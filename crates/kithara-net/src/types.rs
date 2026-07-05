@@ -163,6 +163,14 @@ pub struct NetOptions {
     /// speed", and a 10s cap raced real fixtures.
     #[builder(default = Duration::from_secs(30))]
     pub inactivity_timeout: Duration,
+    /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
+    /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
+    /// backend and on wasm32 (no emulation there).
+    #[builder(default)]
+    pub impersonate: ImpersonatePreset,
+    /// Shared byte buffer pool used by backends that must copy platform-owned
+    /// response buffers before handing bytes to Rust consumers.
+    pub byte_pool: Option<BytePool>,
     /// Hard cap on total request lifetime. Maps to
     /// [`reqwest::RequestBuilder::timeout`]. `None` lets streaming
     /// downloads run indefinitely as long as `inactivity_timeout` is
@@ -178,11 +186,6 @@ pub struct NetOptions {
     /// **Security risk** — use only for local development and test servers.
     #[builder(default)]
     pub is_insecure: bool,
-    /// Max idle connections per host. Enables HTTP keep-alive connection
-    /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
-    /// Set to 0 to disable pooling.
-    #[builder(default = 8)]
-    pub pool_max_idle_per_host: usize,
     /// Apple `NSURLSession` streaming body queue capacity, measured in
     /// delivered data chunks waiting for Rust consumption. Set to 0 to disable
     /// `URLSession` task suspension for queued body chunks.
@@ -193,14 +196,11 @@ pub struct NetOptions {
     /// they resume as soon as the consumer drains one chunk.
     #[builder(default = 16)]
     pub body_queue_resume_at: usize,
-    /// Shared byte buffer pool used by backends that must copy platform-owned
-    /// response buffers before handing bytes to Rust consumers.
-    pub byte_pool: Option<BytePool>,
-    /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
-    /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
-    /// backend and on wasm32 (no emulation there).
-    #[builder(default)]
-    pub impersonate: ImpersonatePreset,
+    /// Max idle connections per host. Enables HTTP keep-alive connection
+    /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
+    /// Set to 0 to disable pooling.
+    #[builder(default = 8)]
+    pub pool_max_idle_per_host: usize,
 }
 
 impl Default for NetOptions {

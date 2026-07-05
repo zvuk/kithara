@@ -23,15 +23,15 @@ pub struct OrphansArgs {
     /// workspace packages.
     #[arg(long = "package", short = 'p', value_name = "NAME")]
     pub packages: Vec<String>,
-    /// Treat orphans as a hard failure (exit non-zero). Without it the
-    /// run is advisory: orphans are printed but exit is success.
-    #[arg(long)]
-    pub deny: bool,
     /// In audit mode, skip the run when no packages are given (avoids
     /// the ~90s workspace sweep on every pre-commit `just audit`).
     /// `just orphans` and `just health` leave this off.
     #[arg(long = "audit-mode")]
     pub audit_mode: bool,
+    /// Treat orphans as a hard failure (exit non-zero). Without it the
+    /// run is advisory: orphans are printed but exit is success.
+    #[arg(long)]
+    pub deny: bool,
 }
 
 pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {

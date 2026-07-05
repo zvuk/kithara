@@ -64,13 +64,13 @@ RUSTUP_TOOLCHAIN=nightly trunk serve --config Trunk.toml --port 8080
 
 A layered workspace of independent crates, from the public player API down to
 storage and platform primitives. See [ARCHITECTURE.md](ARCHITECTURE.md) for the
-dependency graph, crate map, and data flow. Each crate also has its own
-`README.md`.
+facade architecture and [CONTEXT.md](CONTEXT.md) for the crate map, data flow,
+and cross-crate contracts. Each crate also has its own `README.md`.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and
-[.docs/workflows/rust-ai.md](.docs/workflows/rust-ai.md) for the local-first task
+[docs/workflows/rust-ai.md](docs/workflows/rust-ai.md) for the local-first task
 flow.
 
 ## Minimum Supported Rust Version (MSRV)

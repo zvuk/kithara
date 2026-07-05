@@ -17,14 +17,14 @@ pub struct LintArgs {
     /// Repeatable. Forwarded to arch+style+idioms.
     #[arg(long = "path", value_name = "PATH", global = true)]
     pub paths: Vec<PathBuf>,
-    /// When no subcommand is given, apply each namespace's autofix where
-    /// available (currently style only). Forwarded as `--fix` to style.
-    #[arg(long, global = true)]
-    pub fix: bool,
     /// Skip the dirty-tree gate that protects `--fix` from mixing with
     /// uncommitted user edits.
     #[arg(long = "allow-dirty", global = true)]
     pub allow_dirty: bool,
+    /// When no subcommand is given, apply each namespace's autofix where
+    /// available (currently style only). Forwarded as `--fix` to style.
+    #[arg(long, global = true)]
+    pub fix: bool,
 }
 
 #[derive(Debug, Subcommand)]

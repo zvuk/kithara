@@ -34,16 +34,6 @@ impl PlayerImpl {
         self.phase.lock().abr_handle()
     }
 
-    /// Single coherent read of the active slot's live playback scalars.
-    ///
-    /// `None` when no slot is allocated. The standalone `position_seconds`
-    /// / `duration_seconds` / `is_playing` / `buffered_seconds` getters are
-    /// thin derivations of this snapshot — one shared read primitive.
-    pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
-        let slot_id = self.slot()?;
-        Some(self.core.engine.slot_shared_state(slot_id)?.snapshot())
-    }
-
     /// Current media duration in seconds.
     ///
     /// Returns `None` while duration is unknown — the engine sets the shared
@@ -81,6 +71,16 @@ impl PlayerImpl {
     /// Returns `true` if the player is in playing state.
     pub fn is_playing(&self) -> bool {
         self.playback_snapshot().is_some_and(|s| s.playing)
+    }
+
+    /// Single coherent read of the active slot's live playback scalars.
+    ///
+    /// `None` when no slot is allocated. The standalone `position_seconds`
+    /// / `duration_seconds` / `is_playing` / `buffered_seconds` getters are
+    /// thin derivations of this snapshot — one shared read primitive.
+    pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
+        let slot_id = self.slot()?;
+        Some(self.core.engine.slot_shared_state(slot_id)?.snapshot())
     }
 
     /// Current playback position in seconds.

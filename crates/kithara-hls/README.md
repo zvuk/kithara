@@ -33,9 +33,10 @@ let stream = Stream::<Hls>::new(config).await?;
 - `HlsConfig` / `KeyOptions` — bon-builder stream configuration and DRM key-resolution options.
 - `HlsSource` — the `Source` implementation that `Stream<Hls>` wraps.
 - `KeyStore`, `PlaylistCache` — AES-128 key coordination and parsed-playlist cache.
-- `parse_master_playlist`, `parse_media_playlist`, `variant_info_from_master` — standalone playlist parsers.
+- `parse_master_playlist`, `parse_media_playlist` — standalone playlist parsers.
 - `HlsError` / `HlsResult` — crate error type and result alias.
 
-`HlsCoord` and `HlsPeer` are the internal orchestration types and are not part of the public contract. Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`, `KeyProcessorRegistry`, `KeyProcessorRule` from `kithara-drm`.
+`HlsCoord` and `HlsPeer` are internal orchestration types. Re-exports cover the
+ABR mode plus DRM key-processor registry types used to configure encrypted HLS.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

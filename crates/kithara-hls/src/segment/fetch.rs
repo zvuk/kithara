@@ -60,6 +60,13 @@ pub(crate) struct LoadedProof {
 }
 
 impl FetchClaim<Downloading> {
+    /// Consume the claim without touching slot state — used for a stale
+    /// (cancelled) settle whose resource already committed: the new epoch
+    /// owns the slot, so leaving it as-is is correct.
+    pub(crate) fn abandon(mut self) {
+        self.data.settled = true;
+    }
+
     /// Build the owned in-flight handle after [`SegmentSlotState::try_claim`]
     /// wins the `Missing -> Downloading` CAS. `slot` shares the just-flipped
     /// CAS cell so a terminal transition can settle it; `variant` is the
@@ -78,20 +85,6 @@ impl FetchClaim<Downloading> {
             },
             _phase: PhantomData,
         }
-    }
-
-    /// Consume the claim without touching slot state — used for a stale
-    /// (cancelled) settle whose resource already committed: the new epoch
-    /// owns the slot, so leaving it as-is is correct.
-    pub(crate) fn abandon(mut self) {
-        self.data.settled = true;
-    }
-
-    /// Share the slot's CAS cell so the `on_slow` hook can flag the in-flight
-    /// fetch slow without owning the claim. Cloned before the claim moves into
-    /// the `FetchSlot`'s `on_complete`.
-    pub(crate) fn slot_state(&self) -> Arc<SegmentSlotState> {
-        Arc::clone(&self.data.slot)
     }
 
     /// `Downloading -> Failed` terminal settle: the downloader exhausted
@@ -155,6 +148,13 @@ impl FetchClaim<Downloading> {
             _phase: PhantomData,
         }
     }
+
+    /// Share the slot's CAS cell so the `on_slow` hook can flag the in-flight
+    /// fetch slow without owning the claim. Cloned before the claim moves into
+    /// the `FetchSlot`'s `on_complete`.
+    pub(crate) fn slot_state(&self) -> Arc<SegmentSlotState> {
+        Arc::clone(&self.data.slot)
+    }
 }
 
 impl FetchClaim<Loaded> {
@@ -204,6 +204,15 @@ pub(crate) enum PlannedFetch {
 /// apply the post-decrypt size — we use `Weak` (not `Arc`) so a dropped
 /// peer doesn't keep the variant alive past teardown.
 pub(crate) struct FetchSlot {
+    /// Read view of the writer's generation — used to observe a
+    /// committed-by-race status before deciding the terminal transition.
+    pub(crate) reader: AssetReader,
+    /// Sole commit owner (non-`Clone`); consumed in `settle`.
+    pub(crate) writer: AssetWriter,
+    pub(crate) cancel: CancelToken,
+    pub(crate) handle: FetchClaim<Downloading>,
+    /// Clone-able streaming-write handle for the fetch body closure.
+    pub(crate) raw: RawWriteHandle,
     /// Unified reader-wake handle — [`SizeSignal::fire`]d on every terminal
     /// settle (commit/fail/cancel) so an off-RT reader parked in
     /// `wait_range(_, None)` re-probes the now-resolved range and the RT
@@ -211,15 +220,6 @@ pub(crate) struct FetchSlot {
     /// readable (the decrypt gate opens here for DRM segments), not on its
     /// 10 ms poll.
     pub(crate) signal: SizeSignal,
-    /// Read view of the writer's generation — used to observe a
-    /// committed-by-race status before deciding the terminal transition.
-    pub(crate) reader: AssetReader,
-    /// Sole commit owner (non-`Clone`); consumed in `settle`.
-    pub(crate) writer: AssetWriter,
-    pub(crate) cancel: CancelToken,
-    /// Clone-able streaming-write handle for the fetch body closure.
-    pub(crate) raw: RawWriteHandle,
-    pub(crate) handle: FetchClaim<Downloading>,
 }
 
 impl From<FetchSlot> for OnCompleteFn {

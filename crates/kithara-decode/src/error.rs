@@ -167,20 +167,6 @@ impl DecodeError {
         Self::Backend { source: err.into() }
     }
 
-    /// Wrap an upstream parser / io error as a [`DecodeError::Parse`] with a
-    /// `&'static str` site tag. For off-RT init-segment / box parsing only —
-    /// preserves the typed source chain without stringifying it.
-    #[must_use]
-    pub fn parse<E>(what: &'static str, err: E) -> Self
-    where
-        E: Into<Box<dyn StdError + Send + Sync>>,
-    {
-        Self::Parse {
-            what,
-            source: err.into(),
-        }
-    }
-
     /// Tag the error in one source-chain pass so hot decode loops can
     /// replace per-class boolean predicate ladders with a single
     /// `match` over the discriminant.
@@ -217,6 +203,20 @@ impl DecodeError {
     #[must_use]
     pub fn is_interrupted(&self) -> bool {
         matches!(self.classify(), ErrorClass::Interrupted)
+    }
+
+    /// Wrap an upstream parser / io error as a [`DecodeError::Parse`] with a
+    /// `&'static str` site tag. For off-RT init-segment / box parsing only —
+    /// preserves the typed source chain without stringifying it.
+    #[must_use]
+    pub fn parse<E>(what: &'static str, err: E) -> Self
+    where
+        E: Into<Box<dyn StdError + Send + Sync>>,
+    {
+        Self::Parse {
+            what,
+            source: err.into(),
+        }
     }
 
     /// Typed [`PendingReason`] carried by a transient source-read error

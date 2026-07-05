@@ -17,10 +17,10 @@ pub struct TestArgs {
 
 #[derive(Debug)]
 struct TestRequest {
+    flash: Option<bool>,
     lane: Option<String>,
     net_backend: Option<String>,
     passthrough: Vec<String>,
-    flash: Option<bool>,
 }
 
 impl TestRequest {
@@ -311,6 +311,8 @@ mod tests {
             },
             health: HealthConfig::default(),
             test: TestCommandConfig {
+                lanes,
+                net_backends,
                 default_lane: "workspace".to_owned(),
                 default_backend: "http".to_owned(),
                 feature_arg: "--features".to_owned(),
@@ -318,8 +320,6 @@ mod tests {
                     features: vec!["virtual-time".to_owned()],
                     default: true,
                 },
-                lanes,
-                net_backends,
             },
             lint_exclude: LintExcludeConfig::default(),
             workspace_scan: WorkspaceScan::default(),

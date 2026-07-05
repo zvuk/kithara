@@ -24,12 +24,12 @@ pub enum ManifestCommand {
 
 #[derive(Debug, Args)]
 pub struct DependencyOrderArgs {
-    /// Rewrite manifests in place.
-    #[arg(long)]
-    pub fix: bool,
     /// Allow `--fix` on a dirty working tree.
     #[arg(long = "allow-dirty")]
     pub allow_dirty: bool,
+    /// Rewrite manifests in place.
+    #[arg(long)]
+    pub fix: bool,
 }
 
 struct ManifestSet {
@@ -164,8 +164,8 @@ fn rewrite_manifest(source: &str) -> RewriteResult {
     }
 
     RewriteResult {
-        content: output,
         changed_sections,
+        content: output,
     }
 }
 

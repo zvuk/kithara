@@ -6,17 +6,17 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 ## Authority
 
 - `AGENTS.md` is the canonical repo-level contract for all coding agents. It owns repo-wide invariants, coding conventions, routing, and the stable coordination shapes below.
-- `.docs/workflows/rust-ai.md` is the canonical workflow for task setup, split, handoff, and integration.
-- `.docs/guides/*` contains lazy-loaded reference guidance. Open only the file that matches the current task, red flag, or lint failure.
-- `.docs/rules/*` contains tool-neutral entry rules used through tool-specific symlinks.
-- If two documents disagree: `AGENTS.md` wins over `.docs/workflows/*`, `.docs/guides/*`, and `.docs/rules/*`, which win over crate `README.md` / `CONTEXT.md`, which win over tool-specific shims.
+- `docs/workflows/rust-ai.md` is the canonical workflow for task setup, split, handoff, and integration.
+- `docs/guides/*` contains lazy-loaded reference guidance. Open only the file that matches the current task, red flag, or lint failure.
+- `docs/rules/*` contains tool-neutral entry rules used through tool-specific symlinks.
+- If two documents disagree: `AGENTS.md` wins over `docs/workflows/*`, `docs/guides/*`, and `docs/rules/*`, which win over crate `README.md` / `CONTEXT.md`, which win over tool-specific shims.
 
 ## Core Principles
 
 - Minimal magic and hidden dependencies.
 - Predictability, testability, and reproducibility.
 - Components should stay loosely coupled and replaceable.
-- Code is the source of truth. Each crate keeps `README.md` as an overview; longer contracts and invariants belong in the owning crate `CONTEXT.md`, and project-wide architecture lives in the root `CONTEXT.md`.
+- Code is the source of truth. Each crate keeps `README.md` as an overview; longer contracts and invariants belong in the owning crate `CONTEXT.md`, and project-wide architecture lives in `crates/kithara/CONTEXT.md` (symlinked from the root `CONTEXT.md`).
 
 ## Non-Negotiables
 
@@ -30,8 +30,8 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Prefer generics and composition over near-duplicate protocol-specific types.
 - Use `tracing`, not `println!` or `dbg!`, in production code.
 - Do not use destructive git commands unless the user explicitly asks for them.
-- Cancel-token hierarchy is typed and propagate-down. Hard-coded `CancelToken::root()` and `CancelToken::never()` are forbidden outside sanctioned owner sites. See `.docs/guides/cancel-policy.md` only when touching cancellation.
-- Zero-tolerance for lint suppressions and baseline growth. Unavoidable lint means STOP and fix the underlying code. See `.docs/guides/lint-policy.md` only when touching lint policy or a lint exception.
+- Cancel-token hierarchy is typed and propagate-down. Hard-coded `CancelToken::root()` and `CancelToken::never()` are forbidden outside sanctioned owner sites. See `docs/guides/cancel-policy.md` only when touching cancellation.
+- Zero-tolerance for lint suppressions and baseline growth. Unavoidable lint means STOP and fix the underlying code. See `docs/guides/lint-policy.md` only when touching lint policy or a lint exception.
 - Prefer clean, maintainable code over clever shortcuts or speculative abstractions.
 - Keep code readable and easy to understand.
 - Optimize for performance in hot paths.
@@ -218,11 +218,11 @@ Risks or follow-ups:
 - Keep the primary acceptance target explicit in the packet or plan and revisit it after local fixes.
 - Read only the repo docs and crate `README.md` / `CONTEXT.md` files that match the owned paths.
 - The stable task packet, handoff, and final report shapes live here. Do not create parallel template docs for them.
-- If a task needs a plan, follow `.docs/workflows/rust-ai.md` and `.docs/plans/_template.md`.
-- Load `.docs/guides/*` files only when the task, a red flag, or a failing lint points to that topic.
-- Load `.docs/guides/tooling.md` only when touching formatter, lint, dependency-audit, or external-tool policy.
-- Load `.docs/guides/test-harness.md` only when adding/debugging tests or reporting validation scope.
-- Load `.docs/guides/agent-hooks.md` only when touching tool adapters, hooks, or command routing.
+- If a task needs a plan, follow `docs/workflows/rust-ai.md` and `docs/plans/_template.md`.
+- Load `docs/guides/*` files only when the task, a red flag, or a failing lint points to that topic.
+- Load `docs/guides/tooling.md` only when touching formatter, lint, dependency-audit, or external-tool policy.
+- Load `docs/guides/test-harness.md` only when adding/debugging tests or reporting validation scope.
+- Load `docs/guides/agent-hooks.md` only when touching tool adapters, hooks, or command routing.
 - If shared boundaries are unclear, stop and clarify before implementation.
 - Keep debate procedures, investigation journaling, and TDD choreography out of `AGENTS.md`. Put that guidance in workflow docs or owning `CONTEXT.md` files.
 - Do not restate the same repo rule in tool-specific files. Tool-specific files should only route the agent to canonical docs and scoped domain guidance.

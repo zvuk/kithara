@@ -17,10 +17,10 @@ separate on purpose:
   and the disk tier survives restarts.
 
 These never mix: `TrackId` answers "is this the same queue slot", `AnalysisKey`
-answers "is this the same audio source". `start_analysis` (`plan_analysis`)
-skips when the track is already shown or in flight, serves a cache hit without
-wiping the visible analysis, and only wipes + decodes on a genuine miss;
-`commit_analysis` populates both tiers.
+answers "is this the same audio source". `plan_analysis` skips when the track is
+already shown or in flight, serves a cache hit without wiping the visible
+analysis, and only wipes + decodes on a genuine miss; `AnalysisController::commit`
+publishes a completed run and `cache_completed` populates both tiers.
 
 The disk tier stores one blob per track as a resource of the track's
 `AssetScope` (`analysis/track.analysis`), so the artifact follows the track's
@@ -30,7 +30,7 @@ non-exhaustive seam) is in-memory-only by capability, not a fallback.
 
 Invalidation is by `ANALYSIS_BYTES_VERSION` (kithara-app): bump it whenever
 the blob encoding, BPM analysis parameters, waveform encoding, or
-`WAVEFORM_BUCKETS` change. The
+`WAVEFORM_MAX_BUCKETS` change. The
 filename is a sha256 of the key — a `std` hasher is not stable across toolchain
 versions and would orphan every blob. Because the key is the source location
 and not the bytes, a file overwritten in place keeps its key until the version

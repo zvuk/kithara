@@ -145,6 +145,14 @@ pub trait PcmReader: kithara_platform::maybe_send::MaybeSend {
         None
     }
 
+    /// Decoded-ahead frontier: the timestamp up to which PCM has been
+    /// decoded and is ready to play. Always `>=` [`Self::position`].
+    /// Authoritative source for the buffered/playable window; non-adaptive
+    /// or chunk-less readers may report `0`.
+    fn decoded_frontier(&self) -> Duration {
+        Duration::from_secs(0)
+    }
+
     /// Get total duration (if known).
     fn duration(&self) -> Option<Duration>;
 
@@ -176,14 +184,6 @@ pub trait PcmReader: kithara_platform::maybe_send::MaybeSend {
 
     /// Get current playback position.
     fn position(&self) -> Duration;
-
-    /// Decoded-ahead frontier: the timestamp up to which PCM has been
-    /// decoded and is ready to play. Always `>=` [`Self::position`].
-    /// Authoritative source for the buffered/playable window; non-adaptive
-    /// or chunk-less readers may report `0`.
-    fn decoded_frontier(&self) -> Duration {
-        Duration::from_secs(0)
-    }
 
     /// Preload initial chunks into internal buffers.
     ///

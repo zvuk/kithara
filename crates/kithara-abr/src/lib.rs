@@ -4,10 +4,10 @@
 //! downloader, a [`trait@Abr`] trait implemented by peers that want variant
 //! switching, and an [`AbrHandle`] returned on registration.
 //!
-//! All shared vocabulary (`AbrMode`, `AbrReason`, `VariantInfo`,
-//! `BandwidthSource`, `AbrSettings`, `AbrDecision`, `AbrProgressSnapshot`,
-//! `AbrPeerId`, `VariantDuration`) lives in `kithara-events`; we
-//! re-export the names for convenience.
+//! Shared event vocabulary (`AbrMode`, `AbrReason`, `VariantInfo`,
+//! `BandwidthSource`, `AbrProgressSnapshot`, `VariantDuration`) comes from
+//! `kithara-events`; controller/state-owned types (`AbrSettings`,
+//! `AbrDecision`, `AbrPeerId`) are defined here and re-exported for convenience.
 
 #![forbid(unsafe_code)]
 

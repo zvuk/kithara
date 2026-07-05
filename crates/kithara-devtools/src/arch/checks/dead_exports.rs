@@ -28,6 +28,10 @@ pub(crate) const ID: &str = "dead_exports";
 pub(crate) struct DeadExports;
 
 impl Check for DeadExports {
+    fn fix(&self, ctx: &Context<'_>, apply: bool) -> Result<FixOutcome> {
+        fix_dead_exports(ctx, apply)
+    }
+
     fn id(&self) -> &'static str {
         ID
     }
@@ -38,10 +42,6 @@ impl Check for DeadExports {
         let (defs, refs) = scan(ctx, cfg);
         let protected = protected_names(&defs, cfg);
         Ok(emit(&defs, &refs, &exempt, &protected))
-    }
-
-    fn fix(&self, ctx: &Context<'_>, apply: bool) -> Result<FixOutcome> {
-        fix_dead_exports(ctx, apply)
     }
 }
 
@@ -88,10 +88,10 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
                     continue;
                 };
                 RefCollector {
+                    qualified_only,
                     in_test: base_in_test,
                     external: role == Role::TestOnly,
                     refs: &mut refs,
-                    qualified_only,
                     workspace_crates: &workspace_crates,
                     workspace_imports: HashSet::new(),
                     workspace_values: HashSet::new(),
@@ -108,11 +108,11 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
                     let mod_gated =
                         mod_chain_gated(target.src_path.as_std_path(), &path, &mut chain_cache);
                     DefScan {
+                        mod_gated,
                         crate_name: &pkg.name,
                         rel: &rel,
                         kinds: &kinds,
                         export_attrs: &cfg.export_attrs,
-                        mod_gated,
                         out: &mut defs,
                     }
                     .collect(&file.items, false);
@@ -241,45 +241,13 @@ fn fix_dead_exports(ctx: &Context<'_>, apply: bool) -> Result<FixOutcome> {
 }
 
 struct Deleter<'a, 'src> {
-    rel: &'a str,
     dead: &'a HashSet<&'a str>,
     rw: &'a mut SourceRewriter<'src>,
     changes: &'a mut Vec<String>,
+    rel: &'a str,
 }
 
 impl<'src> Deleter<'_, 'src> {
-    fn scope(&mut self, src: &'src str, scope_bytes: Range<usize>, items: &[Item]) {
-        let spans: Vec<Range<usize>> = items.iter().map(|it| it.span().byte_range()).collect();
-        let blocks = expand_blocks(src, scope_bytes, &spans).ok();
-        for (i, item) in items.iter().enumerate() {
-            match item {
-                Item::Mod(m) => {
-                    if let Some((brace, inner)) = &m.content {
-                        let inner_scope = brace.span.open().byte_range().end
-                            ..brace.span.close().byte_range().start;
-                        self.scope(src, inner_scope, inner);
-                    }
-                    continue;
-                }
-                Item::Impl(im) if im.trait_.is_none() => {
-                    self.methods(src, im);
-                    continue;
-                }
-                _ => {}
-            }
-            if let Some(head) = item_head(item)
-                && is_pub_visibility(head.vis)
-                && self.dead.contains(head.ident.to_string().as_str())
-                && !is_gated(head.attrs)
-                && let Some(blocks) = &blocks
-            {
-                self.rw.replace(blocks[i].bytes.clone(), "");
-                self.changes
-                    .push(format!("{}: delete `{}`", self.rel, head.ident));
-            }
-        }
-    }
-
     fn methods(&mut self, src: &'src str, im: &syn::ItemImpl) {
         let scope = im.brace_token.span.open().byte_range().end
             ..im.brace_token.span.close().byte_range().start;
@@ -326,6 +294,38 @@ impl<'src> Deleter<'_, 'src> {
                     }
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn scope(&mut self, src: &'src str, scope_bytes: Range<usize>, items: &[Item]) {
+        let spans: Vec<Range<usize>> = items.iter().map(|it| it.span().byte_range()).collect();
+        let blocks = expand_blocks(src, scope_bytes, &spans).ok();
+        for (i, item) in items.iter().enumerate() {
+            match item {
+                Item::Mod(m) => {
+                    if let Some((brace, inner)) = &m.content {
+                        let inner_scope = brace.span.open().byte_range().end
+                            ..brace.span.close().byte_range().start;
+                        self.scope(src, inner_scope, inner);
+                    }
+                    continue;
+                }
+                Item::Impl(im) if im.trait_.is_none() => {
+                    self.methods(src, im);
+                    continue;
+                }
+                _ => {}
+            }
+            if let Some(head) = item_head(item)
+                && is_pub_visibility(head.vis)
+                && self.dead.contains(head.ident.to_string().as_str())
+                && !is_gated(head.attrs)
+                && let Some(blocks) = &blocks
+            {
+                self.rw.replace(blocks[i].bytes.clone(), "");
+                self.changes
+                    .push(format!("{}: delete `{}`", self.rel, head.ident));
             }
         }
     }
@@ -548,36 +548,36 @@ fn walk_rs_inner(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[derive(Debug)]
 struct Def {
-    name: String,
     kind: &'static str,
     crate_name: String,
+    name: String,
     rel_path: String,
-    line: usize,
-    col: usize,
     /// `#[cfg(target_os/target_arch)]`-gated — at the item or anywhere on the
     /// file's `mod`-declaration chain: never auto-deleted, and its re-export
     /// is never pruned (a build config this scan can't see may still use it).
     gated: bool,
+    col: usize,
+    line: usize,
 }
 
 /// One non-private item head: the three pieces needed to decide whether it is
 /// a reportable export and where it lives.
 #[derive(Clone, Copy)]
 struct Head<'a> {
+    ident: &'a Ident,
     vis: &'a Visibility,
     attrs: &'a [Attribute],
-    ident: &'a Ident,
 }
 
 struct DefScan<'a> {
+    kinds: &'a HashSet<&'a str>,
+    out: &'a mut Vec<Def>,
+    export_attrs: &'a [String],
     crate_name: &'a str,
     rel: &'a str,
-    kinds: &'a HashSet<&'a str>,
-    export_attrs: &'a [String],
     /// The file's `mod`-declaration chain carries a cfg gate; every def in
     /// the file inherits it (see [`mod_chain_gated`]).
     mod_gated: bool,
-    out: &'a mut Vec<Def>,
 }
 
 impl DefScan<'_> {
@@ -624,8 +624,8 @@ impl DefScan<'_> {
         }
         let start = h.ident.span().start();
         self.out.push(Def {
-            name: h.ident.to_string(),
             kind,
+            name: h.ident.to_string(),
             crate_name: self.crate_name.to_string(),
             rel_path: self.rel.to_string(),
             line: start.line,
@@ -636,7 +636,7 @@ impl DefScan<'_> {
 }
 
 fn head<'a>(vis: &'a Visibility, attrs: &'a [Attribute], ident: &'a Ident) -> Head<'a> {
-    Head { vis, attrs, ident }
+    Head { ident, vis, attrs }
 }
 
 fn item_attrs(it: &Item) -> &[Attribute] {
@@ -700,28 +700,76 @@ struct Refs {
 /// not `syn::Path` nodes, so re-exports are naturally excluded — only genuine
 /// call/type/expression references count. Attribute internals are skipped.
 struct RefCollector<'a> {
-    in_test: bool,
-    external: bool,
-    refs: &'a mut Refs,
-    qualified_only: bool,
     workspace_crates: &'a HashSet<String>,
+    refs: &'a mut Refs,
     workspace_imports: HashSet<String>,
-    workspace_values: HashSet<String>,
     workspace_self_fields: HashSet<String>,
+    workspace_values: HashSet<String>,
+    external: bool,
+    in_test: bool,
+    qualified_only: bool,
 }
 
 impl RefCollector<'_> {
-    fn record(&mut self, name: String) {
-        // A `#[kithara::mock]` trait generates `<Name>Mock`; a reference to the
-        // generated mock keeps the trait alive even though the names differ.
-        // Count the stripped base too (over-counting only ever suppresses a
-        // flag, never causes a false deletion).
-        if let Some(base) = name.strip_suffix("Mock")
-            && !base.is_empty()
-        {
-            self.insert(base.to_string());
+    fn expr_call_returns_workspace_value(&self, func: &Expr) -> bool {
+        let Expr::Path(path) = func else {
+            return false;
+        };
+        let Some(first) = path.path.segments.first() else {
+            return false;
+        };
+        path.path.segments.len() > 1
+            && self.is_workspace_import(&first.ident)
+            && starts_with_uppercase(&first.ident)
+    }
+
+    fn expr_field_is_workspace_value(&self, field: &syn::ExprField) -> bool {
+        let Expr::Path(base) = field.base.as_ref() else {
+            return false;
+        };
+        let Some(first) = base.path.segments.first() else {
+            return false;
+        };
+        if first.ident != "self" {
+            return false;
         }
-        self.insert(name);
+        let Member::Named(member) = &field.member else {
+            return false;
+        };
+        self.workspace_self_fields
+            .iter()
+            .any(|field_name| member == field_name.as_str())
+    }
+
+    fn expr_is_workspace_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Path(path) => {
+                let Some(first) = path.path.segments.first() else {
+                    return false;
+                };
+                self.is_workspace_value(&first.ident)
+                    || self.is_workspace_crate(&first.ident)
+                    || (self.is_workspace_import(&first.ident) && path.path.segments.len() > 1)
+            }
+            Expr::Field(field) => self.expr_field_is_workspace_value(field),
+            Expr::Call(call) => self.expr_call_returns_workspace_value(&call.func),
+            Expr::Try(expr_try) => self.expr_is_workspace_value(&expr_try.expr),
+            Expr::Group(group) => self.expr_is_workspace_value(&group.expr),
+            Expr::Paren(paren) => self.expr_is_workspace_value(&paren.expr),
+            Expr::Reference(reference) => self.expr_is_workspace_value(&reference.expr),
+            _ => false,
+        }
+    }
+
+    fn expr_returns_workspace_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Call(call) => self.expr_call_returns_workspace_value(&call.func),
+            Expr::Try(expr_try) => self.expr_returns_workspace_value(&expr_try.expr),
+            Expr::Group(group) => self.expr_returns_workspace_value(&group.expr),
+            Expr::Paren(paren) => self.expr_returns_workspace_value(&paren.expr),
+            Expr::Reference(reference) => self.expr_returns_workspace_value(&reference.expr),
+            _ => self.expr_is_workspace_value(expr),
+        }
     }
 
     fn insert(&mut self, name: String) {
@@ -759,6 +807,19 @@ impl RefCollector<'_> {
         })
     }
 
+    fn record(&mut self, name: String) {
+        // A `#[kithara::mock]` trait generates `<Name>Mock`; a reference to the
+        // generated mock keeps the trait alive even though the names differ.
+        // Count the stripped base too (over-counting only ever suppresses a
+        // flag, never causes a false deletion).
+        if let Some(base) = name.strip_suffix("Mock")
+            && !base.is_empty()
+        {
+            self.insert(base.to_string());
+        }
+        self.insert(name);
+    }
+
     fn record_qualified_path(&mut self, path: &syn::Path) {
         let Some(first) = path.segments.first() else {
             return;
@@ -771,6 +832,31 @@ impl RefCollector<'_> {
         }
         for seg in &path.segments {
             self.record(seg.ident.to_string());
+        }
+    }
+
+    fn record_qualified_tokens(&mut self, ts: &proc_macro2::TokenStream) {
+        let tokens: Vec<proc_macro2::TokenTree> = ts.clone().into_iter().collect();
+        let mut idx = 0;
+        while idx < tokens.len() {
+            match &tokens[idx] {
+                proc_macro2::TokenTree::Ident(ident)
+                    if self.is_workspace_crate(ident) || self.is_workspace_import(ident) =>
+                {
+                    if let Some((next, names)) = qualified_token_path(&tokens, idx) {
+                        for name in names {
+                            self.record(name);
+                        }
+                        idx = next;
+                        continue;
+                    }
+                }
+                proc_macro2::TokenTree::Group(group) => {
+                    self.record_qualified_tokens(&group.stream());
+                }
+                _ => {}
+            }
+            idx += 1;
         }
     }
 
@@ -804,6 +890,35 @@ impl RefCollector<'_> {
         }
     }
 
+    /// Record every identifier inside a token stream (macro body or attribute
+    /// args). `syn` does not parse these — `assert_eq!(x.foo())`,
+    /// `tracing::info!(bar)`, `#[builder(default = BAZ)]` — so without this a
+    /// reference that only appears there is invisible and the symbol looks
+    /// dead. Over-recording here is safe: it can only suppress a flag, never
+    /// cause a false deletion.
+    fn record_tokens(&mut self, ts: &proc_macro2::TokenStream) {
+        if self.qualified_only {
+            return;
+        }
+        for tree in ts.clone() {
+            match tree {
+                proc_macro2::TokenTree::Ident(id) => self.record(id.to_string()),
+                proc_macro2::TokenTree::Group(g) => self.record_tokens(&g.stream()),
+                _ => {}
+            }
+        }
+    }
+
+    fn record_workspace_fields(&mut self, fields: &Fields) {
+        for field in fields {
+            if self.type_is_workspace(&field.ty)
+                && let Some(ident) = &field.ident
+            {
+                self.workspace_self_fields.insert(ident.to_string());
+            }
+        }
+    }
+
     fn record_workspace_inputs(&mut self, inputs: &Punctuated<FnArg, token::Comma>) {
         for input in inputs {
             let FnArg::Typed(arg) = input else {
@@ -832,16 +947,6 @@ impl RefCollector<'_> {
         }
     }
 
-    fn record_workspace_fields(&mut self, fields: &Fields) {
-        for field in fields {
-            if self.type_is_workspace(&field.ty)
-                && let Some(ident) = &field.ident
-            {
-                self.workspace_self_fields.insert(ident.to_string());
-            }
-        }
-    }
-
     fn type_is_workspace(&self, ty: &Type) -> bool {
         match ty {
             Type::Path(path) => self.path_is_workspace_rooted(&path.path),
@@ -849,111 +954,6 @@ impl RefCollector<'_> {
             Type::Group(group) => self.type_is_workspace(&group.elem),
             Type::Paren(paren) => self.type_is_workspace(&paren.elem),
             _ => false,
-        }
-    }
-
-    fn expr_returns_workspace_value(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Call(call) => self.expr_call_returns_workspace_value(&call.func),
-            Expr::Try(expr_try) => self.expr_returns_workspace_value(&expr_try.expr),
-            Expr::Group(group) => self.expr_returns_workspace_value(&group.expr),
-            Expr::Paren(paren) => self.expr_returns_workspace_value(&paren.expr),
-            Expr::Reference(reference) => self.expr_returns_workspace_value(&reference.expr),
-            _ => self.expr_is_workspace_value(expr),
-        }
-    }
-
-    fn expr_call_returns_workspace_value(&self, func: &Expr) -> bool {
-        let Expr::Path(path) = func else {
-            return false;
-        };
-        let Some(first) = path.path.segments.first() else {
-            return false;
-        };
-        path.path.segments.len() > 1
-            && self.is_workspace_import(&first.ident)
-            && starts_with_uppercase(&first.ident)
-    }
-
-    fn expr_is_workspace_value(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Path(path) => {
-                let Some(first) = path.path.segments.first() else {
-                    return false;
-                };
-                self.is_workspace_value(&first.ident)
-                    || self.is_workspace_crate(&first.ident)
-                    || (self.is_workspace_import(&first.ident) && path.path.segments.len() > 1)
-            }
-            Expr::Field(field) => self.expr_field_is_workspace_value(field),
-            Expr::Call(call) => self.expr_call_returns_workspace_value(&call.func),
-            Expr::Try(expr_try) => self.expr_is_workspace_value(&expr_try.expr),
-            Expr::Group(group) => self.expr_is_workspace_value(&group.expr),
-            Expr::Paren(paren) => self.expr_is_workspace_value(&paren.expr),
-            Expr::Reference(reference) => self.expr_is_workspace_value(&reference.expr),
-            _ => false,
-        }
-    }
-
-    fn expr_field_is_workspace_value(&self, field: &syn::ExprField) -> bool {
-        let Expr::Path(base) = field.base.as_ref() else {
-            return false;
-        };
-        let Some(first) = base.path.segments.first() else {
-            return false;
-        };
-        if first.ident != "self" {
-            return false;
-        }
-        let Member::Named(member) = &field.member else {
-            return false;
-        };
-        self.workspace_self_fields
-            .iter()
-            .any(|field_name| member == field_name.as_str())
-    }
-
-    /// Record every identifier inside a token stream (macro body or attribute
-    /// args). `syn` does not parse these — `assert_eq!(x.foo())`,
-    /// `tracing::info!(bar)`, `#[builder(default = BAZ)]` — so without this a
-    /// reference that only appears there is invisible and the symbol looks
-    /// dead. Over-recording here is safe: it can only suppress a flag, never
-    /// cause a false deletion.
-    fn record_tokens(&mut self, ts: &proc_macro2::TokenStream) {
-        if self.qualified_only {
-            return;
-        }
-        for tree in ts.clone() {
-            match tree {
-                proc_macro2::TokenTree::Ident(id) => self.record(id.to_string()),
-                proc_macro2::TokenTree::Group(g) => self.record_tokens(&g.stream()),
-                _ => {}
-            }
-        }
-    }
-
-    fn record_qualified_tokens(&mut self, ts: &proc_macro2::TokenStream) {
-        let tokens: Vec<proc_macro2::TokenTree> = ts.clone().into_iter().collect();
-        let mut idx = 0;
-        while idx < tokens.len() {
-            match &tokens[idx] {
-                proc_macro2::TokenTree::Ident(ident)
-                    if self.is_workspace_crate(ident) || self.is_workspace_import(ident) =>
-                {
-                    if let Some((next, names)) = qualified_token_path(&tokens, idx) {
-                        for name in names {
-                            self.record(name);
-                        }
-                        idx = next;
-                        continue;
-                    }
-                }
-                proc_macro2::TokenTree::Group(group) => {
-                    self.record_qualified_tokens(&group.stream());
-                }
-                _ => {}
-            }
-            idx += 1;
         }
     }
 }
@@ -1024,23 +1024,24 @@ fn starts_with_uppercase(ident: &Ident) -> bool {
 }
 
 impl<'ast> Visit<'ast> for RefCollector<'_> {
-    fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
-        let prev = self.in_test;
-        self.in_test = prev || attrs_mark_test(&m.attrs);
-        visit::visit_item_mod(self, m);
-        self.in_test = prev;
+    fn visit_attribute(&mut self, a: &'ast Attribute) {
+        if self.qualified_only {
+            return;
+        }
+        if let Meta::List(list) = &a.meta {
+            self.record_tokens(&list.tokens);
+        }
     }
 
-    fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
-        let prev_in_test = self.in_test;
-        let prev_values = self.workspace_values.clone();
-        self.in_test = prev_in_test || attrs_mark_test(&f.attrs);
+    fn visit_expr_method_call(&mut self, mc: &'ast syn::ExprMethodCall) {
         if self.qualified_only {
-            self.record_workspace_inputs(&f.sig.inputs);
+            if self.expr_is_workspace_value(&mc.receiver) {
+                self.record(mc.method.to_string());
+            }
+        } else {
+            self.record(mc.method.to_string());
         }
-        visit::visit_item_fn(self, f);
-        self.workspace_values = prev_values;
-        self.in_test = prev_in_test;
+        visit::visit_expr_method_call(self, mc);
     }
 
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
@@ -1055,6 +1056,25 @@ impl<'ast> Visit<'ast> for RefCollector<'_> {
         self.in_test = prev_in_test;
     }
 
+    fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
+        let prev_in_test = self.in_test;
+        let prev_values = self.workspace_values.clone();
+        self.in_test = prev_in_test || attrs_mark_test(&f.attrs);
+        if self.qualified_only {
+            self.record_workspace_inputs(&f.sig.inputs);
+        }
+        visit::visit_item_fn(self, f);
+        self.workspace_values = prev_values;
+        self.in_test = prev_in_test;
+    }
+
+    fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
+        let prev = self.in_test;
+        self.in_test = prev || attrs_mark_test(&m.attrs);
+        visit::visit_item_mod(self, m);
+        self.in_test = prev;
+    }
+
     fn visit_item_struct(&mut self, item_struct: &'ast ItemStruct) {
         if self.qualified_only {
             self.record_workspace_fields(&item_struct.fields);
@@ -1062,20 +1082,19 @@ impl<'ast> Visit<'ast> for RefCollector<'_> {
         visit::visit_item_struct(self, item_struct);
     }
 
+    fn visit_item_use(&mut self, item_use: &'ast ItemUse) {
+        if self.qualified_only {
+            self.record_qualified_use_tree(&item_use.tree, false);
+        } else {
+            visit::visit_item_use(self, item_use);
+        }
+    }
+
     fn visit_local(&mut self, local: &'ast Local) {
         if self.qualified_only {
             self.record_workspace_local(local);
         }
         visit::visit_local(self, local);
-    }
-
-    fn visit_attribute(&mut self, a: &'ast Attribute) {
-        if self.qualified_only {
-            return;
-        }
-        if let Meta::List(list) = &a.meta {
-            self.record_tokens(&list.tokens);
-        }
     }
 
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
@@ -1089,28 +1108,9 @@ impl<'ast> Visit<'ast> for RefCollector<'_> {
         self.record_tokens(&m.tokens);
     }
 
-    fn visit_item_use(&mut self, item_use: &'ast ItemUse) {
-        if self.qualified_only {
-            self.record_qualified_use_tree(&item_use.tree, false);
-        } else {
-            visit::visit_item_use(self, item_use);
-        }
-    }
-
     fn visit_path(&mut self, p: &'ast syn::Path) {
         self.record_qualified_path(p);
         visit::visit_path(self, p);
-    }
-
-    fn visit_expr_method_call(&mut self, mc: &'ast syn::ExprMethodCall) {
-        if self.qualified_only {
-            if self.expr_is_workspace_value(&mc.receiver) {
-                self.record(mc.method.to_string());
-            }
-        } else {
-            self.record(mc.method.to_string());
-        }
-        visit::visit_expr_method_call(self, mc);
     }
 }
 
@@ -1136,10 +1136,10 @@ mod tests {
             .collect();
         let mut refs = Refs::default();
         RefCollector {
+            qualified_only,
             in_test: false,
             external: false,
             refs: &mut refs,
-            qualified_only,
             workspace_crates: &workspace_crates,
             workspace_imports: HashSet::new(),
             workspace_values: HashSet::new(),

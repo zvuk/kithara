@@ -48,27 +48,27 @@ src/
 ├── estimator.rs     — ThroughputEstimator + Estimator trait + private Ewma helper
 ├── handle.rs        — AbrHandle (Drop-driven unregister; safe external API)
 ├── state/
-│   ├── core.rs      — AbrState struct + accessors + commands (apply,
-│   │                  set_mode / set_variants / lock / unlock / …)
+│   ├── core.rs      — AbrState struct + accessors + commands (apply_decision,
+│   │                  set_mode / lock / unlock / …)
 │   ├── decision.rs  — pure `evaluate(state, view, now) -> AbrDecision`
 │   ├── view.rs      — AbrView<'a> (decision inputs)
 │   ├── error.rs     — AbrError
 │   └── tests.rs     — decision/lifecycle tests
-├── types.rs         — re-exports of cross-crate vocabulary owned by kithara-events
+├── types.rs         — re-exports event vocabulary plus crate-owned controller/state types
 └── lib.rs           — module declarations + public re-exports
 ```
 
 ## Architecture invariants
 
-- **`AbrState::current_variant` has two legitimate writers**, both go through
-  [`AbrState::apply`](src/state/core.rs):
+- **`AbrState::current_variant_index()` has two legitimate writers**, both go through
+  [`AbrState::apply_decision`](src/state/core.rs):
   1. `controller::tick` when the auto-mode FSM picks a new variant;
   2. `kithara-hls` scheduler when the user manually selects a variant — HLS
      holds `Arc<AbrState>` and applies a `Manual` decision so the layout
      switch and the ABR state stay in sync.
   `kithara-hls`'s `HlsCoord` reads the variant via `Arc<AbrState>` (no
   cloneable `Arc<AtomicUsize>` handle is exposed) — see `redundant_accessors`
-  in `xtask/src/arch/checks` for the rationale.
+  in `crates/kithara-devtools/src/arch/checks` for the rationale.
 
 ## Decision flow
 
@@ -82,14 +82,14 @@ Downloader → AbrController::record_bandwidth(peer_id, bytes, dur, source)
              │  ├─ Phase 1: parallel compute (5 independent let-bindings)
              │  ├─ Phase 2: single tuple-match → AbrDecision
              │  └─ Phase 3: bandwidth-aware up_switch / down_switch
-             ├─ if changed: AbrState::apply()
+             ├─ if changed: AbrState::apply_decision()
              │              + bus.publish(AbrEvent::VariantApplied)
              │              + schedule_incoherence_watch (5 s deadline)
              └─ else: bus.publish(AbrEvent::DecisionSkipped)
 ```
 
 The decision function avoids a heterogeneous guard-cascade for branch
-prediction reasons — see `xtask/src/idioms/checks/guard_cascade.rs` for
+prediction reasons — see `crates/kithara-devtools/src/idioms/checks/guard_cascade.rs` for
 why and what NOT to do as a workaround.
 
 ## Benchmarking

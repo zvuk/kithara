@@ -31,8 +31,8 @@ Requests flow through five layers (outermost to innermost):
 
 <table>
 <tr><th>Layer</th><th>Responsibility</th></tr>
-<tr><td><code>CachedAssets</code></td><td>In-memory LRU cache (default 5 entries); prevents duplicate mmap opens</td></tr>
 <tr><td><code>LeaseAssets</code></td><td>RAII-based pinning; <code>LeaseGuard</code> unpins on drop; prevents eviction of in-use assets</td></tr>
+<tr><td><code>CachedAssets</code></td><td>In-memory LRU cache (default 5 entries); prevents duplicate mmap opens</td></tr>
 <tr><td><code>ProcessingAssets</code></td><td>Optional chunk-based transformation on <code>commit()</code> (e.g., AES-128-CBC decryption)</td></tr>
 <tr><td><code>EvictAssets</code></td><td>LRU eviction by asset count and/or byte size; pinned assets excluded</td></tr>
 <tr><td><code>DiskAssetStore</code> / <code>MemAssetStore</code></td><td>Base storage backend; maps <code>ResourceKey</code> to filesystem paths or in-memory resources</td></tr>
@@ -43,22 +43,22 @@ Decorator behavior is capability-gated per call. For an absolute `ResourceKey` (
 ```mermaid
 sequenceDiagram
     participant Caller
-    participant Cache as CachedAssets
     participant Lease as LeaseAssets
+    participant Cache as CachedAssets
     participant Proc as ProcessingAssets
     participant Evict as EvictAssets
     participant Disk as DiskAssetStore
     participant FS as Filesystem
 
-    Caller->>Cache: open_resource_with_ctx(key, ctx)
+    Caller->>Lease: open_resource_with_ctx(key, ctx)
+    Lease->>Lease: pin(asset_root)
+    Lease->>Lease: persist _index/pins.bin
+    Lease->>Cache: open_resource_with_ctx(key, ctx)
     Cache->>Cache: check LRU cache
     alt Cache hit
-        Cache-->>Caller: cached resource
+        Cache-->>Lease: cached resource
     else Cache miss
-        Cache->>Lease: open_resource_with_ctx(key, ctx)
-        Lease->>Lease: pin(asset_root)
-        Lease->>Lease: persist _index/pins.bin
-        Lease->>Proc: open_resource_with_ctx(key, ctx)
+        Cache->>Proc: open_resource_with_ctx(key, ctx)
         Proc->>Evict: open_resource_with_ctx(key, ctx)
         Evict->>Evict: first access? check LRU limits
         alt Over limits
@@ -70,12 +70,12 @@ sequenceDiagram
         Disk-->>Evict: StorageResource
         Evict-->>Proc: StorageResource
         Proc->>Proc: wrap in ProcessedResource(res, ctx)
-        Proc-->>Lease: ProcessedResource
-        Lease->>Lease: wrap in LeaseResource(res, guard)
-        Lease-->>Cache: LeaseResource
+        Proc-->>Cache: ProcessedResource
         Cache->>Cache: insert into LRU cache
-        Cache-->>Caller: LeaseResource
+        Cache-->>Lease: CachedResource
     end
+    Lease->>Lease: wrap in LeaseResource(res, guard)
+    Lease-->>Caller: LeaseResource
 
     Note over Caller: On commit():
     Caller->>Proc: commit(final_len)
@@ -119,9 +119,9 @@ All indices use `Atomic<R>` for crash-safe writes. **Availability persistence is
 
 ```rust
 let scope = store.scope(asset_root);
-scope.contains_range(&key, 0..4096); // bool — every byte in range
-scope.available_ranges(&key);        // RangeSet<u64> — full snapshot
-scope.final_len(&key);               // Option<u64> — committed size
+scope.store().contains_range(&key, 0..4096); // bool: every byte in range
+scope.store().available_ranges(&key);        // RangeSet<u64>: full snapshot
+scope.store().final_len(&key);               // Option<u64>: committed size
 ```
 
 Internally these sit on top of an aggregate `AvailabilityIndex` keyed by `(asset_root, ResourceKey)`:
@@ -157,9 +157,9 @@ The in-memory cache key is `(ResourceKey, Option<RequestIdentity>, Option<CtxIde
 
 ## Trait Bridges
 
-- `&Url` → `ResourceKey` (`From`) — derive a unique key from a URL, query-aware
+- `AssetScope::key_for(&Url)` — derive a layout-owned `ResourceKey` from a URL, query-aware
 - `&StoreOptions` → `EvictConfig` (`From`) — extract eviction config from store options
-- `&StoreOptions` → `AssetStoreBuilder` (`From`) — pre-populate a builder from store options (`cancel` set separately); the canonical `StoreOptions`-to-store path for file and HLS
+- `StoreOptions` / `AssetStoreBuilder` — configure the store through explicit builder setters; only eviction config has a `From<&StoreOptions>` bridge
 - `ResourceStatus` → `AssetResourceState` (`From`) — map storage status to asset state
 - `&LruState` ↔ `LruIndexFile` (`From` both ways) — LRU index persistence round-trip
 - `DiskStore` / `MemStore` → `AssetStore` (`From`) — wrap a backend into the unified store

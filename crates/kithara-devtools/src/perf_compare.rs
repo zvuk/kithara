@@ -5,10 +5,10 @@ use regex::Regex;
 
 #[derive(Debug, clap::Args)]
 pub struct PerfCompareArgs {
-    /// Path to the current results file.
-    pub current: PathBuf,
     /// Path to the baseline results file.
     pub baseline: PathBuf,
+    /// Path to the current results file.
+    pub current: PathBuf,
     /// Regression threshold percentage.
     #[arg(long, default_value_t = 10)]
     pub threshold: u32,

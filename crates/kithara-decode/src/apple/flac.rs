@@ -29,11 +29,11 @@ pub(crate) fn streaminfo_body(extra: &[u8]) -> DecodeResult<&[u8]> {
 /// packet size (streaming open).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StreamInfo {
+    pub(crate) total_samples: u64,
+    bits_per_sample: u16,
+    channels: u16,
     max_block_size: u32,
     max_frame_size: u32,
-    channels: u16,
-    bits_per_sample: u16,
-    pub(crate) total_samples: u64,
 }
 
 impl StreamInfo {
@@ -41,23 +41,6 @@ impl StreamInfo {
     /// encoder leaves `max_frame_size` unset (frame + subframe headers and
     /// the CRC footer never approach this, but it keeps the bound safe).
     const HEADER_HEADROOM: u64 = 1024;
-
-    pub(crate) fn parse(extra: &[u8]) -> DecodeResult<Self> {
-        let b = streaminfo_body(extra)?;
-        let max_block_size = u32::from(u16::from_be_bytes([b[2], b[3]]));
-        let max_frame_size = u32::from_be_bytes([0, b[7], b[8], b[9]]);
-        let packed = u64::from_be_bytes([b[10], b[11], b[12], b[13], b[14], b[15], b[16], b[17]]);
-        let channels = u16::try_from(((packed >> 41) & 0x7) + 1).unwrap_or(1);
-        let bits_per_sample = u16::try_from(((packed >> 36) & 0x1F) + 1).unwrap_or(16);
-        let total_samples = packed & 0xF_FFFF_FFFF;
-        Ok(Self {
-            max_block_size,
-            max_frame_size,
-            channels,
-            bits_per_sample,
-            total_samples,
-        })
-    }
 
     /// Upper bound (bytes) on a single FLAC frame, used to size the VBR
     /// read buffer when `AudioFileServices` reports no maximum packet size
@@ -73,6 +56,23 @@ impl StreamInfo {
             .saturating_mul(bytes_per_sample)
             .saturating_add(Self::HEADER_HEADROOM);
         usize::try_from(declared.max(verbatim)).unwrap_or(usize::MAX)
+    }
+
+    pub(crate) fn parse(extra: &[u8]) -> DecodeResult<Self> {
+        let b = streaminfo_body(extra)?;
+        let max_block_size = u32::from(u16::from_be_bytes([b[2], b[3]]));
+        let max_frame_size = u32::from_be_bytes([0, b[7], b[8], b[9]]);
+        let packed = u64::from_be_bytes([b[10], b[11], b[12], b[13], b[14], b[15], b[16], b[17]]);
+        let channels = u16::try_from(((packed >> 41) & 0x7) + 1).unwrap_or(1);
+        let bits_per_sample = u16::try_from(((packed >> 36) & 0x1F) + 1).unwrap_or(16);
+        let total_samples = packed & 0xF_FFFF_FFFF;
+        Ok(Self {
+            total_samples,
+            bits_per_sample,
+            channels,
+            max_block_size,
+            max_frame_size,
+        })
     }
 }
 
@@ -131,10 +131,10 @@ mod tests {
     fn streaminfo_body_slices_dfla_box() {
         let body = streaminfo(4096, 100, 44_100, 2, 16, 1);
         let mut dfla = Vec::new();
-        dfla.extend_from_slice(&[0, 0, 0, 0x32]); // box size
+        dfla.extend_from_slice(&[0, 0, 0, 0x32]);
         dfla.extend_from_slice(b"dfLa");
-        dfla.extend_from_slice(&[0, 0, 0, 0]); // version + flags
-        dfla.extend_from_slice(&[0x80, 0x00, 0x00, 0x22]); // block header
+        dfla.extend_from_slice(&[0, 0, 0, 0]);
+        dfla.extend_from_slice(&[0x80, 0x00, 0x00, 0x22]);
         dfla.extend_from_slice(&body);
         assert_eq!(streaminfo_body(&dfla).expect("dfLa body"), body.as_slice());
         // raw STREAMINFO passes through unchanged.

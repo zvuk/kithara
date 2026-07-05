@@ -5,6 +5,15 @@ use kithara_test_utils::kithara;
 use super::HlsVariant;
 
 impl HlsVariant {
+    pub(crate) fn authoritative_len(&self) -> Option<u64> {
+        let total = self.total_bytes();
+        (total > 0 && self.sizes_complete()).then_some(total)
+    }
+
+    pub(crate) fn eof_ready(&self) -> bool {
+        self.sizes_complete() || self.segment_aware_seek_tail_complete()
+    }
+
     /// Reader-facing lookup in **virtual** byte space — delegates to the
     /// [`Layout`], which subtracts `byte_shift`, runs the natural-space
     /// search, and gates against `[served_from..served_until)` under one
@@ -45,6 +54,16 @@ impl HlsVariant {
         self.layout.is_shrunk(self.num_segments())
     }
 
+    /// True when a same-variant seek needs no layout reset: the offset table
+    /// is already the canonical full-range geometry and every served size is
+    /// exact, so [`Self::reset_layout_to_full_range`] would reproduce the
+    /// identical table. Lets [`HlsCoord::prepare_for_seek`] skip the reset on
+    /// a fully-resolved single-variant track. Cross-variant (shifted/shrunk)
+    /// or size-incomplete layouts return `false` and keep their reset.
+    pub(crate) fn layout_seek_invariant(&self) -> bool {
+        self.layout.is_canonical_complete(&self.segments)
+    }
+
     /// Replace the per-variant fetch queue with `[from_seg .. num_segments)`
     /// (plus `Init` if applicable). Does NOT cancel in-flight fetches —
     /// dedup is handled at `dispatch` time via the `Downloading` state.
@@ -67,16 +86,6 @@ impl HlsVariant {
 
     pub(super) fn reset_layout_to_full_range(&self) {
         self.layout.reset(self.init_route_size(), &self.segments);
-    }
-
-    /// True when a same-variant seek needs no layout reset: the offset table
-    /// is already the canonical full-range geometry and every served size is
-    /// exact, so [`Self::reset_layout_to_full_range`] would reproduce the
-    /// identical table. Lets [`HlsCoord::prepare_for_seek`] skip the reset on
-    /// a fully-resolved single-variant track. Cross-variant (shifted/shrunk)
-    /// or size-incomplete layouts return `false` and keep their reset.
-    pub(crate) fn layout_seek_invariant(&self) -> bool {
-        self.layout.is_canonical_complete(&self.segments)
     }
 
     /// Virtual byte offset of segment `seg_idx` in the combined stream.
@@ -117,15 +126,6 @@ impl HlsVariant {
     /// against the under-count.
     pub(crate) fn sizes_complete(&self) -> bool {
         self.layout.sizes_complete()
-    }
-
-    pub(crate) fn eof_ready(&self) -> bool {
-        self.sizes_complete() || self.segment_aware_seek_tail_complete()
-    }
-
-    pub(crate) fn authoritative_len(&self) -> Option<u64> {
-        let total = self.total_bytes();
-        (total > 0 && self.sizes_complete()).then_some(total)
     }
 
     pub(crate) fn stream_len(&self) -> Option<u64> {

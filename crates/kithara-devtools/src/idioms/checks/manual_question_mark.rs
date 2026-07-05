@@ -71,9 +71,9 @@ impl Check for ManualQuestionMark {
 }
 
 struct MatchVisitor<'a> {
-    rel: &'a str,
     suppress: &'a Suppressions,
     out: &'a mut Vec<Violation>,
+    rel: &'a str,
 }
 
 impl<'ast> Visit<'ast> for MatchVisitor<'_> {

@@ -13,13 +13,13 @@ const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Baseline {
-    #[serde(default = "default_schema_version")]
-    pub(crate) schema_version: u32,
     /// Per-check entries: `check_id` → (`key` → recorded count).
     /// Cannot use `deny_unknown_fields` here because `serde(flatten)` over a
     /// map collects all remaining fields — those are the per-check sections.
     #[serde(flatten)]
     pub checks: BTreeMap<String, BTreeMap<String, u64>>,
+    #[serde(default = "default_schema_version")]
+    pub(crate) schema_version: u32,
 }
 
 fn default_schema_version() -> u32 {
@@ -27,85 +27,6 @@ fn default_schema_version() -> u32 {
 }
 
 impl Baseline {
-    pub(crate) fn path(config_dir: &Path) -> PathBuf {
-        config_dir.join("baseline.toml")
-    }
-
-    /// Load the ratchet baseline from `config_dir`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the baseline file cannot be read or parsed.
-    pub fn load(config_dir: &Path) -> Result<Self> {
-        let path = Self::path(config_dir);
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("read baseline: {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parse baseline: {}", path.display()))
-    }
-
-    /// Return a copy of this baseline with only entries whose key passes
-    /// the predicate. Used to drop out-of-scope baseline entries before
-    /// ratchet diffing on a scoped run.
-    #[must_use]
-    pub fn filter_keys<P>(&self, predicate: P) -> Self
-    where
-        P: Fn(&str) -> bool,
-    {
-        let mut out = Self {
-            schema_version: self.schema_version,
-            checks: BTreeMap::new(),
-        };
-        for (check, keys) in &self.checks {
-            let kept: BTreeMap<String, u64> = keys
-                .iter()
-                .filter(|(k, _)| predicate(k.as_str()))
-                .map(|(k, v)| (k.clone(), *v))
-                .collect();
-            if !kept.is_empty() {
-                out.checks.insert(check.clone(), kept);
-            }
-        }
-        out
-    }
-
-    /// Build a fresh baseline from the report's current observations.
-    #[must_use]
-    pub fn from_report(report: &Report) -> Self {
-        let mut checks: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
-        for v in &report.violations {
-            *checks
-                .entry(v.check.to_string())
-                .or_default()
-                .entry(canonical_key(&v.key))
-                .or_insert(0) += 1;
-        }
-        Self {
-            schema_version: SCHEMA_VERSION,
-            checks,
-        }
-    }
-
-    /// Save the ratchet baseline into `config_dir`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the directory cannot be created, the baseline
-    /// cannot be serialized, or the file cannot be written.
-    pub fn save(&self, config_dir: &Path) -> Result<PathBuf> {
-        fs::create_dir_all(config_dir)
-            .with_context(|| format!("create config dir: {}", config_dir.display()))?;
-        let path = Self::path(config_dir);
-        let mut text = toml::to_string_pretty(self).context("serialize baseline")?;
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        fs::write(&path, text).with_context(|| format!("write baseline: {}", path.display()))?;
-        Ok(path)
-    }
-
     /// Compare observations against this baseline.
     #[must_use]
     pub fn diff<'a>(&self, observed: &'a [Violation]) -> RatchetDiff<'a> {
@@ -169,10 +90,89 @@ impl Baseline {
         new_violations.dedup_by(|a, b| a.check == b.check && a.key == b.key);
 
         RatchetDiff {
-            regressions,
-            new_violations,
             improvements,
+            new_violations,
+            regressions,
         }
+    }
+
+    /// Return a copy of this baseline with only entries whose key passes
+    /// the predicate. Used to drop out-of-scope baseline entries before
+    /// ratchet diffing on a scoped run.
+    #[must_use]
+    pub fn filter_keys<P>(&self, predicate: P) -> Self
+    where
+        P: Fn(&str) -> bool,
+    {
+        let mut out = Self {
+            schema_version: self.schema_version,
+            checks: BTreeMap::new(),
+        };
+        for (check, keys) in &self.checks {
+            let kept: BTreeMap<String, u64> = keys
+                .iter()
+                .filter(|(k, _)| predicate(k.as_str()))
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            if !kept.is_empty() {
+                out.checks.insert(check.clone(), kept);
+            }
+        }
+        out
+    }
+
+    /// Build a fresh baseline from the report's current observations.
+    #[must_use]
+    pub fn from_report(report: &Report) -> Self {
+        let mut checks: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
+        for v in &report.violations {
+            *checks
+                .entry(v.check.to_string())
+                .or_default()
+                .entry(canonical_key(&v.key))
+                .or_insert(0) += 1;
+        }
+        Self {
+            checks,
+            schema_version: SCHEMA_VERSION,
+        }
+    }
+
+    /// Load the ratchet baseline from `config_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the baseline file cannot be read or parsed.
+    pub fn load(config_dir: &Path) -> Result<Self> {
+        let path = Self::path(config_dir);
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let text = fs::read_to_string(&path)
+            .with_context(|| format!("read baseline: {}", path.display()))?;
+        toml::from_str(&text).with_context(|| format!("parse baseline: {}", path.display()))
+    }
+
+    pub(crate) fn path(config_dir: &Path) -> PathBuf {
+        config_dir.join("baseline.toml")
+    }
+
+    /// Save the ratchet baseline into `config_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created, the baseline
+    /// cannot be serialized, or the file cannot be written.
+    pub fn save(&self, config_dir: &Path) -> Result<PathBuf> {
+        fs::create_dir_all(config_dir)
+            .with_context(|| format!("create config dir: {}", config_dir.display()))?;
+        let path = Self::path(config_dir);
+        let mut text = toml::to_string_pretty(self).context("serialize baseline")?;
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        fs::write(&path, text).with_context(|| format!("write baseline: {}", path.display()))?;
+        Ok(path)
     }
 }
 
@@ -201,9 +201,9 @@ fn canonical_key(key: &str) -> String {
 
 #[derive(Debug)]
 pub struct RatchetDiff<'a> {
-    pub regressions: Vec<&'a Violation>,
-    pub new_violations: Vec<&'a Violation>,
     pub improvements: Vec<Improvement>,
+    pub new_violations: Vec<&'a Violation>,
+    pub regressions: Vec<&'a Violation>,
 }
 
 impl RatchetDiff<'_> {

@@ -144,7 +144,9 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
     .await
     .expect("drain join");
 
-    let final_variant = abr.as_ref().and_then(|h| h.current_variant_index());
+    let final_variant = abr
+        .as_ref()
+        .and_then(kithara::abr::AbrHandle::current_variant_index);
 
     assert!(
         drained >= Consts::MIN_CHUNKS,

@@ -51,14 +51,14 @@ consumer directly on the shared `StretchControls` handle.
 </table>
 
 Status types: `PlayerStatus`, `TimeControlStatus`, `ItemStatus`,
-`WaitingReason`. Audio-session value types (`SessionCategory`, `SessionMode`,
-`SessionOptions`, `PortType`, `RouteDescription`) describe routing. Identity/time:
+`WaitingReason`. Audio-session value types (`PortDescription`, `PortType`,
+`RouteDescription`, `SessionDuckingMode`) describe routing. Identity/time:
 `SlotId`, `ObserverId`, `MediaTime` (a `CMTime` mirror with `Ord` and arithmetic).
 
 ## Queue Auto-Advance
 
-`PlayerImpl` exposes a handover API for external orchestrators (e.g.
-`kithara-queue::Queue`):
+`PlayerImpl` exposes a handover API for external orchestrators and internal
+tests:
 
 - `arm_next(idx) -> Option<Arc<str>>` — load the next item into the audio thread,
   ready for gapless stitch (cf=0) or parallel fade (cf>0).
@@ -67,11 +67,12 @@ Status types: `PlayerStatus`, `TimeControlStatus`, `ItemStatus`,
 - `unarm_next()` — drop the armed slot without committing.
 - `armed_next() -> Option<usize>` — snapshot of the armed index.
 
-Two near-end triggers are published: `PlayerEvent::PrefetchRequested` (arm the
-next track) and `PlayerEvent::TrackHandoverRequested` (commit it; emitted only
-when `crossfade_duration > 0`). `PlayerConfig::auto_advance_enabled` (default
-`true`) uses a built-in linear policy (`next = current + 1`); orchestrators turn
-it off and drive advance themselves.
+Two near-end triggers are published: `PlayerEvent::PrefetchRequested` and
+`PlayerEvent::HandoverRequested` (emitted only when `crossfade_duration > 0`).
+`PlayerConfig::auto_advance_enabled` (default `true`) uses a built-in linear
+policy (`next = current + 1`). `kithara-queue::Queue` disables that built-in
+policy and reacts to `HandoverRequested` by selecting the loaded successor via
+`select_item_with_crossfade`; it does not call `arm_next` / `commit_next`.
 
 ## Engine Lifecycle
 
@@ -154,11 +155,13 @@ attributes would fragment the shared `kithara::` facade and shed nothing.
 ## Session Hosting
 
 Platform-asymmetric by necessity. Native (`impls/session/host_native.rs`): a
-dedicated engine worker thread drains a `ringbuf` of commands. Web
+dedicated engine worker thread drains an `mpsc::Receiver<CmdMsg>`. Ring buffers
+live in session state / engine slots, not in the command host. Web
 (`impls/session/host_web.rs`): `AudioContext` lives on the browser main thread,
 and Worker-side clients proxy commands over an `mpsc` bridge. The cross-platform
-core (`state.rs`, `client.rs`) carries zero `#[cfg]`; the only structural gate is
-two lines in `mod.rs`.
+core (`state.rs`, `client.rs`) carries zero `#[cfg]`; the structural gates are
+the four cfg lines around `mod host_native`, `mod host_web`, and their re-exports
+in `mod.rs`.
 
 ## Feature Flags
 
@@ -167,7 +170,13 @@ two lines in `mod.rs`.
 <tr><td><code>backend-cpal</code></td><td>yes</td><td>CPAL output via <code>firewheel/cpal</code></td></tr>
 <tr><td><code>backend-web-audio</code></td><td>no</td><td>WebAudio backend (wasm32)</td></tr>
 <tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM bindings via <code>firewheel/wasm-bindgen</code></td></tr>
+<tr><td><code>symphonia</code></td><td>yes</td><td>Software decode forwarding to <code>kithara-audio</code> and <code>kithara-decode</code></td></tr>
+<tr><td><code>fdk-aac</code></td><td>no</td><td>FDK-AAC decode forwarding to <code>kithara-audio</code> and <code>kithara-decode</code></td></tr>
 <tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode via <code>kithara-audio/apple</code></td></tr>
+<tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to network-reaching deps</td></tr>
+<tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend to network-reaching deps</td></tr>
+<tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
+<tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
 <tr><td><code>probe</code></td><td>no</td><td>USDT runtime tracing</td></tr>
 <tr><td><code>mock</code></td><td>no</td><td><code>unimock</code> trait mocks</td></tr>
 </table>

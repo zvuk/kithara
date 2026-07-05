@@ -14,20 +14,19 @@ use crate::common::{fix::FixOutcome, scope::Scope, violation::Violation};
 
 pub(crate) mod comment_hygiene;
 pub(crate) mod const_locality;
+pub(crate) mod dead_doc_refs;
+pub(crate) mod non_english_text;
 pub(crate) mod struct_field_order;
 pub(crate) mod struct_init_order;
 pub(crate) mod trait_item_order;
 
 pub(crate) struct Context<'a> {
     pub(crate) workspace_root: &'a Path,
-    pub(crate) config: &'a StyleConfig,
     pub(crate) scope: &'a Scope,
+    pub(crate) config: &'a StyleConfig,
 }
 
 pub(crate) trait Check {
-    fn id(&self) -> &'static str;
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
-
     /// Apply the check's autofix in place. Default: no autofix; the
     /// violation stays in the report and the user resolves it manually.
     /// Implementations must uphold the four invariants from
@@ -39,12 +38,20 @@ pub(crate) trait Check {
             changes: Vec::new(),
         })
     }
+    fn id(&self) -> &'static str;
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
+
+    fn uses_global_lint_excludes(&self) -> bool {
+        true
+    }
 }
 
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(comment_hygiene::CommentHygiene),
         Box::new(const_locality::ConstLocality),
+        Box::new(dead_doc_refs::DeadDocRefs),
+        Box::new(non_english_text::NonEnglishText),
         Box::new(struct_field_order::StructFieldOrder),
         Box::new(trait_item_order::TraitItemOrder),
         Box::new(struct_init_order::StructInitOrder),

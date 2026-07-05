@@ -26,8 +26,8 @@ impl<S> tower_layer::Layer<S> for CountConnectionsLayer {
 
 #[derive(Clone)]
 pub(super) struct CountConnectionsService<S> {
-    inner: S,
     metrics: ConnectionMetrics,
+    inner: S,
 }
 
 impl<S, Request> tower_service::Service<Request> for CountConnectionsService<S>
@@ -41,10 +41,6 @@ where
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
     type Response = S::Response;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
-
     fn call(&mut self, request: Request) -> Self::Future {
         let future = self.inner.call(request);
         let metrics = self.metrics.clone();
@@ -55,5 +51,9 @@ where
             }
             result
         })
+    }
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
     }
 }

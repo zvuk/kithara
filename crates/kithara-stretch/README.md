@@ -1,11 +1,24 @@
+<div align="center">
+  <img src="../../logo.svg" alt="kithara" width="300">
+</div>
+
+<div align="center">
+
+[![crates.io](https://img.shields.io/crates/v/kithara-stretch.svg)](https://crates.io/crates/kithara-stretch)
+[![docs.rs](https://docs.rs/kithara-stretch/badge.svg)](https://docs.rs/kithara-stretch)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-stretch
 
 Pure time-stretch DSP contracts and backend adapters for Kithara.
 
 This crate owns the `StretchBackend` trait, backend selector, backend factory,
-and native C++ backend adapters. It has no runtime dependency on other
-`kithara-*` crates; audio graph plumbing, region planning, PCM pools, chunk
-metadata, and resampler routing stay in `kithara-audio`.
+and native C++ backend adapters. Backend features depend downward on
+`kithara-bufpool` for scratch storage, and native builds include
+`kithara-workspace-hack`; audio graph plumbing, region planning, chunk metadata,
+and resampler routing stay in `kithara-audio`.
 
 Feature flags select the compiled backends:
 

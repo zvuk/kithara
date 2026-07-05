@@ -16,13 +16,13 @@ struct Meta {
 
 #[derive(Debug, Deserialize)]
 struct Thread {
-    samples: Samples,
-    #[serde(rename = "stackTable")]
-    stack_table: StackTable,
     #[serde(rename = "frameTable")]
     frame_table: FrameTable,
     #[serde(rename = "funcTable")]
     func_table: FuncTable,
+    samples: Samples,
+    #[serde(rename = "stackTable")]
+    stack_table: StackTable,
     #[serde(rename = "stringArray")]
     string_array: Vec<String>,
 }
@@ -36,8 +36,8 @@ struct Samples {
 
 #[derive(Debug, Deserialize)]
 struct StackTable {
-    prefix: Vec<Option<usize>>,
     frame: Vec<usize>,
+    prefix: Vec<Option<usize>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,8 +52,8 @@ struct FuncTable {
 
 #[derive(Debug)]
 pub(crate) struct WaitBucket {
-    pub(crate) class: String,
     pub(crate) attributed: String,
+    pub(crate) class: String,
     pub(crate) ms: f64,
 }
 
@@ -65,10 +65,10 @@ pub(crate) struct FrameBucket {
 
 #[derive(Debug)]
 pub(crate) struct ProfileSummary {
-    pub(crate) on_cpu_ms: f64,
-    pub(crate) off_cpu_ms: f64,
-    pub(crate) waits: Vec<WaitBucket>,
     pub(crate) cpu: Vec<FrameBucket>,
+    pub(crate) waits: Vec<WaitBucket>,
+    pub(crate) off_cpu_ms: f64,
+    pub(crate) on_cpu_ms: f64,
 }
 
 const WAIT_CLASSES: [(&str, &[&str]); 7] = [
@@ -150,8 +150,8 @@ pub(crate) fn summarize(
     let mut waits: Vec<WaitBucket> = waits
         .into_iter()
         .map(|((class, attributed), ms)| WaitBucket {
-            class,
             attributed,
+            class,
             ms,
         })
         .collect();
@@ -164,10 +164,10 @@ pub(crate) fn summarize(
     cpu.sort_by(|a, b| b.ms.total_cmp(&a.ms));
     cpu.truncate(top);
     Ok(ProfileSummary {
-        on_cpu_ms,
-        off_cpu_ms,
-        waits,
         cpu,
+        waits,
+        off_cpu_ms,
+        on_cpu_ms,
     })
 }
 

@@ -41,7 +41,6 @@ struct HlsTrackState {
     look_ahead_bytes: Option<u64>,
     /// Effective media-segment cap used for small ephemeral stores.
     look_ahead_segments: Option<usize>,
-    size_probe_method: SizeProbeMethod,
     /// Target segment of an in-flight forward seek, held until the reader's
     /// physical byte cursor catches up to it. `coord.position()` only
     /// advances when the reader actually reads at the new offset, so right
@@ -55,6 +54,7 @@ struct HlsTrackState {
     /// Cleared once the reader physically resolves at/after the floor.
     seek_settle_floor: Option<u32>,
     waker: Option<Waker>,
+    size_probe_method: SizeProbeMethod,
     eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
     last_seek_epoch: u64,
     prefetch_budget: usize,
@@ -145,13 +145,13 @@ impl HlsPeer {
             let plan_ctx = PlanCtx {
                 prefetch_budget,
                 look_ahead_bytes,
+                size_probe_method,
+                look_ahead_segments,
                 master_cancel: coord.cancel.clone(),
                 scope: coord.scope.clone(),
                 headers: coord.headers.clone(),
                 seek_epoch: self.seek_obs.epoch(),
                 signal: coord.signal(),
-                size_probe_method,
-                look_ahead_segments,
             };
             active.rebuild(&plan_ctx, initial_seg);
         }
@@ -442,7 +442,6 @@ impl HlsTrackState {
         // `resolved` re-keys the cursor backward and `rebuild`s the prefix
         // (re-downloading seg 0..target). Only drop the floor once the reader
         // *physically resolves* (`demand_segment.is_some()`) to a segment
-        // at/after it —
         // a `None` lookup falls back to `prev` and must NOT be read as "caught
         // up", or a later valid low lookup re-opens the race.
         if let Some(floor) = self.seek_settle_floor {

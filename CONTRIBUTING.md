@@ -16,7 +16,7 @@ just lint-full         # full lint / policy checks
 
 Complete the environment setup below before relying on the `just` workflow. The
 canonical local workflow for both humans and AI agents lives in
-[.docs/workflows/rust-ai.md](.docs/workflows/rust-ai.md).
+[docs/workflows/rust-ai.md](docs/workflows/rust-ai.md).
 
 ## Environment Setup
 
@@ -124,7 +124,7 @@ task packet or plan together with the touched crate `README.md` files to choose
 the right local commands.
 
 See [`AGENTS.md`](AGENTS.md) for the full coding rules and
-[.docs/plans/_template.md](.docs/plans/_template.md) for the required task-plan
+[docs/plans/_template.md](docs/plans/_template.md) for the required task-plan
 format on non-trivial changes.
 
 ## Architecture

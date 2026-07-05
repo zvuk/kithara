@@ -44,8 +44,8 @@ impl Check for ParallelLoops {
 }
 
 struct BlockVisitor<'a> {
-    rel: &'a str,
     out: &'a mut Vec<Violation>,
+    rel: &'a str,
 }
 
 impl<'ast> Visit<'ast> for BlockVisitor<'_> {

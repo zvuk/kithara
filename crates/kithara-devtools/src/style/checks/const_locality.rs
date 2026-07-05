@@ -45,10 +45,10 @@ impl Check for ConstLocality {
             let mut collector = NameCollector { names: &mut names };
             collector.visit_file(&file);
             files.push(ParsedFile {
-                rel,
-                crate_key,
                 file,
                 names,
+                crate_key,
+                rel,
             });
         }
 
@@ -71,10 +71,10 @@ impl Check for ConstLocality {
 }
 
 struct ParsedFile {
-    rel: String,
-    crate_key: String,
     file: syn::File,
     names: HashSet<String>,
+    crate_key: String,
+    rel: String,
 }
 
 /// Nearest-ancestor crate directory (the dir holding `Cargo.toml`), relative
@@ -236,18 +236,18 @@ fn format_owner(o: &Owner) -> String {
 /// length, macro or attribute token stream, doc comment, or a non-fn item
 /// — sets `disqualified`, so the caller refuses to flag the const.
 struct RefAnalyzer<'a> {
-    name: &'a str,
     /// Module path where the const is declared. An expression-position
     /// reference from a *different* module is a cross-module use, not a
     /// fn-local one.
     const_mod_path: &'a [String],
-    owners: Vec<Owner>,
-    disqualified: bool,
-    impl_counter: usize,
+    name: &'a str,
     /// `Some` while visiting a fn/method block body; carries that body's owner.
     current_owner: Option<Owner>,
     /// Module path currently being visited.
     current_mod_path: Vec<String>,
+    owners: Vec<Owner>,
+    disqualified: bool,
+    impl_counter: usize,
     /// `> 0` while inside a type / const-generic / array-length context.
     type_depth: usize,
 }
@@ -310,19 +310,33 @@ fn same_owner(a: &Owner, b: &Owner) -> bool {
 }
 
 impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
-    fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
-        if self.disqualified {
-            return;
+    fn visit_attribute(&mut self, a: &'ast syn::Attribute) {
+        // Covers attribute-macro args (`#[case(..)]`,
+        // `#[kithara::test(timeout(..))]`) and doc comments
+        // (`#[doc = "...[`NAME`]..."]`, including intra-doc links).
+        if attr_mentions_name(a, self.name) {
+            self.disqualified = true;
         }
-        for attr in &m.attrs {
-            self.visit_attribute(attr);
-        }
-        if let Some((_, inner)) = &m.content {
-            self.current_mod_path.push(m.ident.to_string());
-            for it in inner {
-                self.visit_item(it);
-            }
-            self.current_mod_path.pop();
+        visit::visit_attribute(self, a);
+    }
+
+    fn visit_expr_repeat(&mut self, e: &'ast syn::ExprRepeat) {
+        // `[value; LEN]` — the length is a const expression position, so a
+        // reference there is not a movable body-local const.
+        self.visit_expr(&e.expr);
+        self.type_depth += 1;
+        self.visit_expr(&e.len);
+        self.type_depth -= 1;
+    }
+
+    fn visit_generic_argument(&mut self, arg: &'ast GenericArgument) {
+        // `GenericArgument::Const` is a const-generic value position.
+        if let GenericArgument::Const(_) = arg {
+            self.type_depth += 1;
+            visit::visit_generic_argument(self, arg);
+            self.type_depth -= 1;
+        } else {
+            visit::visit_generic_argument(self, arg);
         }
     }
 
@@ -374,29 +388,19 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
         }
     }
 
-    fn visit_expr_repeat(&mut self, e: &'ast syn::ExprRepeat) {
-        // `[value; LEN]` — the length is a const expression position, so a
-        // reference there is not a movable body-local const.
-        self.visit_expr(&e.expr);
-        self.type_depth += 1;
-        self.visit_expr(&e.len);
-        self.type_depth -= 1;
-    }
-
-    fn visit_type(&mut self, t: &'ast Type) {
-        self.type_depth += 1;
-        visit::visit_type(self, t);
-        self.type_depth -= 1;
-    }
-
-    fn visit_generic_argument(&mut self, arg: &'ast GenericArgument) {
-        // `GenericArgument::Const` is a const-generic value position.
-        if let GenericArgument::Const(_) = arg {
-            self.type_depth += 1;
-            visit::visit_generic_argument(self, arg);
-            self.type_depth -= 1;
-        } else {
-            visit::visit_generic_argument(self, arg);
+    fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
+        if self.disqualified {
+            return;
+        }
+        for attr in &m.attrs {
+            self.visit_attribute(attr);
+        }
+        if let Some((_, inner)) = &m.content {
+            self.current_mod_path.push(m.ident.to_string());
+            for it in inner {
+                self.visit_item(it);
+            }
+            self.current_mod_path.pop();
         }
     }
 
@@ -407,16 +411,6 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
             self.disqualified = true;
         }
         visit::visit_macro(self, m);
-    }
-
-    fn visit_attribute(&mut self, a: &'ast syn::Attribute) {
-        // Covers attribute-macro args (`#[case(..)]`,
-        // `#[kithara::test(timeout(..))]`) and doc comments
-        // (`#[doc = "...[`NAME`]..."]`, including intra-doc links).
-        if attr_mentions_name(a, self.name) {
-            self.disqualified = true;
-        }
-        visit::visit_attribute(self, a);
     }
 
     fn visit_path(&mut self, p: &'ast syn::Path) {
@@ -441,6 +435,12 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
                 }
             }
         }
+    }
+
+    fn visit_type(&mut self, t: &'ast Type) {
+        self.type_depth += 1;
+        visit::visit_type(self, t);
+        self.type_depth -= 1;
     }
 }
 
@@ -488,11 +488,11 @@ struct NameCollector<'a> {
 }
 
 impl<'ast> Visit<'ast> for NameCollector<'_> {
-    fn visit_path(&mut self, p: &'ast syn::Path) {
-        for seg in &p.segments {
-            self.names.insert(seg.ident.to_string());
+    fn visit_attribute(&mut self, a: &'ast syn::Attribute) {
+        if let syn::Meta::List(list) = &a.meta {
+            collect_token_idents(&list.tokens, self.names);
         }
-        visit::visit_path(self, p);
+        visit::visit_attribute(self, a);
     }
 
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
@@ -500,11 +500,11 @@ impl<'ast> Visit<'ast> for NameCollector<'_> {
         visit::visit_macro(self, m);
     }
 
-    fn visit_attribute(&mut self, a: &'ast syn::Attribute) {
-        if let syn::Meta::List(list) = &a.meta {
-            collect_token_idents(&list.tokens, self.names);
+    fn visit_path(&mut self, p: &'ast syn::Path) {
+        for seg in &p.segments {
+            self.names.insert(seg.ident.to_string());
         }
-        visit::visit_attribute(self, a);
+        visit::visit_path(self, p);
     }
 }
 

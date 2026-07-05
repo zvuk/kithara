@@ -47,22 +47,6 @@ impl<'src> SourceRewriter<'src> {
         }
     }
 
-    /// Stage a replacement of `range` with `with`. Order of `replace` calls
-    /// does not matter; `finish()` sorts and validates them.
-    pub fn replace<T>(&mut self, range: Range<usize>, with: T)
-    where
-        T: Into<String>,
-    {
-        self.edits.push((range, with.into()));
-    }
-
-    /// True iff no replacements were staged. Caller can use this to skip
-    /// `fs::write` and uphold invariant I3 (no-op safety).
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.edits.is_empty()
-    }
-
     /// Validate ranges, sort them, and apply replacements producing the new
     /// source. Errors out on overlap or out-of-range edits.
     ///
@@ -80,8 +64,8 @@ impl<'src> SourceRewriter<'src> {
             }
             if range.end > src_len {
                 return Err(RewriteError::OutOfRange {
-                    range: range.clone(),
                     src_len,
+                    range: range.clone(),
                 });
             }
         }
@@ -105,6 +89,22 @@ impl<'src> SourceRewriter<'src> {
         }
         out.push_str(&self.src[cursor..]);
         Ok(out)
+    }
+
+    /// True iff no replacements were staged. Caller can use this to skip
+    /// `fs::write` and uphold invariant I3 (no-op safety).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.edits.is_empty()
+    }
+
+    /// Stage a replacement of `range` with `with`. Order of `replace` calls
+    /// does not matter; `finish()` sorts and validates them.
+    pub fn replace<T>(&mut self, range: Range<usize>, with: T)
+    where
+        T: Into<String>,
+    {
+        self.edits.push((range, with.into()));
     }
 }
 

@@ -19,26 +19,6 @@ pub(crate) const ID: &str = "struct_field_order";
 pub(crate) struct StructFieldOrder;
 
 impl Check for StructFieldOrder {
-    fn id(&self) -> &'static str {
-        ID
-    }
-
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let cfg = &ctx.config.thresholds.struct_field_order;
-        let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
-                continue;
-            };
-            let rel = relative_to(ctx.workspace_root, &path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            scan_items(cfg, &rel, &file.items, &mut Vec::new(), &mut violations);
-        }
-        violations.sort_by(|a, b| a.key.cmp(&b.key));
-        Ok(violations)
-    }
-
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.struct_field_order;
         let mut outcome = FixOutcome::default();
@@ -61,6 +41,26 @@ impl Check for StructFieldOrder {
             }
         }
         Ok(outcome)
+    }
+
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        let cfg = &ctx.config.thresholds.struct_field_order;
+        let mut violations = Vec::new();
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+            let Ok(file) = parse_file(&path) else {
+                continue;
+            };
+            let rel = relative_to(ctx.workspace_root, &path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            scan_items(cfg, &rel, &file.items, &mut Vec::new(), &mut violations);
+        }
+        violations.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(violations)
     }
 }
 
@@ -339,10 +339,10 @@ fn check_field_block(
 
 #[derive(Debug, Clone)]
 struct FieldKey {
+    name: String,
+    type_key: String,
     idx: usize,
     vis_bucket: usize,
-    type_key: String,
-    name: String,
 }
 
 fn cmp_field_key(a: &FieldKey, b: &FieldKey) -> Ordering {

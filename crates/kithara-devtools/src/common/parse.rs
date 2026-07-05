@@ -10,17 +10,17 @@ use syn::{
 /// Counts of items in a parsed `.rs` file.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ItemStats {
-    pub types: usize,
     pub fns: usize,
+    pub types: usize,
 }
 
 /// Per-type accounting: how much code targets each type defined in the file.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TypeWeight {
-    /// Total `fn`s across all `impl X` and `impl Trait for X` blocks targeting `X`.
-    pub impl_fns: usize,
     /// Number of distinct `impl` blocks targeting this type (own + trait impls).
     pub impl_blocks: usize,
+    /// Total `fn`s across all `impl X` and `impl Trait for X` blocks targeting `X`.
+    pub impl_fns: usize,
 }
 
 /// Parse a Rust source file into a `syn` file.
@@ -175,12 +175,12 @@ pub enum AccessKind {
 
 #[derive(Debug, Clone)]
 pub struct PassthroughOpts {
-    /// `Some`, `Ok`, `Box::new`, `Cow::Borrowed`, ... — single-arg ctors that
-    /// wrap a passthrough value and preserve data identity.
-    pub wrapper_ctors: Vec<String>,
     /// `as_ref`, `as_mut`, `as_str`, `as_slice`, `borrow`, `lock`, `read`, ... —
     /// 0-arg methods that expose internal data.
     pub expose_methods: Vec<String>,
+    /// `Some`, `Ok`, `Box::new`, `Cow::Borrowed`, ... — single-arg ctors that
+    /// wrap a passthrough value and preserve data identity.
+    pub wrapper_ctors: Vec<String>,
 }
 
 impl Default for PassthroughOpts {
@@ -297,8 +297,8 @@ fn expr_to_passthrough(e: &Expr, opts: &PassthroughOpts) -> Option<AccessPath> {
                 let Expr::Reference(r) = arg else { return None };
                 let fields = self_chain(&r.expr)?;
                 return Some(AccessPath {
-                    kind: AccessKind::Clone,
                     fields,
+                    kind: AccessKind::Clone,
                 });
             }
             if opts
@@ -314,8 +314,8 @@ fn expr_to_passthrough(e: &Expr, opts: &PassthroughOpts) -> Option<AccessPath> {
         Expr::Field(_) | Expr::Path(_) => {
             let fields = self_chain(e)?;
             Some(AccessPath {
-                kind: AccessKind::Move,
                 fields,
+                kind: AccessKind::Move,
             })
         }
         Expr::Block(b) => block_tail_expr(&b.block).and_then(|x| expr_to_passthrough(x, opts)),
@@ -467,10 +467,10 @@ pub fn collect_self_field_writes(method: &ImplItemFn, writer_methods: &[String])
 /// to avoid cross-module name aliasing.
 #[derive(Debug)]
 pub struct Scope<'a> {
+    pub impls: Vec<&'a ItemImpl>,
     /// Module path components, e.g. `["foo", "bar"]`. Empty for file root.
     pub path: Vec<String>,
     pub structs: Vec<&'a syn::ItemStruct>,
-    pub impls: Vec<&'a ItemImpl>,
 }
 
 /// Recursively collect one `Scope` per module level in the file.
@@ -498,9 +498,9 @@ fn collect_scope_inner<'a>(items: &'a [Item], path: &mut Vec<String>, out: &mut 
         }
     }
     out.push(Scope {
-        path: path.clone(),
         structs,
         impls,
+        path: path.clone(),
     });
     for (m, inner) in sub_mods {
         path.push(m.ident.to_string());

@@ -4,7 +4,9 @@ Detailed contracts and invariants for the kithara-drm crate; the README is the o
 
 ## How It Works
 
-The decryption function signature matches `ProcessChunkFn<DecryptContext>` from `kithara-assets`. When `ProcessingAssets::commit()` is called on an encrypted segment:
+HLS wraps `DecryptContext` as a `kithara-assets` `ResourceProcessor` / `ChunkSink`
+pair in `kithara-hls/src/decrypt_processor.rs`. When an encrypted segment is
+processed:
 
 1. The segment data is read from disk in 64 KB chunks.
 2. Each chunk is decrypted via `aes128_cbc_process_chunk()`.

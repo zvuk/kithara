@@ -115,6 +115,18 @@ impl FileSource {
         }
     }
 
+    /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
+    /// inner is created up in `stream.rs::Stream<File>::open` and shared
+    /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
+    /// loop, so this constructor does nothing async.
+    pub(crate) fn with_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
+        Self {
+            coord,
+            inner,
+            peer_handle: None,
+        }
+    }
+
     fn zero_read_outcome(&self, offset: u64) -> kithara_stream::StreamResult<ReadOutcome> {
         match self.inner.asset.reader.status() {
             ResourceStatus::Active => Ok(ReadOutcome::Pending(PendingReason::NotReady(
@@ -132,18 +144,6 @@ impl FileSource {
             ResourceStatus::Cancelled => Err(StreamError::Source(
                 FileSourceError::Storage(StorageError::Cancelled).into(),
             )),
-        }
-    }
-
-    /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
-    /// inner is created up in `stream.rs::Stream<File>::open` and shared
-    /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
-    /// loop, so this constructor does nothing async.
-    pub(crate) fn with_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
-        Self {
-            coord,
-            inner,
-            peer_handle: None,
         }
     }
 }

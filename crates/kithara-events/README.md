@@ -47,6 +47,7 @@ while let Ok(event) = rx.recv().await {
 
 ## Features
 
-All variants of `Event` and all subsystem sub-enums are feature-gated. The default set turns everything on so consumers get the full event surface; disable defaults and pick à-la-carte for smaller builds. See CONTEXT.md for the per-feature table.
+The default feature set exposes the full event surface. See CONTEXT.md for the
+per-feature table and the optional HTTP/TLS forwarding features.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

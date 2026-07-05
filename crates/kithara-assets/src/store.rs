@@ -83,6 +83,8 @@ pub struct StoreOptions {
     /// [`FlushHub::with_worker`] in production for debounced /
     /// coalesced background flushing.
     pub flush_hub: Option<Arc<FlushHub>>,
+    /// On-disk layout policy; `None` keeps [`DefaultLayout`].
+    pub layout: Option<Arc<dyn AssetLayout>>,
     /// Maximum number of assets to keep (soft cap for LRU eviction).
     pub max_assets: Option<usize>,
     /// Maximum bytes to store (soft cap for LRU eviction).
@@ -90,8 +92,6 @@ pub struct StoreOptions {
     /// Storage backend: in-memory, or disk rooted at a directory.
     #[builder(default)]
     pub backend: StorageBackend,
-    /// On-disk layout policy; `None` keeps [`DefaultLayout`].
-    pub layout: Option<Arc<dyn AssetLayout>>,
 }
 
 impl fmt::Debug for StoreOptions {
@@ -299,8 +299,8 @@ impl AssetStoreBuildArgs {
                         availability,
                         demand,
                         eviction,
-                        base: Some(base),
                         layout,
+                        base: Some(base),
                     }
                 }
             }
@@ -376,7 +376,6 @@ impl AssetStoreBuildArgs {
             .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
         // Durable backing: LRU displacement is a transparent cache miss
         // (bytes survive on disk), so the cache never invalidates and no
-        // eviction hook is wired.
         let cached = Arc::new(CachedAssets::new(processing, capacity, None, false));
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
@@ -442,7 +441,6 @@ impl AssetStoreBuildArgs {
         let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool.clone()));
         // Ephemeral backing: LRU displacement frees the bytes, so each
         // displaced key must clear availability and reach its eviction
-        // subscriber.
         let availability_for_hook = availability.clone();
         let eviction_for_hook = eviction.clone();
         let on_invalidated: OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {

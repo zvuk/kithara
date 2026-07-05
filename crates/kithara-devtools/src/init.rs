@@ -12,7 +12,6 @@ use crate::{Ctx, common::baseline::Baseline};
 
 struct Consts;
 impl Consts {
-    const CONFIG_REL: &'static str = ".config/xtask.toml";
     const BASELINE_CONFIG_DIRS: &'static [&'static str] =
         &[".config/arch", ".config/style", ".config/idioms"];
     const COMMENTED_CONFIG_TEMPLATE: &'static str = r#"
@@ -65,6 +64,7 @@ impl Consts {
 # [workspace-scan]
 # exclude = []
 "#;
+    const CONFIG_REL: &'static str = ".config/xtask.toml";
 
     const MAIN_RS_SNIPPET: &'static str = r#"use clap::{Parser, Subcommand};
 use kithara_devtools::{CoreCommand, Ctx};
@@ -159,8 +159,8 @@ fn target_files(root: &Path) -> TargetFiles {
         .map(|dir| Baseline::path(&root.join(dir)))
         .collect();
     TargetFiles {
-        config: root.join(Consts::CONFIG_REL),
         baselines,
+        config: root.join(Consts::CONFIG_REL),
     }
 }
 

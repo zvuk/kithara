@@ -69,6 +69,17 @@ impl StretchControls {
         })
     }
 
+    /// The active region-stretch plan, if any.
+    #[must_use]
+    pub fn region_plan(&self) -> Option<Arc<RegionPlan>> {
+        self.region_plan.load_full()
+    }
+
+    /// Install or clear the region-stretch plan; picked up on the next chunk.
+    pub fn set_region_plan(&self, plan: Option<Arc<RegionPlan>>) {
+        self.region_plan.store(plan);
+    }
+
     /// Set the playback speed.
     pub fn set_speed(&self, speed: f32) {
         self.speed.store(speed, Ordering::Relaxed);
@@ -79,17 +90,6 @@ impl StretchControls {
     #[must_use]
     pub fn speed(&self) -> f32 {
         self.speed.load(Ordering::Relaxed)
-    }
-
-    /// The active region-stretch plan, if any.
-    #[must_use]
-    pub fn region_plan(&self) -> Option<Arc<RegionPlan>> {
-        self.region_plan.load_full()
-    }
-
-    /// Install or clear the region-stretch plan; picked up on the next chunk.
-    pub fn set_region_plan(&self, plan: Option<Arc<RegionPlan>>) {
-        self.region_plan.store(plan);
     }
 
     /// The speed atomic itself, for chains where the resampler follows the

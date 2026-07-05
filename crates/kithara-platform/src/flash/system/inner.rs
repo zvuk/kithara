@@ -111,8 +111,6 @@ pub(in crate::flash) struct Registry {
     /// `pre_count_dedicated` slot not yet claimed, or a just-fired wake bump
     /// before its thread resumes) — the dump annotates that gap.
     pub(super) active_sync_holders: BTreeMap<ThreadKey, SyncHolder>,
-    /// Monotonic condvar-id mint — see `Registry::fresh_cv`.
-    pub(super) next_cv: u64,
     /// Provenance of every engine-backed primitive minted via
     /// [`Registry::fresh_cv`] (Condvar/Notify/channel halves/…), keyed by the raw
     /// cvid. Populated at construction by [`FlashInner::describe_cvid`] only under
@@ -120,6 +118,8 @@ pub(in crate::flash) struct Registry {
     /// diagnostic: it lets the hang dump label an opaque `Condvar(CvId(n))` waiter
     /// with the real async primitive (kind + creation site) instead of a bare id.
     pub(super) cv_desc: BTreeMap<u64, CvDesc>,
+    /// Monotonic condvar-id mint — see `Registry::fresh_cv`.
+    pub(super) next_cv: u64,
     /// Monotonic waiter-id mint — see `Registry::fresh_id`.
     pub(super) next_id: u64,
     /// Monotonic async-task-id mint (one per [`crate::flash::participate`]).
@@ -154,12 +154,12 @@ pub(in crate::flash) struct SyncHolder {
 /// [`FlashInner::describe_cvid`](super::FlashInner::describe_cvid) so the dump
 /// names WHICH async primitive an opaque `Condvar(CvId(n))` waiter belongs to.
 pub(in crate::flash) struct CvDesc {
-    /// What the primitive is (`Notify`, `MpscData`, `Oneshot`, …).
-    pub(super) kind: PrimKind,
     /// Where it was constructed (`#[track_caller]` site).
     pub(super) created_at: &'static Location<'static>,
     /// The thread that constructed it, if named.
     pub(super) created_on: Option<String>,
+    /// What the primitive is (`Notify`, `MpscData`, `Oneshot`, …).
+    pub(super) kind: PrimKind,
 }
 
 /// Parked-waiter queues and pacing state of the engine.

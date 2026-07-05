@@ -90,16 +90,6 @@ impl Wake {
         matches!(self, Self::Task { .. })
     }
 
-    /// Identity of the async task parked on this waiter (`(task id, spawn site)`),
-    /// for the hang dump. `None` for a sync OS-thread waiter or when no task
-    /// context was captured at registration.
-    pub(crate) fn task(&self) -> Option<(u64, &'static Location<'static>)> {
-        match self {
-            Self::Task { task, .. } => *task,
-            Self::Sync(_) => None,
-        }
-    }
-
     /// Mark an async-task wake as granted an `active` slot. MUST run under the
     /// engine `core` lock at the same moment the firer does `active += 1`, so a
     /// concurrent `cancel_async_wait` (which also takes the lock) sees a
@@ -107,6 +97,16 @@ impl Wake {
     pub(crate) fn mark_granted_under_lock(&self) {
         if let Self::Task { granted, .. } = self {
             granted.store(true, Ordering::Release);
+        }
+    }
+
+    /// Identity of the async task parked on this waiter (`(task id, spawn site)`),
+    /// for the hang dump. `None` for a sync OS-thread waiter or when no task
+    /// context was captured at registration.
+    pub(crate) fn task(&self) -> Option<(u64, &'static Location<'static>)> {
+        match self {
+            Self::Task { task, .. } => *task,
+            Self::Sync(_) => None,
         }
     }
 }

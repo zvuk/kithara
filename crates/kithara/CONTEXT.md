@@ -1,78 +1,195 @@
-# kithara — Context
+# Kithara — Project Context
 
-Detailed contracts and invariants for the kithara crate; the README is the overview.
+The cross-crate architectural narrative for the Kithara audio engine: how the
+pieces fit together and where the contracts that span crate boundaries live.
+This file explains the *system*; it does not restate rules. For repo-wide
+invariants, conventions, and coordination shapes see [`AGENTS.md`](../../AGENTS.md);
+for the test/flash model see [`TESTING.md`](../../TESTING.md); for per-crate detail
+follow the links in [Where to look](#where-to-look).
 
-## Architecture
+Kithara is a streaming, gapless, adaptive audio engine: it fetches media (local
+file or HLS), demuxes and decodes it, runs a real-time audio pipeline (resample,
+mix, crossfade, time-stretch, waveform/beat analysis), and plays it out through
+a platform audio device or a queue/FFI/app surface. The whole stack is built so
+that timing correctness is *testable* — see the flash virtual clock below.
 
-```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
-flowchart LR
-    RC[ResourceConfig] -->|auto-detect| R[Resource]
-    R -->|".m3u8"| AH["Audio‹Stream‹Hls››"]
-    R -->|other| AF["Audio‹Stream‹File››"]
-    AH --> PR["Box‹dyn PcmReader›"]
-    AF --> PR
-    PR -->|"read / seek"| APP[Your audio callback]
+## Crate map and dependency direction
+
+Dependencies point strictly **downward** toward base abstractions; nothing lower
+reaches back up into orchestration. The layers, bottom to top:
+
+```
+            kithara-app        kithara-ffi          ← surfaces (consumer-crate tops; cancel roots)
+                  \             /
+                   kithara  (facade: file/hls/assets/net/storage modules + re-exports)
+                      |
+                 kithara-queue  (multi-track queue, auto-advance)
+                      |
+                 kithara-play   (player engine: transport, crossfade, tempo/key-lock, sessions)
+                      |
+                 kithara-audio  (RT pipeline: ring, preload gate, seek-epoch, stretch routing, waveform)
+                  /       |        \
+        kithara-decode  kithara-stretch  kithara-encode  ← demux/decode, optional stretch DSP, encode fixtures
+                  |
+        kithara-file   kithara-hls              ← protocol peers (Peer impls)
+                  \        /
+                 kithara-stream  (unified transport: Downloader, Peer, async→sync bridge, shared media types)
+            /     /      |       \        \
+   kithara-abr  kithara-events  kithara-assets  kithara-storage  ← orchestration leaves
+                  \       |        /        |
+                 kithara-net   kithara-drm  kithara-bufpool   kithara-beat   ← utilities
+                            \      |        /
+                          kithara-platform  (clock/threads/sync/cancel; flash virtual-time engine)
+
+                 kithara-devtools  (workspace tooling command core)
 ```
 
-PCM flows straight from the decoder to your callback through `read()`. The
-optional `EventBus` (`resource.event_bus()`) is a side-channel for
-observability — decode progress, buffering, HLS variant switches — and never
-sits in the audio path.
+- **`kithara-platform`** is the true leaf (no `kithara-*` deps). It owns the
+  clock/threads/sync backends, the cancel-token Node tree, and the `flash`
+  virtual-time engine that every timing-sensitive crate transitively depends on.
+- **`kithara-stream`** is the architectural waist. It owns the shared media
+  types (`AudioCodec`, `ContainerFormat`, `MediaInfo`), the unified transport
+  (`Downloader` / `Peer`), and the async→sync `Stream::Read` bridge. The protocol
+  crates (`kithara-file`, `kithara-hls`) are `Peer` implementations *above* it;
+  the orchestration leaves (`kithara-abr`, `kithara-assets`, `kithara-storage`,
+  `kithara-net`, `kithara-drm`, `kithara-events`, `kithara-bufpool`) sit *below*.
+- **`kithara`** is the facade crate that aggregates protocols + storage + net
+  behind feature flags (`file`, `hls`, …) and is what `kithara-ffi` and
+  `kithara-app` consume — they never reach into protocol crates directly.
+- **`kithara-stretch`**, **`kithara-beat`**, and **`kithara-encode`** are side
+  branches: optional time-stretch DSP backends consumed by `kithara-audio`,
+  beat-analysis DSP consumed by `kithara-audio` (optional), and an encoder used
+  mainly for test fixtures and transcode that depends only on
+  `kithara-stream`'s shared types.
+- The **test crates** (`kithara-test-macros`, `kithara-test-utils`) cut across
+  every layer but only via `cfg(test)`/feature gates, so they are no-ops in
+  production builds.
+- **`kithara-devtools`** is tooling, not runtime: the workspace `xtask` binary
+  uses it for lint, format, test, health, perf, and visualization commands.
 
-## Features
+## End-to-end data flow
 
-<table>
-<tr><th>Feature</th><th>Default</th><th>Enables</th></tr>
-<tr><td><code>file</code></td><td>yes</td><td>Progressive pipeline (<code>kithara-file</code>, <code>kithara-assets</code>, <code>kithara-net</code>)</td></tr>
-<tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>, <code>kithara-drm</code>)</td></tr>
-<tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder (<code>kithara-audio/symphonia</code>, <code>kithara-decode/symphonia</code>) plus queue decode forwarding when <code>queue</code> is enabled</td></tr>
-<tr><td><code>fdk-aac</code></td><td>no</td><td>FDK-AAC decoder override across decode/audio and queue when <code>queue</code> is enabled</td></tr>
-<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder (<code>kithara-audio/apple</code>, <code>kithara-decode/apple</code>, <code>kithara-play/apple</code>) plus queue forwarding when <code>queue</code> is enabled</td></tr>
-<tr><td><code>android</code></td><td>no</td><td>Android <code>MediaCodec</code> hardware decoder (<code>kithara-audio/android</code>, <code>kithara-decode/android</code>)</td></tr>
-<tr><td><code>client-reqwest</code> / <code>client-wreq</code></td><td>reqwest yes</td><td>HTTP backend selection forwarded to all public facade crates that can reach the network</td></tr>
-<tr><td><code>tls-rustls</code> / <code>tls-native</code></td><td>rustls yes</td><td>TLS backend selection forwarded to all public facade crates that can reach the network</td></tr>
-<tr><td><code>assets</code></td><td>no</td><td>Asset/storage modules (<code>kithara-assets</code>, <code>kithara-storage</code>)</td></tr>
-<tr><td><code>net</code></td><td>no</td><td>Network module (<code>kithara-net</code>)</td></tr>
-<tr><td><code>bufpool</code></td><td>no</td><td>Aggregator flag used by <code>full</code>; the <code>kithara::bufpool</code> module is always re-exported</td></tr>
-<tr><td><code>queue</code></td><td>no</td><td>Queue module (<code>kithara-queue</code>) exposed as <code>kithara::queue</code></td></tr>
-<tr><td><code>backend-cpal</code></td><td>no</td><td>Native CPAL backend forwarded to play and queue when <code>queue</code> is enabled</td></tr>
-<tr><td><code>backend-web-audio</code></td><td>no</td><td>Wasm WebAudio backend forwarded to play and queue when <code>queue</code> is enabled</td></tr>
-<tr><td><code>flash</code></td><td>no</td><td>Virtual-time test/platform mode forwarded to <code>kithara-platform</code> and test macro utilities</td></tr>
-<tr><td><code>tokio-net</code></td><td>no</td><td>Tokio networking helpers forwarded to <code>kithara-platform</code></td></tr>
-<tr><td><code>tokio-rt-multi-thread</code></td><td>no</td><td>Tokio multi-thread runtime builder support forwarded to <code>kithara-platform</code>; used by tests that opt into <code>#[kithara::test(..., multi_thread)]</code></td></tr>
-<tr><td><code>full</code></td><td>no</td><td>Shortcut for <code>file + hls + assets + net + bufpool</code></td></tr>
-<tr><td><code>probe</code></td><td>no</td><td>USDT probes forwarded across all public facade crates that expose probes</td></tr>
-<tr><td><code>mock</code></td><td>no</td><td><code>unimock</code>-generated mocks forwarded across all public facade crates that expose mocks</td></tr>
-<tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation across sub-crates</td></tr>
-</table>
+A track plays out through a pull-driven pipeline. Each layer pulls from the one
+below; backpressure and wakeups propagate the same way.
 
-## Key Types
+1. **Source / stream.** A `Peer` (file or HLS) is registered with the global
+   `Downloader`. The `Downloader` is the single HTTP pool; the `Peer` exposes a
+   per-track API. Bytes land in `kithara-storage` (`AssetStore` resources, mmap
+   or in-memory) via `kithara-assets`, which is the single source of truth for
+   byte availability. `kithara-stream` bridges the async fetch world to a
+   **synchronous `Stream::Read`** that the decoder can block on.
+2. **Decode.** `kithara-decode`'s `UniversalDecoder<D, C>` (Demuxer + FrameCodec)
+   demuxes the container and produces PCM frames, handling gapless priming/trim
+   and seek pre-roll. Backend codecs are feature-gated (symphonia / apple /
+   android / fmp4).
+3. **Audio pipeline.** `kithara-audio` drives the decode worker on its own
+   thread, fills a lock-free ring behind a preload gate, resamples to the device
+   format, routes optional time-stretch through `kithara-stretch`, and applies
+   waveform/beat taps. Seek and format-change are state machines (seek-epoch,
+   recreate) so a re-aim never replays stale audio.
+4. **Play / queue.** `kithara-play` owns transport: start/stop, crossfade between
+   decks, tempo/key-lock, session hosting, and the current-item announce
+   contract. `kithara-queue` stacks multiple tracks on top with auto-advance and
+   a pause gate, handing decks to `kithara-play`.
+5. **Surfaces.** `kithara-ffi` exposes an `AudioPlayer` facade across the FFI /
+   wasm boundary (worker-vs-main-thread ownership protocol); `kithara-app` is the
+   TUI/GUI app and adds the track-analysis cache. Both consume the `kithara`
+   facade, not the internals.
 
-<table>
-<tr><th>Type</th><th>Role</th></tr>
-<tr><td><code>Resource</code></td><td>Type-erased <code>Box&lt;dyn PcmReader&gt;</code> — the single entry point for PCM reads</td></tr>
-<tr><td><code>ResourceConfig</code></td><td>Builder for source, network, ABR, decoder backend, and cache options</td></tr>
-<tr><td><code>ResourceSrc</code></td><td>Source: <code>Url(Url)</code> or <code>Path(PathBuf)</code></td></tr>
-<tr><td><code>SourceType</code></td><td>Auto-detection result: <code>HlsStream(Url)</code>, <code>RemoteFile(Url)</code>, or <code>LocalFile(PathBuf)</code></td></tr>
-<tr><td><code>ReadOutcome</code></td><td>Result of a read: <code>Frames { count, position }</code>, <code>Pending { reason, position }</code>, or <code>Eof { position }</code></td></tr>
-<tr><td><code>EventBus</code></td><td>Broadcast publisher for the unified <code>Event</code> stream (observability only)</td></tr>
-</table>
+### How HLS and file differ
 
-## Re-exports
+Both implement the same `Peer` / `Stream` contract, so everything above
+`kithara-stream` is protocol-agnostic. The differences are localized:
 
-Each engine layer is re-exported as a module: `kithara::audio`, `kithara::bufpool`,
-`kithara::decode`, `kithara::events`, `kithara::platform`, `kithara::play`,
-`kithara::stream`. The `file`/`hls`/`assets`/`net`/`storage`/`queue` modules are
-feature-gated. For advanced control — multi-slot engine, crossfade, EQ — reach
-into `kithara::play` (`Engine`, `Player`, `CrossfadeConfig`, `Equalizer`). Test
-macros are re-exported as `kithara::test`, `kithara::fixture`, `kithara::flash`,
-and `kithara::mock`; the facade `flash` macro emits `kithara::platform::flash`
-paths so integration tests do not need a direct `kithara-platform` dependency.
-The `prelude` collects the everyday types.
+- **File** (`kithara-file`) is largely fully-buffered: a single resource, an
+  EOF readiness-probe, and local/remote source orchestration. Once fetched the
+  byte space is stable.
+- **HLS** (`kithara-hls`) is segmented and adaptive: a playlist cache, per-segment
+  `AssetResource`s, AES-128-CBC decryption (`kithara-drm`), ABR variant switching
+  (`kithara-abr`), decoder-probe rebuilds on variant/format change, and a
+  two-mode `wait_range` (budget-bounded) seek/EOF contract with event-driven
+  read/worker wake. A fully-buffered file source can let the flash clock run
+  ahead; an HLS source is real-I/O-paced (see [TESTING.md](../../TESTING.md)).
 
-## Integration
+This asymmetry is why the *fully-buffered vs real-I/O-paced* distinction matters
+across the whole stack: the same timer behaves differently depending on which
+`Peer` paces it.
 
-Most consumers depend on `kithara` with default features and call
-`Resource::new(ResourceConfig::new(url)?).await?`. For wasm or embedded builds,
-disable defaults and pick a minimal feature set (e.g. `file` + `symphonia`).
+## Cross-crate contracts
+
+These are the contracts that no single crate owns; they are the seams agents
+most often get wrong.
+
+- **Cancel-token hierarchy.** Cancellation is a tree of `Arc<Node>` living in
+  `kithara-platform` (`common/cancel/`). A `CancelToken` is a handle; `child()`
+  derives a descendant, `cancel()` cancels its own subtree. Masters are minted
+  only at owner sites — the consumer-crate tops (`kithara-app`, `kithara-ffi`,
+  or `PlayerImpl` when used directly) call `root()`; everything below
+  (Downloader, AssetStore, audio worker, epoch/per-fetch cancels) is a child of
+  that master. `CancelScope::new(Option<CancelToken>)` is the canonical seam.
+  Hard-coded `root()`/`never()` are forbidden outside a small allowlist. The full
+  contract and enforcement (`cargo xtask lint arch` → `cancel_root_sites`) are in
+  [`AGENTS.md`](../../AGENTS.md) and [`crates/kithara-play/CONTEXT.md`](../kithara-play/CONTEXT.md).
+- **Coordinate / state spaces.** Position lives in several spaces — byte offsets,
+  committed layout, virtual-reader, decode-frame index, playback time/samples —
+  and values must cross an **explicit translation boundary**, never be copied
+  raw. Seek and variant-switch are where these spaces collide: `kithara-hls`
+  translates byte ranges across variant boundaries, `kithara-decode` translates
+  seek targets into pre-roll/trim, and `kithara-audio` owns the seek-epoch /
+  playhead. Mixing spaces silently is the root of most seek/recreate bugs.
+- **Shared media types.** `AudioCodec`, `ContainerFormat`, and `MediaInfo` are
+  owned by `kithara-stream` and must not be duplicated. Decode, encode, and the
+  protocol peers all speak these types so the pipeline stays generic.
+- **Unified transport (Downloader / Peer).** One global `Downloader` HTTP pool;
+  each track is a `Peer` registered into it. `Peer::poll_next()` returns batches
+  of self-contained `FetchCmd`s (closure-carried `writer` / `on_complete`,
+  cancel via token). `kithara-assets` enforces a **single-producer /
+  consumer-demand** contract on top: byte availability has one writer.
+- **EventBus scoping.** `kithara-events` provides unified event types and a
+  hierarchical `EventBus` with `BusScope`, feature-gated per domain (`file`,
+  `hls`, `audio`, `player`, `app`, `queue`, `abr`, `downloader`). Events flow up as a side
+  channel parallel to the data path; the facade and surfaces subscribe by scope
+  rather than polling internals.
+- **Flash virtual-clock determinism.** `kithara-platform`'s `flash` feature
+  swaps real clock/runtime primitives for a quiescence-driven virtual clock so
+  timing-sensitive behavior (seek settle, ABR switch, underrun, preload gating)
+  is deterministic and fast — and so lost-wakeups / scheduler-blind primitives
+  become hard failures instead of rare flakes. Every async primitive that can
+  cross the real↔sim boundary needs a sim-participating wrapper; production async
+  helpers with virtual sleeps carry `#[kithara::flash]`. **Do not restate the
+  model here** — see [`TESTING.md`](../../TESTING.md).
+
+## Where to look
+
+**Rules & process:** [`AGENTS.md`](../../AGENTS.md) (repo-wide invariants, conventions,
+coordination shapes) · [`docs/workflows/rust-ai.md`](../../docs/workflows/rust-ai.md)
+(planning/split/handoff) · [`TESTING.md`](../../TESTING.md) (test gate + flash model).
+
+**Per-crate detail** — each `crates/<crate>/CONTEXT.md`:
+
+| Crate | What its CONTEXT.md covers |
+| --- | --- |
+| [`kithara-platform`](../kithara-platform/CONTEXT.md) | flash virtual-time/quiescence engine, real-I/O pacing, CancelToken Node tree, sync/thread/time backend tables, trait bridges |
+| [`kithara-stream`](../kithara-stream/CONTEXT.md) | async→sync bridge lifecycle, per-source EOF invariants, public-item/feature/trait-bridge tables, arch mermaid, agent guardrails |
+| [`kithara-bufpool`](../kithara-bufpool/CONTEXT.md) | lock-free get/put flow, shard capacity / byte-budget caps, config wiring, `doc(hidden)` low-level re-exports |
+| [`kithara-storage`](../kithara-storage/CONTEXT.md) | blocking-coordination diagram, Mmap-vs-Mem table, chunked atomic claim, Condvar/RangeSet sync, redundant_reexport audit |
+| [`kithara-assets`](../kithara-assets/CONTEXT.md) | key-mapping rules, decorator chain + sequence diagram, index persistence (pins/LRU/availability), byte-availability SSoT, Pending/Ready gate, consumer-demand single-producer |
+| [`kithara-net`](../kithara-net/CONTEXT.md) | decorator/`NetExt` composition, `NetOptions` timeout semantics + defaults, four trait-bridge conversions |
+| [`kithara-drm`](../kithara-drm/CONTEXT.md) | in-place AES-128-CBC chunk/PKCS7 commit lifecycle, KeyStore IV-derivation/key-unwrap, DomainMatcher table + registry ordering |
+| [`kithara-events`](../kithara-events/CONTEXT.md) | per-feature gating table, trait-bridge conversions, integration/consumer list |
+| [`kithara-abr`](../kithara-abr/CONTEXT.md) | ABR decision rules, EWMA throughput, initial-seed contract, `current_variant_index` two-writer invariant, decision-flow diagram, bench |
+| [`kithara-file`](../kithara-file/CONTEXT.md) | arch diagram, peer/writer/EOF readiness-probe contract, local/remote source orchestration |
+| [`kithara-hls`](../kithara-hls/CONTEXT.md) | full HLS internals: arch + public-items, ABR/variant-switch + decoder-probe rebuild + init-segment routing + format-change byte ranges, AES-128-CBC, segment cache, two-mode wait_range/seek/EOF + event wake |
+| [`kithara-decode`](../kithara-decode/CONTEXT.md) | init paths, recreate/no-fallback strategy, `InputRequirement`, gapless + seek pre-roll/trim, read-ahead strand, features, module layout, ESDS rationale, trait bridges |
+| [`kithara-encode`](../kithara-encode/CONTEXT.md) | `EncoderFactory` output-method contracts (Outputs), kithara-stream shared-type / test-infra integration |
+| [`kithara-beat`](../kithara-beat/CONTEXT.md) | input/output contract, frozen pipeline constants (chunk 1500, border 6, stride 1488, 50 fps, hop 441), parity validation, MIT attribution |
+| [`kithara-stretch`](../kithara-stretch/CONTEXT.md) | backend contract, backend-selector ownership, PcmPool scratch rules, adding-backend checklist, no-backend/wasm constraints |
+| [`kithara-audio`](../kithara-audio/CONTEXT.md) | threading/ring/preload-gate contracts, seek-epoch + format-change/recreate state machines, waveform + blob-codec DSP, time-stretch routing, agent guardrails |
+| [`kithara-play`](../kithara-play/CONTEXT.md) | crossfade, tempo/key-lock, events, queue handover, atomic engine start, cancel tree, RT-audio rtsan rules, session hosting, features, invariants, announce contract |
+| [`kithara-queue`](../kithara-queue/CONTEXT.md) | queue API surface, event flow, auto-advance/pause-gate, loading lifecycle, select serialization race, kithara-app migration table |
+| [`kithara`](ARCHITECTURE.md) | facade arch + EventBus side-channel, Features/Key-Types tables, Re-exports module map, integration/feature-set guidance |
+| [`kithara-ffi`](../kithara-ffi/CONTEXT.md) | wasm32/target_os cfg-gating boundary + lint exemption, AudioPlayer facade / worker-vs-main-thread ownership, Android `android_test` gating, wasm postbuild internals |
+| [`kithara-app`](../kithara-app/CONTEXT.md) | track-analysis cache: TrackId vs AnalysisKey identity spaces, in-memory/disk tiers, AssetScope lifecycle, `ANALYSIS_BYTES_VERSION` invalidation |
+| [`kithara-test-macros`](../kithara-test-macros/CONTEXT.md) | per-flag test semantics, flash ambient-holder-per-emit-path rules, probe-argument contract (6-arg USDT ceiling, backtrace cost) |
+| [`kithara-test-utils`](../kithara-test-utils/CONTEXT.md) | probe-capture contract: tracing-layer-vs-EventBus rationale, process-wide subscriber install, `#[serial]` requirement, feature-gated activation |
+| [`kithara-devtools`](../kithara-devtools/CONTEXT.md) | reusable xtask command core: Ctx/config lifecycle, CLI surface, feature gating, public common API |

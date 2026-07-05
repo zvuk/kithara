@@ -22,12 +22,10 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
-  # `kithara-ffi/src/lib.rs` is the single structural boundary for the
-  # browser/wasm bindings (`pub mod web;` is the only target_arch gate)
-  # and for Android JNI (`pub(crate) mod android;` is the only target_os
-  # gate). The wasm submodule itself contains zero inline cfg gates
-  # (analogous to the Apple/Android subtrees). Documented in
-  # `crates/kithara-ffi/README.md`.
+  # `kithara-ffi/src/lib.rs` is the structural boundary for the
+  # browser/wasm split (`mod native;` / `pub mod web;` target_arch gates).
+  # Android JNI gates live one level down in `src/native/mod.rs`, alongside
+  # the native platform shims. Documented in `crates/kithara-ffi/CONTEXT.md`.
   - "crates/kithara-ffi/src/lib.rs"
   # `kithara-play` hosts the audio session, which has unavoidable platform
   # asymmetry: native runs a dedicated engine thread with a ringbuf+park

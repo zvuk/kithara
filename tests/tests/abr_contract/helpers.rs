@@ -99,7 +99,6 @@ pub(crate) mod phase_oracle {
 
     #[cfg(test)]
     mod tests {
-        use kithara;
 
         use super::*;
 
@@ -273,11 +272,11 @@ pub(crate) mod params {
             .initial_abr_mode(abr)
             .download_batch_size(prefetch_count)
             .build();
-        // pcm_buffer_chunks по умолчанию 10 (~1s аудио). RED-тестам
-        // нужно ждать определённые пробы (например, decoder build_chunk
-        // на timestamp >= 4s) без активного потребителя — поэтому буфер
-        // расширен до ~30s, чтобы декодер фоновым worker'ом работал
-        // автономно и наполнял канал, пока тестовый поток ждёт через
+        // pcm_buffer_chunks defaults to 10 (~1s audio). RED tests
+        // must wait for specific probes (for example, decoder build_chunk
+        // at timestamp >= 4s) without an active consumer, so the buffer
+        // is expanded to ~30s so the decoder's background worker can run
+        // autonomously and fill the channel while the test thread waits via
         // `wait_for_probe`.
         let config = AudioConfig::<Hls>::for_stream(hls_config)
             .decoder_backend(backend)
@@ -541,14 +540,14 @@ pub(crate) mod probe_contracts {
         let by_thread = filter_by_thread(recorder, |e| e.u64("request_id") == Some(request_id));
         if by_thread.is_empty() {
             return Err(format!(
-                "request_id={request_id}: ни одной пробы. ожидалось {:?} → {:?}.",
+                "request_id={request_id}: no probes observed. expected {:?} → {:?}.",
                 ENTRY_STAGES, TERMINAL_STAGES,
             ));
         }
         if by_thread.len() > 1 {
             return Err(format!(
-                "request_id={request_id}: пробы на нескольких потоках {:?} — \
-                 spawn_fetch контракт нарушен (один task = один поток).",
+                "request_id={request_id}: probes on multiple threads {:?} — \
+                 spawn_fetch contract violated (one task = one thread).",
                 by_thread.keys().collect::<Vec<_>>(),
             ));
         }
@@ -559,21 +558,21 @@ pub(crate) mod probe_contracts {
             if !observed.contains(stage) {
                 return Err(format!(
                     "request_id={request_id}, thread_id={thread_id}: \
-                     отсутствует стадия `{stage}`. \
-                     наблюдалось: {observed:?}. \
-                     события на потоке: {events:#?}",
+                     missing stage `{stage}`. \
+                     observed: {observed:?}. \
+                     thread events: {events:#?}",
                 ));
             }
         }
         if !TERMINAL_STAGES.iter().any(|t| observed.contains(t)) {
             return Err(format!(
                 "request_id={request_id}, thread_id={thread_id}: \
-                 ни одна терминальная стадия не наблюдалась \
-                 (ожидалось `finish_request`, `abort_request` или `fail_request`). \
-                 наблюдалось: {observed:?}. \
-                 это означает что `req.send().await` в reqwest не завершился — \
-                 spawn_fetch task завис между `with_soft_timeout` и `deliver`. \
-                 события на потоке: {events:#?}",
+                 no terminal stage observed \
+                 (expected `finish_request`, `abort_request` or `fail_request`). \
+                 observed: {observed:?}. \
+                 this means `req.send().await` in reqwest did not complete — \
+                 spawn_fetch task is stuck between `with_soft_timeout` and `deliver`. \
+                 thread events: {events:#?}",
             ));
         }
         Ok(())
@@ -596,14 +595,14 @@ pub(crate) mod probe_contracts {
         let by_thread = filter_by_thread(recorder, |e| e.probe_name() == Some("on_complete_seg"));
         if by_thread.is_empty() {
             return Err(format!(
-                "on_complete_seg: ни одного события. ожидалось seg=0..{} на variant={variant}.",
+                "on_complete_seg: no events observed. expected seg=0..{} on variant={variant}.",
                 n - 1,
             ));
         }
         if by_thread.len() > 1 {
             return Err(format!(
-                "on_complete_seg: события на нескольких потоках {:?} — \
-                 single-variant scheduler контракт нарушен.",
+                "on_complete_seg: events on multiple threads {:?} — \
+                 single-variant scheduler contract violated.",
                 by_thread.keys().collect::<Vec<_>>(),
             ));
         }
@@ -625,9 +624,9 @@ pub(crate) mod probe_contracts {
             let notify_events: Vec<ProbeEvent> = recorder.events_with_probe("notify_commit");
             let missing: Vec<(usize, usize)> = expected.difference(&actual).copied().collect();
             let extra: Vec<(usize, usize)> = actual.difference(&expected).copied().collect();
-            // Считаем сколько раз каждый (variant, seg_idx) появился —
-            // показываем только те, что встретились >1 раза, чтобы
-            // мгновенно увидеть какой именно seg задвоился.
+            // Count how many times each (variant, seg_idx) appeared,
+            // showing only entries seen more than once so the duplicated
+            // segment is visible immediately.
             let mut counts: BTreeMap<(usize, usize), usize> = BTreeMap::new();
             for pair in &pairs {
                 *counts.entry(*pair).or_default() += 1;
@@ -638,26 +637,26 @@ pub(crate) mod probe_contracts {
                 String::new()
             } else {
                 format!(
-                    "\nдубликаты ({}):\n{:#?}\n\
-                     один и тот же (variant, seg_idx) попал в \
-                     on_complete_seg несколько раз — race-condition \
-                     в commit-цепочке.",
+                    "\nduplicates ({}):\n{:#?}\n\
+                     the same (variant, seg_idx) reached \
+                     on_complete_seg more than once — race condition \
+                     in the commit chain.",
                     duplicates.len(),
                     duplicates,
                 )
             };
             return Err(format!(
-                "on_complete_seg, thread_id={thread_id}: множество \
-                 закоммиченных сегментов не совпадает \
-                 ({total_events} событий, {unique_seg_count} уникальных, \
-                 ожидалось n={n}).\n\
+                "on_complete_seg, thread_id={thread_id}: set of \
+                 committed segments does not match \
+                 ({total_events} events, {unique_seg_count} unique, \
+                 expected n={n}).\n\
                  expected: {expected:?}\n\
                  actual:   {actual:?}\n\
                  missing:  {missing:?}\n\
                  extra:    {extra:?}\
                  {duplicates_diag}\n\
-                 dispatch события ({}):\n{:#?}\n\
-                 notify_commit события ({}):\n{:#?}",
+                 dispatch events ({}):\n{:#?}\n\
+                 notify_commit events ({}):\n{:#?}",
                 emit_events.len(),
                 emit_events,
                 notify_events.len(),
@@ -852,14 +851,12 @@ pub(crate) mod probe_contracts {
     ) -> Result<(), String> {
         let by_thread = filter_by_thread(recorder, |e| e.probe_name() == Some("build_chunk"));
         if by_thread.is_empty() {
-            return Err(
-                "build_chunk: ни одного события — декодер не выдал ни одного PCM кадра".into(),
-            );
+            return Err("build_chunk: no events observed — decoder emitted no PCM frames".into());
         }
         if by_thread.len() > 1 {
             return Err(format!(
-                "build_chunk: события на нескольких потоках {:?} — \
-                 в T8 декодер однопоточный.",
+                "build_chunk: events on multiple threads {:?} — \
+                 decoder is single-threaded in T8.",
                 by_thread.keys().collect::<Vec<_>>(),
             ));
         }
@@ -873,10 +870,10 @@ pub(crate) mod probe_contracts {
             return Ok(());
         }
         Err(format!(
-            "build_chunk, thread_id={thread_id}: декодер достиг ts={last_ts}μs, \
-             ожидалось ts >= {target_ts_us}μs (chunks_observed={}). \
-             декодер встал — следующий шаг: проверить какой fetch не завершился \
-             (см. `assert_request_lifecycle_complete`).",
+            "build_chunk, thread_id={thread_id}: decoder reached ts={last_ts}μs, \
+             expected ts >= {target_ts_us}μs (chunks_observed={}). \
+             decoder stalled — next step: check which fetch did not complete \
+             (see `assert_request_lifecycle_complete`).",
             events.len(),
         ))
     }

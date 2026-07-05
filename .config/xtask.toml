@@ -111,16 +111,22 @@ backend = "apple"
 
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"
+delay_secs = 20
+http_timeout_secs = 20
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
 [ext.release]
 # Apple release flow (cargo xtask release prepare|publish).
+manifest = "Package.swift"
+title = "Kithara"
 github_repo = "zvuk/kithara"
 gitlab_host = "gitlab.zvq.me"
 gitlab_project = "disrupt/kithara"
 gitlab_package = "kithara"
 asset = "KitharaFFIInternal.xcframework.zip"
 single_asset = "Kithara.xcframework.zip"
+http_timeout_secs = 60
+upload_timeout_secs = 600
 # Documentation channel: DocC archive (`just apple doc`) zipped + uploaded as a
 # release asset.
 docs_asset = "Kithara-docs.zip"
@@ -149,6 +155,13 @@ exclude_packages = [
 ffi_crate = "kithara-ffi"
 # AAR artifacts the Gradle export is expected to produce.
 aars = ["kithara.aar", "rust-tls.aar"]
+# Demo app launched by `cargo xtask android run`.
+default_avd = "Pixel_6"
+demo_package = "com.kithara.example"
+demo_activity = "com.kithara.example.MainActivity"
+api_level = "26"
+boot_wait_attempts = 120
+boot_poll_interval_secs = 1
 
 [ext.wasm]
 # wasm-bindgen JS artifact patched by the trunk post-build hook.
@@ -157,6 +170,23 @@ js_artifact = "kithara-ffi.js"
 [quality]
 # Trait directory whose every `pub trait` must carry `#[unimock]`.
 unimock_traits_dir = "crates/kithara-play/src/traits"
+
+[ext.apple]
+# Demo app launched by `cargo xtask apple run`.
+default_simulator = "iPhone 17 Pro Max"
+default_scheme = "KitharaDemo_iOS"
+demo_bundle_id = "com.kithara.demo"
+# Apple slice symbol audit.
+banned_symbol_needles = [
+  "symphonia_bundle_",
+  "symphonia_codec_",
+  "symphonia_format_caf",
+  "symphonia_format_mkv",
+  "symphonia_format_ogg",
+  "symphonia_format_riff",
+  "fdk_aac",
+]
+apple_proof_needles = ["AppleCodec", "AppleAudioFileDemuxer"]
 
 [ext.apple.docgen]
 # DocC documentation-extension pages generated from Rust rustdoc JSON so the

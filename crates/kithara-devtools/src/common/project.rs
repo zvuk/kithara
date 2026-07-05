@@ -13,17 +13,17 @@ const CONFIG_REL: &str = ".config/xtask.toml";
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProjectConfig {
-    pub project: ProjectIdentity,
     pub health: HealthConfig,
-    pub test: TestCommandConfig,
-    pub perf: PerfConfig,
     pub lint_exclude: LintExcludeConfig,
-    #[serde(default, rename = "workspace-scan")]
-    pub workspace_scan: WorkspaceScan,
     pub orphans: OrphansConfig,
+    pub perf: PerfConfig,
+    pub project: ProjectIdentity,
     pub quality: QualityConfig,
     #[serde(default)]
     pub ext: Table,
+    pub test: TestCommandConfig,
+    #[serde(default, rename = "workspace-scan")]
+    pub workspace_scan: WorkspaceScan,
 }
 
 /// Workspace-wide Rust file scan exclusions.
@@ -52,14 +52,14 @@ pub struct QualityConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LintExcludeConfig {
+    /// Inline-module names / `::`-paths whose violations are dropped from every
+    /// lint namespace, regardless of file.
+    pub modules: Vec<String>,
     /// Workspace-relative globs whose violations are dropped from every lint
     /// namespace (`arch`, `style`, `idioms`) so baselines measure production
     /// debt, not test code. `#[cfg(test)]` blocks are stripped automatically
     /// (AST) on top of this — no glob can match inline test modules.
     pub paths: Vec<String>,
-    /// Inline-module names / `::`-paths whose violations are dropped from every
-    /// lint namespace, regardless of file.
-    pub modules: Vec<String>,
     /// ast-grep rule IDs that must scan the FULL tree — tests included —
     /// bypassing [`Self::paths`]. Hard-correctness bans (e.g. `arch.no-direct-time`)
     /// where test code is NOT exempt: routing time through one primitive only
@@ -88,11 +88,11 @@ pub struct HealthConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct PerfConfig {
-    pub lanes: Vec<PerfLane>,
-    pub primary_lane: String,
     pub frame_prefix: Option<String>,
     #[serde(default = "default_perf_nextest_profile")]
     pub nextest_profile: String,
+    pub primary_lane: String,
+    pub lanes: Vec<PerfLane>,
 }
 
 impl Default for PerfConfig {
@@ -110,8 +110,8 @@ impl Default for PerfConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct PerfLane {
-    pub flash: bool,
     pub backend: String,
+    pub flash: bool,
 }
 
 fn default_perf_nextest_profile() -> String {
@@ -121,12 +121,12 @@ fn default_perf_nextest_profile() -> String {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TestCommandConfig {
-    pub default_lane: String,
-    pub default_backend: String,
-    pub feature_arg: String,
-    pub flash: TestFlashConfig,
     pub lanes: BTreeMap<String, TestLaneConfig>,
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
+    pub default_backend: String,
+    pub default_lane: String,
+    pub feature_arg: String,
+    pub flash: TestFlashConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,12 +154,12 @@ pub struct TestNetBackendConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TestLaneConfig {
-    pub program: String,
-    pub prefix_args: Vec<String>,
-    pub suffix_args: Vec<String>,
-    pub default_features: Vec<String>,
     pub default_flash: Option<bool>,
     pub passthrough: String,
+    pub program: String,
+    pub default_features: Vec<String>,
+    pub prefix_args: Vec<String>,
+    pub suffix_args: Vec<String>,
 }
 
 impl ProjectConfig {

@@ -146,9 +146,9 @@ fn make_playlist_state(
                 .parse()
                 .expect("valid url");
             SegmentState {
+                url,
                 duration: Duration::from_secs(2),
                 byte_range_len: None,
-                url,
                 index: SegmentIndex::try_new(idx, count).expect("in-bounds segment"),
             }
         })
@@ -1130,8 +1130,8 @@ fn exact_seek_completion_keeps_stale_anchor_alias_until_reader_moves() {
         .map(|idx| make_placeholder_seg(idx, 256, &ctx.scope))
         .collect();
     let v = VariantParts {
-        init: None,
         segments,
+        init: None,
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
@@ -1169,8 +1169,8 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
         .map(|idx| make_placeholder_seg(idx, 64, &ctx.scope))
         .collect();
     let v = VariantParts {
-        init: None,
         segments,
+        init: None,
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
@@ -1208,8 +1208,8 @@ fn byte_continuity_boundary_preparation_sizes_only_prefix() {
         .map(|idx| make_placeholder_seg(idx, 64, &ctx.scope))
         .collect();
     let v = VariantParts {
-        init: None,
         segments,
+        init: None,
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),

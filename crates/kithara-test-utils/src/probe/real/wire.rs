@@ -152,9 +152,9 @@ impl<T: IntoProbeArg> IntoProbeArg for Option<T> {
 
 /// Register all USDT probes embedded in the binary with the host
 /// kernel tracer (dtrace on macOS, bpftrace on Linux). Safe to call
-/// from multiple init paths — guarded by an internal `OnceLock`. На
-/// wasm32 и в прод-сборке (`feature = "probe"` выключена) это
-/// no-op stub — `usdt`-крейт оптуально и не пуллится.
+/// from multiple init paths — guarded by an internal `OnceLock`. On
+/// wasm32 and in production builds (`feature = "probe"` disabled), this is a
+/// no-op stub — the optional `usdt` crate is not pulled in.
 pub fn register_probes() {
     imp::register();
 }

@@ -37,11 +37,11 @@ pub struct KeyStore {
     scope: AssetScope,
     /// Byte buffer pool for reading cached key bodies.
     byte_pool: kithara_bufpool::BytePool,
+    /// Cache-first + downloader pipeline for HLS-AES / DRM key bodies.
+    key_peer: KeyPeer,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
     base_headers: Option<Headers>,
     key_registry: Option<KeyProcessorRegistry>,
-    /// Cache-first + downloader pipeline for HLS-AES / DRM key bodies.
-    key_peer: KeyPeer,
 }
 
 impl KeyStore {

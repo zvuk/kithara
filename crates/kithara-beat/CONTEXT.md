@@ -10,11 +10,11 @@ Detailed contracts and invariants for the kithara-beat crate; the README is the 
 - Output: `RawBeats { beats, downbeats }` — positions in **seconds**, sorted,
   deduplicated, downbeats snapped to the nearest beat. Grid cleanup /
   source-frame conversion is the consumer's job (`kithara-audio`).
-- Models load from bytes (`BeatThis::from_model_bytes`) — the caller decides
-  embed vs file vs download.
+- Models load from `(mel, beat)` ONNX bytes via `BeatThis::try_from` — the
+  caller decides embed vs file vs download.
 
 ```rust
-let mut bt = BeatThis::from_model_bytes(mel_bytes, beat_bytes)?;
+let mut bt = BeatThis::try_from((mel_bytes, beat_bytes))?;
 let raw: RawBeats = bt.analyze(&mono_22050)?;
 ```
 

@@ -16,9 +16,9 @@ use crate::{
 
 pub(crate) struct TraceParams {
     pub(crate) data_dir: PathBuf,
-    pub(crate) run_id: String,
     pub(crate) target_root: PathBuf,
     pub(crate) lane: String,
+    pub(crate) run_id: String,
     pub(crate) suite: String,
     pub(crate) test: String,
 }

@@ -249,16 +249,17 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     epoch: Arc<AtomicU64>,
     /// Narrow mutating playhead handle — committed position and total duration.
     playhead: Arc<dyn PlayheadWrite>,
+    rebuild_completion: Arc<ArrayQueue<DecoderRebuildComplete>>,
     /// Narrow seek-control handle — begin / complete / clear-pending.
     seek: Arc<dyn SeekControl>,
     /// Narrow seek-observe handle — read seek state without mutation.
     seek_obs: Arc<dyn SeekObserve>,
-    decoder_factory: DecoderFactory<T>,
-    runtime_handle: RuntimeHandle,
     worker_wake: Arc<dyn WorkerWake>,
-    rebuild_completion: Arc<ArrayQueue<DecoderRebuildComplete>>,
-    pending_rebuild_submit: Option<DecoderRebuildJob<T>>,
-    next_rebuild_ticket: u64,
+    /// Decoders displaced on the produce core. They are dropped from
+    /// `flush_deferred`, outside the forbid-blocking region.
+    retired_decoders: ArrayQueue<Box<dyn Decoder>>,
+    decoder_retire_overflowed: AtomicBool,
+    decoder_factory: DecoderFactory<T>,
     /// Gapless trim mode applied per-track. Built once at construction;
     /// ABR variant switches inside one track keep the same trimmer
     /// (production semantics) so we never retrim audible content
@@ -285,10 +286,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
     emit: Option<DeferredBus<AudioEvent>>,
-    /// Incremental end-of-stream effect drain. Allocated at source construction;
-    /// true EOF only flips booleans and pulls one tail chunk per pass.
-    eof_drain_inputs_exhausted: Vec<bool>,
-    eof_drain_active: bool,
     last_spec: Option<PcmSpec>,
     /// Reader→peer wake handle, resolved from [`Source::peer_wake`] at
     /// construction. The FSM runs on the produce core, so it `arm`s this
@@ -297,6 +294,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `SharedStream` mutex) keeps the arm out of the lock the FSM already holds
     /// at every `clear_seek_pending` callsite. `None` for file streams.
     peer_wake: Option<Arc<kithara_stream::DeferredWake>>,
+    pending_rebuild_submit: Option<DecoderRebuildJob<T>>,
     /// `(seek_epoch, target)` of the most recent applied seek.
     /// `committed_position` lags `target` until the seek's first
     /// (trim-aligned) chunk is consumed: the decoder lands at the
@@ -309,13 +307,15 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// backward one) never resumes against a stale forward target. See
     /// `execute_recreation`.
     resume_target: Option<(u64, Duration)>,
-    /// Decoders displaced on the produce core. They are dropped from
-    /// `flush_deferred`, outside the forbid-blocking region.
-    retired_decoders: ArrayQueue<Box<dyn Decoder>>,
-    decoder_retire_overflowed: AtomicBool,
+    runtime_handle: RuntimeHandle,
     shared_stream: SharedStream<T>,
     effects: Vec<Box<dyn AudioEffect>>,
+    /// Incremental end-of-stream effect drain. Allocated at source construction;
+    /// true EOF only flips booleans and pulls one tail chunk per pass.
+    eof_drain_inputs_exhausted: Vec<bool>,
+    eof_drain_active: bool,
     chunks_decoded: u64,
+    next_rebuild_ticket: u64,
     total_samples: u64,
 }
 
@@ -330,13 +330,13 @@ pub(crate) struct DecodeInit<T: StreamType> {
 }
 
 struct DecoderRebuildJob<T: StreamType> {
-    ticket: u64,
-    shared_stream: SharedStream<T>,
-    media_info: MediaInfo,
-    base_offset: u64,
-    decoder_factory: DecoderFactory<T>,
     completion: Arc<ArrayQueue<DecoderRebuildComplete>>,
     worker_wake: Arc<dyn WorkerWake>,
+    decoder_factory: DecoderFactory<T>,
+    media_info: MediaInfo,
+    shared_stream: SharedStream<T>,
+    base_offset: u64,
+    ticket: u64,
 }
 
 impl<T: StreamType> DecoderRebuildJob<T> {
@@ -372,7 +372,7 @@ impl<T: StreamType> DecoderRebuildJob<T> {
                 Err(RecreateOutcome::SoftFailed)
             }
         };
-        let complete = DecoderRebuildComplete { ticket, result };
+        let complete = DecoderRebuildComplete { result, ticket };
         // `prepare_rebuild` is the only spawn site and the FSM guarantees
         // at most one outstanding rebuild job, so this push never contends;
         // the pop/retry/warn branch is defensive only.
@@ -400,20 +400,20 @@ struct SeekAttempt {
 
 // Construction, lifecycle, and state access
 impl<T: StreamType> StreamAudioSource<T> {
-    /// Default read-ahead size in bytes when segment range is unknown.
-    const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
-
     /// Bounded off-RT retire queue for decoders displaced on the produce core.
     const DECODER_RETIRE_CAPACITY: usize = 4;
+
+    /// Default read-ahead size in bytes when segment range is unknown.
+    const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
 
     /// Nanoseconds per second for frame/duration conversion.
     const NANOS_PER_SEC: u128 = 1_000_000_000;
 
     const SEEK_ANCHOR_NO_INIT_RANGE: &str =
         "seek anchor alignment: decoder recreate has no init segment range";
+    const SEEK_ANCHOR_RESOLUTION_FAILED: &str = "seek anchor resolution failed";
     const SEEK_RECOVERY_NO_INIT_RANGE: &str =
         "seek recovery: decoder recreate requires init segment range";
-    const SEEK_ANCHOR_RESOLUTION_FAILED: &str = "seek anchor resolution failed";
     const VARIANT_CHANGE_NO_FORMAT_TRANSITION: &str =
         "variant change signal without observable format transition";
 
@@ -452,9 +452,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             decoder_factory,
             runtime_handle,
             worker_wake,
-            rebuild_completion: Arc::new(ArrayQueue::new(2)),
-            pending_rebuild_submit: None,
-            next_rebuild_ticket: 1,
             epoch,
             effects,
             playhead,
@@ -465,6 +462,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             gapless,
             peer_wake,
             eof_drain_inputs_exhausted,
+            rebuild_completion: Arc::new(ArrayQueue::new(2)),
+            pending_rebuild_submit: None,
+            next_rebuild_ticket: 1,
             eof_drain_active: false,
             state: CurrentFsm::decoding(),
             chunks_decoded: 0,
@@ -478,10 +478,36 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    pub(crate) fn with_emit(mut self, emit: DeferredBus<AudioEvent>) -> Self {
-        self.emit = Some(emit);
-        self
+    /// Emit an audio event if the bus is set. Runs on the produce core, so it
+    /// only *enqueues* (lock-free); the shell publishes via `flush_deferred` /
+    /// `Drop` — the `broadcast::send` is a `kevent` the forbid path must not make.
+    fn emit_event(&self, event: AudioEvent) {
+        if let Some(ref emit) = self.emit {
+            emit.enqueue(event);
+        }
     }
+    /// Reset the effect chain and discard any armed EOF drain.
+    /// Used on seek / decoder recreation, so a buffering effect's stale tail never leaks past
+    /// the discontinuity and a seek-after-EOF re-arms the drain from scratch.
+    fn reset_effect_chain(&mut self) {
+        reset_effects(&mut self.effects);
+        self.eof_drain_active = false;
+    }
+
+    fn resume_state(&self) -> Option<&ResumeState> {
+        match &self.state {
+            CurrentFsm::AwaitingResume(h) => Some(h.data()),
+            _ => None,
+        }
+    }
+
+    fn resume_state_mut(&mut self) -> Option<&mut ResumeState> {
+        match &mut self.state {
+            CurrentFsm::AwaitingResume(h) => Some(h.data_mut()),
+            _ => None,
+        }
+    }
+
     /// Publish the current FSM phase to the shared activity flag and assign
     /// the new state.
     ///
@@ -499,35 +525,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.state = new;
     }
 
-    /// Reset the effect chain and discard any armed EOF drain.
-    /// Used on seek / decoder recreation, so a buffering effect's stale tail never leaks past
-    /// the discontinuity and a seek-after-EOF re-arms the drain from scratch.
-    fn reset_effect_chain(&mut self) {
-        reset_effects(&mut self.effects);
-        self.eof_drain_active = false;
-    }
-
-    /// Emit an audio event if the bus is set. Runs on the produce core, so it
-    /// only *enqueues* (lock-free); the shell publishes via `flush_deferred` /
-    /// `Drop` — the `broadcast::send` is a `kevent` the forbid path must not make.
-    fn emit_event(&self, event: AudioEvent) {
-        if let Some(ref emit) = self.emit {
-            emit.enqueue(event);
-        }
-    }
-
-    fn resume_state(&self) -> Option<&ResumeState> {
-        match &self.state {
-            CurrentFsm::AwaitingResume(h) => Some(h.data()),
-            _ => None,
-        }
-    }
-
-    fn resume_state_mut(&mut self) -> Option<&mut ResumeState> {
-        match &mut self.state {
-            CurrentFsm::AwaitingResume(h) => Some(h.data_mut()),
-            _ => None,
-        }
+    pub(crate) fn with_emit(mut self, emit: DeferredBus<AudioEvent>) -> Self {
+        self.emit = Some(emit);
+        self
     }
 }
 
@@ -904,6 +904,19 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    fn emit_seek_lifecycle(
+        &self,
+        stage: SeekLifecycleStage,
+        seek_epoch: u64,
+        location: SegmentLocation,
+    ) {
+        self.emit_event(AudioEvent::SeekLifecycle {
+            stage,
+            seek_epoch,
+            location,
+        });
+    }
+
     /// Approximate the byte Symphonia will target for `position` before we
     /// issue the seek. Used to gate `apply_seek_from_decoder` on the byte
     /// range being downloaded — without this, `decoder.seek()` issues a
@@ -930,6 +943,24 @@ impl<T: StreamType> StreamAudioSource<T> {
         .expect("pos_nanos * payload / dur_nanos overflowed u64")
         .min(payload);
         Some(base_offset.saturating_add(target_relative))
+    }
+
+    /// Resolve the post-seek skip remainder for the given epoch in one
+    /// pass. Returns `Some(remaining)` only when an active skip is still
+    /// owed; otherwise clears any stale entry and returns `None`. Lets
+    /// the caller short-circuit the per-chunk fast path with a single
+    /// branch instead of a four-guard cascade (`guard_cascade.rs:60-76`).
+    #[inline]
+    fn pending_skip_amount(&mut self, epoch: u64) -> Option<Duration> {
+        let resume = self.resume_state().copied()?;
+        let remaining = resume.skip?;
+        if resume.seek.epoch != epoch || remaining.is_zero() {
+            if let Some(state) = self.resume_state_mut() {
+                state.skip = None;
+            }
+            return None;
+        }
+        Some(remaining)
     }
 
     /// Resolve a seek-preemption target in one Option-chain so the per-tick
@@ -966,24 +997,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         Some(target)
     }
 
-    /// Resolve the post-seek skip remainder for the given epoch in one
-    /// pass. Returns `Some(remaining)` only when an active skip is still
-    /// owed; otherwise clears any stale entry and returns `None`. Lets
-    /// the caller short-circuit the per-chunk fast path with a single
-    /// branch instead of a four-guard cascade (`guard_cascade.rs:60-76`).
-    #[inline]
-    fn pending_skip_amount(&mut self, epoch: u64) -> Option<Duration> {
-        let resume = self.resume_state().copied()?;
-        let remaining = resume.skip?;
-        if resume.seek.epoch != epoch || remaining.is_zero() {
-            if let Some(state) = self.resume_state_mut() {
-                state.skip = None;
-            }
-            return None;
-        }
-        Some(remaining)
-    }
-
     fn seek_context(&self) -> SegmentLocation {
         SegmentLocation::new(
             self.shared_stream
@@ -1003,23 +1016,25 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.session.decoder.update_byte_len(relative);
         }
     }
-
-    fn emit_seek_lifecycle(
-        &self,
-        stage: SeekLifecycleStage,
-        seek_epoch: u64,
-        location: SegmentLocation,
-    ) {
-        self.emit_event(AudioEvent::SeekLifecycle {
-            stage,
-            seek_epoch,
-            location,
-        });
-    }
 }
 
 // Seek: recovery and failure
 impl<T: StreamType> StreamAudioSource<T> {
+    fn fail_seek(&mut self, request: SeekRequest, err: DecodeError, context: &'static str) {
+        warn!(
+            ?err,
+            epoch = request.seek.epoch,
+            ?request.seek.target,
+            "{context}"
+        );
+        self.emit_event(AudioEvent::SeekRejected {
+            epoch: request.seek.epoch,
+            target: request.seek.target,
+        });
+        self.finalize_seek_pending(request.seek.epoch);
+        self.update_state(CurrentFsm::failed(TrackFailure::Decode(err)));
+    }
+
     /// Shared recovery path for a failed `decoder.seek()`.
     ///
     /// Splits by [`DecodeError`] variant: [`DecodeError::SeekOutOfRange`]
@@ -1118,21 +1133,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.epoch.store(request.seek.epoch, Ordering::Release);
         self.finalize_seek_pending(request.seek.epoch);
         self.update_state(CurrentFsm::decoding());
-    }
-
-    fn fail_seek(&mut self, request: SeekRequest, err: DecodeError, context: &'static str) {
-        warn!(
-            ?err,
-            epoch = request.seek.epoch,
-            ?request.seek.target,
-            "{context}"
-        );
-        self.emit_event(AudioEvent::SeekRejected {
-            epoch: request.seek.epoch,
-            target: request.seek.target,
-        });
-        self.finalize_seek_pending(request.seek.epoch);
-        self.update_state(CurrentFsm::failed(TrackFailure::Decode(err)));
     }
 }
 
@@ -1319,6 +1319,13 @@ impl<T: StreamType> StreamAudioSource<T> {
 
 // Decoder: rebuild and recreate lifecycle
 impl<T: StreamType> StreamAudioSource<T> {
+    fn drain_retired_decoders(&self) {
+        while self.retired_decoders.pop().is_some() {}
+        if self.decoder_retire_overflowed.swap(false, Ordering::AcqRel) {
+            warn!("decoder retire queue overflowed; leaked decoder to keep RT core free");
+        }
+    }
+
     fn install_recreated_session(
         &mut self,
         new_info: &MediaInfo,
@@ -1337,28 +1344,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             base_offset,
             variant,
         });
-    }
-
-    fn retire_decoder(&self, decoder: Box<dyn Decoder>) {
-        if let Err(decoder) = self.retired_decoders.push(decoder) {
-            self.decoder_retire_overflowed
-                .store(true, Ordering::Release);
-            mem::forget(decoder);
-        }
-    }
-
-    fn drain_retired_decoders(&self) {
-        while self.retired_decoders.pop().is_some() {}
-        if self.decoder_retire_overflowed.swap(false, Ordering::AcqRel) {
-            warn!("decoder retire queue overflowed; leaked decoder to keep RT core free");
-        }
-    }
-
-    fn submit_pending_rebuild(&mut self) {
-        let Some(job) = self.pending_rebuild_submit.take() else {
-            return;
-        };
-        drop(spawn_blocking_on(&self.runtime_handle, move || job.run()));
     }
 
     fn next_rebuild_ticket(&mut self) -> u64 {
@@ -1407,12 +1392,20 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.pending_rebuild_submit = Some(job);
         self.update_state(CurrentFsm::rebuilding(RebuildState {
             ticket,
+            completion,
             recreate: recreate.clone(),
             started_seek_epoch: self.seek_obs.epoch(),
-            completion,
             superseded_seek: None,
         }));
         Ok(())
+    }
+
+    fn retire_decoder(&self, decoder: Box<dyn Decoder>) {
+        if let Err(decoder) = self.retired_decoders.push(decoder) {
+            self.decoder_retire_overflowed
+                .store(true, Ordering::Release);
+            mem::forget(decoder);
+        }
     }
 
     #[kithara::probe]
@@ -1434,23 +1427,37 @@ impl<T: StreamType> StreamAudioSource<T> {
         );
         self.update_state(CurrentFsm::recreating(state));
     }
+
+    fn submit_pending_rebuild(&mut self) {
+        let Some(job) = self.pending_rebuild_submit.take() else {
+            return;
+        };
+        drop(spawn_blocking_on(&self.runtime_handle, move || job.run()));
+    }
 }
 
 // Output: gapless drain, chunk tracking, and frame/time helpers
 impl<T: StreamType> StreamAudioSource<T> {
-    /// Drain ready chunks from the gapless trimmer through the effect
-    /// chain, returning the first chunk that survives effects.
-    ///
-    /// `apply_effects` may swallow a chunk (e.g. resampler buffering);
-    /// in that case we keep pulling from `gapless.next()` until we hit
-    /// either an emittable chunk or the trimmer is empty.
-    fn next_gapless_output(&mut self) -> Option<PcmChunk> {
-        while let Some(chunk) = self.gapless.next() {
-            if let Some(processed) = apply_effects(&mut self.effects, chunk) {
-                return Some(processed);
-            }
-        }
-        None
+    fn duration_for_frames(spec: PcmSpec, frames: usize) -> Duration {
+        let nanos = (frames as u128)
+            .saturating_mul(Self::NANOS_PER_SEC)
+            .saturating_div(u128::from(spec.sample_rate.get()));
+        let nanos_u64 = num_traits::cast::ToPrimitive::to_u64(&nanos).unwrap_or(u64::MAX);
+        Duration::from_nanos(nanos_u64)
+    }
+
+    fn frames_for_duration(spec: PcmSpec, duration: Duration) -> usize {
+        let frames = duration
+            .as_nanos()
+            .saturating_mul(u128::from(spec.sample_rate.get()))
+            .saturating_div(Self::NANOS_PER_SEC);
+        assert!(
+            frames <= usize::MAX as u128,
+            "source.rs:1036 frames_for_duration: frames={frames} \
+             exceeds usize::MAX (duration={duration:?}, sample_rate={})",
+            spec.sample_rate
+        );
+        frames as usize
     }
 
     fn next_eof_drain_output(&mut self) -> Option<PcmChunk> {
@@ -1467,6 +1474,21 @@ impl<T: StreamType> StreamAudioSource<T> {
             &mut self.eof_drain_inputs_exhausted,
             last_stage,
         )
+    }
+
+    /// Drain ready chunks from the gapless trimmer through the effect
+    /// chain, returning the first chunk that survives effects.
+    ///
+    /// `apply_effects` may swallow a chunk (e.g. resampler buffering);
+    /// in that case we keep pulling from `gapless.next()` until we hit
+    /// either an emittable chunk or the trimmer is empty.
+    fn next_gapless_output(&mut self) -> Option<PcmChunk> {
+        while let Some(chunk) = self.gapless.next() {
+            if let Some(processed) = apply_effects(&mut self.effects, chunk) {
+                return Some(processed);
+            }
+        }
+        None
     }
 
     fn pull_eof_drain_stage(
@@ -1517,28 +1539,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             });
             self.last_spec = Some(chunk.spec());
         }
-    }
-
-    fn duration_for_frames(spec: PcmSpec, frames: usize) -> Duration {
-        let nanos = (frames as u128)
-            .saturating_mul(Self::NANOS_PER_SEC)
-            .saturating_div(u128::from(spec.sample_rate.get()));
-        let nanos_u64 = num_traits::cast::ToPrimitive::to_u64(&nanos).unwrap_or(u64::MAX);
-        Duration::from_nanos(nanos_u64)
-    }
-
-    fn frames_for_duration(spec: PcmSpec, duration: Duration) -> usize {
-        let frames = duration
-            .as_nanos()
-            .saturating_mul(u128::from(spec.sample_rate.get()))
-            .saturating_div(Self::NANOS_PER_SEC);
-        assert!(
-            frames <= usize::MAX as u128,
-            "source.rs:1036 frames_for_duration: frames={frames} \
-             exceeds usize::MAX (duration={duration:?}, sample_rate={})",
-            spec.sample_rate
-        );
-        frames as usize
     }
 }
 
@@ -1928,6 +1928,29 @@ impl<T: StreamType> StreamAudioSource<T> {
         )
     }
 
+    /// Byte range whose readiness lets the decoder produce its next chunk from
+    /// `byte`: the 32 KB read-ahead window, clamped down to the next segment
+    /// boundary (segmented sources) and to `Source::len()`. The clamp to the
+    /// next segment boundary matters — a fixed 32 KB window straddles the
+    /// boundary into a not-yet-fetched next segment, so the gate would never
+    /// clear even though the decoder only needs the rest of the current
+    /// segment to emit a chunk.
+    fn chunk_lookahead_range(&self, byte: u64) -> Range<u64> {
+        let lookahead_end = byte.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
+        let check_end = self
+            .shared_stream
+            .byte_map()
+            .and_then(|layout| layout.segment_after_byte(byte))
+            .map_or(lookahead_end, |next| {
+                next.byte_range.start.min(lookahead_end)
+            });
+        let check_end = self
+            .shared_stream
+            .len()
+            .map_or(check_end, |len| check_end.min(len));
+        byte..check_end
+    }
+
     /// Decode one chunk using the decode loop.
     #[kithara::probe]
     fn decode_one_step(&mut self) -> DecodeStep {
@@ -2102,48 +2125,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.shared_stream.len().map_or(end, |len| end.min(len))
     }
 
-    /// Byte range whose readiness lets the decoder produce its next chunk from
-    /// `byte`: the 32 KB read-ahead window, clamped down to the next segment
-    /// boundary (segmented sources) and to `Source::len()`. The clamp to the
-    /// next segment boundary matters — a fixed 32 KB window straddles the
-    /// boundary into a not-yet-fetched next segment, so the gate would never
-    /// clear even though the decoder only needs the rest of the current
-    /// segment to emit a chunk.
-    fn chunk_lookahead_range(&self, byte: u64) -> Range<u64> {
-        let lookahead_end = byte.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
-        let check_end = self
-            .shared_stream
-            .byte_map()
-            .and_then(|layout| layout.segment_after_byte(byte))
-            .map_or(lookahead_end, |next| {
-                next.byte_range.start.min(lookahead_end)
-            });
-        let check_end = self
-            .shared_stream
-            .len()
-            .map_or(check_end, |len| check_end.min(len));
-        byte..check_end
-    }
-
     /// Check whether the underlying source has data ready for a non-blocking
     /// decode. Returns `true` for `Ready`, `Eof`, or `Seeking` phases.
     fn source_is_ready(&self) -> bool {
         self.source_ready_for_range(self.chunk_lookahead_range(self.shared_stream.position()))
-    }
-
-    /// Readiness of the chunk-lookahead window starting at `byte` — the
-    /// post-seek-resume companion to [`Self::source_is_ready`], which gates on
-    /// the same segment-clamped window but at the decoder's resume byte rather
-    /// than the live stream position.
-    fn source_is_ready_for_chunk(&self, byte: u64) -> bool {
-        self.source_ready_for_range(self.chunk_lookahead_range(byte))
-    }
-
-    /// Phase of the chunk-lookahead window at `byte`, so the post-seek wait
-    /// path blocks on exactly the window it later gates ready on.
-    fn source_phase_for_chunk(&self, byte: u64) -> SourcePhase {
-        self.shared_stream
-            .phase_at(self.chunk_lookahead_range(byte))
     }
 
     fn source_is_ready_for_apply_seek(&self, applying: ApplySeekState) -> bool {
@@ -2154,6 +2139,14 @@ impl<T: StreamType> StreamAudioSource<T> {
             } => self.source_is_ready_for_seek_landing(byte),
             SeekMode::Direct { target_byte: None } => self.source_is_ready(),
         }
+    }
+
+    /// Readiness of the chunk-lookahead window starting at `byte` — the
+    /// post-seek-resume companion to [`Self::source_is_ready`], which gates on
+    /// the same segment-clamped window but at the decoder's resume byte rather
+    /// than the live stream position.
+    fn source_is_ready_for_chunk(&self, byte: u64) -> bool {
+        self.source_ready_for_range(self.chunk_lookahead_range(byte))
     }
 
     /// Readiness check for the byte range the decoder will read first
@@ -2174,6 +2167,13 @@ impl<T: StreamType> StreamAudioSource<T> {
         let reason = map_source_phase(phase)?;
         self.arm_peer_wake();
         Some(reason)
+    }
+
+    /// Phase of the chunk-lookahead window at `byte`, so the post-seek wait
+    /// path blocks on exactly the window it later gates ready on.
+    fn source_phase_for_chunk(&self, byte: u64) -> SourcePhase {
+        self.shared_stream
+            .phase_at(self.chunk_lookahead_range(byte))
     }
 
     /// Companion to [`source_is_ready_for_seek_landing`] used by the
@@ -2265,6 +2265,38 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    fn finish_apply_seek_after_recreate(&mut self, request: SeekRequest) -> TrackStep<PcmChunk> {
+        debug!(
+            target = ?request.seek.target,
+            epoch = request.seek.epoch,
+            emit_request = request.emit_request,
+            committed_position = ?self.playhead.position(),
+            stream_pos = self.shared_stream.position(),
+            "finish_apply_seek_after_recreate: enter"
+        );
+        match self.decoder_seek_safe(request.seek.target) {
+            Ok(_outcome) => {
+                self.apply_seek_applied(
+                    request.seek.epoch,
+                    request.seek.target,
+                    self.seek_context(),
+                    None,
+                );
+                self.epoch.store(request.seek.epoch, Ordering::Release);
+                self.finalize_seek_pending(request.seek.epoch);
+                TrackStep::StateChanged
+            }
+            Err(err) => {
+                self.reject_seek(
+                    request,
+                    &err,
+                    "step_recreating_decoder: recreated decoder seek failed",
+                );
+                TrackStep::StateChanged
+            }
+        }
+    }
+
     fn finish_format_boundary_rebuild(&mut self) -> RecreateOutcome {
         let committed = self.playhead.position();
         let epoch_now = self.epoch.load(Ordering::Acquire);
@@ -2316,23 +2348,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         RecreateOutcome::Done
     }
 
-    fn finish_recreate_outcome(
-        &mut self,
-        recreate: RecreateState,
-        outcome: RecreateOutcome,
-    ) -> TrackStep<PcmChunk> {
-        match outcome {
-            RecreateOutcome::Done => self.apply_recreate_next(&recreate.next),
-            RecreateOutcome::SoftFailed => {
-                self.update_state(CurrentFsm::failed(TrackFailure::RecreateFailed {
-                    offset: recreate.offset,
-                }));
-                TrackStep::Failed
-            }
-            RecreateOutcome::NeedsSourceWait => self.wait_for_source_on_recreate(recreate),
-        }
-    }
-
     fn finish_rebuild(
         &mut self,
         rebuild: RebuildState,
@@ -2360,6 +2375,23 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.finish_recreate_outcome(recreate, outcome)
     }
 
+    fn finish_recreate_outcome(
+        &mut self,
+        recreate: RecreateState,
+        outcome: RecreateOutcome,
+    ) -> TrackStep<PcmChunk> {
+        match outcome {
+            RecreateOutcome::Done => self.apply_recreate_next(&recreate.next),
+            RecreateOutcome::SoftFailed => {
+                self.update_state(CurrentFsm::failed(TrackFailure::RecreateFailed {
+                    offset: recreate.offset,
+                }));
+                TrackStep::Failed
+            }
+            RecreateOutcome::NeedsSourceWait => self.wait_for_source_on_recreate(recreate),
+        }
+    }
+
     fn rebuild_superseded(&self, rebuild: &RebuildState) -> bool {
         rebuild.superseded_seek.is_some()
             || self.seek_obs.epoch() != rebuild.started_seek_epoch
@@ -2385,6 +2417,32 @@ impl<T: StreamType> StreamAudioSource<T> {
         )
     }
 
+    fn record_rebuild_seek_preempt(&self, rebuild: &mut RebuildState) {
+        if !self.seek_obs.take_preempt() {
+            return;
+        }
+        let epoch = self.seek_obs.epoch();
+        let min_epoch = rebuild
+            .superseded_seek
+            .map_or(rebuild.started_seek_epoch, |request| request.seek.epoch);
+        if epoch <= min_epoch || epoch <= self.epoch.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(target) = self.seek_obs.target() else {
+            return;
+        };
+        rebuild.superseded_seek = Some(SeekRequest {
+            seek: SeekContext { target, epoch },
+            emit_request: false,
+        });
+    }
+
+    fn retire_rebuild_complete(&self, complete: DecoderRebuildComplete) {
+        if let Ok(decoder) = complete.result {
+            self.retire_decoder(decoder);
+        }
+    }
+
     fn seek_request_from_observer(&self, min_epoch: u64) -> Option<SeekRequest> {
         let epoch = self.seek_obs.epoch();
         if epoch <= min_epoch {
@@ -2395,13 +2453,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             seek: SeekContext { target, epoch },
             emit_request: false,
         })
-    }
-
-    fn transition_to_seek_request(&mut self, request: SeekRequest) -> TrackStep<PcmChunk> {
-        self.update_state(CurrentFsm::seek_requested(request));
-        self.reset_effect_chain();
-        self.gapless.notify_seek();
-        TrackStep::StateChanged
     }
 
     fn transition_after_rebuild_superseded(
@@ -2431,62 +2482,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         TrackStep::StateChanged
     }
 
-    fn record_rebuild_seek_preempt(&self, rebuild: &mut RebuildState) {
-        if !self.seek_obs.take_preempt() {
-            return;
-        }
-        let epoch = self.seek_obs.epoch();
-        let min_epoch = rebuild
-            .superseded_seek
-            .map_or(rebuild.started_seek_epoch, |request| request.seek.epoch);
-        if epoch <= min_epoch || epoch <= self.epoch.load(Ordering::Acquire) {
-            return;
-        }
-        let Some(target) = self.seek_obs.target() else {
-            return;
-        };
-        rebuild.superseded_seek = Some(SeekRequest {
-            seek: SeekContext { target, epoch },
-            emit_request: false,
-        });
-    }
-
-    fn retire_rebuild_complete(&self, complete: DecoderRebuildComplete) {
-        if let Ok(decoder) = complete.result {
-            self.retire_decoder(decoder);
-        }
-    }
-
-    fn finish_apply_seek_after_recreate(&mut self, request: SeekRequest) -> TrackStep<PcmChunk> {
-        debug!(
-            target = ?request.seek.target,
-            epoch = request.seek.epoch,
-            emit_request = request.emit_request,
-            committed_position = ?self.playhead.position(),
-            stream_pos = self.shared_stream.position(),
-            "finish_apply_seek_after_recreate: enter"
-        );
-        match self.decoder_seek_safe(request.seek.target) {
-            Ok(_outcome) => {
-                self.apply_seek_applied(
-                    request.seek.epoch,
-                    request.seek.target,
-                    self.seek_context(),
-                    None,
-                );
-                self.epoch.store(request.seek.epoch, Ordering::Release);
-                self.finalize_seek_pending(request.seek.epoch);
-                TrackStep::StateChanged
-            }
-            Err(err) => {
-                self.reject_seek(
-                    request,
-                    &err,
-                    "step_recreating_decoder: recreated decoder seek failed",
-                );
-                TrackStep::StateChanged
-            }
-        }
+    fn transition_to_seek_request(&mut self, request: SeekRequest) -> TrackStep<PcmChunk> {
+        self.update_state(CurrentFsm::seek_requested(request));
+        self.reset_effect_chain();
+        self.gapless.notify_seek();
+        TrackStep::StateChanged
     }
 
     /// Handle the "source not ready for boundary" branch of
@@ -3021,13 +3021,13 @@ mod rebuilding_decoder_tests {
     use super::*;
 
     struct TestDecoder {
-        id: u64,
         drops: Arc<Mutex<Vec<u64>>>,
+        id: u64,
     }
 
     impl TestDecoder {
         fn new(id: u64, drops: Arc<Mutex<Vec<u64>>>) -> Self {
-            Self { id, drops }
+            Self { drops, id }
         }
     }
 
@@ -3086,10 +3086,10 @@ mod rebuilding_decoder_tests {
     }
 
     struct TestControl {
-        media_info: Mutex<Option<MediaInfo>>,
         variant_pending: AtomicBool,
-        variant_target: Mutex<Option<usize>>,
         format_range: Mutex<Option<Range<u64>>>,
+        media_info: Mutex<Option<MediaInfo>>,
+        variant_target: Mutex<Option<usize>>,
     }
 
     impl TestControl {
@@ -3102,14 +3102,14 @@ mod rebuilding_decoder_tests {
             }
         }
 
-        fn set_media_info(&self, media_info: MediaInfo) {
-            *self.media_info.lock() = Some(media_info);
-        }
-
         fn raise_variant_fence(&self, target: usize, media_info: MediaInfo) {
             self.set_media_info(media_info);
             *self.variant_target.lock() = Some(target);
             self.variant_pending.store(true, Ordering::Release);
+        }
+
+        fn set_media_info(&self, media_info: MediaInfo) {
+            *self.media_info.lock() = Some(media_info);
         }
     }
 
@@ -3279,8 +3279,8 @@ mod rebuilding_decoder_tests {
         StreamAudioSource::new(
             shared_stream,
             DecodeInit {
-                decoder: Box::new(TestDecoder::new(1, Arc::clone(&drops))),
                 decoder_factory,
+                decoder: Box::new(TestDecoder::new(1, Arc::clone(&drops))),
                 gapless_mode: GaplessMode::Disabled,
                 media_info: Some(media_info(0)),
             },

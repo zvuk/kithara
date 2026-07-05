@@ -1,3 +1,15 @@
+<div align="center">
+  <img src="../../logo.svg" alt="kithara" width="300">
+</div>
+
+<div align="center">
+
+[![crates.io](https://img.shields.io/crates/v/kithara-beat.svg)](https://crates.io/crates/kithara-beat)
+[![docs.rs](https://docs.rs/kithara-beat/badge.svg)](https://docs.rs/kithara-beat)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-beat
 
 Beat / downbeat detection: pure-Rust NN inference. A port of the `beat_this`
@@ -14,7 +26,7 @@ grid cleanup.
 
 ## Key types
 
-- `BeatThis::from_model_bytes(mel_bytes, beat_bytes)` — load models from bytes
+- `BeatThis::try_from((mel_bytes, beat_bytes))` — load models from bytes
   (caller chooses embed vs file vs download).
 - `BeatThis::analyze(&mono_22050)` — run the mel → inference → peak-pick pipeline.
 - `RawBeats { beats, downbeats }` — output positions in seconds, sorted and
@@ -23,7 +35,9 @@ grid cleanup.
 ## Usage
 
 ```rust
-let mut bt = BeatThis::from_model_bytes(mel_bytes, beat_bytes)?;
+use kithara_beat::{BeatThis, RawBeats};
+
+let mut bt = BeatThis::try_from((mel_bytes, beat_bytes))?;
 let raw: RawBeats = bt.analyze(&mono_22050)?;
 ```
 

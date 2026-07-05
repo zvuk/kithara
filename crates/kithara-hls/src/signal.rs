@@ -39,6 +39,15 @@ fn wake_worker(cell: &WorkerWakeCell) {
 /// the same worker cell.
 #[derive(Clone)]
 pub(crate) struct SizeSignal {
+    /// Late-bound peer-poll wake — the `HlsPeer`'s `reader_advanced` handle.
+    /// Fired by [`wake_peer`](Self::wake_peer) from the `on_slow` hook when an
+    /// in-flight fetch crosses `soft_timeout` without settling: the peer re-polls
+    /// and `reconcile_escape` marks the ABR escape against the now-stalled slot.
+    /// This is the anti-event twin of `worker_wake`/`ready` (data is *not*
+    /// arriving), so the escape is edge-triggered by the stall rather than left
+    /// to an incidental reader-progress wake. Empty until the peer activates
+    /// (`HlsCoord::set_peer_wake`), then set once.
+    peer_wake: Arc<OnceLock<Arc<DeferredWake>>>,
     /// Shared readiness gate. Every transition that can flip a blocked reader's
     /// `wait_range` predicate (segment write/commit/fail, fence raise/clear,
     /// seek reset, cancel) signals it; the off-RT `wait_range(_, None)` parks on
@@ -57,15 +66,6 @@ pub(crate) struct SizeSignal {
     /// signals), so the RT decoder's worker re-ticks on data arrival rather than
     /// on its 10 ms scheduler poll.
     worker_wake: WorkerWakeCell,
-    /// Late-bound peer-poll wake — the `HlsPeer`'s `reader_advanced` handle.
-    /// Fired by [`wake_peer`](Self::wake_peer) from the `on_slow` hook when an
-    /// in-flight fetch crosses `soft_timeout` without settling: the peer re-polls
-    /// and `reconcile_escape` marks the ABR escape against the now-stalled slot.
-    /// This is the anti-event twin of `worker_wake`/`ready` (data is *not*
-    /// arriving), so the escape is edge-triggered by the stall rather than left
-    /// to an incidental reader-progress wake. Empty until the peer activates
-    /// (`HlsCoord::set_peer_wake`), then set once.
-    peer_wake: Arc<OnceLock<Arc<DeferredWake>>>,
 }
 
 impl SizeSignal {
@@ -77,6 +77,12 @@ impl SizeSignal {
             worker_wake,
             peer_wake: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Pre-park snapshot of the gate generation (seqlock guard for the off-RT
+    /// `wait_range` loop). Pass-through to [`WaitGate::current`].
+    pub(crate) fn current(&self) -> u64 {
+        self.ready.current()
     }
 
     /// Signal the gate, then re-tick the audio worker. Used where newly readable
@@ -98,11 +104,10 @@ impl SizeSignal {
         self.ready.signal();
     }
 
-    /// Install the audio worker's data-arrival wake (idempotent — only the first
-    /// set sticks). Called by the coord once the worker exists; the fire methods
-    /// read it lock-free thereafter.
-    pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
-        let _ = self.worker_wake.set(wake);
+    /// Re-vend the underlying readiness gate. Used by the cancel waker, which
+    /// must capture a hard-`Send + Sync` handle in its `on_cancel` closure.
+    pub(crate) fn ready_gate(&self) -> Arc<ThreadGate> {
+        Arc::clone(&self.ready)
     }
 
     /// Install the peer's `reader_advanced` wake (idempotent — only the first
@@ -110,6 +115,20 @@ impl SizeSignal {
     /// reads it lock-free thereafter.
     pub(crate) fn set_peer_wake(&self, wake: Arc<DeferredWake>) {
         let _ = self.peer_wake.set(wake);
+    }
+
+    /// Install the audio worker's data-arrival wake (idempotent — only the first
+    /// set sticks). Called by the coord once the worker exists; the fire methods
+    /// read it lock-free thereafter.
+    pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
+        let _ = self.worker_wake.set(wake);
+    }
+
+    /// Park on the gate until its generation advances past `since` or `timeout`
+    /// elapses. Returns `true` on a signal, `false` on timeout. Pass-through to
+    /// [`WaitGate::wait_timeout`].
+    pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool {
+        self.ready.wait_timeout(since, timeout)
     }
 
     /// Wake the HLS peer's `poll_next` so it re-runs `reconcile_escape` against
@@ -121,24 +140,5 @@ impl SizeSignal {
         if let Some(wake) = self.peer_wake.get() {
             wake.notify_now();
         }
-    }
-
-    /// Re-vend the underlying readiness gate. Used by the cancel waker, which
-    /// must capture a hard-`Send + Sync` handle in its `on_cancel` closure.
-    pub(crate) fn ready_gate(&self) -> Arc<ThreadGate> {
-        Arc::clone(&self.ready)
-    }
-
-    /// Pre-park snapshot of the gate generation (seqlock guard for the off-RT
-    /// `wait_range` loop). Pass-through to [`WaitGate::current`].
-    pub(crate) fn current(&self) -> u64 {
-        self.ready.current()
-    }
-
-    /// Park on the gate until its generation advances past `since` or `timeout`
-    /// elapses. Returns `true` on a signal, `false` on timeout. Pass-through to
-    /// [`WaitGate::wait_timeout`].
-    pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool {
-        self.ready.wait_timeout(since, timeout)
     }
 }

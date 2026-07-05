@@ -91,53 +91,6 @@ impl AppleAudioFile {
         Self::open_inner(source, hint, size, true)
     }
 
-    /// Open a streamed `source` whose total length the source reports at open
-    /// (`Content-Length` / committed size). Skips the eager packet-count scan
-    /// (the demuxer sources duration / read-buffer size from header metadata);
-    /// otherwise identical to [`Self::open`]. The known total is what lets the
-    /// codec treat a not-ready read as a transient `Pending` (not EOF) and
-    /// resolve seeks by size-estimation instead of an O(N) forward frame-scan.
-    /// If the source reports no length (no `Content-Length`, not yet
-    /// committed), falls back to the size-less [`SizeMode::Unknown`] path
-    /// ([`Self::open_streaming`]).
-    ///
-    /// The source must report its TRUE total here, never a partial in-flight
-    /// length: `AudioFileServices` never reads past the size `get_size`
-    /// reports, so a partial would pin a false EOF at the open-time prefix
-    /// (the "plays a fraction then freezes" device bug). `FileSource::len`
-    /// owns that guarantee.
-    pub(crate) fn open_sized_streaming(
-        source: BoxedSource,
-        hint: Option<u32>,
-    ) -> DecodeResult<Self> {
-        let (mut source, end) = Self::probe_end(source)?;
-        source
-            .seek(SeekFrom::Start(0))
-            .map_err(DecodeError::backend)?;
-        let size = match end {
-            Some(end) => SizeMode::Snapshot(i64::try_from(end).map_err(DecodeError::backend)?),
-            None => SizeMode::Unknown,
-        };
-        Self::open_inner(source, hint, size, false)
-    }
-
-    /// Probe the source length via a seek-to-end, restoring the cursor to the
-    /// start. `None` means the source reports no length (`ErrorKind::Unsupported`
-    /// — e.g. a chunked stream with no `Content-Length`, or a streamed source
-    /// not yet committed). A streamed source reports its TRUE total here (never
-    /// a partial in-flight prefix) — see [`Self::open_sized_streaming`].
-    fn probe_end(mut source: BoxedSource) -> DecodeResult<(BoxedSource, Option<u64>)> {
-        let end = match source.seek(SeekFrom::End(0)) {
-            Ok(end) => Some(end),
-            Err(err) if err.kind() == ErrorKind::Unsupported => None,
-            Err(err) => return Err(DecodeError::backend(err)),
-        };
-        source
-            .seek(SeekFrom::Start(0))
-            .map_err(DecodeError::backend)?;
-        Ok((source, end))
-    }
-
     fn open_inner(
         source: BoxedSource,
         hint: Option<u32>,
@@ -199,6 +152,36 @@ impl AppleAudioFile {
         })
     }
 
+    /// Open a streamed `source` whose total length the source reports at open
+    /// (`Content-Length` / committed size). Skips the eager packet-count scan
+    /// (the demuxer sources duration / read-buffer size from header metadata);
+    /// otherwise identical to [`Self::open`]. The known total is what lets the
+    /// codec treat a not-ready read as a transient `Pending` (not EOF) and
+    /// resolve seeks by size-estimation instead of an O(N) forward frame-scan.
+    /// If the source reports no length (no `Content-Length`, not yet
+    /// committed), falls back to the size-less [`SizeMode::Unknown`] path
+    /// ([`Self::open_streaming`]).
+    ///
+    /// The source must report its TRUE total here, never a partial in-flight
+    /// length: `AudioFileServices` never reads past the size `get_size`
+    /// reports, so a partial would pin a false EOF at the open-time prefix
+    /// (the "plays a fraction then freezes" device bug). `FileSource::len`
+    /// owns that guarantee.
+    pub(crate) fn open_sized_streaming(
+        source: BoxedSource,
+        hint: Option<u32>,
+    ) -> DecodeResult<Self> {
+        let (mut source, end) = Self::probe_end(source)?;
+        source
+            .seek(SeekFrom::Start(0))
+            .map_err(DecodeError::backend)?;
+        let size = match end {
+            Some(end) => SizeMode::Snapshot(i64::try_from(end).map_err(DecodeError::backend)?),
+            None => SizeMode::Unknown,
+        };
+        Self::open_inner(source, hint, size, false)
+    }
+
     pub(crate) fn open_streaming(
         mut source: BoxedSource,
         hint: Option<u32>,
@@ -218,6 +201,23 @@ impl AppleAudioFile {
         self.packet_count
     }
 
+    /// Probe the source length via a seek-to-end, restoring the cursor to the
+    /// start. `None` means the source reports no length (`ErrorKind::Unsupported`
+    /// — e.g. a chunked stream with no `Content-Length`, or a streamed source
+    /// not yet committed). A streamed source reports its TRUE total here (never
+    /// a partial in-flight prefix) — see [`Self::open_sized_streaming`].
+    fn probe_end(mut source: BoxedSource) -> DecodeResult<(BoxedSource, Option<u64>)> {
+        let end = match source.seek(SeekFrom::End(0)) {
+            Ok(end) => Some(end),
+            Err(err) if err.kind() == ErrorKind::Unsupported => None,
+            Err(err) => return Err(DecodeError::backend(err)),
+        };
+        source
+            .seek(SeekFrom::Start(0))
+            .map_err(DecodeError::backend)?;
+        Ok((source, end))
+    }
+
     /// Translate an `AudioFileReadPacketData` failure into a
     /// `DecodeError::Backend`. When the source read callback stashed an
     /// `io::Error` (transient `PendingReason` / `VariantChangeError`
@@ -230,20 +230,6 @@ impl AppleAudioFile {
             Error::other(format!("{op} failed: {}", os_status_to_string(status)))
         });
         DecodeError::backend(io_err)
-    }
-
-    /// Take the read callback's stashed error and return it as a typed
-    /// `DecodeError` ONLY if it is transient (a not-ready / pending read).
-    /// `AudioFile` masks such a callback failure as a graceful EOF or a
-    /// truncated packet, so the demuxer must surface it as `Pending` rather
-    /// than trust the `status`/packets result. A non-transient stashed
-    /// error (e.g. an incidental probe past a complete file's true EOF) is
-    /// dropped: the genuine `status`/packets outcome stands.
-    fn take_pending_callback_error(&self) -> Option<DecodeError> {
-        self._ctx.last_error.take().and_then(|err| {
-            let de = DecodeError::backend(err);
-            de.pending_reason().is_some().then_some(de)
-        })
     }
 
     /// Read one VBR packet at `starting_packet` into `buf`. Returns
@@ -326,6 +312,20 @@ impl AppleAudioFile {
             return Err(self.read_failure_error("AudioFileReadPacketData(cbr)", status));
         }
         Ok((bytes, packets))
+    }
+
+    /// Take the read callback's stashed error and return it as a typed
+    /// `DecodeError` ONLY if it is transient (a not-ready / pending read).
+    /// `AudioFile` masks such a callback failure as a graceful EOF or a
+    /// truncated packet, so the demuxer must surface it as `Pending` rather
+    /// than trust the `status`/packets result. A non-transient stashed
+    /// error (e.g. an incidental probe past a complete file's true EOF) is
+    /// dropped: the genuine `status`/packets outcome stands.
+    fn take_pending_callback_error(&self) -> Option<DecodeError> {
+        self._ctx.last_error.take().and_then(|err| {
+            let de = DecodeError::backend(err);
+            de.pending_reason().is_some().then_some(de)
+        })
     }
 }
 

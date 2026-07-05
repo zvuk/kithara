@@ -207,9 +207,9 @@ pub struct CachedAssets<A>
 where
     A: Assets,
 {
+    capacity: Arc<AtomicUsize>,
     inner: Arc<A>,
     pinned: Arc<DashSet<ResourceKey>>,
-    capacity: Arc<AtomicUsize>,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
     cache: SharedCache<A>,
     /// True when dropping a resource handle frees its bytes (ephemeral
@@ -235,6 +235,13 @@ impl<A> CachedAssets<A>
 where
     A: Assets,
 {
+    /// Hard ceiling on the auto-sized cache, bounding the fd / memory
+    /// budget for very long tracks.
+    const MAX_CACHE_CAPACITY: usize = 64;
+
+    /// Slots reserved above the media count for non-media handles
+    /// (init segment, LRU / pins index resources).
+    const NON_MEDIA_HEADROOM: usize = 2;
     pub fn new(
         inner: Arc<A>,
         capacity: NonZeroUsize,
@@ -243,35 +250,12 @@ where
     ) -> Self {
         Self {
             inner,
-            capacity: Arc::new(AtomicUsize::new(capacity.get())),
             on_invalidated,
+            volatile,
+            capacity: Arc::new(AtomicUsize::new(capacity.get())),
             cache: Arc::new(Mutex::new(LruCache::new(capacity))),
             pinned: Arc::new(DashSet::new()),
-            volatile,
         }
-    }
-
-    /// Slots reserved above the media count for non-media handles
-    /// (init segment, LRU / pins index resources).
-    const NON_MEDIA_HEADROOM: usize = 2;
-    /// Hard ceiling on the auto-sized cache, bounding the fd / memory
-    /// budget for very long tracks.
-    const MAX_CACHE_CAPACITY: usize = 64;
-
-    /// Size the cache to hold up to `media_items` media resources plus a
-    /// small non-media headroom, clamped to [`Self::MAX_CACHE_CAPACITY`].
-    /// This is the store's own policy seam: callers propose a media count
-    /// and receive the capacity actually installed. Growing lets the
-    /// eviction loop retain more resources; shrinking is enforced lazily on
-    /// the next insert. The capacity stays owned here — callers reach this
-    /// through the lease/store forwarders, never by holding the atomic.
-    pub(crate) fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
-        let want = media_items
-            .saturating_add(Self::NON_MEDIA_HEADROOM)
-            .clamp(1, Self::MAX_CACHE_CAPACITY);
-        let capacity = NonZeroUsize::new(want).unwrap_or(NonZeroUsize::MIN);
-        self.capacity.store(capacity.get(), Ordering::Relaxed);
-        capacity
     }
 
     fn cache_entry(
@@ -371,6 +355,13 @@ where
         committed
     }
 
+    fn entry_hits(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> usize {
+        match entry {
+            CacheEntry::Resource { hits, .. } => *hits,
+            CacheEntry::Index(_) => 0,
+        }
+    }
+
     fn is_active(&self) -> bool {
         self.inner.capabilities().contains(Capabilities::CACHE)
     }
@@ -422,13 +413,6 @@ where
             .count()
     }
 
-    fn entry_hits(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> usize {
-        match entry {
-            CacheEntry::Resource { hits, .. } => *hits,
-            CacheEntry::Index(_) => 0,
-        }
-    }
-
     fn pop_evictable(&self, cache: &mut CacheMap<A>) -> Option<CacheItem<A>> {
         let key = cache
             .iter()
@@ -444,6 +428,22 @@ where
             .reduce(|best, cand| if cand.1 <= best.1 { cand } else { best })
             .map(|(key, _)| key)?;
         cache.pop(&key).map(|entry| (key, entry))
+    }
+
+    /// Size the cache to hold up to `media_items` media resources plus a
+    /// small non-media headroom, clamped to [`Self::MAX_CACHE_CAPACITY`].
+    /// This is the store's own policy seam: callers propose a media count
+    /// and receive the capacity actually installed. Growing lets the
+    /// eviction loop retain more resources; shrinking is enforced lazily on
+    /// the next insert. The capacity stays owned here — callers reach this
+    /// through the lease/store forwarders, never by holding the atomic.
+    pub(crate) fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
+        let want = media_items
+            .saturating_add(Self::NON_MEDIA_HEADROOM)
+            .clamp(1, Self::MAX_CACHE_CAPACITY);
+        let capacity = NonZeroUsize::new(want).unwrap_or(NonZeroUsize::MIN);
+        self.capacity.store(capacity.get(), Ordering::Relaxed);
+        capacity
     }
 
     /// Wrap an [`AcquisitionResult`] from the inner store in cache wrappers

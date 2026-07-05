@@ -101,7 +101,6 @@ impl AppleAudioFileDemuxer {
         // wait on a streamed source). The streaming opens skip that scan;
         // duration and the read-buffer size come from cheap header metadata
         // instead (Xing for MP3, STREAMINFO for FLAC).
-        //
         // FLAC additionally needs the real file size handed to AudioFile
         // (`open_sized_streaming`): without it a not-ready read past the
         // download boundary is mistaken for EOF (track ends mid-stream) and
@@ -714,8 +713,8 @@ mod tests {
     /// fixed file length (the realistic case where `Content-Length` is known
     /// at open), so a correct decoder needs the size exactly once.
     struct CountingSource {
-        inner: Cursor<Vec<u8>>,
         end_seeks: Arc<AtomicUsize>,
+        inner: Cursor<Vec<u8>>,
     }
 
     impl Read for CountingSource {

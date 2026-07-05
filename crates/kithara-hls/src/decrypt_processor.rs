@@ -13,8 +13,8 @@ pub(crate) fn as_process_ctx(ctx: DecryptContext) -> ProcessCtx {
 
 /// AES-128-CBC [`ResourceProcessor`] over a [`DecryptContext`].
 pub(crate) struct DecryptProcessor {
-    ctx: DecryptContext,
     identity: Box<[u8]>,
+    ctx: DecryptContext,
 }
 
 impl fmt::Debug for DecryptProcessor {
@@ -40,14 +40,14 @@ impl DecryptProcessor {
 }
 
 impl ResourceProcessor for DecryptProcessor {
-    fn identity(&self) -> &[u8] {
-        &self.identity
-    }
-
     fn begin(&self) -> Box<dyn ChunkSink> {
         Box::new(CbcSink {
             ctx: self.ctx.clone(),
         })
+    }
+
+    fn identity(&self) -> &[u8] {
+        &self.identity
     }
 }
 

@@ -81,19 +81,19 @@ pub struct Report {
 }
 
 impl Report {
-    pub fn extend<I>(&mut self, vs: I)
-    where
-        I: IntoIterator<Item = Violation>,
-    {
-        self.violations.extend(vs);
-    }
-
     #[must_use]
     pub fn deny_count(&self) -> usize {
         self.violations
             .iter()
             .filter(|v| v.severity == Severity::Deny)
             .count()
+    }
+
+    pub fn extend<I>(&mut self, vs: I)
+    where
+        I: IntoIterator<Item = Violation>,
+    {
+        self.violations.extend(vs);
     }
 
     #[must_use]

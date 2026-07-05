@@ -61,18 +61,18 @@ are integration-tested rather than `unimock`ed.
 
 ## Orientation
 
-- **Lifecycle:** `start()` → `allocate_slot()` → attach `Player` →
-  `replace_current_item(Some(item))` → `play()`; tear down with `release_slot(id)`
-  then `stop()`.
-- **Crossfade:** `Engine::crossfade(from, to, config)` fades one slot out and
-  another in via `CrossfadeConfig` / `CrossfadeCurve`.
+- **Lifecycle:** start the engine, allocate a slot, attach a player item, play,
+  then release the slot and stop the engine.
+- **Crossfade:** `Engine::crossfade(from, to, config)` fades between two slots
+  via `CrossfadeConfig` / `CrossfadeCurve`.
 - **Tempo & key-lock:** driven by the shared `StretchControls` handle in
   `PlayerConfig.timestretch`; speed, key-lock, and backend apply live, mid-track.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
   `engine.subscribe()` (`PlayerEvent`, `ItemEvent`, `EngineEvent`,
   `SessionEvent`, `DjEvent`).
-- **Queue auto-advance:** `PlayerImpl` exposes an `arm_next` / `commit_next`
-  handover API for external orchestrators (e.g. `kithara-queue::Queue`).
+- **Queue auto-advance:** `PlayerImpl` publishes `PrefetchRequested` /
+  `HandoverRequested`; `kithara-queue::Queue` disables the built-in linear policy
+  and selects the loaded successor itself.
 - **Cancel:** the player's `CancelScope` is derived from `PlayerConfig.cancel`;
   the master cancel lives at the consumer-crate top.
 

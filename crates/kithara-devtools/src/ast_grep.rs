@@ -11,36 +11,36 @@ use crate::{Ctx, common::report::print_check_block, util::ensure_clean_tree};
 
 #[derive(Debug, Args)]
 pub struct AstGrepArgs {
-    /// Promote every warning to an error (passes `--warning` to ast-grep).
-    /// Use for exhaustive sweeps when warning-level rules should also fail.
-    #[arg(long)]
-    pub strict: bool,
+    /// Optional paths to scan. Empty = whole workspace.
+    pub paths: Vec<String>,
+    /// Skip the dirty-tree gate that protects `--fix` from mixing with
+    /// uncommitted user edits. Mirrors `cargo fmt`/`cargo fix` UX.
+    #[arg(long = "allow-dirty")]
+    pub allow_dirty: bool,
     /// Apply rule fixes by passing `--update-all` to ast-grep. Only rules
     /// that declare a `fix:` block in `.config/ast-grep/*.yml` actually
     /// rewrite anything; rules without one stay reporting-only.
     /// Refuses to run on a dirty working tree unless `--allow-dirty`.
     #[arg(long)]
     pub fix: bool,
-    /// Skip the dirty-tree gate that protects `--fix` from mixing with
-    /// uncommitted user edits. Mirrors `cargo fmt`/`cargo fix` UX.
-    #[arg(long = "allow-dirty")]
-    pub allow_dirty: bool,
     /// Bypass the grouped renderer and stream ast-grep's native short
     /// output verbatim. Useful when you need the upstream formatting.
     #[arg(long)]
     pub raw: bool,
-    /// Optional paths to scan. Empty = whole workspace.
-    pub paths: Vec<String>,
+    /// Promote every warning to an error (passes `--warning` to ast-grep).
+    /// Use for exhaustive sweeps when warning-level rules should also fail.
+    #[arg(long)]
+    pub strict: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct Match {
+    range: Range,
+    file: String,
+    message: String,
     #[serde(rename = "ruleId")]
     rule_id: String,
     severity: String,
-    file: String,
-    range: Range,
-    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,8 +50,8 @@ struct Range {
 
 #[derive(Debug, Deserialize)]
 struct Position {
-    line: u32,
     column: u32,
+    line: u32,
 }
 
 pub(crate) fn run(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
@@ -185,15 +185,15 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
 }
 
 struct RuleGroup {
-    severity: String,
     message: String,
+    severity: String,
     hits: Vec<Hit>,
 }
 
 struct Hit {
     file: String,
-    line: u32,
     column: u32,
+    line: u32,
 }
 
 fn severity_rank(s: &str) -> u8 {

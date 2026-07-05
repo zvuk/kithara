@@ -33,22 +33,22 @@ use crate::common::{
 
 #[derive(Debug, Default, Args)]
 pub struct IdiomsArgs {
-    #[arg(long = "check")]
-    pub check: Vec<String>,
     #[arg(long)]
     pub report: Option<PathBuf>,
-    #[arg(long)]
-    pub json: bool,
-    #[arg(long = "update-baseline")]
-    pub update_baseline: bool,
     #[arg(long, default_value = ".config/idioms")]
     pub config_dir: PathBuf,
+    #[arg(long = "check")]
+    pub check: Vec<String>,
     /// Restrict scan to specific crate(s) by name. Repeatable.
     #[arg(long = "crate", value_name = "NAME")]
     pub crates: Vec<String>,
     /// Restrict scan to workspace-relative path(s). Repeatable.
     #[arg(long = "path", value_name = "PATH")]
     pub paths: Vec<PathBuf>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long = "update-baseline")]
+    pub update_baseline: bool,
 }
 
 pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {

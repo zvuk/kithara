@@ -9,9 +9,9 @@ use crate::{Ctx, util::check_tool};
 
 struct Consts;
 impl Consts {
-    const INSTALL_HINT: &'static str = "cargo install similarity-rs";
-
     const CONFIG_REL: &'static str = ".config/similarity.toml";
+
+    const INSTALL_HINT: &'static str = "cargo install similarity-rs";
 }
 
 /// Crate exclusions for similarity scans, loaded from

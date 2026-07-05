@@ -74,30 +74,6 @@ impl Scope {
         }
     }
 
-    /// Resolve a list of user-supplied scope tokens (typically from
-    /// positional `cargo xtask scope` args) into a `Scope`. Each token is
-    /// classified as a bare crate name, a `crates/<name>[/...]` path, or
-    /// a non-crate workspace path (`tests/`, `xtask/`, …).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any token is not a known crate name, crate path,
-    /// or supported top-level workspace path.
-    pub fn resolve(tokens: &[String], workspace_root: &Path) -> Result<Self> {
-        let mut scope = Self::default();
-        for tok in tokens {
-            match classify_token(tok, workspace_root)? {
-                ScopeToken::Crate(name) => scope.crates.push(name),
-                ScopeToken::CratePath { path } => scope.paths.push(path),
-                ScopeToken::NonCratePath(p) => {
-                    scope.paths.push(p);
-                    scope.has_noncrate_path = true;
-                }
-            }
-        }
-        Ok(scope)
-    }
-
     /// Crate names extracted from `crates/<name>[/...]` paths. Used by
     /// clippy/fmt flag emission to convert path scope to `-p NAME`.
     fn crate_names_from_paths(&self) -> Vec<String> {
@@ -131,18 +107,25 @@ impl Scope {
         }
     }
 
-    fn flags_xtask(&self, is_empty: bool) -> Vec<String> {
+    fn flags_orphans(&self, is_empty: bool, crate_paths_names: &[String]) -> Vec<String> {
         if is_empty {
             return vec![];
         }
-        let mut out = Vec::new();
-        for c in &self.crates {
-            out.push("--crate".into());
-            out.push(c.clone());
+        let mut packages: Vec<String> = self
+            .crates
+            .iter()
+            .chain(crate_paths_names.iter())
+            .cloned()
+            .collect();
+        packages.sort();
+        packages.dedup();
+        if packages.is_empty() {
+            return vec!["__skip__".into()];
         }
-        for p in &self.paths {
-            out.push("--path".into());
-            out.push(p.display().to_string());
+        let mut out = Vec::new();
+        for p in &packages {
+            out.push("--package".into());
+            out.push(p.clone());
         }
         out
     }
@@ -196,25 +179,18 @@ impl Scope {
         out
     }
 
-    fn flags_orphans(&self, is_empty: bool, crate_paths_names: &[String]) -> Vec<String> {
+    fn flags_xtask(&self, is_empty: bool) -> Vec<String> {
         if is_empty {
             return vec![];
         }
-        let mut packages: Vec<String> = self
-            .crates
-            .iter()
-            .chain(crate_paths_names.iter())
-            .cloned()
-            .collect();
-        packages.sort();
-        packages.dedup();
-        if packages.is_empty() {
-            return vec!["__skip__".into()];
-        }
         let mut out = Vec::new();
-        for p in &packages {
-            out.push("--package".into());
-            out.push(p.clone());
+        for c in &self.crates {
+            out.push("--crate".into());
+            out.push(c.clone());
+        }
+        for p in &self.paths {
+            out.push("--path".into());
+            out.push(p.display().to_string());
         }
         out
     }
@@ -245,6 +221,30 @@ impl Scope {
                     .replace('\\', "/");
                 key.starts_with(&format!("{prefix}/")) || key == prefix
             })
+    }
+
+    /// Resolve a list of user-supplied scope tokens (typically from
+    /// positional `cargo xtask scope` args) into a `Scope`. Each token is
+    /// classified as a bare crate name, a `crates/<name>[/...]` path, or
+    /// a non-crate workspace path (`tests/`, `xtask/`, …).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any token is not a known crate name, crate path,
+    /// or supported top-level workspace path.
+    pub fn resolve(tokens: &[String], workspace_root: &Path) -> Result<Self> {
+        let mut scope = Self::default();
+        for tok in tokens {
+            match classify_token(tok, workspace_root)? {
+                ScopeToken::Crate(name) => scope.crates.push(name),
+                ScopeToken::CratePath { path } => scope.paths.push(path),
+                ScopeToken::NonCratePath(p) => {
+                    scope.paths.push(p);
+                    scope.has_noncrate_path = true;
+                }
+            }
+        }
+        Ok(scope)
     }
 
     /// Roots to walk. Empty scope → `<root>/crates` (the legacy default,

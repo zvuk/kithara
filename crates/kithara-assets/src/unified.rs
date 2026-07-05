@@ -111,28 +111,6 @@ impl AssetStore {
         self.demand().attach_demand(key, entry)
     }
 
-    /// Subscribe to evictions under `asset_root`.
-    ///
-    /// When a [`ResourceKey`] under `asset_root` is invalidated, the evicted key is sent on `tx`.
-    /// A single subscriber per `asset_root`, last-writer-wins. The returned
-    /// [`EvictionSubscription`] guard deregisters on drop.
-    pub fn subscribe_eviction(
-        &self,
-        asset_root: Arc<str>,
-        tx: mpsc::UnboundedSender<ResourceKey>,
-    ) -> EvictionSubscription {
-        self.eviction().subscribe(asset_root, tx)
-    }
-
-    /// Return the crate-private eviction-router handle.
-    fn eviction(&self) -> &EvictionRouter {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { eviction, .. } => eviction,
-            Self::Mem { eviction, .. } => eviction,
-        }
-    }
-
     /// Return the crate-private aggregate availability handle.
     pub(crate) fn availability(&self) -> &AvailabilityIndex {
         match self {
@@ -228,6 +206,15 @@ impl AssetStore {
         }
     }
 
+    /// Return the crate-private eviction-router handle.
+    fn eviction(&self) -> &EvictionRouter {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { eviction, .. } => eviction,
+            Self::Mem { eviction, .. } => eviction,
+        }
+    }
+
     /// Return the committed final length of the resource, if known.
     #[must_use]
     pub fn final_len(&self, key: &ResourceKey) -> Option<u64> {
@@ -243,17 +230,13 @@ impl AssetStore {
         None
     }
 
-    /// Request the in-memory LRU handle cache hold up to `media_items`
-    /// media resources (e.g. the variant segment count). The store applies
-    /// its own non-media headroom and hard cap, returning the capacity
-    /// actually installed. Use on a private per-stream store only; resizing
-    /// an app-wide shared store clobbers sibling streams.
+    /// The on-disk [`AssetLayout`] this store was built with.
     #[must_use]
-    pub fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
+    pub fn layout(&self) -> &Arc<dyn AssetLayout> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.reserve_cache_for(media_items),
-            Self::Mem { store, .. } => store.reserve_cache_for(media_items),
+            Self::Disk { layout, .. } => layout,
+            Self::Mem { layout, .. } => layout,
         }
     }
 
@@ -299,6 +282,20 @@ impl AssetStore {
         }
     }
 
+    /// Request the in-memory LRU handle cache hold up to `media_items`
+    /// media resources (e.g. the variant segment count). The store applies
+    /// its own non-media headroom and hard cap, returning the capacity
+    /// actually installed. Use on a private per-stream store only; resizing
+    /// an app-wide shared store clobbers sibling streams.
+    #[must_use]
+    pub fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { store, .. } => store.reserve_cache_for(media_items),
+            Self::Mem { store, .. } => store.reserve_cache_for(media_items),
+        }
+    }
+
     /// Inspect the current resource state.
     ///
     /// # Errors
@@ -322,14 +319,17 @@ impl AssetStore {
         AssetScope::new(self.clone(), asset_root.into())
     }
 
-    /// The on-disk [`AssetLayout`] this store was built with.
-    #[must_use]
-    pub fn layout(&self) -> &Arc<dyn AssetLayout> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { layout, .. } => layout,
-            Self::Mem { layout, .. } => layout,
-        }
+    /// Subscribe to evictions under `asset_root`.
+    ///
+    /// When a [`ResourceKey`] under `asset_root` is invalidated, the evicted key is sent on `tx`.
+    /// A single subscriber per `asset_root`, last-writer-wins. The returned
+    /// [`EvictionSubscription`] guard deregisters on drop.
+    pub fn subscribe_eviction(
+        &self,
+        asset_root: Arc<str>,
+        tx: mpsc::UnboundedSender<ResourceKey>,
+    ) -> EvictionSubscription {
+        self.eviction().subscribe(asset_root, tx)
     }
 }
 

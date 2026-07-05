@@ -10,7 +10,7 @@
 
 # kithara-encode
 
-Synchronous audio encoding library with a thin facade and FFmpeg-backed implementations. `EncoderFactory` creates packaged access units for fMP4/HLS helpers and complete encoded bytes for test fixture routes.
+Synchronous audio encoding library with a thin facade, FFmpeg-backed implementations, and an in-tree fdk-aac HE-AAC v2 packaged encoder. `EncoderFactory` creates packaged access units for fMP4/HLS helpers and complete encoded bytes for test fixture routes.
 
 ## Usage
 
@@ -30,8 +30,9 @@ let encoded = encoder.encode_bytes(BytesEncodeRequest {
 - `EncoderFactory` — entry point; creates byte-oriented and packaged encoders.
 - `InnerEncoder` — encoder trait returned by the factory.
 - `BytesEncodeRequest` / `BytesEncodeTarget` — byte-encoding inputs.
+- `PackagedEncodeRequest` — packaged access-unit encoding input.
 - `EncodedBytes` / `EncodedTrack` — encoded outputs (complete bytes and packaged access units).
 
-Consumes canonical `AudioCodec`, `ContainerFormat`, and `MediaInfo` from `kithara-stream`. Intended for test infrastructure and used by `kithara-test-utils` for native FFmpeg-backed signal and packaged-audio generation.
+Consumes canonical media types from `kithara-stream` and is primarily used by `kithara-test-utils` to generate encoded fixtures and packaged tracks.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

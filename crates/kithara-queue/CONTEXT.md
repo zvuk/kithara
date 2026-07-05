@@ -9,7 +9,8 @@ Detailed contracts and invariants for the kithara-queue crate; the README is the
   `set_tracks`
 - Query: `tracks`, `track(id)`, `current`, `current_index`, `len`,
   `is_empty`
-- Navigation: `select(id)`, `advance_to_next`, `return_to_previous`,
+- Navigation: `select(id, transition)`, `advance_to_next(transition)`,
+  `return_to_previous(transition)`,
   `set_shuffle` / `is_shuffle_enabled`, `set_repeat` / `repeat_mode`,
   `seek(seconds)`
 - Delegated to `PlayerImpl`: `play`, `pause`, `is_playing`,
@@ -24,7 +25,7 @@ Detailed contracts and invariants for the kithara-queue crate; the README is the
 has two shapes:
 
 - `TrackSource::Uri(String)` — the [`Queue`] builds a default
-  `ResourceConfig` from the `QueueConfig` `net` / `store` templates.
+  `ResourceConfig` via `ResourceConfig::new`.
 - `TrackSource::Config(Box<ResourceConfig>)` — the caller provides a
   pre-built `ResourceConfig` (useful for DRM keys, custom headers,
   format hints). [`Queue`] leaves caller-set fields intact.
@@ -57,42 +58,37 @@ plus `Event::Player(..)`, `Event::Audio(..)`, `Event::Hls(..)`, and
 ## Auto-Advance Contract
 
 `Queue` is the sole auto-advance orchestrator: `Queue::new` calls
-`PlayerImpl::set_auto_advance_enabled(false)` to disable the player's
-built-in linear handler, then drives transitions from
-`PlayerEvent::PrefetchRequested` / `HandoverRequested`:
+`PlayerImpl::set_auto_advance_enabled(false)` to disable the player's built-in
+linear handler, then drives transitions from player events and the host `tick()`
+loop.
 
-- on `PrefetchRequested`: resolve the next index via
-  `NavigationState::peek_next` (honouring shuffle / repeat); if the
-  resolved entry is `TrackStatus::Loaded`, call `arm_next(idx)`. Tracks
-  that are still loading are picked up via the
-  `TrackStatusChanged { Loaded }` retry path.
-- on `HandoverRequested` (cf>0 only): call `commit_next(idx)`,
-  advance navigation, mark the just-promoted track `Consumed`, publish
-  `QueueEvent::CrossfadeStarted`.
-- on `ItemDidPlayToEnd`: the audio thread already advanced (cf=0 arena
-  handover) or the queue did (cf>0 commit). `sync_navigation_after_handover`
-  brings `NavigationState::current_index` in line with the player and
-  emits `QueueEvent::QueueEnded` if no further track is reachable.
+- on `PlayerEvent::HandoverRequested` (cf>0 only): `handle_handover_requested`
+  calls `advance_loaded_successor(entry.id, Transition::Crossfade)`, which
+  selects the next loaded entry through `select(next.id, transition)`.
+  `Queue` does not consume `PrefetchRequested` and does not call
+  `PlayerImpl::arm_next` / `commit_next`.
+- on `ItemDidPlayToEnd`: after filtering stale fade-out signals, natural EOF
+  advances through `advance_to_next(Transition::Crossfade)`; failures advance
+  with `Transition::None`.
+- during `tick()`: `maybe_arm_crossfade` checks the current
+  `playback_view()`, `crossfade_duration`, and `should_arm_crossfade`; when the
+  remaining time is inside the crossfade window, it pre-selects the loaded
+  successor via `advance_loaded_successor`. The `crossfade_armed_for` marker
+  prevents repeated selects for the same play-through and lets the later EOF
+  signal be consumed instead of advancing twice.
 
-Auto-advance is gated on the user pause state (`Queue::is_paused`, i.e.
-the player's live rate is `0.0`): a paused queue never auto-advances or
-arms a crossfade. The advance path resumes playback (`autoplay: true`),
-so firing it while paused would silently un-pause and let the committed
-position run on — the user paused, the head must freeze. The event
-handlers (`ItemDidPlayToEnd`, `ItemDidFail`, `maybe_arm_crossfade`)
-therefore no-op while paused. The gate reads the rate, not
-`is_playing()`: a natural end-of-track drops `is_playing()` to `false`
-once the arena drains, and gating on that would wrongly block the
-genuine end-of-track advance; the rate stays `> 0` through EOF and only
-drops to `0.0` on a deliberate `pause`. Explicit user navigation
-(`select`, `advance_to_next`, `play`) is unaffected — only the
-automatic, event-driven transitions are gated.
-
-`set_repeat`, `set_shuffle`, `Queue::remove`, and `Queue::clear` call
-`PlayerImpl::unarm_next` so a stale arm cannot survive a navigation /
-queue mutation. The previous `Queue::tick`-based polling
-(`maybe_arm_crossfade`, `should_arm_crossfade`) is removed; `tick` now
-only ticks the player and drains events.
+Auto-advance is gated on the user pause state (`Queue::is_paused`, i.e. the
+player's live rate is `0.0`): a paused queue never auto-advances or arms a
+crossfade. The advance path resumes playback, so firing it while paused would
+silently un-pause and let the committed position run on — the user paused, the
+head must freeze. The event handlers (`ItemDidPlayToEnd`, `ItemDidFail`,
+`handle_handover_requested`, `maybe_arm_crossfade`) therefore no-op while paused.
+The gate reads the rate, not `is_playing()`: a natural end-of-track drops
+`is_playing()` to `false` once the arena drains, and gating on that would wrongly
+block the genuine end-of-track advance; the rate stays `> 0` through EOF and
+only drops to `0.0` on a deliberate `pause`. Explicit user navigation (`select`,
+`advance_to_next`, `play`) is unaffected — only the automatic transitions are
+gated.
 
 ## Loading Lifecycle
 
@@ -109,8 +105,9 @@ status `Pending`, then spawns a background task:
    `TrackStatusChanged { Slow }` is published before completion.
 5. On success: `PlayerImpl::replace_item(index, resource)`,
    `TrackStatusChanged { Loaded }`.
-6. If the loaded track was stashed in `pending_select` (a `select(id)`
-   arrived before loading finished), call `select_item(index, true)`.
+6. If the loaded track was stashed in `pending_select` (a `select(id, transition)`
+   arrived before loading finished), complete the apply-after-load path through
+   `select_item_with_crossfade`.
    Otherwise the track stays `Loaded` and does nothing until the caller
    explicitly selects it.
 
@@ -118,9 +115,12 @@ After `select_item` succeeds the engine has consumed `items[index]`, so
 the Queue immediately transitions the entry to `TrackStatus::Consumed`.
 Re-selecting a `Consumed` track respawns the load.
 
-The Queue never starts playback on its own: there is no autoplay. The
-caller drives the first `select` / `play` explicitly so playback order
-is deterministic and independent of which load finishes first.
+The production append/insert path does not start initial playback on its own:
+the caller drives the first `select` / `play` explicitly so playback order is
+deterministic and independent of which load finishes first.
+`QueueConfig::should_autoplay` defaults to `true`, but its current consumption is
+cfg-gated to the test/probe harness (`register_for_test` /
+`complete_load_for_test`), not the production loader path.
 
 ## Selection serialization
 
@@ -170,7 +170,7 @@ into a single [`Queue`]:
 | `playlist.get_next_track()` + switch         | `queue.advance_to_next()`                         |
 | `playlist.get_prev_track()` + switch         | `queue.return_to_previous()`                      |
 | `player.seek_seconds(s)`                     | `queue.seek(s)`                                   |
-| `player.select_item(idx, true)`              | `queue.select(id)`                                |
+| `player.select_item(idx, true)`              | `queue.select(id, transition)`                    |
 | `player.tick()`                              | `queue.tick()`                                    |
 
 DRM stays in the caller. `kithara-queue` is DRM-agnostic; apps that

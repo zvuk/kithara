@@ -17,14 +17,14 @@ use crate::track::TrackSource;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct PlaybackView {
-    /// Smoothed playback position in seconds; `None` until a stable
-    /// position is known (e.g. between tracks).
-    pub position: Option<f64>,
-    /// Total media duration in seconds; `None` while unknown.
-    pub duration: Option<f64>,
     /// Decoded-ahead buffered/playable seconds; `None` when no track is
     /// active. Always `>=` `position`.
     pub buffered: Option<f64>,
+    /// Total media duration in seconds; `None` while unknown.
+    pub duration: Option<f64>,
+    /// Smoothed playback position in seconds; `None` until a stable
+    /// position is known (e.g. between tracks).
+    pub position: Option<f64>,
     /// Whether playback is active.
     pub playing: bool,
 }

@@ -341,14 +341,6 @@ impl Engine for EngineImpl {
         Err(PlayError::NotReady)
     }
 
-    fn is_crossfading(&self) -> bool {
-        false
-    }
-
-    fn is_running(&self) -> bool {
-        self.running.load(Ordering::Acquire)
-    }
-
     fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
         if !self.running.load(Ordering::Acquire) {
             debug!(
@@ -358,6 +350,14 @@ impl Engine for EngineImpl {
             return Ok(());
         }
         self.session.invalidate_audio_route(reason)
+    }
+
+    fn is_crossfading(&self) -> bool {
+        false
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
     }
 
     fn master_channels(&self) -> u16 {
