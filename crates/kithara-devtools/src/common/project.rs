@@ -16,6 +16,7 @@ pub struct ProjectConfig {
     pub project: ProjectIdentity,
     pub health: HealthConfig,
     pub test: TestCommandConfig,
+    pub perf: PerfConfig,
     pub lint_exclude: LintExcludeConfig,
     #[serde(default, rename = "workspace-scan")]
     pub workspace_scan: WorkspaceScan,
@@ -81,6 +82,40 @@ pub struct HealthConfig {
     pub feature_powerset_exclude: Vec<String>,
     /// Crates excluded from whole-workspace stages (semver, nextest, doc-test).
     pub workspace_exclude: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct PerfConfig {
+    pub lanes: Vec<PerfLane>,
+    pub primary_lane: String,
+    pub frame_prefix: Option<String>,
+    #[serde(default = "default_perf_nextest_profile")]
+    pub nextest_profile: String,
+}
+
+impl Default for PerfConfig {
+    fn default() -> Self {
+        Self {
+            lanes: Vec::new(),
+            primary_lane: String::new(),
+            frame_prefix: None,
+            nextest_profile: default_perf_nextest_profile(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct PerfLane {
+    pub flash: bool,
+    pub backend: String,
+}
+
+fn default_perf_nextest_profile() -> String {
+    "perf".to_owned()
 }
 
 #[derive(Debug, Default, Deserialize)]

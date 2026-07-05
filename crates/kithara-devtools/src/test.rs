@@ -80,23 +80,40 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
     validate_config(test)?;
 
     let (lane_name, lane) = select_lane(test, &request)?;
-    let mut cmd = Command::new(&lane.program);
-    cmd.args(&lane.prefix_args);
-    let features = features_for(test, lane, &request)?;
-    if !features.is_empty() {
-        cmd.arg(&test.feature_arg)
-            .arg(features.into_iter().collect::<Vec<_>>().join(","));
-    }
-    match passthrough_position(lane)? {
-        PassthroughPosition::BeforeSuffix => {
-            cmd.args(&request.passthrough);
-            cmd.args(&lane.suffix_args);
+    let passthrough = passthrough_position(lane)?;
+    let mut cmd = match passthrough {
+        PassthroughPosition::BeforeSuffix if lane_name == test.default_lane => {
+            let flash = request
+                .flash
+                .unwrap_or_else(|| lane.default_flash.unwrap_or(test.flash.default));
+            let backend = request
+                .net_backend
+                .as_deref()
+                .unwrap_or(&test.default_backend);
+            let (_, cmd) = nextest_lane_command(&project, flash, backend, &request.passthrough)?;
+            cmd
         }
-        PassthroughPosition::AfterSuffix => {
-            cmd.args(&lane.suffix_args);
-            cmd.args(&request.passthrough);
+        passthrough => {
+            let mut cmd = Command::new(&lane.program);
+            cmd.args(&lane.prefix_args);
+            let features = features_for(test, lane, &request)?;
+            if !features.is_empty() {
+                cmd.arg(&test.feature_arg)
+                    .arg(features.into_iter().collect::<Vec<_>>().join(","));
+            }
+            match passthrough {
+                PassthroughPosition::BeforeSuffix => {
+                    cmd.args(&request.passthrough);
+                    cmd.args(&lane.suffix_args);
+                }
+                PassthroughPosition::AfterSuffix => {
+                    cmd.args(&lane.suffix_args);
+                    cmd.args(&request.passthrough);
+                }
+            }
+            cmd
         }
-    }
+    };
 
     let status = cmd
         .status()
@@ -163,18 +180,27 @@ fn features_for(
     lane: &TestLaneConfig,
     request: &TestRequest,
 ) -> Result<BTreeSet<String>> {
-    let mut features = BTreeSet::new();
-    features.extend(lane.default_features.iter().cloned());
     let flash = request
         .flash
         .unwrap_or_else(|| lane.default_flash.unwrap_or(config.flash.default));
+    let backend_name = request
+        .net_backend
+        .clone()
+        .unwrap_or_else(|| config.default_backend.clone());
+    lane_features(config, lane, flash, &backend_name)
+}
+
+pub(crate) fn lane_features(
+    config: &TestCommandConfig,
+    lane: &TestLaneConfig,
+    flash: bool,
+    backend_name: &str,
+) -> Result<BTreeSet<String>> {
+    let mut features = BTreeSet::new();
+    features.extend(lane.default_features.iter().cloned());
     if flash {
         features.extend(config.flash.features.iter().cloned());
     }
-    let backend_name = request
-        .net_backend
-        .as_ref()
-        .unwrap_or(&config.default_backend);
     let Some(backend) = config.net_backends.get(backend_name) else {
         let valid = config
             .net_backends
@@ -186,6 +212,30 @@ fn features_for(
     };
     features.extend(backend.features.iter().cloned());
     Ok(features)
+}
+
+pub(crate) fn nextest_lane_command(
+    project: &ProjectConfig,
+    flash: bool,
+    backend: &str,
+    extra: &[String],
+) -> Result<(Vec<String>, Command)> {
+    let test = &project.test;
+    validate_config(test)?;
+    let lane_name = &test.default_lane;
+    let Some(lane) = test.lanes.get(lane_name) else {
+        bail!("test.default_lane `{lane_name}` is not defined in test.lanes");
+    };
+    let features = lane_features(test, lane, flash, backend)?;
+    let mut cmd = Command::new(&lane.program);
+    cmd.args(&lane.prefix_args);
+    if !features.is_empty() {
+        cmd.arg(&test.feature_arg)
+            .arg(features.iter().cloned().collect::<Vec<_>>().join(","));
+    }
+    cmd.args(extra);
+    cmd.args(&lane.suffix_args);
+    Ok((features.into_iter().collect(), cmd))
 }
 
 enum PassthroughPosition {
@@ -206,5 +256,107 @@ fn parse_flash(value: &str) -> Result<bool> {
         "on" | "true" => Ok(true),
         "off" | "false" => Ok(false),
         _ => bail!("unsupported flash mode: {value}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::common::project::{
+        HealthConfig, LintExcludeConfig, OrphansConfig, PerfConfig, ProjectIdentity, QualityConfig,
+        TestFlashConfig, TestNetBackendConfig, WorkspaceScan,
+    };
+
+    fn args_of(cmd: &Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn synthetic_project() -> ProjectConfig {
+        let mut lanes = BTreeMap::new();
+        lanes.insert(
+            "workspace".to_owned(),
+            TestLaneConfig {
+                program: "cargo".to_owned(),
+                prefix_args: vec![
+                    "nextest".to_owned(),
+                    "run".to_owned(),
+                    "--workspace".to_owned(),
+                ],
+                suffix_args: vec!["--locked".to_owned()],
+                default_features: Vec::new(),
+                default_flash: None,
+                passthrough: String::new(),
+            },
+        );
+        let mut net_backends = BTreeMap::new();
+        net_backends.insert(
+            "http".to_owned(),
+            TestNetBackendConfig {
+                features: Vec::new(),
+            },
+        );
+        net_backends.insert(
+            "native".to_owned(),
+            TestNetBackendConfig {
+                features: vec!["demo/native-net".to_owned()],
+            },
+        );
+        ProjectConfig {
+            project: ProjectIdentity {
+                name: "demo".to_owned(),
+            },
+            health: HealthConfig::default(),
+            test: TestCommandConfig {
+                default_lane: "workspace".to_owned(),
+                default_backend: "http".to_owned(),
+                feature_arg: "--features".to_owned(),
+                flash: TestFlashConfig {
+                    features: vec!["virtual-time".to_owned()],
+                    default: true,
+                },
+                lanes,
+                net_backends,
+            },
+            lint_exclude: LintExcludeConfig::default(),
+            workspace_scan: WorkspaceScan::default(),
+            orphans: OrphansConfig::default(),
+            quality: QualityConfig::default(),
+            perf: PerfConfig::default(),
+            ext: toml::Table::default(),
+        }
+    }
+
+    #[test]
+    fn lane_features_flash_and_backend() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes[&test.default_lane];
+
+        let feats = lane_features(test, lane, true, "native").expect("features");
+        assert!(feats.contains("virtual-time"));
+        assert!(feats.contains("demo/native-net"));
+
+        let feats = lane_features(test, lane, false, "http").expect("features");
+        assert!(feats.is_empty());
+    }
+
+    #[test]
+    fn nextest_lane_command_shape() {
+        let project = synthetic_project();
+        let extra = vec!["--profile".to_owned(), "perf".to_owned()];
+
+        let (features, cmd) =
+            nextest_lane_command(&project, true, "http", &extra).expect("nextest command");
+
+        assert_eq!(features, vec!["virtual-time".to_owned()]);
+        let args = args_of(&cmd);
+        assert_eq!(cmd.get_program().to_string_lossy(), "cargo");
+        assert!(args.windows(2).any(|w| w == ["--profile", "perf"]));
+        assert!(args.contains(&"--workspace".to_owned()));
+        assert_eq!(args.last().map(String::as_str), Some("--locked"));
     }
 }

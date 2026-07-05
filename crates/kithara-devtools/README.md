@@ -23,6 +23,8 @@ Exposed through the `CoreCommand` subcommand enum:
 - `quality` — rstest / unimock / trait-mock audits.
 - `scope` — translate scope tokens to tool-specific flags.
 - `perf-compare` — compare hotpath timing tables against a baseline.
+- `perf` — test-suite performance pipeline: matrix, slow aggregation, samply
+  profiling, merged report, and xctrace escalation.
 - `viz` — architecture visualization. *(feature `viz`)*
 
 ## Consuming it
@@ -58,6 +60,23 @@ sections under `[ext.*]`, which the core passes through untouched.
 
 The shared `[workspace-scan] exclude` globs drop directories (media trees,
 virtualenvs, …) from the scanning commands.
+
+`[perf]` configures the generic test-suite performance pipeline:
+
+- `lanes` is the matrix of `{ flash, backend }` combinations to measure.
+- `primary_lane` is the lane used for ranking/profile defaults; an empty value
+  means the first configured lane.
+- `frame_prefix` overrides gecko profile frame attribution; if omitted, the
+  project name is used.
+- `nextest_profile` names the nextest profile used by `perf matrix`; it defaults
+  to `perf`.
+
+The selected nextest profile must write JUnit at `junit.xml`, for example:
+
+```toml
+[profile.perf.junit]
+path = "junit.xml"
+```
 
 ## Features
 

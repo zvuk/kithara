@@ -89,6 +89,26 @@ suffix_args = ["selenium", "--", "--nocapture"]
 passthrough = "after-suffix"
 default_flash = false
 
+[perf]
+primary_lane = "flash-on-wreq"
+nextest_profile = "perf"
+
+[[perf.lanes]]
+flash = true
+backend = "wreq"
+
+[[perf.lanes]]
+flash = false
+backend = "wreq"
+
+[[perf.lanes]]
+flash = true
+backend = "apple"
+
+[[perf.lanes]]
+flash = false
+backend = "apple"
+
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"

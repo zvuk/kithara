@@ -67,3 +67,6 @@ leak-timeout = "2s"
 [[profile.cache.scripts]]
 filter = 'package(kithara-integration-tests)'
 setup = ['fixture-cache']
+
+[profile.perf.junit]
+path = "junit.xml"

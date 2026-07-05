@@ -309,6 +309,7 @@ regex = "1"
 reqwest = { version = "0.13.4", default-features = false }
 ringbuf = "0.5.0"
 rkyv = "0.8.16"
+roxmltree = "0.20"
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 # Beat detection NN inference (kithara-beat).
 rten = { version = "0.24", features = ["fft"] }

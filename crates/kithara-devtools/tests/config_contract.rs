@@ -20,6 +20,7 @@ fn missing_config_file_yields_defaults() {
     let config = ProjectConfig::load(temp.path()).expect("load missing config");
 
     assert!(config.workspace_scan.exclude.is_empty());
+    assert_eq!(config.perf.nextest_profile, "perf");
 }
 
 #[test]
@@ -96,6 +97,37 @@ exclude = ["foo/**"]
     let config = ProjectConfig::load(temp.path()).expect("load workspace scan config");
 
     assert_eq!(config.workspace_scan.exclude, ["foo/**"]);
+}
+
+#[test]
+fn perf_config_parses_generic_lanes() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[perf]
+primary_lane = "flash-on-http"
+nextest_profile = "suite-perf"
+frame_prefix = "demo"
+
+[[perf.lanes]]
+flash = true
+backend = "http"
+
+[[perf.lanes]]
+flash = false
+backend = "native"
+"#,
+    );
+
+    let config = ProjectConfig::load(temp.path()).expect("load perf config");
+
+    assert_eq!(config.perf.primary_lane, "flash-on-http");
+    assert_eq!(config.perf.frame_prefix.as_deref(), Some("demo"));
+    assert_eq!(config.perf.nextest_profile, "suite-perf");
+    assert_eq!(config.perf.lanes.len(), 2);
+    assert!(config.perf.lanes[0].flash);
+    assert_eq!(config.perf.lanes[0].backend, "http");
 }
 
 #[test]

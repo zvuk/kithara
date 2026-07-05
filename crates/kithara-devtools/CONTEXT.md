@@ -23,8 +23,8 @@ single parsed configuration for the run.
   unknown key in a core section is a typed parse error naming the offending
   token — misconfiguration fails loud, it is never silently ignored.
 - **`[ext]` ownership rule.** The core schema names only generic concerns
-  (`project`, `workspace_scan`, `lint_exclude`, `health`, `test`, `orphans`,
-  `quality`). Anything project-specific lives under `[ext.*]`, exposed as the
+  (`project`, `workspace_scan`, `lint_exclude`, `health`, `test`, `perf`,
+  `orphans`, `quality`). Anything project-specific lives under `[ext.*]`, exposed as the
   raw `ext: toml::Table` passthrough. The core never interprets `[ext]`; the
   consuming bin deserializes its own typed view from it (kithara does this in
   `xtask/src/config.rs`). This keeps `deny_unknown_fields` strict on core
@@ -32,6 +32,12 @@ single parsed configuration for the run.
 - `[workspace-scan] exclude` holds globs applied in `workspace_rs_files_scoped`
   (the lint scan path) so a project can drop media/venv/generated trees from
   every scanning namespace. Raw `walk_rs_files` stays a pure directory walk.
+- `[perf]` owns the generic test-suite performance pipeline configuration:
+  lane matrix entries (`flash`, `backend`), optional `primary_lane` for ranking
+  and profile/report defaults, optional `frame_prefix` for gecko own-frame
+  attribution, and `nextest_profile` (default `perf`). The selected nextest
+  profile must expose `[profile.<name>.junit] path = "junit.xml"` because
+  `perf matrix` copies `target/nextest/<name>/junit.xml` into the run data.
 
 ## CLI surface
 

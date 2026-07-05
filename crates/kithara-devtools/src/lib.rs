@@ -12,6 +12,7 @@ pub mod init;
 pub mod lint;
 pub mod manifest;
 pub mod orphans;
+pub mod perf;
 pub mod perf_compare;
 pub mod quality;
 pub mod scope;
@@ -47,6 +48,8 @@ pub enum CoreCommand {
     Lint(lint::LintArgs),
     /// Compare perf results.
     PerfCompare(perf_compare::PerfCompareArgs),
+    /// Test-suite performance measurement pipeline (matrix/slow/profile/report/trace).
+    Perf(perf::PerfArgs),
     /// Code quality checks.
     Quality {
         #[command(subcommand)]
@@ -80,6 +83,7 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         #[cfg(feature = "lint")]
         CoreCommand::Lint(args) => lint::run(args),
         CoreCommand::PerfCompare(args) => perf_compare::run(args),
+        CoreCommand::Perf(args) => perf::run(args, ctx),
         CoreCommand::Quality { command } => quality::run(command),
         CoreCommand::Scope(args) => scope::run(args),
         CoreCommand::Test(args) => test::run(args),

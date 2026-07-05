@@ -33,6 +33,10 @@ ignores:
   # token streams (the hang watchdog); rewriting those would force a
   # kithara-platform dependency onto every macro consumer.
   - crates/kithara-test-macros/**
+  # Build tooling: a native synchronous CLI that polls child processes with real
+  # wall-clock waits and owns no production runtime path, so it is outside the
+  # flash virtual-time model (mirrors the arch.no-direct-time exemption).
+  - crates/kithara-devtools/**
 rule:
   any:
     # Import of `sleep`/`park_timeout` from std::thread in any shape:

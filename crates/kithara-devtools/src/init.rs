@@ -42,6 +42,15 @@ impl Consts {
 # [test.net_backends.default]
 # features = []
 #
+# [perf]
+# primary_lane = ""
+# nextest_profile = "perf"
+# frame_prefix = ""
+#
+# [[perf.lanes]]
+# flash = true
+# backend = ""
+#
 # [orphans]
 # exclude_packages = []
 #
