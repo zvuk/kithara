@@ -29,8 +29,6 @@ message: |
   Suppress with `// ast-grep-ignore: rust.no-inherent-to-string` when there
   is a documented reason — e.g. an FFI bridge that intentionally exposes
   a named symbol `to_string` with non-Display semantics.
-
-  See docs/plans/2026-05-23-rust-idioms-refactor.md (Category 12a, Wave 14).
 severity: error
 language: Rust
 files:

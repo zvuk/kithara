@@ -28,9 +28,6 @@ message: |
 
   Suppress with `// ast-grep-ignore: style.no-pub-fields-inside-crate`
   if the struct is `pub(crate)` but re-exported as public API.
-
-  See docs/plans/2026-05-23-rust-idioms-refactor.md (Category 7,
-  Wave 10).
 severity: error
 language: Rust
 files:

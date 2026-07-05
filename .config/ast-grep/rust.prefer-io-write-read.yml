@@ -29,8 +29,6 @@ message: |
   Suppress with `// ast-grep-ignore: rust.prefer-io-write-read` when the
   inherent method has a domain-specific signature that cannot be expressed
   as `io::Read` / `io::Write`.
-
-  See docs/plans/2026-05-23-rust-idioms-refactor.md (Category 12c, Wave 16).
 severity: error
 language: Rust
 files:

@@ -44,9 +44,6 @@ message: |
   Suppress with `// ast-grep-ignore: arch.prefer-dashmap-dashset` when
   there is a legitimate reason (document in a comment or the owning
   crate's README).
-
-  See docs/plans/2026-05-23-rust-idioms-refactor.md (Category 11,
-  Wave 13). See memory `feedback_prefer_dashmap_dashset.md`.
 severity: error
 language: Rust
 files:

@@ -30,9 +30,6 @@ message: |
 
   Suppress with `// ast-grep-ignore: rust.prefer-from-not-to-into` when
   there is a legitimate reason.
-
-  See docs/plans/2026-05-23-rust-idioms-refactor.md (Categories 1c/1d,
-  Wave 4).
 severity: error
 language: Rust
 files:

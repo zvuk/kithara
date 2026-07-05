@@ -1,7 +1,7 @@
 //! ABR pull-driven contract tests (probe-based).
 //!
 //! Each test in this directory exercises a slice of the pull-driven
-//! refactor spec at `docs/plans/2026-05-11-abr-pull-driven-simplification.md`.
+//! ABR refactor contract.
 //! Tests are independent: there are no shared assertion bundles that
 //! would let a regression in one invariant mask a regression in another.
 

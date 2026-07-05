@@ -27,9 +27,6 @@ message: |
   Suppress with `// ast-grep-ignore: rust.prefer-from-trait` when
   there is a legitimate reason (e.g. a named constructor with
   domain-specific semantics that should not be a generic From).
-
-  See docs/plans/2026-05-23-rust-idioms-refactor.md (Category 1a,
-  Wave 2).
 severity: error
 language: Rust
 files:
