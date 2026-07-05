@@ -12,7 +12,7 @@ mod config;
 pub use config::StretchOptions;
 
 mod kind;
-pub use kind::StretchBackendKind;
+pub use kind::StretchKind;
 
 mod factory;
 pub use factory::build_backend;

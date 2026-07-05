@@ -109,7 +109,7 @@ pub mod prelude {
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     ))]
-    pub use kithara_audio::StretchBackendKind;
+    pub use kithara_audio::StretchKind;
     pub use kithara_audio::{
         Audio, AudioConfig, EngineLoadSnapshot, PcmReader, ResamplerQuality, StretchControls,
     };

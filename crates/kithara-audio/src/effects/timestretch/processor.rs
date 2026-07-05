@@ -2,7 +2,7 @@ use std::sync::{Arc, atomic::Ordering};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
-use kithara_stretch::{StretchBackend, StretchBackendKind, StretchOptions, build_backend};
+use kithara_stretch::{StretchBackend, StretchKind, StretchOptions, build_backend};
 use portable_atomic::AtomicF32;
 use tracing::warn;
 
@@ -47,7 +47,7 @@ pub struct TimeStretchProcessor {
     spec: PcmSpec,
     /// Backend kind currently built; compared against `controls.backend()` to
     /// detect a live backend swap.
-    current_kind: StretchBackendKind,
+    current_kind: StretchKind,
     /// Interleaved output scratch, reused across calls (alloc-free steady state).
     scratch: Vec<f32>,
     /// Whether the previous chunk ran through the backend (key-lock on). Drives
@@ -157,7 +157,7 @@ impl TimeStretchProcessor {
 
     /// Rebuild the backend for `kind` at the current `spec`, discarding any
     /// buffered state. Used on a live backend swap and on a source-spec change.
-    fn rebuild_backend(&mut self, kind: StretchBackendKind) {
+    fn rebuild_backend(&mut self, kind: StretchKind) {
         let options = Self::options_for(self.spec, &self.pool);
         self.backend = build_backend(kind, &options);
         if let Err(e) = self.backend.set_pitch(1.0) {
@@ -391,7 +391,7 @@ mod tests {
 
     /// Build a key-locked processor at `speed` on `kind`, plus the resampler
     /// rate atomic it drives.
-    fn keylocked(kind: StretchBackendKind, speed: f32) -> (TimeStretchProcessor, Arc<AtomicF32>) {
+    fn keylocked(kind: StretchKind, speed: f32) -> (TimeStretchProcessor, Arc<AtomicF32>) {
         let controls = StretchControls::new(speed);
         controls.set_keylock(true);
         controls.set_backend(kind);
@@ -405,7 +405,7 @@ mod tests {
         (fx, resampler_rate)
     }
 
-    fn run(kind: StretchBackendKind, speed: f32, in_frames: usize) -> Vec<f32> {
+    fn run(kind: StretchKind, speed: f32, in_frames: usize) -> Vec<f32> {
         let input = sine(in_frames);
         let (mut fx, _rate) = keylocked(kind, speed);
         let mut out: Vec<f32> = Vec::new();
@@ -438,7 +438,7 @@ mod tests {
 
     /// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
     /// Shared across every compiled-in backend.
-    fn assert_half_speed_contract(kind: StretchBackendKind) {
+    fn assert_half_speed_contract(kind: StretchKind) {
         let channels = usize::from(Consts::CH);
         let in_frames = usize::try_from(Consts::SR).unwrap() * 2; // 2 s
         let out = run(kind, 0.5, in_frames);
@@ -467,7 +467,7 @@ mod tests {
         );
     }
 
-    fn assert_unity_contract(kind: StretchBackendKind) {
+    fn assert_unity_contract(kind: StretchKind) {
         let channels = usize::from(Consts::CH);
         let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
         let out = run(kind, 1.0, in_frames);
@@ -487,21 +487,21 @@ mod tests {
     #[cfg(feature = "stretch-signalsmith")]
     #[kithara::test]
     fn signalsmith_half_speed_and_unity_contracts() {
-        assert_half_speed_contract(StretchBackendKind::Signalsmith);
-        assert_unity_contract(StretchBackendKind::Signalsmith);
+        assert_half_speed_contract(StretchKind::Signalsmith);
+        assert_unity_contract(StretchKind::Signalsmith);
     }
 
     #[cfg(feature = "stretch-bungee")]
     #[kithara::test]
     fn bungee_half_speed_and_unity_contracts() {
-        assert_half_speed_contract(StretchBackendKind::Bungee);
-        assert_unity_contract(StretchBackendKind::Bungee);
+        assert_half_speed_contract(StretchKind::Bungee);
+        assert_unity_contract(StretchKind::Bungee);
     }
 
     #[kithara::test]
     fn output_meta_preserves_decoder_timeline() {
         let channels = usize::from(Consts::CH);
-        let (mut fx, _rate) = keylocked(StretchBackendKind::default(), 0.5);
+        let (mut fx, _rate) = keylocked(StretchKind::default(), 0.5);
         let cf = 1024usize;
         let block = sine(cf);
         let mut fed_ends = std::collections::HashSet::new();
@@ -572,7 +572,7 @@ mod tests {
     /// Key-lock on pins the resampler to unity (this slot owns the tempo).
     #[kithara::test]
     fn keylock_pins_resampler_to_unity() {
-        let (mut fx, rate) = keylocked(StretchBackendKind::default(), 0.5);
+        let (mut fx, rate) = keylocked(StretchKind::default(), 0.5);
         let _ = fx.process(chunk(&sine(4096)));
         assert!(
             (rate.load(Ordering::Relaxed) - 1.0).abs() < 1e-6,
@@ -638,7 +638,7 @@ mod tests {
     fn live_backend_swap_continues_and_keeps_pitch() {
         let controls = StretchControls::new(0.5);
         controls.set_keylock(true);
-        controls.set_backend(StretchBackendKind::Bungee);
+        controls.set_backend(StretchKind::Bungee);
         let rate = Arc::new(AtomicF32::new(1.0));
         let mut fx = TimeStretchProcessor::new(
             Arc::clone(&controls),
@@ -650,7 +650,7 @@ mod tests {
         let mut out: Vec<f32> = Vec::new();
         for i in 0..24 {
             if i == 6 {
-                controls.set_backend(StretchBackendKind::Signalsmith);
+                controls.set_backend(StretchKind::Signalsmith);
             }
             if let Some(c) = fx.process(chunk(&block)) {
                 out.extend_from_slice(&c.samples);

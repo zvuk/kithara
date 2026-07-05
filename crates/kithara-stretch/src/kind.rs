@@ -6,7 +6,7 @@ use std::fmt;
 /// un-representable rather than a runtime error.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StretchBackendKind {
+pub enum StretchKind {
     /// `signalsmith-stretch` (C++). Feature `stretch-signalsmith`.
     #[cfg(feature = "stretch-signalsmith")]
     Signalsmith,
@@ -15,7 +15,7 @@ pub enum StretchBackendKind {
     Bungee,
 }
 
-impl StretchBackendKind {
+impl StretchKind {
     /// Backends compiled into this target/feature set, in selector order.
     /// The DJ UI renders exactly these, so an unavailable backend is never
     /// shown nor clickable. Non-empty by construction: the crate requires at
@@ -33,20 +33,20 @@ impl StretchBackendKind {
 
 /// Stable discriminant for storing the selection in an atomic. Values are
 /// fixed regardless of which feature-gated variants are compiled in.
-impl From<StretchBackendKind> for u8 {
-    fn from(kind: StretchBackendKind) -> Self {
+impl From<StretchKind> for u8 {
+    fn from(kind: StretchKind) -> Self {
         match kind {
             #[cfg(feature = "stretch-signalsmith")]
-            StretchBackendKind::Signalsmith => 1,
+            StretchKind::Signalsmith => 1,
             #[cfg(feature = "stretch-bungee")]
-            StretchBackendKind::Bungee => 2,
+            StretchKind::Bungee => 2,
         }
     }
 }
 
 /// Decode a stored backend discriminant. Any value outside the compiled-in set
 /// decodes to the default (first compiled-in) backend.
-impl From<u8> for StretchBackendKind {
+impl From<u8> for StretchKind {
     fn from(value: u8) -> Self {
         match value {
             #[cfg(feature = "stretch-signalsmith")]
@@ -59,7 +59,7 @@ impl From<u8> for StretchBackendKind {
 }
 
 /// The first compiled-in backend, in [`Self::all`] selector order.
-impl Default for StretchBackendKind {
+impl Default for StretchKind {
     fn default() -> Self {
         Self::all()[0]
     }
@@ -67,8 +67,12 @@ impl Default for StretchBackendKind {
 
 /// UI label = the variant name (`Signalsmith` / `Bungee`), via `Debug`, so
 /// the selector needs no per-variant `cfg` arm.
-impl fmt::Display for StretchBackendKind {
+impl fmt::Display for StretchKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
     }
 }
+
+#[cfg(test)]
+#[path = "kind_tests.rs"]
+mod tests;

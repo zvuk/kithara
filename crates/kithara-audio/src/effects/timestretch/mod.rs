@@ -17,7 +17,7 @@ pub use controls::StretchControls;
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 pub use {
-    kithara_stretch::{StretchBackend, StretchBackendError, StretchBackendKind},
+    kithara_stretch::{StretchBackend, StretchBackendError, StretchKind},
     processor::TimeStretchProcessor,
 };
 

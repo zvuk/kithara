@@ -7,7 +7,7 @@ use portable_atomic::AtomicF32;
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 use {
-    kithara_stretch::StretchBackendKind,
+    kithara_stretch::StretchKind,
     std::sync::atomic::{AtomicBool, AtomicU8},
 };
 
@@ -64,7 +64,7 @@ impl StretchControls {
             ))]
             engine: EngineControls {
                 keylock: AtomicBool::new(false),
-                backend: AtomicU8::new(u8::from(StretchBackendKind::default())),
+                backend: AtomicU8::new(u8::from(StretchKind::default())),
             },
         })
     }
@@ -110,8 +110,8 @@ impl StretchControls {
 impl StretchControls {
     /// The selected time-stretch backend.
     #[must_use]
-    pub fn backend(&self) -> StretchBackendKind {
-        StretchBackendKind::from(self.engine.backend.load(Ordering::Relaxed))
+    pub fn backend(&self) -> StretchKind {
+        StretchKind::from(self.engine.backend.load(Ordering::Relaxed))
     }
 
     /// Whether key-lock (pitch-preserving tempo) is enabled.
@@ -121,7 +121,7 @@ impl StretchControls {
     }
 
     /// Select the time-stretch backend.
-    pub fn set_backend(&self, backend: StretchBackendKind) {
+    pub fn set_backend(&self, backend: StretchKind) {
         self.engine
             .backend
             .store(u8::from(backend), Ordering::Relaxed);

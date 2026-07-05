@@ -30,7 +30,7 @@ pub use blob::BlobError;
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
-pub use effects::timestretch::{StretchBackendKind, TimeStretchProcessor};
+pub use effects::timestretch::{StretchKind, TimeStretchProcessor};
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     timestretch::StretchControls,

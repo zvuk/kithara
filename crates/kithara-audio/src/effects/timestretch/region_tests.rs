@@ -2,7 +2,7 @@ use std::{num::NonZero, sync::Arc};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
-use kithara_stretch::StretchBackendKind;
+use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 
@@ -99,7 +99,7 @@ fn add_click(buf: &mut [f32], frame: usize) {
 fn render(speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
-    controls.set_backend(StretchBackendKind::Signalsmith);
+    controls.set_backend(StretchKind::Signalsmith);
     controls.set_region_plan(plan.map(Arc::new));
     let rate = Arc::new(AtomicF32::new(1.0));
     let mut fx = TimeStretchProcessor::new(controls, rate, spec(), PcmPool::default().clone());

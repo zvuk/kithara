@@ -8,7 +8,7 @@ the overview.
 `kithara-stretch` owns pure time-stretch DSP concerns:
 
 - `StretchBackend` and `StretchBackendError` define the backend contract.
-- `StretchBackendKind` stores the compiled backend selector. The persisted
+- `StretchKind` stores the compiled backend selector. The persisted
   discriminants are stable: `1 = Signalsmith`, `2 = Bungee`; discriminant `3`
   is reserved for the future pure-Rust native backend.
 - `StretchOptions` owns backend construction settings: source sample rate,
@@ -57,7 +57,7 @@ To add a backend:
    `StretchBackend`.
 2. Add a feature `stretch-<name>` in `Cargo.toml`, and add it to the `any(...)`
    guard of the `compile_error!` in `lib.rs` (the crate requires ≥1 backend).
-3. Gate the adapter module, the `StretchBackendKind` variant, its `all()` entry,
+3. Gate the adapter module, the `StretchKind` variant, its `all()` entry,
    its `From`/`u8` arms, and the `build_backend` factory arm on
    `#[cfg(feature = "stretch-<name>")]`; keep the variant's discriminant stable.
 4. Re-export the adapter from `backends/mod.rs` under the same gate.
