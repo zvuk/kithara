@@ -1,41 +1,132 @@
 use bungee_rs::Stream;
+use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
 use num_traits::cast::AsPrimitive;
 use tracing::warn;
 
-use crate::{StretchBackend, StretchBackendError};
+use crate::{StretchBackend, StretchBackendError, StretchOptions};
 
-const MAX_INPUT_FRAMES: usize = 8192;
+struct PooledPlanar {
+    pool: PcmPool,
+    channels: Vec<Vec<f32>>,
+}
+
+impl PooledPlanar {
+    fn new(pool: &PcmPool, channels: usize, min_len: usize) -> Result<Self, BudgetExhausted> {
+        let mut pooled = (0..channels).map(|_| pool.get()).collect::<Vec<_>>();
+        for samples in &mut pooled {
+            samples.ensure_len(min_len)?;
+            samples.clear();
+        }
+        Ok(Self {
+            pool: pool.clone(),
+            channels: pooled.into_iter().map(PcmBuf::into_inner).collect(),
+        })
+    }
+
+    fn empty(pool: &PcmPool) -> Self {
+        Self {
+            pool: pool.clone(),
+            channels: Vec::default(),
+        }
+    }
+
+    fn fill_interleaved(&mut self, input: &[f32], start: usize, frames: usize, channels: usize) {
+        for (channel, samples) in self.channels.iter_mut().take(channels).enumerate() {
+            samples.clear();
+            samples.extend((0..frames).map(|frame| input[(start + frame) * channels + channel]));
+        }
+    }
+
+    fn ensure_len(&mut self, frames: usize) -> Result<(), BudgetExhausted> {
+        for samples in &mut self.channels {
+            let mut pooled = self.pool.attach(std::mem::take(samples));
+            let result = pooled.ensure_len(frames);
+            *samples = pooled.into_inner();
+            result?;
+        }
+        Ok(())
+    }
+}
+
+impl AsRef<[Vec<f32>]> for PooledPlanar {
+    fn as_ref(&self) -> &[Vec<f32>] {
+        &self.channels
+    }
+}
+
+impl AsMut<[Vec<f32>]> for PooledPlanar {
+    fn as_mut(&mut self) -> &mut [Vec<f32>] {
+        &mut self.channels
+    }
+}
+
+impl Drop for PooledPlanar {
+    fn drop(&mut self) {
+        for samples in self.channels.drain(..) {
+            self.pool.recycle(samples);
+        }
+    }
+}
 
 pub(crate) struct BungeeBackend {
     inner: Option<Stream>,
-    in_planar: Vec<Vec<f32>>,
-    out_planar: Vec<Vec<f32>>,
+    in_planar: PooledPlanar,
+    out_planar: PooledPlanar,
+    max_input_frames: usize,
     pitch: f64,
     ratio: f64,
     channels: usize,
 }
 
 impl BungeeBackend {
-    pub(crate) fn new(sample_rate: u32, channels: usize) -> Self {
-        let channels = channels.max(1);
-        let sample_rate: usize = sample_rate.as_();
-        let inner = match Stream::new(sample_rate, channels, MAX_INPUT_FRAMES) {
-            Ok(stream) => Some(stream),
+    pub(crate) fn new(options: &StretchOptions) -> Self {
+        let channels = options.channels.max(1);
+        let max_input_frames = options.max_input_frames.max(1);
+        let sample_rate: usize = options.sample_rate.as_();
+        let scratch =
+            PooledPlanar::new(&options.pool, channels, max_input_frames).and_then(|in_planar| {
+                PooledPlanar::new(&options.pool, channels, max_input_frames)
+                    .map(|out_planar| (in_planar, out_planar))
+            });
+        let (in_planar, out_planar, scratch_ready) = match scratch {
+            Ok((in_planar, out_planar)) => (in_planar, out_planar, true),
             Err(e) => {
                 warn!(
-                    error = e,
-                    sample_rate, channels, "bungee Stream::new failed; backend disabled"
+                    error = %e,
+                    sample_rate,
+                    channels,
+                    max_input_frames,
+                    "bungee scratch checkout failed; backend disabled"
                 );
-                None
+                (
+                    PooledPlanar::empty(&options.pool),
+                    PooledPlanar::empty(&options.pool),
+                    false,
+                )
             }
+        };
+        let inner = if scratch_ready {
+            match Stream::new(sample_rate, channels, max_input_frames) {
+                Ok(stream) => Some(stream),
+                Err(e) => {
+                    warn!(
+                        error = e,
+                        sample_rate, channels, "bungee Stream::new failed; backend disabled"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
         };
         Self {
             inner,
             channels,
+            max_input_frames,
             ratio: 1.0,
             pitch: 1.0,
-            in_planar: vec![Vec::with_capacity(MAX_INPUT_FRAMES); channels],
-            out_planar: vec![Vec::new(); channels],
+            in_planar,
+            out_planar,
         }
     }
 }
@@ -58,47 +149,44 @@ impl StretchBackend for BungeeBackend {
     }
 
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
-        let Self {
-            inner,
-            channels,
-            ratio,
-            pitch,
-            in_planar,
-            out_planar,
-            ..
-        } = self;
-        let Some(stream) = inner.as_mut() else {
+        let Some(stream) = self.inner.as_mut() else {
             // Stream::new failed at construction (already warned once); emit
             // nothing rather than erroring per chunk. Unreachable for a valid
             // spec — see the bungee note in the crate CONTEXT.md.
             return Ok(());
         };
-        let ch = *channels;
+        let ch = self.channels;
         let total = input.len() / ch;
+        if total == 0 {
+            return Ok(());
+        }
         // Size the output buffer for a FULL input block so the stream can
         // always drain its pending grain even on a short final sub-block;
         // a too-small output backs up the input ring and trips a C++ assert.
-        let full_f: f64 = MAX_INPUT_FRAMES.as_();
-        let cap: usize = num_traits::cast((full_f * *ratio).ceil())
-            .unwrap_or(0)
+        let full_f: f64 = self.max_input_frames.as_();
+        let cap: usize = num_traits::cast::<f64, usize>((full_f * self.ratio).ceil())
+            .ok_or_else(|| StretchBackendError::Process("bungee output frame cap overflow".into()))?
             .max(1);
         let mut done = 0;
         while done < total {
-            let n = (total - done).min(MAX_INPUT_FRAMES);
-            for c in 0..ch {
-                let buf = &mut in_planar[c];
-                buf.clear();
-                buf.extend((0..n).map(|f| input[(done + f) * ch + c]));
-            }
+            let n = (total - done).min(self.max_input_frames);
+            self.in_planar.fill_interleaved(input, done, n, ch);
             let n_f: f64 = n.as_();
-            let out_frames = (n_f * *ratio).max(1.0);
-            for c in 0..ch {
-                out_planar[c].clear();
-                out_planar[c].resize(cap, 0.0);
-            }
-            let rendered = stream.process(Some(in_planar), out_planar, n, out_frames, *pitch);
-            for f in 0..rendered.min(cap) {
-                out.extend((0..ch).map(|c| out_planar[c][f]));
+            let out_frames = (n_f * self.ratio).max(1.0);
+            self.out_planar
+                .ensure_len(cap)
+                .map_err(|e| StretchBackendError::Process(e.to_string()))?;
+            let rendered = stream.process(
+                Some(self.in_planar.as_ref()),
+                self.out_planar.as_mut(),
+                n,
+                out_frames,
+                self.pitch,
+            );
+            let rendered = rendered.min(cap);
+            let output = self.out_planar.as_ref();
+            for frame in 0..rendered {
+                out.extend(output.iter().take(ch).map(|channel| channel[frame]));
             }
             done += n;
         }
@@ -106,10 +194,10 @@ impl StretchBackend for BungeeBackend {
     }
 
     fn reset(&mut self) {
-        if let Some(spec_channels) = self.inner.as_ref().map(|s| s.num_channels()) {
+        if let Some(spec_channels) = self.inner.as_ref().map(Stream::num_channels) {
             // Recreate the stream to clear internal state (no reset on Stream).
             let sample_rate = self.inner.as_ref().map_or(1, Stream::sample_rate);
-            self.inner = Stream::new(sample_rate, spec_channels, MAX_INPUT_FRAMES).ok();
+            self.inner = Stream::new(sample_rate, spec_channels, self.max_input_frames).ok();
         }
     }
 

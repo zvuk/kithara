@@ -1,6 +1,7 @@
-use kithara_stretch::GridSegment;
-
-use crate::blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer};
+use crate::{
+    blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer},
+    region::GridSegment,
+};
 
 /// Cleaned beat grid for one track. All positions are source frames
 /// (decoder/song time, `PcmMeta.frame_offset` space) — never output/stretched
@@ -107,10 +108,10 @@ fn read_finite(r: &mut Reader<'_>) -> Result<f64, BlobError> {
 
 #[cfg(test)]
 mod bytes_tests {
-    use kithara_stretch::GridSegment;
     use kithara_test_utils::kithara;
 
     use super::{BeatGrid, BlobError};
+    use crate::region::GridSegment;
 
     fn sample() -> BeatGrid {
         BeatGrid {

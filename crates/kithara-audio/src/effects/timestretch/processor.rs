@@ -2,14 +2,15 @@ use std::sync::{Arc, atomic::Ordering};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
-use kithara_stretch::{
-    ActiveRegion, RegionPlan, StretchBackend, StretchBackendKind, build_backend,
-};
+use kithara_stretch::{StretchBackend, StretchBackendKind, StretchOptions, build_backend};
 use portable_atomic::AtomicF32;
 use tracing::warn;
 
 use super::controls::StretchControls;
-use crate::traits::AudioEffect;
+use crate::{
+    region::{ActiveRegion, RegionPlan},
+    traits::AudioEffect,
+};
 
 /// Pre-resampler time-stretch slot. Reads live key-lock, backend, and speed
 /// from the shared [`StretchControls`] each chunk:
@@ -75,11 +76,8 @@ impl TimeStretchProcessor {
         pool: PcmPool,
     ) -> Self {
         let current_kind = controls.backend();
-        let mut backend = build_backend(
-            current_kind,
-            spec.sample_rate.get(),
-            usize::from(spec.channels.max(1)),
-        );
+        let options = Self::options_for(spec, &pool);
+        let mut backend = build_backend(current_kind, &options);
         if let Err(e) = backend.set_pitch(1.0) {
             warn!(error = %e, "time-stretch set_pitch(1.0) failed");
         }
@@ -99,6 +97,14 @@ impl TimeStretchProcessor {
         };
         me.route_rate();
         me
+    }
+
+    fn options_for(spec: PcmSpec, pool: &PcmPool) -> StretchOptions {
+        StretchOptions::builder()
+            .sample_rate(spec.sample_rate.get())
+            .channels(usize::from(spec.channels.max(1)))
+            .pool(pool.clone())
+            .build()
     }
 
     /// Push `stretch` to the backend when it moved beyond `RATIO_EPS`. At a
@@ -152,11 +158,8 @@ impl TimeStretchProcessor {
     /// Rebuild the backend for `kind` at the current `spec`, discarding any
     /// buffered state. Used on a live backend swap and on a source-spec change.
     fn rebuild_backend(&mut self, kind: StretchBackendKind) {
-        self.backend = build_backend(
-            kind,
-            self.spec.sample_rate.get(),
-            usize::from(self.spec.channels.max(1)),
-        );
+        let options = Self::options_for(self.spec, &self.pool);
+        self.backend = build_backend(kind, &options);
         if let Err(e) = self.backend.set_pitch(1.0) {
             warn!(error = %e, "time-stretch set_pitch(1.0) failed");
         }

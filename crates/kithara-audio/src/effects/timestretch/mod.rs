@@ -17,8 +17,8 @@ pub use controls::StretchControls;
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 pub use {
-    kithara_stretch::{
-        RegionPlan, RegionPlanError, StretchBackend, StretchBackendError, StretchBackendKind,
-    },
+    kithara_stretch::{StretchBackend, StretchBackendError, StretchBackendKind},
     processor::TimeStretchProcessor,
 };
+
+pub use crate::region::{RegionPlan, RegionPlanError};

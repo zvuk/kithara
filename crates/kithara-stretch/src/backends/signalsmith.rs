@@ -1,7 +1,7 @@
 use num_traits::cast::AsPrimitive;
 use signalsmith_stretch::Stretch;
 
-use crate::{StretchBackend, StretchBackendError};
+use crate::{StretchBackend, StretchBackendError, StretchOptions};
 
 pub(crate) struct SignalsmithBackend {
     inner: Stretch,
@@ -11,10 +11,12 @@ pub(crate) struct SignalsmithBackend {
 }
 
 impl SignalsmithBackend {
-    pub(crate) fn new(sample_rate: u32, channels: usize) -> Self {
-        let channels = channels.max(1);
-        let inner =
-            Stretch::preset_default(u32::try_from(channels).unwrap_or(u32::MAX), sample_rate);
+    pub(crate) fn new(options: &StretchOptions) -> Self {
+        let channels = options.channels.max(1);
+        let inner = Stretch::preset_default(
+            u32::try_from(channels).unwrap_or(u32::MAX),
+            options.sample_rate,
+        );
         Self {
             inner,
             channels,

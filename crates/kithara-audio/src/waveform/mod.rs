@@ -6,4 +6,5 @@ mod bucketize;
 pub use analyzer::{AnalysisParams, WaveformAnalyzer};
 pub use beat_grid::BeatGrid;
 pub use bucket::{Bucket, Waveform};
-pub use kithara_stretch::GridSegment;
+
+pub use crate::region::GridSegment;

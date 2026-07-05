@@ -1,21 +1,20 @@
-#[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
+#[cfg(feature = "stretch-bungee")]
 use crate::backends::BungeeBackend;
-#[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
+#[cfg(feature = "stretch-signalsmith")]
 use crate::backends::SignalsmithBackend;
-use crate::{StretchBackend, StretchBackendKind};
+use crate::{StretchBackend, StretchBackendKind, StretchOptions};
 
 /// Construct the backend for `kind` at the configured source shape. Called once
 /// per chain build and on a source-spec change inside the audio processor.
 #[must_use]
 pub fn build_backend(
     kind: StretchBackendKind,
-    sample_rate: u32,
-    channels: usize,
+    options: &StretchOptions,
 ) -> Box<dyn StretchBackend> {
     match kind {
-        #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
-        StretchBackendKind::Signalsmith => Box::new(SignalsmithBackend::new(sample_rate, channels)),
-        #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
-        StretchBackendKind::Bungee => Box::new(BungeeBackend::new(sample_rate, channels)),
+        #[cfg(feature = "stretch-signalsmith")]
+        StretchBackendKind::Signalsmith => Box::new(SignalsmithBackend::new(options)),
+        #[cfg(feature = "stretch-bungee")]
+        StretchBackendKind::Bungee => Box::new(BungeeBackend::new(options)),
     }
 }

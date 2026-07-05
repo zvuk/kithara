@@ -8,55 +8,60 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StretchBackendKind {
     /// `signalsmith-stretch` (C++). Feature `stretch-signalsmith`.
-    #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
+    #[cfg(feature = "stretch-signalsmith")]
     Signalsmith,
     /// `bungee` (C++). Feature `stretch-bungee`.
-    #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
+    #[cfg(feature = "stretch-bungee")]
     Bungee,
 }
 
 impl StretchBackendKind {
     /// Backends compiled into this target/feature set, in selector order.
     /// The DJ UI renders exactly these, so an unavailable backend is never
-    /// shown nor clickable. Non-empty by construction: this module only
-    /// compiles when at least one `stretch-*` feature is enabled.
-    pub const ALL: &'static [Self] = &[
-        #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
-        Self::Signalsmith,
-        #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
-        Self::Bungee,
-    ];
-
-    /// Decode a discriminant written by [`Self::to_u8`]. Any value outside the
-    /// compiled-in set decodes to the default (first compiled-in) backend.
+    /// shown nor clickable. Non-empty by construction: the crate requires at
+    /// least one backend feature (`compile_error!` in `lib.rs` otherwise).
     #[must_use]
-    pub const fn from_u8(v: u8) -> Self {
-        match v {
-            #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
-            1 => Self::Signalsmith,
-            #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
-            2 => Self::Bungee,
-            _ => Self::ALL[0],
-        }
+    pub const fn all() -> &'static [Self] {
+        &[
+            #[cfg(feature = "stretch-signalsmith")]
+            Self::Signalsmith,
+            #[cfg(feature = "stretch-bungee")]
+            Self::Bungee,
+        ]
     }
+}
 
-    /// Stable discriminant for storing the selection in an atomic. Values are
-    /// fixed regardless of which feature-gated variants are compiled in.
-    #[must_use]
-    pub const fn to_u8(self) -> u8 {
-        match self {
-            #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
-            Self::Signalsmith => 1,
-            #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
-            Self::Bungee => 2,
+/// Stable discriminant for storing the selection in an atomic. Values are
+/// fixed regardless of which feature-gated variants are compiled in.
+impl From<StretchBackendKind> for u8 {
+    fn from(kind: StretchBackendKind) -> Self {
+        match kind {
+            #[cfg(feature = "stretch-signalsmith")]
+            StretchBackendKind::Signalsmith => 1,
+            #[cfg(feature = "stretch-bungee")]
+            StretchBackendKind::Bungee => 2,
         }
     }
 }
 
-/// The first compiled-in backend, in [`Self::ALL`] selector order.
+/// Decode a stored backend discriminant. Any value outside the compiled-in set
+/// decodes to the default (first compiled-in) backend.
+impl From<u8> for StretchBackendKind {
+    fn from(value: u8) -> Self {
+        match value {
+            #[cfg(feature = "stretch-signalsmith")]
+            1 => Self::Signalsmith,
+            #[cfg(feature = "stretch-bungee")]
+            2 => Self::Bungee,
+            _ => Self::all()[0],
+        }
+    }
+}
+
+/// The first compiled-in backend, in [`Self::all`] selector order.
 impl Default for StretchBackendKind {
     fn default() -> Self {
-        Self::ALL[0]
+        Self::all()[0]
     }
 }
 

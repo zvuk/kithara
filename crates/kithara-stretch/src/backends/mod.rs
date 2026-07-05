@@ -1,9 +1,9 @@
-#[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
+#[cfg(feature = "stretch-bungee")]
 mod bungee;
-#[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
+#[cfg(feature = "stretch-signalsmith")]
 mod signalsmith;
 
-#[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
+#[cfg(feature = "stretch-bungee")]
 pub(crate) use bungee::BungeeBackend;
-#[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
+#[cfg(feature = "stretch-signalsmith")]
 pub(crate) use signalsmith::SignalsmithBackend;

@@ -56,8 +56,8 @@ fdk-aac = ["kithara-decode/fdk-aac"]
 # Native-only C++ time-stretch backends, opt-in. Each pulls a C++ toolchain
 # (signalsmith: cc+libclang; bungee: cmake). Without one, default + wasm
 # builds carry no stretch DSP: speed control stays, key-lock is compiled out.
-stretch-signalsmith = ["kithara-stretch/stretch-signalsmith"]
-stretch-bungee = ["kithara-stretch/stretch-bungee"]
+stretch-signalsmith = ["dep:kithara-stretch", "kithara-stretch/stretch-signalsmith"]
+stretch-bungee = ["dep:kithara-stretch", "kithara-stretch/stretch-bungee"]
 # NN beat/downbeat detector (kithara-beat, embedded small model). Native-only
 # in practice: wasm builds simply do not enable it (rten on wasm unverified).
 beat-nn = ["dep:kithara-beat", "kithara-beat/embed-small-model"]
@@ -70,7 +70,7 @@ kithara-decode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
-kithara-stretch = { workspace = true, default-features = false }
+kithara-stretch = { workspace = true, default-features = false, optional = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 

@@ -2,12 +2,15 @@ use std::{num::NonZero, sync::Arc};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
-use kithara_stretch::{GridSegment, RegionPlan, RegionPlanError, StretchBackendKind};
+use kithara_stretch::StretchBackendKind;
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 
 use super::{StretchControls, TimeStretchProcessor};
-use crate::traits::AudioEffect;
+use crate::{
+    region::{GridSegment, RegionPlan, RegionPlanError},
+    traits::AudioEffect,
+};
 
 const SR: u32 = 44_100;
 const CH: usize = 2;
