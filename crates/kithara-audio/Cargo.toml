@@ -10,7 +10,15 @@ keywords = ["audio", "dsp", "resampling", "playback", "player"]
 categories = ["multimedia::audio"]
 
 [features]
-default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
+default = [
+    "symphonia",
+    "resample-rubato",
+    "resample-fft",
+    "analysis-waveform",
+    "stretch-signalsmith",
+    "client-reqwest",
+    "tls-rustls",
+]
 probe = []
 mock = []
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -54,6 +62,8 @@ symphonia = ["kithara-decode/symphonia", "resample-rubato"]
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
 resample-rubato = ["kithara-decode/resample-rubato"]
+resample-fft = ["rubato/fft_resampler"]
+analysis-waveform = ["dep:realfft"]
 # Native-only C++ time-stretch backends. Default native builds use signalsmith;
 # bungee stays opt-in. Wasm builds pass `--no-default-features`, so they carry
 # no stretch DSP: speed control stays, key-lock is compiled out.
@@ -85,7 +95,7 @@ fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
-realfft = { workspace = true }
+realfft = { workspace = true, optional = true }
 ringbuf = { workspace = true }
 rubato = { workspace = true }
 serde = { workspace = true }
@@ -122,6 +132,7 @@ bytes = { workspace = true }
 cbc = { workspace = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
+realfft = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

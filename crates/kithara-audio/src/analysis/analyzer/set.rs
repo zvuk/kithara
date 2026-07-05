@@ -4,8 +4,8 @@ use kithara_decode::{PcmChunk, PcmSpec};
 use num_traits::cast::AsPrimitive;
 
 use super::{
+    WaveformPass,
     track_analysis::{Analyzer, TrackAnalysis},
-    waveform_pass::WaveformPass,
 };
 use crate::analysis::beat::{BeatPass, GridParams, SharedBeatDetector};
 
@@ -125,15 +125,23 @@ impl AnalyzerBuilder {
 
     /// Run a waveform analyzer at `buckets` resolution.
     #[must_use]
+    #[cfg(feature = "analysis-waveform")]
     pub fn with_waveform(self, buckets: usize) -> Self {
         Self {
             waveform_buckets: Some(buckets),
             ..self
         }
     }
+
+    /// Run a waveform analyzer at `buckets` resolution.
+    #[must_use]
+    #[cfg(not(feature = "analysis-waveform"))]
+    pub fn with_waveform(self, _buckets: usize) -> Self {
+        self
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "analysis-waveform"))]
 mod tests {
     use std::{num::NonZeroU32, sync::Arc};
 

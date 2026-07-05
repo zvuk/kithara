@@ -881,7 +881,7 @@ mod seek_trim_tests {
         const SAMPLE_RATE: u32 = 44_100;
         const PACKET_FRAMES: u32 = 1024;
 
-        let target = crate::duration_for_frames(SAMPLE_RATE, u64::from(PACKET_FRAMES));
+        let target = duration_for_frames(SAMPLE_RATE, u64::from(PACKET_FRAMES));
         let rounded_past_target = target.saturating_add(Duration::from_nanos(1));
         let codec = CountingCodec::new(
             PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),

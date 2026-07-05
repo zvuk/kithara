@@ -10,7 +10,17 @@ keywords = ["audio", "streaming", "hls", "player", "dj"]
 categories = ["multimedia::audio"]
 
 [features]
-default = ["file", "hls", "symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
+default = [
+    "file",
+    "hls",
+    "symphonia",
+    "resample-rubato",
+    "resample-fft",
+    "analysis-waveform",
+    "stretch-signalsmith",
+    "client-reqwest",
+    "tls-rustls",
+]
 # HTTP backend forwarding to every kithara-net-reaching dep. Optional deps
 # (kithara-net / kithara-file / kithara-hls / kithara-abr) use the weak `?`
 # form so a backend choice never force-enables them. Android forwards
@@ -83,11 +93,9 @@ symphonia = [
 # LC-only AAC decoder; without this feature, HE-AAC v2 (parametric
 # stereo + SBR) streams fail in the software pipeline.
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac", "kithara-queue?/fdk-aac"]
-resample-rubato = [
-    "kithara-audio/resample-rubato",
-    "kithara-decode/resample-rubato",
-    "kithara-play/resample-rubato",
-]
+resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato", "kithara-play/resample-rubato"]
+resample-fft = ["kithara-audio/resample-fft", "kithara-play/resample-fft"]
+analysis-waveform = ["kithara-audio/analysis-waveform", "kithara-play/analysis-waveform"]
 # Native-only C++ time-stretch backends (selectable at runtime in the DJ
 # deck). Each pulls a C++ toolchain; without one, key-lock is compiled out.
 stretch-signalsmith = ["kithara-audio/stretch-signalsmith"]
@@ -159,12 +167,7 @@ apple = [
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
 apple-net = ["kithara-net?/client-apple", "kithara-stream/client-apple"]
-android = [
-    "kithara-audio/android",
-    "kithara-decode/android",
-    "kithara-net?/client-wreq",
-    "resample-rubato",
-]
+android = ["kithara-audio/android", "kithara-decode/android", "kithara-net?/client-wreq", "resample-rubato"]
 full = ["file", "hls", "assets", "net", "bufpool"]
 
 [dependencies]

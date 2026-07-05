@@ -172,13 +172,14 @@ mod run {
         },
         FakeReader, SR, sine,
     };
-    use crate::{
-        traits::PcmReader,
-        waveform::{AnalysisParams, WaveformAnalyzer},
-    };
+    use crate::traits::PcmReader;
+    #[cfg(feature = "analysis-waveform")]
+    use crate::waveform::{AnalysisParams, WaveformAnalyzer};
 
+    #[cfg(feature = "analysis-waveform")]
     const BUCKETS: usize = 64;
 
+    #[cfg(feature = "analysis-waveform")]
     fn waveform_only() -> AnalyzerBuilder {
         AnalyzerBuilder::default().with_waveform(BUCKETS)
     }
@@ -193,6 +194,7 @@ mod run {
         out
     }
 
+    #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
     fn matches_direct_waveform_analyzer_over_chunked_stream() {
         let samples = sine(usize::try_from(SR).unwrap());
@@ -214,6 +216,7 @@ mod run {
         );
     }
 
+    #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
     fn cancelled_token_yields_none() {
         let cancel = CancelToken::root();
@@ -222,6 +225,7 @@ mod run {
         assert!(stages(&mut reader, &waveform_only(), &cancel).is_empty());
     }
 
+    #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
     fn decode_error_yields_none() {
         let mut reader = FakeReader::failing();
@@ -229,6 +233,7 @@ mod run {
         assert!(out.is_empty());
     }
 
+    #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
     fn empty_stream_yields_none() {
         let mut reader = FakeReader::empty();
@@ -271,6 +276,7 @@ mod run {
         assert_eq!(grid.downbeats[1], u64::from(SR) * 2, "source frames");
     }
 
+    #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
     fn pending_is_tolerated_mid_stream() {
         let samples = sine(8192);
@@ -280,7 +286,7 @@ mod run {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "analysis-waveform"))]
 mod worker {
     use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;

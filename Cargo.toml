@@ -316,7 +316,7 @@ rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 # Beat detection NN inference (kithara-beat).
 rten = { version = "0.24", features = ["fft"] }
 rten-tensor = "0.24"
-rubato = "3.0"
+rubato = { version = "3.0", default-features = false }
 rustdoc-types = "0.60.0"
 rustls-platform-verifier = "0.7.0"
 send_wrapper = "0.6"

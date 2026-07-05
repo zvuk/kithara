@@ -45,7 +45,9 @@ pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
     SeekOutcome,
 };
-pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, Waveform, WaveformAnalyzer};
+#[cfg(feature = "analysis-waveform")]
+pub use waveform::WaveformAnalyzer;
+pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, Waveform};
 pub use worker::{
     AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, handle::AudioWorkerHandle,
     types::ServiceClass,

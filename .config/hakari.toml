@@ -33,3 +33,9 @@ workspace-members = [
   "kithara-ffi",
   "kithara-test-utils",
 ]
+third-party = [
+  { name = "realfft" },
+  { name = "rubato" },
+  { name = "rustfft" },
+  { name = "symphonia-core" },
+]

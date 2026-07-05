@@ -3936,6 +3936,14 @@ mod splice_continuity_tests {
         peak
     }
 
+    fn segment_boundary_frame(segment: usize) -> usize {
+        let seconds = u64::try_from(segment)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(Consts::SEGMENT_DURATION_SECS);
+        let frames = seconds.saturating_mul(u64::from(Consts::SAMPLE_RATE));
+        usize::try_from(frames).unwrap_or(usize::MAX)
+    }
+
     // splice-continuity contract: RED = audible click on variant switch
     // (see .docs/plans/2026-07-03-resampler-native-src-design.md, S-Click)
     #[kithara::test(tokio)]
@@ -3991,9 +3999,7 @@ mod splice_continuity_tests {
         let mut control_peak = 0.0_f32;
         let mut control_count = 0usize;
         for k in 1..Consts::TOTAL_SEGMENTS {
-            let boundary = k
-                .saturating_mul(Consts::SEGMENT_DURATION_SECS as usize)
-                .saturating_mul(Consts::SAMPLE_RATE as usize);
+            let boundary = segment_boundary_frame(k);
             if boundary >= left.len() || boundary.abs_diff(splice_frame) <= 4096 {
                 continue;
             }
@@ -4085,9 +4091,7 @@ mod splice_continuity_tests {
         let mut control_peak = 0.0_f32;
         let mut control_count = 0usize;
         for k in 1..Consts::TOTAL_SEGMENTS {
-            let boundary = k
-                .saturating_mul(Consts::SEGMENT_DURATION_SECS as usize)
-                .saturating_mul(Consts::SAMPLE_RATE as usize);
+            let boundary = segment_boundary_frame(k);
             if boundary >= left.len() || boundary.abs_diff(recreate_frame) <= 4096 {
                 continue;
             }

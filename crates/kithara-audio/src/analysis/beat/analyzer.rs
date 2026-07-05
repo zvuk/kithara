@@ -1,15 +1,15 @@
-use std::{iter, sync::Arc};
+use std::sync::Arc;
 
-use audioadapter_buffers::direct::SequentialSliceOfVecs;
 use kithara_decode::PcmChunk;
 use kithara_platform::sync::Mutex;
 use num_traits::cast::ToPrimitive;
-use rubato::{Fft, FixedSync, Resampler};
 use tracing::warn;
 
 use super::{
+    TARGET_RATE,
     detector::{BeatDetectError, BeatDetector},
     grid::{GridParams, build_grid},
+    resampler::MonoResampler,
 };
 use crate::{analysis::analyzer::Analyzer, waveform::BeatGrid};
 
@@ -36,16 +36,9 @@ enum MonoFeed {
 }
 
 impl BeatAnalyzer {
-    /// Input frames per resampler block. Off-line analysis: latency-free, so a
-    /// comfortable block keeps FFT overhead low.
-    const BLOCK_FRAMES: usize = 1024;
-
-    /// The detector's contractual input rate (`BeatDetector::detect`).
-    const TARGET_RATE: u32 = 22_050;
-
     #[must_use]
     pub(crate) fn new(source_rate: u32, params: GridParams) -> Self {
-        let feed = if source_rate == Self::TARGET_RATE {
+        let feed = if source_rate == TARGET_RATE {
             MonoFeed::Pass(Vec::new())
         } else {
             MonoResampler::new(source_rate).map_or(MonoFeed::Broken, MonoFeed::Resample)
@@ -93,132 +86,6 @@ impl BeatAnalyzer {
             MonoFeed::Pass(out) => out.extend(mono),
             MonoFeed::Resample(resampler) => resampler.push(mono),
             MonoFeed::Broken => {}
-        }
-    }
-}
-
-/// Incremental mono `source_rate` → 22 050 Hz resampler over rubato's
-/// synchronous FFT engine. `finish` pads with silence until the engine has
-/// emitted its whole delay line, then trims the leading delay and truncates
-/// to the duration-exact length — no tail loss, no position shift.
-struct MonoResampler {
-    fft: Box<Fft<f32>>,
-    /// Single-channel scratch in the adapter's slice-of-vecs shape.
-    input_block: Vec<Vec<f32>>,
-    /// Accumulated raw engine output (still carries the leading delay).
-    out: Vec<f32>,
-    output_block: Vec<Vec<f32>>,
-    /// Mono input awaiting a full block.
-    pending: Vec<f32>,
-    /// Output frames per input frame (`22 050 / source_rate`).
-    ratio: f64,
-    /// Real (non-padding) input frames seen.
-    total_in: u64,
-    /// Engine delay in output frames, trimmed from the front.
-    delay: usize,
-}
-
-impl MonoResampler {
-    fn new(source_rate: u32) -> Option<Self> {
-        let fft = Fft::<f32>::new(
-            source_rate.to_usize()?,
-            BeatAnalyzer::TARGET_RATE.to_usize()?,
-            BeatAnalyzer::BLOCK_FRAMES,
-            2,
-            1,
-            FixedSync::Input,
-        )
-        .map_err(|e| {
-            warn!(
-                ?e,
-                source_rate, "beat analysis: resampler construction failed"
-            );
-        })
-        .ok()?;
-
-        let delay = fft.output_delay();
-
-        Some(Self {
-            delay,
-            fft: Box::new(fft),
-            ratio: f64::from(BeatAnalyzer::TARGET_RATE) / f64::from(source_rate),
-            pending: Vec::new(),
-            input_block: vec![Vec::new()],
-            output_block: vec![Vec::new()],
-            out: Vec::new(),
-            total_in: 0,
-        })
-    }
-
-    /// Flush: pad with silence until the engine has emitted `delay` plus the
-    /// duration-exact output, then cut the delay off the front. The lesson of
-    /// the waveform analyzer's lost tail, made structural.
-    fn finish(mut self) -> Vec<f32> {
-        let expected = self
-            .total_in
-            .to_f64()
-            .map(|frames| frames * self.ratio)
-            .and_then(|frames| frames.round().to_usize())
-            .unwrap_or(0);
-
-        while self.out.len() < self.delay + expected {
-            let needed = self.fft.input_frames_next();
-            let pad = needed.saturating_sub(self.pending.len());
-            self.pending.extend(iter::repeat_n(0.0_f32, pad));
-            if !self.process_block() {
-                break;
-            }
-        }
-
-        let mut out = self.out;
-        out.drain(..self.delay.min(out.len()));
-        out.truncate(expected);
-        out
-    }
-
-    /// Run one fixed-size input block through the engine, appending its
-    /// output. `false` on an engine error (the block is dropped).
-    fn process_block(&mut self) -> bool {
-        let needed = self.fft.input_frames_next();
-        let out_next = self.fft.output_frames_next();
-        self.input_block[0].clear();
-        self.input_block[0].extend_from_slice(&self.pending[..needed]);
-        self.output_block[0].resize(out_next, 0.0);
-
-        let written = SequentialSliceOfVecs::new(&self.input_block, 1, needed)
-            .map_err(|e| e.to_string())
-            .and_then(|input| {
-                let mut output =
-                    SequentialSliceOfVecs::new_mut(&mut self.output_block, 1, out_next)
-                        .map_err(|e| e.to_string())?;
-                self.fft
-                    .process_into_buffer(&input, &mut output, None)
-                    .map(|(_, written)| written)
-                    .map_err(|e| e.to_string())
-            });
-        self.pending.drain(..needed);
-
-        match written {
-            Ok(written) => {
-                self.out.extend_from_slice(&self.output_block[0][..written]);
-                true
-            }
-            Err(e) => {
-                warn!(e, "beat analysis: resample block failed; dropped");
-                false
-            }
-        }
-    }
-
-    fn push(&mut self, mono: impl Iterator<Item = f32>) {
-        let before = self.pending.len();
-        self.pending.extend(mono);
-        self.total_in += (self.pending.len() - before).to_u64().unwrap_or(0);
-
-        while self.pending.len() >= self.fft.input_frames_next() {
-            if !self.process_block() {
-                return;
-            }
         }
     }
 }
@@ -402,7 +269,7 @@ mod tests {
 
     #[kithara::test]
     fn passthrough_at_detector_rate() {
-        // A 22 050 Hz source needs no resampling: the detector sees the
+        // A 22 050 Hz source needs no resampling: the detector sees the input.
         let pcm = stereo(10_000, |_| 0.25);
         let mut analyzer = BeatAnalyzer::new(22_050, GridParams::default());
         push_chunked(&mut analyzer, &pcm, 999);

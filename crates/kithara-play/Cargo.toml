@@ -10,7 +10,15 @@ keywords = ["audio", "player", "dj", "crossfade", "playback"]
 categories = ["multimedia::audio"]
 
 [features]
-default = ["backend-cpal", "symphonia", "resample-rubato", "client-reqwest", "tls-rustls"]
+default = [
+    "backend-cpal",
+    "symphonia",
+    "resample-rubato",
+    "resample-fft",
+    "analysis-waveform",
+    "client-reqwest",
+    "tls-rustls",
+]
 backend-cpal = ["firewheel/cpal"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
@@ -63,6 +71,8 @@ apple = ["kithara-audio/apple", "resample-rubato"]
 symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia", "resample-rubato"]
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
+resample-fft = ["kithara-audio/resample-fft"]
+analysis-waveform = ["kithara-audio/analysis-waveform"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
 probe = []
