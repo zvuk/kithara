@@ -1,6 +1,6 @@
 use iced::{Task, window};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use kithara::prelude::StretchBackendKind;
+use kithara::prelude::StretchKind;
 
 use super::{app::Kithara, frontend::window_settings, message::Message, widgets::Viewport};
 use crate::gui::widgets::WaveMsg;
@@ -78,7 +78,7 @@ pub(crate) enum DjMsg {
     ToggleKeyLock,
     /// Select the time-stretch backend.
     #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-    SelectBackend(StretchBackendKind),
+    SelectBackend(StretchKind),
 }
 
 pub(crate) fn handle(state: &mut Kithara, msg: &DjMsg) -> Task<Message> {

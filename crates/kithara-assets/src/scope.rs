@@ -4,12 +4,7 @@ use std::sync::Arc;
 
 use url::Url;
 
-use crate::{
-    error::AssetsResult,
-    key::ResourceKey,
-    naming::{AssetScopeDelegate, DefaultAssetScopeDelegate},
-    unified::AssetStore,
-};
+use crate::{error::AssetsResult, key::ResourceKey, layout::AssetLayout, unified::AssetStore};
 
 /// A lightweight handle that holds one `asset_root` over a shared
 /// [`AssetStore`] and mints self-identifying [`ResourceKey`]s under it.
@@ -22,13 +17,14 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct AssetScope {
     asset_root: Arc<str>,
-    delegate: Arc<dyn AssetScopeDelegate>,
+    layout: Arc<dyn AssetLayout>,
     store: AssetStore,
 }
 
 impl AssetScope {
     pub(crate) fn new(store: AssetStore, asset_root: Arc<str>) -> Self {
-        Self::with_delegate(store, asset_root, Arc::new(DefaultAssetScopeDelegate))
+        let layout = Arc::clone(store.layout());
+        Self::with_layout(store, asset_root, layout)
     }
 
     /// The `asset_root` this scope is bound to.
@@ -51,13 +47,10 @@ impl AssetScope {
         ResourceKey::relative(Arc::clone(&self.asset_root), rel_path)
     }
 
-    /// Mint a relative key from a URL under this scope's `asset_root`.
+    /// Mint a relative key for the resource at `url` under this scope's `asset_root`.
     #[must_use]
-    pub fn key_from_url(&self, url: &Url) -> ResourceKey {
-        ResourceKey::relative(
-            Arc::clone(&self.asset_root),
-            self.delegate.rel_path_for_url(url),
-        )
+    pub fn key_for(&self, url: &Url) -> ResourceKey {
+        ResourceKey::relative(Arc::clone(&self.asset_root), self.layout.rel_path(url))
     }
 
     /// The underlying shared store, where per-resource operations live.
@@ -66,14 +59,14 @@ impl AssetScope {
         &self.store
     }
 
-    pub(crate) fn with_delegate(
+    pub(crate) fn with_layout(
         store: AssetStore,
         asset_root: Arc<str>,
-        delegate: Arc<dyn AssetScopeDelegate>,
+        layout: Arc<dyn AssetLayout>,
     ) -> Self {
         Self {
             asset_root,
-            delegate,
+            layout,
             store,
         }
     }

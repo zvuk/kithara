@@ -44,6 +44,7 @@ pub use impls::{
     shared_player_state::PlaybackSnapshot,
     source_type::SourceType,
 };
+pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::{
     AudioWorkerHandle, EngineLoadSnapshot, SeekOutcome, ServiceClass, StretchControls,
 };

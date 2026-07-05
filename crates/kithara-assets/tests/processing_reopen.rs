@@ -13,7 +13,7 @@ use cbc::{
 };
 use kithara_assets::{
     AcquisitionResult, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide, ResourceProcessor,
-    WriteSide,
+    StorageBackend, WriteSide,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::time::Duration;
@@ -133,7 +133,9 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
     let store = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
     let scope = store.scope(ROOT);
@@ -192,7 +194,9 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
     let store = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
     let scope = store.scope(ROOT);
@@ -237,7 +241,9 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
     let store = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
     let scope = store.scope(ROOT);
@@ -281,7 +287,9 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
 fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_bytes() {
     let dir = tempdir().unwrap();
     let store = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
     let scope = store.scope(DRM_ROOT);

@@ -1,7 +1,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
@@ -167,7 +167,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
         let cap =
             NonZeroUsize::new(Consts::SEGMENT_COUNT * Consts::VARIANT_COUNT + 20).expect("nz");
         store.cache_capacity = Some(cap);
-        store.is_ephemeral = true;
+        store.backend = StorageBackend::Memory;
     }
 
     let hls_config = HlsConfig::for_url(url)

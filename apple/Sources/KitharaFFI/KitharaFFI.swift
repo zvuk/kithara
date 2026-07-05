@@ -1757,6 +1757,213 @@ public func FfiConverterTypeAudioPlayerItem_lower(_ value: AudioPlayerItem) -> U
 
 
 /**
+ * Foreign on-disk layout callback: maps a resource URL to a relative path
+ * inside the asset's cache directory. The URL already carries everything a
+ * client scheme encodes (quality, segment number, extension).
+ *
+ * `rel_path` is a pure function - the same URL must always yield the same
+ * path. It runs on arbitrary background threads, must not block and must not
+ * throw; a hostile or empty return is rejected store-side with a typed error
+ * (never silently rewritten).
+ */
+public protocol FfiAssetLayout: AnyObject, Sendable {
+    
+    func relPath(url: String)  -> String
+    
+}
+/**
+ * Foreign on-disk layout callback: maps a resource URL to a relative path
+ * inside the asset's cache directory. The URL already carries everything a
+ * client scheme encodes (quality, segment number, extension).
+ *
+ * `rel_path` is a pure function - the same URL must always yield the same
+ * path. It runs on arbitrary background threads, must not block and must not
+ * throw; a hostile or empty return is rejected store-side with a typed error
+ * (never silently rewritten).
+ */
+open class FfiAssetLayoutImpl: FfiAssetLayout, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_kithara_ffi_fn_clone_ffiassetlayout(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_kithara_ffi_fn_free_ffiassetlayout(handle, $0) }
+    }
+
+    
+
+    
+open func relPath(url: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_ffiassetlayout_rel_path(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(url),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceFfiAssetLayout {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceFfiAssetLayout] = [UniffiVTableCallbackInterfaceFfiAssetLayout(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeFfiAssetLayout.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface FfiAssetLayout: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeFfiAssetLayout.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface FfiAssetLayout: handle missing in uniffiClone")
+            }
+        },
+        relPath: { (
+            uniffiHandle: UInt64,
+            url: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> String in
+                guard let uniffiObj = try? FfiConverterTypeFfiAssetLayout.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.relPath(
+                     url: try FfiConverterString.lift(url)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterString.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )]
+}
+
+private func uniffiCallbackInitFfiAssetLayout() {
+    uniffi_kithara_ffi_fn_init_callback_vtable_ffiassetlayout(UniffiCallbackInterfaceFfiAssetLayout.vtable)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAssetLayout: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<FfiAssetLayout>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiAssetLayout
+
+    public static func lift(_ handle: UInt64) throws -> FfiAssetLayout {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return FfiAssetLayoutImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: FfiAssetLayout) -> UInt64 {
+         if let rustImpl = value as? FfiAssetLayoutImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAssetLayout {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiAssetLayout, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetLayout_lift(_ handle: UInt64) throws -> FfiAssetLayout {
+    return try FfiConverterTypeFfiAssetLayout.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetLayout_lower(_ value: FfiAssetLayout) -> UInt64 {
+    return FfiConverterTypeFfiAssetLayout.lower(value)
+}
+
+
+
+
+
+
+/**
  * Position-dependent symmetric cipher for DRM key decryption.
  *
  * Wraps `kithara_drm::UniqueBinaryCipher` for use from Swift/Kotlin.
@@ -3554,13 +3761,21 @@ public func FfiConverterTypeFfiVariant_lower(_ value: FfiVariant) -> RustBuffer 
 /**
  * Store configuration forwarded from platform layer to resource creation.
  */
-public struct StoreOptions: Equatable, Hashable {
+public struct StoreOptions {
     public let cacheDir: String?
+    /**
+     * Foreign on-disk layout delegate. `None` == the store's default layout.
+     */
+    public let layout: FfiAssetLayout?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(cacheDir: String?) {
+    public init(cacheDir: String?, 
+        /**
+         * Foreign on-disk layout delegate. `None` == the store's default layout.
+         */layout: FfiAssetLayout? = nil) {
         self.cacheDir = cacheDir
+        self.layout = layout
     }
 
     
@@ -3579,12 +3794,14 @@ public struct FfiConverterTypeStoreOptions: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> StoreOptions {
         return
             try StoreOptions(
-                cacheDir: FfiConverterOptionString.read(from: &buf)
+                cacheDir: FfiConverterOptionString.read(from: &buf), 
+                layout: FfiConverterOptionTypeFfiAssetLayout.read(from: &buf)
         )
     }
 
     public static func write(_ value: StoreOptions, into buf: inout [UInt8]) {
         FfiConverterOptionString.write(value.cacheDir, into: &buf)
+        FfiConverterOptionTypeFfiAssetLayout.write(value.layout, into: &buf)
     }
 }
 
@@ -4757,6 +4974,30 @@ fileprivate struct FfiConverterOptionTypeAudioPlayerItem: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeFfiAssetLayout: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAssetLayout?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiAssetLayout.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiAssetLayout.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeFfiAbrMode: FfiConverterRustBuffer {
     typealias SwiftType = FfiAbrMode?
 
@@ -5102,6 +5343,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_uuid_i64() != 18592) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_ffiassetlayout_rel_path() != 60234) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 2649) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5241,6 +5485,7 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
 
+    uniffiCallbackInitFfiAssetLayout()
     uniffiCallbackInitFfiKeyProcessor()
     uniffiCallbackInitItemLoadCallback()
     uniffiCallbackInitItemObserver()

@@ -29,7 +29,7 @@ impl Consts {
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
 )]
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
-    use kithara::assets::StoreOptions;
+    use kithara::assets::{StorageBackend, StoreOptions};
     use kithara_integration_tests::{
         create_wav_exact_bytes,
         hls_server::{HlsTestServer, HlsTestServerConfig},
@@ -60,7 +60,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     .await;
     let temp = temp_dir();
     let mut store = StoreOptions::new(temp.path());
-    store.is_ephemeral = true;
+    store.backend = StorageBackend::Memory;
     store.cache_capacity = Some(std::num::NonZeroUsize::new(4).expect("nonzero"));
     store.max_assets = Some(8);
     let hls_url = hls_server.url("/master.m3u8");

@@ -1,4 +1,7 @@
-use crate::blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer};
+use crate::{
+    blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer},
+    region::GridSegment,
+};
 
 /// Cleaned beat grid for one track. All positions are source frames
 /// (decoder/song time, `PcmMeta.frame_offset` space) — never output/stretched
@@ -63,11 +66,11 @@ impl Blob for BeatGrid {
         let segment_count = r.read_len()?;
         let mut segments = Vec::with_capacity(segment_count.min(MAX_PREALLOC));
         for _ in 0..segment_count {
-            segments.push(GridSegment {
-                start_frame: r.read_u64()?,
-                end_frame: r.read_u64()?,
-                ratio_correction: read_finite(r)?,
-            });
+            segments.push(GridSegment::new(
+                r.read_u64()?,
+                r.read_u64()?,
+                read_finite(r)?,
+            ));
         }
         Ok(Self {
             beats,
@@ -103,34 +106,12 @@ fn read_finite(r: &mut Reader<'_>) -> Result<f64, BlobError> {
     }
 }
 
-/// One uniform-tempo region of the grid: `[start_frame, end_frame)` in
-/// source frames with a single time-stretch ratio correction.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[non_exhaustive]
-pub struct GridSegment {
-    /// `nominal_bar / fitted_bar`; 1.0 = the region already sits on the grid.
-    pub ratio_correction: f64,
-    pub end_frame: u64,
-    pub start_frame: u64,
-}
-
-impl GridSegment {
-    /// Construct a segment; see [`BeatGrid::new`] for why this exists.
-    #[must_use]
-    pub fn new(start_frame: u64, end_frame: u64, ratio_correction: f64) -> Self {
-        Self {
-            ratio_correction,
-            end_frame,
-            start_frame,
-        }
-    }
-}
-
 #[cfg(test)]
 mod bytes_tests {
     use kithara_test_utils::kithara;
 
-    use super::{BeatGrid, BlobError, GridSegment};
+    use super::{BeatGrid, BlobError};
+    use crate::region::GridSegment;
 
     fn sample() -> BeatGrid {
         BeatGrid {
@@ -138,16 +119,8 @@ mod bytes_tests {
             beats: vec![0, 22_050, 44_100, 66_150],
             downbeats: vec![0, 88_200],
             segments: vec![
-                GridSegment {
-                    start_frame: 0,
-                    end_frame: 88_200,
-                    ratio_correction: 1.02,
-                },
-                GridSegment {
-                    start_frame: 88_200,
-                    end_frame: 176_400,
-                    ratio_correction: 0.98,
-                },
+                GridSegment::new(0, 88_200, 1.02),
+                GridSegment::new(88_200, 176_400, 0.98),
             ],
         }
     }

@@ -119,9 +119,8 @@ fn main() -> AppResult {
     let asset_store = Arc::new(
         AssetStoreBuilder::default()
             .cancel(shutdown.child())
-            .root_dir(&store_options.cache_dir)
+            .backend(store_options.backend.clone())
             .evict_config(EvictConfig::from(&store_options))
-            .ephemeral(store_options.is_ephemeral)
             .pool(byte_pool.clone())
             .maybe_cache_capacity(store_options.cache_capacity)
             .maybe_flush_hub(store_options.flush_hub.clone())

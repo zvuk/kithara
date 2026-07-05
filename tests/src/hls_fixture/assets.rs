@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::assets::StorageBackend;
 use kithara::{
     assets::{AssetScope, AssetStore, AssetStoreBuilder},
     hls::{KeyStore, PlaylistCache},
@@ -44,7 +46,9 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let temp_dir = Arc::new(temp_dir);
 
     let assets = AssetStoreBuilder::default()
-        .root_dir(temp_dir.path().to_path_buf())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
         .evict_config(EvictConfig::default())
         .cancel(CancelToken::never())
         .build();

@@ -4,7 +4,8 @@ use kithara::{
     self,
     assets::{
         AcquisitionResult, AssetResourceState, AssetStoreBuilder, BytePool, ChunkSink,
-        DiskAssetStore, EvictConfig, ProcessCtx, ReadSide, ResourceProcessor, WriteSide,
+        DiskAssetStore, EvictConfig, ProcessCtx, ReadSide, ResourceProcessor, StorageBackend,
+        WriteSide,
     },
     platform::{CancelToken, time::Duration},
 };
@@ -76,7 +77,9 @@ fn load_pins(root_dir: &Path) -> HashSet<String> {
 fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
     let dir = tempdir().unwrap();
     let scope = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .build()
         .scope("disk-asset");
 
@@ -125,7 +128,9 @@ fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
 fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
     let dir = tempdir().unwrap();
     let scope = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build()
         .scope("disk-asset");
@@ -154,7 +159,9 @@ fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
 fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
     let dir = tempdir().unwrap();
     let scope = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build()
         .scope("disk-asset");
@@ -180,7 +187,9 @@ fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
 fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
     let dir = tempdir().unwrap();
     let scope = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build()
         .scope("disk-asset");
@@ -219,7 +228,7 @@ fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
 fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
     let scope = AssetStoreBuilder::default()
         .cache_capacity(NonZeroUsize::new(3).unwrap())
-        .ephemeral(true)
+        .backend(StorageBackend::Memory)
         .build()
         .scope("mem-asset");
 
@@ -293,7 +302,9 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     };
 
     let scope_a = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .evict_config(evict.clone())
         .build()
         .scope("asset-a");
@@ -336,7 +347,9 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     assert_eq!(processed, vec![0x45, 0x75, 0x65]);
 
     let scope_b = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .evict_config(evict.clone())
         .build()
         .scope("asset-b");
@@ -364,7 +377,9 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     );
 
     let scope_c = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .evict_config(evict.clone())
         .build()
         .scope("asset-c");
@@ -380,7 +395,9 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     drop(res_c);
 
     let scope_a_probe = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .evict_config(evict.clone())
         .build()
         .scope("asset-a");

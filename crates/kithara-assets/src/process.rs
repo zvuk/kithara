@@ -566,7 +566,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        AssetStoreBuilder,
+        AssetStoreBuilder, StorageBackend,
         base::{BaseReader, BaseWriter},
     };
 
@@ -963,7 +963,9 @@ mod tests {
     /// an uncommitted DRM-style entry whose read trips the pre-commit guard.
     #[kithara::test]
     fn open_resource_none_ctx_does_not_leak_precommit_guard() {
-        let store = AssetStoreBuilder::default().ephemeral(true).build();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build();
         let key = ResourceKey::relative("drm-fallthrough", "segment.m4s");
         let proc: ProcessCtx = xor_chunk_processor(0x42, Arc::new(AtomicUsize::new(0)));
 

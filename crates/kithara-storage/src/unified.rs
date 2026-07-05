@@ -7,11 +7,11 @@ use std::{
 };
 
 use crate::{
-    AtomicChunked, MemDriver, MemResource, ResourceRead, StorageResult,
+    AtomicChunked, MemDriver, MemResource, StorageResult,
     resource::{ResourceStatus, WaitOutcome},
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::{MmapDriver, MmapResource};
+use crate::{MmapDriver, MmapResource, ResourceRead};
 
 /// Unified resource: disk (mmap) or memory backend.
 ///

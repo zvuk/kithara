@@ -8,7 +8,7 @@ use std::{
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide,
+        AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, StorageBackend, WriteSide,
         index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
     },
     platform::time::Duration,
@@ -102,7 +102,9 @@ fn read_archived_availability(path: &Path, asset_root: &str, key: &str) -> Archi
 
 fn build_scope(temp_dir: &kithara_integration_tests::TestTempDir, asset_root: &str) -> AssetScope {
     AssetStoreBuilder::default()
-        .root_dir(temp_dir.path())
+        .backend(StorageBackend::Disk {
+            root: (temp_dir.path()).into(),
+        })
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,

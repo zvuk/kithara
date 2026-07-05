@@ -6,6 +6,7 @@ pub(crate) mod bridge;
 pub mod cipher;
 pub(crate) mod config;
 pub(crate) mod inner;
+pub(crate) mod layout;
 pub mod logging;
 mod runtime;
 pub mod salt;

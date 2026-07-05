@@ -3,13 +3,13 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     hls::{Hls, HlsConfig},
-    platform::{thread, time::Duration, tokio::task::spawn_blocking},
+    platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
+use kithara_integration_tests::{TestServerHelper, auto, flash_pace::virtual_pace};
 use tracing::info;
 
 struct Consts;
@@ -31,13 +31,12 @@ impl Consts {
     timeout(Duration::from_secs(30)),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info,suite_stress=info")
 )]
-async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) {
+async fn red_flaky_small_cache_hot_refetch_behind_reader() {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(1).expect("nonzero"))
         .build();
 
@@ -69,7 +68,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
                 Ok(ChunkOutcome::Chunk(_)) => chunks_read += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => {
-                    thread::sleep(Duration::from_micros(100));
+                    virtual_pace(Duration::from_micros(100));
                 }
                 Err(e) => panic!("warmup decode error: {e}"),
             }
@@ -84,13 +83,13 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
                     drained += 1;
                     // Load-bearing pacing: the reader must lag the network so
                     // the cap=1 LRU evicts segments behind/under the reader.
-                    thread::sleep(Duration::from_millis(Consts::READER_SLEEP_MS));
+                    virtual_pace(Duration::from_millis(Consts::READER_SLEEP_MS));
                 }
                 Ok(ChunkOutcome::Eof { .. }) => {
                     reached_eof = true;
                 }
                 Ok(ChunkOutcome::Pending { .. }) => {
-                    thread::sleep(Duration::from_micros(100));
+                    virtual_pace(Duration::from_micros(100));
                 }
                 Err(e) => panic!("drain decode error: {e}"),
             }

@@ -459,11 +459,7 @@ fn scan_mp4_fragment_hint(reader: &mut dyn DecoderInput) -> Result<bool, Mp4Meta
     while let Some(header) = next_box(reader, None)? {
         match header.kind {
             Consts::BOX_MOOF => return Ok(true),
-            Consts::BOX_MOOV => {
-                if scan_moov_for_mvex(reader, header.end)? {
-                    return Ok(true);
-                }
-            }
+            Consts::BOX_MOOV if scan_moov_for_mvex(reader, header.end)? => return Ok(true),
             _ => {}
         }
         reader.seek(SeekFrom::Start(header.end))?;

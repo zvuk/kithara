@@ -44,7 +44,7 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -56,7 +56,6 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    TestTempDir,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
@@ -127,11 +126,8 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
     // Withhold the BODY of GATED_SEGMENT; its HEAD (size) stays open so the
     // up-front layout is complete and the worker reaches the boundary.
     let (server, gate) = HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await;
-    let temp_dir = TestTempDir::new();
-
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(SEGMENT_COUNT + 10).expect("nonzero"))
         .build();
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))

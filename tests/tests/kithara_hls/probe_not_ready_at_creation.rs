@@ -41,7 +41,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig},
     hls::{Hls, HlsConfig},
     net::{NetOptions, RetryPolicy},
@@ -53,7 +53,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    TestTempDir, auto,
+    auto,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
@@ -90,10 +90,9 @@ fn fixture_config() -> HlsTestServerConfig {
     }
 }
 
-fn audio_config(server: &HlsTestServer, temp_dir: &TestTempDir) -> AudioConfig<Hls> {
+fn audio_config(server: &HlsTestServer) -> AudioConfig<Hls> {
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
     // Short stall + bounded retries so a withheld body settles the segment
@@ -153,10 +152,8 @@ async fn audio_new_bounded_failure_when_first_segment_withheld() {
     // decoder probe's read window then spills past the init into the withheld
     // body, which the blocking read waits the full budget for and then fails.
     let (server, _gate) = HlsTestServer::with_segment_gate(fixture_config(), 0, 0).await;
-    let temp_dir = TestTempDir::new();
-
     let started = Instant::now();
-    let result = Audio::<Stream<Hls>>::new(audio_config(&server, &temp_dir)).await;
+    let result = Audio::<Stream<Hls>>::new(audio_config(&server)).await;
     let elapsed = started.elapsed();
 
     let err = result
@@ -206,8 +203,6 @@ async fn audio_new_bounded_failure_when_first_segment_withheld() {
 )]
 async fn audio_new_succeeds_when_first_segment_released_during_probe() {
     let (server, gate) = HlsTestServer::with_segment_gate(fixture_config(), 0, 0).await;
-    let temp_dir = TestTempDir::new();
-
     // Release the body as soon as its GET reaches the gate (no timer): the
     // construction probe must then await the data and build the decoder.
     let release_gate = gate.clone();
@@ -226,7 +221,7 @@ async fn audio_new_succeeds_when_first_segment_released_during_probe() {
         }
     });
 
-    let result = Audio::<Stream<Hls>>::new(audio_config(&server, &temp_dir)).await;
+    let result = Audio::<Stream<Hls>>::new(audio_config(&server)).await;
     releaser.await.expect("releaser joins");
 
     assert!(

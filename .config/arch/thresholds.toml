@@ -461,6 +461,12 @@ export_attrs = ["no_mangle", "export_name", "wasm_bindgen", "uniffi"]
 #   notifications for *_internal ordering assertions; the public PlayerEvent bus
 #   path consumes-and-converts, losing the raw-notification granularity these
 #   tests assert.
+#   test_session: cfg(test)-only NoopBackend session dispatcher injected through
+#   PlayerConfig::session so engine-starting player unit tests never open the
+#   real CoreAudio device; production always resolves the process-wide cpal
+#   session_client — no production reader by design. Shared by the core.rs and
+#   queue.rs test modules, so it cannot relocate into either without
+#   duplicating the backend mock.
 exempt = [
   "advance_to_next_item",
   "ensure_thread_pool",
@@ -469,6 +475,7 @@ exempt = [
   "track_mut",
   "try_pop_notification",
   "drain_notifications",
+  "test_session",
 ]
 # Path fragments whose defs `--fix` must never auto-delete: platform-gated
 # module dirs whose callers live in cfg-disabled or non-Rust (JNI) code the

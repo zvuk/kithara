@@ -17,6 +17,7 @@ pub mod effects;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 mod pipeline;
+mod region;
 mod resampler;
 mod runtime;
 mod traits;
@@ -29,9 +30,7 @@ pub use blob::BlobError;
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
-pub use effects::timestretch::{
-    RegionPlan, RegionPlanError, StretchBackendKind, TimeStretchProcessor,
-};
+pub use effects::timestretch::{StretchKind, TimeStretchProcessor};
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     timestretch::StretchControls,
@@ -40,6 +39,7 @@ pub use pipeline::{
     config::AudioConfig,
     fetch::{EpochValidator, Fetch},
 };
+pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,

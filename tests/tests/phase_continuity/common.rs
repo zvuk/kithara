@@ -191,6 +191,11 @@ where
     }
 }
 
+#[kithara::flash(true)]
+async fn consumer_pace(duration: Duration) {
+    sleep(duration).await;
+}
+
 /// Check phase continuity vs the **previous** scan, not a fixed anchor.
 ///
 /// "Continuity" = no sudden glitch (sample drop, fragment skip, decoder
@@ -393,7 +398,7 @@ where
                 break;
             };
             if let Some(p) = pace {
-                sleep(p).await;
+                consumer_pace(p).await;
             }
             let frames_this_read = (n / chan) as u64;
             if consumed >= next_scan_at {

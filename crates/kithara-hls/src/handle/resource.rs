@@ -37,6 +37,11 @@ impl ResourceHandle {
         &self.url
     }
 
+    /// The pre-minted [`ResourceKey`] for this resource.
+    pub(crate) fn key(&self) -> &ResourceKey {
+        &self.key
+    }
+
     /// Open the resource and copy `range` into `dst`. `Ok(None)` means the
     /// resource is not on disk yet (`NotFound`) — the caller treats that as a
     /// pending read.

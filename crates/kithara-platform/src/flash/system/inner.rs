@@ -5,6 +5,7 @@ use std::{
         Arc, LazyLock, OnceLock, Weak,
         atomic::{AtomicU64, Ordering},
     },
+    thread::Thread,
 };
 
 use super::{pace::Pacer, sched::Entry, wake::Wake};
@@ -197,6 +198,13 @@ pub(in crate::flash) struct Scheduler {
     /// The pace limit is `anchor_virtual + (real_now - anchor_real)`; cleared
     /// when the last op completes so full-speed collapse resumes at once.
     pub(super) pace_anchor: Option<(RealInstant, u64)>,
+    /// Pacer thread handle published by `pace_run` before its first park.
+    /// Scheduler defer edges use it for lock-free wakeups from under `core`.
+    pub(super) pacer_wake: Option<Thread>,
+    /// Test-only count of pacer park returns. It proves event-driven pacing does
+    /// not poll at a fixed interval while real I/O is in flight.
+    #[cfg(test)]
+    pub(super) pacer_wake_count: usize,
     /// Test-only oracle: the sequence of clock values the engine jumped
     /// to, recorded under the `core` lock alongside each advance. Proves
     /// min-jump, tie-batching (fewer entries than waiters), and determinism
@@ -238,6 +246,9 @@ impl Core {
                 notify_permits: BTreeSet::new(),
                 real_io: 0,
                 pace_anchor: None,
+                pacer_wake: None,
+                #[cfg(test)]
+                pacer_wake_count: 0,
                 #[cfg(test)]
                 advance_log: Vec::new(),
             },
@@ -254,8 +265,8 @@ impl Core {
 pub(in crate::flash) struct FlashInner {
     /// The ONE engine lock (former global `SCHED`).
     pub(super) core: Mutex<Core>,
-    /// Real-I/O pacer state + its lazily-spawned eternal thread. Lock order:
-    /// `pacer.armed` is taken BEFORE `core`, never the other way.
+    /// Real-I/O pacer state + its lazily-spawned eternal thread. The scheduler
+    /// wakes it lock-free via `Thread::unpark` from under `core`.
     pub(super) pacer: Pacer,
     pub(in crate::flash) clock: Clock,
 }
@@ -282,12 +293,15 @@ impl FlashInner {
     /// in-process test harness; nextest gives production tests per-process
     /// isolation). Order matters: store the base first, then drop the engine
     /// state, so afterwards the clock reads `Instant::BASE_NANOS` and the
-    /// engine is empty. Deliberately untouched (exactly as before W2): the
-    /// pacer's `armed` flag (disarmed only by `real_io_exit`), the real-clock
-    /// anchor, and the per-thread credit cells (separate `reset_credit()`).
+    /// engine is empty. Deliberately untouched: the pacer's published wake
+    /// handle, the real-clock anchor, and the per-thread credit cells (separate
+    /// `reset_credit()`).
     pub(in crate::flash) fn reset(&self) {
         self.clock.reset();
-        *self.core.lock() = Core::new();
+        let mut core = self.core.lock();
+        let wake = core.sched.pacer_wake.take();
+        *core = Core::new();
+        core.sched.pacer_wake = wake;
     }
 }
 

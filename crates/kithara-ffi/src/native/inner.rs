@@ -4,7 +4,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
-    assets::BytePool,
+    assets::{AssetLayout, BytePool},
     audio::generate_log_spaced_bands,
     hls::{KeyOptions, KeyProcessorRegistry, KeyProcessorRule},
     net::{HttpClient, NetOptions},
@@ -189,6 +189,9 @@ pub(crate) struct NativeInner {
     peak_bitrate: Mutex<PeakBitrate>,
     /// Shared storage options (cache dir, etc.) applied to every item.
     store: StoreOptions,
+    /// Shared on-disk layout resolved once from [`StoreOptions::layout`].
+    /// `None` keeps the store's `DefaultLayout`.
+    layout: Option<Arc<dyn AssetLayout>>,
 }
 
 impl NativeInner {
@@ -209,6 +212,7 @@ impl NativeInner {
         );
         let (key_options, player_headers) = build_initial_key_state(config.key_options);
         let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
+        let layout = super::layout::resolve_layout(config.store.layout.as_ref());
         Self {
             downloader,
             byte_pool,
@@ -218,6 +222,7 @@ impl NativeInner {
             peak_bitrate: Mutex::default(),
             queue: Arc::new(Queue::new(queue_config)),
             store: config.store,
+            layout,
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
@@ -598,7 +603,7 @@ fn build_source_for_item(
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();
 
-    native_config::configure_resource(&mut config, &inner.store);
+    native_config::configure_resource(&mut config, &inner.store, inner.layout.as_ref());
     *item.bus.lock() = Some(scoped);
 
     Ok(TrackSource::Config(Box::new(config)))

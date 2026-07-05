@@ -12,14 +12,13 @@ pub enum StretchBackendError {
     Param(String),
 }
 
-/// DSP-only time-stretch backend living behind the single
-/// [`TimeStretchProcessor`](super::super::TimeStretchProcessor) slot.
+/// DSP-only time-stretch backend living behind an audio graph processor.
 ///
 /// Interleaved f32 in/out; the processor owns all `PcmChunk` / pool /
 /// timeline plumbing so each library adapter stays tiny. Tempo
 /// ([`set_ratio`](Self::set_ratio)) and pitch
 /// ([`set_pitch`](Self::set_pitch)) are independent — that decoupling is
-/// what makes keylock real. See `crates/kithara-audio/CONTEXT.md`.
+/// what makes keylock real. See this crate's `CONTEXT.md`.
 pub trait StretchBackend: Send + 'static {
     /// Drain the buffered tail at end of stream. One-shot: once the tail is
     /// drained, further calls (until the next `process` or `reset`) must

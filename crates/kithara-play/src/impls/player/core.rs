@@ -620,7 +620,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{impls::player_processor::PlayerCmd, types::SlotId};
+    use crate::{
+        impls::{player_processor::PlayerCmd, session::testing},
+        types::SlotId,
+    };
 
     #[derive(Clone, Copy)]
     enum PlayerBasicScenario {
@@ -880,7 +883,10 @@ mod tests {
 
     #[kithara::test]
     fn timestretch_is_address_stable_across_play_pause() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+        let player = PlayerImpl::new(PlayerConfig {
+            session: Some(testing::test_session()),
+            ..PlayerConfig::default()
+        });
         let ptr_before = Arc::as_ptr(&player.core.config.timestretch);
         player.play();
         player.pause();

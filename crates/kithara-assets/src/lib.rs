@@ -17,6 +17,7 @@ mod flush;
 mod identity;
 pub mod index;
 mod key;
+mod layout;
 mod lease;
 mod mem_store;
 mod naming;
@@ -41,16 +42,16 @@ pub use index::{DemandLease, EvictConfig, ProducerHandle};
 pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
 pub use kithara_bufpool::BytePool;
+pub use layout::{AssetLayout, DefaultLayout};
 pub use lease::{LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter};
 pub use mem_store::MemAssetStore;
-pub use naming::{
-    AssetScopeDelegate, DefaultAssetScopeDelegate, safe_path_component, url_fingerprint,
-};
 pub use process::{
     ChunkSink, ProcessCtx, ProcessedReader, ProcessedWriter, ProcessingAssets, ResourceProcessor,
 };
 pub use resource::{BaseReader, BaseWriter};
 pub use scope::AssetScope;
 pub use state::AssetResourceState;
-pub use store::{AssetReader, AssetResource, AssetStoreBuilder, AssetWriter, StoreOptions};
+pub use store::{
+    AssetReader, AssetResource, AssetStoreBuilder, AssetWriter, StorageBackend, StoreOptions,
+};
 pub use unified::AssetStore;

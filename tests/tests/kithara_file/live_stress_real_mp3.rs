@@ -6,7 +6,7 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::PcmChunk,
     events::{DownloaderEvent, Event, FileEvent},
@@ -119,7 +119,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     let url = server.asset("track.mp3");
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
-        store.is_ephemeral = true;
+        store.backend = StorageBackend::Memory;
         store.cache_capacity = Some(NonZeroUsize::new(8).expect("nonzero"));
         store.max_assets = Some(10);
     }

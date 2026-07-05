@@ -5,7 +5,9 @@
 //! returned guard deregisters, so no further keys arrive.
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_assets::{AcquisitionResult, AssetStore, AssetStoreBuilder, ResourceKey, WriteSide};
+use kithara_assets::{
+    AcquisitionResult, AssetStore, AssetStoreBuilder, ResourceKey, StorageBackend, WriteSide,
+};
 use kithara_platform::{time::Duration, tokio::sync::mpsc};
 use kithara_test_utils::kithara;
 
@@ -14,7 +16,7 @@ const ROOT_B: &str = "asset_root_b";
 
 fn ephemeral_store(cap: usize) -> AssetStore {
     AssetStoreBuilder::default()
-        .ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(cap).expect("test cache capacity must be non-zero"))
         .build()
 }

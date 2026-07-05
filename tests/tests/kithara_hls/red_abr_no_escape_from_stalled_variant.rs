@@ -42,7 +42,7 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
@@ -50,7 +50,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, auto, fixture_protocol::DelayRule, temp_dir,
+    HlsFixtureBuilder, TestServerHelper, auto, fixture_protocol::DelayRule,
 };
 
 struct Consts;
@@ -97,10 +97,8 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         .expect("create HLS fixture")
         .master_url();
 
-    let temp = temp_dir();
     let store = StoreOptions::builder()
-        .cache_dir(temp.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(64).expect("nonzero"))
         .build();
 

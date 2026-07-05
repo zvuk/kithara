@@ -13,7 +13,7 @@ use kithara::assets::EvictConfig;
 use kithara::{
     assets::{
         AcquisitionResult, AssetScope, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide,
-        ResourceProcessor, WriteSide,
+        ResourceProcessor, StorageBackend, WriteSide,
     },
     platform::time::Duration,
 };
@@ -87,7 +87,9 @@ fn build_test_processing_scope(
     #[cfg(not(target_arch = "wasm32"))]
     {
         builder
-            .root_dir(temp_dir.path())
+            .backend(StorageBackend::Disk {
+                root: (temp_dir.path()).into(),
+            })
             .evict_config(EvictConfig {
                 max_assets: None,
                 max_bytes: None,
@@ -98,7 +100,10 @@ fn build_test_processing_scope(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
-        builder.ephemeral(true).build().scope(asset_root)
+        builder
+            .backend(StorageBackend::Memory)
+            .build()
+            .scope(asset_root)
     }
 }
 
@@ -109,7 +114,9 @@ fn build_test_scope_no_processing(
     #[cfg(not(target_arch = "wasm32"))]
     {
         AssetStoreBuilder::default()
-            .root_dir(temp_dir.path())
+            .backend(StorageBackend::Disk {
+                root: (temp_dir.path()).into(),
+            })
             .evict_config(EvictConfig {
                 max_assets: None,
                 max_bytes: None,
@@ -121,7 +128,7 @@ fn build_test_scope_no_processing(
     {
         let _ = temp_dir;
         AssetStoreBuilder::default()
-            .ephemeral(true)
+            .backend(StorageBackend::Memory)
             .build()
             .scope(asset_root)
     }

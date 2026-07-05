@@ -591,7 +591,7 @@ impl<S> Audio<S> {
                     let interpolated = u128::from(start_ns).saturating_add(consumed_ns_offset);
                     let interpolated_ns = u64::try_from(interpolated).unwrap_or(u64::MAX);
                     self.playhead
-                        .set_position(Duration::from_nanos(interpolated_ns));
+                        .advance_partial(Duration::from_nanos(interpolated_ns));
                 }
             }
 
@@ -732,6 +732,32 @@ impl<S> Audio<S> {
         }
     }
 
+    fn stage_post_seek_fetch(&mut self, fetch: Fetch<PcmChunk>, epoch: u64) {
+        debug_assert_eq!(
+            fetch.epoch, epoch,
+            "PCM ring preserved a fetch from a future seek epoch"
+        );
+        // Decoder emits a terminal marker as the last item for its epoch, so
+        // staging EOF/failure cannot hide same-epoch PCM behind it.
+        match fetch.kind {
+            FetchKind::Data => {
+                let chunk = fetch.into_inner();
+                self.spec = chunk.spec();
+                self.current_chunk = Some(chunk);
+                self.current_chunk_consumed_frames = 0;
+                self.consumer_phase = ConsumerPhase::Playing;
+            }
+            FetchKind::NaturalEof => {
+                self.consumer_phase = ConsumerPhase::AtEof;
+                self.discard_chunk(fetch.into_inner());
+            }
+            FetchKind::Failure => {
+                self.consumer_phase = ConsumerPhase::Failed;
+                self.discard_chunk(fetch.into_inner());
+            }
+        }
+    }
+
     /// Seek to position in the audio stream.
     ///
     /// This method never blocks. Seek coordination flows entirely through
@@ -768,8 +794,14 @@ impl<S> Audio<S> {
         self.consumer_phase = ConsumerPhase::SeekPending { epoch };
 
         while let Some(fetch) = self.pcm_rx.try_pop() {
-            self.discard_chunk(fetch.into_inner());
-            hang_tick!();
+            if fetch.epoch < epoch {
+                self.discard_chunk(fetch.into_inner());
+                hang_tick!();
+                continue;
+            }
+
+            self.stage_post_seek_fetch(fetch, epoch);
+            break;
         }
 
         if let Some(ref worker) = self.worker {
@@ -1791,7 +1823,25 @@ mod tests {
         let mut chunk = PcmChunk::default();
         chunk.samples.clear();
         chunk.samples.extend_from_slice(samples);
+        chunk.meta.spec.channels = 1;
+        chunk.meta.frames = u32::try_from(samples.len()).unwrap_or(u32::MAX);
         chunk
+    }
+
+    fn make_timed_chunk(spec: PcmSpec, frames: u32, start: Duration, end: Duration) -> PcmChunk {
+        let channels = usize::from(spec.channels.max(1));
+        let frame_count = usize::try_from(frames).expect("test frame count fits usize");
+        let samples = vec![0.5; frame_count * channels];
+        PcmChunk::new(
+            PcmMeta {
+                spec,
+                timestamp: start,
+                end_timestamp: end,
+                frames,
+                ..Default::default()
+            },
+            PcmPool::default().attach(samples),
+        )
     }
 
     #[kithara::test]
@@ -1809,6 +1859,33 @@ mod tests {
 
         assert!(audio.fill_buffer());
         assert_eq!(audio.consumer_phase, ConsumerPhase::Playing);
+    }
+
+    #[kithara::test]
+    fn partial_resampled_chunk_position_caps_at_duration() {
+        let (mut audio, mut tx) = audio_with_channel();
+        let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
+        let duration = Duration::from_nanos(36_360_000_000);
+        let chunk = make_timed_chunk(
+            spec,
+            148,
+            duration.saturating_sub(Duration::from_millis(2)),
+            duration.saturating_add(Duration::from_millis(2)),
+        );
+
+        audio.playhead.set_duration(Some(duration));
+        tx.try_push(Fetch::new(chunk, false, 0))
+            .expect("chunk reaches test ring");
+
+        let mut buf = vec![0.0f32; 200];
+        let outcome = audio.read(&mut buf).expect("partial read succeeds");
+        let ReadOutcome::Frames { count, position } = outcome else {
+            panic!("expected frames from partial resampled chunk");
+        };
+
+        assert_eq!(count.get(), 200);
+        assert_eq!(position, duration);
+        assert_eq!(audio.current_chunk_consumed_frames, 100);
     }
 
     #[kithara::test]
@@ -1834,6 +1911,42 @@ mod tests {
 
         assert!(audio.fill_buffer());
         assert_eq!(audio.consumer_phase, ConsumerPhase::Playing);
+    }
+
+    #[kithara::test]
+    fn seek_drain_preserves_new_epoch_chunk_after_stale_chunks() {
+        let (mut audio, mut tx) = audio_with_channel();
+
+        let stale = Fetch::new(make_chunk(&[0.1, 0.2]), false, 0);
+        let fresh = Fetch::new(make_chunk(&[0.7, 0.8]), false, 1);
+        assert!(tx.try_push(stale).is_ok());
+        assert!(tx.try_push(fresh).is_ok());
+
+        audio.seek(Duration::from_secs(5)).ok();
+
+        let mut buf = [0.0; 2];
+        let count = match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            other => panic!("expected preserved post-seek frames, got {other:?}"),
+        };
+        assert_eq!(count, 2);
+        assert_eq!(buf, [0.7, 0.8]);
+    }
+
+    #[kithara::test]
+    fn seek_drain_preserves_new_epoch_eof_after_stale_chunks() {
+        let (mut audio, mut tx) = audio_with_channel();
+
+        let stale = Fetch::new(make_chunk(&[0.1, 0.2]), false, 0);
+        let eof = Fetch::new(PcmChunk::default(), true, 1);
+        assert!(tx.try_push(stale).is_ok());
+        assert!(tx.try_push(eof).is_ok());
+
+        audio.seek(Duration::from_secs(5)).ok();
+
+        let mut buf = [0.0; 2];
+        assert!(matches!(audio.read(&mut buf), Ok(ReadOutcome::Eof { .. })));
+        assert_eq!(audio.consumer_phase, ConsumerPhase::AtEof);
     }
 
     #[kithara::test]

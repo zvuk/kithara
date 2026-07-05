@@ -337,7 +337,7 @@ mod tests {
 
     // The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
-        assets::{AssetResourceState, AssetStore, AssetStoreBuilder},
+        assets::{AssetResourceState, AssetStore, AssetStoreBuilder, StorageBackend},
         audio::{BeatGrid, GridSegment, Waveform},
         prelude::ResourceConfig,
     };
@@ -382,7 +382,11 @@ mod tests {
     }
 
     fn store_in(dir: &Path) -> Arc<AssetStore> {
-        Arc::new(AssetStoreBuilder::default().root_dir(dir).build())
+        Arc::new(
+            AssetStoreBuilder::default()
+                .backend(StorageBackend::Disk { root: dir.into() })
+                .build(),
+        )
     }
 
     fn cache_over(store: &Arc<AssetStore>) -> TrackAnalysisCache {
