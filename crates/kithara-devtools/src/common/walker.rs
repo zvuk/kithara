@@ -84,6 +84,7 @@ pub fn workspace_text_files_scoped(workspace_root: &Path, scope: &Scope) -> Resu
     let mut out = git_tracked_files(workspace_root)?;
     out.retain(|path| {
         is_lint_text_file(path)
+            && !is_symlink(path)
             && !excludes.matches(path)
             && scoped_path_match(workspace_root, scope, path)
     });
@@ -137,6 +138,14 @@ fn scoped_path_match(workspace_root: &Path, scope: &Scope, path: &Path) -> bool 
         .to_string_lossy()
         .replace('\\', "/");
     scope.key_in_scope(&rel)
+}
+
+// Symlinked docs are pointers; their content is scanned at the real path,
+// and relative links only resolve there.
+fn is_symlink(path: &Path) -> bool {
+    path.symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 fn is_lint_text_file(path: &Path) -> bool {

@@ -16,7 +16,7 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Minimal magic and hidden dependencies.
 - Predictability, testability, and reproducibility.
 - Components should stay loosely coupled and replaceable.
-- Code is the source of truth. Each crate keeps `README.md` as an overview; longer contracts and invariants belong in the owning crate `CONTEXT.md`, and project-wide architecture lives in the root `CONTEXT.md`.
+- Code is the source of truth. Each crate keeps `README.md` as an overview; longer contracts and invariants belong in the owning crate `CONTEXT.md`, and project-wide architecture lives in `crates/kithara/CONTEXT.md` (symlinked from the root `CONTEXT.md`).
 
 ## Non-Negotiables
 
