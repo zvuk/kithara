@@ -1,4 +1,4 @@
-use std::{future::Future, marker::PhantomData};
+use std::{future::Future, marker::PhantomData, panic::Location};
 
 pub type Watched<F> = F;
 pub type PermitPoll<F> = F;
@@ -31,6 +31,10 @@ pub fn pause() -> Pause {
 #[inline(always)]
 #[track_caller]
 pub(crate) fn forbid(_what: &'static str) {}
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn forbid_bridged(_spawn_loc: Option<&'static Location<'static>>) {}
 
 #[doc(hidden)]
 #[inline]

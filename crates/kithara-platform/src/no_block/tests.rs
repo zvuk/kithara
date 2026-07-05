@@ -25,7 +25,7 @@ fn spin_for(d: Duration) {
 }
 
 #[test]
-fn budget_flags_cpu_spin() {
+fn budget_flags_over_budget_poll() {
     force_mode(Mode::Panic);
 
     let caught = std::panic::catch_unwind(|| {
@@ -36,8 +36,9 @@ fn budget_flags_cpu_spin() {
     });
     let err = caught.expect_err("over-budget spin poll must panic");
     let msg = err.downcast_ref::<String>().expect("panic payload");
-    assert!(msg.contains("CPU spin"), "got: {msg}");
+    assert!(msg.contains("[no_block]"), "got: {msg}");
     assert!(msg.contains("spin_task"), "got: {msg}");
+    assert!(msg.contains("budget"), "got: {msg}");
 }
 
 #[test]

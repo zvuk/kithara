@@ -24,6 +24,26 @@ pub(super) fn forbidden(
     }
 }
 
+pub(super) fn bridged(
+    task: &'static str,
+    spawned: &'static Location<'static>,
+    spawn_loc: Option<&'static Location<'static>>,
+) {
+    match mode() {
+        Mode::Off => {}
+        Mode::Census => eprintln!(
+            "[no_block][census] BRIDGED sync wait inside async poll of `{task}` \
+             (spawned at {spawned}, flash task {spawn_loc:?}) - in prod this blocks \
+             a runtime worker"
+        ),
+        Mode::Panic => panic!(
+            "[no_block] BRIDGED sync wait inside async poll of `{task}` \
+             (spawned at {spawned}, flash task {spawn_loc:?}) - in prod this blocks \
+             a runtime worker"
+        ),
+    }
+}
+
 pub(super) fn over_budget(
     task: &'static str,
     spawned: &'static Location<'static>,
@@ -31,11 +51,7 @@ pub(super) fn over_budget(
     cpu: Option<Duration>,
     budget: Duration,
 ) {
-    let kind = match cpu {
-        Some(c) if c.as_secs_f64() >= wall.as_secs_f64() * SPIN_CPU_FRACTION => "CPU spin",
-        Some(_) => "blocked wait (lock/sleep/IO)",
-        None => "unclassified (no thread CPU clock)",
-    };
+    let kind = classify(wall, cpu);
     match mode() {
         Mode::Off => {}
         Mode::Census => eprintln!(
@@ -47,5 +63,30 @@ pub(super) fn over_budget(
              (cpu {cpu:?}, budget {budget:?}) - {kind}\n  sanctioned blocking? mark \
              the blocking fn with #[kithara::allow_block]"
         ),
+    }
+}
+
+fn classify(wall: Duration, cpu: Option<Duration>) -> &'static str {
+    match cpu {
+        Some(c) if c.as_secs_f64() >= wall.as_secs_f64() * SPIN_CPU_FRACTION => "CPU spin",
+        Some(_) => "blocked wait (lock/sleep/IO)",
+        None => "unclassified (no thread CPU clock)",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WALL: Duration = Duration::from_millis(50);
+
+    #[test]
+    fn classify_splits_cpu_spin_blocked_and_unclassified() {
+        assert_eq!(classify(WALL, Some(Duration::from_millis(49))), "CPU spin");
+        assert_eq!(
+            classify(WALL, Some(Duration::from_millis(2))),
+            "blocked wait (lock/sleep/IO)"
+        );
+        assert_eq!(classify(WALL, None), "unclassified (no thread CPU clock)");
     }
 }

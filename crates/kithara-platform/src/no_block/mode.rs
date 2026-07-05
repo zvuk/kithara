@@ -3,7 +3,7 @@ use std::cell::Cell;
 use std::{sync::OnceLock, time::Duration};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Mode {
+pub(crate) enum Mode {
     Off,
     Census,
     Panic,
@@ -50,6 +50,6 @@ pub(super) fn blanket_budget() -> Duration {
 }
 
 #[cfg(test)]
-pub(super) fn force_mode(m: Mode) {
+pub(crate) fn force_mode(m: Mode) {
     FORCED.with(|forced| forced.set(Some(m)));
 }

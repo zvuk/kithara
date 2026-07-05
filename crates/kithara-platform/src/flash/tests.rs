@@ -31,6 +31,12 @@ fn guard() -> MutexGuard<'static, ()> {
 }
 
 const NANOS_PER_SEC: u64 = 1_000_000_000;
+#[cfg(feature = "no-block")]
+const NO_BLOCK_BRIDGED_BUDGET_MS: u64 = 10_000;
+#[cfg(feature = "no-block")]
+const NO_BLOCK_ENGINE_WAIT_MS: u64 = 30;
+#[cfg(feature = "no-block")]
+const NO_BLOCK_TIGHT_BUDGET_MS: u64 = 1;
 
 /// Generous real-time bound: every engine test below must return in ~0 real
 /// time because nothing blocks on the wall clock. A bug that stops the engine
@@ -98,6 +104,70 @@ struct NoopWake;
 impl Wake for NoopWake {
     fn wake(self: Arc<Self>) {}
     fn wake_by_ref(self: &Arc<Self>) {}
+}
+
+#[cfg(feature = "no-block")]
+fn poll_once_no_block<F: Future>(fut: F) -> std::task::Poll<F::Output> {
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = Box::pin(fut);
+
+    fut.as_mut().poll(&mut cx)
+}
+
+#[cfg(feature = "no-block")]
+#[test]
+fn no_block_bridged_engine_wait_panics() {
+    let _g = guard();
+    reset();
+    crate::no_block::mode::force_mode(crate::no_block::mode::Mode::Panic);
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let task = crate::no_block::watch_budget(
+        "bridged_engine_wait",
+        NO_BLOCK_BRIDGED_BUDGET_MS,
+        participate(
+            async {
+                crate::thread::park_timeout(Duration::from_millis(NO_BLOCK_ENGINE_WAIT_MS));
+            },
+            Location::caller(),
+        ),
+    );
+
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _ = poll_once_no_block(task);
+    }))
+    .expect_err("bridged engine wait must panic in no-block panic mode");
+    let msg = err
+        .as_ref()
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| err.as_ref().downcast_ref::<&'static str>().copied())
+        .unwrap_or("");
+
+    assert!(msg.contains("BRIDGED"), "panic message: {msg}");
+}
+
+#[cfg(feature = "no-block")]
+#[test]
+fn no_block_permit_poll_suppresses_bridged_wait_and_budget() {
+    let _g = guard();
+    reset();
+    crate::no_block::mode::force_mode(crate::no_block::mode::Mode::Panic);
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let task = crate::no_block::watch_budget(
+        "permitted_bridged_engine_wait",
+        NO_BLOCK_TIGHT_BUDGET_MS,
+        participate(
+            crate::no_block::permit_poll(async {
+                crate::thread::park_timeout(Duration::from_millis(NO_BLOCK_ENGINE_WAIT_MS));
+            }),
+            Location::caller(),
+        ),
+    );
+
+    assert!(poll_once_no_block(task).is_ready());
 }
 
 #[test]
