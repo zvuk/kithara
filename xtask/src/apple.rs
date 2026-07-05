@@ -7,10 +7,14 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+use kithara_devtools::Ctx;
 use plist::Value as PlistValue;
 use regex::Regex;
 
-use crate::{apple_docgen, common::project::ProjectConfig};
+use crate::{
+    apple_docgen,
+    config::{KitharaExt, ReleaseConfig},
+};
 
 /// Module constants for `cargo xtask apple run`. Grouped per the
 /// `style.multiple-private-module-consts` lint.
@@ -288,7 +292,8 @@ pub(crate) enum AppleCommand {
     Release,
 }
 
-pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
+pub(crate) fn run(cmd: AppleCommand, ctx: &Ctx) -> Result<()> {
+    let ext = KitharaExt::from_ctx(ctx)?;
     match cmd {
         AppleCommand::Build { profile, target } => run_build(profile, target.as_deref()),
         AppleCommand::Single { profile } => run_single(profile),
@@ -306,8 +311,8 @@ pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
             skip_framework,
         ),
         AppleCommand::Audit { path } => audit_symbols(&path),
-        AppleCommand::Docgen { check } => apple_docgen::run(check),
-        AppleCommand::Release => run_release(),
+        AppleCommand::Docgen { check } => apple_docgen::run(check, &ext.apple.docgen),
+        AppleCommand::Release => run_release(&ext.release),
     }
 }
 
@@ -527,18 +532,16 @@ fn set_release_rustflags(cmd: &mut Command) {
     cmd.env("CARGO_ENCODED_RUSTFLAGS", flags);
 }
 
-fn run_release() -> Result<()> {
+fn run_release(release: &ReleaseConfig) -> Result<()> {
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to read cargo metadata")?;
     let root = metadata.workspace_root.as_std_path().to_path_buf();
-    let project = ProjectConfig::load(&root)?;
-    let release = &project.release;
     if release.asset.trim().is_empty() {
-        bail!("release.asset is not set in .config/xtask.toml");
+        bail!("ext.release.asset is not set in .config/xtask.toml");
     }
     if release.single_asset.trim().is_empty() {
-        bail!("release.single_asset is not set in .config/xtask.toml");
+        bail!("ext.release.single_asset is not set in .config/xtask.toml");
     }
 
     let apple_dir = root.join("apple");
@@ -742,7 +745,10 @@ fn run_single(profile: crate::BuildProfile) -> Result<()> {
     let rx_src = resolve_rxswift(&root)?;
     println!("==> RxSwift source: {}", rx_src.display());
 
-    let temp = TempWorkDir::create(&format!("{}-apple-single", crate::util::project_name()))?;
+    let temp = TempWorkDir::create(&format!(
+        "{}-apple-single",
+        kithara_devtools::util::project_name()
+    ))?;
     let work = temp.path().to_path_buf();
     let merged = work.join("merged");
     fs::create_dir_all(&merged)?;

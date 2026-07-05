@@ -9,6 +9,7 @@ members = [
     "crates/kithara-beat",
     "crates/kithara-bufpool",
     "crates/kithara-decode",
+    "crates/kithara-devtools",
     "crates/kithara-drm",
     "crates/kithara-encode",
     "crates/kithara-events",
@@ -181,6 +182,7 @@ kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha4", defau
 kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha4" }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha4" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha4", default-features = false }
+kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha4" }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha4" }
 kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha4" }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4" }

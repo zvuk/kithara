@@ -1,0 +1,180 @@
+use std::{collections::BTreeMap, path::Path};
+
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use toml::Table;
+
+const CONFIG_REL: &str = ".config/xtask.toml";
+
+/// Project-specific identity and per-tool settings for the otherwise
+/// project-agnostic xtask. Loaded from `.config/xtask.toml`; every field
+/// defaults to empty so a fresh project starts with no baked-in names and
+/// fills in only what it uses.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProjectConfig {
+    pub project: ProjectIdentity,
+    pub health: HealthConfig,
+    pub test: TestCommandConfig,
+    pub perf: PerfConfig,
+    pub lint_exclude: LintExcludeConfig,
+    #[serde(default, rename = "workspace-scan")]
+    pub workspace_scan: WorkspaceScan,
+    pub orphans: OrphansConfig,
+    pub quality: QualityConfig,
+    #[serde(default)]
+    pub ext: Table,
+}
+
+/// Workspace-wide Rust file scan exclusions.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspaceScan {
+    pub exclude: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OrphansConfig {
+    /// Packages excluded from the default `cargo modules orphans` sweep
+    /// (generated/helper/macro crates and per-target-gated crates that the
+    /// default rust-analyzer view flags as false-positive orphans).
+    pub exclude_packages: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct QualityConfig {
+    /// Trait directory whose every `pub trait` must carry `#[unimock]`.
+    pub unimock_traits_dir: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LintExcludeConfig {
+    /// Workspace-relative globs whose violations are dropped from every lint
+    /// namespace (`arch`, `style`, `idioms`) so baselines measure production
+    /// debt, not test code. `#[cfg(test)]` blocks are stripped automatically
+    /// (AST) on top of this — no glob can match inline test modules.
+    pub paths: Vec<String>,
+    /// Inline-module names / `::`-paths whose violations are dropped from every
+    /// lint namespace, regardless of file.
+    pub modules: Vec<String>,
+    /// ast-grep rule IDs that must scan the FULL tree — tests included —
+    /// bypassing [`Self::paths`]. Hard-correctness bans (e.g. `arch.no-direct-time`)
+    /// where test code is NOT exempt: routing time through one primitive only
+    /// works if tests obey it too. Run in a second ast-grep pass per rule with
+    /// no exclude globs; the rule's own `files:` / `ignores:` scope it.
+    pub scan_all_rules: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProjectIdentity {
+    /// Used in human-facing labels: health report title, temp-log prefix.
+    pub name: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HealthConfig {
+    /// Crates excluded from the `cargo hack --feature-powerset` stage.
+    pub feature_powerset_exclude: Vec<String>,
+    /// Crates excluded from whole-workspace stages (semver, nextest, doc-test).
+    pub workspace_exclude: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct PerfConfig {
+    pub lanes: Vec<PerfLane>,
+    pub primary_lane: String,
+    pub frame_prefix: Option<String>,
+    #[serde(default = "default_perf_nextest_profile")]
+    pub nextest_profile: String,
+}
+
+impl Default for PerfConfig {
+    fn default() -> Self {
+        Self {
+            lanes: Vec::new(),
+            primary_lane: String::new(),
+            frame_prefix: None,
+            nextest_profile: default_perf_nextest_profile(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct PerfLane {
+    pub flash: bool,
+    pub backend: String,
+}
+
+fn default_perf_nextest_profile() -> String {
+    "perf".to_owned()
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestCommandConfig {
+    pub default_lane: String,
+    pub default_backend: String,
+    pub feature_arg: String,
+    pub flash: TestFlashConfig,
+    pub lanes: BTreeMap<String, TestLaneConfig>,
+    pub net_backends: BTreeMap<String, TestNetBackendConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestFlashConfig {
+    pub features: Vec<String>,
+    pub default: bool,
+}
+
+impl Default for TestFlashConfig {
+    fn default() -> Self {
+        Self {
+            features: Vec::new(),
+            default: true,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestNetBackendConfig {
+    pub features: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestLaneConfig {
+    pub program: String,
+    pub prefix_args: Vec<String>,
+    pub suffix_args: Vec<String>,
+    pub default_features: Vec<String>,
+    pub default_flash: Option<bool>,
+    pub passthrough: String,
+}
+
+impl ProjectConfig {
+    /// Load project-specific xtask settings from `.config/xtask.toml`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config file cannot be read or parsed.
+    pub fn load(workspace_root: &Path) -> Result<Self> {
+        let path = workspace_root.join(CONFIG_REL);
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("read project config: {}", path.display()))?;
+        toml::from_str(&text).with_context(|| format!("parse project config: {}", path.display()))
+    }
+}

@@ -4553,6 +4553,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-devtools"
+version = "0.0.1-alpha4"
+dependencies = [
+ "anyhow",
+ "cargo_metadata",
+ "clap",
+ "glob",
+ "kithara-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "syn 2.0.118",
+ "tempfile",
+ "toml 1.1.2+spec-1.1.0",
+]
+
+[[package]]
 name = "kithara-drm"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -11471,12 +11491,10 @@ dependencies = [
  "cargo_metadata",
  "clap",
  "glob",
+ "kithara-devtools",
  "kithara-workspace-hack",
  "plist",
- "proc-macro2",
- "quote",
  "regex",
- "roxmltree",
  "rustdoc-types",
  "serde",
  "serde_json",

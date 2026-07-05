@@ -1,0 +1,40 @@
+[package]
+name = "kithara-devtools"
+version = "0.0.1-alpha4"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+description = "Reusable, config-driven xtask command core (lint, format, test, health and friends)"
+repository = "https://github.com/zvuk/kithara"
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
+[features]
+default = ["lint", "viz"]
+# Enables the arch/style/idioms lint command family.
+lint = ["dep:quote"]
+# Enables architecture visualization commands.
+viz = []
+
+[dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+anyhow = { workspace = true }
+cargo_metadata = { workspace = true }
+clap = { workspace = true }
+glob = { workspace = true }
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+quote = { workspace = true, optional = true }
+regex = { workspace = true }
+roxmltree = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+syn = { workspace = true, features = ["full", "extra-traits", "visit"] }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

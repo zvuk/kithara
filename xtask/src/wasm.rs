@@ -2,9 +2,10 @@ use std::{fs, path::Path, process::Command, sync::LazyLock};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+use kithara_devtools::{Ctx, util::check_tool};
 use regex::Regex;
 
-use crate::{common::project::ProjectConfig, util::check_tool};
+use crate::config::{KitharaExt, WasmConfig};
 
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum WasmCommand {
@@ -22,10 +23,11 @@ pub(crate) enum WasmCommand {
     },
 }
 
-pub(crate) fn run(cmd: WasmCommand) -> Result<()> {
+pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
+    let ext = KitharaExt::from_ctx(ctx)?;
     match cmd {
         WasmCommand::Build { profile } => run_build(profile),
-        WasmCommand::Postbuild { staging_dir } => run_postbuild(&staging_dir),
+        WasmCommand::Postbuild { staging_dir } => run_postbuild(&staging_dir, &ext.wasm),
     }
 }
 
@@ -222,14 +224,11 @@ fn apply_inline_patches(content: &str) -> String {
         )
 }
 
-fn run_postbuild(staging_dir: &str) -> Result<()> {
+fn run_postbuild(staging_dir: &str, wasm: &WasmConfig) -> Result<()> {
     let dir = Path::new(staging_dir);
     anyhow::ensure!(dir.is_dir(), "staging dir does not exist: {staging_dir}");
 
-    let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
-    let js_name = ProjectConfig::load(metadata.workspace_root.as_std_path())?
-        .wasm
-        .js_artifact;
+    let js_name = &wasm.js_artifact;
 
     let index = dir.join("index.html");
     let content = fs::read_to_string(&index).context("read index.html")?;
@@ -237,7 +236,7 @@ fn run_postbuild(staging_dir: &str) -> Result<()> {
     let content = rewrite_paths(&content);
     fs::write(&index, content).context("write index.html")?;
 
-    let js = dir.join(&js_name);
+    let js = dir.join(js_name);
     if js.exists() {
         let content = fs::read_to_string(&js).with_context(|| format!("read {js_name}"))?;
         let content = apply_text_decoder_polyfill(&content);

@@ -89,11 +89,31 @@ suffix_args = ["selenium", "--", "--nocapture"]
 passthrough = "after-suffix"
 default_flash = false
 
-[publish]
+[perf]
+primary_lane = "flash-on-wreq"
+nextest_profile = "perf"
+
+[[perf.lanes]]
+flash = true
+backend = "wreq"
+
+[[perf.lanes]]
+flash = false
+backend = "wreq"
+
+[[perf.lanes]]
+flash = true
+backend = "apple"
+
+[[perf.lanes]]
+flash = false
+backend = "apple"
+
+[ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
-[release]
+[ext.release]
 # Apple release flow (cargo xtask release prepare|publish).
 github_repo = "zvuk/kithara"
 gitlab_host = "gitlab.zvq.me"
@@ -124,13 +144,13 @@ exclude_packages = [
   "xtask",
 ]
 
-[android]
+[ext.android]
 # Cargo package compiled into the Android JNI libraries.
 ffi_crate = "kithara-ffi"
 # AAR artifacts the Gradle export is expected to produce.
 aars = ["kithara.aar", "rust-tls.aar"]
 
-[wasm]
+[ext.wasm]
 # wasm-bindgen JS artifact patched by the trunk post-build hook.
 js_artifact = "kithara-ffi.js"
 
@@ -138,7 +158,7 @@ js_artifact = "kithara-ffi.js"
 # Trait directory whose every `pub trait` must carry `#[unimock]`.
 unimock_traits_dir = "crates/kithara-play/src/traits"
 
-[apple.docgen]
+[ext.apple.docgen]
 # DocC documentation-extension pages generated from Rust rustdoc JSON so the
 # Swift facade docs stay a projection of the Rust `///` source of truth.
 # Cargo package whose rustdoc JSON is the doc source (JSON stem = dashes→underscores).
@@ -154,15 +174,15 @@ output_dir = "apple/Sources/Kithara/Kithara.docc"
 swift_dirs = ["apple/Sources/Kithara", "apple/Sources/KitharaRx"]
 
 # facade DocC symbol → Rust type in the rustdoc JSON (the allowlist).
-[[apple.docgen.symbols]]
+[[ext.apple.docgen.symbols]]
 docc = "TrackStatus"
 rust = "FfiTrackStatus"
 
-[[apple.docgen.symbols]]
+[[ext.apple.docgen.symbols]]
 docc = "ItemEvent"
 rust = "FfiItemEvent"
 
-[[apple.docgen.symbols]]
+[[ext.apple.docgen.symbols]]
 docc = "PlayerSnapshot"
 rust = "FfiPlayerSnapshot"
 
@@ -183,6 +203,10 @@ paths = [
   "crates/kithara-test-macros/**",
   "crates/kithara-integration-tests/**",
   "crates/kithara-fuzz/**",
+  # Build tooling, not production runtime code. Its source is the lint engine
+  # itself (check files carry the very patterns they detect), so it is exempt
+  # from the production ratchet exactly like the `xtask` bin at the repo root.
+  "crates/kithara-devtools/**",
 ]
 modules = []
 # Hard-correctness rules that must scan the FULL tree (tests included),

@@ -6,11 +6,14 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+use kithara_devtools::{
+    Ctx,
+    util::{check_rust_target, check_tool},
+};
 
 use crate::{
     BuildProfile,
-    common::project::ProjectConfig,
-    util::{check_rust_target, check_tool},
+    config::{AndroidConfig, KitharaExt},
 };
 
 /// Module constants for `cargo xtask android run`. Grouped per the
@@ -59,16 +62,17 @@ pub(crate) enum AndroidCommand {
     },
 }
 
-pub(crate) fn run(cmd: AndroidCommand) -> Result<()> {
+pub(crate) fn run(cmd: AndroidCommand, ctx: &Ctx) -> Result<()> {
+    let ext = KitharaExt::from_ctx(ctx)?;
     match cmd {
-        AndroidCommand::Build { profile } => run_build(profile),
-        AndroidCommand::Aar => run_aar(),
+        AndroidCommand::Build { profile } => run_build(profile, &ext.android),
+        AndroidCommand::Aar => run_aar(&ext.android),
         AndroidCommand::Run {
             profile,
             avd,
             debug,
             skip_build,
-        } => run_app(profile, avd.as_deref(), debug, skip_build),
+        } => run_app(profile, avd.as_deref(), debug, skip_build, &ext.android),
     }
 }
 
@@ -80,7 +84,7 @@ fn recreate_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
+pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Result<()> {
     const ANDROID_API_LEVEL: &str = "26";
     const RUST_TARGETS: &[(&str, &str)] = &[
         ("aarch64-linux-android", "arm64-v8a"),
@@ -100,8 +104,8 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         .exec()
         .context("failed to read cargo metadata")?;
     let root = metadata.workspace_root.as_std_path();
-    let ffi_crate = ProjectConfig::load(root)?.android.ffi_crate;
-    let crate_dir = root.join("crates").join(&ffi_crate);
+    let ffi_crate = android.ffi_crate.as_str();
+    let crate_dir = root.join("crates").join(ffi_crate);
     let jni_dir = root.join("android/lib/build/generated/jniLibs");
     let kotlin_dir = root.join("android/lib/build/generated/uniffi/kotlin");
 
@@ -133,7 +137,7 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         .args([
             "build",
             "-p",
-            ffi_crate.as_str(),
+            ffi_crate,
             "--no-default-features",
             "--features",
             features,
@@ -198,8 +202,8 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
     Ok(())
 }
 
-fn run_aar() -> Result<()> {
-    run_build(BuildProfile::Release)?;
+fn run_aar(android: &AndroidConfig) -> Result<()> {
+    run_build(BuildProfile::Release, android)?;
 
     let metadata = MetadataCommand::new()
         .exec()
@@ -227,12 +231,7 @@ fn run_aar() -> Result<()> {
     }
 
     let output = android_root.join("lib/build/outputs/aar");
-    let aars: Vec<PathBuf> = ProjectConfig::load(&workspace_root)?
-        .android
-        .aars
-        .iter()
-        .map(|name| output.join(name))
-        .collect();
+    let aars: Vec<PathBuf> = android.aars.iter().map(|name| output.join(name)).collect();
     for aar in &aars {
         if !aar.is_file() {
             bail!("expected AAR was not produced: {}", aar.display());
@@ -246,7 +245,13 @@ fn run_aar() -> Result<()> {
     Ok(())
 }
 
-fn run_app(profile: BuildProfile, avd: Option<&str>, debug: bool, skip_build: bool) -> Result<()> {
+fn run_app(
+    profile: BuildProfile,
+    avd: Option<&str>,
+    debug: bool,
+    skip_build: bool,
+    android: &AndroidConfig,
+) -> Result<()> {
     let sdk_root = android_sdk_root()?;
     let adb = sdk_root.join("platform-tools/adb");
     let emulator = sdk_root.join("emulator/emulator");
@@ -265,7 +270,7 @@ fn run_app(profile: BuildProfile, avd: Option<&str>, debug: bool, skip_build: bo
     }
 
     if !skip_build {
-        run_build(profile)?;
+        run_build(profile, android)?;
     }
 
     ensure_emulator_running(&adb, &emulator, avd.unwrap_or(Consts::DEFAULT_AVD))?;

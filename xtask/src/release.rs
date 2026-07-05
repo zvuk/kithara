@@ -5,12 +5,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use kithara_devtools::{Ctx, util::check_tool};
 use serde_json::{Value, json};
 
-use crate::{
-    common::project::{ProjectConfig, ReleaseConfig},
-    util::check_tool,
-};
+use crate::config::{KitharaExt, ReleaseConfig};
 
 const MANIFEST: &str = "Package.swift";
 
@@ -57,9 +55,9 @@ enum ReleaseCommand {
     },
 }
 
-pub(crate) fn run(args: &ReleaseArgs) -> Result<()> {
-    let project = ProjectConfig::load(Path::new("."))?;
-    let cfg = &project.release;
+pub(crate) fn run(args: &ReleaseArgs, ctx: &Ctx) -> Result<()> {
+    let ext = KitharaExt::from_ctx(ctx)?;
+    let cfg = &ext.release;
     match &args.command {
         ReleaseCommand::Prepare { version, zip } => prepare(cfg, version, zip.as_deref()),
         ReleaseCommand::Publish { r#ref } => publish(cfg, r#ref),
@@ -454,7 +452,10 @@ fn pages(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
         );
     }
 
-    let staging = env::temp_dir().join(format!("{}-pages-{tag}", crate::util::project_name()));
+    let staging = env::temp_dir().join(format!(
+        "{}-pages-{tag}",
+        kithara_devtools::util::project_name()
+    ));
     if staging.exists() {
         fs::remove_dir_all(&staging).with_context(|| format!("clean {}", staging.display()))?;
     }
@@ -489,8 +490,10 @@ fn single_subdir(dir: &Path) -> Result<PathBuf> {
 }
 
 fn deploy_pages_branch(branch: &str, content: &Path, tag: &str) -> Result<()> {
-    let worktree =
-        env::temp_dir().join(format!("{}-{branch}-worktree", crate::util::project_name()));
+    let worktree = env::temp_dir().join(format!(
+        "{}-{branch}-worktree",
+        kithara_devtools::util::project_name()
+    ));
     let _ = Command::new("git")
         .args(["worktree", "remove", "--force"])
         .arg(&worktree)
@@ -1036,7 +1039,9 @@ fn require_config(cfg: &ReleaseConfig) -> Result<()> {
     ];
     for (name, value) in fields {
         if value.trim().is_empty() {
-            bail!("release.{name} is not set; fill in the [release] section of .config/xtask.toml");
+            bail!(
+                "ext.release.{name} is not set; fill in the [ext.release] section of .config/xtask.toml"
+            );
         }
     }
     Ok(())
@@ -1065,7 +1070,7 @@ fn cache_named(tag: &str, name: &str) -> Result<PathBuf> {
     let home = env::var_os("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home)
         .join("Library/Caches")
-        .join(crate::util::project_name())
+        .join(kithara_devtools::util::project_name())
         .join("releases")
         .join(tag)
         .join(name))

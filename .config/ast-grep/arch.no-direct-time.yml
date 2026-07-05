@@ -47,6 +47,9 @@ ignores:
   # token streams it emits (hygienic `::std::time::Duration`); rewriting those
   # would force a kithara-platform dependency onto every macro consumer.
   - crates/kithara-test-macros/**
+  # Build tooling: generates report timestamps with wall-clock time and owns no
+  # production runtime path, so it is outside the flash virtual-time model.
+  - crates/kithara-devtools/**
 rule:
   any:
     # Imports (flat OR grouped/multi-line) pulling a `time` segment from a

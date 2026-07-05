@@ -1,52 +1,20 @@
-use std::path::PathBuf;
-
 use clap::{Parser, Subcommand};
+use kithara_devtools::{CoreCommand, Ctx};
 
 mod agent_hook;
 mod android;
 mod apple;
 mod apple_docgen;
-mod arch;
-mod ast_grep;
-mod common;
-mod format;
-mod health;
-mod idioms;
-mod lint;
-mod manifest;
-mod orphans;
-mod perf;
-mod perf_compare;
+mod config;
 mod publish;
-mod quality;
 mod release;
-mod scope;
-mod similarity;
-mod style;
-mod test;
-mod typos;
-mod util;
-mod viz;
 mod wasm;
 
 use agent_hook::AgentHookArgs;
 use android::AndroidCommand;
 use apple::AppleCommand;
-use ast_grep::AstGrepArgs;
-use format::FormatArgs;
-use health::HealthArgs;
-use lint::LintArgs;
-use manifest::ManifestArgs;
-use orphans::OrphansArgs;
-use perf::PerfArgs;
 use publish::PublishArgs;
-use quality::QualityCommand;
 use release::ReleaseArgs;
-use scope::ScopeArgs;
-use similarity::SimilarityArgs;
-use test::TestArgs;
-use typos::TyposArgs;
-use viz::VizArgs;
 use wasm::WasmCommand;
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -73,25 +41,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Test-suite performance measurement pipeline (matrix/slow/profile/report/trace).
-    Perf(PerfArgs),
-    /// Compare perf results.
-    PerfCompare {
-        /// Path to the current results file.
-        current: PathBuf,
-        /// Path to the baseline results file.
-        baseline: PathBuf,
-        /// Regression threshold percentage.
-        #[arg(long, default_value_t = 10)]
-        threshold: u32,
-    },
-    /// Workspace linters: arch, style, idioms (run all, or one via subcommand).
-    Lint(LintArgs),
-    /// Code quality checks.
-    Quality {
-        #[command(subcommand)]
-        command: QualityCommand,
-    },
     /// Android build tasks.
     Android {
         #[command(subcommand)]
@@ -112,57 +61,23 @@ enum Command {
     /// Apple release flow: prepare (stamp manifests) and publish
     /// (GitHub release + `GitLab` mirror).
     Release(ReleaseArgs),
-    /// Translate scope tokens to tool-specific flags (used by `just audit`).
-    Scope(ScopeArgs),
     /// Agent editor/shell hooks for tool-specific adapters.
     AgentHook(AgentHookArgs),
-    /// Run workspace tests through `cargo nextest`.
-    Test(TestArgs),
-    /// Format Rust, manifests, TOML, JSON, and Markdown through project tooling.
-    Format(FormatArgs),
-    /// Thin wrapper around `ast-grep scan` that bakes in the policy filter list.
-    AstGrep(AstGrepArgs),
-    /// Thin wrapper around `typos` that pins the workspace config.
-    Typos(TyposArgs),
-    /// Thin wrapper around `similarity-rs` with audit/advisory/strict profiles.
-    Similarity(SimilarityArgs),
-    /// Cargo manifest hygiene checks.
-    Manifest(ManifestArgs),
-    /// Per-package `cargo modules orphans` with `--cfg-test`.
-    Orphans(OrphansArgs),
-    /// Comprehensive workspace health check with markdown report.
-    Health(HealthArgs),
-    /// Architecture visualization tools (hierarchy, arc-map).
-    Viz(VizArgs),
+    #[command(flatten)]
+    Core(CoreCommand),
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let ctx = Ctx::load()?;
 
     match cli.command {
-        Command::PerfCompare {
-            current,
-            baseline,
-            threshold,
-        } => perf_compare::run(&current, &baseline, threshold),
-        Command::Perf(ref args) => perf::run(args),
-        Command::Lint(ref args) => lint::run(args),
-        Command::Quality { command } => quality::run(command),
-        Command::Android { command } => android::run(command),
-        Command::Apple { command } => apple::run(command),
-        Command::Wasm { command } => wasm::run(command),
-        Command::Publish(ref args) => publish::run(args),
-        Command::Release(ref args) => release::run(args),
-        Command::Scope(ref args) => scope::run(args),
+        Command::Android { command } => android::run(command, &ctx),
+        Command::Apple { command } => apple::run(command, &ctx),
+        Command::Wasm { command } => wasm::run(command, &ctx),
+        Command::Publish(ref args) => publish::run(args, &ctx),
+        Command::Release(ref args) => release::run(args, &ctx),
         Command::AgentHook(ref args) => agent_hook::run(args),
-        Command::Test(ref args) => test::run(args),
-        Command::Format(ref args) => format::run(args),
-        Command::AstGrep(ref args) => ast_grep::run(args),
-        Command::Typos(ref args) => typos::run(args),
-        Command::Similarity(ref args) => similarity::run(args),
-        Command::Manifest(ref args) => manifest::run(args),
-        Command::Orphans(ref args) => orphans::run(args),
-        Command::Health(ref args) => health::run(args),
-        Command::Viz(ref args) => viz::run(args),
+        Command::Core(cmd) => kithara_devtools::run(&cmd, &ctx),
     }
 }
