@@ -24,6 +24,8 @@ use kithara::platform::time::Duration;
 /// simulated network latency, where the duration itself is the thing under test.
 /// This is NOT a substitute for waiting on program state; for "wait until X
 /// happens" use [`crate::waits`].
+/// `no_block`: deliberate virtual-time pace; the sleep duration is the behavior under test.
+#[kithara::allow_block]
 #[kithara::flash(true)]
 pub fn virtual_pace(duration: Duration) {
     kithara::platform::thread::sleep(duration);

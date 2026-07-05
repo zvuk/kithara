@@ -5,6 +5,7 @@ use kithara_platform::{
     sync::{Mutex, mpsc},
     thread::spawn_named,
 };
+use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
 use super::{
@@ -23,6 +24,8 @@ pub(crate) struct SessionClient {
 }
 
 impl SessionClient {
+    /// `no_block`: sync command-reply bridge to the dedicated session thread for host/FFI dispatch.
+    #[kithara::allow_block]
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.cmd_tx
