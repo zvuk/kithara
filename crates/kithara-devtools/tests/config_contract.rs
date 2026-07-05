@@ -29,7 +29,7 @@ fn unknown_section_is_a_typed_error() {
     write_config(
         temp.path(),
         r#"
-[project]
+[not_a_real_section]
 name = "typo"
 "#,
     );
@@ -38,7 +38,7 @@ name = "typo"
     let message = format!("{error:#}");
 
     assert!(
-        message.contains("project"),
+        message.contains("not_a_real_section"),
         "error did not mention offending token: {message}"
     );
 }
