@@ -48,6 +48,9 @@ pub(crate) struct AppleCodec {
     /// did not yet yield priming numbers; cleared after the first
     /// post-decode refresh.
     prime_info_refresh_pending: bool,
+    /// Source-domain sample rate from `TrackInfo`; `spec.sample_rate`
+    /// is the actual output/device-domain rate.
+    source_sample_rate: u32,
     /// `AudioConverter`'s expected output packets-per-callback. Used to
     /// pre-grow the caller's `out` buffer before invoking the FFI so the
     /// converter writes directly into pool memory — no internal scratch
@@ -65,6 +68,8 @@ pub(crate) struct AppleCodec {
 unsafe impl Send for AppleCodec {}
 
 impl AppleCodec {
+    const SRC_OUTPUT_MARGIN_FRAMES: u32 = 1;
+
     /// Inherent constructor used by [`Self::open_with_config`] (and only
     /// there). Builds a base [`AppleCodec`] from `TrackInfo` without
     /// any of the gapless / `PrimeInfo` follow-up wiring; the
@@ -121,6 +126,7 @@ impl AppleCodec {
         Ok(Self {
             converter,
             spec,
+            source_sample_rate: track.sample_rate,
             frames_per_packet,
             input_bytes_per_packet,
             input_state: Box::new(ConverterInputState::default()),
@@ -249,23 +255,27 @@ impl FrameCodec for AppleCodec {
         };
         self.input_state.set(frame_data, desc);
 
-        let channels = usize::from(self.spec.channels);
-        let target_frames: u32 = if self.input_bytes_per_packet > 0 {
+        let input_frames = if self.input_bytes_per_packet > 0 {
             let packets = frame_data.len() / usize::try_from(self.input_bytes_per_packet)?;
             u32::try_from(packets)?
         } else {
             self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET)
         };
+        let target_frames = output_frame_capacity(
+            input_frames,
+            self.source_sample_rate,
+            self.spec.sample_rate.get(),
+        )?;
         if target_frames == 0 {
             out.clear();
             return Ok(0);
         }
-        let needed_samples = usize::try_from(target_frames)? * channels;
+        let channels = usize::from(self.spec.channels);
+        let needed_samples = output_sample_capacity(target_frames, channels)?;
         out.ensure_len(needed_samples)?;
 
         let mut output_packets = target_frames;
-        let buffer_bytes =
-            u32::try_from(out.len() * usize::try_from(Consts::BYTES_PER_F32_SAMPLE).unwrap_or(0))?;
+        let buffer_bytes = pcm_buffer_byte_len(out.len())?;
         let mut buffer_list = AudioBufferList {
             mNumberBuffers: 1,
             mBuffers: [AudioBuffer {
@@ -301,7 +311,7 @@ impl FrameCodec for AppleCodec {
         }
 
         let frames = output_packets;
-        let samples_len = usize::try_from(frames)? * channels;
+        let samples_len = output_sample_capacity(frames, channels)?;
         out.truncate(samples_len);
         self.refresh_gapless_after_first_chunk();
         Ok(frames)
@@ -610,6 +620,66 @@ fn resolve_output_sample_rate(source_rate: u32, target_output_rate: Option<u32>)
     }
 }
 
+fn ceil_resampled_frames(
+    input_frames: u32,
+    source_rate: u32,
+    output_rate: u32,
+) -> DecodeResult<u32> {
+    if source_rate == 0 {
+        return Err(DecodeError::InvalidSampleRate {
+            resource: "apple.codec.source",
+        });
+    }
+    if output_rate == 0 {
+        return Err(DecodeError::InvalidSampleRate {
+            resource: "apple.codec.output",
+        });
+    }
+
+    let numerator = u128::from(input_frames) * u128::from(output_rate);
+    let divisor = u128::from(source_rate);
+    let frames = numerator.div_ceil(divisor);
+    u32::try_from(frames).map_err(|_| DecodeError::InvalidData {
+        detail: "apple output frame capacity overflow",
+    })
+}
+
+fn output_frame_capacity(
+    input_frames: u32,
+    source_rate: u32,
+    output_rate: u32,
+) -> DecodeResult<u32> {
+    let frames = ceil_resampled_frames(input_frames, source_rate, output_rate)?;
+    let margin = if source_rate == output_rate {
+        0
+    } else {
+        AppleCodec::SRC_OUTPUT_MARGIN_FRAMES
+    };
+    frames.checked_add(margin).ok_or(DecodeError::InvalidData {
+        detail: "apple output frame capacity overflow",
+    })
+}
+
+fn output_sample_capacity(frames: u32, channels: usize) -> DecodeResult<usize> {
+    usize::try_from(frames)?
+        .checked_mul(channels)
+        .ok_or(DecodeError::InvalidData {
+            detail: "apple output sample capacity overflow",
+        })
+}
+
+fn pcm_buffer_byte_len(samples: usize) -> DecodeResult<u32> {
+    let bytes_per_sample = usize::try_from(Consts::BYTES_PER_F32_SAMPLE)?;
+    let bytes = samples
+        .checked_mul(bytes_per_sample)
+        .ok_or(DecodeError::InvalidData {
+            detail: "apple output buffer byte capacity overflow",
+        })?;
+    u32::try_from(bytes).map_err(|_| DecodeError::InvalidData {
+        detail: "apple output buffer byte capacity exceeds CoreAudio limit",
+    })
+}
+
 fn build_pcm_output_format(
     source_rate: u32,
     channels: u16,
@@ -771,7 +841,9 @@ mod output_rate_tests {
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
-    use super::{AppleCodec, build_pcm_output_format, resolve_output_sample_rate};
+    use super::{
+        AppleCodec, build_pcm_output_format, output_frame_capacity, resolve_output_sample_rate,
+    };
     use crate::{
         codec::FrameCodec,
         demuxer::TrackInfo,
@@ -781,8 +853,11 @@ mod output_rate_tests {
     struct Consts;
     impl Consts {
         const ALT_RATE: u32 = 48_000;
+        const DOWNSAMPLE_CAPACITY: u32 = 942;
+        const INPUT_FRAMES: u32 = 1024;
         const SOURCE_RATE: u32 = 44_100;
         const TEST_CHANNELS: u16 = 2;
+        const UPSAMPLE_CAPACITY: u32 = 1116;
     }
 
     fn read_fixture(name: &str) -> Vec<u8> {
@@ -838,6 +913,36 @@ mod output_rate_tests {
     }
 
     #[kithara::test]
+    fn output_frame_capacity_preserves_equal_rate_passthrough() {
+        let capacity = output_frame_capacity(
+            Consts::INPUT_FRAMES,
+            Consts::SOURCE_RATE,
+            Consts::SOURCE_RATE,
+        )
+        .expect("BUG: compute equal-rate output capacity");
+
+        assert_eq!(capacity, Consts::INPUT_FRAMES);
+    }
+
+    #[kithara::test]
+    fn output_frame_capacity_covers_upsample_ratio() {
+        let capacity =
+            output_frame_capacity(Consts::INPUT_FRAMES, Consts::SOURCE_RATE, Consts::ALT_RATE)
+                .expect("BUG: compute upsample output capacity");
+
+        assert_eq!(capacity, Consts::UPSAMPLE_CAPACITY);
+    }
+
+    #[kithara::test]
+    fn output_frame_capacity_covers_downsample_ratio() {
+        let capacity =
+            output_frame_capacity(Consts::INPUT_FRAMES, Consts::ALT_RATE, Consts::SOURCE_RATE)
+                .expect("BUG: compute downsample output capacity");
+
+        assert_eq!(capacity, Consts::DOWNSAMPLE_CAPACITY);
+    }
+
+    #[kithara::test]
     fn apple_codec_spec_uses_resolved_output_rate() {
         let track = aac_lc_track();
         let target_rate = if track.sample_rate == Consts::ALT_RATE {
@@ -862,7 +967,7 @@ mod aac_lc_decode_tests {
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
-    use super::AppleCodec;
+    use super::{AppleCodec, ceil_resampled_frames, output_frame_capacity};
     use crate::{
         codec::FrameCodec,
         demuxer::TrackInfo,
@@ -874,6 +979,14 @@ mod aac_lc_decode_tests {
             .join("../../assets/hls")
             .join(name);
         std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+    }
+
+    struct Consts;
+    impl Consts {
+        const COMMON_TARGET_RATE: u32 = 48_000;
+        const HIGH_TARGET_RATE: u32 = 96_000;
+        const MAX_SRC_DELAY_FRAMES: u32 = 1024;
+        const RESAMPLED_TEST_PACKETS: usize = 16;
     }
 
     /// RED (device repro): the Apple AAC-LC decoder must turn real fMP4
@@ -922,6 +1035,90 @@ mod aac_lc_decode_tests {
         assert!(
             pcm.iter().all(|sample| sample.is_finite()),
             "Apple AAC-LC decode produced non-finite PCM",
+        );
+    }
+
+    #[kithara::test]
+    fn apple_aac_lc_resampled_decode_produces_ratio_sized_frames() {
+        let init_bytes = read_fixture("init-slq-a1.mp4");
+        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+        assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
+        let extra_data = match &init.config {
+            CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
+        };
+        let track = TrackInfo {
+            extra_data,
+            codec: init.codec,
+            sample_rate: init.sample_rate,
+            channels: init.channels,
+            duration: None,
+            gapless: init.gapless,
+        };
+        let target_rate = if init.sample_rate < Consts::COMMON_TARGET_RATE {
+            Consts::COMMON_TARGET_RATE
+        } else {
+            Consts::HIGH_TARGET_RATE
+        };
+        assert_ne!(
+            target_rate, init.sample_rate,
+            "fixture sample rate must differ from target rate"
+        );
+
+        let seg = read_fixture("segment-1-slq-a1.m4s");
+        let ranges: Vec<(usize, usize)> = parse_segment_frames(&init, &seg)
+            .expect("BUG: parse segment frames")
+            .iter()
+            .take(Consts::RESAMPLED_TEST_PACKETS)
+            .map(|f| (f.offset, f.size))
+            .collect();
+        assert!(
+            ranges.len() >= 2,
+            "segment yielded too few AAC frames for resampled decode"
+        );
+
+        let pool = PcmPool::new(2, 8192);
+        let mut codec = AppleCodec::open_with_config(&track, false, Some(target_rate))
+            .expect("BUG: open Apple AAC-LC codec with target rate");
+        let mut total_output_frames = 0_u64;
+        let mut total_capacity_frames = 0_u64;
+        let mut produced_more_than_source_packet = false;
+        for &(offset, size) in &ranges {
+            let mut buf = pool.get();
+            let frames = codec
+                .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
+                .expect("BUG: decode resampled Apple AAC-LC frame");
+            let capacity = output_frame_capacity(
+                super::Consts::AAC_FRAMES_PER_PACKET,
+                init.sample_rate,
+                target_rate,
+            )
+            .expect("BUG: compute per-packet output capacity");
+
+            assert!(frames <= capacity, "converter wrote past computed capacity");
+            produced_more_than_source_packet |= frames > super::Consts::AAC_FRAMES_PER_PACKET;
+            total_output_frames += u64::from(frames);
+            total_capacity_frames += u64::from(capacity);
+        }
+
+        let packet_count = u32::try_from(ranges.len()).expect("BUG: test packet count fits in u32");
+        let input_frames = packet_count
+            .checked_mul(super::Consts::AAC_FRAMES_PER_PACKET)
+            .expect("BUG: test input frame count fits in u32");
+        let ideal_total = ceil_resampled_frames(input_frames, init.sample_rate, target_rate)
+            .expect("BUG: compute total resampled frame count");
+        let minimum_expected = ideal_total.saturating_sub(Consts::MAX_SRC_DELAY_FRAMES);
+
+        assert!(
+            produced_more_than_source_packet,
+            "upsampled decode never exceeded the old source-rate frame cap"
+        );
+        assert!(
+            total_output_frames >= u64::from(minimum_expected),
+            "resampled decode produced too few frames: {total_output_frames} < {minimum_expected}"
+        );
+        assert!(
+            total_output_frames <= total_capacity_frames,
+            "resampled decode exceeded requested output capacity"
         );
     }
 }
