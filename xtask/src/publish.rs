@@ -629,7 +629,7 @@ mod tests {
         assert!(!order.is_empty(), "should find publishable crates");
         assert_eq!(
             order.len(),
-            20,
+            21,
             "publish order should cover all publishable crates"
         );
 
