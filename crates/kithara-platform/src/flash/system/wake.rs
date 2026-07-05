@@ -33,7 +33,7 @@ impl Token {
         self.cv.notify_all();
     }
     pub(crate) fn wait(&self) {
-        let _nb_pause = crate::no_block::pause();
+        let _nb_permit = crate::no_block::permit();
         wait_set(&self.cv, self.woken.lock());
     }
 }

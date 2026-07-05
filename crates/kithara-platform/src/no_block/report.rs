@@ -32,19 +32,20 @@ pub(super) fn bridged(
     spawned: &'static Location<'static>,
     spawn_loc: Option<&'static Location<'static>>,
 ) {
+    let flash_task = spawn_loc.map_or_else(|| "-".to_owned(), ToString::to_string);
     match mode() {
         Mode::Off => {}
         Mode::Census => {
             let line = format!(
                 "[no_block][census] BRIDGED sync wait inside async poll of `{task}` \
-                 (spawned at {spawned}, flash task {spawn_loc:?}) - in prod this blocks \
+                 (spawned at {spawned}, flash task {flash_task}) - in prod this blocks \
                  a runtime worker"
             );
             census_emit(&line);
         }
         Mode::Panic => panic!(
             "[no_block] BRIDGED sync wait inside async poll of `{task}` \
-             (spawned at {spawned}, flash task {spawn_loc:?}) - in prod this blocks \
+             (spawned at {spawned}, flash task {flash_task}) - in prod this blocks \
              a runtime worker"
         ),
     }
@@ -79,11 +80,12 @@ fn census_emit(line: &str) {
     eprintln!("{line}");
 
     if let Some(path) = log_path() {
+        let line = format!("{line}\n");
         let _ = OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
-            .and_then(|mut file| writeln!(file, "{line}"));
+            .and_then(|mut file| file.write_all(line.as_bytes()));
     }
 }
 
