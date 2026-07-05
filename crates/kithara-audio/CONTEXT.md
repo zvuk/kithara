@@ -41,7 +41,7 @@ flowchart TB
 - **Downloader (tokio)**: lives in `kithara-stream::dl`. It owns the HTTP pool and writes bytes directly into the `StorageResource` the `DecoderNode` reads from. The downloader is not spawned by `kithara-audio`.
 - **Ring**: a lock-free `ringbuf::HeapRb<PcmChunk>` carries processed PCM from the worker to the consumer; backpressure is enforced by the ring's capacity and an `Outlet` overflow slot.
 - **Ring wake**: the producer push and the consumer park form a lock-free wait protocol guarded by a `SeqCst` fence pair (a Dekker StoreLoad barrier) so a just-parked consumer is never missed.
-- **Trash ring (spent-chunk return)**: the consumer (`Audio`) runs on the caller's real-time audio thread, so it must never `free`. Returning a `PcmChunk`'s pooled buffer to `kithara-bufpool` can deallocate (shard full, or trim), so the consumer never drops a consumed chunk: it pushes every spent chunk back through a second lock-free ring, and `DecoderNode::drain_trash` drops them on the worker thread on its next tick. The ring is sized `pcm_buffer_chunks + 2` — enough to absorb a seek that drains the whole forward ring at once — so the real-time push is infallible and no buffer is ever freed on the audio thread.
+- **Trash ring (spent-chunk return)**: the consumer (`Audio`) runs on the caller's real-time audio thread, so it must never `free`. Returning a `PcmChunk`'s pooled buffer to `kithara-bufpool` can deallocate (shard full, or trim), so the consumer never drops a consumed chunk: it pushes every spent chunk back through a second lock-free ring, and `Node::recycle` drops them on the worker thread on its next tick. The ring is sized `pcm_buffer_chunks + 2` — enough to absorb a seek that drains the whole forward ring at once — so the real-time push is infallible and no buffer is ever freed on the audio thread.
 - **Preload gate (`PreloadGate`)**: the one-time startup signal that releases the async consumer's `Resource::preload().await`. The worker is a plain OS thread, not a tokio runtime worker, so it must never run a cross-thread tokio-task `wake()` (that schedules through tokio's inject queue — a lock + futex, real-time-unsafe). The gate is decoupled: the worker only does a lock-free `ready_epoch.store(epoch, Release)` plus `ready.store(true, Release)` via `signal_epoch(epoch)`; the async awaiter (`PreloadGate::wait_for_epoch`) polls with `Acquire` and re-arms its own runtime timer (`POLL_INTERVAL`) while the gate is closed, so the worker never drives the wakeup. `DecoderNode` opens the gate at every preload terminal site — the preload-chunk threshold, EOF, `Failed`, and `on_cancel` — using its producer runtime epoch, and `rearm()`s (re-closes) it in `sync_seek_epoch` so a post-seek wait blocks again until that epoch refills. A stale pre-seek signal must not release a post-seek waiter; a missed signal would stall the consumer before first audio, so all terminal arms must fire it with the epoch they actually produced.
 - **Events**: every layer publishes into a unified `EventBus` (`AudioEvent`, `HlsEvent`, `FileEvent`, ABR events).
 - **Epoch-based seek invalidation**: each seek bumps an `AtomicU64` epoch; stale chunks tagged with an older epoch are dropped before reaching the ring.
@@ -63,20 +63,22 @@ flowchart LR
 
 ## Track analysis (shared worker)
 
-`analysis/` owns the reusable per-track analysis engine consumed by the demo
-app today and by mobile surfaces (kithara-ffi) next:
+`analysis/` owns the reusable per-track analysis engine consumed by the demo app
+today and by mobile surfaces (kithara-ffi) next:
 
-- **`TrackAnalyzer`** — streaming analyzer fed every decoded chunk once;
-  `finish` folds its result into the shared `TrackAnalysis` aggregate
-  (`waveform` today; bpm/pitch slots come with their analyzers).
-- **`AnalyzerRegistry`** — the set of analyzer factories to run per track.
-  Factories take the first chunk's `PcmSpec`, so analyzers can size to the
-  source sample rate. Decode once, feed all of them.
+- **`Analyzer` / `TrackAnalyzers`** — crate-private streaming analyzer pieces.
+  Each analyzer is fed every decoded chunk once; `TrackAnalyzers` stages
+  completion into the public `TrackAnalysis { waveform, beat, source_frames }`.
+- **`AnalyzerBuilder`** — the public builder for selecting analysis passes.
+  `with_waveform(buckets)` enables waveform extraction, `with_beat()` enables
+  the NN beat slot when `beat-nn` is compiled and the model loads, and
+  `is_empty()` lets callers skip scheduling an analysis pass.
 - **`analyze_reader`** — the synchronous decode loop over any `PcmReader`:
-  cancel-aware, `Pending`-tolerant, `None` on cancel/error/empty input.
-  Opening the source stays with the caller (`Resource` lives in
-  kithara-play; FFI opens its own reader) so this crate gains no upward
-  dependency.
+  cancel-aware, `Pending`-tolerant, and callback-based
+  (`analyze_reader(..., emit) -> ()`). It emits staged `TrackAnalysis` values
+  and emits nothing on cancel/error/empty input. Opening the source stays with
+  the caller (`Resource` lives in kithara-play; FFI opens its own reader), so
+  this crate gains no upward dependency.
 - **`AnalysisWorker`** — a long-lived named thread running `analyze_reader`
   per queued job. Jobs carry caller-owned cancel tokens that must be
   children of the same scope that owns the worker (one cancel hierarchy);
@@ -92,11 +94,10 @@ app today and by mobile surfaces (kithara-ffi) next:
   while the worker idles. Likewise the `Pending` backoff inside
   `analyze_reader` uses `thread::paced_backoff`, not `thread::sleep`, so it
   is paced by the real download instead of free-running the virtual clock.
-- **Feature seam, runtime switch**: the `analysis` cargo feature gates only
-  the FFT stack (`realfft` + `WaveformAnalyzer`). The analysis API above is
-  always compiled; `waveform_analyzer(buckets)` returns `None` without the
-  feature, so consumers use one runtime check (empty registry → skip
-  scheduling) instead of spreading `#[cfg]` upward.
+- **Feature seam, runtime switch**: there is no `analysis` cargo feature.
+  `realfft` and waveform analysis are unconditional; the optional NN beat
+  detector is gated by `beat-nn`. Consumers use `AnalyzerBuilder::is_empty()`
+  as the runtime signal to skip scheduling.
 
 ## Waveform
 
@@ -250,16 +251,16 @@ Known same-codec HLS switches are not decoder format changes. The HLS source ret
 
 ### Recreate readiness gating
 
-What *kind* of bytes gate a decoder recreate is not guessed by the gate: `recreate_input` (`source.rs`) asks `DecoderFactory::input_requirement` for the demuxer's input contract (kithara-decode `README.md` "Decoder input contract"). The contract names the input **shape**; this layer resolves it to a virtual byte range in `recreate_ready_range`, shared by the gate (`source_ready_for_recreate`) and the wait path (`wait_for_source_on_recreate`) so the two never disagree — a mismatch livelocks the worker (the HE-AAC v2 variant-switch hang). The demuxer cannot name the *virtual* range itself, because only the stream knows the ABR byte shift (`served_from`).
+What *kind* of bytes gate a decoder recreate is not guessed by the gate: `recreate_input` (`source.rs`) asks `DecoderFactory::input_requirement` for the demuxer's input contract (kithara-decode `CONTEXT.md` "Decoder input contract"). The contract names the input **shape**; this layer resolves it to a virtual byte range in `recreate_ready_range`, shared by the gate (`source_ready_for_recreate`) and the wait path (`wait_for_source_on_recreate`) so the two never disagree — a mismatch livelocks the worker (the HE-AAC v2 variant-switch hang). The demuxer cannot name the *virtual* range itself, because only the stream knows the ABR byte shift (`served_from`).
 
-- **`InputRequirement::InitOnly`** (segment-aware fMP4): gate on the init header resolved in virtual byte space (`format_change_segment_range`, `served_from`-aware), falling back to the `[offset..offset + DEFAULT_READ_AHEAD)` read-ahead window when the init is unaddressable or larger than `DEFAULT_READ_AHEAD`. The landing media segment is read by the rebuilt demuxer's first `next_frame`, not gated up front.
+- **`InputRequirement::InitOnly`** (segment-aware fMP4): gate on the init header resolved in virtual byte space (`format_change_segment_range`, `served_from`-aware), falling back to the `[offset..offset + DEFAULT_READ_AHEAD_BYTES)` read-ahead window when the init is unaddressable or larger than `DEFAULT_READ_AHEAD_BYTES`. The landing media segment is read by the rebuilt demuxer's first `next_frame`, not gated up front.
 - **`InputRequirement::Incremental`** (raw WAV/MP3/FLAC/Ogg): no init to wait for — gate on the read-ahead window directly.
 
 ### Playback readiness gating
 
 Steady-state forward decode has the same gate-vs-read contract as recreation: the readiness gate must cover what the decoder actually reads, or the worker hot-spins. `source_is_ready` (the `Track<Decoding>::step` entry gate) clamps its look-ahead window to the **next segment boundary** — it only requires the current segment to be ready before entering `decode_one_step`. But the decoder's container parser reads *across* that boundary into the next segment. When the next segment's body is withheld (slow network), the decoder returns `Pending` while `source_is_ready` still reports `Ready` (the current segment is fully cached). Returning a bare `TrackStep::Blocked(Waiting)` and staying in `Decoding` then re-runs the full `decode_one_step` on every scheduler wake — a busy-spin (`step_track took too long — starving other tracks`), driven hard by the blocking consumer's `recv_outcome_blocking` wake loop (flake F5).
 
-So a `DecodeStep::NotReady` parks in `WaitContext::Playback`, and that wait context's phase (`source_phase_for_wait_context`) gates on `source_phase_forward` — the unclamped `[pos, pos + DEFAULT_READ_AHEAD)` window the decoder reads through, **not** the single-byte `phase()` at `pos`. The worker then re-checks that wider window cheaply on each wake and only re-enters `Decoding` (re-running the decode) once it is ready. Gate (`source_phase_forward`) and the decoder's real read never disagree, so the loop parks instead of spinning.
+So a `DecodeStep::NotReady` parks in `WaitContext::Playback`, and that wait context's phase (`source_phase_for_wait_context`) gates on `source_phase_forward` — the unclamped `[pos, pos + DEFAULT_READ_AHEAD_BYTES)` window the decoder reads through, **not** the single-byte `phase()` at `pos`. The worker then re-checks that wider window cheaply on each wake and only re-enters `Decoding` (re-running the decode) once it is ready. Gate (`source_phase_forward`) and the decoder's real read never disagree, so the loop parks instead of spinning.
 
 ### Source-readiness parks re-aim the producer
 
@@ -278,7 +279,7 @@ Init-bearing containers (fMP4/MP4/WAV/MKV/CAF) must recreate at the source's ini
 
 On seek, epoch is incremented atomically. The worker tags each decoded chunk with the current epoch. The consumer discards stale chunks (old epoch), preventing leftover data from reaching output after a seek.
 
-There are two distinct epoch atomics: the **timeline** seek epoch, bumped by the consumer the instant it requests a seek (`Audio::seek` → `Timeline::initiate_seek`), and the **producer's decode epoch** (`StreamAudioSource::epoch`), advanced only when the worker actually *applies* a seek. The decode epoch therefore lags the timeline epoch across the window where a seek has been requested but not yet applied. Decoded chunks are tagged with the decode epoch, and terminal markers (EOF / failure) **must** be tagged the same way — via `AudioWorkerSource::decode_epoch()`, not the live `timeline().seek_epoch()`. A near-end seek can drive the decoder to a genuine EOF in the same window where a newer seek has already bumped the timeline epoch; stamping the marker with the live timeline epoch would make the stale end-of-stream pass the consumer's validator and surface as a false `ReadOutcome::Eof` for the newer (in-range) seek. Tagging with the decode epoch lets the validator discard it. This race only manifests under CPU starvation (the seek-bump and the EOF-stamp interleave), so its regression guard tags the marker through a mocked `decode_epoch` that differs from the timeline epoch.
+There are two distinct epoch atomics: the **seek-state** epoch, bumped by the consumer the instant it requests a seek (`Audio::seek` -> `SeekControl::begin`), and the **producer's decode epoch** (`StreamAudioSource::epoch`), advanced only when the worker actually *applies* a seek. The decode epoch therefore lags the seek-state epoch across the window where a seek has been requested but not yet applied. Decoded chunks are tagged with the decode epoch, and terminal markers (EOF / failure) **must** be tagged the same way — via `AudioWorkerSource::decode_epoch()`, not the live seek-state epoch. A near-end seek can drive the decoder to a genuine EOF in the same window where a newer seek has already bumped the seek-state epoch; stamping the marker with the live seek-state epoch would make the stale end-of-stream pass the consumer's validator and surface as a false `ReadOutcome::Eof` for the newer (in-range) seek. Tagging with the decode epoch lets the validator discard it. This race only manifests under CPU starvation (the seek-bump and the EOF-stamp interleave), so its regression guard tags the marker through a mocked `decode_epoch` that differs from the seek-state epoch.
 
 ## Agent guardrails
 

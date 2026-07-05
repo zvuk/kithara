@@ -44,11 +44,11 @@ For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_
 <tr><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
 <tr><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
 <tr><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
-<tr><td>Android MediaCodec</td><td>Runtime hardware path for AAC-LC, MP3, FLAC with recoverable fallback to Symphonia</td><td>Android</td></tr>
+<tr><td>Android MediaCodec</td><td>Hardware path for fMP4 AAC-LC/FLAC plus standalone WAV, MP3, and ALAC through <code>AMediaExtractor</code>; no runtime Symphonia fallback</td><td>Android</td></tr>
 </table>
 
 ## Integration
 
-Consumed by `kithara-audio`, which wraps it in a threaded pipeline with effects and resampling. Accepts any `R: Read + Seek + Send + Sync + 'static` — works with `Stream<File>`, `Stream<Hls>`, `Cursor<Vec<u8>>`, or plain files.
+`kithara-audio` owns threading, effects, and resampling; this crate stays a synchronous decoder over `R: Read + Seek + Send + Sync + 'static` inputs such as `Stream<File>`, `Stream<Hls>`, cursors, or plain files.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

@@ -12,7 +12,7 @@
 
 # kithara-net
 
-HTTP client with retry, timeout, and streaming. Wraps reqwest behind the `Net` trait, with a `TimeoutNet` decorator and a `MockNet` for tests.
+HTTP client with retry, timeout, and streaming. Wraps the selected backend (`reqwest` by default, `wreq`, or Apple `NSURLSession`) behind the `Net` trait, with a `TimeoutNet` decorator and `NetMock` for tests.
 
 ## Usage
 
@@ -33,7 +33,7 @@ Decorators compose via the `NetExt` extension trait: `with_retry` adds exponenti
 <table>
 <tr><th>Type</th><th>Role</th></tr>
 <tr><td><code>Net</code> (trait)</td><td>HTTP operations: <code>get_bytes</code>, <code>post_bytes</code>, <code>stream</code>, <code>get_range</code>, <code>head</code></td></tr>
-<tr><td><code>HttpClient</code></td><td><code>reqwest::Client</code> wrapper implementing <code>Net</code></td></tr>
+<tr><td><code>HttpClient</code></td><td>Backend-agnostic client implementing <code>Net</code> for the selected feature backend</td></tr>
 <tr><td><code>Headers</code></td><td><code>HashMap&lt;String, String&gt;</code> wrapper</td></tr>
 <tr><td><code>RangeSpec</code></td><td>HTTP byte range: <code>{ start: u64, end: Option&lt;u64&gt; }</code></td></tr>
 <tr><td><code>RetryPolicy</code></td><td>Retry configuration: base delay, max delay, max retries</td></tr>
@@ -42,6 +42,13 @@ Decorators compose via the `NetExt` extension trait: `with_retry` adds exponenti
 
 ## Integration
 
-Used by `kithara-file` and `kithara-hls` for all HTTP operations. `MockNet` (behind the `mock` feature) enables deterministic testing without network access.
+Used by `kithara-file` and `kithara-hls` for all HTTP operations. `NetMock` (behind the `mock` feature, native only) enables deterministic testing without network access.
+
+## Backend Features
+
+- `client-reqwest` (default) — portable reqwest backend, required on wasm32.
+- `client-wreq` — native wreq backend with BoringSSL and browser fingerprint emulation; shadows reqwest when both are enabled.
+- `client-apple` — macOS/iOS `NSURLSession` backend; shadows the reqwest/wreq seam on Apple platforms when enabled.
+- `tls-rustls` (default) / `tls-native` — TLS selection for the reqwest path only.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

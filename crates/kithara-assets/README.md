@@ -16,15 +16,15 @@ Assets store (disk or in-memory) with lease/pin semantics and LRU eviction. An *
 
 ## Role
 
-Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-file`, `kithara-hls`). Provides a unified `AssetStore` type (`Disk`/`Mem`) that internally composes decorators: `CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<...>>>>`.
+Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-file`, `kithara-hls`). Provides a unified `AssetStore` type (`Disk`/`Mem`) that internally composes decorators: `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<...>>>>`.
 
 ## Key types & entry points
 
 - `AssetStore` — the unified, explicit public contract (`Disk`/`Mem` backends).
 - `AssetStoreBuilder` — constructs a store; propagates the shared cancellation token.
-- `scope(asset_root)` — binds a scope to one `asset_root`; mints self-identifying keys and hosts per-resource ops (`acquire_resource`, `open_resource`, byte-availability queries).
+- `scope(asset_root)` — binds a scope to one `asset_root` and mints self-identifying keys; per-resource operations and byte-availability queries live on the store.
 - `attach_demand(&key, read_pos, look_ahead)` — registers a consumer with the single-producer demand index.
-- `AcquisitionResult<Pending(ProcessedWriter), Ready(ProcessedReader)>` — the Pending/Ready typestate split that shapes the whole `Assets` contract.
+- `AssetResource = AcquisitionResult<AssetWriter, AssetReader>` — the Pending/Ready typestate split surfaced by the facade.
 
 ## Usage
 
@@ -41,6 +41,12 @@ let key = scope.key("segments/001.m4s");
 // Per-resource ops live on the store; request identity is passed per call.
 let resource = scope.store().acquire_resource(&key, None)?;
 ```
+
+## Features
+
+- `client-reqwest` / `client-wreq` and `tls-rustls` / `tls-native` — forward network backend selection to storage/test-utils dependencies.
+- `probe` — enables USDT probes for tracing.
+- `mock` — enables generated mocks for tests.
 
 ## Public contract
 

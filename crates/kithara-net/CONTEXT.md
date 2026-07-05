@@ -16,19 +16,28 @@ active per target; the choice is invisible above the `Net` trait — `HttpClient
 
 Rules:
 
-- **Exactly one backend.** A `compile_error!` (in `backend/mod.rs`) fires if no backend
-  is selected for the target. This is a contract, not a fallback — there is no silent
-  default-to-reqwest when a misconfigured build drops every client feature.
-- **Backend features are mutually exclusive.** Cargo features are additive, so a
-  build that pulls two client backends is a configuration bug. The crate rejects
-  that shape at compile time instead of picking a fallback backend.
+- **At least one usable backend.** A `compile_error!` (in `backend/mod.rs`) fires
+  if no backend is selected for the target, or if wasm32 is built without
+  `client-reqwest`. There is no silent default-to-reqwest when a misconfigured
+  build drops every client feature.
+- **Cargo features are additive; selection is cfg-priority.** Native
+  `client-wreq` shadows native `client-reqwest` when both are enabled. On macOS
+  or iOS, `client-apple` shadows the reqwest/wreq seam when enabled. This is
+  feature-priority selection, not mutual-exclusion enforcement.
 - **wasm32 is always `client-reqwest`.** `wreq`/BoringSSL has no wasm target, so
-  the `client-wreq` dep is gated to `cfg(not(wasm32))` and the wasm guard requires
-  `client-reqwest`. `client-apple` is also native-only and rejected on wasm32.
-  TLS features are inert on wasm (the browser owns TLS).
-- **TLS axis applies only to `client-reqwest`.** `tls-rustls` / `tls-native` map to
-  `reqwest`'s `rustls` / `native-tls`; they are no-ops under `client-wreq` (always
-  BoringSSL), `client-apple` (platform trust), and on wasm (the browser owns TLS).
+  the `client-wreq` dep is gated to `cfg(not(wasm32))` and the wasm guard
+  requires `client-reqwest`. TLS features are inert on wasm (the browser owns
+  TLS).
+- **TLS axis applies only to `client-reqwest`.** `tls-rustls` / `tls-native` map
+  to `reqwest`'s `rustls` / `native-tls`; they are no-ops under `client-wreq`
+  (always BoringSSL), `client-apple` (platform trust), and on wasm (the browser
+  owns TLS).
+
+Minor features:
+
+- `probe` — enables USDT probes for tracing.
+- `mock` — enables generated mocks for tests.
+- `perf` — enables `hotpath` instrumentation.
 
 Why reqwest is the default and wreq is opt-in: Cargo feature unification makes
 "disable a transitive default" effectively impossible across the dependency graph,
@@ -44,11 +53,12 @@ Backend layout:
   the uniform `backend` seam. It has no backend selection logic.
 - `backend/mod.rs` owns backend selection, compile-time guard failures, and the
   public `HttpClient` re-export.
-- When `client-apple` is not selected, `backend/mod.rs` selects the active
-  platform folder: `native/` for non-wasm targets and `wasm/` for wasm32.
-- `backend/native/mod.rs` selects the active native backend (`reqwest` unless
-  `client-wreq` is enabled), owns native-only compression builder
-  transforms, and provides native `HEAD`.
+- `backend/selected.rs` selects the active native or wasm folder when the Apple
+  backend is not selected.
+- `backend/native/mod.rs` selects the active native backend (`wreq` when
+  `client-wreq` is enabled, otherwise `reqwest`).
+- `backend/native/shared.rs` owns native-only compression builder transforms
+  plus native `HEAD` and `POST` request builders.
 - `backend/native/reqwest.rs` builds the native reqwest client.
 - `backend/native/wreq.rs` builds the native wreq client and maps
   `ImpersonatePreset` to `wreq_util::Emulation`.
@@ -98,12 +108,12 @@ not expose socket creation. Server-side TCP instrumentation, if needed for a
 specific test, belongs in test-server support rather than downloader or stream
 production code.
 
-When `client-apple` is not selected, the seam re-exported by `backend` is exactly
-`Client`, `RequestBuilder`, `Response`, `BackendError`,
-`build_client(&NetOptions, &ConnectionMetrics)`, and
-`head_request(&Client, Url)`. `ClientBuilder`, compression transforms, and
-native connector metrics stay under `backend/native/`; shared HTTP code must not
-import backend crates directly.
+When `client-apple` is not selected, the seam re-exported by `backend` includes
+`Client`, `RequestBuilder`, `Response`, `StatusCode`, `BackendError`,
+`build_client(&NetOptions, &ConnectionMetrics)`, `head_request(&Client, Url)`,
+and `post_request(&Client, Url, Bytes)`. `ClientBuilder`, compression
+transforms, and native connector metrics stay under `backend/native/`; shared
+HTTP code must not import backend crates directly.
 
 ## `client-apple` unsafe carve-out
 

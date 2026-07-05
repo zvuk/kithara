@@ -3,7 +3,7 @@
 //! - [`Audio`] — generic audio pipeline running in a separate thread
 //! - [`AudioConfig`] — pipeline configuration
 //! - [`ResamplerQuality`] — sample rate conversion quality
-//! - `Audio` also implements `rodio::Source` directly (requires `rodio` feature)
+//! - `Audio` implements [`PcmReader`] for pull-based PCM consumers
 //!
 //! See the crate `README.md` for usage and `CONTEXT.md` for threading model and architecture.
 
