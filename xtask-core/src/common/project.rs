@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use toml::Table;
 
 const CONFIG_REL: &str = ".config/xtask.toml";
 
@@ -15,16 +16,13 @@ pub struct ProjectConfig {
     pub project: ProjectIdentity,
     pub health: HealthConfig,
     pub test: TestCommandConfig,
-    pub publish: PublishConfig,
-    pub release: ReleaseConfig,
     pub lint_exclude: LintExcludeConfig,
     #[serde(default, rename = "workspace-scan")]
     pub workspace_scan: WorkspaceScan,
-    pub apple: AppleConfig,
     pub orphans: OrphansConfig,
-    pub android: AndroidConfig,
-    pub wasm: WasmConfig,
     pub quality: QualityConfig,
+    #[serde(default)]
+    pub ext: Table,
 }
 
 /// Workspace-wide Rust file scan exclusions.
@@ -41,22 +39,6 @@ pub struct OrphansConfig {
     /// (generated/helper/macro crates and per-target-gated crates that the
     /// default rust-analyzer view flags as false-positive orphans).
     pub exclude_packages: Vec<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AndroidConfig {
-    /// Cargo package compiled into the Android JNI libraries.
-    pub ffi_crate: String,
-    /// AAR artifacts the Gradle export is expected to produce.
-    pub aars: Vec<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct WasmConfig {
-    /// wasm-bindgen JS artifact patched by the trunk post-build hook.
-    pub js_artifact: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -143,84 +125,6 @@ pub struct TestLaneConfig {
     pub default_features: Vec<String>,
     pub default_flash: Option<bool>,
     pub passthrough: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ReleaseConfig {
-    /// GitHub repo (`owner/name`) that hosts the canonical releases.
-    pub github_repo: String,
-    /// Self-hosted `GitLab` instance that mirrors release artifacts.
-    pub gitlab_host: String,
-    /// `GitLab` project: numeric id or `group/name` path.
-    pub gitlab_project: String,
-    /// Generic package name in the `GitLab` registry.
-    pub gitlab_package: String,
-    /// Primary release asset: the SPM Rust `XCFramework` zip.
-    pub asset: String,
-    /// Optional single self-contained framework zip for manual drag-in. Empty
-    /// disables that channel.
-    pub single_asset: String,
-    /// Documentation channel: zip name for the DocC archive uploaded as a
-    /// release asset. Empty disables the docs channel.
-    pub docs_asset: String,
-    /// Workspace-relative DocC archive dir zipped into [`Self::docs_asset`]
-    /// (the `just apple doc` output).
-    pub docs_archive: String,
-    /// WebAssembly channel: zip name for the trunk `dist` bundle deployed to
-    /// GitHub Pages classic. Empty disables the wasm channel.
-    pub wasm_asset: String,
-    /// Workspace-relative trunk `dist` dir zipped into [`Self::wasm_asset`]
-    /// (the `cargo xtask wasm build` output).
-    pub wasm_dist: String,
-    /// Branch GitHub Pages classic serves from (force-orphan deploy of the
-    /// wasm bundle). Empty disables the pages deploy.
-    pub pages_branch: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct PublishConfig {
-    /// Generated workspace-hack crate, stripped from published manifests.
-    pub workspace_hack_crate: String,
-    /// User-agent sent to the registry when checking crate availability.
-    pub user_agent: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AppleConfig {
-    pub docgen: DocgenConfig,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct DocgenConfig {
-    /// Cargo package whose rustdoc JSON is the documentation source. The JSON
-    /// filename stem is this name with dashes replaced by underscores.
-    pub package: String,
-    /// Features enabled for the rustdoc JSON build.
-    pub features: Vec<String>,
-    /// DocC module name used in the generated extension page headers.
-    pub module: String,
-    /// Workspace-relative directory the generated `.md` extensions are written
-    /// to (a `.docc` catalog subfolder; gitignored, rebuilt by `just apple doc`).
-    pub output_dir: String,
-    /// facade DocC symbol → Rust type allowlist/mapping.
-    pub symbols: Vec<DocgenSymbol>,
-    /// Workspace-relative Swift source dirs whose every `public`/`open`
-    /// declaration must carry a `///` doc comment. Enforced by
-    /// `apple docgen --check` so no public symbol ships undocumented.
-    pub swift_dirs: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DocgenSymbol {
-    /// DocC symbol name in the facade module (e.g. `TrackStatus`).
-    pub docc: String,
-    /// Rust type name in the rustdoc JSON (e.g. `FfiTrackStatus`).
-    pub rust: String,
 }
 
 impl ProjectConfig {

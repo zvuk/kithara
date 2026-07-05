@@ -7,14 +7,13 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
-use kithara_xtask_core::common::project::{DocgenConfig, ProjectConfig};
 use regex::Regex;
 use rustdoc_types::{Crate, ItemEnum};
 
-pub(crate) fn run(check: bool) -> Result<()> {
+use crate::config::DocgenConfig;
+
+pub(crate) fn run(check: bool, docgen: &DocgenConfig) -> Result<()> {
     let root = workspace_root()?;
-    let config = ProjectConfig::load(&root)?;
-    let docgen = &config.apple.docgen;
     validate(docgen)?;
 
     build_rustdoc_json(&root, docgen)?;
@@ -68,16 +67,16 @@ pub(crate) fn run(check: bool) -> Result<()> {
 
 fn validate(docgen: &DocgenConfig) -> Result<()> {
     if docgen.package.is_empty() {
-        bail!("[apple.docgen] package is empty in .config/xtask.toml");
+        bail!("[ext.apple.docgen] package is empty in .config/xtask.toml");
     }
     if docgen.module.is_empty() {
-        bail!("[apple.docgen] module is empty in .config/xtask.toml");
+        bail!("[ext.apple.docgen] module is empty in .config/xtask.toml");
     }
     if docgen.output_dir.is_empty() {
-        bail!("[apple.docgen] output_dir is empty in .config/xtask.toml");
+        bail!("[ext.apple.docgen] output_dir is empty in .config/xtask.toml");
     }
     if docgen.symbols.is_empty() {
-        bail!("[apple.docgen] has no symbols in .config/xtask.toml");
+        bail!("[ext.apple.docgen] has no symbols in .config/xtask.toml");
     }
     Ok(())
 }

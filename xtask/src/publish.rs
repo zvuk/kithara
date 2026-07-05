@@ -9,10 +9,9 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::{DependencyKind, MetadataCommand};
-use kithara_xtask_core::{
-    common::project::{ProjectConfig, PublishConfig},
-    util::check_tool,
-};
+use kithara_xtask_core::{Ctx, util::check_tool};
+
+use crate::config::{KitharaExt, PublishConfig};
 
 struct Consts;
 
@@ -48,7 +47,7 @@ pub(crate) struct PublishArgs {
     no_verify: bool,
 }
 
-pub(crate) fn run(args: &PublishArgs) -> Result<()> {
+pub(crate) fn run(args: &PublishArgs, ctx: &Ctx) -> Result<()> {
     check_tool(
         "cargo-hakari",
         &["hakari", "--version"],
@@ -68,15 +67,14 @@ pub(crate) fn run(args: &PublishArgs) -> Result<()> {
     }
     println!();
 
+    let ext = KitharaExt::from_ctx(ctx)?;
     if args.dry_run {
         println!("Mode: dry-run (validate packaging without upload)");
-        let project = ProjectConfig::load(Path::new("."))?;
-        run_dry_run(&order, args.verify_registry, &project.publish)?;
+        run_dry_run(&order, args.verify_registry, &ext.publish)?;
     } else {
         println!("Mode: publish ({}s delay between crates)", args.delay);
         println!();
-        let project = ProjectConfig::load(Path::new("."))?;
-        run_publish(&order, args.delay, args.no_verify, &project.publish)?;
+        run_publish(&order, args.delay, args.no_verify, &ext.publish)?;
     }
 
     println!();

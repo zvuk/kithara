@@ -5,6 +5,7 @@ mod agent_hook;
 mod android;
 mod apple;
 mod apple_docgen;
+mod config;
 mod publish;
 mod release;
 mod wasm;
@@ -71,11 +72,11 @@ fn main() -> anyhow::Result<()> {
     let ctx = Ctx::load()?;
 
     match cli.command {
-        Command::Android { command } => android::run(command),
-        Command::Apple { command } => apple::run(command),
-        Command::Wasm { command } => wasm::run(command),
-        Command::Publish(ref args) => publish::run(args),
-        Command::Release(ref args) => release::run(args),
+        Command::Android { command } => android::run(command, &ctx),
+        Command::Apple { command } => apple::run(command, &ctx),
+        Command::Wasm { command } => wasm::run(command, &ctx),
+        Command::Publish(ref args) => publish::run(args, &ctx),
+        Command::Release(ref args) => release::run(args, &ctx),
         Command::AgentHook(ref args) => agent_hook::run(args),
         Command::Core(cmd) => kithara_xtask_core::run(&cmd, &ctx),
     }

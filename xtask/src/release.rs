@@ -5,11 +5,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_xtask_core::{
-    common::project::{ProjectConfig, ReleaseConfig},
-    util::check_tool,
-};
+use kithara_xtask_core::{Ctx, util::check_tool};
 use serde_json::{Value, json};
+
+use crate::config::{KitharaExt, ReleaseConfig};
 
 const MANIFEST: &str = "Package.swift";
 
@@ -56,9 +55,9 @@ enum ReleaseCommand {
     },
 }
 
-pub(crate) fn run(args: &ReleaseArgs) -> Result<()> {
-    let project = ProjectConfig::load(Path::new("."))?;
-    let cfg = &project.release;
+pub(crate) fn run(args: &ReleaseArgs, ctx: &Ctx) -> Result<()> {
+    let ext = KitharaExt::from_ctx(ctx)?;
+    let cfg = &ext.release;
     match &args.command {
         ReleaseCommand::Prepare { version, zip } => prepare(cfg, version, zip.as_deref()),
         ReleaseCommand::Publish { r#ref } => publish(cfg, r#ref),
@@ -1040,7 +1039,9 @@ fn require_config(cfg: &ReleaseConfig) -> Result<()> {
     ];
     for (name, value) in fields {
         if value.trim().is_empty() {
-            bail!("release.{name} is not set; fill in the [release] section of .config/xtask.toml");
+            bail!(
+                "ext.release.{name} is not set; fill in the [ext.release] section of .config/xtask.toml"
+            );
         }
     }
     Ok(())

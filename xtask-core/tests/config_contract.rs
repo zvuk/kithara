@@ -43,6 +43,46 @@ name = "typo"
 }
 
 #[test]
+fn top_level_consumer_section_is_rejected() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[android]
+ffi_crate = "kithara-ffi"
+"#,
+    );
+
+    let error = ProjectConfig::load(temp.path()).expect_err("top-level consumer section fails");
+    let message = format!("{error:#}");
+
+    assert!(
+        message.contains("android"),
+        "error did not mention offending token: {message}"
+    );
+}
+
+#[test]
+fn ext_table_accepts_consumer_sections() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[ext.android]
+ffi_crate = "kithara-ffi"
+
+[ext.local_tool]
+enabled = true
+"#,
+    );
+
+    let config = ProjectConfig::load(temp.path()).expect("load ext passthrough config");
+
+    assert!(config.ext.contains_key("android"));
+    assert!(config.ext.contains_key("local_tool"));
+}
+
+#[test]
 fn workspace_scan_parses() {
     let temp = tempdir().expect("tempdir");
     write_config(
