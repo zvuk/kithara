@@ -4,7 +4,7 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 use super::actions::Action;
 
 /// The "scripted" scenario from the Player Robustness plan
-/// ("Understanding Lock" / "Обязательный scripted scenario"):
+/// ("Understanding Lock" / "Mandatory scripted scenario"):
 /// seek 90 % → play 1-5 s → seek 10 % → play 1-5 s → seek 50 % → read
 /// to the end. Bugs #5 and #6 are expected to surface on the first two
 /// jumps; the third is the "near-end" stress that lights up Bug #7
@@ -176,7 +176,7 @@ pub(crate) fn auto_abr_upswitch_then_seek_burst() -> Vec<Action> {
         // playlist this happens at ~4 s; we give it 15 s to be safe.
         Action::PlayFor(Duration::from_secs(15)),
         // Burst of seeks across the track — each one is the seek the
-        // user describes as "просто eof или hang". If any one of them
+        // user describes as "just EOF or hang". If any one of them
         // breaks the contract (auto-advance, position never lands,
         // track Failed), the harness panics.
         Action::SeekRatio(0.50),

@@ -40,7 +40,7 @@ const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
 /// real player loop (`PlayerProcessor` — the same path cpal drives) offline.
 ///
 /// The bug: every ~30 s the playhead jumps forward by several seconds
-/// ("проглатывание") while audio decodes continuously — the source timeline's
+/// while audio decodes continuously — the source timeline's
 /// `committed_position` runs ahead of decoded content with no seek (app.log
 /// 2026-05-27: committed +10.4 s in one step, ~50 s ahead of decoded).
 ///

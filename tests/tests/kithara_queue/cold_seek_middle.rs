@@ -343,8 +343,8 @@ async fn queue_seek_two_tracks_index1(temp_dir: TestTempDir) {
 /// Fix is a proper downloader-level request coalescer (single-flight
 /// layer between `PeerHandle::execute` and the HTTP client).
 ///
-/// Без `#[ignore]` — пинит реальную регрессию: пока coalescer не написан,
-/// этот тест падает в `just test` и держит баг на виду.
+/// Without `#[ignore]` this pins a real regression: until the coalescer exists,
+/// this test fails under `just test` and keeps the bug visible.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(20)))]
 #[ignore = "pins real regression — pending downloader request coalescer; unignore when single-flight layer lands"]
 async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {

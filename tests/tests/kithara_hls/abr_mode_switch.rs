@@ -1126,8 +1126,8 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
 
 /// Phase O.0 regression: production bug repro.
 ///
-/// User reports: "клик на новый вариант — играет тот же, в кэше новых
-/// файлов нет". app.log confirms `GUI: set_mode accepted` fires but no
+/// User reports: "clicking a new variant keeps playing the same one; no new
+/// files appear in the cache". app.log confirms `GUI: set_mode accepted` fires but no
 /// `commit_variant_switch` invocation follows.
 ///
 /// Root cause hypothesis: when all segments of the current variant are

@@ -54,7 +54,7 @@ const MAX_COMMITTED_STEP_SECS: f64 = 0.5;
 /// demuxer's segment cursor used to advance by the previous segment's
 /// `byte_range.end` (a byte offset). When the announced size disagrees with
 /// the real one, that byte offset re-resolves to the wrong segment and the
-/// demuxer silently skips one whole segment — the "проглатывание" swallow.
+/// demuxer silently skips one whole segment — the swallow.
 /// An over-estimate makes the byte-advance overshoot the next segment
 /// deterministically, without any FLAC frame straddling a truncated read
 /// (which an under-estimate would cause). The fix advances by segment index
@@ -108,7 +108,7 @@ async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f6
 ///
 /// The bug: the source timeline's `committed_position` jumps forward by ~one
 /// segment with no seek when a slow FLAC segment isn't ready by the real-time
-/// deadline ("проглатывание"). Detector: the `committed_ns` USDT probe on
+/// deadline. Detector: the `committed_ns` USDT probe on
 /// `PlayheadState::write_playhead` — fail if the committed playhead ever jumps
 /// forward by more than [`MAX_COMMITTED_STEP_SECS`] in a single commit.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
