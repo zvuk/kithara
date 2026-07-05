@@ -10,7 +10,7 @@ name = "kithara"
 path = "src/main.rs"
 
 [features]
-default = ["tui", "gui", "beat-nn"]
+default = ["tui", "gui", "beat-nn", "stretch-signalsmith"]
 tui = ["dep:ratatui", "dep:crossterm"]
 # HTTP backend forwarding to every kithara-net-reaching production dep
 # (kithara facade + kithara-queue). NOT in `default`: the backend is selected
@@ -30,7 +30,8 @@ beat-nn = ["kithara/beat-nn"]
 # modules without pulling in iced/ratatui. Used by integration tests
 # (`tests/tests/kithara_queue/real_playlist.rs`).
 lib-only = []
-# Native-only C++ time-stretch backends, opt-in (need a C++ toolchain).
+# Native-only C++ time-stretch backends. Signalsmith is the default; bungee
+# stays opt-in (need a C++ toolchain).
 stretch-signalsmith = ["kithara/stretch-signalsmith"]
 stretch-bungee = ["kithara/stretch-bungee"]
 # Enable both stretch libraries in the DJ deck's selector.
