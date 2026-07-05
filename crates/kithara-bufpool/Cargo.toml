@@ -24,7 +24,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 [dev-dependencies]
 kithara-bufpool = { path = ".", default-features = false }
 kithara-test-macros = { path = "../kithara-test-macros" }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["probe", "hang", "no-block"] }
 wasm-bindgen-test = { workspace = true }
 
 [lints]

@@ -80,7 +80,7 @@ kithara-net = { workspace = true, default-features = false, features = [
     "client-reqwest",
     "tls-rustls",
 ] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
 
 aes = { workspace = true }
 cbc = { workspace = true }

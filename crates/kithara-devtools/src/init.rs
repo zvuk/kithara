@@ -26,6 +26,7 @@ impl Consts {
 # default_lane = ""
 # default_backend = ""
 # feature_arg = ""
+# features = []
 #
 # [test.flash]
 # features = []

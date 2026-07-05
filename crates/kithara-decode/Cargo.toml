@@ -71,7 +71,7 @@ ndk-context = { workspace = true }
 
 [dev-dependencies]
 kithara-storage = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
 wasm-bindgen-test = { workspace = true }
 
 [lints]

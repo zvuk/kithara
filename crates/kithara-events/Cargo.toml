@@ -44,7 +44,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-events = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
 wasm-bindgen-test = { workspace = true }
 
 [lints]

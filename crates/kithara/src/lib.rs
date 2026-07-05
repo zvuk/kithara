@@ -97,11 +97,11 @@ pub use kithara_audio::{GridSegment, RegionPlan, RegionPlanError};
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 pub use kithara_audio::{StretchControls, StretchKind, TimeStretchProcessor};
-pub use kithara_test_utils::kithara::mock;
+pub use kithara_test_utils::{kithara::mock, no_block};
 #[cfg(feature = "probe")]
 pub use kithara_test_utils::{
     kithara::{fixture, test},
-    kithara_facade::flash,
+    kithara_facade::{allow_block, flash, no_block},
 };
 
 #[cfg(feature = "mock")]

@@ -15,6 +15,8 @@ workspace_exclude = ["kithara-fuzz"]
 default_lane = "workspace"
 default_backend = "wreq"
 feature_arg = "--features"
+# Features applied to every test lane, including `--flash=off`.
+features = ["no-block"]
 
 [test.flash]
 default = true

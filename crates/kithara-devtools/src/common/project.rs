@@ -124,6 +124,7 @@ pub struct TestCommandConfig {
     pub default_lane: String,
     pub default_backend: String,
     pub feature_arg: String,
+    pub features: Vec<String>,
     pub flash: TestFlashConfig,
     pub lanes: BTreeMap<String, TestLaneConfig>,
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
