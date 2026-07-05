@@ -180,7 +180,7 @@ coordination shapes) · [`docs/workflows/rust-ai.md`](docs/workflows/rust-ai.md)
 | [`kithara-audio`](crates/kithara-audio/CONTEXT.md) | threading/ring/preload-gate contracts, seek-epoch + format-change/recreate state machines, waveform + blob-codec DSP, time-stretch routing, agent guardrails |
 | [`kithara-play`](crates/kithara-play/CONTEXT.md) | crossfade, tempo/key-lock, events, queue handover, atomic engine start, cancel tree, RT-audio rtsan rules, session hosting, features, invariants, announce contract |
 | [`kithara-queue`](crates/kithara-queue/CONTEXT.md) | queue API surface, event flow, auto-advance/pause-gate, loading lifecycle, select serialization race, kithara-app migration table |
-| [`kithara`](crates/kithara/CONTEXT.md) | facade arch + EventBus side-channel, Features/Key-Types tables, Re-exports module map, integration/feature-set guidance |
+| [`kithara`](crates/kithara/ARCHITECTURE.md) | facade arch + EventBus side-channel, Features/Key-Types tables, Re-exports module map, integration/feature-set guidance |
 | [`kithara-ffi`](crates/kithara-ffi/CONTEXT.md) | wasm32/target_os cfg-gating boundary + lint exemption, AudioPlayer facade / worker-vs-main-thread ownership, Android `android_test` gating, wasm postbuild internals |
 | [`kithara-app`](crates/kithara-app/CONTEXT.md) | track-analysis cache: TrackId vs AnalysisKey identity spaces, in-memory/disk tiers, AssetScope lifecycle, `ANALYSIS_BYTES_VERSION` invalidation |
 | [`kithara-test-macros`](crates/kithara-test-macros/CONTEXT.md) | per-flag test semantics, flash ambient-holder-per-emit-path rules, probe-argument contract (6-arg USDT ceiling, backtrace cost) |

@@ -1,6 +1,6 @@
-# kithara — Context
+# kithara — Architecture
 
-Detailed contracts and invariants for the kithara crate; the README is the overview.
+Architecture, contracts, and invariants for the kithara facade crate; the README is the overview.
 
 ## Architecture
 

@@ -57,4 +57,4 @@ side-channel and never sits in the audio path. For advanced control — multi-sl
 engine, crossfade, EQ — reach into `kithara::play`. The `prelude` collects the
 everyday types.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the architecture, detailed contracts, and invariants.
