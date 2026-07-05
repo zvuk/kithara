@@ -11,6 +11,7 @@ use kithara_test_utils::kithara;
 use crate::{
     codec::FrameCodec,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
+    duration_for_frames,
     error::DecodeResult,
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
@@ -170,7 +171,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 DemuxOutcome::Pending(reason) => {
                     return Ok(DecoderChunkOutcome::Pending(reason));
                 }
-                DemuxOutcome::Eof => return Ok(DecoderChunkOutcome::Eof),
+                DemuxOutcome::Eof => return self.drain_codec_eof(),
             };
             hang_reset!();
             let frame_pts = frame.pts;
@@ -223,6 +224,21 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             let chunk = self.build_chunk(buf, frames, chunk_pts, source_bytes);
             return Ok(DecoderChunkOutcome::Chunk(chunk));
         }
+    }
+
+    fn drain_codec_eof(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if self.spec.sample_rate.get() == self.demuxer.track_info().sample_rate {
+            return Ok(DecoderChunkOutcome::Eof);
+        }
+
+        let mut buf = self.pool.get();
+        let timestamp = duration_for_frames(self.spec.sample_rate.get(), self.frame_offset);
+        let frames = self.codec.decode_frame(&[], timestamp, &[], &mut buf)?;
+        if frames == 0 {
+            return Ok(DecoderChunkOutcome::Eof);
+        }
+        let chunk = self.build_chunk(buf, frames, timestamp, 0);
+        Ok(DecoderChunkOutcome::Chunk(chunk))
     }
 
     fn seek_inner(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -671,6 +687,71 @@ mod test_counting_codec {
 }
 
 #[cfg(test)]
+mod test_eof_drain_codec {
+
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    };
+
+    use kithara_bufpool::PcmBuf;
+    use kithara_platform::time::Duration;
+
+    use crate::{codec::FrameCodec, error::DecodeResult, types::PcmSpec};
+
+    pub(super) struct EofDrainCodec {
+        pub(super) empty_decode_calls: Arc<AtomicU32>,
+        spec: PcmSpec,
+        frames_per_call: u32,
+        tail_frames: u32,
+        tail_pending: bool,
+    }
+
+    impl EofDrainCodec {
+        pub(super) fn new(spec: PcmSpec, frames_per_call: u32, tail_frames: u32) -> Self {
+            Self {
+                empty_decode_calls: Arc::new(AtomicU32::new(0)),
+                spec,
+                frames_per_call,
+                tail_frames,
+                tail_pending: tail_frames > 0,
+            }
+        }
+    }
+
+    impl FrameCodec for EofDrainCodec {
+        fn decode_frame(
+            &mut self,
+            bytes: &[u8],
+            _pts: Duration,
+            _packet_desc: &[u8],
+            out: &mut PcmBuf,
+        ) -> DecodeResult<u32> {
+            if bytes.is_empty() {
+                self.empty_decode_calls.fetch_add(1, Ordering::SeqCst);
+                if !self.tail_pending {
+                    out.clear();
+                    return Ok(0);
+                }
+                self.tail_pending = false;
+                return super::write_silent_test_frame(self.spec, self.tail_frames, out);
+            }
+
+            super::write_silent_test_frame(self.spec, self.frames_per_call, out)
+        }
+
+        fn flush(&mut self) -> DecodeResult<()> {
+            self.tail_pending = self.tail_frames > 0;
+            Ok(())
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+}
+
+#[cfg(test)]
 mod seek_trim_tests {
 
     use std::{
@@ -693,6 +774,7 @@ mod seek_trim_tests {
 
     impl Consts {
         const CHANNELS: u16 = 2;
+        const OUTPUT_SAMPLE_RATE: u32 = 48_000;
         const PACKET_COUNT: u64 = 6;
         const PACKET_FRAMES: u32 = 1024;
         const SAMPLE_RATE: u32 = 44_100;
@@ -798,9 +880,13 @@ mod seek_trim_tests {
     }
 
     fn empty_track() -> TrackInfo {
+        track_with_rate(Consts::SAMPLE_RATE)
+    }
+
+    fn track_with_rate(sample_rate: u32) -> TrackInfo {
         TrackInfo {
             codec: AudioCodec::AacLc,
-            sample_rate: 44_100,
+            sample_rate,
             channels: 2,
             extra_data: Vec::new(),
             duration: None,
@@ -983,6 +1069,165 @@ mod seek_trim_tests {
             target
         );
         assert_eq!(chunk.meta.frames, expected_frames);
+    }
+
+    #[kithara::test]
+    fn seek_trim_uses_codec_output_rate_for_resampled_chunks() {
+        let source_packet_start =
+            duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES));
+        let target =
+            duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512);
+        let output_packet_frames = u32::try_from(frames_to_trim(
+            Duration::ZERO,
+            packet_duration(),
+            Consts::OUTPUT_SAMPLE_RATE,
+        ))
+        .expect("output packet frame count fits in u32");
+        let codec = CountingCodec::new(
+            PcmSpec::new(
+                Consts::CHANNELS,
+                NonZeroU32::new(Consts::OUTPUT_SAMPLE_RATE).expect("test rate"),
+            ),
+            output_packet_frames,
+        );
+        let demuxer = BoundaryFrameDemuxer {
+            track: track_with_rate(Consts::SAMPLE_RATE),
+            held: Vec::new(),
+            frames: regular_seek_frames(),
+            idx: 0,
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+
+        let _ = decoder.seek(target).expect("BUG: seek");
+        let outcome = decoder.next_chunk().expect("BUG: next_chunk");
+        let DecoderChunkOutcome::Chunk(chunk) = outcome else {
+            panic!("expected Chunk, got {outcome:?}");
+        };
+        let expected_trim = frames_to_trim(source_packet_start, target, Consts::OUTPUT_SAMPLE_RATE);
+        let expected_frames =
+            output_packet_frames - u32::try_from(expected_trim).expect("trim fits in u32");
+        let expected_frame = frame_offset_for(target, Consts::OUTPUT_SAMPLE_RATE);
+
+        assert_eq!(
+            chunk.meta.spec.sample_rate.get(),
+            Consts::OUTPUT_SAMPLE_RATE
+        );
+        assert_eq!(chunk.meta.frame_offset, expected_frame);
+        assert_eq!(chunk.meta.timestamp, target);
+        assert_eq!(chunk.meta.frames, expected_frames);
+    }
+}
+
+#[cfg(test)]
+mod eof_drain_tests {
+
+    use std::{
+        num::NonZeroU32,
+        sync::{Arc, atomic::Ordering},
+    };
+
+    use kithara_platform::time::Duration;
+    use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
+
+    use super::{test_eof_drain_codec::EofDrainCodec, *};
+    use crate::{
+        demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
+        traits::Decoder,
+    };
+
+    struct OneFrameDemuxer {
+        track: TrackInfo,
+        held: Vec<u8>,
+        emitted: bool,
+    }
+
+    impl Demuxer for OneFrameDemuxer {
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+
+        fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+            if self.emitted {
+                return Ok(DemuxOutcome::Eof);
+            }
+            self.emitted = true;
+            self.held = vec![1u8; 4];
+            Ok(DemuxOutcome::Frame(Frame {
+                pts: Duration::ZERO,
+                duration: Duration::from_millis(20),
+                data: &self.held,
+                packet_desc: &[],
+            }))
+        }
+
+        fn seek(
+            &mut self,
+            _pos: Duration,
+            _priming: crate::codec::CodecPriming,
+        ) -> DecodeResult<DemuxSeekOutcome> {
+            self.emitted = false;
+            Ok(DemuxSeekOutcome::Landed {
+                landed_at: Duration::ZERO,
+                landed_byte: Some(0),
+                preroll: crate::demuxer::PrerollHint::NotNeeded,
+            })
+        }
+
+        fn track_info(&self) -> &TrackInfo {
+            &self.track
+        }
+    }
+
+    fn empty_track() -> TrackInfo {
+        TrackInfo {
+            codec: AudioCodec::AacLc,
+            sample_rate: 44_100,
+            channels: 2,
+            extra_data: Vec::new(),
+            duration: None,
+            gapless: None,
+        }
+    }
+
+    #[kithara::test]
+    fn demuxer_eof_drains_codec_tail_before_reporting_eof() {
+        const FRAMES: u32 = 960;
+        const TAIL_FRAMES: u32 = 17;
+        const SAMPLE_RATE: u32 = 48_000;
+
+        let codec = EofDrainCodec::new(
+            PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+            FRAMES,
+            TAIL_FRAMES,
+        );
+        let empty_calls = Arc::clone(&codec.empty_decode_calls);
+        let demuxer = OneFrameDemuxer {
+            track: empty_track(),
+            held: Vec::new(),
+            emitted: false,
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+
+        let first = decoder.next_chunk().expect("BUG: first chunk");
+        let DecoderChunkOutcome::Chunk(first_chunk) = first else {
+            panic!("expected first Chunk, got {first:?}");
+        };
+        let drained = decoder.next_chunk().expect("BUG: EOF drain chunk");
+        let DecoderChunkOutcome::Chunk(drained_chunk) = drained else {
+            panic!("expected drained Chunk, got {drained:?}");
+        };
+        let eof = decoder.next_chunk().expect("BUG: EOF after drain");
+
+        assert!(matches!(eof, DecoderChunkOutcome::Eof));
+        assert_eq!(first_chunk.meta.frames, FRAMES);
+        assert_eq!(drained_chunk.meta.frames, TAIL_FRAMES);
+        assert_eq!(drained_chunk.meta.frame_offset, u64::from(FRAMES));
+        assert_eq!(
+            drained_chunk.meta.timestamp,
+            duration_for_frames(SAMPLE_RATE, u64::from(FRAMES))
+        );
+        assert_eq!(empty_calls.load(Ordering::SeqCst), 2);
     }
 }
 

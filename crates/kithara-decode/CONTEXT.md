@@ -44,7 +44,9 @@ resolves to concrete bytes in its own virtual coordinate space.
 
 `DecoderConfig::gapless` is enabled by default. Decoders report engine-level trim
 metadata through `DecoderTrackInfo::gapless: Option<GaplessInfo>`, where
-`leading_frames` and `trailing_frames` are PCM frame counts.
+`leading_frames` and `trailing_frames` are decoder-output PCM frame counts. When
+Apple fused decode+SRC is active, the factory scales source-rate container
+metadata once before codec open so `GaplessTrimmer` never sees mixed domains.
 
 The contract has one owner for actual trimming:
 
