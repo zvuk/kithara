@@ -75,14 +75,17 @@ impl AppleCodec {
     ///
     /// Returns [`DecodeError::Backend`] when `CoreAudio`'s
     /// `AudioConverterNew` rejects the input/output ASBD pair.
-    fn open(track: &TrackInfo) -> DecodeResult<Self> {
+    fn open(track: &TrackInfo, target_output_rate: Option<u32>) -> DecodeResult<Self> {
         let AppleInputFormat {
             asbd: input_format,
             frames_per_packet,
             cookie,
         } = build_input_format(track)?;
         let input_bytes_per_packet = input_format.mBytesPerPacket;
-        let output_format = build_pcm_output_format(track.sample_rate, track.channels);
+        let output_sample_rate = resolve_output_sample_rate(track.sample_rate, target_output_rate);
+        let spec = PcmSpec::checked(track.channels, output_sample_rate, "apple.codec.output")?;
+        let output_format =
+            build_pcm_output_format(track.sample_rate, track.channels, target_output_rate);
 
         let mut converter: AudioConverterRef = ptr::null_mut();
         // SAFETY: input/output formats are valid stack values; `converter`
@@ -115,8 +118,6 @@ impl AppleCodec {
             }
         }
 
-        let spec = PcmSpec::checked(track.channels, track.sample_rate, "apple.codec.open")?;
-
         Ok(Self {
             converter,
             spec,
@@ -141,8 +142,12 @@ impl AppleCodec {
     ///
     /// Returns [`DecodeError::Backend`] when `CoreAudio`'s `AudioConverterNew`
     /// rejects the input/output ASBD pair.
-    pub(crate) fn open_with_config(track: &TrackInfo, gapless: bool) -> DecodeResult<Self> {
-        let mut codec = Self::open(track)?;
+    pub(crate) fn open_with_config(
+        track: &TrackInfo,
+        gapless: bool,
+        target_output_rate: Option<u32>,
+    ) -> DecodeResult<Self> {
+        let mut codec = Self::open(track, target_output_rate)?;
         if gapless {
             codec.gapless_enabled = true;
             let prime_info = prime_info_from_converter(codec.converter);
@@ -598,7 +603,19 @@ fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
         .collect())
 }
 
-fn build_pcm_output_format(sample_rate: u32, channels: u16) -> AudioStreamBasicDescription {
+fn resolve_output_sample_rate(source_rate: u32, target_output_rate: Option<u32>) -> u32 {
+    match target_output_rate {
+        Some(rate) if rate != source_rate => rate,
+        _ => source_rate,
+    }
+}
+
+fn build_pcm_output_format(
+    source_rate: u32,
+    channels: u16,
+    target_output_rate: Option<u32>,
+) -> AudioStreamBasicDescription {
+    let sample_rate = resolve_output_sample_rate(source_rate, target_output_rate);
     AudioStreamBasicDescription {
         mSampleRate: f64::from(sample_rate),
         mFormatID: Consts::kAudioFormatLinearPCM,
@@ -748,6 +765,97 @@ mod priming_table_tests {
 }
 
 #[cfg(test)]
+mod output_rate_tests {
+    use std::{fs, path::Path};
+
+    use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
+
+    use super::{AppleCodec, build_pcm_output_format, resolve_output_sample_rate};
+    use crate::{
+        codec::FrameCodec,
+        demuxer::TrackInfo,
+        fmp4::parsing::{CodecConfig, parse_init},
+    };
+
+    struct Consts;
+    impl Consts {
+        const ALT_RATE: u32 = 48_000;
+        const SOURCE_RATE: u32 = 44_100;
+        const TEST_CHANNELS: u16 = 2;
+    }
+
+    fn read_fixture(name: &str) -> Vec<u8> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/hls")
+            .join(name);
+        fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+    }
+
+    fn aac_lc_track() -> TrackInfo {
+        let init_bytes = read_fixture("init-slq-a1.mp4");
+        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+        let extra_data = match &init.config {
+            CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
+        };
+        TrackInfo {
+            extra_data,
+            codec: AudioCodec::AacLc,
+            sample_rate: init.sample_rate,
+            channels: init.channels,
+            duration: None,
+            gapless: init.gapless,
+        }
+    }
+
+    #[kithara::test]
+    fn pcm_output_format_uses_source_rate_without_target() {
+        let asbd = build_pcm_output_format(Consts::SOURCE_RATE, Consts::TEST_CHANNELS, None);
+
+        assert_eq!(asbd.mSampleRate, f64::from(Consts::SOURCE_RATE));
+    }
+
+    #[kithara::test]
+    fn pcm_output_format_uses_source_rate_when_target_matches() {
+        let asbd = build_pcm_output_format(
+            Consts::SOURCE_RATE,
+            Consts::TEST_CHANNELS,
+            Some(Consts::SOURCE_RATE),
+        );
+
+        assert_eq!(asbd.mSampleRate, f64::from(Consts::SOURCE_RATE));
+    }
+
+    #[kithara::test]
+    fn pcm_output_format_uses_target_rate_when_different() {
+        let asbd = build_pcm_output_format(
+            Consts::SOURCE_RATE,
+            Consts::TEST_CHANNELS,
+            Some(Consts::ALT_RATE),
+        );
+
+        assert_eq!(asbd.mSampleRate, f64::from(Consts::ALT_RATE));
+    }
+
+    #[kithara::test]
+    fn apple_codec_spec_uses_resolved_output_rate() {
+        let track = aac_lc_track();
+        let target_rate = if track.sample_rate == Consts::ALT_RATE {
+            Consts::SOURCE_RATE
+        } else {
+            Consts::ALT_RATE
+        };
+        for target_output_rate in [None, Some(track.sample_rate), Some(target_rate)] {
+            let codec = AppleCodec::open_with_config(&track, false, target_output_rate)
+                .expect("BUG: open Apple codec with target rate");
+            let expected_rate = resolve_output_sample_rate(track.sample_rate, target_output_rate);
+
+            assert_eq!(codec.spec().sample_rate.get(), expected_rate);
+        }
+    }
+}
+
+#[cfg(test)]
 mod aac_lc_decode_tests {
     use kithara_bufpool::PcmPool;
     use kithara_platform::time::Duration;
@@ -799,8 +907,8 @@ mod aac_lc_decode_tests {
         assert!(!ranges.is_empty(), "segment yielded no AAC frames");
 
         let pool = PcmPool::default();
-        let mut codec =
-            AppleCodec::open_with_config(&track, false).expect("BUG: open Apple AAC-LC codec");
+        let mut codec = AppleCodec::open_with_config(&track, false, None)
+            .expect("BUG: open Apple AAC-LC codec");
         let mut pcm = Vec::new();
         for &(offset, size) in &ranges {
             let mut buf = pool.get();

@@ -118,6 +118,9 @@ pub struct DecoderConfig {
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
     pub pcm_pool: Option<PcmPool>,
+    /// Optional hardware-decoder output sample rate. `None` means the
+    /// backend emits at the source rate.
+    pub target_output_rate: Option<u32>,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
@@ -286,8 +289,9 @@ fn create_apple(
                 "fmp4_segment: dispatching to segment-aware Apple HW codec path"
             );
             let gapless = config.gapless;
+            let target_output_rate = config.target_output_rate;
             return build_fmp4_segment_decoder(source, layout, config, |track| {
-                AppleCodec::open_with_config(track, gapless)
+                AppleCodec::open_with_config(track, gapless, target_output_rate)
             });
         }
         #[cfg(feature = "symphonia")]
@@ -360,7 +364,11 @@ fn build_apple_standalone_decoder(
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }
-    let codec_impl = AppleCodec::open_with_config(demuxer.track_info(), config.gapless)?;
+    let codec_impl = AppleCodec::open_with_config(
+        demuxer.track_info(),
+        config.gapless,
+        config.target_output_rate,
+    )?;
     let pool = config
         .pcm_pool
         .clone()
