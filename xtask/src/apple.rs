@@ -452,7 +452,7 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
         // the Apple AudioToolbox backend is the sole decoder on-device.
         "--no-default-features",
         "-F",
-        "uniffi,apple,dev",
+        "uniffi,apple,dev,stretch-signalsmith",
         "--swift-tools-version",
         "6.0",
         "-y",

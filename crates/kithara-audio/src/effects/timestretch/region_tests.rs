@@ -2,16 +2,15 @@ use std::{num::NonZero, sync::Arc};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 
-use super::{
-    controls::StretchControls,
-    processor::TimeStretchProcessor,
-    region_plan::{RegionPlan, RegionPlanError},
-    stretch_kind::StretchBackendKind,
+use super::{StretchControls, TimeStretchProcessor};
+use crate::{
+    region::{GridSegment, RegionPlan, RegionPlanError},
+    traits::AudioEffect,
 };
-use crate::{traits::AudioEffect, waveform::GridSegment};
 
 const SR: u32 = 44_100;
 const CH: usize = 2;
@@ -39,11 +38,7 @@ fn u64_of(x: usize) -> u64 {
 }
 
 fn seg(start: usize, end: usize, ratio: f64) -> GridSegment {
-    GridSegment {
-        start_frame: u64_of(start),
-        end_frame: u64_of(end),
-        ratio_correction: ratio,
-    }
+    GridSegment::new(u64_of(start), u64_of(end), ratio)
 }
 
 fn spec() -> PcmSpec {
@@ -104,7 +99,7 @@ fn add_click(buf: &mut [f32], frame: usize) {
 fn render(speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
-    controls.set_backend(StretchBackendKind::Signalsmith);
+    controls.set_backend(StretchKind::Signalsmith);
     controls.set_region_plan(plan.map(Arc::new));
     let rate = Arc::new(AtomicF32::new(1.0));
     let mut fx = TimeStretchProcessor::new(controls, rate, spec(), PcmPool::default().clone());

@@ -11,7 +11,7 @@ use iced::{
     widget::{overlay::menu, pick_list},
 };
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use kithara::prelude::StretchBackendKind;
+use kithara::prelude::StretchKind;
 
 use super::tokens::{studio_radius, studio_type};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -147,7 +147,7 @@ fn library_select(_state: &Kithara, _p: GuiPalette) -> Element<'static, Message>
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 fn library_select(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     let active = state.controller.deck().backend();
-    pick_list(StretchBackendKind::ALL, Some(active), |k| {
+    pick_list(StretchKind::all(), Some(active), |k| {
         Message::Dj(DjMsg::SelectBackend(k))
     })
     .text_size(studio_type::MONO_SM)

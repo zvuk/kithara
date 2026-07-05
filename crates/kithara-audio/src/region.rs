@@ -1,4 +1,25 @@
-use crate::waveform::GridSegment;
+/// One uniform-tempo region of the grid: `[start_frame, end_frame)` in
+/// source frames with a single time-stretch ratio correction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct GridSegment {
+    /// `nominal_bar / fitted_bar`; 1.0 = the region already sits on the grid.
+    pub ratio_correction: f64,
+    pub end_frame: u64,
+    pub start_frame: u64,
+}
+
+impl GridSegment {
+    /// Construct a segment.
+    #[must_use]
+    pub fn new(start_frame: u64, end_frame: u64, ratio_correction: f64) -> Self {
+        Self {
+            ratio_correction,
+            end_frame,
+            start_frame,
+        }
+    }
+}
 
 /// Per-region stretch plan: sorted, non-overlapping `[start, end)` segments in
 /// source frames (`PcmMeta.frame_offset` space), each with a ratio correction.
@@ -49,7 +70,8 @@ impl RegionPlan {
 
     /// Resolve the region covering `frame`: a plan segment, or the gap
     /// between segments (correction `1.0`).
-    pub(crate) fn region_at(&self, frame: u64) -> ActiveRegion {
+    #[must_use]
+    pub fn region_at(&self, frame: u64) -> ActiveRegion {
         let idx = self.segments.partition_point(|s| s.end_frame <= frame);
         match self.segments.get(idx) {
             Some(s) if s.start_frame <= frame => ActiveRegion {
@@ -76,21 +98,67 @@ impl RegionPlan {
 /// Resolved uniform-ratio span covering one source frame: either a plan
 /// segment or a gap between segments.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct ActiveRegion {
-    pub(crate) correction: f64,
-    pub(crate) end: u64,
-    pub(crate) start: u64,
+#[non_exhaustive]
+pub struct ActiveRegion {
+    pub correction: f64,
+    pub end: u64,
+    pub start: u64,
 }
 
 impl ActiveRegion {
     /// The whole-track region used when no plan is installed.
-    pub(crate) const UNBOUNDED: Self = Self {
+    pub const UNBOUNDED: Self = Self {
         start: 0,
         end: u64::MAX,
         correction: 1.0,
     };
 
-    pub(crate) fn contains(&self, frame: u64) -> bool {
+    #[must_use]
+    pub fn contains(&self, frame: u64) -> bool {
         self.start <= frame && frame < self.end
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GridSegment, RegionPlan, RegionPlanError};
+
+    fn seg(start: u64, end: u64, ratio: f64) -> GridSegment {
+        GridSegment::new(start, end, ratio)
+    }
+
+    #[test]
+    fn plan_rejects_invalid_segments() {
+        assert!(matches!(
+            RegionPlan::new(vec![seg(10, 10, 1.0)]),
+            Err(RegionPlanError::Inverted { index: 0 })
+        ));
+        assert!(matches!(
+            RegionPlan::new(vec![seg(0, 10, 0.0)]),
+            Err(RegionPlanError::Ratio { index: 0, .. })
+        ));
+        assert!(matches!(
+            RegionPlan::new(vec![seg(0, 100, 1.0), seg(50, 200, 1.0)]),
+            Err(RegionPlanError::Overlap { index: 1 })
+        ));
+    }
+
+    #[test]
+    fn lookup_covers_segments_and_gaps() {
+        let plan =
+            RegionPlan::new(vec![seg(100, 200, 1.1), seg(300, 400, 0.9)]).expect("valid plan");
+        let cases = [
+            (0_u64, 0_u64, 100_u64, 1.0),
+            (150, 100, 200, 1.1),
+            (250, 200, 300, 1.0),
+            (350, 300, 400, 0.9),
+            (450, 400, u64::MAX, 1.0),
+        ];
+        for (frame, start, end, correction) in cases {
+            let region = plan.region_at(frame);
+            assert_eq!((region.start, region.end), (start, end));
+            assert!((region.correction - correction).abs() < f64::EPSILON);
+            assert!(region.contains(frame));
+        }
     }
 }

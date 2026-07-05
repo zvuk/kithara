@@ -10,7 +10,7 @@ keywords = ["audio", "dsp", "resampling", "playback", "player"]
 categories = ["multimedia::audio"]
 
 [features]
-default = ["symphonia", "client-reqwest", "tls-rustls"]
+default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 probe = []
 mock = []
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -53,11 +53,11 @@ symphonia = ["kithara-decode/symphonia"]
 # decoder is LC-only; without this feature, HE-AAC v2 streams fail to
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
-# Native-only C++ time-stretch backends, opt-in. Each pulls a C++ toolchain
-# (signalsmith: cc+libclang; bungee: cmake). Without one, default + wasm
-# builds carry no stretch DSP: speed control stays, key-lock is compiled out.
-stretch-signalsmith = ["dep:signalsmith-stretch"]
-stretch-bungee = ["dep:bungee-rs"]
+# Native-only C++ time-stretch backends. Default native builds use signalsmith;
+# bungee stays opt-in. Wasm builds pass `--no-default-features`, so they carry
+# no stretch DSP: speed control stays, key-lock is compiled out.
+stretch-signalsmith = ["dep:kithara-stretch", "kithara-stretch/stretch-signalsmith"]
+stretch-bungee = ["dep:kithara-stretch", "kithara-stretch/stretch-bungee"]
 # NN beat/downbeat detector (kithara-beat, embedded small model). Native-only
 # in practice: wasm builds simply do not enable it (rten on wasm unverified).
 beat-nn = ["dep:kithara-beat", "kithara-beat/embed-small-model"]
@@ -70,6 +70,7 @@ kithara-decode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
+kithara-stretch = { workspace = true, default-features = false, optional = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
@@ -93,9 +94,6 @@ tracing = { workspace = true }
 unimock = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-
-bungee-rs = { workspace = true, optional = true }
-signalsmith-stretch = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
