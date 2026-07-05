@@ -267,7 +267,11 @@ impl Default for DeadDocRefsConfig {
 }
 
 fn default_dead_doc_refs_exclude_paths() -> Vec<String> {
-    default_tracked_text_exclude_paths()
+    let mut paths = default_tracked_text_exclude_paths();
+    // Lint-check implementations carry synthetic fixture paths in their
+    // unit tests; those strings are test vectors, not references.
+    paths.push("**/kithara-devtools/src/style/checks/*.rs".to_string());
+    paths
 }
 
 fn default_tracked_text_exclude_paths() -> Vec<String> {

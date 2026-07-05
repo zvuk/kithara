@@ -40,6 +40,8 @@ exclude_paths = [
 
 [dead_doc_refs]
 exclude_paths = [
+  # lint-check implementations carry synthetic fixture paths in their unit tests
+  "**/kithara-devtools/src/style/checks/*.rs",
   "assets/**",
   "**/assets/**",
   "fonts/**",
