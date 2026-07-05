@@ -20,3 +20,38 @@ allowed_inline_markers = [
   "xtask-lint-ignore:",
 ]
 exclude_paths = ["**/build.rs", "**/tests/**/fixtures/**"]
+
+[non_english_text]
+exclude_paths = [
+  "assets/**",
+  "**/assets/**",
+  "fonts/**",
+  "**/fonts/**",
+  "models/**",
+  "**/models/**",
+  "fixtures/**",
+  "**/fixtures/**",
+  "target/**",
+  "**/target/**",
+  "docs/plans/**",
+  "docs/specs/**",
+  "android/gradle/wrapper/**",
+]
+
+[dead_doc_refs]
+exclude_paths = [
+  "assets/**",
+  "**/assets/**",
+  "fonts/**",
+  "**/fonts/**",
+  "models/**",
+  "**/models/**",
+  "fixtures/**",
+  "**/fixtures/**",
+  "target/**",
+  "**/target/**",
+  "docs/plans/**",
+  "docs/specs/**",
+  "android/gradle/wrapper/**",
+]
+allow_targets = []

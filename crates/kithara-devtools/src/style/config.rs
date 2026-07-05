@@ -27,6 +27,10 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) struct_init_order: StructInitOrderConfig,
     #[serde(default)]
     pub(crate) comment_hygiene: CommentHygieneConfig,
+    #[serde(default)]
+    pub(crate) dead_doc_refs: DeadDocRefsConfig,
+    #[serde(default)]
+    pub(crate) non_english_text: NonEnglishTextConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -216,6 +220,75 @@ fn default_exclude_paths() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NonEnglishTextConfig {
+    /// Workspace-relative glob patterns that opt paths out of the tracked text
+    /// scan. Binary payload directories and local-only planning docs live here
+    /// as configuration, not baked-in check constants.
+    #[serde(default = "default_non_english_exclude_paths")]
+    pub(crate) exclude_paths: Vec<String>,
+}
+
+impl Default for NonEnglishTextConfig {
+    fn default() -> Self {
+        Self {
+            exclude_paths: default_non_english_exclude_paths(),
+        }
+    }
+}
+
+fn default_non_english_exclude_paths() -> Vec<String> {
+    default_tracked_text_exclude_paths()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DeadDocRefsConfig {
+    /// Workspace-relative glob patterns that opt paths out of the tracked text
+    /// scan. Defaults match `non_english_text` so generated, binary, and local
+    /// planning trees stay configuration-owned.
+    #[serde(default = "default_dead_doc_refs_exclude_paths")]
+    pub(crate) exclude_paths: Vec<String>,
+    /// Workspace-relative referenced target globs allowed to be local-only.
+    #[serde(default)]
+    pub(crate) allow_targets: Vec<String>,
+}
+
+impl Default for DeadDocRefsConfig {
+    fn default() -> Self {
+        Self {
+            exclude_paths: default_dead_doc_refs_exclude_paths(),
+            allow_targets: Vec::new(),
+        }
+    }
+}
+
+fn default_dead_doc_refs_exclude_paths() -> Vec<String> {
+    default_tracked_text_exclude_paths()
+}
+
+fn default_tracked_text_exclude_paths() -> Vec<String> {
+    [
+        "assets/**",
+        "**/assets/**",
+        "fonts/**",
+        "**/fonts/**",
+        "models/**",
+        "**/models/**",
+        "fixtures/**",
+        "**/fixtures/**",
+        "target/**",
+        "**/target/**",
+        "docs/plans/**",
+        "docs/specs/**",
+        "android/gradle/wrapper/**",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 fn load_optional<T>(path: &Path) -> Result<T>

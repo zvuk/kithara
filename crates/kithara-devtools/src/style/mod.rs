@@ -77,6 +77,7 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
         config: &config,
         scope: &scope,
     };
+    let project = ProjectConfig::load(&workspace_root)?;
 
     let registry = registry();
     let known_ids: HashSet<&str> = registry.iter().map(|c| c.id()).collect();
@@ -105,14 +106,21 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
             continue;
         }
         ran.push(check.id());
-        let violations = check.run(&ctx)?;
+        let mut violations = check.run(&ctx)?;
+        if check.uses_global_lint_excludes() {
+            let mut check_report = Report::default();
+            check_report.extend(violations);
+            apply_path_excludes(&mut check_report, &project.lint_exclude.paths);
+            apply_cfg_test_exclusion(&mut check_report, &workspace_root);
+            apply_module_excludes(
+                &mut check_report,
+                &project.lint_exclude.modules,
+                &workspace_root,
+            );
+            violations = check_report.violations;
+        }
         report.extend(violations);
     }
-
-    let project = ProjectConfig::load(&workspace_root)?;
-    apply_path_excludes(&mut report, &project.lint_exclude.paths);
-    apply_cfg_test_exclusion(&mut report, &workspace_root);
-    apply_module_excludes(&mut report, &project.lint_exclude.modules, &workspace_root);
 
     if args.update_baseline {
         let new_baseline = Baseline::from_report(&report);

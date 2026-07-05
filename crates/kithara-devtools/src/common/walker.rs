@@ -1,9 +1,11 @@
 use std::{
     fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
+    process::Command,
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use glob::Pattern;
 
 use super::{project::ProjectConfig, scope::Scope};
@@ -67,9 +69,127 @@ pub fn workspace_rs_files_scoped(workspace_root: &Path, scope: &Scope) -> Result
     Ok(out)
 }
 
+/// Walk tracked text files under the workspace or requested scope.
+///
+/// Empty scope walks every tracked workspace file. Non-empty scope keeps files
+/// whose workspace-relative path is covered by the same `Scope` matching used
+/// for ratcheted lint keys. Git is the owner of "tracked" and ignored path
+/// state here, so ignored/untracked build outputs never enter the scan.
+///
+/// # Errors
+///
+/// Returns an error if `git ls-files` fails or emits a non-UTF-8 path.
+pub fn workspace_text_files_scoped(workspace_root: &Path, scope: &Scope) -> Result<Vec<PathBuf>> {
+    let excludes = WorkspaceScanExcludes::from_root(workspace_root)?;
+    let mut out = git_tracked_files(workspace_root)?;
+    out.retain(|path| {
+        is_lint_text_file(path)
+            && !excludes.matches(path)
+            && scoped_path_match(workspace_root, scope, path)
+    });
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+pub(crate) fn workspace_tracked_files(workspace_root: &Path) -> Result<Vec<PathBuf>> {
+    git_tracked_files(workspace_root)
+}
+
 #[must_use]
 pub fn relative_to<'a>(root: &Path, full: &'a Path) -> &'a Path {
     full.strip_prefix(root).unwrap_or(full)
+}
+
+fn git_tracked_files(workspace_root: &Path) -> Result<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .arg("ls-files")
+        .arg("-z")
+        .output()
+        .with_context(|| format!("list tracked files under {}", workspace_root.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "git ls-files failed under {}: {stderr}",
+            workspace_root.display()
+        );
+    }
+    let stdout = String::from_utf8(output.stdout).with_context(|| {
+        format!(
+            "git ls-files emitted a non-UTF-8 path under {}",
+            workspace_root.display()
+        )
+    })?;
+    Ok(stdout
+        .split('\0')
+        .filter(|rel| !rel.is_empty())
+        .map(|rel| workspace_root.join(rel))
+        .collect())
+}
+
+fn scoped_path_match(workspace_root: &Path, scope: &Scope, path: &Path) -> bool {
+    if scope.is_empty() {
+        return true;
+    }
+    let rel = relative_to(workspace_root, path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    scope.key_in_scope(&rel)
+}
+
+fn is_lint_text_file(path: &Path) -> bool {
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if matches!(
+        file_name,
+        "Dockerfile" | "dockerfile" | "justfile" | "Justfile"
+    ) || file_name.ends_with(".Dockerfile")
+    {
+        return true;
+    }
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "rs" | "md"
+                    | "toml"
+                    | "yml"
+                    | "yaml"
+                    | "mdc"
+                    | "dockerfile"
+                    | "sh"
+                    | "bash"
+                    | "zsh"
+                    | "fish"
+            )
+        })
+        || has_shell_shebang(path)
+}
+
+fn has_shell_shebang(path: &Path) -> bool {
+    if path.extension().is_some() {
+        return false;
+    }
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let mut first_line = String::new();
+    let mut reader = BufReader::new(file);
+    if reader.read_line(&mut first_line).is_err() {
+        return false;
+    }
+    let line = first_line.trim_end();
+    line.starts_with("#!")
+        && (line.contains("/sh")
+            || line.contains("/bash")
+            || line.contains("/zsh")
+            || line.contains("/fish")
+            || line.contains("env sh")
+            || line.contains("env bash")
+            || line.contains("env zsh")
+            || line.contains("env fish"))
 }
 
 struct WorkspaceScanExcludes {
