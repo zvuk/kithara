@@ -630,12 +630,30 @@ mod tests {
     fn publish_order_is_resolved() {
         let order = resolve_publish_order().unwrap();
         assert!(!order.is_empty(), "should find publishable crates");
+        assert_eq!(
+            order.len(),
+            20,
+            "publish order should cover all publishable crates"
+        );
 
         let platform_pos = order.iter().position(|n| n == "kithara-platform");
         let facade_pos = order.iter().position(|n| n == "kithara");
         if let (Some(p), Some(f)) = (platform_pos, facade_pos) {
             assert!(p < f, "kithara-platform must be published before kithara");
         }
+
+        let stretch_pos = order
+            .iter()
+            .position(|n| n == "kithara-stretch")
+            .expect("kithara-stretch should be publishable");
+        let audio_pos = order
+            .iter()
+            .position(|n| n == "kithara-audio")
+            .expect("kithara-audio should be publishable");
+        assert!(
+            stretch_pos < audio_pos,
+            "kithara-stretch must be published before kithara-audio"
+        );
     }
 
     #[test]

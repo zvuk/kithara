@@ -86,6 +86,17 @@ pub mod storage {
     pub use kithara_storage::*;
 }
 
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+pub use kithara_audio::effects::{StretchBackend, StretchBackendError};
+pub use kithara_audio::{GridSegment, RegionPlan, RegionPlanError};
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+pub use kithara_audio::{StretchControls, StretchKind, TimeStretchProcessor};
 pub use kithara_test_utils::kithara::mock;
 #[cfg(feature = "probe")]
 pub use kithara_test_utils::{
@@ -105,13 +116,17 @@ pub mod mock {
 pub mod prelude {
     #[cfg(feature = "hls")]
     pub use kithara_abr::AbrMode;
+    pub use kithara_audio::{
+        Audio, AudioConfig, EngineLoadSnapshot, GridSegment, PcmReader, RegionPlan,
+        RegionPlanError, ResamplerQuality,
+    };
     #[cfg(all(
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     ))]
-    pub use kithara_audio::StretchKind;
     pub use kithara_audio::{
-        Audio, AudioConfig, EngineLoadSnapshot, PcmReader, ResamplerQuality, StretchControls,
+        StretchControls, StretchKind, TimeStretchProcessor,
+        effects::{StretchBackend, StretchBackendError},
     };
     pub use kithara_decode::{
         DecodeError, DecodeResult, DecoderTrackInfo, PcmMeta, PcmSpec, TrackMetadata,
