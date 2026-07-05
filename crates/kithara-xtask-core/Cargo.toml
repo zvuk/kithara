@@ -18,7 +18,7 @@ lint = ["dep:quote"]
 viz = []
 
 [dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../crates/kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
