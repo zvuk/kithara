@@ -6,9 +6,9 @@ use kithara_platform::time::Instant;
 #[derive(Clone)]
 pub struct ProbeEvent {
     /// Numeric / boolean fields, keyed by name.
-    pub fields: HashMap<String, u64>,
+    pub fields: HashMap<&'static str, u64>,
     /// Field values that arrived as strings (e.g. `probe = "enqueued"`).
-    pub string_fields: HashMap<String, String>,
+    pub string_fields: HashMap<&'static str, String>,
     /// Wall-clock timestamp of the probe firing.
     pub at: Instant,
     /// Target string of the captured tracing event (e.g.
@@ -65,10 +65,11 @@ impl std::fmt::Debug for ProbeEvent {
         if let Some(seq) = self.seq() {
             s.field("seq", &seq);
         }
-        let mut numeric_keys: Vec<&String> = self
+        let mut numeric_keys: Vec<&'static str> = self
             .fields
             .keys()
-            .filter(|k| !debug_keys::NUMERIC_SERVICE.contains(&k.as_str()))
+            .copied()
+            .filter(|k| !debug_keys::NUMERIC_SERVICE.contains(k))
             .collect();
         numeric_keys.sort();
         for key in numeric_keys {
@@ -79,10 +80,11 @@ impl std::fmt::Debug for ProbeEvent {
         if let Some(caller_fn) = self.caller_fn() {
             s.field("caller_fn", &caller_fn);
         }
-        let mut string_keys: Vec<&String> = self
+        let mut string_keys: Vec<&'static str> = self
             .string_fields
             .keys()
-            .filter(|k| !debug_keys::STRING_SERVICE.contains(&k.as_str()))
+            .copied()
+            .filter(|k| !debug_keys::STRING_SERVICE.contains(k))
             .collect();
         string_keys.sort();
         for key in string_keys {
