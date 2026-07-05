@@ -62,6 +62,9 @@ pub(crate) struct AppleCodec {
     /// match the actual input packet count when the demuxer batched
     /// multiple packets into one `Frame`.
     input_bytes_per_packet: u32,
+    /// True once a source-rate-changing converter has reported no more
+    /// SRC tail frames after true EOF.
+    eof_drained: bool,
 }
 
 // SAFETY: `AudioConverterRef` is an opaque CoreAudio handle. Apple's
@@ -134,6 +137,7 @@ impl AppleCodec {
             last_prime_info: None,
             gapless_enabled: false,
             prime_info_refresh_pending: false,
+            eof_drained: false,
         })
     }
 
@@ -189,87 +193,39 @@ impl AppleCodec {
         }
     }
 
-    /// Whether the Apple `AudioConverter` accepts this codec at the
-    /// codec layer alone (i.e. without an external container parser).
-    ///
-    /// Scope: AAC-LC and FLAC over fMP4 (HLS), plus standalone WAV/PCM,
-    /// MP3, and ALAC paired with [`super::AppleAudioFileDemuxer`]. PCM
-    /// requires the demuxer to stash the source ASBD as a serialized
-    /// 40-byte blob in `TrackInfo.extra_data`; ALAC requires the magic
-    /// cookie in the same field.
-    #[must_use]
-    pub(crate) fn supports(codec: AudioCodec) -> bool {
-        matches!(
-            codec,
-            AudioCodec::AacLc
-                | AudioCodec::AacHe
-                | AudioCodec::AacHeV2
-                | AudioCodec::Flac
-                | AudioCodec::Pcm
-                | AudioCodec::Mp3
-                | AudioCodec::Alac
+    fn needs_src_eof_drain(&self) -> bool {
+        self.spec.sample_rate.get() != self.source_sample_rate
+    }
+
+    fn eof_flush_frame_capacity(&self) -> DecodeResult<u32> {
+        output_frame_capacity(
+            self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET),
+            self.source_sample_rate,
+            self.spec.sample_rate.get(),
         )
     }
-}
 
-impl Drop for AppleCodec {
-    fn drop(&mut self) {
-        if !self.converter.is_null() {
-            // SAFETY: `self.converter` was constructed by `AudioConverterNew`
-            let _ = unsafe { AudioConverterDispose(self.converter) };
-        }
-    }
-}
-
-impl FrameCodec for AppleCodec {
-    fn decode_frame(
-        &mut self,
-        frame_data: &[u8],
-        _pts: Duration,
-        packet_desc: &[u8],
-        out: &mut PcmBuf,
-    ) -> DecodeResult<u32> {
-        if frame_data.is_empty() {
+    fn drain_eof(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
+        if !self.needs_src_eof_drain() || self.eof_drained {
             out.clear();
             return Ok(0);
         }
 
-        let desc = if packet_desc.len() == size_of::<AudioStreamPacketDescription>() {
-            let mut d = AudioStreamPacketDescription::default();
-            // SAFETY: `AudioStreamPacketDescription` is `#[repr(C)]` POD;
-            unsafe {
-                ptr::copy_nonoverlapping(
-                    packet_desc.as_ptr(),
-                    ptr::from_mut(&mut d).cast::<u8>(),
-                    size_of::<AudioStreamPacketDescription>(),
-                );
-            }
-            d
-        } else {
-            let frame_bytes = UInt32::try_from(frame_data.len())?;
-            AudioStreamPacketDescription {
-                mStartOffset: 0,
-                mVariableFramesInPacket: 0,
-                mDataByteSize: frame_bytes,
-            }
-        };
-        self.input_state.set(frame_data, desc);
+        self.input_state.finish();
+        let frames = self.fill_converter(out, self.eof_flush_frame_capacity()?)?;
+        if frames == 0 {
+            self.eof_drained = true;
+            self.input_state.clear();
+        }
+        Ok(frames)
+    }
 
-        let input_frames = if self.input_bytes_per_packet > 0 {
-            let packets = frame_data.len() / usize::try_from(self.input_bytes_per_packet)?;
-            u32::try_from(packets)?
-        } else {
-            self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET)
-        };
-        let target_frames = output_frame_capacity(
-            input_frames,
-            self.source_sample_rate,
-            self.spec.sample_rate.get(),
-        )?;
+    fn fill_converter(&mut self, out: &mut PcmBuf, target_frames: u32) -> DecodeResult<u32> {
         if target_frames == 0 {
             out.clear();
             return Ok(0);
         }
+
         let channels = usize::from(self.spec.channels);
         let needed_samples = output_sample_capacity(target_frames, channels)?;
         out.ensure_len(needed_samples)?;
@@ -313,6 +269,87 @@ impl FrameCodec for AppleCodec {
         let frames = output_packets;
         let samples_len = output_sample_capacity(frames, channels)?;
         out.truncate(samples_len);
+        Ok(frames)
+    }
+
+    /// Whether the Apple `AudioConverter` accepts this codec at the
+    /// codec layer alone (i.e. without an external container parser).
+    ///
+    /// Scope: AAC-LC and FLAC over fMP4 (HLS), plus standalone WAV/PCM,
+    /// MP3, and ALAC paired with [`super::AppleAudioFileDemuxer`]. PCM
+    /// requires the demuxer to stash the source ASBD as a serialized
+    /// 40-byte blob in `TrackInfo.extra_data`; ALAC requires the magic
+    /// cookie in the same field.
+    #[must_use]
+    pub(crate) fn supports(codec: AudioCodec) -> bool {
+        matches!(
+            codec,
+            AudioCodec::AacLc
+                | AudioCodec::AacHe
+                | AudioCodec::AacHeV2
+                | AudioCodec::Flac
+                | AudioCodec::Pcm
+                | AudioCodec::Mp3
+                | AudioCodec::Alac
+        )
+    }
+}
+
+impl Drop for AppleCodec {
+    fn drop(&mut self) {
+        if !self.converter.is_null() {
+            // SAFETY: `self.converter` was constructed by `AudioConverterNew`
+            let _ = unsafe { AudioConverterDispose(self.converter) };
+        }
+    }
+}
+
+impl FrameCodec for AppleCodec {
+    fn decode_frame(
+        &mut self,
+        frame_data: &[u8],
+        _pts: Duration,
+        packet_desc: &[u8],
+        out: &mut PcmBuf,
+    ) -> DecodeResult<u32> {
+        if frame_data.is_empty() {
+            return self.drain_eof(out);
+        }
+
+        let desc = if packet_desc.len() == size_of::<AudioStreamPacketDescription>() {
+            let mut d = AudioStreamPacketDescription::default();
+            // SAFETY: `AudioStreamPacketDescription` is `#[repr(C)]` POD;
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    packet_desc.as_ptr(),
+                    ptr::from_mut(&mut d).cast::<u8>(),
+                    size_of::<AudioStreamPacketDescription>(),
+                );
+            }
+            d
+        } else {
+            let frame_bytes = UInt32::try_from(frame_data.len())?;
+            AudioStreamPacketDescription {
+                mStartOffset: 0,
+                mVariableFramesInPacket: 0,
+                mDataByteSize: frame_bytes,
+            }
+        };
+        self.eof_drained = false;
+        self.input_state.set(frame_data, desc);
+
+        let input_frames = if self.input_bytes_per_packet > 0 {
+            let packets = frame_data.len() / usize::try_from(self.input_bytes_per_packet)?;
+            u32::try_from(packets)?
+        } else {
+            self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET)
+        };
+        let target_frames = output_frame_capacity(
+            input_frames,
+            self.source_sample_rate,
+            self.spec.sample_rate.get(),
+        )?;
+        let frames = self.fill_converter(out, target_frames)?;
         self.refresh_gapless_after_first_chunk();
         Ok(frames)
     }
@@ -331,6 +368,7 @@ impl FrameCodec for AppleCodec {
             });
         }
         self.input_state.clear();
+        self.eof_drained = false;
         Ok(())
     }
 
@@ -971,7 +1009,7 @@ mod aac_lc_decode_tests {
     use crate::{
         codec::FrameCodec,
         demuxer::TrackInfo,
-        fmp4::parsing::{CodecConfig, parse_init, parse_segment_frames},
+        fmp4::parsing::{CodecConfig, Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
     };
 
     fn read_fixture(name: &str) -> Vec<u8> {
@@ -986,7 +1024,68 @@ mod aac_lc_decode_tests {
         const COMMON_TARGET_RATE: u32 = 48_000;
         const HIGH_TARGET_RATE: u32 = 96_000;
         const MAX_SRC_DELAY_FRAMES: u32 = 1024;
+        const MAX_EOF_DRAIN_CALLS: usize = 8;
+        const OUTPUT_LENGTH_TOLERANCE_FRAMES: u64 = 1;
         const RESAMPLED_TEST_PACKETS: usize = 16;
+    }
+
+    fn track_from_init(init: &Fmp4InitInfo) -> TrackInfo {
+        let extra_data = match &init.config {
+            CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
+        };
+        TrackInfo {
+            extra_data,
+            codec: init.codec,
+            sample_rate: init.sample_rate,
+            channels: init.channels,
+            duration: None,
+            gapless: init.gapless,
+        }
+    }
+
+    fn target_rate_for_source(source_rate: u32) -> u32 {
+        if source_rate < Consts::COMMON_TARGET_RATE {
+            Consts::COMMON_TARGET_RATE
+        } else {
+            Consts::HIGH_TARGET_RATE
+        }
+    }
+
+    fn decode_frames(
+        codec: &mut AppleCodec,
+        pool: &PcmPool,
+        seg: &[u8],
+        frames: &[Fmp4Frame],
+    ) -> u64 {
+        let mut total = 0_u64;
+        for frame in frames {
+            let mut buf = pool.get();
+            let decoded = codec
+                .decode_frame(
+                    &seg[frame.offset..frame.offset + frame.size],
+                    Duration::ZERO,
+                    &[],
+                    &mut buf,
+                )
+                .expect("BUG: decode Apple AAC-LC frame");
+            total += u64::from(decoded);
+        }
+        total
+    }
+
+    fn drain_eof(codec: &mut AppleCodec, pool: &PcmPool) -> u64 {
+        let mut total = 0_u64;
+        for _ in 0..Consts::MAX_EOF_DRAIN_CALLS {
+            let mut buf = pool.get();
+            let frames = codec
+                .decode_frame(&[], Duration::ZERO, &[], &mut buf)
+                .expect("BUG: drain Apple AAC-LC EOF");
+            if frames == 0 {
+                return total;
+            }
+            total += u64::from(frames);
+        }
+        panic!("Apple AAC-LC EOF drain did not finish");
     }
 
     /// RED (device repro): the Apple AAC-LC decoder must turn real fMP4
@@ -999,17 +1098,7 @@ mod aac_lc_decode_tests {
         let init_bytes = read_fixture("init-slq-a1.mp4");
         let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
-        let extra_data = match &init.config {
-            CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
-        };
-        let track = TrackInfo {
-            extra_data,
-            codec: init.codec,
-            sample_rate: init.sample_rate,
-            channels: init.channels,
-            duration: None,
-            gapless: init.gapless,
-        };
+        let track = track_from_init(&init);
 
         let seg = read_fixture("segment-1-slq-a1.m4s");
         let ranges: Vec<(usize, usize)> = parse_segment_frames(&init, &seg)
@@ -1043,22 +1132,8 @@ mod aac_lc_decode_tests {
         let init_bytes = read_fixture("init-slq-a1.mp4");
         let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
-        let extra_data = match &init.config {
-            CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
-        };
-        let track = TrackInfo {
-            extra_data,
-            codec: init.codec,
-            sample_rate: init.sample_rate,
-            channels: init.channels,
-            duration: None,
-            gapless: init.gapless,
-        };
-        let target_rate = if init.sample_rate < Consts::COMMON_TARGET_RATE {
-            Consts::COMMON_TARGET_RATE
-        } else {
-            Consts::HIGH_TARGET_RATE
-        };
+        let track = track_from_init(&init);
+        let target_rate = target_rate_for_source(init.sample_rate);
         assert_ne!(
             target_rate, init.sample_rate,
             "fixture sample rate must differ from target rate"
@@ -1120,5 +1195,75 @@ mod aac_lc_decode_tests {
             total_output_frames <= total_capacity_frames,
             "resampled decode exceeded requested output capacity"
         );
+    }
+
+    #[kithara::test]
+    fn apple_aac_lc_src_eof_flush_total_output_within_one_frame() {
+        let init_bytes = read_fixture("init-slq-a1.mp4");
+        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+        assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
+        let track = track_from_init(&init);
+        let target_rate = target_rate_for_source(init.sample_rate);
+        assert_ne!(
+            target_rate, init.sample_rate,
+            "fixture sample rate must differ from target rate"
+        );
+
+        let seg = read_fixture("segment-1-slq-a1.m4s");
+        let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
+        assert!(!frames.is_empty(), "segment yielded no AAC frames");
+
+        let pool = PcmPool::new(2, 8192);
+        let mut source_codec =
+            AppleCodec::open_with_config(&track, false, None).expect("BUG: open source-rate codec");
+        let source_frames = decode_frames(&mut source_codec, &pool, &seg, &frames);
+        let source_drain = drain_eof(&mut source_codec, &pool);
+        assert_eq!(
+            source_drain, 0,
+            "equal-rate EOF drain must not change passthrough length"
+        );
+
+        let mut src_codec = AppleCodec::open_with_config(&track, false, Some(target_rate))
+            .expect("BUG: open SRC codec");
+        let before_drain = decode_frames(&mut src_codec, &pool, &seg, &frames);
+        let drained = drain_eof(&mut src_codec, &pool);
+        let total_output = before_drain + drained;
+        let source_frames_u32 =
+            u32::try_from(source_frames).expect("BUG: test source frame count fits in u32");
+        let ideal = u64::from(
+            ceil_resampled_frames(source_frames_u32, init.sample_rate, target_rate)
+                .expect("BUG: compute ideal SRC frame count"),
+        );
+
+        assert!(
+            drained > 0,
+            "SRC EOF drain emitted no tail frames; before={before_drain}, ideal={ideal}"
+        );
+        assert!(
+            total_output.abs_diff(ideal) <= Consts::OUTPUT_LENGTH_TOLERANCE_FRAMES,
+            "SRC total output length off: total={total_output}, ideal={ideal}, \
+             before_drain={before_drain}, drained={drained}, source={source_frames}"
+        );
+    }
+
+    #[kithara::test]
+    fn apple_aac_lc_passthrough_eof_drain_preserves_length() {
+        let init_bytes = read_fixture("init-slq-a1.mp4");
+        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+        assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
+        let track = track_from_init(&init);
+
+        let seg = read_fixture("segment-1-slq-a1.m4s");
+        let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
+        assert!(!frames.is_empty(), "segment yielded no AAC frames");
+
+        let pool = PcmPool::new(2, 8192);
+        let mut codec = AppleCodec::open_with_config(&track, false, None)
+            .expect("BUG: open Apple AAC-LC codec");
+        let before_drain = decode_frames(&mut codec, &pool, &seg, &frames);
+        let drained = drain_eof(&mut codec, &pool);
+
+        assert!(before_drain > 0, "passthrough decode produced no frames");
+        assert_eq!(drained, 0, "passthrough EOF drain produced extra frames");
     }
 }

@@ -108,6 +108,7 @@ pub(crate) struct ConverterInputState {
     pub(crate) packet_desc: AudioStreamPacketDescription,
     pub(crate) packet_len: UInt32,
     pub(crate) has_packet: bool,
+    pub(crate) reached_eof: bool,
 }
 
 impl ConverterInputState {
@@ -115,6 +116,14 @@ impl ConverterInputState {
         self.packet_ptr = ptr::null();
         self.packet_len = 0;
         self.has_packet = false;
+        self.reached_eof = false;
+    }
+
+    pub(crate) fn finish(&mut self) {
+        self.packet_ptr = ptr::null();
+        self.packet_len = 0;
+        self.has_packet = false;
+        self.reached_eof = true;
     }
 
     pub(crate) fn set(&mut self, data: &[u8], description: AudioStreamPacketDescription) {
@@ -128,6 +137,7 @@ impl ConverterInputState {
             mDataByteSize: len,
         };
         self.has_packet = true;
+        self.reached_eof = false;
     }
 }
 
@@ -147,7 +157,11 @@ pub(crate) extern "C" fn converter_input_callback(
         unsafe {
             *io_num_packets = 0;
         }
-        return Consts::kAudioConverterErr_NoDataNow;
+        return if state.reached_eof {
+            Consts::noErr
+        } else {
+            Consts::kAudioConverterErr_NoDataNow
+        };
     }
 
     // SAFETY: `io_data`, `io_num_packets` are valid pointers supplied by
