@@ -208,9 +208,13 @@ mod tests {
         flash.real_io_exit();
 
         let wakes = flash.pacer_wake_count().saturating_sub(before);
+        // A 1ms poll over a 120ms deadline would wake ~120 times; a self-unpark
+        // busy-spin woke ~1e6. Event-driven wakes O(1): once at the deadline plus
+        // the odd spurious `park_timeout` return under load. Bound well below the
+        // poll count so a regression to either failure mode is still caught.
         assert!(
-            wakes <= 5,
-            "event-driven pacer should wake O(1) times, not poll every millisecond: {wakes}"
+            wakes < 20,
+            "event-driven pacer should wake O(1) times, not poll or busy-spin: {wakes}"
         );
     }
 

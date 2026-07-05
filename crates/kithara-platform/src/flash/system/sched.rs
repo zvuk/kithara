@@ -146,7 +146,15 @@ impl Core {
             // the next computed real deadline.
             let elapsed = u64::try_from(anchor_real.elapsed().as_nanos()).unwrap_or(u64::MAX);
             if min > anchor_virtual.saturating_add(elapsed) {
-                if let Some(t) = &self.sched.pacer_wake {
+                // Wake the pacer to re-target the next real deadline — but NEVER
+                // the pacer waking itself. The pacer runs this same advance rule
+                // after each park, and a self-unpark would arm its own park token,
+                // so the following `park_timeout` returns immediately → busy-spin
+                // until the deadline comes due. Its own deferred advance is already
+                // followed by a fresh `pace_target` + re-park, so it needs no wake.
+                if let Some(t) = &self.sched.pacer_wake
+                    && t.id() != std::thread::current().id()
+                {
                     t.unpark();
                 }
                 return WakeBatch(Vec::new());
