@@ -7,6 +7,7 @@ pub mod format;
 pub mod health;
 #[cfg(feature = "lint")]
 pub mod idioms;
+pub mod init;
 #[cfg(feature = "lint")]
 pub mod lint;
 pub mod manifest;
@@ -27,6 +28,8 @@ pub use ctx::Ctx;
 
 #[derive(Debug, clap::Subcommand)]
 pub enum CoreCommand {
+    /// Scaffold xtask-core config and lint baselines for this workspace.
+    Init(init::InitArgs),
     /// Format Rust, manifests, TOML, JSON, and Markdown through project tooling.
     Format(format::FormatArgs),
     /// Thin wrapper around `ast-grep scan` that bakes in the policy filter list.
@@ -67,6 +70,7 @@ pub enum CoreCommand {
 /// Returns an error when the selected command fails.
 pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
     match cmd {
+        CoreCommand::Init(args) => init::run(args, ctx),
         CoreCommand::Format(args) => format::run(args, ctx),
         CoreCommand::AstGrep(args) => ast_grep::run(args, ctx),
         CoreCommand::Typos(args) => typos::run(args, ctx),
