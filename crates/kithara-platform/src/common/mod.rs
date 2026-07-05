@@ -3,6 +3,7 @@ pub(crate) mod error;
 pub mod flash_inert;
 pub(crate) mod gate;
 pub(crate) mod maybe_send;
+pub mod no_block_inert;
 pub(crate) mod thread_id;
 pub(crate) mod time;
 pub mod traits;

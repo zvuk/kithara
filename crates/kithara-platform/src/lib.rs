@@ -6,13 +6,16 @@
 //! 100% cross-platform code lives in `common`. All crate cfg lives in this
 //! file. See the crate `CONTEXT.md` for per-target backends.
 
-// In the flash-ON lane the inert control surface (`common::flash_inert`) and
-// the real-clock arms it aliases compile but are intentionally unwired (the
-// engine `flash` module takes the path), so `unreachable_pub`/`dead_code` are
-// structurally false-positive there. OFF + wasm lanes re-export the inert
-// forms and keep full coverage. See AGENTS.md "Non-Negotiables" legalized
+// In feature-ON lanes the inert control surfaces (`common::flash_inert`,
+// `common::no_block_inert`) and the real-clock arms they alias compile but are
+// intentionally unwired, so `unreachable_pub`/`dead_code` are structurally
+// false-positive there. OFF + wasm lanes re-export the inert forms and keep
+// full coverage. See AGENTS.md "Non-Negotiables" legalized
 #[cfg_attr(
-    all(not(target_arch = "wasm32"), feature = "flash"),
+    all(
+        not(target_arch = "wasm32"),
+        any(feature = "flash", feature = "no-block")
+    ),
     expect(unreachable_pub, dead_code)
 )]
 mod common;
@@ -35,6 +38,8 @@ pub use wasm::*;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub mod flash;
+#[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
+pub mod no_block;
 
 // W3 propagate-down cancel — the workspace's only cancel surface (the legacy
 // runtime-backed roots were dropped in 3.4).
@@ -42,6 +47,8 @@ pub mod flash;
 // in every configuration: inert forms off the engine.
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "flash")))]
 pub use common::flash_inert as flash;
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "no-block")))]
+pub use common::no_block_inert as no_block;
 pub use common::{
     cancel::{CancelGroup, CancelScope, CancelToken, CancelWakerGuard, Cancelled},
     traits,

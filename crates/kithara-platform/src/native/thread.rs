@@ -94,7 +94,9 @@ where
 
 /// Block the current thread for at least `duration` (real OS sleep).
 #[inline]
+#[track_caller]
 pub fn sleep(duration: Duration) {
+    crate::no_block::forbid("thread::sleep");
     std::thread::sleep(duration);
 }
 
@@ -106,19 +108,24 @@ pub fn sleep(duration: Duration) {
 /// progress rather than inflated by a free virtual timer. See
 /// `crate::flash::thread::paced_backoff`.
 #[inline]
+#[track_caller]
 pub fn paced_backoff(duration: Duration) {
     sleep(duration);
 }
 
 /// Block until the current thread is explicitly unparked.
 #[inline]
+#[track_caller]
 pub fn park() {
+    crate::no_block::forbid("thread::park");
     std::thread::park();
 }
 
 /// Block until unparked or until `duration` elapses.
 #[inline]
+#[track_caller]
 pub fn park_timeout(duration: Duration) {
+    crate::no_block::forbid("thread::park_timeout");
     std::thread::park_timeout(duration);
 }
 
