@@ -26,13 +26,15 @@ pro-audio apps.
 - **DRM** — AES-128 decryption for protected HLS.
 
 `kithara` is the facade crate: it aggregates the engine layers
-(`audio`, `decode`, `events`, `platform`, `play`, `stream`, and the feature-gated
-`file`/`hls`/`assets`/`net`/`storage` pipelines) behind one dependency and a
-single `Resource` entry point.
+(`audio`, `bufpool`, `decode`, `events`, `platform`, `play`, `stream`, and the
+feature-gated `file`/`hls`/`assets`/`net`/`storage`/`queue` pipelines) behind one
+dependency and a single `Resource` entry point. The `abr` and `drm` modules are
+available when `hls` is enabled.
 
 ## Usage
 
 ```rust
+use kithara::audio::ReadOutcome;
 use kithara::prelude::*;
 
 let config = ResourceConfig::new("https://example.com/song.mp3")?;

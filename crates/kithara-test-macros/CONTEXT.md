@@ -17,6 +17,7 @@ A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
 - `serial` — emits `#[serial_test::serial]` so the test never runs in parallel with other `serial` tests; for resource-intensive / contention-sensitive tests. Requires `serial_test` at the call site
 - `multi_thread` — uses `new_multi_thread().worker_threads(2)` instead of `new_current_thread()`; required when the body spawns tasks needing a multi-threaded executor (e.g. `thirtyfour` `WebDriver`)
 - `selenium` — convenience flag implying `native + tokio + serial + multi_thread` and adding `#[ignore = "requires selenium"]`, for Selenium/WebDriver integration tests
+- `flash(true|false)` — opt the test body into or out of flash time rewriting
 
 Supports `#[case]` / `#[case::name]` parameterization and fixture injection.
 

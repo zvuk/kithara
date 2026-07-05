@@ -9,6 +9,9 @@ documents and reusable agent assets that should be loaded only when relevant.
 - `agents/`: concrete subagent/scenario definitions exposed through symlinks.
 - `skills/`: reusable local agent skills.
 - `plans/`: dated implementation plans and archived planning material.
+- `specs/`: local-by-default specs (gitignored like plans, with only the
+  directory marker tracked).
+- `superpowers/`: symlinks that expose plans/specs to the superpowers tooling.
 
 Tool-specific folders such as `.claude/*`, `.cursor/*`, and top-level
 `CLAUDE.md` / `GEMINI.md` / `WARP.md` are adapters. Keep canonical content here

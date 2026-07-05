@@ -12,7 +12,7 @@ pub(super) type SharedLog = Arc<Mutex<Vec<ProbeEvent>>>;
 static GLOBAL_LOG: OnceLock<SharedLog> = OnceLock::new();
 
 /// Lazily allocate (or fetch) the process-wide probe log. Called by
-/// [`fixtures::init_tracing`](crate::fixtures::init_tracing) when it
+/// [`test::init_tracing`](crate::test::init_tracing) when it
 /// constructs the global subscriber, and by [`install`] when a test
 /// requests a recorder. Never sets a global subscriber by itself.
 pub(crate) fn shared_log() -> SharedLog {

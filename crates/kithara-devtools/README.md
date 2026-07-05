@@ -1,3 +1,15 @@
+<div align="center">
+  <img src="../../logo.svg" alt="kithara" width="300">
+</div>
+
+<div align="center">
+
+[![crates.io](https://img.shields.io/crates/v/kithara-devtools.svg)](https://crates.io/crates/kithara-devtools)
+[![docs.rs](https://docs.rs/kithara-devtools/badge.svg)](https://docs.rs/kithara-devtools)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-devtools
 
 Reusable, config-driven command core for `cargo xtask` build tooling. It holds
@@ -11,6 +23,7 @@ overview.
 
 Exposed through the `CoreCommand` subcommand enum:
 
+- `init` — scaffold the workspace tooling config and lint baselines.
 - `lint` — architectural / style / idiomatic fitness functions (`arch`, `style`,
   `idioms`), ratcheted against a baseline. *(feature `lint`)*
 - `format` — Rust, Cargo manifests, TOML, JSON, and Markdown formatting.

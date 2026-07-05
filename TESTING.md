@@ -18,9 +18,9 @@ just test --flash=off      # real wall clock — the regression baseline
 just test -p kithara-hls   # one package
 just test --profile ci     # a specific nextest profile
 just test EXPR             # a nextest filter expression, e.g. test(seek)
-just test-doc              # doc-tests (nextest does not run them)
-just test-e2e              # gated by the `e2e` feature (suite_e2e)
-just test-cached           # opt-in ephemeral L2 fixture cache (profile `cache`)
+just test --lane=doc       # doc-tests (nextest does not run them)
+just test --lane=e2e       # gated by the `e2e` feature (suite_e2e)
+just test --lane=cached    # opt-in ephemeral L2 fixture cache (profile `cache`)
 ```
 
 The `--flash=*` token is stripped before reaching nextest; every other argument
