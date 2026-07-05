@@ -2,6 +2,8 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -15,21 +17,6 @@ use crate::{
     BuildProfile,
     config::{AndroidConfig, KitharaExt},
 };
-
-/// Module constants for `cargo xtask android run`. Grouped per the
-/// `style.multiple-private-module-consts` lint.
-struct Consts;
-impl Consts {
-    /// AVD picked when `--avd` is omitted. Kept here so `cargo xtask
-    /// android run` works out of the box on the team's typical setup;
-    /// the developer overrides it on the CLI when running a different
-    /// image.
-    const DEFAULT_AVD: &'static str = "Pixel_6";
-    /// Application id of the demo APK.
-    const DEMO_PACKAGE: &'static str = "com.kithara.example";
-    /// Activity component the demo APK surfaces.
-    const DEMO_ACTIVITY: &'static str = "com.kithara.example.MainActivity";
-}
 
 #[derive(Clone, Debug, clap::Subcommand)]
 pub(crate) enum AndroidCommand {
@@ -85,7 +72,6 @@ fn recreate_dir(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Result<()> {
-    const ANDROID_API_LEVEL: &str = "26";
     const RUST_TARGETS: &[(&str, &str)] = &[
         ("aarch64-linux-android", "arm64-v8a"),
         ("x86_64-linux-android", "x86_64"),
@@ -104,7 +90,8 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
         .exec()
         .context("failed to read cargo metadata")?;
     let root = metadata.workspace_root.as_std_path();
-    let ffi_crate = android.ffi_crate.as_str();
+    let ffi_crate = require_android_str(&android.ffi_crate, "ffi_crate")?;
+    let api_level = require_android_str(&android.api_level, "api_level")?;
     let crate_dir = root.join("crates").join(ffi_crate);
     let jni_dir = root.join("android/lib/build/generated/jniLibs");
     let kotlin_dir = root.join("android/lib/build/generated/uniffi/kotlin");
@@ -128,7 +115,7 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
     let mut cmd = Command::new("cargo");
     cmd.arg("ndk")
         .arg("-P")
-        .arg(ANDROID_API_LEVEL)
+        .arg(api_level)
         .args(&ndk_targets)
         .arg("-o")
         .arg(&jni_dir)
@@ -273,7 +260,11 @@ fn run_app(
         run_build(profile, android)?;
     }
 
-    ensure_emulator_running(&adb, &emulator, avd.unwrap_or(Consts::DEFAULT_AVD))?;
+    let avd_name = match avd {
+        Some(avd) => avd,
+        None => require_android_str(&android.default_avd, "default_avd")?,
+    };
+    ensure_emulator_running(&adb, &emulator, avd_name, android)?;
 
     println!("==> Installing demo APK via gradle");
     let gradle_task = match profile {
@@ -289,11 +280,9 @@ fn run_app(
         bail!("gradle install task failed: {gradle_task}");
     }
 
-    println!(
-        "==> Launching {}/{}",
-        Consts::DEMO_PACKAGE,
-        Consts::DEMO_ACTIVITY
-    );
+    let package = require_android_str(&android.demo_package, "demo_package")?;
+    let activity = require_android_str(&android.demo_activity, "demo_activity")?;
+    println!("==> Launching {package}/{activity}");
     let mut cmd = Command::new(&adb);
     cmd.args(["shell", "am", "start"]);
     if debug {
@@ -303,7 +292,7 @@ fn run_app(
     }
     cmd.args([
         "-n",
-        &format!("{}/{}", Consts::DEMO_PACKAGE, Consts::DEMO_ACTIVITY),
+        &format!("{package}/{activity}"),
         "-a",
         "android.intent.action.MAIN",
         "-c",
@@ -341,7 +330,12 @@ fn android_sdk_root() -> Result<PathBuf> {
 
 /// Make sure at least one device is online; if none is, boot the AVD in
 /// the background and wait for it to finish booting.
-fn ensure_emulator_running(adb: &Path, emulator: &Path, avd_name: &str) -> Result<()> {
+fn ensure_emulator_running(
+    adb: &Path,
+    emulator: &Path,
+    avd_name: &str,
+    android: &AndroidConfig,
+) -> Result<()> {
     if has_online_device(adb)? {
         println!("==> Using already-connected device");
         return Ok(());
@@ -373,7 +367,7 @@ fn ensure_emulator_running(adb: &Path, emulator: &Path, avd_name: &str) -> Resul
     // is well before the system finishes booting; poll
     // `sys.boot_completed` so the install step doesn't race the
     // package manager.
-    wait_for_boot_complete(adb)?;
+    wait_for_boot_complete(adb, android)?;
     Ok(())
 }
 
@@ -392,13 +386,15 @@ fn has_online_device(adb: &Path) -> Result<bool> {
         .any(|line| line.ends_with("\tdevice")))
 }
 
-fn wait_for_boot_complete(adb: &Path) -> Result<()> {
-    use std::{thread, time::Duration};
+fn wait_for_boot_complete(adb: &Path, android: &AndroidConfig) -> Result<()> {
+    let max_attempts = android.boot_wait_attempts.context(
+        "ext.android.boot_wait_attempts is not set; fill in the [ext.android] section of .config/xtask.toml",
+    )?;
+    let poll_interval = Duration::from_secs(android.boot_poll_interval_secs.context(
+        "ext.android.boot_poll_interval_secs is not set; fill in the [ext.android] section of .config/xtask.toml",
+    )?);
 
-    const MAX_ATTEMPTS: u32 = 120;
-    const POLL_INTERVAL: Duration = Duration::from_secs(1);
-
-    for _ in 0..MAX_ATTEMPTS {
+    for _ in 0..max_attempts {
         let output = Command::new(adb)
             .args(["shell", "getprop", "sys.boot_completed"])
             .output();
@@ -411,9 +407,20 @@ fn wait_for_boot_complete(adb: &Path) -> Result<()> {
                 return Ok(());
             }
         }
-        thread::sleep(POLL_INTERVAL);
+        thread::sleep(poll_interval);
     }
-    bail!("device did not finish booting within {MAX_ATTEMPTS} seconds");
+    let timeout_secs = u64::from(max_attempts).saturating_mul(poll_interval.as_secs());
+    bail!("device did not finish booting within {timeout_secs} seconds");
+}
+
+fn require_android_str<'a>(value: &'a str, key: &str) -> Result<&'a str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!(
+            "ext.android.{key} is not set; fill in the [ext.android] section of .config/xtask.toml"
+        );
+    }
+    Ok(trimmed)
 }
 
 /// Print attach instructions after `am start -D`. Failures here are

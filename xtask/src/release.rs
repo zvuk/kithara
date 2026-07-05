@@ -10,17 +10,15 @@ use serde_json::{Value, json};
 
 use crate::config::{KitharaExt, ReleaseConfig};
 
-const MANIFEST: &str = "Package.swift";
-
 /// Two-phase Apple release flow.
 ///
 /// `prepare` runs before the release PR: it takes the built `XCFramework` zip,
-/// computes the SPM checksum, stamps `Package.swift` (committed in the PR)
+/// computes the SPM checksum, stamps the configured Swift package manifest
 /// and stashes the zip in a local cache so `publish` ships the exact bytes
 /// the manifest was stamped against.
 ///
-/// `publish` runs after the PR is merged: it reads version + checksum from
-/// `Package.swift` at the given ref and publishes the cached zip to GitHub
+/// `publish` runs after the PR is merged: it reads version + checksum from the
+/// configured manifest at the given ref and publishes the cached zip to GitHub
 /// (tag + release + asset) and the `GitLab` mirror (tag + generic package +
 /// release). Every step is idempotent, so a failed run can be retried.
 #[derive(Debug, clap::Args)]
@@ -31,7 +29,7 @@ pub(crate) struct ReleaseArgs {
 
 #[derive(Debug, clap::Subcommand)]
 enum ReleaseCommand {
-    /// Stamp Package.swift with version + checksum and cache the zip.
+    /// Stamp the release manifest with version + checksum and cache the zip.
     Prepare {
         /// Version to release, without the `v` prefix (e.g. 0.0.2).
         version: String,
@@ -42,14 +40,14 @@ enum ReleaseCommand {
     },
     /// Publish the prepared release to GitHub and the `GitLab` mirror.
     Publish {
-        /// Git ref whose Package.swift defines the release (merge commit).
+        /// Git ref whose release manifest defines the release (merge commit).
         #[arg(long, default_value = "HEAD")]
         r#ref: String,
     },
     /// Deploy the prepared wasm bundle to GitHub Pages classic (gh-pages
     /// branch, force-orphan).
     Pages {
-        /// Git ref whose Package.swift defines the release version.
+        /// Git ref whose release manifest defines the release version.
         #[arg(long, default_value = "HEAD")]
         r#ref: String,
     },
@@ -89,10 +87,12 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     let checksum = swift_checksum(zip)?;
     println!("Checksum: {checksum}");
 
-    let manifest = fs::read_to_string(MANIFEST).context("read Package.swift")?;
+    let manifest_path = cfg.manifest.as_str();
+    let manifest =
+        fs::read_to_string(manifest_path).with_context(|| format!("read {manifest_path}"))?;
     let stamped = stamp_manifest(&manifest, version, &checksum)?;
-    fs::write(MANIFEST, stamped).context("write Package.swift")?;
-    println!("Stamped {MANIFEST}: version={version}");
+    fs::write(manifest_path, stamped).with_context(|| format!("write {manifest_path}"))?;
+    println!("Stamped {manifest_path}: version={version}");
 
     let cached = cache_path(cfg, &tag_of(version))?;
     if let Some(dir) = cached.parent() {
@@ -130,7 +130,7 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
 
     println!();
     println!("Next steps:");
-    println!("  1. Commit {MANIFEST} in the release PR.");
+    println!("  1. Commit {manifest_path} in the release PR.");
     println!("  2. After merge: cargo xtask release publish");
     if !cfg.pages_branch.is_empty() && !cfg.wasm_asset.is_empty() {
         println!("  3. Deploy wasm to Pages: cargo xtask release pages");
@@ -188,7 +188,7 @@ fn publish(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
     check_tool("gh", &["--version"], "brew install gh")?;
 
     let sha = git_capture(&["rev-parse", git_ref])?;
-    let manifest = git_capture(&["show", &format!("{sha}:{MANIFEST}")])?;
+    let manifest = git_capture(&["show", &format!("{sha}:{}", cfg.manifest)])?;
     let version = manifest_field(&manifest, "version")?;
     let checksum = manifest_field(&manifest, "checksum")?;
     let tag = tag_of(&version);
@@ -200,9 +200,10 @@ fn publish(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
             let actual = sha256(&zip)?;
             if actual != checksum {
                 bail!(
-                    "cached {} sha256 {actual} does not match Package.swift checksum {checksum}; \
+                    "cached {} sha256 {actual} does not match {} checksum {checksum}; \
                      re-run `cargo xtask release prepare` and release a new version",
-                    zip.display()
+                    zip.display(),
+                    cfg.manifest
                 );
             }
             Some(zip)
@@ -256,7 +257,7 @@ fn publish_github(
     if exists {
         println!("[github] release {tag} already exists");
         println!("[github] updating release notes for {tag}...");
-        let title = release_title(tag);
+        let title = release_title(cfg, tag);
         run_step(
             Command::new("gh").args([
                 "release", "edit", tag, "--repo", repo, "--title", &title, "--notes", notes,
@@ -266,7 +267,7 @@ fn publish_github(
     } else {
         let zip = zip_required(zip, cfg, tag)?;
         println!("[github] creating release {tag}...");
-        let title = release_title(tag);
+        let title = release_title(cfg, tag);
         run_step(
             Command::new("gh").args([
                 "release",
@@ -320,7 +321,7 @@ fn publish_gitlab(
     zip: Option<&Path>,
 ) -> Result<()> {
     let token = gitlab_token(&cfg.gitlab_host)?;
-    let api = GitlabApi::new(cfg, &token);
+    let api = GitlabApi::new(cfg, &token)?;
 
     let (code, _) = api.get(&format!("repository/tags/{tag}"))?;
     match code {
@@ -368,7 +369,7 @@ fn publish_gitlab(
             println!("[gitlab] release {tag} already exists");
             println!("[gitlab] updating release notes for {tag}...");
             let payload = json!({
-                "name": release_title(tag),
+                "name": release_title(cfg, tag),
                 "description": notes,
             });
             let (code, body) = api.put(&format!("releases/{tag}"), Some(&payload.to_string()))?;
@@ -381,7 +382,7 @@ fn publish_gitlab(
             println!("[gitlab] creating release {tag}...");
             let payload = json!({
                 "tag_name": tag,
-                "name": release_title(tag),
+                "name": release_title(cfg, tag),
                 "description": notes,
                 "assets": { "links": links.iter().map(GitlabReleaseLink::as_json).collect::<Vec<_>>() },
             });
@@ -439,7 +440,7 @@ fn pages(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
     check_tool("unzip", &["-v"], "unzip is part of the base system")?;
 
     let sha = git_capture(&["rev-parse", git_ref])?;
-    let manifest = git_capture(&["show", &format!("{sha}:{MANIFEST}")])?;
+    let manifest = git_capture(&["show", &format!("{sha}:{}", cfg.manifest)])?;
     let version = manifest_field(&manifest, "version")?;
     let tag = tag_of(&version);
 
@@ -582,7 +583,7 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 
 fn sync_gitlab_distribution_links(cfg: &ReleaseConfig, tag: &str) -> Result<()> {
     let token = gitlab_token(&cfg.gitlab_host)?;
-    let api = GitlabApi::new(cfg, &token);
+    let api = GitlabApi::new(cfg, &token)?;
     let links = gitlab_release_links(cfg, tag);
     sync_gitlab_release_links(&api, tag, &links)
 }
@@ -605,7 +606,7 @@ fn upload_github_asset(repo: &str, tag: &str, file: &Path) -> Result<()> {
 /// Mirror one asset to the `GitLab` generic package registry under the tag.
 fn upload_gitlab_asset(cfg: &ReleaseConfig, tag: &str, name: &str, file: &Path) -> Result<()> {
     let token = gitlab_token(&cfg.gitlab_host)?;
-    let api = GitlabApi::new(cfg, &token);
+    let api = GitlabApi::new(cfg, &token)?;
     let actual_sha = sha256(file)?;
     match api.package_file_sha(tag, name)? {
         Some(existing_sha) if existing_sha == actual_sha => {
@@ -628,15 +629,29 @@ fn upload_gitlab_asset(cfg: &ReleaseConfig, tag: &str, name: &str, file: &Path) 
     Ok(())
 }
 
+fn resolve_http_timeout_secs(cfg: &ReleaseConfig) -> Result<u64> {
+    cfg.http_timeout_secs.context(
+        "ext.release.http_timeout_secs is not set; fill in the [ext.release] section of .config/xtask.toml",
+    )
+}
+
+fn resolve_upload_timeout_secs(cfg: &ReleaseConfig) -> Result<u64> {
+    cfg.upload_timeout_secs.context(
+        "ext.release.upload_timeout_secs is not set; fill in the [ext.release] section of .config/xtask.toml",
+    )
+}
+
 struct GitlabApi {
     base: String,
     noproxy: String,
     token: String,
+    http_timeout_secs: u64,
+    upload_timeout_secs: u64,
 }
 
 impl GitlabApi {
-    fn new(cfg: &ReleaseConfig, token: &str) -> Self {
-        Self {
+    fn new(cfg: &ReleaseConfig, token: &str) -> Result<Self> {
+        Ok(Self {
             base: format!(
                 "https://{}/api/v4/projects/{}",
                 cfg.gitlab_host,
@@ -644,7 +659,9 @@ impl GitlabApi {
             ),
             noproxy: cfg.gitlab_host.clone(),
             token: token.to_string(),
-        }
+            http_timeout_secs: resolve_http_timeout_secs(cfg)?,
+            upload_timeout_secs: resolve_upload_timeout_secs(cfg)?,
+        })
     }
 
     fn get(&self, path: &str) -> Result<(u16, String)> {
@@ -668,30 +685,26 @@ impl GitlabApi {
     }
 
     fn upload(&self, path: &str, file: &Path) -> Result<(u16, String)> {
-        self.curl(
-            &[
-                "--upload-file",
-                &file.display().to_string(),
-                "--max-time",
-                "600",
-            ],
-            path,
-        )
+        let file_arg = file.display().to_string();
+        let timeout = self.upload_timeout_secs.to_string();
+        self.curl(&["--upload-file", &file_arg, "--max-time", &timeout], path)
     }
 
     /// Internal hosts are not reachable through corporate/sandbox proxies,
     /// so the `GitLab` host is always taken off-proxy.
     fn curl(&self, extra: &[&str], path: &str) -> Result<(u16, String)> {
         let url = format!("{}/{path}", self.base);
+        let timeout = self.http_timeout_secs.to_string();
+        let private_token = format!("PRIVATE-TOKEN: {}", self.token);
         let output = Command::new("curl")
             .args([
                 "-sS",
                 "--max-time",
-                "60",
+                &timeout,
                 "--noproxy",
                 &self.noproxy,
                 "--header",
-                &format!("PRIVATE-TOKEN: {}", self.token),
+                &private_token,
                 "-w",
                 "\n%{http_code}",
             ])
@@ -914,7 +927,7 @@ fn render_release_notes(
     checksum: &str,
     single_checksum: Option<&str>,
 ) -> String {
-    let mut notes = format!("## {}\n\n{}", release_title(tag), body.trim());
+    let mut notes = format!("## {}\n\n{}", release_title(cfg, tag), body.trim());
     notes.push_str("\n\n## Artifacts\n\n");
     notes.push_str(&format!("- `{}` for Swift Package Manager.\n", cfg.asset));
     if !cfg.single_asset.is_empty() {
@@ -935,8 +948,8 @@ fn render_release_notes(
     notes
 }
 
-fn release_title(tag: &str) -> String {
-    format!("Kithara {}", tag.trim_start_matches('v'))
+fn release_title(cfg: &ReleaseConfig, tag: &str) -> String {
+    format!("{} {}", cfg.title, tag.trim_start_matches('v'))
 }
 
 fn changelog_section(sha: &str, version: &str) -> Option<String> {
@@ -1031,6 +1044,8 @@ fn command_output_text(output: &std::process::Output) -> String {
 
 fn require_config(cfg: &ReleaseConfig) -> Result<()> {
     let fields = [
+        ("manifest", &cfg.manifest),
+        ("title", &cfg.title),
         ("github_repo", &cfg.github_repo),
         ("gitlab_host", &cfg.gitlab_host),
         ("gitlab_project", &cfg.gitlab_project),
@@ -1105,7 +1120,7 @@ fn stamp_manifest(manifest: &str, version: &str, checksum: &str) -> Result<Strin
         }
     }
     if !seen_version || !seen_checksum {
-        bail!("Package.swift is missing the `let version` / `let checksum` lines");
+        bail!("release manifest is missing the `let version` / `let checksum` lines");
     }
     Ok(out)
 }
@@ -1117,7 +1132,7 @@ fn manifest_field(manifest: &str, key: &str) -> Result<String> {
         .find_map(|line| line.strip_prefix(&prefix))
         .and_then(|rest| rest.strip_suffix('"'))
         .map(str::to_string)
-        .with_context(|| format!("`let {key} = \"...\"` not found in Package.swift"))
+        .with_context(|| format!("`let {key} = \"...\"` not found in release manifest"))
 }
 
 fn swift_checksum(zip: &Path) -> Result<String> {
@@ -1237,6 +1252,8 @@ mod tests {
     #[test]
     fn release_notes_render_release_content() {
         let cfg = ReleaseConfig {
+            manifest: "Package.swift".into(),
+            title: "Kithara".into(),
             github_repo: "zvuk/kithara".into(),
             gitlab_host: "gitlab.zvq.me".into(),
             gitlab_project: "disrupt/kithara".into(),
@@ -1248,6 +1265,8 @@ mod tests {
             wasm_asset: "kithara-wasm-pages.zip".into(),
             wasm_dist: "crates/kithara-ffi/dist".into(),
             pages_branch: "gh-pages".into(),
+            http_timeout_secs: Some(60),
+            upload_timeout_secs: Some(600),
         };
         let notes = render_release_notes(
             &cfg,
@@ -1275,6 +1294,8 @@ mod tests {
     #[test]
     fn gitlab_release_links_include_active_distribution_assets() {
         let cfg = ReleaseConfig {
+            manifest: "Package.swift".into(),
+            title: "Kithara".into(),
             github_repo: "zvuk/kithara".into(),
             gitlab_host: "gitlab.zvq.me".into(),
             gitlab_project: "disrupt/kithara".into(),
@@ -1286,6 +1307,8 @@ mod tests {
             wasm_asset: "kithara-wasm-pages.zip".into(),
             wasm_dist: "crates/kithara-ffi/dist".into(),
             pages_branch: "gh-pages".into(),
+            http_timeout_secs: Some(60),
+            upload_timeout_secs: Some(600),
         };
 
         let links = gitlab_release_links(&cfg, "v0.0.2");
@@ -1314,5 +1337,77 @@ mod tests {
         assert!(!gh_release_missing(
             "The token in keyring is invalid. To re-authenticate, run: gh auth refresh"
         ));
+    }
+
+    #[test]
+    fn release_http_timeout_uses_config() {
+        let cfg = ReleaseConfig {
+            manifest: String::new(),
+            title: String::new(),
+            github_repo: String::new(),
+            gitlab_host: String::new(),
+            gitlab_project: String::new(),
+            gitlab_package: String::new(),
+            asset: String::new(),
+            single_asset: String::new(),
+            docs_asset: String::new(),
+            docs_archive: String::new(),
+            wasm_asset: String::new(),
+            wasm_dist: String::new(),
+            pages_branch: String::new(),
+            http_timeout_secs: Some(60),
+            upload_timeout_secs: Some(600),
+        };
+
+        assert_eq!(resolve_http_timeout_secs(&cfg).unwrap(), 60);
+        assert_eq!(resolve_upload_timeout_secs(&cfg).unwrap(), 600);
+    }
+
+    #[test]
+    fn release_http_timeout_requires_config() {
+        let cfg = ReleaseConfig {
+            manifest: String::new(),
+            title: String::new(),
+            github_repo: String::new(),
+            gitlab_host: String::new(),
+            gitlab_project: String::new(),
+            gitlab_package: String::new(),
+            asset: String::new(),
+            single_asset: String::new(),
+            docs_asset: String::new(),
+            docs_archive: String::new(),
+            wasm_asset: String::new(),
+            wasm_dist: String::new(),
+            pages_branch: String::new(),
+            http_timeout_secs: None,
+            upload_timeout_secs: Some(600),
+        };
+
+        let error = resolve_http_timeout_secs(&cfg).unwrap_err();
+        assert!(error.to_string().contains("http_timeout_secs"), "{error}");
+    }
+
+    #[test]
+    fn release_upload_timeout_requires_config() {
+        let cfg = ReleaseConfig {
+            manifest: String::new(),
+            title: String::new(),
+            github_repo: String::new(),
+            gitlab_host: String::new(),
+            gitlab_project: String::new(),
+            gitlab_package: String::new(),
+            asset: String::new(),
+            single_asset: String::new(),
+            docs_asset: String::new(),
+            docs_archive: String::new(),
+            wasm_asset: String::new(),
+            wasm_dist: String::new(),
+            pages_branch: String::new(),
+            http_timeout_secs: Some(60),
+            upload_timeout_secs: None,
+        };
+
+        let error = resolve_upload_timeout_secs(&cfg).unwrap_err();
+        assert!(error.to_string().contains("upload_timeout_secs"), "{error}");
     }
 }
