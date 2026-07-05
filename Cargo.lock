@@ -5021,6 +5021,7 @@ dependencies = [
  "kithara-events",
  "kithara-platform",
  "kithara-test-macros",
+ "kithara-test-utils",
  "num-traits",
  "serde",
  "serde_json",

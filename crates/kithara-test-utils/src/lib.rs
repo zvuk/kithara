@@ -12,6 +12,7 @@ pub use kithara_platform;
 
 pub mod hang;
 pub mod mock;
+pub mod no_block;
 pub mod probe;
 pub mod rtsan;
 #[cfg(any(test, feature = "probe"))]
@@ -19,11 +20,13 @@ pub mod test;
 
 pub mod kithara {
     pub use kithara_test_macros::{
-        Probe, fixture, flash, hang_watchdog, mock, probe, rtsan_allow_blocking,
-        rtsan_forbid_blocking, test,
+        Probe, allow_block, fixture, flash, hang_watchdog, mock, no_block, probe,
+        rtsan_allow_blocking, rtsan_forbid_blocking, test,
     };
 }
 
 pub mod kithara_facade {
-    pub use kithara_test_macros::facade_flash as flash;
+    pub use kithara_test_macros::{
+        facade_allow_block as allow_block, facade_flash as flash, facade_no_block as no_block,
+    };
 }
