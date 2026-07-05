@@ -10,7 +10,7 @@ keywords = ["audio", "streaming", "hls", "player", "dj"]
 categories = ["multimedia::audio"]
 
 [features]
-default = ["file", "hls", "symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
+default = ["file", "hls", "symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep. Optional deps
 # (kithara-net / kithara-file / kithara-hls / kithara-abr) use the weak `?`
 # form so a backend choice never force-enables them. Android forwards
@@ -73,11 +73,21 @@ tls-native = [
 ]
 # Enable the Symphonia software decoder path. Disable to compile with
 # only a hardware backend (apple/android) and no software fallback.
-symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia", "kithara-queue?/symphonia"]
+symphonia = [
+    "kithara-audio/symphonia",
+    "kithara-decode/symphonia",
+    "kithara-queue?/symphonia",
+    "resample-rubato",
+]
 # libfdk-aac override for HE-AAC v1/v2 streams. Symphonia ships an
 # LC-only AAC decoder; without this feature, HE-AAC v2 (parametric
 # stereo + SBR) streams fail in the software pipeline.
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac", "kithara-queue?/fdk-aac"]
+resample-rubato = [
+    "kithara-audio/resample-rubato",
+    "kithara-decode/resample-rubato",
+    "kithara-play/resample-rubato",
+]
 # Native-only C++ time-stretch backends (selectable at runtime in the DJ
 # deck). Each pulls a C++ toolchain; without one, key-lock is compiled out.
 stretch-signalsmith = ["kithara-audio/stretch-signalsmith"]
@@ -137,13 +147,24 @@ perf = [
 # coupled to symphonia for desktop/WASM software fallback builds only. HTTP
 # backend selection is separate so macOS desktop/tests can use the decoder
 # without pulling the real-clock NSURLSession backend.
-apple = ["kithara-audio/apple", "kithara-decode/apple", "kithara-play/apple", "kithara-queue?/apple"]
+apple = [
+    "kithara-audio/apple",
+    "kithara-decode/apple",
+    "kithara-play/apple",
+    "kithara-queue?/apple",
+    "resample-rubato",
+]
 # Apple HTTP backend for the shipped FFI framework build. It uses NSURLSession,
 # which passes the DRM keyserver anti-bot WAF natively and removes the wreq /
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
 apple-net = ["kithara-net?/client-apple", "kithara-stream/client-apple"]
-android = ["kithara-audio/android", "kithara-decode/android", "kithara-net?/client-wreq"]
+android = [
+    "kithara-audio/android",
+    "kithara-decode/android",
+    "kithara-net?/client-wreq",
+    "resample-rubato",
+]
 full = ["file", "hls", "assets", "net", "bufpool"]
 
 [dependencies]

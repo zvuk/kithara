@@ -7,165 +7,16 @@ use std::{
     },
 };
 
-use audioadapter_buffers::direct::SequentialSliceOfVecs;
 use bon::Builder;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+pub use kithara_decode::ResamplerQuality;
+use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, ResampleError, ResamplerKind};
 use portable_atomic::AtomicF32;
-use rubato::{
-    Async, Fft, FixedAsync, FixedSync, PolynomialDegree, Resampler as RubatoResampler,
-    SincInterpolationParameters, SincInterpolationType, WindowFunction,
-};
 use smallvec::SmallVec;
 use tracing::{debug, info, trace};
 
 use crate::traits::AudioEffect;
-
-/// Quality preset for the audio resampler.
-///
-/// Controls the resampling algorithm and interpolation parameters.
-/// Higher quality uses more CPU but produces better audio fidelity.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ResamplerQuality {
-    /// Fastest resampling using polynomial interpolation.
-    /// Suitable for previews or low-power devices.
-    Fast,
-    /// Balanced sinc resampling (64-tap, linear interpolation).
-    Normal,
-    /// Good sinc resampling (128-tap, linear interpolation).
-    Good,
-    /// High sinc resampling (256-tap, cubic interpolation).
-    /// Recommended for music playback.
-    #[default]
-    High,
-    /// Maximum quality using FFT-based resampling.
-    /// Highest CPU usage, best for offline processing or high-end playback.
-    Maximum,
-}
-
-impl From<ResamplerQuality> for SincInterpolationParameters {
-    fn from(quality: ResamplerQuality) -> Self {
-        /// Oversampling factor for good/high quality sinc filters.
-        const OVERSAMPLING_HIGH: usize = 256;
-        /// Oversampling factor for normal quality sinc filter.
-        const OVERSAMPLING_NORMAL: usize = 128;
-        /// Cutoff frequency ratio for sinc filters.
-        const CUTOFF: f32 = 0.95;
-        /// Sinc filter length for good quality (128-tap).
-        const LEN_GOOD: usize = 128;
-        /// Sinc filter length for high quality (256-tap).
-        const LEN_HIGH: usize = 256;
-        /// Sinc filter length for normal quality (64-tap).
-        const LEN_NORMAL: usize = 64;
-
-        match quality {
-            ResamplerQuality::Good => Self {
-                sinc_len: LEN_GOOD,
-                f_cutoff: CUTOFF,
-                interpolation: SincInterpolationType::Linear,
-                oversampling_factor: OVERSAMPLING_HIGH,
-                window: WindowFunction::BlackmanHarris2,
-            },
-            ResamplerQuality::High => Self {
-                sinc_len: LEN_HIGH,
-                f_cutoff: CUTOFF,
-                interpolation: SincInterpolationType::Cubic,
-                oversampling_factor: OVERSAMPLING_HIGH,
-                window: WindowFunction::BlackmanHarris2,
-            },
-            ResamplerQuality::Normal | ResamplerQuality::Fast | ResamplerQuality::Maximum => Self {
-                sinc_len: LEN_NORMAL,
-                f_cutoff: CUTOFF,
-                interpolation: SincInterpolationType::Linear,
-                oversampling_factor: OVERSAMPLING_NORMAL,
-                window: WindowFunction::BlackmanHarris2,
-            },
-        }
-    }
-}
-
-/// Enum wrapper for rubato resamplers (trait is not object-safe).
-enum ResamplerKind {
-    Poly(Async<f32>),
-    Sinc(Async<f32>),
-    Fft(Box<Fft<f32>>),
-}
-
-impl ResamplerKind {
-    /// Worst-case input block across the whole ratio-adjustment window
-    /// (`MAX_RATIO_ADJUSTMENT`). Pre-sizing input scratch to this means a
-    /// live ratio change (DJ rate sweep) never reallocates on the
-    /// produce-core.
-    // ast-grep-ignore: idioms.match-self-conversion
-    fn input_frames_max(&self) -> usize {
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => r.input_frames_max(),
-            Self::Fft(r) => r.input_frames_max(),
-        }
-    }
-    // ast-grep-ignore: idioms.match-self-conversion
-    fn input_frames_next(&self) -> usize {
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => r.input_frames_next(),
-            Self::Fft(r) => r.input_frames_next(),
-        }
-    }
-
-    /// Worst-case output block across the whole ratio-adjustment window.
-    // ast-grep-ignore: idioms.match-self-conversion
-    fn output_frames_max(&self) -> usize {
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => r.output_frames_max(),
-            Self::Fft(r) => r.output_frames_max(),
-        }
-    }
-
-    // ast-grep-ignore: idioms.match-self-conversion
-    fn output_frames_next(&self) -> usize {
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => r.output_frames_next(),
-            Self::Fft(r) => r.output_frames_next(),
-        }
-    }
-
-    fn process_into_buffer(
-        &mut self,
-        input: &[Vec<f32>],
-        output: &mut [Vec<f32>],
-    ) -> Result<(usize, usize), rubato::ResampleError> {
-        let channels = input.len();
-        let input_frames = input[0].len();
-        let output_frames = output[0].len();
-
-        let input_adapter =
-            SequentialSliceOfVecs::new(input, channels, input_frames).map_err(|_| {
-                rubato::ResampleError::InsufficientInputBufferSize {
-                    expected: input_frames,
-                    actual: 0,
-                }
-            })?;
-        let mut output_adapter = SequentialSliceOfVecs::new_mut(output, channels, output_frames)
-            .map_err(|_| rubato::ResampleError::InsufficientOutputBufferSize {
-                expected: output_frames,
-                actual: 0,
-            })?;
-
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => {
-                r.process_into_buffer(&input_adapter, &mut output_adapter, None)
-            }
-            Self::Fft(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
-        }
-    }
-
-    fn set_resample_ratio(&mut self, ratio: f64, ramp: bool) -> Result<(), rubato::ResampleError> {
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => r.set_resample_ratio(ratio, ramp),
-            Self::Fft(r) => r.set_resample_ratio(ratio, ramp),
-        }
-    }
-}
 
 /// Configuration parameters for the resampler effect.
 ///
@@ -241,33 +92,9 @@ pub struct ResamplerProcessor {
     chunk_size: usize,
 }
 
-/// Construction parameters for one rubato resampler instance, bundled so
-/// [`ResamplerProcessor::create_resampler`] takes a single argument.
-#[derive(Clone, Copy)]
-struct ResamplerBuild {
-    quality: ResamplerQuality,
-    ratio: f64,
-    source_rate: u32,
-    target_rate: u32,
-    channels: usize,
-    chunk_size: usize,
-}
-
 impl ResamplerProcessor {
     /// Default resampler chunk size in frames.
     const DEFAULT_CHUNK_SIZE: usize = 4096;
-
-    /// Sub-chunk count for FFT resampler.
-    const FFT_SUB_CHUNKS: usize = 2;
-
-    /// Maximum ratio adjustment factor for async resamplers.
-    const MAX_RATIO_ADJUSTMENT: f64 = 8.0;
-
-    /// Minimum playback rate to avoid division by zero or extreme ratios.
-    const MIN_PLAYBACK_RATE: f64 = 0.01;
-
-    /// Passthrough detection tolerance for playback rate.
-    const PASSTHROUGH_TOLERANCE: f64 = 0.0001;
 
     /// Create a new resampler from configuration parameters.
     pub fn new(params: ResamplerParams) -> Self {
@@ -379,54 +206,6 @@ impl ResamplerProcessor {
         let out_frames = u32::try_from(frame_count).unwrap_or(u32::MAX);
         meta.frames = out_frames;
         Some(PcmChunk::new(meta, interleaved))
-    }
-
-    fn create_resampler(
-        build: ResamplerBuild,
-    ) -> Result<ResamplerKind, rubato::ResamplerConstructionError> {
-        let ResamplerBuild {
-            quality,
-            ratio,
-            chunk_size,
-            channels,
-            source_rate,
-            target_rate,
-        } = build;
-        match quality {
-            ResamplerQuality::Fast => {
-                let poly = Async::new_poly(
-                    ratio,
-                    Self::MAX_RATIO_ADJUSTMENT,
-                    PolynomialDegree::Cubic,
-                    chunk_size,
-                    channels,
-                    FixedAsync::Input,
-                )?;
-                Ok(ResamplerKind::Poly(poly))
-            }
-            ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
-                let sinc = Async::new_sinc(
-                    ratio,
-                    Self::MAX_RATIO_ADJUSTMENT,
-                    &SincInterpolationParameters::from(quality),
-                    chunk_size,
-                    channels,
-                    FixedAsync::Input,
-                )?;
-                Ok(ResamplerKind::Sinc(sinc))
-            }
-            ResamplerQuality::Maximum => {
-                let fft = Fft::new(
-                    source_rate as usize,
-                    target_rate as usize,
-                    chunk_size,
-                    Self::FFT_SUB_CHUNKS,
-                    channels,
-                    FixedSync::Input,
-                )?;
-                Ok(ResamplerKind::Fft(Box::new(fft)))
-            }
-        }
     }
 
     /// Drain accumulated input into `temp_output_all` one block at a time.
@@ -608,7 +387,7 @@ impl ResamplerProcessor {
         resampler: &mut ResamplerKind,
         input_frames: usize,
         output_frames: usize,
-    ) -> Result<usize, rubato::ResampleError> {
+    ) -> Result<usize, ResampleError> {
         let channels = self.channels;
 
         for ch in 0..channels {
@@ -628,24 +407,22 @@ impl ResamplerProcessor {
     }
 
     fn ratio_for_target(&self, target_rate: u32) -> f64 {
-        let rate =
-            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
-        if self.source_rate > 0 {
-            f64::from(target_rate) / (f64::from(self.source_rate) * rate)
-        } else {
-            1.0 / rate
-        }
+        ResamplerKind::ratio_for_target(
+            self.source_rate,
+            target_rate,
+            f64::from(self.playback_rate.load(Ordering::Relaxed)),
+        )
     }
 
     fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
-        match Self::create_resampler(ResamplerBuild {
+        match ResamplerKind::new(
+            self.quality,
+            new_ratio,
+            self.source_rate,
             target_rate,
-            quality: self.quality,
-            ratio: new_ratio,
-            chunk_size: self.chunk_size,
-            channels: self.channels,
-            source_rate: self.source_rate,
-        }) {
+            self.channels,
+            self.chunk_size,
+        ) {
             Ok(resampler) => {
                 self.resampler = Some(resampler);
                 self.current_ratio = new_ratio;
@@ -693,11 +470,6 @@ impl ResamplerProcessor {
         for buf in &mut self.temp_output_all {
             buf.clear();
         }
-    }
-
-    fn should_passthrough(source_rate: u32, target_rate: u32, playback_rate: f64) -> bool {
-        (source_rate == target_rate || target_rate == 0)
-            && (playback_rate - 1.0).abs() < Self::PASSTHROUGH_TOLERANCE
     }
 
     fn switch_to_passthrough(&mut self, target_rate: u32, currently_pt: bool) {
@@ -761,12 +533,14 @@ impl ResamplerProcessor {
         // target_rate() returns source_rate when host==0 (non-zero) or host_sr (non-zero by contract).
         self.output_spec.sample_rate =
             NonZeroU32::new(target_rate).unwrap_or(self.output_spec.sample_rate);
-        let new_playback_rate =
-            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
-        let should_pt = Self::should_passthrough(self.source_rate, target_rate, new_playback_rate);
+        let new_playback_rate = ResamplerKind::clamped_playback_rate(f64::from(
+            self.playback_rate.load(Ordering::Relaxed),
+        ));
+        let should_pt =
+            ResamplerKind::should_passthrough(self.source_rate, target_rate, new_playback_rate);
         let currently_pt = self.is_passthrough();
         let new_ratio = self.ratio_for_target(target_rate);
-        let ratio_changed = (new_ratio - self.current_ratio).abs() > Self::PASSTHROUGH_TOLERANCE;
+        let ratio_changed = ResamplerKind::ratio_changed(self.current_ratio, new_ratio);
 
         if should_pt {
             self.switch_to_passthrough(target_rate, currently_pt);

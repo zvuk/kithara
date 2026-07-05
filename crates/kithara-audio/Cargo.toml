@@ -10,7 +10,7 @@ keywords = ["audio", "dsp", "resampling", "playback", "player"]
 categories = ["multimedia::audio"]
 
 [features]
-default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
+default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 probe = []
 mock = []
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -43,16 +43,17 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 # Enable memory profiling for examples (includes allocation tracking, adds overhead)
 memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 # Enable Apple AudioToolbox hardware decoder (macOS/iOS)
-apple = ["kithara-decode/apple"]
+apple = ["kithara-decode/apple", "resample-rubato"]
 # Enable Android MediaCodec hardware decoder (Android)
-android = ["kithara-decode/android"]
+android = ["kithara-decode/android", "resample-rubato"]
 # Enable the Symphonia software decoder path. Disable to build with
 # only the hardware backend (apple or android) and no software fallback.
-symphonia = ["kithara-decode/symphonia"]
+symphonia = ["kithara-decode/symphonia", "resample-rubato"]
 # Enable libfdk-aac for HE-AAC v1/v2 decode. Symphonia's stock AAC
 # decoder is LC-only; without this feature, HE-AAC v2 streams fail to
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
+resample-rubato = ["kithara-decode/resample-rubato"]
 # Native-only C++ time-stretch backends. Default native builds use signalsmith;
 # bungee stays opt-in. Wasm builds pass `--no-default-features`, so they carry
 # no stretch DSP: speed control stays, key-lock is compiled out.

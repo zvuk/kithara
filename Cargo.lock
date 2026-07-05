@@ -4555,6 +4555,7 @@ dependencies = [
  "ndk-context",
  "num-traits",
  "re_mp4",
+ "rubato",
  "smallvec",
  "symphonia 0.6.0",
  "symphonia-core 0.6.0",
