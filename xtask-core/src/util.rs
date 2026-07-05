@@ -1,23 +1,22 @@
 use std::{
     io::{BufRead, BufReader},
-    path::Path,
     process::{Command, Stdio},
     sync::OnceLock,
 };
 
 use anyhow::{Context, Result, bail};
 
-use crate::common::project::ProjectConfig;
+use crate::Ctx;
 
 /// Project name from `.config/xtask.toml` (`[project] name`), used to namespace
 /// scratch / cache / temp dirs so the reusable xtask carries no project-name
-/// literals. Resolved once from the working dir; falls back to `xtask` when
-/// unset or unreadable.
+/// literals. Resolved once from the Cargo workspace; falls back to `xtask`
+/// when unreadable.
 pub fn project_name() -> &'static str {
     static NAME: OnceLock<String> = OnceLock::new();
     NAME.get_or_init(|| {
-        let resolved = ProjectConfig::load(Path::new("."))
-            .map(|cfg| cfg.project.name)
+        let resolved = Ctx::load()
+            .map(|ctx| ctx.config.project.name)
             .unwrap_or_default();
         if resolved.is_empty() {
             "xtask".to_string()

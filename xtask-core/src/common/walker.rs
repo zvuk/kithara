@@ -3,10 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use glob::Pattern;
 
-use super::scope::Scope;
+use super::{project::ProjectConfig, scope::Scope};
 
 /// Recursively collect all `.rs` files under `dir`, returning them sorted.
 ///
@@ -57,9 +57,11 @@ pub fn matches_any(patterns: &[Pattern], rel: &Path) -> bool {
 /// scoped root.
 pub fn workspace_rs_files_scoped(workspace_root: &Path, scope: &Scope) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
+    let excludes = WorkspaceScanExcludes::from_root(workspace_root)?;
     for root in scope.roots(workspace_root) {
         walk_rs_files_inner(&root, &mut out)?;
     }
+    out.retain(|path| !excludes.matches(path));
     out.sort();
     out.dedup();
     Ok(out)
@@ -68,4 +70,32 @@ pub fn workspace_rs_files_scoped(workspace_root: &Path, scope: &Scope) -> Result
 #[must_use]
 pub fn relative_to<'a>(root: &Path, full: &'a Path) -> &'a Path {
     full.strip_prefix(root).unwrap_or(full)
+}
+
+struct WorkspaceScanExcludes {
+    workspace_root: PathBuf,
+    patterns: Vec<Pattern>,
+}
+
+impl WorkspaceScanExcludes {
+    fn from_root(workspace_root: &Path) -> Result<Self> {
+        let config = ProjectConfig::load(workspace_root).with_context(|| {
+            format!(
+                "loading workspace scan config from {}",
+                workspace_root.display()
+            )
+        })?;
+        Ok(Self {
+            workspace_root: workspace_root.to_path_buf(),
+            patterns: compile_globs(&config.workspace_scan.exclude),
+        })
+    }
+
+    fn matches(&self, path: &Path) -> bool {
+        if self.patterns.is_empty() {
+            return false;
+        }
+        let rel = relative_to(&self.workspace_root, path);
+        matches_any(&self.patterns, rel)
+    }
 }

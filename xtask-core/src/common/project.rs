@@ -18,11 +18,20 @@ pub struct ProjectConfig {
     pub publish: PublishConfig,
     pub release: ReleaseConfig,
     pub lint_exclude: LintExcludeConfig,
+    #[serde(default, rename = "workspace-scan")]
+    pub workspace_scan: WorkspaceScan,
     pub apple: AppleConfig,
     pub orphans: OrphansConfig,
     pub android: AndroidConfig,
     pub wasm: WasmConfig,
     pub quality: QualityConfig,
+}
+
+/// Workspace-wide Rust file scan exclusions.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspaceScan {
+    pub exclude: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
