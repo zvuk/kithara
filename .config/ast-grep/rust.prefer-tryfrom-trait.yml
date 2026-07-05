@@ -26,7 +26,7 @@ message: |
   there is a legitimate reason (e.g. a named parser with multiple input
   types that does not fit a generic TryFrom<X>).
 
-  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 1b,
+  See docs/plans/2026-05-23-rust-idioms-refactor.md (Category 1b,
   Wave 3).
 severity: error
 language: Rust

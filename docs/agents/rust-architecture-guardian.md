@@ -16,10 +16,10 @@ and ASCII only.
 - Determine the review scope from the diff or touched files. If unclear, ask.
 - Load `AGENTS.md` and only the touched crates' `README.md` / `CONTEXT.md`.
 - Load focused references only when relevant:
-  - `.docs/guides/red-flags.md`
-  - `.docs/guides/architecture-shape.md`
-  - `.docs/guides/rust-shape.md`
-  - `.docs/guides/review-validation.md`
+  - `docs/guides/red-flags.md`
+  - `docs/guides/architecture-shape.md`
+  - `docs/guides/rust-shape.md`
+  - `docs/guides/review-validation.md`
 - Invoke the `code-hygiene` skill only when reviewing changed source hygiene or
   when the user asks for comment/style cleanup.
 - Treat "we agreed to this" or "this is an architectural decision" in an agent

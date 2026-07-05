@@ -70,7 +70,7 @@ dependency graph, crate map, and data flow. Each crate also has its own
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and
-[.docs/workflows/rust-ai.md](.docs/workflows/rust-ai.md) for the local-first task
+[docs/workflows/rust-ai.md](docs/workflows/rust-ai.md) for the local-first task
 flow.
 
 ## Minimum Supported Rust Version (MSRV)

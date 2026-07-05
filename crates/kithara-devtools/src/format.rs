@@ -175,10 +175,10 @@ fn run_markdown_format(check: bool) -> Result<()> {
         "SECURITY.md",
         "ARCHITECTURE.md",
         "CODE_OF_CONDUCT.md",
-        ".docs/guides",
-        ".docs/workflows",
-        ".docs/agents",
-        ".docs/skills",
+        "docs/guides",
+        "docs/workflows",
+        "docs/agents",
+        "docs/skills",
         "crates",
         "tests",
         "apple",
@@ -191,7 +191,7 @@ fn run_markdown_format(check: bool) -> Result<()> {
         "--ordered-list",
         "one",
         "--exclude",
-        ".docs/plans",
+        "docs/plans",
     ];
     if check {
         args.push("--check");

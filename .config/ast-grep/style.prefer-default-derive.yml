@@ -35,7 +35,7 @@ message: |
   `new()` has semantics that differ from Default (e.g. allocates,
   registers, or has another side effect).
 
-  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 4,
+  See docs/plans/2026-05-23-rust-idioms-refactor.md (Category 4,
   Wave 6).
 severity: error
 language: Rust

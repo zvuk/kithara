@@ -3,7 +3,7 @@ message: |
   `fn from_$NAME(s: &str) -> Option<Self>` / `Result<Self>` is a manual
   `FromStr` impl (with a domain-specific name).
 
-  Policy (see .docs/plans/2026-05-23-rust-idioms-refactor.md,
+  Policy (see docs/plans/2026-05-23-rust-idioms-refactor.md,
   wave-0-decisions.md):
   - **FromStr** — for parsing text formats (HLS codec, MIME, user input,
     config strings)
@@ -32,7 +32,7 @@ message: |
   a legitimate reason (e.g. multiple parsers for one type with different
   semantics).
 
-  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 3,
+  See docs/plans/2026-05-23-rust-idioms-refactor.md (Category 3,
   Wave 5).
 severity: error
 language: Rust

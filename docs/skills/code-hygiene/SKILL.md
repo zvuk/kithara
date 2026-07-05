@@ -21,7 +21,7 @@ removal.
 to a few lines** rather than deleting. Remove doc entirely only on private/trivial
 items and on tests.
 
-Rules come from project conventions (`AGENTS.md`, `.docs/workflows/rust-ai.md`) and
+Rules come from project conventions (`AGENTS.md`, `docs/workflows/rust-ai.md`) and
 the owning crates (`README.md`/`CONTEXT.md`). The skill **does not rewrite
 silently**: mechanical findings are fixed after confirmation; judgment-call
 findings are listed (out-of-scope edits go to chat, not applied silently).
@@ -143,7 +143,7 @@ runtime abstractions - not surface or protocol policy.
 
 Shared media types (`AudioCodec`, `ContainerFormat`, `MediaInfo`) live in
 `kithara-stream`. A duplicate of such a type in another crate is a violation - flag
-it and name the canonical owner. (See `.docs/workflows/rust-ai.md` cross-domain
+it and name the canonical owner. (See `docs/workflows/rust-ai.md` cross-domain
 guardrails.)
 
 ### 8. Code -> docs reference direction
@@ -151,7 +151,7 @@ References between code and docs are one-way: doc -> code, never the reverse. Co
 (including doc comments) does not reference doc files - the normative document
 points at the code, the code is self-contained. Flag, in sources and doc comments,
 references to a crate `README.md`/`CONTEXT.md`, the root `CONTEXT.md`, and
-`.docs/*.md` (plans, workflow, notes).
+`docs/*.md` (plans, workflow, notes).
 
 ### 9. Opaque abbreviations in names
 Identifiers without puzzle abbreviations (`segment_index`, not `si`). Prefer

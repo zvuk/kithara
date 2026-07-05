@@ -27,7 +27,7 @@ message: |
   constructor consumes a strict `Iterator` for a reason (e.g. requires
   exact-size or ordered iteration with no backing collection).
 
-  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 12b, Wave 15).
+  See docs/plans/2026-05-23-rust-idioms-refactor.md (Category 12b, Wave 15).
 severity: error
 language: Rust
 files:

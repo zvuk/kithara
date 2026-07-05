@@ -5,7 +5,7 @@
 //! - `RequestIdentity` differentiates inflight handles within one store.
 //! - Distinct `AssetStore` instances stay isolated by construction.
 //!
-//! See `.docs/plans/2026-05-20-inflight-asset-sharing.md` step 1.
+//! See `docs/plans/2026-05-20-inflight-asset-sharing.md` step 1.
 
 use kithara_assets::{
     AcquisitionResult, AssetStoreBuilder, ReadSide, RequestIdentity, StorageBackend, WriteSide,
