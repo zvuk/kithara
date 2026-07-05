@@ -1,0 +1,61 @@
+function-name-matches:malloc
+function-name-matches:calloc
+function-name-matches:realloc
+function-name-matches:free
+function-name-matches:posix_memalign
+# Thread SPAWN from async setup code is the malloc class (brief syscall, not
+# a wait; slowness is covered by the level-2 budget). pthread_join stays
+# unsuppressed: joining inside a poll is a genuine blocking wait.
+function-name-matches:pthread_create
+# stderr writes from the panic hook (no_block's own panic-mode reports, test
+# logging under --nocapture) land inside the still-active poll scope; rtsan
+# cannot distinguish fds. Trade-off accepted: file WRITES are invisible to
+# this lane (reads/open/socket/sleep stay intercepted; storage writes route
+# through spawn_blocking/dedicated threads in this codebase).
+function-name-matches:write
+function-name-matches:writev
+# Condvar SIGNALING is a wake (futex-wake class, brief), sanctioned in polls
+# like notify/unpark/send. pthread_cond_wait/timedwait stay intercepted.
+function-name-matches:pthread_cond_signal
+function-name-matches:pthread_cond_broadcast
+# Instantaneous fd/VM/signal setup syscalls (tokio/mio registration, allocator
+# mapping): metadata flag flips, no waiting. Disk metadata reads (stat/fstat)
+# and all genuine waits (read/open/kevent-with-timeout/nanosleep) stay
+# intercepted.
+function-name-matches:fcntl
+function-name-matches:ioctl
+function-name-matches:getsockopt
+function-name-matches:setsockopt
+function-name-matches:sigaction
+function-name-matches:sigaltstack
+function-name-matches:mmap
+function-name-matches:munmap
+function-name-matches:madvise
+function-name-matches:mprotect
+# fd lifecycle/teardown and wakers: close is every fd-holder's drop path
+# (pathological final-flush stalls are the budget's job); pipe/socketpair are
+# waker/channel setup; in-poll kevent is nonblocking registration (the
+# driver's blocking kevent parks OUTSIDE task polls); entropy reads are
+# instant pool reads (HashMap seeds). The acquisition/wait side (open, read,
+# recv, connect, accept, send, stat, nanosleep, pthread_cond_wait, join)
+# stays intercepted.
+function-name-matches:close
+function-name-matches:pipe
+function-name-matches:socketpair
+function-name-matches:kevent
+function-name-matches:getentropy
+function-name-matches:getrandom
+# Sync-primitive construction/teardown (Drop paths inside polls): instant.
+function-name-matches:pthread_mutex_init
+function-name-matches:pthread_mutex_destroy
+function-name-matches:pthread_cond_init
+function-name-matches:pthread_cond_destroy
+function-name-matches:pthread_rwlock_init
+function-name-matches:pthread_rwlock_destroy
+# Measured 2026-07-06: unsuppressed locks abort on the FIRST uncontended
+# pthread_mutex_lock in the first test (rtsan aborts on call, not on wait) —
+# the lane is unusable without these. Long lock waits remain covered by the
+# level-2 budget classifier ("blocked wait"). Condvar waits stay unsuppressed.
+function-name-matches:pthread_mutex_lock
+function-name-matches:pthread_mutex_unlock
+function-name-matches:pthread_rwlock

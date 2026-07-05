@@ -1,17 +1,108 @@
 use std::future::Future;
 
-pub use kithara_platform::no_block::{Pause, Permit, PermitPoll, Watched, permit, permit_poll};
+pub use kithara_platform::no_block::{Pause, Watched};
+#[cfg(not(rtsan))]
+pub use kithara_platform::no_block::{Permit, PermitPoll, permit, permit_poll};
+
+#[cfg(rtsan)]
+mod rtsan_gate {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    use pin_project_lite::pin_project;
+
+    pin_project! {
+        pub struct RtsanChecked<F> {
+            #[pin]
+            pub(super) fut: F,
+        }
+    }
+
+    pin_project! {
+        pub struct PermitPoll<F> {
+            #[pin]
+            pub(super) fut: F,
+        }
+    }
+
+    impl<F: Future> Future for RtsanChecked<F> {
+        type Output = F::Output;
+
+        #[sanitize(realtime = "nonblocking")]
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            self.project().fut.poll(cx)
+        }
+    }
+
+    impl<F: Future> Future for PermitPoll<F> {
+        type Output = F::Output;
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let this = self.project();
+            let _permit = super::permit();
+            this.fut.poll(cx)
+        }
+    }
+}
+
+#[cfg(rtsan)]
+pub use rtsan_gate::PermitPoll;
+
+#[cfg(rtsan)]
+#[must_use = "the permit only suspends no_block and RTSan checks while the guard is alive"]
+pub struct Permit {
+    _platform: kithara_platform::no_block::Permit,
+    _rtsan: crate::rtsan::Permit,
+}
+
+#[cfg(rtsan)]
+pub fn permit() -> Permit {
+    Permit {
+        _platform: kithara_platform::no_block::permit(),
+        _rtsan: crate::rtsan::permit(),
+    }
+}
+
+#[cfg(rtsan)]
+#[doc(hidden)]
+#[must_use]
+pub fn permit_poll<F: Future>(fut: F) -> PermitPoll<F> {
+    PermitPoll { fut }
+}
 
 #[doc(hidden)]
 #[track_caller]
+#[cfg(not(rtsan))]
 pub fn watch<F: Future>(name: &'static str, budget_ms: u64, fut: F) -> Watched<F> {
     kithara_platform::no_block::watch_budget(name, budget_ms, fut)
 }
 
 #[doc(hidden)]
 #[track_caller]
+#[cfg(rtsan)]
+pub fn watch<F: Future>(
+    name: &'static str,
+    budget_ms: u64,
+    fut: F,
+) -> Watched<rtsan_gate::RtsanChecked<F>> {
+    kithara_platform::no_block::watch_budget(name, budget_ms, rtsan_gate::RtsanChecked { fut })
+}
+
+#[doc(hidden)]
+#[track_caller]
+#[cfg(not(rtsan))]
 pub fn watch_root<F: Future>(name: &'static str, fut: F) -> Watched<F> {
     kithara_platform::no_block::watch_blanket(name, fut)
+}
+
+#[doc(hidden)]
+#[track_caller]
+#[cfg(rtsan)]
+pub fn watch_root<F: Future>(name: &'static str, fut: F) -> Watched<rtsan_gate::RtsanChecked<F>> {
+    kithara_platform::no_block::watch_blanket(name, rtsan_gate::RtsanChecked { fut })
 }
 
 #[cfg(test)]

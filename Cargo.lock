@@ -5023,6 +5023,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "num-traits",
+ "pin-project-lite",
  "serde",
  "serde_json",
  "tracing",

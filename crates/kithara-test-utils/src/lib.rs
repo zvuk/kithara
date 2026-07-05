@@ -1,3 +1,5 @@
+#![cfg_attr(rtsan, feature(sanitize))]
+
 #[cfg(test)]
 extern crate self as kithara_test_utils;
 
