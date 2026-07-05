@@ -18,6 +18,11 @@ impl DriverIo for MemDriver {
                 "memory commit: len {end} does not fit usize: {err}"
             ))
         })?;
+        // Buffer released by a prior commit (repeat commit, no `reactivate`): it
+        // no longer covers `end`, so the published snapshot stays authoritative.
+        if end_usize > state.buf.len() {
+            return Ok(());
+        }
         // Publish (or clear) the snapshot AND release the working buffer
         // atomically under the state lock, then shrink `state.len` to the
         // committed length. `read_at` is working-buffer-first under this same
