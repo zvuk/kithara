@@ -75,7 +75,6 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
                 ResamplerQuality::Normal,
                 ResamplerQuality::Good,
                 ResamplerQuality::High,
-                ResamplerQuality::Maximum,
             ];
 
             for quality in qualities {

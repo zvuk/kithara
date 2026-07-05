@@ -1,7 +1,6 @@
 use rubato::{
-    Async, Fft, FixedAsync, FixedSync, PolynomialDegree, Resampler as RubatoResampler,
-    SincInterpolationParameters, SincInterpolationType, WindowFunction,
-    audioadapter_buffers::direct::SequentialSliceOfVecs,
+    Async, FixedAsync, PolynomialDegree, Resampler as RubatoResampler, SincInterpolationParameters,
+    SincInterpolationType, WindowFunction, audioadapter_buffers::direct::SequentialSliceOfVecs,
 };
 pub use rubato::{ResampleError, ResamplerConstructionError};
 
@@ -22,9 +21,6 @@ pub enum ResamplerQuality {
     /// Recommended for music playback.
     #[default]
     High,
-    /// Maximum quality using FFT-based resampling.
-    /// Highest CPU usage, best for offline processing or high-end playback.
-    Maximum,
 }
 
 impl From<ResamplerQuality> for SincInterpolationParameters {
@@ -57,7 +53,7 @@ impl From<ResamplerQuality> for SincInterpolationParameters {
                 oversampling_factor: OVERSAMPLING_HIGH,
                 window: WindowFunction::BlackmanHarris2,
             },
-            ResamplerQuality::Normal | ResamplerQuality::Fast | ResamplerQuality::Maximum => Self {
+            ResamplerQuality::Normal | ResamplerQuality::Fast => Self {
                 sinc_len: LEN_NORMAL,
                 f_cutoff: CUTOFF,
                 interpolation: SincInterpolationType::Linear,
@@ -72,13 +68,9 @@ impl From<ResamplerQuality> for SincInterpolationParameters {
 pub enum ResamplerKind {
     Poly(Async<f32>),
     Sinc(Async<f32>),
-    Fft(Box<Fft<f32>>),
 }
 
 impl ResamplerKind {
-    /// Sub-chunk count for FFT resampler.
-    const FFT_SUB_CHUNKS: usize = 2;
-
     /// Maximum ratio adjustment factor for async resamplers.
     const MAX_RATIO_ADJUSTMENT: f64 = 8.0;
 
@@ -93,12 +85,10 @@ impl ResamplerKind {
     /// # Errors
     ///
     /// Returns [`ResamplerConstructionError`] when rubato rejects the
-    /// supplied rates, ratio, channel count, or chunk size.
+    /// supplied ratio, channel count, or chunk size.
     pub fn new(
         quality: ResamplerQuality,
         ratio: f64,
-        source_rate: u32,
-        target_rate: u32,
         channels: usize,
         chunk_size: usize,
     ) -> Result<Self, ResamplerConstructionError> {
@@ -124,17 +114,6 @@ impl ResamplerKind {
                     FixedAsync::Input,
                 )?;
                 Ok(Self::Sinc(sinc))
-            }
-            ResamplerQuality::Maximum => {
-                let fft = Fft::new(
-                    source_rate as usize,
-                    target_rate as usize,
-                    chunk_size,
-                    Self::FFT_SUB_CHUNKS,
-                    channels,
-                    FixedSync::Input,
-                )?;
-                Ok(Self::Fft(Box::new(fft)))
             }
         }
     }
@@ -179,7 +158,6 @@ impl ResamplerKind {
     pub fn input_frames_max(&self) -> usize {
         match self {
             Self::Poly(r) | Self::Sinc(r) => r.input_frames_max(),
-            Self::Fft(r) => r.input_frames_max(),
         }
     }
 
@@ -189,7 +167,6 @@ impl ResamplerKind {
     pub fn input_frames_next(&self) -> usize {
         match self {
             Self::Poly(r) | Self::Sinc(r) => r.input_frames_next(),
-            Self::Fft(r) => r.input_frames_next(),
         }
     }
 
@@ -199,7 +176,6 @@ impl ResamplerKind {
     pub fn output_frames_max(&self) -> usize {
         match self {
             Self::Poly(r) | Self::Sinc(r) => r.output_frames_max(),
-            Self::Fft(r) => r.output_frames_max(),
         }
     }
 
@@ -209,7 +185,6 @@ impl ResamplerKind {
     pub fn output_frames_next(&self) -> usize {
         match self {
             Self::Poly(r) | Self::Sinc(r) => r.output_frames_next(),
-            Self::Fft(r) => r.output_frames_next(),
         }
     }
 
@@ -249,7 +224,6 @@ impl ResamplerKind {
             Self::Poly(r) | Self::Sinc(r) => {
                 r.process_into_buffer(&input_adapter, &mut output_adapter, None)
             }
-            Self::Fft(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
         }
     }
 
@@ -262,7 +236,6 @@ impl ResamplerKind {
     pub fn set_resample_ratio(&mut self, ratio: f64, ramp: bool) -> Result<(), ResampleError> {
         match self {
             Self::Poly(r) | Self::Sinc(r) => r.set_resample_ratio(ratio, ramp),
-            Self::Fft(r) => r.set_resample_ratio(ratio, ramp),
         }
     }
 }

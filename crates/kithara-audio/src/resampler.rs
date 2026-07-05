@@ -414,15 +414,8 @@ impl ResamplerProcessor {
         )
     }
 
-    fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
-        match ResamplerKind::new(
-            self.quality,
-            new_ratio,
-            self.source_rate,
-            target_rate,
-            self.channels,
-            self.chunk_size,
-        ) {
+    fn recreate_resampler(&mut self, new_ratio: f64) {
+        match ResamplerKind::new(self.quality, new_ratio, self.channels, self.chunk_size) {
             Ok(resampler) => {
                 self.resampler = Some(resampler);
                 self.current_ratio = new_ratio;
@@ -554,7 +547,7 @@ impl ResamplerProcessor {
         }
 
         if currently_pt || self.resampler.is_none() || ratio_changed {
-            self.recreate_resampler(target_rate, new_ratio);
+            self.recreate_resampler(new_ratio);
             self.current_playback_rate = new_playback_rate;
         }
     }
@@ -879,7 +872,6 @@ mod tests {
     #[case::normal(ResamplerQuality::Normal)]
     #[case::good(ResamplerQuality::Good)]
     #[case::high(ResamplerQuality::High)]
-    #[case::maximum(ResamplerQuality::Maximum)]
     fn test_quality_resamples(#[case] quality: ResamplerQuality) {
         let mut processor = ResamplerProcessor::new(params_with_quality(
             make_host_rate(44100),
