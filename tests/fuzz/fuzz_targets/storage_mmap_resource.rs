@@ -1,8 +1,10 @@
 #![no_main]
 
 use arbitrary::{Arbitrary, Unstructured};
-use kithara_platform::CancelToken;
-use kithara_storage::{MmapOptions, MmapResource, StorageResource};
+use kithara::{
+    platform::CancelToken,
+    storage::{MmapOptions, MmapResource, StorageResource},
+};
 use libfuzzer_sys::fuzz_target;
 use tempfile::TempDir;
 

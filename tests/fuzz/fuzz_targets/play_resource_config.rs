@@ -1,7 +1,7 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara_play::ResourceConfig;
+use kithara::play::ResourceConfig;
 use libfuzzer_sys::fuzz_target;
 
 #[derive(Arbitrary, Debug)]

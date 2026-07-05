@@ -1,8 +1,10 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara_events::VariantInfo;
-use kithara_hls::{FromWithParams, parse_master_playlist, parse_media_playlist};
+use kithara::{
+    events::VariantInfo,
+    hls::{FromWithParams, parse_master_playlist, parse_media_playlist},
+};
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 

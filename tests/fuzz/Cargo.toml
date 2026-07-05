@@ -75,15 +75,14 @@ test = false
 bench = false
 
 [dependencies]
-kithara-assets = { workspace = true }
-kithara-drm = { workspace = true }
-kithara-events = { workspace = true }
-kithara-file = { workspace = true }
-kithara-hls = { workspace = true, features = ["probe"] }
-kithara-platform = { workspace = true }
-kithara-play = { workspace = true, features = ["backend-cpal"] }
-kithara-storage = { workspace = true }
-kithara-stream = { workspace = true }
+kithara = { workspace = true, features = [
+    "full",
+    "probe",
+    "symphonia",
+    "backend-cpal",
+    "client-reqwest",
+    "tls-rustls",
+] }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../../crates/kithara-workspace-hack" }
 
 arbitrary = { workspace = true }
