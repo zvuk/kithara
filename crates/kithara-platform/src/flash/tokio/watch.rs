@@ -330,7 +330,7 @@ where
             None => {}
         }
 
-        let state = rx.shared.state.lock();
+        let mut state = rx.shared.state.lock();
         rx.seen = state.version;
         if (this.predicate)(&state.value) {
             drop(state);
@@ -350,10 +350,9 @@ where
             Backend::Native => {
                 trace_native_from_ambient("watch", "wait_for_park");
                 let waker = cx.waker().clone();
-                let mut state = state;
                 state.wakers.push(waker.clone());
-                rx.pending = Some(Parked::Real(waker));
                 drop(state);
+                rx.pending = Some(Parked::Real(waker));
             }
         }
         Poll::Pending
