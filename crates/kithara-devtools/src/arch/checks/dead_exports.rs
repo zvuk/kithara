@@ -1130,7 +1130,7 @@ mod tests {
 
     fn collect_refs(src: &str, qualified_only: bool) -> Refs {
         let file = syn::parse_file(src).unwrap();
-        let workspace_crates: HashSet<String> = ["kithara_xtask_core"]
+        let workspace_crates: HashSet<String> = ["kithara_devtools"]
             .into_iter()
             .map(str::to_owned)
             .collect();
@@ -1165,7 +1165,7 @@ mod tests {
         let refs = collect_refs(
             r#"
             fn run() {
-                kithara_xtask_core::util::check_tool();
+                kithara_devtools::util::check_tool();
             }
             "#,
             true,
@@ -1178,7 +1178,7 @@ mod tests {
     fn qualified_only_records_workspace_qualified_use_leaf() {
         let refs = collect_refs(
             r#"
-            use kithara_xtask_core::util::{check_tool as ct, project_name};
+            use kithara_devtools::util::{check_tool as ct, project_name};
 
             fn run() {
                 ct();
@@ -1200,7 +1200,7 @@ mod tests {
     fn qualified_only_ignores_unqualified_names_methods_macros_and_attrs() {
         let refs = collect_refs(
             r#"
-            #[kithara_xtask_core::marker(check_tool)]
+            #[kithara_devtools::marker(check_tool)]
             fn run() {
                 check_tool();
                 target.check_tool();
@@ -1218,7 +1218,7 @@ mod tests {
     fn qualified_only_records_methods_on_workspace_imported_values() {
         let refs = collect_refs(
             r#"
-            use kithara_xtask_core::common::{
+            use kithara_devtools::common::{
                 baseline::Baseline,
                 report,
                 scope::Scope,
@@ -1244,11 +1244,11 @@ mod tests {
     fn normal_collection_keeps_existing_reference_sources() {
         let refs = collect_refs(
             r#"
-            use kithara_xtask_core::util::imported_leaf;
+            use kithara_devtools::util::imported_leaf;
 
             #[some_attr(attr_token)]
             fn run() {
-                kithara_xtask_core::util::inline_path();
+                kithara_devtools::util::inline_path();
                 receiver.method_name();
                 tracing::info!(macro_token);
             }

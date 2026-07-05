@@ -16,7 +16,7 @@ impl Consts {
     const BASELINE_CONFIG_DIRS: &'static [&'static str] =
         &[".config/arch", ".config/style", ".config/idioms"];
     const COMMENTED_CONFIG_TEMPLATE: &'static str = r#"
-# Optional generic xtask-core sections. Uncomment only the settings this workspace owns.
+# Optional generic tooling config sections. Uncomment only the settings this workspace owns.
 #
 # [health]
 # feature_powerset_exclude = []
@@ -58,7 +58,7 @@ impl Consts {
 "#;
 
     const MAIN_RS_SNIPPET: &'static str = r#"use clap::{Parser, Subcommand};
-use kithara_xtask_core::{CoreCommand, Ctx};
+use kithara_devtools::{CoreCommand, Ctx};
 
 #[derive(Debug, Parser)]
 #[command(name = "xtask")]
@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let ctx = Ctx::load()?;
     match cli.command {
-        Command::Core(cmd) => kithara_xtask_core::run(&cmd, &ctx),
+        Command::Core(cmd) => kithara_devtools::run(&cmd, &ctx),
     }
 }
 "#;

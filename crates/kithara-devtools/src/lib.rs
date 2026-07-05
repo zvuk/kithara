@@ -28,7 +28,7 @@ pub use ctx::Ctx;
 
 #[derive(Debug, clap::Subcommand)]
 pub enum CoreCommand {
-    /// Scaffold xtask-core config and lint baselines for this workspace.
+    /// Scaffold the workspace tooling config and lint baselines.
     Init(init::InitArgs),
     /// Format Rust, manifests, TOML, JSON, and Markdown through project tooling.
     Format(format::FormatArgs),

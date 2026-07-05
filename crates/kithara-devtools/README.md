@@ -1,4 +1,4 @@
-# kithara-xtask-core
+# kithara-devtools
 
 Reusable, config-driven command core for `cargo xtask` build tooling. It holds
 the project-agnostic commands so several workspaces can share one implementation
@@ -34,15 +34,15 @@ enum, keeping your project-specific commands alongside it:
 #[derive(clap::Subcommand)]
 enum Command {
     #[command(flatten)]
-    Core(kithara_xtask_core::CoreCommand),
+    Core(kithara_devtools::CoreCommand),
     // ... your project-specific commands
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let ctx = kithara_xtask_core::Ctx::load()?;
+    let ctx = kithara_devtools::Ctx::load()?;
     match cli.command {
-        Command::Core(cmd) => kithara_xtask_core::run(&cmd, &ctx),
+        Command::Core(cmd) => kithara_devtools::run(&cmd, &ctx),
         // ... your arms
     }
 }

@@ -186,7 +186,7 @@ paths = [
   # Build tooling, not production runtime code. Its source is the lint engine
   # itself (check files carry the very patterns they detect), so it is exempt
   # from the production ratchet exactly like the `xtask` bin at the repo root.
-  "crates/kithara-xtask-core/**",
+  "crates/kithara-devtools/**",
 ]
 modules = []
 # Hard-correctness rules that must scan the FULL tree (tests included),

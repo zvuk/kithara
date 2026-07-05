@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
-use kithara_xtask_core::{
+use kithara_devtools::{
     Ctx,
     util::{check_rust_target, check_tool},
 };

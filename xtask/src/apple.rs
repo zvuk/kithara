@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
-use kithara_xtask_core::Ctx;
+use kithara_devtools::Ctx;
 use plist::Value as PlistValue;
 use regex::Regex;
 
@@ -747,7 +747,7 @@ fn run_single(profile: crate::BuildProfile) -> Result<()> {
 
     let temp = TempWorkDir::create(&format!(
         "{}-apple-single",
-        kithara_xtask_core::util::project_name()
+        kithara_devtools::util::project_name()
     ))?;
     let work = temp.path().to_path_buf();
     let merged = work.join("merged");

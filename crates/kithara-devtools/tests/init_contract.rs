@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use kithara_xtask_core::{
+use kithara_devtools::{
     CoreCommand, Ctx,
     common::{baseline::Baseline, project::ProjectConfig},
     init::InitArgs,
@@ -18,7 +18,7 @@ fn ctx(root: &Path, name: &str) -> Ctx {
 
 fn run_init(root: &Path, force: bool) -> anyhow::Result<()> {
     let command = CoreCommand::Init(InitArgs { force });
-    kithara_xtask_core::run(&command, &ctx(root, "demo-project"))
+    kithara_devtools::run(&command, &ctx(root, "demo-project"))
 }
 
 #[test]

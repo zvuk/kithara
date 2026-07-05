@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_xtask_core::{Ctx, util::check_tool};
+use kithara_devtools::{Ctx, util::check_tool};
 use serde_json::{Value, json};
 
 use crate::config::{KitharaExt, ReleaseConfig};
@@ -454,7 +454,7 @@ fn pages(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
 
     let staging = env::temp_dir().join(format!(
         "{}-pages-{tag}",
-        kithara_xtask_core::util::project_name()
+        kithara_devtools::util::project_name()
     ));
     if staging.exists() {
         fs::remove_dir_all(&staging).with_context(|| format!("clean {}", staging.display()))?;
@@ -492,7 +492,7 @@ fn single_subdir(dir: &Path) -> Result<PathBuf> {
 fn deploy_pages_branch(branch: &str, content: &Path, tag: &str) -> Result<()> {
     let worktree = env::temp_dir().join(format!(
         "{}-{branch}-worktree",
-        kithara_xtask_core::util::project_name()
+        kithara_devtools::util::project_name()
     ));
     let _ = Command::new("git")
         .args(["worktree", "remove", "--force"])
@@ -1070,7 +1070,7 @@ fn cache_named(tag: &str, name: &str) -> Result<PathBuf> {
     let home = env::var_os("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home)
         .join("Library/Caches")
-        .join(kithara_xtask_core::util::project_name())
+        .join(kithara_devtools::util::project_name())
         .join("releases")
         .join(tag)
         .join(name))

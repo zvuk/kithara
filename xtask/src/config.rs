@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use kithara_xtask_core::Ctx;
+use kithara_devtools::Ctx;
 use serde::Deserialize;
 
 #[derive(Debug, Default, Deserialize)]
@@ -118,7 +118,7 @@ pub(crate) struct DocgenSymbol {
 mod tests {
     use std::path::PathBuf;
 
-    use kithara_xtask_core::Ctx;
+    use kithara_devtools::Ctx;
 
     use super::KitharaExt;
 

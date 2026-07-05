@@ -2,7 +2,7 @@ use std::{fs, path::Path, process::Command, sync::LazyLock};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
-use kithara_xtask_core::{Ctx, util::check_tool};
+use kithara_devtools::{Ctx, util::check_tool};
 use regex::Regex;
 
 use crate::config::{KitharaExt, WasmConfig};

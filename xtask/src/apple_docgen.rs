@@ -42,7 +42,7 @@ pub(crate) fn run(check: bool, docgen: &DocgenConfig) -> Result<()> {
     if check {
         let temp = TempDir::create(&format!(
             "{}-apple-docgen",
-            kithara_xtask_core::util::project_name()
+            kithara_devtools::util::project_name()
         ))?;
         write_pages(temp.path(), &pages)?;
         println!(

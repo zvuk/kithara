@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use kithara_xtask_core::{CoreCommand, Ctx};
+use kithara_devtools::{CoreCommand, Ctx};
 
 mod agent_hook;
 mod android;
@@ -78,6 +78,6 @@ fn main() -> anyhow::Result<()> {
         Command::Publish(ref args) => publish::run(args, &ctx),
         Command::Release(ref args) => release::run(args, &ctx),
         Command::AgentHook(ref args) => agent_hook::run(args),
-        Command::Core(cmd) => kithara_xtask_core::run(&cmd, &ctx),
+        Command::Core(cmd) => kithara_devtools::run(&cmd, &ctx),
     }
 }

@@ -1,5 +1,5 @@
 [package]
-name = "kithara-xtask-core"
+name = "kithara-devtools"
 version = "0.0.1-alpha4"
 edition = "2024"
 rust-version = "1.88"

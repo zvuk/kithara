@@ -4566,6 +4566,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-devtools"
+version = "0.0.1-alpha4"
+dependencies = [
+ "anyhow",
+ "cargo_metadata 0.23.1",
+ "clap",
+ "glob",
+ "kithara-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "serde",
+ "serde_json",
+ "syn 2.0.118",
+ "tempfile",
+ "toml 1.1.2+spec-1.1.0",
+]
+
+[[package]]
 name = "kithara-drm"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5091,25 +5110,6 @@ dependencies = [
  "zstd",
  "zstd-safe",
  "zstd-sys",
-]
-
-[[package]]
-name = "kithara-xtask-core"
-version = "0.0.1-alpha4"
-dependencies = [
- "anyhow",
- "cargo_metadata 0.23.1",
- "clap",
- "glob",
- "kithara-workspace-hack",
- "proc-macro2",
- "quote",
- "regex",
- "serde",
- "serde_json",
- "syn 2.0.118",
- "tempfile",
- "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]
@@ -11487,8 +11487,8 @@ dependencies = [
  "cargo_metadata 0.23.1",
  "clap",
  "glob",
+ "kithara-devtools",
  "kithara-workspace-hack",
- "kithara-xtask-core",
  "plist",
  "regex",
  "rustdoc-types",

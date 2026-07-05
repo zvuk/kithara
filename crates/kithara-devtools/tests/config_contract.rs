@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use kithara_xtask_core::common::{
+use kithara_devtools::common::{
     project::ProjectConfig,
     scope::Scope,
     walker::{relative_to, workspace_rs_files_scoped},

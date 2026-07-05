@@ -107,7 +107,7 @@ mod tests {
     fn ctx_load_resolves_workspace_root() {
         let ctx = Ctx::load().expect("ctx loads inside the kithara workspace");
         assert!(ctx.root.join("Cargo.toml").is_file());
-        assert!(ctx.root.join("crates/kithara-xtask-core").is_dir());
+        assert!(ctx.root.join("crates/kithara-devtools").is_dir());
         assert_eq!(ctx.config.project.name, "kithara");
     }
 

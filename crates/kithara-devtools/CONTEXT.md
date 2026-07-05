@@ -1,4 +1,4 @@
-# kithara-xtask-core — contracts
+# kithara-devtools — contracts
 
 Owning-crate contracts for the reusable xtask command core. The [`README.md`](README.md)
 is the overview; this file owns the invariants a consumer or contributor relies on.

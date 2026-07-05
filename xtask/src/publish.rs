@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::{DependencyKind, MetadataCommand};
-use kithara_xtask_core::{Ctx, util::check_tool};
+use kithara_devtools::{Ctx, util::check_tool};
 
 use crate::config::{KitharaExt, PublishConfig};
 

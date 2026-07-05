@@ -49,7 +49,7 @@ ignores:
   - crates/kithara-test-macros/**
   # Build tooling: generates report timestamps with wall-clock time and owns no
   # production runtime path, so it is outside the flash virtual-time model.
-  - crates/kithara-xtask-core/**
+  - crates/kithara-devtools/**
 rule:
   any:
     # Imports (flat OR grouped/multi-line) pulling a `time` segment from a
