@@ -31,7 +31,7 @@ pub(crate) struct BeatAnalyzer {
 /// degrade to nothing when the resampler cannot be built (degenerate rate).
 enum MonoFeed {
     Pass(Vec<f32>),
-    Resample(MonoResampler),
+    Resample(Box<MonoResampler>),
     Broken,
 }
 
@@ -41,7 +41,9 @@ impl BeatAnalyzer {
         let feed = if source_rate == TARGET_RATE {
             MonoFeed::Pass(Vec::new())
         } else {
-            MonoResampler::new(source_rate).map_or(MonoFeed::Broken, MonoFeed::Resample)
+            MonoResampler::new(source_rate)
+                .map(Box::new)
+                .map_or(MonoFeed::Broken, MonoFeed::Resample)
         };
 
         Self {

@@ -162,6 +162,12 @@ apple = [
     "kithara-queue?/apple",
     "resample-rubato",
 ]
+apple-fused-src = [
+    "kithara-audio/apple-fused-src",
+    "kithara-decode/apple",
+    "kithara-play/apple-fused-src",
+    "kithara-queue?/apple-fused-src",
+]
 # Apple HTTP backend for the shipped FFI framework build. It uses NSURLSession,
 # which passes the DRM keyserver anti-bot WAF natively and removes the wreq /
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips

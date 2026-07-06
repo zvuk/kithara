@@ -33,7 +33,12 @@ required-features = ["uniffi-bindgen-cli"]
 default = ["uniffi", "symphonia", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
 uniffi-bindgen-cli = ["uniffi", "uniffi/cli", "uniffi/cargo-metadata"]
-apple = ["kithara/apple", "kithara/apple-net"]
+apple = [
+    "kithara/apple-fused-src",
+    "kithara/apple-net",
+    "kithara-play/apple-fused-src",
+    "kithara-queue/apple-fused-src",
+]
 android = ["kithara/android"]
 # Cross-platform software decode backend. Not part of apple/android
 # (those own hardware decode on-device). Used for the host-side

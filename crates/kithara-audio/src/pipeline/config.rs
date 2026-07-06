@@ -8,7 +8,7 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{DecoderBackend, GaplessMode, PcmSpec};
+use kithara_decode::{DecoderBackend, GaplessMode, PcmSpec, ResamplerQuality};
 use kithara_events::EventBus;
 use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
@@ -20,10 +20,16 @@ use portable_atomic::AtomicF32;
 use crate::effects::timestretch::TimeStretchProcessor;
 use crate::{
     effects::timestretch::StretchControls,
-    resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
     worker::{EngineLoad, handle},
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResamplerStage {
+    Present(ResamplerQuality),
+    #[cfg(feature = "apple-fused-src")]
+    Absent,
+}
 
 /// Configuration for audio pipeline with stream config.
 ///
@@ -132,16 +138,16 @@ pub(crate) fn expected_output_spec(
     }
 }
 
-/// Build `[..pre, Resampler, ..custom]`. Tempo mode (`stretch` `Some`) always
-/// adds a `TimeStretchProcessor` pre-slot that drives the resampler rate (it
-/// bypasses cleanly when key-lock is off); else resampler-first with
-/// `playback_rate`.
+/// Build `[..pre, Resampler?, ..custom]`. Tempo mode (`stretch` `Some`) always
+/// adds a `TimeStretchProcessor` pre-slot when a backend is compiled in. The
+/// fused Apple path passes an absent-stage value so the resampler stage is
+/// never constructed.
 pub(crate) fn create_effects(
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
     playback_rate: &Arc<AtomicF32>,
     stretch: Option<&Arc<StretchControls>>,
-    quality: ResamplerQuality,
+    resampler_stage: ResamplerStage,
     pool: Option<PcmPool>,
     custom_effects: Vec<Box<dyn AudioEffect>>,
 ) -> Vec<Box<dyn AudioEffect>> {
@@ -152,16 +158,14 @@ pub(crate) fn create_effects(
         |controls| stretch_rate(controls, &mut chain, initial_spec, pool.as_ref()),
     );
 
-    let params = ResamplerParams::builder()
-        .host_sample_rate(Arc::clone(host_sample_rate))
-        .source_sample_rate(initial_spec.sample_rate.get())
-        .channels(initial_spec.channels as usize)
-        .playback_rate(resampler_rate)
-        .quality(quality)
-        .maybe_pool(pool)
-        .build();
-
-    chain.push(Box::new(ResamplerProcessor::new(params)));
+    crate::pipeline::resampler_stage::append(
+        &mut chain,
+        resampler_stage,
+        initial_spec,
+        host_sample_rate,
+        resampler_rate,
+        pool,
+    );
     chain.extend(custom_effects);
     chain
 }
@@ -257,7 +261,7 @@ mod tests {
             &host_sr,
             &playback_rate,
             Some(&controls),
-            ResamplerQuality::default(),
+            ResamplerStage::Present(ResamplerQuality::default()),
             None,
             Vec::new(),
         );
@@ -274,12 +278,46 @@ mod tests {
             &host_sr,
             &playback_rate,
             None,
-            ResamplerQuality::default(),
+            ResamplerStage::Present(ResamplerQuality::default()),
             None,
             vec![Box::new(PassthroughEffect)],
         );
         // [Resampler, custom] -- resampler-first, no pre slot.
         assert_eq!(effects.len(), 2);
+    }
+
+    #[cfg(feature = "apple-fused-src")]
+    #[kithara::test]
+    fn create_effects_fused_omits_resampler_stage() {
+        let host_sr = Arc::new(AtomicU32::new(48000));
+        let playback_rate = Arc::new(AtomicF32::new(1.0));
+        let effects = create_effects(
+            spec(),
+            &host_sr,
+            &playback_rate,
+            None,
+            ResamplerStage::Absent,
+            None,
+            Vec::new(),
+        );
+        assert!(effects.is_empty());
+    }
+
+    #[cfg(feature = "apple-fused-src")]
+    #[kithara::test]
+    fn create_effects_fused_keeps_custom_effects_without_resampler() {
+        let host_sr = Arc::new(AtomicU32::new(48000));
+        let playback_rate = Arc::new(AtomicF32::new(1.0));
+        let effects = create_effects(
+            spec(),
+            &host_sr,
+            &playback_rate,
+            None,
+            ResamplerStage::Absent,
+            None,
+            vec![Box::new(PassthroughEffect)],
+        );
+        assert_eq!(effects.len(), 1);
     }
 
     #[cfg(all(
@@ -296,7 +334,7 @@ mod tests {
             &host_sr,
             &playback_rate,
             Some(&controls),
-            ResamplerQuality::default(),
+            ResamplerStage::Present(ResamplerQuality::default()),
             None,
             vec![Box::new(PassthroughEffect)],
         );
@@ -324,7 +362,7 @@ mod tests {
             &host_sr,
             &playback_rate,
             Some(&controls),
-            ResamplerQuality::default(),
+            ResamplerStage::Present(ResamplerQuality::default()),
             None,
             Vec::new(),
         );

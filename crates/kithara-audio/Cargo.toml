@@ -50,8 +50,10 @@ tls-native = [
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # Enable memory profiling for examples (includes allocation tracking, adds overhead)
 memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
-# Enable Apple AudioToolbox hardware decoder (macOS/iOS)
+# Enable Apple AudioToolbox hardware decoder (macOS/iOS) with the separate SRC stage.
 apple = ["kithara-decode/apple", "resample-rubato"]
+# Enable Apple AudioToolbox fused decode+SRC, used by the Apple device FFI set.
+apple-fused-src = ["kithara-decode/apple"]
 # Enable Android MediaCodec hardware decoder (Android)
 android = ["kithara-decode/android", "resample-rubato"]
 # Enable the Symphonia software decoder path. Disable to build with

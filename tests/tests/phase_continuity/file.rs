@@ -1,4 +1,7 @@
-use std::{io::Write, num::NonZeroUsize};
+use std::{
+    io::Write,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use kithara::{
     assets::{StorageBackend, StoreOptions},
@@ -18,6 +21,12 @@ use super::common::{
     SAMPLE_RATE, STREAM_FRAMES, SinePhaseSpec, TOLERANCE_SAMPLES, e2e_phase_scan,
     measure_phase_rad_window, seek_phase_scan, wrap_pi,
 };
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+const APPLE_FUSED_HOST_RATE: u32 = 48_000;
 
 fn format_ext(fmt: SignalFormat) -> Option<&'static str> {
     match fmt {
@@ -211,6 +220,86 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
     );
 }
 
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+async fn local_apple_fused_run_case() {
+    kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
+
+    let spec = SignalSpec {
+        sample_rate: SAMPLE_RATE,
+        channels: CHANNELS,
+        length: SignalSpecLength::Frames(
+            usize::try_from(STREAM_FRAMES).expect("stream frames fit usize"),
+        ),
+        format: SignalFormat::M4a,
+        bit_rate: Some(320_000),
+    };
+
+    let temp_dir = TestTempDir::new();
+    let fixture_path = write_sine_fixture_to_disk(&spec, &temp_dir).await;
+
+    let file_config = FileConfig::for_src(FileSrc::Local(fixture_path)).build();
+    let audio_config = AudioConfig::<File>::for_stream(file_config)
+        .decoder_backend(DecoderBackend::Apple)
+        .host_sample_rate(NonZeroU32::new(APPLE_FUSED_HOST_RATE).expect("nonzero host rate"))
+        .maybe_hint(Some("m4a".to_owned()))
+        .build();
+    let mut audio = Audio::<Stream<File>>::new(audio_config)
+        .await
+        .expect("create fused local Audio<Stream<File>>");
+
+    let total_duration = audio
+        .duration()
+        .expect("local fused fixture should report duration");
+    let total_secs = total_duration.as_secs_f64();
+    info!(
+        source_rate = SAMPLE_RATE,
+        host_rate = APPLE_FUSED_HOST_RATE,
+        total_secs,
+        "Apple fused local fixture ready"
+    );
+
+    let aspec = audio.spec();
+    assert_eq!(aspec.sample_rate.get(), APPLE_FUSED_HOST_RATE);
+    assert_eq!(u32::from(aspec.channels), u32::from(CHANNELS));
+
+    let total_frames_truth = frames_for_duration_rounded(APPLE_FUSED_HOST_RATE, total_duration);
+    let sine = SinePhaseSpec {
+        freq_hz: FREQ_HZ,
+        sample_rate: APPLE_FUSED_HOST_RATE,
+        channels: CHANNELS,
+    };
+
+    let drifts = spawn_blocking(move || -> Vec<PhaseDrift> {
+        let drifts = e2e_phase_scan(&mut audio, sine, total_frames_truth);
+        drop(audio);
+        drifts
+    })
+    .await
+    .expect("fused local scan joined");
+    drop(temp_dir);
+
+    assert!(
+        drifts.is_empty(),
+        "phase continuity broken on Apple fused local file scan: {drifts:?}",
+    );
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
+    let frames = duration
+        .as_nanos()
+        .saturating_mul(u128::from(sample_rate))
+        .saturating_add(500_000_000)
+        .saturating_div(1_000_000_000);
+    u64::try_from(frames).unwrap_or(u64::MAX)
+}
+
 /// First flash equivalence proof on a socket-free pipeline.
 ///
 /// Reads a sine MP3 fixture straight from disk through `FileSrc::Local` and
@@ -244,6 +333,21 @@ async fn phase_continuity_file_local_socket_free(
     #[case] bit_rate: Option<u64>,
 ) {
     local_run_case(format, backend, bit_rate).await;
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(25)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn phase_continuity_file_apple_fused_src_44k_to_host_48k() {
+    local_apple_fused_run_case().await;
 }
 
 async fn decode_pcm_seconds(

@@ -187,6 +187,7 @@ _rtsan SUITE FILTER:
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
         cargo +nightly test -p kithara-integration-tests --test {{SUITE}} \
+        --features apple-fused-src \
         --target "$target" -- --nocapture {{FILTER}}
 
 # RTSan mock produce-core lane (suite_light, fast tripwire).

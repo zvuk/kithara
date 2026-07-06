@@ -5,6 +5,11 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+use kithara::decode::DecoderBackend;
 use kithara::{
     assets::StoreOptions,
     audio::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
@@ -38,6 +43,21 @@ const FUSED_FIXTURE_SOURCE_FRAMES: u64 = 44_100;
 const FUSED_FIXTURE_IDEAL_DEVICE_FRAMES: usize = 48_000;
 const FUSED_FIXTURE_SEAM_OMEGA: f64 = 0.23925;
 const FUSED_FIXTURE_SEAM_PHASE: f64 = -1.365_523_678_408_751_2;
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+const APPLE_FUSED_DEFICIT_SOURCE_FRAMES: u64 = 261_120;
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+const APPLE_FUSED_DEFICIT_SEGMENT_SECS: f64 = 5.921_088_435_374_15;
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+const APPLE_FUSED_DEFICIT_SEGMENTS: usize = 1;
 /// Phase-locked tone: period = 100 frames at 48 kHz, integer divisor of the
 /// sample rate, integer divisor of the AAC frame size (1024 / 100 ≠ int but
 /// the wave is still perfectly periodic over any block large enough — only
@@ -319,6 +339,163 @@ async fn fused_gapless_deficit_compensation_restores_deferred_lead_at_stitch() {
         compensated_db + 10.0 < uncompensated_db,
         "compensation must improve the seam by at least 10 dB: compensated={compensated_db:.2}, uncompensated={uncompensated_db:.2}"
     );
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
+    let expected_device_frames = usize::try_from(ceil_scaled_frames(
+        source_stitch_frame,
+        FUSED_FIXTURE_DEVICE_RATE,
+        FUSED_FIXTURE_SOURCE_RATE,
+    ))
+    .expect("fixture length fits usize");
+    assert_eq!(
+        expected_device_frames, 284_213,
+        "fixture must keep the selected one-frame-deficit search geometry"
+    );
+
+    let probe_harness = OfflinePlayerHarness::with_sample_rate(
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(silence_trim_with_trailing())
+            .build(),
+        FUSED_FIXTURE_DEVICE_RATE,
+    );
+    let (probe, _) = create_apple_fused_resource(
+        probe_harness.player(),
+        &server,
+        temp_dir.path(),
+        "apple-fused-probe",
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        None,
+        0,
+    )
+    .await;
+    let probe = drain_resource_to_eof(probe).await;
+    assert_eq!(
+        probe.output_deficit_frames, 0,
+        "head-side path must be disabled"
+    );
+    assert_eq!(
+        probe.output_frames.saturating_add(1),
+        expected_device_frames,
+        "neutralized fused seam bookkeeping should keep the uncompensated ideal-1 length"
+    );
+
+    let pending_decision =
+        render_apple_fused_deficit_seam(&server, temp_dir.path(), probe.output_frames).await;
+
+    println!(
+        "APPLE_FUSED_PENDING_SEAM reported_deficit={} measured_frames={} ideal_frames={} length_delta={} \
+         seam_db={:.2} control_db={:.2} stitch_frame={} nearby={:?}",
+        probe.output_deficit_frames,
+        probe.output_frames,
+        expected_device_frames,
+        isize::try_from(probe.output_frames).expect("probe frames fit isize")
+            - isize::try_from(expected_device_frames).expect("ideal frames fit isize"),
+        pending_decision.seam_db,
+        pending_decision.control_db,
+        pending_decision.stitch_frame,
+        pending_decision.nearby_db
+    );
+
+    // W5 step 6 compensation ownership is pending an owner decision.
+    assert!(pending_decision.seam_db.is_finite());
+    assert!(
+        pending_decision.seam_db < -20.0,
+        "neutralized fused seam regression floor: {:.2} dB",
+        pending_decision.seam_db
+    );
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+async fn render_apple_fused_deficit_seam(
+    server: &TestServerHelper,
+    cache_dir: &std::path::Path,
+    stitch_frame: usize,
+) -> AppleFusedSeamRender {
+    let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(silence_trim_with_trailing())
+            .build(),
+        FUSED_FIXTURE_DEVICE_RATE,
+    );
+
+    let (first, first_id) = create_apple_fused_resource(
+        harness.player(),
+        server,
+        cache_dir,
+        "apple-fused-1",
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        None,
+        0,
+    )
+    .await;
+    let second = create_apple_fused_resource(
+        harness.player(),
+        server,
+        cache_dir,
+        "apple-fused-2",
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        None,
+        source_stitch_frame,
+    )
+    .await;
+
+    load_tagged_queue(&harness, [(first, first_id), second]);
+
+    let control_post_roll_blocks =
+        (ContinuityMetric::CONTROL_STRIDE_FRAMES / BLOCK_FRAMES) + POST_ROLL_BLOCKS;
+    let (rendered, events) =
+        render_until_item_end_with_post_roll(&harness, "apple-fused-1", control_post_roll_blocks)
+            .await;
+    let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
+    let _ = timed_event_frame_end(&events, |event| {
+        matches!(
+            event,
+            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
+                if id.as_ref() == "apple-fused-1"
+        )
+    })
+    .expect("first fused item must emit ItemDidPlayToEnd");
+
+    assert_prefetch_before_first_end(&events, "apple-fused-1");
+    assert!(
+        stitch_frame < left.len(),
+        "fused stitch frame must be inside rendered PCM; stitch_frame={stitch_frame}, left_frames={}, events={events:?}",
+        left.len()
+    );
+
+    let seam_db = seam_step_db(&left, stitch_frame);
+    let (control_peak, control_count) = gapless_control_peak(&left, stitch_frame);
+    let control_db = amplitude_db(control_peak);
+    assert!(
+        control_count >= ContinuityMetric::MIN_CONTROL_WINDOWS,
+        "Apple fused seam metric needs at least {} same-track control windows, got {control_count}",
+        ContinuityMetric::MIN_CONTROL_WINDOWS
+    );
+    AppleFusedSeamRender {
+        control_db,
+        nearby_db: nearby_seam_step_db(&left, stitch_frame),
+        seam_db,
+        stitch_frame,
+    }
 }
 
 #[kithara::test(
@@ -683,6 +860,68 @@ async fn create_resource_with_encoding(
     (resource, item_id)
 }
 
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fixture builder: each parameter pins one HLS-fixture knob"
+)]
+async fn create_apple_fused_resource(
+    player: &kithara::play::PlayerImpl,
+    server: &TestServerHelper,
+    cache_dir: &std::path::Path,
+    item_id: &'static str,
+    encoder_delay: Option<u32>,
+    trailing_delay: Option<u32>,
+    start_frame: u64,
+) -> (Resource, Arc<str>) {
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(APPLE_FUSED_DEFICIT_SEGMENTS)
+                .segment_duration_secs(APPLE_FUSED_DEFICIT_SEGMENT_SECS)
+                .packaged_audio(PackagedAudioRequest {
+                    codec: AudioCodec::AacLc,
+                    sample_rate: FUSED_FIXTURE_SOURCE_RATE,
+                    channels: GAPLESS_CHANNELS,
+                    start_frame: NonZeroU32::new(
+                        u32::try_from(start_frame).expect("start_frame fits u32"),
+                    ),
+                    timescale: Some(FUSED_FIXTURE_SOURCE_RATE),
+                    bit_rate: Some(128_000),
+                    encoder_delay: encoder_delay.and_then(NonZeroU32::new),
+                    trailing_delay: trailing_delay.and_then(NonZeroU32::new),
+                    source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: SINE_HZ }),
+                    gapless_encoding: GaplessEncoding::default(),
+                    variant_overrides: Vec::new(),
+                }),
+        )
+        .await
+        .expect("create Apple fused gapless HLS fixture");
+
+    let item_id = Arc::<str>::from(item_id);
+    let store = StoreOptions::new(cache_dir);
+    let config = ResourceConfig::for_src(created.master_url().as_str())
+        .expect("valid HLS master URL")
+        .store(store)
+        .decoder_backend(DecoderBackend::Apple)
+        .build();
+    let config = player.prepare_config(config);
+    let mut resource = Resource::new(config)
+        .await
+        .expect("open HLS resource for Apple fused fixture");
+    let _ = resource.preload().await;
+    assert_eq!(
+        resource.spec().sample_rate.get(),
+        FUSED_FIXTURE_DEVICE_RATE,
+        "Apple fused decoder must emit the host/device rate"
+    );
+    (resource, item_id)
+}
+
 async fn render_synthetic_fused_deficit_seam(first_deficit_frames: u32) -> SyntheticSeamRender {
     let expected_device_frames = ceil_scaled_frames(
         FUSED_FIXTURE_SOURCE_FRAMES,
@@ -744,6 +983,64 @@ fn load_tagged_queue<const N: usize>(
 struct SyntheticSeamRender {
     left: Vec<f32>,
     events: Vec<TimedPlayerEvent>,
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[derive(Debug)]
+struct AppleFusedSeamRender {
+    control_db: f32,
+    nearby_db: [f32; 7],
+    seam_db: f32,
+    stitch_frame: usize,
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[derive(Debug)]
+struct DrainedResource {
+    output_deficit_frames: u32,
+    output_frames: usize,
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+async fn drain_resource_to_eof(mut resource: Resource) -> DrainedResource {
+    let mut output_frames = 0usize;
+    let mut pending = 0usize;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match resource.next_chunk().expect("drain Apple fused resource") {
+            ChunkOutcome::Chunk(chunk) => {
+                pending = 0;
+                output_frames = output_frames.saturating_add(chunk.frames());
+            }
+            ChunkOutcome::Pending { .. } => {
+                pending = pending.saturating_add(1);
+                assert!(
+                    pending < 4096,
+                    "Apple fused resource stayed pending while draining to EOF"
+                );
+                assert!(
+                    Instant::now() <= deadline,
+                    "timed out draining Apple fused resource to EOF"
+                );
+                time::sleep(Duration::from_millis(1)).await;
+            }
+            ChunkOutcome::Eof { .. } => {
+                return DrainedResource {
+                    output_deficit_frames: resource.output_deficit_frames(),
+                    output_frames,
+                };
+            }
+        }
+    }
 }
 
 struct SyntheticDeficitReader {
@@ -937,6 +1234,14 @@ async fn render_until_item_end(
     harness: &OfflinePlayerHarness,
     terminal_item_id: &'static str,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
+    render_until_item_end_with_post_roll(harness, terminal_item_id, POST_ROLL_BLOCKS).await
+}
+
+async fn render_until_item_end_with_post_roll(
+    harness: &OfflinePlayerHarness,
+    terminal_item_id: &'static str,
+    post_roll_blocks: usize,
+) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut rendered = Vec::new();
     let mut rendered_frames = 0usize;
@@ -963,7 +1268,7 @@ async fn render_until_item_end(
                     if id.as_ref() == terminal_item_id
             )
         }) {
-            for _ in 0..POST_ROLL_BLOCKS {
+            for _ in 0..post_roll_blocks {
                 let block = harness.render(BLOCK_FRAMES);
                 rendered.extend_from_slice(&block);
                 rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES);
@@ -1104,6 +1409,15 @@ fn seam_step_db(left: &[f32], stitch_frame: usize) -> f32 {
         left.len(),
     );
     amplitude_db((left[stitch_frame] - left[stitch_frame - 1]).abs())
+}
+
+fn nearby_seam_step_db(left: &[f32], stitch_frame: usize) -> [f32; 7] {
+    let mut values = [0.0_f32; 7];
+    let start = stitch_frame.saturating_sub(3);
+    for (index, value) in values.iter_mut().enumerate() {
+        *value = seam_step_db(left, start.saturating_add(index));
+    }
+    values
 }
 
 fn amplitude_db(value: f32) -> f32 {

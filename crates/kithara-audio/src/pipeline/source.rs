@@ -4330,7 +4330,7 @@ mod splice_continuity_tests {
             &host_sample_rate,
             &playback_rate,
             None,
-            crate::resampler::ResamplerQuality::default(),
+            crate::pipeline::config::ResamplerStage::Present(crate::ResamplerQuality::default()),
             Some(PcmPool::default().clone()),
             Vec::new(),
         );

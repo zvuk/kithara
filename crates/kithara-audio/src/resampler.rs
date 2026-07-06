@@ -10,8 +10,7 @@ use std::{
 use bon::Builder;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool};
-pub use kithara_decode::ResamplerQuality;
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, ResampleError, ResamplerKind};
+use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, ResampleError, ResamplerKind, ResamplerQuality};
 use portable_atomic::AtomicF32;
 use smallvec::SmallVec;
 use tracing::{debug, info, trace};

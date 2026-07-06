@@ -44,6 +44,7 @@ flash = ["kithara/flash", "kithara-test-utils/flash"]
 # This is separate from `apple`, which only brings Apple decode/audio variants
 # into scope for tests.
 apple-net = ["kithara/apple-net"]
+apple-fused-src = ["kithara/apple-fused-src"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]

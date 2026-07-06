@@ -64,6 +64,7 @@ tls-native = [
 backend-web-audio = ["dep:firewheel-web-audio", "symphonia"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple", "resample-rubato"]
+apple-fused-src = ["kithara-audio/apple-fused-src", "kithara-decode/apple"]
 # Software decoder pass-through. Required when not opting into a hardware
 # backend, since `kithara-decode`'s `DecoderBackend` enum needs at least
 # one variant available. `backend-web-audio` pulls it in transitively:

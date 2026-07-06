@@ -37,6 +37,7 @@ use crate::{
     pipeline::{
         config::{AudioConfig, create_effects, expected_output_spec},
         fetch::{EpochValidator, Fetch, FetchKind},
+        fused_src,
         source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
@@ -78,6 +79,10 @@ fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
         .saturating_add(500_000_000)
         .saturating_div(1_000_000_000);
     u64::try_from(frames).unwrap_or(u64::MAX)
+}
+
+fn warm_channels_from_media_info(info: Option<&MediaInfo>) -> usize {
+    info.and_then(|info| info.channels).map_or(2, usize::from)
 }
 
 fn trim_pcm_chunk_start(chunk: &mut PcmChunk, trim_frames: u32) {
@@ -1062,16 +1067,17 @@ struct DecoderDeps {
 }
 
 impl DecoderDeps {
-    fn passthrough(
+    fn new(
         backend: kithara_decode::DecoderBackend,
         pcm_pool: PcmPool,
         byte_pool: BytePool,
+        host_sample_rate: &Arc<AtomicU32>,
     ) -> Self {
         Self {
             byte_pool,
             backend,
             pcm_pool,
-            target_output_rate: None,
+            target_output_rate: fused_src::decoder_target_output_rate(backend, host_sample_rate),
         }
     }
 }
@@ -1119,21 +1125,10 @@ struct GaplessDeficitSettings {
 }
 
 impl GaplessDeficitSettings {
-    fn for_decoder(decoder: &dyn Decoder, target_output_rate: Option<&Arc<AtomicU32>>) -> Self {
-        let output_deficit_compensation_enabled = target_output_rate.is_some();
-        let has_output_rate = current_decoder_target_output_rate(target_output_rate).is_some();
-        let has_leading_trim = decoder
-            .track_info()
-            .gapless
-            .is_some_and(|gapless| gapless.leading_frames > 0);
-        let deferred_leading_trim_frames = if has_output_rate && has_leading_trim {
-            1
-        } else {
-            0
-        };
+    fn for_decoder() -> Self {
         Self {
-            deferred_leading_trim_frames,
-            output_deficit_compensation_enabled,
+            deferred_leading_trim_frames: 0,
+            output_deficit_compensation_enabled: false,
         }
     }
 }
@@ -1207,33 +1202,31 @@ where
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
 
         let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
-        let warm_channels = initial_media_info
-            .as_ref()
-            .and_then(|info| info.channels)
-            .map_or(2, usize::from);
+        let warm_channels = warm_channels_from_media_info(initial_media_info.as_ref());
         Self::warm_pcm_pool(pool, warm_channels, pcm_buffer_chunks);
         // The single up-front build reads through the blocking off-RT
         // `Stream::read` adapter (waits for residual init lateness, cancel-
         // bounded), then we disarm before the RT worker is registered so the
         // decode loop the worker drives reads non-blocking via `probe_read`.
         shared_stream.set_blocking(true);
-        let decoder_deps =
-            DecoderDeps::passthrough(decoder_backend, pool.clone(), byte_pool.clone());
+        let deps = DecoderDeps::new(
+            decoder_backend,
+            pool.clone(),
+            byte_pool.clone(),
+            &host_sample_rate,
+        );
         let decoder = Self::create_initial_decoder(
             shared_stream.clone(),
             initial_media_info.clone(),
             hint.clone(),
-            &decoder_deps,
+            &deps,
         )
         .await;
         shared_stream.set_blocking(false);
         let decoder = decoder?;
 
         let initial_spec = decoder.spec();
-        let deficit_settings = GaplessDeficitSettings::for_decoder(
-            decoder.as_ref(),
-            decoder_deps.target_output_rate.as_ref(),
-        );
+        let deficit_settings = GaplessDeficitSettings::for_decoder();
         let total_duration = decoder.duration().or_else(|| playhead.duration());
         playhead.set_duration(total_duration);
         let metadata = decoder.metadata();
@@ -1247,7 +1240,7 @@ where
             &host_sample_rate,
             &playback_rate,
             config_stretch.as_ref(),
-            resampler_quality,
+            fused_src::resampler_stage(decoder_backend, resampler_quality),
             Some(pool.clone()),
             custom_effects,
         );
@@ -1271,7 +1264,7 @@ where
             bus: &bus,
             cancel: &cancel,
             decoder,
-            decoder_factory: Self::create_decoder_factory(&decoder_deps, &epoch, &byte_len_handle),
+            decoder_factory: Self::create_decoder_factory(&deps, &epoch, &byte_len_handle),
             deferred_gapless_leading_trim_frames: deficit_settings.deferred_leading_trim_frames,
             effects,
             emit: Self::create_emit(&bus),
@@ -1282,7 +1275,7 @@ where
             initial_media_info,
             pcm_buffer_chunks,
             preload_chunks,
-            recreate_on_host_rate_change: decoder_deps.target_output_rate.is_some(),
+            recreate_on_host_rate_change: deps.target_output_rate.is_some(),
             runtime_handle,
             shared_stream,
             worker: config_worker,

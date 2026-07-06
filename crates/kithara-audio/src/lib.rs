@@ -18,6 +18,7 @@ pub mod effects;
 pub mod mock;
 mod pipeline;
 mod region;
+#[cfg(feature = "resample-rubato")]
 mod resampler;
 mod runtime;
 mod traits;
@@ -35,12 +36,14 @@ pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     timestretch::StretchControls,
 };
+pub use kithara_decode::ResamplerQuality;
 pub use pipeline::{
     config::AudioConfig,
     fetch::{EpochValidator, Fetch},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
-pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
+#[cfg(feature = "resample-rubato")]
+pub use resampler::{ResamplerParams, ResamplerProcessor};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
     SeekOutcome,

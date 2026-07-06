@@ -6,8 +6,10 @@ use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use num_traits::cast::AsPrimitive;
 
+#[cfg(feature = "analysis-waveform")]
+use crate::traits::PendingReason;
 use crate::{
-    traits::{ChunkOutcome, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
+    traits::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
     worker::PreloadGate,
 };
 
@@ -77,6 +79,7 @@ impl FakeReader {
     }
 
     /// Like [`Self::chunked`] with a `Pending` tick between every chunk.
+    #[cfg(feature = "analysis-waveform")]
     fn chunked_with_pending(samples: &[f32], parts: usize) -> Self {
         let mut with_pending = VecDeque::new();
         for outcome in Self::chunked(samples, parts).outcomes {
@@ -86,10 +89,12 @@ impl FakeReader {
         Self::new(with_pending)
     }
 
+    #[cfg(feature = "analysis-waveform")]
     fn empty() -> Self {
         Self::new(VecDeque::from([Ok(eof())]))
     }
 
+    #[cfg(feature = "analysis-waveform")]
     fn failing() -> Self {
         Self::new(VecDeque::from([Err(DecodeError::InvalidData {
             detail: "scripted failure",
@@ -103,6 +108,7 @@ fn eof() -> ChunkOutcome {
     }
 }
 
+#[cfg(feature = "analysis-waveform")]
 fn pending() -> ChunkOutcome {
     ChunkOutcome::Pending {
         reason: PendingReason::Buffering,
