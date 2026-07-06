@@ -166,6 +166,17 @@ core (`state.rs`, `client.rs`) carries zero `#[cfg]`; the structural gates are
 the four cfg lines around `mod host_native`, `mod host_web`, and their re-exports
 in `mod.rs`.
 
+## Route Changes
+
+`PlayerNodeProcessor::new_stream` is the host-rate bridge. A platform route
+notification updates the session host sample rate and propagates it to every
+loaded resource. When the numeric rate changes, resources enter the existing
+decoder recreate path with `RecreateCause::RouteChange`; the same machinery
+preserves playback position and gapless state. Equal-rate notifications only
+refresh the host state and do not recreate. On Apple fused builds the recreated
+decoder receives the current host rate as `DecoderConfig.target_output_rate`;
+all non-fused builds continue to use the fixed-ratio resampler stage.
+
 ## Feature Flags
 
 <table>
@@ -176,6 +187,11 @@ in `mod.rs`.
 <tr><td><code>symphonia</code></td><td>yes</td><td>Software decode forwarding to <code>kithara-audio</code> and <code>kithara-decode</code></td></tr>
 <tr><td><code>fdk-aac</code></td><td>no</td><td>FDK-AAC decode forwarding to <code>kithara-audio</code> and <code>kithara-decode</code></td></tr>
 <tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode via <code>kithara-audio/apple</code></td></tr>
+<tr><td><code>apple-fused-src</code></td><td>no</td><td>Apple AudioToolbox fused decode+SRC; forwards host rate to decode and omits the staged resampler for Apple decoders</td></tr>
+<tr><td><code>resample-rubato</code></td><td>yes</td><td>Fixed-ratio rubato sinc resampler stage for non-fused playback</td></tr>
+<tr><td><code>resample-fft</code></td><td>yes</td><td>FFT mono-resampler backend for beat analysis; requires <code>analysis-beat</code></td></tr>
+<tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass forwarding to <code>kithara-audio</code>; absent from Apple FFI device sets</td></tr>
+<tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer forwarding to <code>kithara-audio</code></td></tr>
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to network-reaching deps</td></tr>
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend to network-reaching deps</td></tr>
 <tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>

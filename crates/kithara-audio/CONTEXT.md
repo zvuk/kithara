@@ -94,10 +94,20 @@ today and by mobile surfaces (kithara-ffi) next:
   while the worker idles. Likewise the `Pending` backoff inside
   `analyze_reader` uses `thread::paced_backoff`, not `thread::sleep`, so it
   is paced by the real download instead of free-running the virtual clock.
-- **Feature seam, runtime switch**: there is no `analysis` cargo feature.
-  `realfft` and waveform analysis are unconditional; the optional NN beat
-  detector is gated by `beat-nn`. Consumers use `AnalyzerBuilder::is_empty()`
-  as the runtime signal to skip scheduling.
+- **Feature seams.** There is no single `analysis` cargo feature. Artifact
+  types (`Waveform`, `BeatGrid`, `Bucket`, `GridSegment`, `AnalysisParams`) are
+  unconditional because region/stretch logic and cache keys use them even when a
+  pass is absent. `analysis-waveform` gates only the `realfft` waveform
+  analyzer. `analysis-beat` gates the beat analyzer/worker path and the rubato
+  mono-resampler it uses; `resample-fft` selects the FFT backend for that
+  resampler, otherwise the beat pass uses rubato sinc. `beat-nn` is a detector
+  backend layered on top of `analysis-beat`.
+- **Runtime switch.** Consumers use `AnalyzerBuilder::is_empty()` as the runtime
+  signal to skip scheduling. When `analysis-beat` is absent,
+  `AnalyzerBuilder::with_beat()` is a compile-time no-op. Apple FFI device
+  builds intentionally omit `analysis-beat` so rubato is fully evicted there;
+  the NN beat fallback for that set is future work, not a hidden runtime
+  fallback.
 
 ## Waveform
 
@@ -179,6 +189,26 @@ format frame; each artifact only implements its body.
 <tr><td>Maximum</td><td>FFT-based</td><td>Offline / high-end</td></tr>
 </table>
 
+## Sample-rate Conversion
+
+The resampler stage is fixed-ratio only: it converts decoder/source PCM to the
+current host/device sample rate and never carries playback speed. Speed and
+key-lock live in the time-stretch slot below.
+
+`apple-fused-src` is the Apple device path. When the selected decoder backend is
+Apple AudioToolbox, `AudioConfig.host_sample_rate` is threaded to
+`DecoderConfig.target_output_rate`, the Apple converter emits PCM directly in
+the device domain, and the effect chain omits `ResamplerProcessor`
+structurally. Non-Apple backends in the same build keep the resampler stage.
+
+`resample-rubato` enables the staged `ResamplerProcessor` and rubato sinc SRC.
+Default desktop and Android builds keep it. Apple fused FFI builds omit it.
+
+Route changes that actually change the host sample rate store the new rate,
+then drive the existing decoder recreate state machine with
+`RecreateCause::RouteChange`. The recreate path preserves playback position and
+gapless state; equal-rate notifications do not recreate.
+
 ## Time-Stretch (speed and key-lock)
 
 Playback speed lives in the pre-resampler `TimeStretchProcessor` slot. The
@@ -191,10 +221,11 @@ builds one of two chains:
 
 - **fixed-rate** (`stretch = None`): no stretch slot; the resampler converts
   source rate to host rate only.
-- **speed mode** (`stretch = Some`): a `TimeStretchProcessor` runs before the
-  resampler and reads live `StretchControls` (`speed` + `region_plan` + gated
-  `keylock`/`backend`) each chunk. Without a compiled-in backend, including
-  wasm, no slot is added and playback speed is pinned to 1.0 in PCM output.
+- **speed mode** (`stretch = Some`): when a backend is compiled in, a
+  `TimeStretchProcessor` runs before the resampler and reads live
+  `StretchControls` (`speed` + `region_plan` + gated `keylock`/`backend`) each
+  chunk. Without a compiled-in backend, including wasm, no slot is added and
+  playback speed is pinned to 1.0 in PCM output.
 
 **Live speed routing.** `StretchControls` is the single source of truth,
 shared (`Arc`) between the consumer/UI and this slot:

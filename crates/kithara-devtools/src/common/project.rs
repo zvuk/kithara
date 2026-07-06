@@ -45,7 +45,7 @@ pub struct OrphansConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QualityConfig {
-    /// Trait directory whose every `pub trait` must carry `#[unimock]`.
+    /// Trait directory whose every `pub trait` must carry workspace mock coverage.
     pub unimock_traits_dir: String,
 }
 
