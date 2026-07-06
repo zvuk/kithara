@@ -7,7 +7,6 @@ use crate::{
     error::PlayError,
     events::PlayerEvent,
     impls::{player_processor::PlayerCmd, shared_player_state::PlaybackSnapshot},
-    traits::engine::Engine,
     types::SlotId,
 };
 

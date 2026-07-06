@@ -2,14 +2,6 @@
 
 Detailed contracts and invariants for the kithara-play crate; the README is the overview.
 
-## Crossfade
-
-`Engine::crossfade(from, to, config)` fades one slot out while the other fades
-in. `CrossfadeConfig` selects the curve (`CrossfadeCurve`: `EqualPower`,
-`Linear`, `SCurve`, `ConstantPower`, `FastFadeIn`, `FastFadeOut`), duration,
-cut points, and a `beat_aligned` flag. Beat/BPM data types (`BeatGrid`,
-`BpmInfo`) and `DjEvent` exist for callers that supply their own analysis.
-
 ## Tempo & Key-Lock
 
 `kithara-audio`'s `StretchControls` (one per deck, in `PlayerConfig.timestretch`)
@@ -45,15 +37,14 @@ consumer directly on the shared `StretchControls` handle.
 <tr><th>Enum</th><th>Scope</th></tr>
 <tr><td><code>PlayerEvent</code></td><td>Status, rate, volume, mute, current item, prefetch/handover, EOF, failure</td></tr>
 <tr><td><code>ItemEvent</code></td><td>Item status, buffering, seek, stall, end-of-stream</td></tr>
-<tr><td><code>EngineEvent</code></td><td>Slot lifecycle, crossfade progress, master volume</td></tr>
+<tr><td><code>EngineEvent</code></td><td>Slot lifecycle, master volume</td></tr>
 <tr><td><code>SessionEvent</code></td><td>Interruption, route change, media services</td></tr>
 <tr><td><code>DjEvent</code></td><td>BPM detected, beat tick, sync engage/disengage, phase aligned</td></tr>
 </table>
 
 Status types: `PlayerStatus`, `TimeControlStatus`, `ItemStatus`,
-`WaitingReason`. Audio-session value types (`PortDescription`, `PortType`,
-`RouteDescription`, `SessionDuckingMode`) describe routing. Identity/time:
-`SlotId`, `ObserverId`, `MediaTime` (a `CMTime` mirror with `Ord` and arithmetic).
+`WaitingReason`. `SessionDuckingMode` describes ducking policy. Identity:
+`SlotId`.
 
 ## Queue Auto-Advance
 
@@ -76,12 +67,11 @@ policy and reacts to `HandoverRequested` by selecting the loaded successor via
 
 ## Engine Lifecycle
 
-`start()` → `allocate_slot()` → attach `Player` → `replace_current_item(Some(item))`
-→ `play()`. For crossfade, allocate a second slot and call
-`Engine::crossfade(from, to, config)`. Tear down with `release_slot(id)` then
+`start()` -> `allocate_slot()` -> attach `PlayerImpl` -> `replace_current_item(Some(item))`
+-> `play()`. Tear down with `release_slot(id)` then
 `stop()`.
 
-`Engine::start` is **atomic single-start**: the `running` check-then-act is
+`EngineImpl::start` is **atomic single-start**: the `running` check-then-act is
 serialized by an internal `start_lock`, and `running` flips to `true` only after
 `session.start_player` has fully succeeded. Two concurrent starters (e.g. the
 synchronous `Queue::select` path and an async loader-completion both calling
@@ -187,9 +177,8 @@ File and HLS pipelines are unconditional: `kithara-play` always links
 ## Invariants
 
 - `SlotId` is valid only between `allocate_slot()` and `release_slot()`.
-- At most `Engine::max_slots()` slots allocated at once; at most one active crossfade.
-- `Player::slot_id()` is `None` until registered with the engine.
-- `MediaTime::INVALID` has `timescale == 0`; arithmetic on invalid times stays invalid.
+- At most `EngineImpl::max_slots()` slots allocated at once.
+- `PlayerImpl::slot()` is `None` until registered with the engine.
 - Audio-thread `process()` is allocation-, free-, and lock-free.
 
 ## Current item
@@ -218,6 +207,6 @@ The offline render backend for deterministic engine/player tests lives in
 
 ## Integration
 
-Defines the public player API consumed by higher-level crates. All traits are
-`Send + Sync + 'static`; failures propagate via `Result<T, PlayError>` (no
-`unwrap()`/`expect()` in production code).
+Defines the public player API consumed by higher-level crates. Failures
+propagate via `Result<T, PlayError>` (no `unwrap()`/`expect()` in production
+code).

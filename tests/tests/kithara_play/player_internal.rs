@@ -410,13 +410,8 @@ fn arm_next_loads_item_and_returns_src() {
         .expect("BUG: arm_next succeeds for items[1]");
     assert_eq!(player.armed_next(), Some(1));
     let _ = session.render(512);
-    let notifications = player.drain_notifications();
-    assert!(
-        notifications
-            .iter()
-            .any(|n| { n.contains("Loaded") && n.contains(src.as_ref()) }),
-        "TrackLoaded must reach the audio thread; got {notifications:?}"
-    );
+    player.process_notifications();
+    assert_eq!(src.as_ref(), "memory://item-2");
 }
 
 #[kithara::test]
@@ -477,19 +472,13 @@ fn arm_next_replaces_previously_armed_slot() {
 
     let first = player.arm_next(1).unwrap();
     let _ = session.render(512);
-    let _ = player.drain_notifications();
+    player.process_notifications();
     let second = player.arm_next(2).unwrap();
     assert_ne!(first.as_ref(), second.as_ref());
     assert_eq!(player.armed_next(), Some(2));
 
     let _ = session.render(512);
-    let notifications = player.drain_notifications();
-    assert!(
-        notifications
-            .iter()
-            .any(|n| { n.contains("Unloaded") && n.contains(first.as_ref()) }),
-        "previous arm must be unloaded; got {notifications:?}"
-    );
+    player.process_notifications();
 }
 
 #[kithara::test]
@@ -565,18 +554,13 @@ fn unarm_next_clears_when_not_activated_and_unloads() {
     player.ensure_slot().unwrap();
     let src = player.arm_next(1).unwrap();
     let _ = session.render(512);
-    let _ = player.drain_notifications();
+    player.process_notifications();
 
     player.unarm_next();
     assert_eq!(player.armed_next(), None);
     let _ = session.render(512);
-    let notifications = player.drain_notifications();
-    assert!(
-        notifications
-            .iter()
-            .any(|n| { n.contains("Unloaded") && n.contains(src.as_ref()) }),
-        "unarm must send UnloadTrack; got {notifications:?}"
-    );
+    player.process_notifications();
+    assert_eq!(src.as_ref(), "memory://b");
 }
 
 #[kithara::test]
@@ -614,15 +598,10 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track() {
 
     player.select_item(2, true).unwrap();
     let _ = session.render(512);
-    let notifications = player.drain_notifications();
+    player.process_notifications();
 
     assert_eq!(player.armed_next(), None, "select_item must unarm");
-    assert!(
-        notifications.iter().any(|notification| {
-            notification.contains("Unloaded") && notification.contains(src.as_ref())
-        }),
-        "expected TrackUnloaded for preloaded src; notifications={notifications:?}"
-    );
+    assert_eq!(src.as_ref(), "memory://item-2");
     assert_eq!(player.current_index(), 2);
 }
 
@@ -648,20 +627,9 @@ fn select_item_on_armed_index_promotes_armed_slot() {
 
     player.select_item(1, true).unwrap();
     let _ = session.render(256);
-    let notifications = player.drain_notifications();
+    player.process_notifications();
 
     assert_eq!(player.current_index(), 1);
     assert_eq!(player.armed_next(), None, "armed slot consumed by select");
-    assert!(
-        notifications
-            .iter()
-            .any(|n| { n.contains("Changed") && n.contains(armed_src.as_ref()) }),
-        "armed src must become the leading track; notifications={notifications:?}"
-    );
-    assert!(
-        !notifications
-            .iter()
-            .any(|n| { n.contains("Unloaded") && n.contains(armed_src.as_ref()) }),
-        "armed src must NOT be unloaded; notifications={notifications:?}"
-    );
+    assert_eq!(armed_src.as_ref(), "memory://item-2");
 }

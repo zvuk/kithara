@@ -26,10 +26,6 @@ use super::{
     shared_eq::SharedEq,
     shared_player_state::SharedPlayerState,
 };
-#[rustfmt::skip]
-use crate::traits::dj::crossfade::CrossfadeConfig;
-#[rustfmt::skip]
-use crate::traits::engine::Engine;
 use crate::{
     error::PlayError,
     events::EngineEvent,
@@ -88,7 +84,7 @@ pub(crate) struct SlotHandle {
     pub(crate) eq: SharedEq,
 }
 
-/// Concrete [`Engine`] implementation backed by a process-wide session.
+/// Concrete engine implementation backed by a process-wide session.
 ///
 /// Multiple `EngineImpl` instances share one CPAL/Firewheel stream while
 /// retaining independent per-player graph controls.
@@ -123,11 +119,10 @@ pub struct EngineImpl {
     /// Per-slot command channels and shared state.
     slot_registry: Mutex<ArenaRegistry<SlotId, SlotHandle>>,
 
-    /// Serialises [`Engine::start`]'s check-then-act on `running`, so two
+    /// Serialises [`Self::start`]'s check-then-act on `running`, so two
     /// concurrent starters cannot both pass the `!running` gate and
     /// double-dispatch `session.start_player`. The loser observes
     /// `running == true` under the lock and returns `EngineAlreadyRunning`.
-    /// See `CONTEXT.md` "Engine start".
     start_lock: Mutex<()>,
 
     runtime: Option<RuntimeHandle>,
@@ -143,7 +138,7 @@ impl EngineImpl {
     /// `None`, it falls back to the process-wide cpal-backed session
     /// client.
     ///
-    /// The engine is created in the *stopped* state. Call [`Engine::start`]
+    /// The engine is created in the *stopped* state. Call [`Self::start`]
     /// to begin audio processing.
     #[must_use]
     pub fn new(mut config: EngineConfig, bus: EventBus) -> Self {
@@ -293,12 +288,12 @@ impl Drop for EngineImpl {
     }
 }
 
-impl Engine for EngineImpl {
-    fn active_slots(&self) -> Vec<SlotId> {
+impl EngineImpl {
+    pub fn active_slots(&self) -> Vec<SlotId> {
         self.active_slots.lock().clone()
     }
 
-    fn allocate_slot(&self) -> Result<SlotId, PlayError> {
+    pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
         }
@@ -328,20 +323,7 @@ impl Engine for EngineImpl {
         Ok(slot_id)
     }
 
-    fn cancel_crossfade(&self) -> Result<(), PlayError> {
-        Err(PlayError::NoCrossfade)
-    }
-
-    fn crossfade(
-        &self,
-        _from: SlotId,
-        _to: SlotId,
-        _config: CrossfadeConfig,
-    ) -> Result<(), PlayError> {
-        Err(PlayError::NotReady)
-    }
-
-    fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
+    pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
         if !self.running.load(Ordering::Acquire) {
             debug!(
                 reason,
@@ -352,31 +334,19 @@ impl Engine for EngineImpl {
         self.session.invalidate_audio_route(reason)
     }
 
-    fn is_crossfading(&self) -> bool {
-        false
-    }
-
-    fn is_running(&self) -> bool {
+    pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Acquire)
     }
 
-    fn master_channels(&self) -> u16 {
-        self.config.channels
-    }
-
-    fn master_sample_rate(&self) -> u32 {
-        Self::master_sample_rate(self)
-    }
-
-    fn master_volume(&self) -> f32 {
+    pub fn master_volume(&self) -> f32 {
         self.master_volume.load(Ordering::Relaxed)
     }
 
-    fn max_slots(&self) -> usize {
+    pub fn max_slots(&self) -> usize {
         self.config.max_slots
     }
 
-    fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
+    pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
         }
@@ -399,30 +369,7 @@ impl Engine for EngineImpl {
         Ok(())
     }
 
-    fn set_master_volume(&self, volume: f32) {
-        let clamped = volume.clamp(0.0, 1.0);
-        self.master_volume.store(clamped, Ordering::Relaxed);
-
-        if self.running.load(Ordering::Acquire)
-            && let Some(player_id) = *self.player_id.lock()
-            && let Err(err) = self.session.set_player_master_volume(player_id, clamped)
-        {
-            warn!(
-                ?err,
-                player_id,
-                volume = clamped,
-                "failed to apply player master volume"
-            );
-        }
-
-        self.emit(EngineEvent::MasterVolumeChanged { volume: clamped });
-    }
-
-    fn slot_count(&self) -> usize {
-        self.active_slots.lock().len()
-    }
-
-    fn start(&self) -> Result<(), PlayError> {
+    pub fn start(&self) -> Result<(), PlayError> {
         // Hold across the whole check-then-act: `running` flips to `true`
         // only after `start_player` has fully succeeded, so a concurrent
         // starter either blocks here and then observes `running == true`
@@ -452,7 +399,7 @@ impl Engine for EngineImpl {
         Ok(())
     }
 
-    fn stop(&self) -> Result<(), PlayError> {
+    pub fn stop(&self) -> Result<(), PlayError> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
         }
@@ -469,12 +416,10 @@ impl Engine for EngineImpl {
         Ok(())
     }
 
-    fn subscribe(&self) -> kithara_events::EventReceiver {
+    pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
     }
-}
 
-impl EngineImpl {
     /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
     ///
     /// Returns the config default if the engine is not running yet.

@@ -1,24 +1,20 @@
 use firewheel::dsp::fade::FadeCurve;
 
-use crate::traits::dj::crossfade::CrossfadeCurve;
-
 /// Default crossfade duration in seconds.
 pub(crate) const DEFAULT_CROSSFADE_DURATION: f32 = 1.0;
 
-/// Map our [`CrossfadeCurve`] to firewheel's [`FadeCurve`].
-///
-/// Firewheel only supports `Linear` and `SquareRoot`.
-/// Our richer enum maps to the closest available:
-/// - `EqualPower`, `ConstantPower`, `FastFadeIn`, `FastFadeOut` -> `SquareRoot`
-/// - `Linear`, `SCurve` -> `Linear`
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) enum CrossfadeCurve {
+    #[default]
+    EqualPower,
+}
+
 pub(crate) fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
     match curve {
-        CrossfadeCurve::Linear | CrossfadeCurve::SCurve => FadeCurve::Linear,
-        _ => FadeCurve::SquareRoot,
+        CrossfadeCurve::EqualPower => FadeCurve::SquareRoot,
     }
 }
 
-/// Crossfade configuration for the player processor.
 #[derive(Clone, Debug)]
 pub(crate) struct CrossfadeSettings {
     pub(crate) curve: CrossfadeCurve,
@@ -35,7 +31,6 @@ impl Default for CrossfadeSettings {
 }
 
 impl CrossfadeSettings {
-    /// Get the mapped firewheel [`FadeCurve`].
     pub(crate) fn fade_curve(&self) -> FadeCurve {
         map_curve(self.curve)
     }
@@ -48,17 +43,8 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    #[case(CrossfadeCurve::EqualPower, FadeCurve::SquareRoot)]
-    #[case(CrossfadeCurve::Linear, FadeCurve::Linear)]
-    #[case(CrossfadeCurve::SCurve, FadeCurve::Linear)]
-    #[case(CrossfadeCurve::ConstantPower, FadeCurve::SquareRoot)]
-    #[case(CrossfadeCurve::FastFadeIn, FadeCurve::SquareRoot)]
-    #[case(CrossfadeCurve::FastFadeOut, FadeCurve::SquareRoot)]
-    fn map_curve_matches_expected_fade_curve(
-        #[case] input: CrossfadeCurve,
-        #[case] expected: FadeCurve,
-    ) {
-        assert_eq!(map_curve(input), expected);
+    fn map_curve_matches_expected_fade_curve() {
+        assert_eq!(map_curve(CrossfadeCurve::EqualPower), FadeCurve::SquareRoot);
     }
 
     #[kithara::test]

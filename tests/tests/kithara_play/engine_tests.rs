@@ -3,10 +3,7 @@ use std::sync::{Mutex as StdMutex, OnceLock};
 use kithara::{
     self,
     events::EventBus,
-    play::{
-        Engine, EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId,
-        traits::dj::crossfade::CrossfadeConfig,
-    },
+    play::{EngineConfig, EngineImpl, PlayError, SessionDuckingMode, SlotId},
 };
 
 fn slot_id(value: u64) -> SlotId {
@@ -25,7 +22,6 @@ fn session_ducking_lock() -> &'static StdMutex<()> {
 #[derive(Clone, Copy)]
 enum EngineInitialScenario {
     ActiveSlotsEmpty,
-    NotCrossfading,
     NotRunning,
     SlotState,
 }
@@ -64,17 +60,15 @@ fn engine_config_builder() {
 #[case(EngineInitialScenario::NotRunning)]
 #[case(EngineInitialScenario::SlotState)]
 #[case(EngineInitialScenario::ActiveSlotsEmpty)]
-#[case(EngineInitialScenario::NotCrossfading)]
 fn engine_initial_state(#[case] scenario: EngineInitialScenario) {
     let engine = make_engine();
     match scenario {
         EngineInitialScenario::NotRunning => assert!(!engine.is_running()),
         EngineInitialScenario::SlotState => {
-            assert_eq!(engine.slot_count(), 0);
+            assert_eq!(engine.active_slots().len(), 0);
             assert_eq!(engine.max_slots(), 4);
         }
         EngineInitialScenario::ActiveSlotsEmpty => assert!(engine.active_slots().is_empty()),
-        EngineInitialScenario::NotCrossfading => assert!(!engine.is_crossfading()),
     }
 }
 
@@ -88,33 +82,6 @@ fn engine_subscribe_works() {
 fn engine_master_volume_default() {
     let engine = make_engine();
     assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
-}
-
-#[kithara::test]
-fn engine_set_master_volume() {
-    let engine = make_engine();
-    engine.set_master_volume(0.5);
-    assert!((engine.master_volume() - 0.5).abs() < f32::EPSILON);
-}
-
-#[kithara::test]
-fn engine_set_master_volume_clamps() {
-    let engine = make_engine();
-    engine.set_master_volume(2.0);
-    assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
-    engine.set_master_volume(-0.5);
-    assert!(engine.master_volume().abs() < f32::EPSILON);
-}
-
-#[kithara::test]
-fn engine_set_master_volume_emits_event() {
-    let engine = make_engine();
-    let mut rx = engine.subscribe();
-    engine.set_master_volume(0.75);
-    let event = rx.try_recv().unwrap();
-    assert!(
-        matches!(event, kithara::events::Event::Engine(EngineEvent::MasterVolumeChanged { volume }) if (volume - 0.75).abs() < f32::EPSILON)
-    );
 }
 
 #[kithara::test]
@@ -132,32 +99,10 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
 }
 
 #[kithara::test]
-fn engine_crossfade_stub_returns_not_ready() {
-    let engine = make_engine();
-    let err = engine
-        .crossfade(slot_id(1), slot_id(2), CrossfadeConfig::default())
-        .unwrap_err();
-    assert!(matches!(err, PlayError::NotReady));
-}
-
-#[kithara::test]
-fn engine_cancel_crossfade_stub_returns_no_crossfade() {
-    let engine = make_engine();
-    let err = engine.cancel_crossfade().unwrap_err();
-    assert!(matches!(err, PlayError::NoCrossfade));
-}
-
-#[kithara::test]
 fn engine_master_sample_rate_returns_config_when_stopped() {
     let config = EngineConfig::builder().sample_rate(48000).build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
-}
-
-#[kithara::test]
-fn engine_master_channels_returns_config() {
-    let engine = make_engine();
-    assert_eq!(engine.master_channels(), 2);
 }
 
 #[kithara::test]

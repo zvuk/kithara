@@ -30,7 +30,6 @@ use crate::{
         resource::Resource,
         session::SessionDispatcher,
     },
-    traits::engine::Engine,
     types::{PlayerStatus, SessionDuckingMode},
 };
 
@@ -287,7 +286,7 @@ impl PlayerImpl {
     /// Ensure the audio engine is started.
     ///
     /// Idempotent under concurrency: if another thread wins the start race
-    /// (the engine is now running), `Engine::start` returns
+    /// (the engine is now running), `EngineImpl::start` returns
     /// `EngineAlreadyRunning`, which is the success case here — the engine
     /// is started, which is all this method promises.
     pub fn ensure_engine_started(&self) -> Result<(), PlayError> {

@@ -16,7 +16,6 @@ use crate::{
         player_processor::PlayerCmd,
         player_resource::PlayerResource,
     },
-    traits::engine::Engine,
 };
 
 /// Outcome of resolving an arm request under the short phase lock, acted on
@@ -180,21 +179,6 @@ impl PlayerImpl {
                 }
             }
         }
-    }
-
-    /// Drain audio-thread notifications for every active slot.
-    pub fn drain_notifications(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        for slot_id in self.core.engine.active_slots() {
-            let Some(state) = self.core.engine.slot_shared_state(slot_id) else {
-                continue;
-            };
-            while let Some(notification) = state.notification_rx.lock().try_pop() {
-                out.push(format!("{notification:?}"));
-            }
-            state.drain_trash();
-        }
-        out
     }
 
     pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(Arc<str>, f64)> {

@@ -1,7 +1,7 @@
 use kithara::{
     self,
     events::EventBus,
-    play::{Engine, EngineConfig, EngineImpl, PlayError},
+    play::{EngineConfig, EngineImpl, PlayError},
 };
 use kithara_integration_tests::offline::OfflineSession;
 
@@ -38,11 +38,11 @@ fn engine_allocate_and_release_slot(#[case] backend: Backend) {
     engine.start().unwrap();
 
     let slot_id = engine.allocate_slot().unwrap();
-    assert_eq!(engine.slot_count(), 1);
+    assert_eq!(engine.active_slots().len(), 1);
     assert!(engine.active_slots().contains(&slot_id));
 
     engine.release_slot(slot_id).unwrap();
-    assert_eq!(engine.slot_count(), 0);
+    assert_eq!(engine.active_slots().len(), 0);
 
     engine.stop().unwrap();
 }

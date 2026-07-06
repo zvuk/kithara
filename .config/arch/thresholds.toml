@@ -457,10 +457,6 @@ export_attrs = ["no_mangle", "export_name", "wasm_bindgen", "uniffi"]
 #   try_pop_notification: white-box drain of the processor->main notification
 #   channel; the processor is the producer side, so no production reader exists.
 #   Same relocation constraint as track_mut.
-#   drain_notifications: white-box drain+format of the active engine slot's
-#   notifications for *_internal ordering assertions; the public PlayerEvent bus
-#   path consumes-and-converts, losing the raw-notification granularity these
-#   tests assert.
 #   test_session: cfg(test)-only NoopBackend session dispatcher injected through
 #   PlayerConfig::session so engine-starting player unit tests never open the
 #   real CoreAudio device; production always resolves the process-wide cpal
@@ -474,7 +470,6 @@ exempt = [
   "active_named_thread_count",
   "track_mut",
   "try_pop_notification",
-  "drain_notifications",
   "test_session",
 ]
 # Path fragments whose defs `--fix` must never auto-delete: platform-gated
