@@ -441,6 +441,7 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
     ]);
     cmd.current_dir(&crate_dir);
     cmd.env("IPHONEOS_DEPLOYMENT_TARGET", "16.0");
+    set_simulator_bindgen_args(&mut cmd)?;
 
     let status = cmd.status().context("failed to run cargo swift package")?;
     if !status.success() {
@@ -495,6 +496,29 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
         guard.restore()?;
     }
 
+    Ok(())
+}
+
+/// `signalsmith-stretch` runs `bindgen`, which derives clang's target from
+/// cargo's `TARGET`. For simulator slices that yields `arm64-apple-ios-sim`,
+/// but libclang wants `-simulator`; pin valid simulator triples and sysroot.
+fn set_simulator_bindgen_args(cmd: &mut Command) -> Result<()> {
+    let sim_sdk = sdk_path("iphonesimulator")?;
+    let sim_sdk = sim_sdk
+        .to_str()
+        .context("iphonesimulator SDK path is not UTF-8")?;
+    for (key, triple) in [
+        (
+            "BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios_sim",
+            "arm64-apple-ios-simulator",
+        ),
+        (
+            "BINDGEN_EXTRA_CLANG_ARGS_x86_64_apple_ios",
+            "x86_64-apple-ios-simulator",
+        ),
+    ] {
+        cmd.env(key, format!("--target={triple} -isysroot {sim_sdk}"));
+    }
     Ok(())
 }
 
