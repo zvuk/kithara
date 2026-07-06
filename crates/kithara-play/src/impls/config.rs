@@ -139,12 +139,12 @@ pub struct ResourceConfig {
     pub name: Option<String>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
-    /// Shared playback rate atomic for the audio pipeline resampler in the
-    /// non-tempo (no-`stretch`) chain.
+    /// Legacy shared playback-rate state for direct audio configuration. The
+    /// resampler is fixed-ratio; live speed DSP uses `stretch`.
     pub playback_rate: Option<Arc<AtomicF32>>,
     /// Live time-stretch controls (speed + key-lock + backend). `Some` selects
     /// tempo mode; the same `Arc` must flow to every track so live changes
-    /// reach the running effect chain. `None` keeps the resampler-first chain.
+    /// reach the running effect chain. `None` leaves playback speed pinned.
     pub stretch: Option<Arc<StretchControls>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     pub worker: Option<AudioWorkerHandle>,

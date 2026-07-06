@@ -2,7 +2,6 @@ use std::sync::{Arc, atomic::AtomicU32};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::PcmSpec;
-use portable_atomic::AtomicF32;
 
 use crate::{pipeline::config::ResamplerStage, traits::AudioEffect};
 
@@ -12,7 +11,6 @@ pub(crate) fn append(
     stage: ResamplerStage,
     _initial_spec: PcmSpec,
     _host_sample_rate: &Arc<AtomicU32>,
-    _playback_rate: Arc<AtomicF32>,
     _pool: Option<PcmPool>,
 ) {
     debug_assert!(
@@ -27,7 +25,6 @@ pub(crate) fn append(
     _stage: ResamplerStage,
     _initial_spec: PcmSpec,
     _host_sample_rate: &Arc<AtomicU32>,
-    _playback_rate: Arc<AtomicF32>,
     _pool: Option<PcmPool>,
 ) {
 }

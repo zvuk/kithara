@@ -57,10 +57,7 @@ impl ResamplerKind {
     /// Maximum ratio adjustment factor for async resamplers.
     const MAX_RATIO_ADJUSTMENT: f64 = 8.0;
 
-    /// Minimum playback rate to avoid division by zero or extreme ratios.
-    const MIN_PLAYBACK_RATE: f64 = 0.01;
-
-    /// Passthrough detection tolerance for playback rate.
+    /// Passthrough detection tolerance for sample-rate ratios.
     const PASSTHROUGH_TOLERANCE: f64 = 0.0001;
 
     /// Build the selected rubato resampler engine.
@@ -101,12 +98,6 @@ impl ResamplerKind {
         }
     }
 
-    /// Return `playback_rate` clamped to the minimum ratio-safe value.
-    #[must_use]
-    pub fn clamped_playback_rate(playback_rate: f64) -> f64 {
-        playback_rate.max(Self::MIN_PLAYBACK_RATE)
-    }
-
     /// Return whether `new_ratio` differs enough to update the engine.
     #[must_use]
     pub fn ratio_changed(current_ratio: f64, new_ratio: f64) -> bool {
@@ -115,27 +106,23 @@ impl ResamplerKind {
 
     /// Compute the output/input resampling ratio for a target sample rate.
     #[must_use]
-    pub fn ratio_for_target(source_rate: u32, target_rate: u32, playback_rate: f64) -> f64 {
-        let rate = Self::clamped_playback_rate(playback_rate);
+    pub fn ratio_for_target(source_rate: u32, target_rate: u32) -> f64 {
         if source_rate > 0 {
-            f64::from(target_rate) / (f64::from(source_rate) * rate)
+            f64::from(target_rate) / f64::from(source_rate)
         } else {
-            1.0 / rate
+            1.0
         }
     }
 
     /// Return whether this rate combination can bypass resampling.
     #[must_use]
-    pub fn should_passthrough(source_rate: u32, target_rate: u32, playback_rate: f64) -> bool {
-        (source_rate == target_rate || target_rate == 0)
-            && (Self::clamped_playback_rate(playback_rate) - 1.0).abs()
-                < Self::PASSTHROUGH_TOLERANCE
+    pub fn should_passthrough(source_rate: u32, target_rate: u32) -> bool {
+        source_rate == target_rate || target_rate == 0
     }
 
     /// Worst-case input block across the whole ratio-adjustment window
     /// (`MAX_RATIO_ADJUSTMENT`). Pre-sizing input scratch to this means a
-    /// live ratio change (DJ rate sweep) never reallocates on the
-    /// produce-core.
+    /// host/source-rate ratio change never reallocates on the produce-core.
     #[must_use]
     // ast-grep-ignore: idioms.match-self-conversion
     pub fn input_frames_max(&self) -> usize {
@@ -207,18 +194,6 @@ impl ResamplerKind {
             Self::Poly(r) | Self::Sinc(r) => {
                 r.process_into_buffer(&input_adapter, &mut output_adapter, None)
             }
-        }
-    }
-
-    /// Update the active output/input resampling ratio.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ResampleError`] when rubato rejects the ratio, for example
-    /// because it lies outside the configured adjustment window.
-    pub fn set_resample_ratio(&mut self, ratio: f64, ramp: bool) -> Result<(), ResampleError> {
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => r.set_resample_ratio(ratio, ramp),
         }
     }
 }

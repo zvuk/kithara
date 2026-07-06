@@ -2,7 +2,6 @@ use std::sync::{Arc, atomic::AtomicU32};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmSpec, ResamplerQuality};
-use portable_atomic::AtomicF32;
 
 use crate::{
     pipeline::config::ResamplerStage,
@@ -16,20 +15,12 @@ pub(crate) fn append(
     stage: ResamplerStage,
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
-    playback_rate: Arc<AtomicF32>,
     pool: Option<PcmPool>,
 ) {
     let ResamplerStage::Present(quality) = stage else {
         return;
     };
-    append_present(
-        chain,
-        initial_spec,
-        host_sample_rate,
-        playback_rate,
-        quality,
-        pool,
-    );
+    append_present(chain, initial_spec, host_sample_rate, quality, pool);
 }
 
 #[cfg(not(feature = "apple-fused-src"))]
@@ -38,25 +29,16 @@ pub(crate) fn append(
     stage: ResamplerStage,
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
-    playback_rate: Arc<AtomicF32>,
     pool: Option<PcmPool>,
 ) {
     let ResamplerStage::Present(quality) = stage;
-    append_present(
-        chain,
-        initial_spec,
-        host_sample_rate,
-        playback_rate,
-        quality,
-        pool,
-    );
+    append_present(chain, initial_spec, host_sample_rate, quality, pool);
 }
 
 fn append_present(
     chain: &mut Vec<Box<dyn AudioEffect>>,
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
-    playback_rate: Arc<AtomicF32>,
     quality: ResamplerQuality,
     pool: Option<PcmPool>,
 ) {
@@ -64,7 +46,6 @@ fn append_present(
         .host_sample_rate(Arc::clone(host_sample_rate))
         .source_sample_rate(initial_spec.sample_rate.get())
         .channels(usize::from(initial_spec.channels))
-        .playback_rate(playback_rate)
         .quality(quality)
         .maybe_pool(pool)
         .build();

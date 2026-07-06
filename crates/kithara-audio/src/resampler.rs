@@ -11,7 +11,6 @@ use bon::Builder;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, ResampleError, ResamplerKind, ResamplerQuality};
-use portable_atomic::AtomicF32;
 use smallvec::SmallVec;
 use tracing::{debug, info, trace};
 
@@ -26,12 +25,6 @@ use crate::traits::AudioEffect;
 pub struct ResamplerParams {
     /// Shared atomic for dynamic host sample rate tracking.
     pub host_sample_rate: Arc<AtomicU32>,
-    /// Shared atomic for dynamic playback rate (1.0 = normal speed).
-    ///
-    /// Affects the resampling ratio: `ratio = host_rate / (source_rate × playback_rate)`.
-    /// At rate=2.0, audio plays at double speed with pitch shift (vinyl effect).
-    #[builder(default = Arc::new(AtomicF32::new(1.0)))]
-    pub playback_rate: Arc<AtomicF32>,
     /// Shared PCM pool for output buffers.
     pub pool: Option<PcmPool>,
     /// Quality preset controlling resampling algorithm.
@@ -59,14 +52,11 @@ impl ResamplerParams {
 
 /// Audio resampler that converts between source and host sample rates.
 ///
-/// Monitors `host_sample_rate` (an `Arc<AtomicU32>`) and `playback_rate`
-/// (an `Arc<AtomicF32>`) for dynamic changes.
-/// When `host_sample_rate == 0` or equals `source_rate` and `playback_rate == 1.0`,
-/// operates in passthrough mode.
+/// Monitors `host_sample_rate` (an `Arc<AtomicU32>`) for dynamic changes.
+/// When `host_sample_rate == 0` or equals `source_rate`, operates in
+/// passthrough mode.
 pub struct ResamplerProcessor {
     host_sample_rate: Arc<AtomicU32>,
-    /// Shared atomic for dynamic playback rate tracking.
-    playback_rate: Arc<AtomicF32>,
     /// Most recently observed input `PcmMeta`. Carried over to each
     /// resampled output chunk so the timeline still gets the decoder's
     /// authoritative `timestamp` / `end_timestamp` after rate
@@ -84,7 +74,6 @@ pub struct ResamplerProcessor {
     temp_input_slice: SmallVec<[Vec<f32>; 8]>,
     temp_output_all: SmallVec<[Vec<f32>; 8]>,
     temp_output_bufs: SmallVec<[Vec<f32>; 8]>,
-    current_playback_rate: f64,
     current_ratio: f64,
     source_rate: u32,
     channels: usize,
@@ -105,19 +94,14 @@ impl ResamplerProcessor {
         // or host_sr (only used when != 0). The MIN fallback can never fire.
         let nz_target = NonZeroU32::new(target_rate).unwrap_or(NonZeroU32::MIN);
         let output_spec = PcmSpec::new(u16::try_from(channels).unwrap_or(u16::MAX), nz_target);
-
-        let initial_playback_rate = f64::from(params.playback_rate.load(Ordering::Relaxed));
-
         let mut processor = Self {
             channels,
             output_spec,
             source_rate,
             chunk_size: params.chunk_size,
-            current_playback_rate: initial_playback_rate,
             current_ratio: 1.0,
             host_sample_rate: params.host_sample_rate,
             input_buffer: smallvec_new_vecs(channels),
-            playback_rate: params.playback_rate,
             pool: params.pool.unwrap_or_else(|| PcmPool::default().clone()),
             quality: params.quality,
             resampler: None,
@@ -352,9 +336,10 @@ impl ResamplerProcessor {
     /// front (construction / resampler-recreate), so the produce-core never
     /// reallocates them mid-playback. Sizes come from the resampler's
     /// worst-case input/output blocks (`*_frames_max`, which already fold in
-    /// the `MAX_RATIO_ADJUSTMENT` window), so even a live DJ rate sweep stays
-    /// allocation-free. No-op in passthrough — there is no resampler and the
-    /// scratch is unused. Pure capacity reservation: output is bit-exact.
+    /// the `MAX_RATIO_ADJUSTMENT` window), so even a live host/source-rate
+    /// ratio move stays allocation-free. No-op in passthrough — there is no
+    /// resampler and the scratch is unused. Pure capacity reservation: output
+    /// is bit-exact.
     fn presize_scratch(&mut self) {
         let Some((in_max, out_max, in_next)) = self.resampler.as_ref().map(|r| {
             (
@@ -406,11 +391,7 @@ impl ResamplerProcessor {
     }
 
     fn ratio_for_target(&self, target_rate: u32) -> f64 {
-        ResamplerKind::ratio_for_target(
-            self.source_rate,
-            target_rate,
-            f64::from(self.playback_rate.load(Ordering::Relaxed)),
-        )
+        ResamplerKind::ratio_for_target(self.source_rate, target_rate)
     }
 
     fn recreate_resampler(&mut self, new_ratio: f64) {
@@ -487,67 +468,23 @@ impl ResamplerProcessor {
         }
     }
 
-    fn try_update_ratio(
-        &mut self,
-        target_rate: u32,
-        new_ratio: f64,
-        currently_pt: bool,
-        ratio_changed: bool,
-    ) -> bool {
-        if currently_pt || !ratio_changed {
-            return false;
-        }
-        let Some(ref mut resampler) = self.resampler else {
-            return false;
-        };
-
-        match resampler.set_resample_ratio(new_ratio, false) {
-            Ok(()) => {
-                debug!(
-                    new_ratio,
-                    source_rate = self.source_rate,
-                    target_rate,
-                    "Resampler ratio updated dynamically"
-                );
-                self.current_ratio = new_ratio;
-                true
-            }
-            Err(e) => {
-                debug!(err = %e, "Failed to update ratio dynamically, recreating");
-                self.resampler = None;
-                false
-            }
-        }
-    }
-
     fn update_resampler_if_needed(&mut self) {
         let target_rate = self.target_rate();
         // target_rate() returns source_rate when host==0 (non-zero) or host_sr (non-zero by contract).
         self.output_spec.sample_rate =
             NonZeroU32::new(target_rate).unwrap_or(self.output_spec.sample_rate);
-        let new_playback_rate = ResamplerKind::clamped_playback_rate(f64::from(
-            self.playback_rate.load(Ordering::Relaxed),
-        ));
-        let should_pt =
-            ResamplerKind::should_passthrough(self.source_rate, target_rate, new_playback_rate);
+        let should_pt = ResamplerKind::should_passthrough(self.source_rate, target_rate);
         let currently_pt = self.is_passthrough();
         let new_ratio = self.ratio_for_target(target_rate);
         let ratio_changed = ResamplerKind::ratio_changed(self.current_ratio, new_ratio);
 
         if should_pt {
             self.switch_to_passthrough(target_rate, currently_pt);
-            self.current_playback_rate = new_playback_rate;
-            return;
-        }
-
-        if self.try_update_ratio(target_rate, new_ratio, currently_pt, ratio_changed) {
-            self.current_playback_rate = new_playback_rate;
             return;
         }
 
         if currently_pt || self.resampler.is_none() || ratio_changed {
             self.recreate_resampler(new_ratio);
-            self.current_playback_rate = new_playback_rate;
         }
     }
 }
@@ -663,20 +600,6 @@ mod tests {
 
     fn params(host_sr: Arc<AtomicU32>, source_rate: u32, channels: usize) -> ResamplerParams {
         ResamplerParams::new(host_sr, source_rate, channels)
-    }
-
-    fn params_with_rate(
-        host_sr: Arc<AtomicU32>,
-        source_rate: u32,
-        channels: usize,
-        rate: Arc<AtomicF32>,
-    ) -> ResamplerParams {
-        ResamplerParams::builder()
-            .host_sample_rate(host_sr)
-            .source_sample_rate(source_rate)
-            .channels(channels)
-            .playback_rate(rate)
-            .build()
     }
 
     fn params_with_quality(
@@ -811,59 +734,6 @@ mod tests {
 
         AudioEffect::reset(&mut processor);
         assert!(processor.input_buffer[0].is_empty());
-    }
-
-    #[kithara::test]
-    #[case::rate_2x_halves(2.0, true, 5000)]
-    #[case::rate_half_doubles(0.5, false, 12000)]
-    fn test_playback_rate_scales_output(
-        #[case] rate_value: f32,
-        #[case] expect_less_than: bool,
-        #[case] threshold: usize,
-    ) {
-        let rate = Arc::new(AtomicF32::new(rate_value));
-        let mut processor =
-            ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
-        assert!(!processor.is_passthrough());
-        let chunk = test_chunk(pcm_spec(2, 44100), vec![0.1; 16384]);
-        let result = processor.process(chunk);
-        assert!(result.is_some());
-        let output_frames = result.unwrap().frames();
-        if expect_less_than {
-            assert!(
-                output_frames < threshold,
-                "Expected < {threshold}, got {output_frames}"
-            );
-        } else {
-            assert!(
-                output_frames > threshold,
-                "Expected > {threshold}, got {output_frames}"
-            );
-        }
-    }
-
-    #[kithara::test]
-    fn test_playback_rate_1x_same_rate_passthrough() {
-        let rate = Arc::new(AtomicF32::new(1.0));
-        let processor =
-            ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
-        assert!(processor.is_passthrough());
-    }
-
-    #[kithara::test]
-    fn test_playback_rate_dynamic_change() {
-        let rate = Arc::new(AtomicF32::new(1.0));
-        let mut processor = ResamplerProcessor::new(params_with_rate(
-            make_host_rate(44100),
-            44100,
-            2,
-            Arc::clone(&rate),
-        ));
-        assert!(processor.is_passthrough());
-        rate.store(2.0, Ordering::Relaxed);
-        let chunk = test_chunk(pcm_spec(2, 44100), vec![0.1; 16384]);
-        let _ = processor.process(chunk);
-        assert!(!processor.is_passthrough());
     }
 
     #[kithara::test]

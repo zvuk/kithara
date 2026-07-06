@@ -20,20 +20,23 @@ it each chunk. Rate setters (`set_rate`, `play`) and `set_keylock` / `set_backen
 all write this one handle; there is no second rate atomic and no manual mirror.
 
 `prepare_config` always passes the shared controls into every track (`stretch =
-Some(..)`). With a compiled-in backend the effect chain runs a
-`TimeStretchProcessor` in tempo mode whether or not key-lock is on:
+Some(..)`). With a compiled-in backend the effect chain runs a source-domain
+`TimeStretchProcessor` before the fixed-ratio resampler:
 
-- **key-lock off** (default): the stretch slot bypasses (PCM forwarded untouched)
-  and routes `speed` to the resampler — changing speed shifts pitch (vinyl-style).
-- **key-lock on**: the stretch slot changes tempo with pitch held and pins the
-  resampler to 1.0.
+- **key-lock off**: the stretch slot applies `set_ratio(1/speed)` and
+  `set_pitch(speed)` — changing speed shifts pitch (vinyl-style).
+- **key-lock on**: the stretch slot applies `set_ratio(1/speed)` and
+  `set_pitch(1.0)` — changing speed preserves pitch.
 
-Without one (default native build, wasm) there is no key-lock: the resampler
-follows the shared speed atomic directly, identical to key-lock off.
+At speed 1.0 with no region plan the slot bypasses byte-identically. Without a
+stretch backend, including wasm, no speed DSP is inserted and PCM output remains
+pinned to 1.0 speed. Mobile feature sets default key-lock to on, so app-level
+rate changes are pitch-preserving unless the consumer explicitly disables
+key-lock.
 
 Because the controls are read each chunk, **key-lock, backend, and speed all apply
-live, mid-track — no reload.** Switching key-lock or backend resets the FFT
-backend's buffer, so a brief transient (~100–300 ms) is expected at the switch.
+live, mid-track — no reload.** Switching backend rebuilds the DSP backend;
+returning to unity passthrough resets buffered stretch state.
 `Queue` delegates `set_rate` to the player; key-lock and backend are set by the
 consumer directly on the shared `StretchControls` handle.
 

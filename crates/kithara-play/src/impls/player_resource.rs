@@ -247,7 +247,7 @@ impl PlayerResource {
         self.resource.set_host_sample_rate(sample_rate);
     }
 
-    /// Set the playback rate for pitch-shifted speed control.
+    /// Set the playback rate for the active stretch controls.
     pub(crate) fn set_playback_rate(&self, rate: f32) {
         self.resource.set_playback_rate(rate);
     }

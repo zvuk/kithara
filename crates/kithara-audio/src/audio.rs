@@ -155,9 +155,9 @@ pub struct Audio<S> {
     /// 0 means "not set".
     host_sample_rate: Arc<AtomicU32>,
 
-    /// Shared playback rate for timeline scaling (1.0 = normal speed). Read by
-    /// the resampler in the non-tempo chain; in tempo mode `set_playback_rate`
-    /// routes into `stretch` instead.
+    /// Shared playback-rate state for compatibility with direct `Audio`
+    /// callers. Runtime speed changes route into `stretch` when present; the
+    /// fixed-ratio resampler never reads this value.
     playback_rate: Arc<AtomicF32>,
 
     /// Wake handle for blocking PCM reads.
@@ -199,9 +199,9 @@ pub struct Audio<S> {
     /// sources keep `None`.
     peer_wake: Option<Arc<DeferredWake>>,
 
-    /// Live time-stretch controls when this source runs in tempo mode. `Some`
-    /// makes it the sink for `set_playback_rate` (speed) so the effect chain's
-    /// `TimeStretchProcessor` sees rate moves; `None` for the plain chain.
+    /// Live time-stretch controls when this source owns speed DSP. `Some`
+    /// makes it the sink for `set_playback_rate` so the effect chain's
+    /// `TimeStretchProcessor` sees rate moves; `None` leaves speed pinned.
     stretch: Option<Arc<StretchControls>>,
 
     /// Assigned track ID in the shared worker (used for unregister on drop).
@@ -1079,7 +1079,6 @@ where
         let effects = create_effects(
             initial_spec,
             &host_sample_rate,
-            &playback_rate,
             config_stretch.as_ref(),
             fused_src::resampler_stage(decoder_backend, resampler_quality),
             Some(pool.clone()),
@@ -1648,8 +1647,6 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
     }
 
     fn set_playback_rate(&self, rate: f32) {
-        // Tempo mode: speed lives in the shared controls (the stretch slot and
-        // its resampler read it). Plain chain: drive the resampler atomic.
         match &self.stretch {
             Some(controls) => controls.set_speed(rate),
             None => self.playback_rate.store(rate, Ordering::Relaxed),

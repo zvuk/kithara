@@ -179,24 +179,38 @@ format frame; each artifact only implements its body.
 <tr><td>Maximum</td><td>FFT-based</td><td>Offline / high-end</td></tr>
 </table>
 
-## Time-Stretch (key-lock)
+## Time-Stretch (speed and key-lock)
 
-Preserve-pitch tempo lives in the pre-resampler `TimeStretchProcessor` slot.
+Playback speed lives in the pre-resampler `TimeStretchProcessor` slot. The
+resampler stage is strictly fixed-ratio: it converts source rate to host rate
+only and never carries playback speed.
+
 The whole stretch DSP exists only when a backend is compiled in
 (`stretch-signalsmith` / `stretch-bungee`, native targets). `create_effects`
 builds one of two chains:
 
-- **resampler-first** (`stretch = None`): no stretch slot; the resampler reads `playback_rate` directly. Used by plain (non-DJ) playback.
-- **tempo mode** (`stretch = Some`): a `TimeStretchProcessor` runs *before* the resampler. It is **always present** in tempo mode regardless of key-lock, and reads the live `StretchControls` (`speed` + `region_plan` + gated `keylock`/`backend`) each chunk. Without a compiled-in backend (no-stretch build, wasm) no slot is added, and the resampler follows the speed atomic directly — same audible behavior as key-lock off.
+- **fixed-rate** (`stretch = None`): no stretch slot; the resampler converts
+  source rate to host rate only.
+- **speed mode** (`stretch = Some`): a `TimeStretchProcessor` runs before the
+  resampler and reads live `StretchControls` (`speed` + `region_plan` + gated
+  `keylock`/`backend`) each chunk. Without a compiled-in backend, including
+  wasm, no slot is added and playback speed is pinned to 1.0 in PCM output.
 
-**Live speed routing — the one seam to know.** `StretchControls` is the single source of truth, shared (`Arc`) between the consumer/UI and this slot. The slot owns the *speed split* and is the sole writer of the resampler's rate atomic (`resampler_rate`, created in `create_effects` and handed to both the slot and the resampler that follows it):
+**Live speed routing.** `StretchControls` is the single source of truth,
+shared (`Arc`) between the consumer/UI and this slot:
 
-| mode | what the stretch slot does | `resampler_rate` |
-|---|---|---|
-| key-lock **on** | `set_ratio(1/speed)`, `set_pitch(1.0)` → tempo moves, pitch held | `1.0` |
-| key-lock **off** | true pass-through (chunk forwarded untouched) | `speed` (resampler shifts pitch, vinyl-style) |
+| mode | what the stretch slot does |
+|---|---|
+| key-lock **on** | `set_ratio(1/speed)`, `set_pitch(1.0)` -> tempo moves, pitch held |
+| key-lock **off** | `set_ratio(1/speed)`, `set_pitch(speed)` -> vinyl-style speed and pitch |
 
-Both effects run sequentially on the same worker thread, so the resampler always reads the value written for the current chunk — no cross-thread race, no control-thread mirror. Because the controls are read each chunk, **key-lock, backend, and speed all apply live, mid-track, with no reload.** A live key-lock or backend change discards the FFT backend's internal buffer (`reset`/rebuild), so expect a brief transient (~100–300 ms) at the switch; steady-state key-lock-off audio is byte-identical to the resampler-first chain (the slot never touches the buffer while bypassing).
+At speed 1.0 with no region plan the slot is byte-identical passthrough, so
+default playback keeps the old no-DSP behavior. Because controls are read each
+chunk, **key-lock, backend, and speed all apply live, mid-track, with no
+reload.** A live backend change rebuilds the DSP backend; returning to unity
+passthrough resets buffered stretch state. Mobile feature sets
+(`apple-fused-src` / `android`) default key-lock to on, so rate changes are
+pitch-preserving unless the consumer explicitly disables key-lock.
 
 **Backend seam.** `kithara-stretch` is the optional DSP backend crate. It owns `StretchBackend`, `StretchBackendError`, `StretchKind`, `StretchOptions`, `build_backend`, and the backend adapters behind `stretch-signalsmith` / `stretch-bungee`; `kithara-audio` only enables that dependency through its matching stretch features. `TimeStretchProcessor` owns one `Box<dyn StretchBackend>` selected from `controls.backend()` and rebuilt in place on a live backend swap (or a source-spec change); the trait is DSP-only (interleaved `process`/`flush`/`set_ratio`/`set_pitch`/`max_output_samples`/`reset`) so all `PcmChunk`/pool/timeline plumbing lives in kithara-audio and each library is a small adapter. `set_ratio` is the time factor (`output/input`, >1 = slower); `set_pitch` is independent (1.0 = pitch locked) — that decoupling is what makes key-lock real. Backends select statically via `StretchKind` + `cfg`:
 
@@ -205,9 +219,9 @@ Both effects run sequentially on the same worker thread, so the resampler always
 
 `StretchKind::all()` lists exactly the backends compiled into the current target (the default is `all()[0]`, discriminants are stable: 1 = Signalsmith, 2 = Bungee), so the UI selector never offers an absent one — selecting an uncompiled backend is un-representable, not a runtime error. With no `stretch-*` feature the optional `kithara-stretch` dependency is not linked and the kind/backend/processor re-exports are compiled out; `StretchControls` still exposes speed and optional region-plan storage.
 
-**Region plan (beat-aligned stretch).** The pure region types (`GridSegment`, `RegionPlan`, `RegionPlanError`, and `ActiveRegion`) live in `kithara-audio::region`; public callers use the unconditional `kithara_audio::{GridSegment, RegionPlan, RegionPlanError}` re-exports. `StretchControls` and `TimeStretchProcessor` stay in kithara-audio: controls optionally carry a `RegionPlan` (`ArcSwapOption`, installed via `set_region_plan`, read each chunk — the same live-swap shape as the other controls), and the processor applies the plan. Plans are sorted, non-overlapping `[start_frame, end_frame)` segments in **source frames** (`PcmMeta.frame_offset` space, never output time), each with a `ratio_correction` (validated at construction with a typed `RegionPlanError`). In key-lock mode the processor maps each chunk's `frame_offset` to its segment (cached cursor, binary search on a miss after seek/swap), splits chunks at segment boundaries, and drives the backend at `1/speed × ratio_correction`. The backend is `flush`ed (tail drained at the old ratio) + `reset` **only** when a boundary actually moves the effective ratio beyond `RATIO_EPS`; equal-ratio boundaries and gaps between segments (correction `1.0`) cost nothing, and live speed moves inside one region glide via `set_ratio` without a reset. An empty or absent plan is exactly the planless path. For region work prefer `signalsmith` (`bungee`'s no-op `flush` drops the tail at every real ratio boundary).
+**Region plan (beat-aligned stretch).** The pure region types (`GridSegment`, `RegionPlan`, `RegionPlanError`, and `ActiveRegion`) live in `kithara-audio::region`; public callers use the unconditional `kithara_audio::{GridSegment, RegionPlan, RegionPlanError}` re-exports. `StretchControls` and `TimeStretchProcessor` stay in kithara-audio: controls optionally carry a `RegionPlan` (`ArcSwapOption`, installed via `set_region_plan`, read each chunk - the same live-swap shape as the other controls), and the processor applies the plan. Plans are sorted, non-overlapping `[start_frame, end_frame)` segments in **source frames** (`PcmMeta.frame_offset` space, never output time), each with a `ratio_correction` (validated at construction with a typed `RegionPlanError`). The processor maps each chunk's `frame_offset` to its segment (cached cursor, binary search on a miss after seek/swap), splits chunks at segment boundaries, and drives the backend at `1/speed * ratio_correction`. The backend is `flush`ed (tail drained at the old ratio) + `reset` **only** when a boundary actually moves the effective ratio beyond `RATIO_EPS`; equal-ratio boundaries and gaps between segments (correction `1.0`) cost nothing, and live speed moves inside one region glide via `set_ratio` without a reset. An empty or absent plan is exactly the planless path. For region work prefer `signalsmith` (`bungee`'s no-op `flush` drops the tail at every real ratio boundary).
 
-**Timeline.** A stretch changes the output frame *count*, not the rate: each emitted chunk recomputes `meta.frames` but preserves `timestamp`/`end_timestamp`/`spec` verbatim (the resampler's `finalize_resample_chunk` recipe), so the playhead stays in source-track time — a 3-minute track reads `0:00→3:00` even at 50 % tempo. `bungee` has no clean tail drain through its high-level `Stream`, so its `flush` is a no-op (the final ~latency of audio is dropped at EOS rather than padded with stretched silence). If `bungee`'s `Stream::new` ever fails at construction (only on an invalid spec — unreachable for real stereo/mono audio), the backend warns once and then emits silence until the track is reloaded, rather than erroring per chunk.
+**Timeline.** A stretch changes the output frame *count*, not the rate: each emitted chunk recomputes `meta.frames` but preserves `timestamp`/`end_timestamp`/`spec` verbatim, so the playhead stays in source-track time - a 3-minute track reads `0:00->3:00` even at 50 % tempo. `bungee` has no clean tail drain through its high-level `Stream`, so its `flush` is a no-op (the final ~latency of audio is dropped at EOS rather than padded with stretched silence). If `bungee`'s `Stream::new` ever fails at construction (only on an invalid spec - unreachable for real stereo/mono audio), the backend warns once and then emits silence until the track is reloaded, rather than erroring per chunk.
 
 ## Engine load (live cost meter)
 
@@ -285,12 +299,12 @@ There are two distinct epoch atomics: the **seek-state** epoch, bumped by the co
 
 - **Node Architecture**: A track is represented by a single `Node` implementation (`DecoderNode`), stored in the shared scheduler as `Box<dyn Node>` through `runtime/`.
 - **Operators vs Nodes**: Audio effects are implemented as operators (`AudioEffect`) that are called directly within the track's `Node`. We do not use separate `Node`s or ring buffers between effects.
-- **Chain order**: The effect chain is `[..pre, Resampler, ..custom]`. With `AudioConfig::stretch` set (tempo mode), a source-domain `TimeStretchProcessor` occupies the `pre` slot before the host resampler and drives the resampler's rate atomic (`1.0` when key-locked, else `speed`). Without it, the chain is resampler-first and `playback_rate` drives the resampler "vinyl" speed+pitch path.
+- **Chain order**: The effect chain is `[..pre, Resampler, ..custom]`. With `AudioConfig::stretch` set and a native stretch backend compiled in, a source-domain `TimeStretchProcessor` occupies the `pre` slot before the fixed-ratio host resampler and owns all playback speed changes. Without a stretch backend, including wasm, no speed DSP is inserted and PCM output is pinned to 1.0 speed.
 - **EOF drain**: At true EOF `StreamAudioSource` drains the effect chain incrementally, one emitted chunk per FSM step: each stage is flushed to exhaustion only after the upstream stage's outputs pass through it, so a buffering effect's multi-pull tail is never truncated and the producer core does not allocate a drain queue. `EndOfStream` fires once on completion, not at source exhaustion.
 
 ### Coordinate spaces
 
-The whole pipeline runs in one space: **decoder/song time** (`PcmMeta.timestamp` / `end_timestamp` / `frame_offset`, `Timeline`, `total_duration`, the seek target, the UI playhead). A duration-changing `AudioEffect` (resampler "vinyl" today, preserve-pitch time-stretch later) changes frame counts but is the sole timeline authority: it restamps only `spec`+`frames` and carries the consumed input's song-time meta forward (`ResamplerProcessor::last_input_meta` pattern). The consumer keeps reading `end_timestamp` for position, so no translation layer and no parallel frame counter exist (single source of truth). Reporting perceived/elapsed output time instead would need an explicit translation owner; it is deliberately deferred until a real stretch backend lands.
+The whole pipeline runs in one space: **decoder/song time** (`PcmMeta.timestamp` / `end_timestamp` / `frame_offset`, `Timeline`, `total_duration`, the seek target, the UI playhead). A duration-changing `AudioEffect` changes frame counts but is the sole timeline authority: it restamps only `spec`+`frames` and carries the consumed input's song-time meta forward. The consumer keeps reading `end_timestamp` for position, so no translation layer and no parallel frame counter exist (single source of truth). Reporting perceived/elapsed output time instead would need an explicit translation owner.
 - **Buffers**: If a backpressure boundary or rate-matching is needed (e.g. between the worker and the audio callback), a separate buffer `Node` should be introduced explicitly.
 - **Push with Backpressure**: Producer nodes call `Outlet::try_push` directly. The outlet has a built-in single-slot overflow that absorbs one backpressure miss per tick, so a producer that emits at most one chunk per tick treats `try_push` as infallible. Each tick begins with `Outlet::flush()` to forward the parked item to the ring once the consumer drains it; if the ring is still full the node returns `TickResult::Waiting`. Under normal operation, the source's FSM is ticked every pass. However, if the outlet is completely saturated (both the ring buffer and the overflow slot are full), the node will return `Waiting` immediately without ticking the FSM. This provides strict backpressure, pausing all internal state transitions (including seeks) until the consumer drains the ring.
 - **Cancellation**: Do not use `CancelToken` inside `Node` implementations. Cancellation is handled centrally by calling `worker.unregister_track(...)`, which triggers the scheduler to call `Node::on_cancel()`.

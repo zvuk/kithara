@@ -68,15 +68,15 @@ pub struct AudioConfig<T: StreamType> {
     pub media_info: Option<kithara_stream::MediaInfo>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
-    /// Shared atomic for dynamic playback rate (1.0 = normal speed). Used by
-    /// the resampler in the non-tempo (no-`stretch`) chain.
+    /// Legacy shared playback-rate state for direct `Audio` callers. The
+    /// effect chain no longer consumes this value: speed lives in
+    /// [`StretchControls`] when a stretch backend is compiled in.
     pub playback_rate: Option<Arc<AtomicF32>>,
     /// Live playback-speed controls (plus key-lock + backend when a stretch
-    /// backend is compiled in). `Some` selects tempo mode: a
-    /// `TimeStretchProcessor` is added and drives the resampler rate (see
-    /// `create_effects`); without a compiled-in backend the resampler follows
-    /// the speed directly. `None` keeps the resampler-first chain reading
-    /// `playback_rate`.
+    /// backend is compiled in). `Some` inserts a `TimeStretchProcessor` before
+    /// the fixed-ratio resampler on native stretch builds. Without a compiled
+    /// backend, including wasm, no speed DSP is inserted and playback remains
+    /// at unity.
     pub stretch: Option<Arc<StretchControls>>,
     /// Optional shared audio worker handle.
     pub worker: Option<handle::AudioWorkerHandle>,
@@ -138,14 +138,12 @@ pub(crate) fn expected_output_spec(
     }
 }
 
-/// Build `[..pre, Resampler?, ..custom]`. Tempo mode (`stretch` `Some`) always
-/// adds a `TimeStretchProcessor` pre-slot when a backend is compiled in. The
-/// fused Apple path passes an absent-stage value so the resampler stage is
-/// never constructed.
+/// Build `[..pre, Resampler?, ..custom]`. When `stretch` is `Some`, native
+/// stretch builds add a `TimeStretchProcessor` pre-slot. The fused Apple path
+/// passes an absent-stage value so the resampler stage is never constructed.
 pub(crate) fn create_effects(
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
-    playback_rate: &Arc<AtomicF32>,
     stretch: Option<&Arc<StretchControls>>,
     resampler_stage: ResamplerStage,
     pool: Option<PcmPool>,
@@ -153,58 +151,52 @@ pub(crate) fn create_effects(
 ) -> Vec<Box<dyn AudioEffect>> {
     let mut chain: Vec<Box<dyn AudioEffect>> = Vec::new();
 
-    let resampler_rate = stretch.map_or_else(
-        || Arc::clone(playback_rate),
-        |controls| stretch_rate(controls, &mut chain, initial_spec, pool.as_ref()),
-    );
+    append_stretch_slot(stretch, &mut chain, initial_spec, pool.as_ref());
 
     crate::pipeline::resampler_stage::append(
         &mut chain,
         resampler_stage,
         initial_spec,
         host_sample_rate,
-        resampler_rate,
         pool,
     );
     chain.extend(custom_effects);
     chain
 }
 
-/// Tempo mode with a compiled-in backend: prepend the stretch slot. It is the
-/// sole writer of the returned rate atomic; the resampler reads it.
+/// Tempo mode with a compiled-in backend: prepend the stretch slot.
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
-fn stretch_rate(
-    controls: &Arc<StretchControls>,
+fn append_stretch_slot(
+    controls: Option<&Arc<StretchControls>>,
     chain: &mut Vec<Box<dyn AudioEffect>>,
     initial_spec: PcmSpec,
     pool: Option<&PcmPool>,
-) -> Arc<AtomicF32> {
-    let resampler_rate = Arc::new(AtomicF32::new(1.0));
+) {
+    let Some(controls) = controls else {
+        return;
+    };
     chain.push(Box::new(TimeStretchProcessor::new(
         Arc::clone(controls),
-        Arc::clone(&resampler_rate),
         initial_spec,
         pool.cloned().unwrap_or_default(),
     )));
-    resampler_rate
 }
 
-/// No stretch backend compiled in: the resampler follows the shared speed
-/// atomic directly (pitch follows speed, no key-lock).
+/// No stretch backend compiled in: speed DSP is absent and playback is pinned
+/// to unity. The fixed-ratio resampler never consumes speed.
 #[cfg(not(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 )))]
-fn stretch_rate(
-    controls: &Arc<StretchControls>,
+fn append_stretch_slot(
+    _controls: Option<&Arc<StretchControls>>,
     _chain: &mut Vec<Box<dyn AudioEffect>>,
     _initial_spec: PcmSpec,
     _pool: Option<&PcmPool>,
-) -> Arc<AtomicF32> {
-    controls.speed_shared()
+) {
 }
 
 #[cfg(test)]
@@ -244,9 +236,8 @@ mod tests {
         PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
     }
 
-    /// Without a compiled-in stretch backend, `stretch` still selects live
-    /// speed control: no pre-slot is added and the resampler follows the
-    /// shared speed atomic directly.
+    /// Without a compiled-in stretch backend, `stretch` does not add a speed
+    /// slot: playback remains at unity and the resampler stays fixed-ratio.
     #[cfg(not(all(
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
@@ -254,29 +245,25 @@ mod tests {
     #[kithara::test]
     fn create_effects_stretch_without_backends_is_resampler_first() {
         let host_sr = Arc::new(AtomicU32::new(44100));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
         let controls = StretchControls::new(1.5);
         let effects = create_effects(
             spec(),
             &host_sr,
-            &playback_rate,
             Some(&controls),
             ResamplerStage::Present(ResamplerQuality::default()),
             None,
             Vec::new(),
         );
-        // [Resampler] only — the rate it reads is the controls' speed atomic.
+        // [Resampler] only — no stretch backend exists in this build.
         assert_eq!(effects.len(), 1);
     }
 
     #[kithara::test]
     fn create_effects_includes_custom_effects() {
         let host_sr = Arc::new(AtomicU32::new(44100));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
         let effects = create_effects(
             spec(),
             &host_sr,
-            &playback_rate,
             None,
             ResamplerStage::Present(ResamplerQuality::default()),
             None,
@@ -290,11 +277,9 @@ mod tests {
     #[kithara::test]
     fn create_effects_fused_omits_resampler_stage() {
         let host_sr = Arc::new(AtomicU32::new(48000));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
         let effects = create_effects(
             spec(),
             &host_sr,
-            &playback_rate,
             None,
             ResamplerStage::Absent,
             None,
@@ -307,11 +292,9 @@ mod tests {
     #[kithara::test]
     fn create_effects_fused_keeps_custom_effects_without_resampler() {
         let host_sr = Arc::new(AtomicU32::new(48000));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
         let effects = create_effects(
             spec(),
             &host_sr,
-            &playback_rate,
             None,
             ResamplerStage::Absent,
             None,
@@ -327,46 +310,40 @@ mod tests {
     #[kithara::test]
     fn create_effects_tempo_mode_prepends_stretch_slot() {
         let host_sr = Arc::new(AtomicU32::new(44100));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
         let controls = StretchControls::new(1.0);
         let effects = create_effects(
             spec(),
             &host_sr,
-            &playback_rate,
             Some(&controls),
             ResamplerStage::Present(ResamplerQuality::default()),
             None,
             vec![Box::new(PassthroughEffect)],
         );
-        // [TimeStretch, Resampler, custom] -- pre-resampler slot present
-        // whenever tempo mode is engaged (even with key-lock off, it bypasses).
+        // [TimeStretch, Resampler, custom] -- speed is owned by the pre slot.
         assert_eq!(effects.len(), 3);
     }
 
-    /// Key-lock off in tempo mode routes the speed to the resampler (pitch
-    /// follows speed) — the stretch slot bypasses but still drives the rate.
+    /// Key-lock off in tempo mode is still handled by the stretch slot.
     #[cfg(all(
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     ))]
     #[kithara::test]
-    fn create_effects_tempo_bypass_routes_speed_to_resampler() {
+    fn create_effects_tempo_vinyl_uses_stretch_slot() {
         use kithara_decode::{PcmChunk, PcmMeta};
 
         let host_sr = Arc::new(AtomicU32::new(44100));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
         let controls = StretchControls::new(1.5);
-        // key-lock off (default).
+        controls.set_keylock(false);
         let mut effects = create_effects(
             spec(),
             &host_sr,
-            &playback_rate,
             Some(&controls),
             ResamplerStage::Present(ResamplerQuality::default()),
             None,
             Vec::new(),
         );
-        // Drive one chunk through the stretch slot (index 0) so it routes rate.
+        // Drive one chunk through the stretch slot (index 0).
         let frames = 1024usize;
         let samples = vec![0.0_f32; frames * 2];
         let meta = PcmMeta {
@@ -377,7 +354,8 @@ mod tests {
         let chunk = PcmChunk::new(meta, PcmPool::default().attach(samples.clone()));
         let out = effects[0]
             .process(chunk)
-            .expect("bypass forwards the chunk");
-        assert_eq!(&out.samples[..], &samples[..], "bypass: PCM untouched");
+            .expect("vinyl stretch emits a chunk");
+        assert_eq!(out.spec(), spec());
+        assert!(!out.samples.is_empty());
     }
 }

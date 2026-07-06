@@ -118,9 +118,8 @@ fn resampler_active_first_chunk_alloc_free() {
     });
 }
 
-/// `WS5b`: a live ratio change (DJ rate sweep) stays allocation-free — the
-/// scratch is pre-sized to the resampler's worst-case block across the whole
-/// `MAX_RATIO_ADJUSTMENT` window, so the steady `process` after a rate change
+/// `WS5b`: an active fixed-ratio resampler stays allocation-free after warmup.
+/// Scratch is pre-sized to the engine's worst-case block, so steady `process`
 /// never reallocates.
 #[kithara::test]
 fn resampler_active_steady_state_alloc_free() {

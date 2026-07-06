@@ -399,10 +399,9 @@ impl PlayerImpl {
         // player's master when none was supplied.
         let parent = config.cancel.unwrap_or_else(|| self.core.cancel.clone());
         let cancel = Some(parent.child());
-        // Always engage tempo mode: with a stretch backend compiled in, the
-        // stretch slot is present regardless of key-lock (it bypasses cleanly
-        // when off), so key-lock and backend can be toggled live without
-        // reloading the track. Without one, the resampler follows the speed.
+        // Always pass the shared speed controls: with a stretch backend
+        // compiled in, the stretch slot owns speed and key-lock live. Without
+        // one, PCM speed is pinned and the controls remain state only.
         let stretch = Some(Arc::clone(&self.core.config.timestretch));
         crate::impls::config::ResourceConfig {
             bus,

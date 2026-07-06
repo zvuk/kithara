@@ -242,9 +242,8 @@ impl Resource {
         self.inner.set_host_sample_rate(sample_rate);
     }
 
-    /// Set the playback rate for pitch-shifted speed control.
+    /// Set the playback rate for the active stretch controls.
     ///
-    /// Updates the resampler's ratio and timeline scaling.
     /// Rate > 1.0 speeds up playback, rate < 1.0 slows it down.
     pub fn set_playback_rate(&self, rate: f32) {
         self.inner.set_playback_rate(rate);

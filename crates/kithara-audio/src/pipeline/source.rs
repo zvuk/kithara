@@ -3951,7 +3951,6 @@ mod splice_continuity_tests {
         SourceError, SourceSeekAnchor, StreamError, StreamResult, VariantControl,
     };
     use kithara_test_utils::kithara;
-    use portable_atomic::AtomicF32;
 
     use super::*;
 
@@ -4318,11 +4317,9 @@ mod splice_continuity_tests {
         .expect("create initial slq fMP4 decoder");
         let initial_spec = initial_decoder.spec();
         let host_sample_rate = Arc::new(AtomicU32::new(Consts::SAMPLE_RATE));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
         let effects = crate::pipeline::config::create_effects(
             initial_spec,
             &host_sample_rate,
-            &playback_rate,
             None,
             crate::pipeline::config::ResamplerStage::Present(crate::ResamplerQuality::default()),
             Some(PcmPool::default().clone()),
