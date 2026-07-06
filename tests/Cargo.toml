@@ -48,7 +48,7 @@ apple-net = ["kithara/apple-net"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang", "no-block"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }

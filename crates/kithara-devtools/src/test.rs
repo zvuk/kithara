@@ -197,6 +197,7 @@ pub(crate) fn lane_features(
     backend_name: &str,
 ) -> Result<BTreeSet<String>> {
     let mut features = BTreeSet::new();
+    features.extend(config.features.iter().cloned());
     features.extend(lane.default_features.iter().cloned());
     if flash {
         features.extend(config.flash.features.iter().cloned());
@@ -316,6 +317,7 @@ mod tests {
                 default_lane: "workspace".to_owned(),
                 default_backend: "http".to_owned(),
                 feature_arg: "--features".to_owned(),
+                features: vec!["base-feature".to_owned()],
                 flash: TestFlashConfig {
                     features: vec!["virtual-time".to_owned()],
                     default: true,
@@ -337,11 +339,12 @@ mod tests {
         let lane = &test.lanes[&test.default_lane];
 
         let feats = lane_features(test, lane, true, "native").expect("features");
+        assert!(feats.contains("base-feature"));
         assert!(feats.contains("virtual-time"));
         assert!(feats.contains("demo/native-net"));
 
         let feats = lane_features(test, lane, false, "http").expect("features");
-        assert!(feats.is_empty());
+        assert_eq!(feats, BTreeSet::from(["base-feature".to_owned()]));
     }
 
     #[test]
@@ -352,7 +355,10 @@ mod tests {
         let (features, cmd) =
             nextest_lane_command(&project, true, "http", &extra).expect("nextest command");
 
-        assert_eq!(features, vec!["virtual-time".to_owned()]);
+        assert_eq!(
+            features,
+            vec!["base-feature".to_owned(), "virtual-time".to_owned()]
+        );
         let args = args_of(&cmd);
         assert_eq!(cmd.get_program().to_string_lossy(), "cargo");
         assert!(args.windows(2).any(|w| w == ["--profile", "perf"]));

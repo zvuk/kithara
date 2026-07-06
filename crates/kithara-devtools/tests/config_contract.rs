@@ -131,6 +131,26 @@ backend = "native"
 }
 
 #[test]
+fn test_config_parses_base_features() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[test]
+features = ["always-on"]
+
+[test.flash]
+features = ["virtual-time"]
+"#,
+    );
+
+    let config = ProjectConfig::load(temp.path()).expect("load test config");
+
+    assert_eq!(config.test.features, ["always-on"]);
+    assert_eq!(config.test.flash.features, ["virtual-time"]);
+}
+
+#[test]
 fn workspace_scan_excludes_walked_files() {
     let temp = tempdir().expect("tempdir");
     write_config(

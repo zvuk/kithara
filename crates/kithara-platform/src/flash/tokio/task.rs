@@ -15,7 +15,7 @@ pub use crate::flash::yield_now;
 pub use crate::native::tokio::task::{JoinError, JoinHandle};
 use crate::{
     flash::system::credit,
-    native::tokio::{runtime::Handle, task as native_task},
+    native::tokio::{backend, runtime::Handle, task as native_task},
 };
 
 /// Spawn an async task. Under `flash` (native) the future is wrapped in the
@@ -41,9 +41,9 @@ where
 {
     let on = crate::flash::ambient_snapshot();
     let loc = Location::caller();
-    native_task::spawn(crate::flash::with_ambient(
+    backend::task::spawn(crate::flash::with_ambient(
         on,
-        crate::flash::participate(future, loc),
+        crate::flash::participate(crate::no_block::watch_blanket_at("spawn", loc, future), loc),
     ))
 }
 
@@ -63,7 +63,7 @@ where
     let loc = Location::caller();
     handle.spawn(crate::flash::with_ambient(
         on,
-        crate::flash::participate(future, loc),
+        crate::flash::participate(crate::no_block::watch_blanket_at("spawn", loc, future), loc),
     ))
 }
 
