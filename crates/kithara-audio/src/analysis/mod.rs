@@ -1,4 +1,5 @@
 mod analyzer;
+#[cfg(feature = "analysis-beat")]
 pub(crate) mod beat;
 mod run;
 #[cfg(test)]

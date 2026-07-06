@@ -15,6 +15,7 @@ default = [
     "symphonia",
     "resample-rubato",
     "resample-fft",
+    "analysis-beat",
     "analysis-waveform",
     "client-reqwest",
     "tls-rustls",
@@ -73,6 +74,7 @@ symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia", "resample-ru
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
 resample-fft = ["kithara-audio/resample-fft"]
+analysis-beat = ["kithara-audio/analysis-beat"]
 analysis-waveform = ["kithara-audio/analysis-waveform"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.

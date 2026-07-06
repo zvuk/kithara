@@ -16,6 +16,7 @@ default = [
     "symphonia",
     "resample-rubato",
     "resample-fft",
+    "analysis-beat",
     "analysis-waveform",
     "stretch-signalsmith",
     "client-reqwest",
@@ -95,6 +96,7 @@ symphonia = [
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac", "kithara-queue?/fdk-aac"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato", "kithara-play/resample-rubato"]
 resample-fft = ["kithara-audio/resample-fft", "kithara-play/resample-fft"]
+analysis-beat = ["kithara-audio/analysis-beat", "kithara-play/analysis-beat"]
 analysis-waveform = ["kithara-audio/analysis-waveform", "kithara-play/analysis-waveform"]
 # Native-only C++ time-stretch backends (selectable at runtime in the DJ
 # deck). Each pulls a C++ toolchain; without one, key-lock is compiled out.
@@ -173,7 +175,7 @@ apple-fused-src = [
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
 apple-net = ["kithara-net?/client-apple", "kithara-stream/client-apple"]
-android = ["kithara-audio/android", "kithara-decode/android", "kithara-net?/client-wreq", "resample-rubato"]
+android = ["kithara-audio/android", "kithara-decode/android", "kithara-net?/client-wreq", "resample-rubato", "analysis-beat"]
 full = ["file", "hls", "assets", "net", "bufpool"]
 
 [dependencies]

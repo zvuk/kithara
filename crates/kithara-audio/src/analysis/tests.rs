@@ -164,16 +164,23 @@ impl PcmReader for FakeReader {
 }
 
 mod run {
+    #[cfg(feature = "analysis-beat")]
     use std::sync::Arc;
 
-    use kithara_platform::{CancelToken, sync::Mutex};
+    use kithara_platform::CancelToken;
+    #[cfg(feature = "analysis-beat")]
+    use kithara_platform::sync::Mutex;
     use kithara_test_utils::kithara;
+    #[cfg(feature = "analysis-beat")]
     use unimock::{MockFn, Unimock, matching};
 
+    #[cfg(feature = "analysis-beat")]
+    use super::super::beat::{
+        BeatDetector, BeatDetectorMock, GridParams, RawBeats, SharedBeatDetector,
+    };
     use super::{
         super::{
             analyzer::{AnalyzerBuilder, TrackAnalysis},
-            beat::{BeatDetector, BeatDetectorMock, GridParams, RawBeats, SharedBeatDetector},
             run::analyze_reader,
         },
         FakeReader, SR, sine,
@@ -247,6 +254,7 @@ mod run {
         assert!(out.is_empty(), "EOF with no chunks is not an analysis");
     }
 
+    #[cfg(feature = "analysis-beat")]
     #[kithara::test]
     fn beat_slot_fills_the_beat_grid() {
         let raw = RawBeats {

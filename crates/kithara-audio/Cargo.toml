@@ -14,6 +14,7 @@ default = [
     "symphonia",
     "resample-rubato",
     "resample-fft",
+    "analysis-beat",
     "analysis-waveform",
     "stretch-signalsmith",
     "client-reqwest",
@@ -64,7 +65,8 @@ symphonia = ["kithara-decode/symphonia", "resample-rubato"]
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
 resample-rubato = ["kithara-decode/resample-rubato"]
-resample-fft = ["rubato/fft_resampler"]
+resample-fft = ["analysis-beat", "rubato/fft_resampler"]
+analysis-beat = ["dep:rubato"]
 analysis-waveform = ["dep:realfft"]
 # Native-only C++ time-stretch backends. Default native builds use signalsmith;
 # bungee stays opt-in. Wasm builds pass `--no-default-features`, so they carry
@@ -73,7 +75,7 @@ stretch-signalsmith = ["dep:kithara-stretch", "kithara-stretch/stretch-signalsmi
 stretch-bungee = ["dep:kithara-stretch", "kithara-stretch/stretch-bungee"]
 # NN beat/downbeat detector (kithara-beat, embedded small model). Native-only
 # in practice: wasm builds simply do not enable it (rten on wasm unverified).
-beat-nn = ["dep:kithara-beat", "kithara-beat/embed-small-model"]
+beat-nn = ["analysis-beat", "dep:kithara-beat", "kithara-beat/embed-small-model"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
@@ -99,7 +101,7 @@ num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 realfft = { workspace = true, optional = true }
 ringbuf = { workspace = true }
-rubato = { workspace = true }
+rubato = { workspace = true, optional = true }
 serde = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }

@@ -99,16 +99,9 @@ impl AnalyzerBuilder {
     /// its model fails to load (`beat-nn`).
     #[must_use]
     pub fn with_beat(self) -> Self {
-        #[cfg(feature = "beat-nn")]
-        {
-            Self {
-                beat: super::nn::detector().map(|d| (d, GridParams::default())),
-                ..self
-            }
-        }
-        #[cfg(not(feature = "beat-nn"))]
-        {
-            self
+        Self {
+            beat: super::nn::detector().map(|d| (d, GridParams::default())),
+            ..self
         }
     }
 
