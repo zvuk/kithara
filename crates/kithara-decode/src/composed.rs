@@ -193,7 +193,13 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                         frames_to_trim(frame_pts, target, live_spec.sample_rate.get())
                             .min(u64::from(frames));
                     let trim_frames = u32::try_from(trim_frames_u64).unwrap_or(frames);
-                    if trim_frames > 0 && trim_frames < frames {
+                    // Duration rounding can leave `frame_end > target` even when
+                    // this packet is fully pre-target in sample space.
+                    if trim_frames >= frames {
+                        drop(buf);
+                        continue;
+                    }
+                    if trim_frames > 0 {
                         let channels = usize::from(live_spec.channels);
                         let trim_samples = usize::try_from(trim_frames)
                             .unwrap_or(0)
@@ -679,13 +685,42 @@ mod seek_trim_tests {
     use super::{test_counting_codec::CountingCodec, *};
     use crate::{
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
+        duration_for_frames,
         traits::Decoder,
     };
+
+    struct Consts;
+
+    impl Consts {
+        const CHANNELS: u16 = 2;
+        const PACKET_COUNT: u64 = 6;
+        const PACKET_FRAMES: u32 = 1024;
+        const SAMPLE_RATE: u32 = 44_100;
+    }
 
     struct ThreeFrameDemuxer {
         track: TrackInfo,
         held: Vec<u8>,
         idx: usize,
+    }
+
+    #[derive(Clone, Copy)]
+    struct BoundaryFrame {
+        pts: Duration,
+        duration: Duration,
+    }
+
+    struct BoundaryFrameDemuxer {
+        track: TrackInfo,
+        held: Vec<u8>,
+        frames: Vec<BoundaryFrame>,
+        idx: usize,
+    }
+
+    #[derive(Clone, Copy)]
+    enum SeekTrimLayout {
+        RegularPackets,
+        RoundedPastTarget,
     }
 
     impl Demuxer for ThreeFrameDemuxer {
@@ -725,6 +760,43 @@ mod seek_trim_tests {
         }
     }
 
+    impl Demuxer for BoundaryFrameDemuxer {
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+
+        fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+            let Some(frame) = self.frames.get(self.idx).copied() else {
+                return Ok(DemuxOutcome::Eof);
+            };
+            self.idx += 1;
+            self.held = vec![0u8; 4];
+            Ok(DemuxOutcome::Frame(Frame {
+                pts: frame.pts,
+                duration: frame.duration,
+                data: &self.held,
+                packet_desc: &[],
+            }))
+        }
+
+        fn seek(
+            &mut self,
+            _pos: Duration,
+            _priming: crate::codec::CodecPriming,
+        ) -> DecodeResult<DemuxSeekOutcome> {
+            self.idx = 0;
+            Ok(DemuxSeekOutcome::Landed {
+                landed_at: Duration::ZERO,
+                landed_byte: Some(0),
+                preroll: crate::demuxer::PrerollHint::NotNeeded,
+            })
+        }
+
+        fn track_info(&self) -> &TrackInfo {
+            &self.track
+        }
+    }
+
     fn empty_track() -> TrackInfo {
         TrackInfo {
             codec: AudioCodec::AacLc,
@@ -736,11 +808,49 @@ mod seek_trim_tests {
         }
     }
 
+    fn packet_duration() -> Duration {
+        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
+    }
+
+    fn regular_seek_frames() -> Vec<BoundaryFrame> {
+        (0..Consts::PACKET_COUNT)
+            .map(|packet_idx| BoundaryFrame {
+                pts: duration_for_frames(
+                    Consts::SAMPLE_RATE,
+                    packet_idx.saturating_mul(u64::from(Consts::PACKET_FRAMES)),
+                ),
+                duration: packet_duration(),
+            })
+            .collect()
+    }
+
+    fn rounded_past_target_frames(target: Duration) -> Vec<BoundaryFrame> {
+        vec![
+            BoundaryFrame {
+                pts: Duration::ZERO,
+                duration: target.saturating_add(Duration::from_nanos(1)),
+            },
+            BoundaryFrame {
+                pts: target,
+                duration: packet_duration(),
+            },
+        ]
+    }
+
+    fn seek_frames_for(target: Duration, layout: SeekTrimLayout) -> Vec<BoundaryFrame> {
+        match layout {
+            SeekTrimLayout::RegularPackets => regular_seek_frames(),
+            SeekTrimLayout::RoundedPastTarget => rounded_past_target_frames(target),
+        }
+    }
+
     #[kithara::test]
     fn pre_target_frames_are_decoded_and_dropped_by_pending_seek_target() {
+        const FRAME_FRAMES: u32 = 882;
+
         let codec = CountingCodec::new(
             PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
-            1,
+            FRAME_FRAMES,
         );
         let calls = Arc::clone(&codec.decode_calls);
         let demuxer = ThreeFrameDemuxer {
@@ -764,6 +874,115 @@ mod seek_trim_tests {
             2,
             "decode_frame must be called for pre-target frames so MDCT advances"
         );
+    }
+
+    #[kithara::test]
+    fn fully_trimmed_seek_packet_is_dropped_before_target_chunk() {
+        const SAMPLE_RATE: u32 = 44_100;
+        const PACKET_FRAMES: u32 = 1024;
+
+        let target = crate::duration_for_frames(SAMPLE_RATE, u64::from(PACKET_FRAMES));
+        let rounded_past_target = target.saturating_add(Duration::from_nanos(1));
+        let codec = CountingCodec::new(
+            PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+            PACKET_FRAMES,
+        );
+        let calls = Arc::clone(&codec.decode_calls);
+        let demuxer = BoundaryFrameDemuxer {
+            track: empty_track(),
+            held: Vec::new(),
+            idx: 0,
+            frames: vec![
+                BoundaryFrame {
+                    pts: Duration::ZERO,
+                    duration: rounded_past_target,
+                },
+                BoundaryFrame {
+                    pts: target,
+                    duration: rounded_past_target,
+                },
+            ],
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+
+        let _ = decoder.seek(target).expect("BUG: seek");
+        let outcome = decoder.next_chunk().expect("BUG: next_chunk");
+        let DecoderChunkOutcome::Chunk(chunk) = outcome else {
+            panic!("expected Chunk, got {outcome:?}");
+        };
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the fully pre-target packet must be decode-discarded before emitting"
+        );
+        assert_eq!(chunk.meta.frame_offset, u64::from(PACKET_FRAMES));
+        assert_eq!(chunk.meta.timestamp, target);
+    }
+
+    #[kithara::test]
+    #[case::packet_boundary(
+        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES)),
+        SeekTrimLayout::RegularPackets
+    )]
+    #[case::mid_packet(
+        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512),
+        SeekTrimLayout::RegularPackets
+    )]
+    #[case::rounding_hair_past_boundary(
+        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
+            .saturating_add(Duration::from_nanos(1)),
+        SeekTrimLayout::RoundedPastTarget
+    )]
+    #[case::multiple_fully_pre_target_packets(
+        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) * 3 + 512),
+        SeekTrimLayout::RegularPackets
+    )]
+    fn seek_trim_lands_first_chunk_on_exact_target_frame(
+        #[case] target: Duration,
+        #[case] layout: SeekTrimLayout,
+    ) {
+        let codec = CountingCodec::new(
+            PcmSpec::new(
+                Consts::CHANNELS,
+                NonZeroU32::new(Consts::SAMPLE_RATE).expect("test rate"),
+            ),
+            Consts::PACKET_FRAMES,
+        );
+        let demuxer = BoundaryFrameDemuxer {
+            track: empty_track(),
+            held: Vec::new(),
+            frames: seek_frames_for(target, layout),
+            idx: 0,
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+
+        let _ = decoder.seek(target).expect("BUG: seek");
+        let outcome = decoder.next_chunk().expect("BUG: next_chunk");
+        let DecoderChunkOutcome::Chunk(chunk) = outcome else {
+            panic!("expected Chunk, got {outcome:?}");
+        };
+        let expected_frame = frame_offset_for(target, Consts::SAMPLE_RATE);
+        let packet_offset = expected_frame % u64::from(Consts::PACKET_FRAMES);
+        let expected_frames = if packet_offset == 0 {
+            Consts::PACKET_FRAMES
+        } else {
+            Consts::PACKET_FRAMES - u32::try_from(packet_offset).expect("packet offset fits in u32")
+        };
+
+        assert_eq!(chunk.meta.frame_offset, expected_frame);
+        assert_eq!(chunk.meta.timestamp, target);
+        assert_eq!(
+            frame_offset_for(chunk.meta.timestamp, Consts::SAMPLE_RATE),
+            expected_frame
+        );
+        assert!(
+            chunk.meta.timestamp >= target,
+            "first chunk timestamp {:?} before seek target {:?}",
+            chunk.meta.timestamp,
+            target
+        );
+        assert_eq!(chunk.meta.frames, expected_frames);
     }
 }
 

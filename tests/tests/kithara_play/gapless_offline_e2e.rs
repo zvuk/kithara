@@ -215,6 +215,73 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
+async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let stitch_frame = crate::gapless_common::generated_aac_elst_visible_frames();
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(silence_trim_with_trailing())
+            .build(),
+        GAPLESS_SAMPLE_RATE,
+    );
+
+    let first = create_resource(
+        harness.player(),
+        &server,
+        temp_dir.path(),
+        "continuity-1",
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        Some(AAC_GAPLESS_TRAILING_DELAY),
+        0,
+    )
+    .await;
+    let second = create_resource(
+        harness.player(),
+        &server,
+        temp_dir.path(),
+        "continuity-2",
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        Some(AAC_GAPLESS_TRAILING_DELAY),
+        u64::try_from(stitch_frame).expect("stitch frame fits u64"),
+    )
+    .await;
+
+    load_tagged_queue(&harness, [first, second]);
+
+    let (rendered, events) = render_until_item_end(&harness, "continuity-2").await;
+    let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
+
+    assert!(
+        left.len() > stitch_frame + ContinuityMetric::HALF_WINDOW_FRAMES,
+        "rendered PCM must cover the stitch window; left_frames={}, stitch_frame={stitch_frame}, events={events:?}",
+        left.len()
+    );
+    assert_prefetch_before_first_end(&events, "continuity-1");
+
+    let switch_peak = peak_first_diff(&left, stitch_frame, ContinuityMetric::HALF_WINDOW_FRAMES);
+    let (control_peak, control_count) = gapless_control_peak(&left, stitch_frame);
+    assert!(
+        control_count >= ContinuityMetric::MIN_CONTROL_WINDOWS,
+        "gapless continuity metric needs at least {} same-track control windows, got {control_count}",
+        ContinuityMetric::MIN_CONTROL_WINDOWS,
+    );
+    let ratio = switch_peak / control_peak.max(f32::EPSILON);
+    println!(
+        "GAPLESS_CONTINUITY switch_peak={switch_peak:.6} control_peak={control_peak:.6} ratio={ratio:.3}"
+    );
+    assert!(
+        ratio < ContinuityMetric::MAX_RATIO,
+        "gapless stitch discontinuity {switch_peak:.6} is {ratio:.1}x the worst same-track control window {control_peak:.6}",
+    );
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
 async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -655,6 +722,15 @@ struct TimedPlayerEvent {
     event: PlayerEvent,
 }
 
+struct ContinuityMetric;
+
+impl ContinuityMetric {
+    const CONTROL_STRIDE_FRAMES: usize = GAPLESS_SAMPLE_RATE as usize / 4;
+    const HALF_WINDOW_FRAMES: usize = 64;
+    const MAX_RATIO: f32 = 3.0;
+    const MIN_CONTROL_WINDOWS: usize = 2;
+}
+
 fn timed_event_frame_end<P>(events: &[TimedPlayerEvent], predicate: P) -> Option<usize>
 where
     P: Fn(&PlayerEvent) -> bool,
@@ -663,6 +739,64 @@ where
         .iter()
         .find(|timed| predicate(&timed.event))
         .map(|timed| timed.frame_end)
+}
+
+fn assert_prefetch_before_first_end(events: &[TimedPlayerEvent], first_item_id: &str) {
+    let prefetch = events
+        .iter()
+        .position(|timed| matches!(&timed.event, PlayerEvent::PrefetchRequested))
+        .expect("PrefetchRequested must fire so the test exercises arm_next");
+    let first_end = events
+        .iter()
+        .position(|timed| {
+            matches!(
+                &timed.event,
+                PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
+                    if id.as_ref() == first_item_id
+            )
+        })
+        .expect("first item must emit ItemDidPlayToEnd");
+    assert!(
+        prefetch < first_end,
+        "PrefetchRequested must precede the first ItemDidPlayToEnd; events={events:?}"
+    );
+}
+
+fn peak_first_diff(left: &[f32], center: usize, half: usize) -> f32 {
+    assert!(
+        (1..left.len()).contains(&center),
+        "first-difference center must be in 1..{}, got {center}",
+        left.len(),
+    );
+    let start = center.saturating_sub(half).max(1);
+    let end = center.saturating_add(half).min(left.len() - 1);
+    let mut peak = 0.0_f32;
+    for i in start..=end {
+        peak = peak.max((left[i] - left[i - 1]).abs());
+    }
+    peak
+}
+
+fn gapless_control_peak(left: &[f32], stitch_frame: usize) -> (f32, usize) {
+    let mut peak = 0.0_f32;
+    let mut count = 0usize;
+    for center in [
+        stitch_frame.saturating_sub(ContinuityMetric::CONTROL_STRIDE_FRAMES),
+        stitch_frame.saturating_add(ContinuityMetric::CONTROL_STRIDE_FRAMES),
+    ] {
+        if center <= ContinuityMetric::HALF_WINDOW_FRAMES
+            || center + ContinuityMetric::HALF_WINDOW_FRAMES >= left.len()
+        {
+            continue;
+        }
+        peak = peak.max(peak_first_diff(
+            left,
+            center,
+            ContinuityMetric::HALF_WINDOW_FRAMES,
+        ));
+        count += 1;
+    }
+    (peak, count)
 }
 
 /// Index just past the last sample whose absolute amplitude is at or above
