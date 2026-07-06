@@ -20,28 +20,32 @@ impl StyleConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ThresholdsConfig {
     #[serde(default)]
-    pub(crate) struct_field_order: StructFieldOrderConfig,
+    pub(crate) comment_hygiene: CommentHygieneConfig,
     #[serde(default)]
-    pub(crate) trait_item_order: TraitItemOrderConfig,
+    pub(crate) dead_doc_refs: DeadDocRefsConfig,
+    #[serde(default)]
+    pub(crate) non_english_text: NonEnglishTextConfig,
+    #[serde(default)]
+    pub(crate) struct_field_order: StructFieldOrderConfig,
     #[serde(default)]
     pub(crate) struct_init_order: StructInitOrderConfig,
     #[serde(default)]
-    pub(crate) comment_hygiene: CommentHygieneConfig,
+    pub(crate) trait_item_order: TraitItemOrderConfig,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StructFieldOrderConfig {
-    /// Visibility group order. Each field is bucketed by visibility, then
-    /// sorted by type name, then by field name within the bucket.
-    /// Recognised tokens: `pub`, `pub(crate)`, `pub(super)`, `pub(in)`, `private`.
-    #[serde(default = "default_visibility_order")]
-    pub(crate) visibility_order: Vec<String>,
     /// Outer-attribute names that exempt a struct from ordering checks.
     /// `repr` covers `#[repr(C)]`, `#[repr(packed)]`, etc., where field order
     /// is part of the layout contract.
     #[serde(default = "default_exempt_attrs")]
     pub(crate) exempt_attrs: Vec<String>,
+    /// Visibility group order. Each field is bucketed by visibility, then
+    /// sorted by type name, then by field name within the bucket.
+    /// Recognised tokens: `pub`, `pub(crate)`, `pub(super)`, `pub(in)`, `private`.
+    #[serde(default = "default_visibility_order")]
+    pub(crate) visibility_order: Vec<String>,
 }
 
 impl Default for StructFieldOrderConfig {
@@ -67,15 +71,15 @@ fn default_exempt_attrs() -> Vec<String> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TraitItemOrderConfig {
-    /// Item kinds in the order they should appear inside a `trait` / `impl`.
-    /// Recognised tokens: `type`, `const`, `fn`, `macro`.
-    #[serde(default = "default_trait_kind_order")]
-    pub(crate) kind_order: Vec<String>,
     /// Where to apply the rule: any combination of `trait` / `impl_inherent`
     /// / `impl_trait`. Defaults cover both kinds of `impl` so methods stay
     /// grouped near their associated types/consts.
     #[serde(default = "default_trait_apply_to")]
     pub(crate) apply_to: Vec<String>,
+    /// Item kinds in the order they should appear inside a `trait` / `impl`.
+    /// Recognised tokens: `type`, `const`, `fn`, `macro`.
+    #[serde(default = "default_trait_kind_order")]
+    pub(crate) kind_order: Vec<String>,
     /// Function names that must appear *first* within the `fn` kind bucket,
     /// in the listed order. Conventional constructors (`new`) come before the
     /// rest of the impl so a reader sees creation entry points up top.
@@ -135,25 +139,6 @@ fn default_shorthand_first() -> bool {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CommentHygieneConfig {
-    /// Maximum number of consecutive lines a whitelisted inline `//` block
-    /// may span before flagging `size:inline`. Once a comment spans more
-    /// lines than this it likely belongs in a doc-block above the item or
-    /// in the crate `README.md`.
-    #[serde(default = "default_inline_max_lines")]
-    pub(crate) inline_max_lines: usize,
-    /// Maximum number of consecutive lines a `///` or `//!` doc-block may
-    /// span before flagging `size:doc`. Long contracts belong in the
-    /// owning crate `README.md` per AGENTS.md.
-    #[serde(default = "default_doc_block_max_lines")]
-    pub(crate) doc_block_max_lines: usize,
-    /// Density threshold in percent (0..=100): a fn body where the share
-    /// of non-doc inline `//` lines strictly exceeds this is flagged.
-    #[serde(default = "default_fn_density_threshold_pct")]
-    pub(crate) fn_density_threshold_pct: u32,
-    /// Functions with body shorter than this many lines are exempt from
-    /// the density check (signal would be noisy on tiny helpers).
-    #[serde(default = "default_fn_density_min_body_lines")]
-    pub(crate) fn_density_min_body_lines: usize,
     /// Prefixes that mark an inline `//` comment as intentional and
     /// exempt from the `category` check. Match is case-sensitive on the
     /// trimmed comment body.
@@ -163,6 +148,25 @@ pub(crate) struct CommentHygieneConfig {
     /// `comment_hygiene` sub-check.
     #[serde(default = "default_exclude_paths")]
     pub(crate) exclude_paths: Vec<String>,
+    /// Density threshold in percent (0..=100): a fn body where the share
+    /// of non-doc inline `//` lines strictly exceeds this is flagged.
+    #[serde(default = "default_fn_density_threshold_pct")]
+    pub(crate) fn_density_threshold_pct: u32,
+    /// Maximum number of consecutive lines a `///` or `//!` doc-block may
+    /// span before flagging `size:doc`. Long contracts belong in the
+    /// owning crate `README.md` per AGENTS.md.
+    #[serde(default = "default_doc_block_max_lines")]
+    pub(crate) doc_block_max_lines: usize,
+    /// Functions with body shorter than this many lines are exempt from
+    /// the density check (signal would be noisy on tiny helpers).
+    #[serde(default = "default_fn_density_min_body_lines")]
+    pub(crate) fn_density_min_body_lines: usize,
+    /// Maximum number of consecutive lines a whitelisted inline `//` block
+    /// may span before flagging `size:inline`. Once a comment spans more
+    /// lines than this it likely belongs in a doc-block above the item or
+    /// in the crate `README.md`.
+    #[serde(default = "default_inline_max_lines")]
+    pub(crate) inline_max_lines: usize,
 }
 
 impl Default for CommentHygieneConfig {
@@ -216,6 +220,79 @@ fn default_exclude_paths() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NonEnglishTextConfig {
+    /// Workspace-relative glob patterns that opt paths out of the tracked text
+    /// scan. Binary payload directories and local-only planning docs live here
+    /// as configuration, not baked-in check constants.
+    #[serde(default = "default_non_english_exclude_paths")]
+    pub(crate) exclude_paths: Vec<String>,
+}
+
+impl Default for NonEnglishTextConfig {
+    fn default() -> Self {
+        Self {
+            exclude_paths: default_non_english_exclude_paths(),
+        }
+    }
+}
+
+fn default_non_english_exclude_paths() -> Vec<String> {
+    default_tracked_text_exclude_paths()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DeadDocRefsConfig {
+    /// Workspace-relative referenced target globs allowed to be local-only.
+    #[serde(default)]
+    pub(crate) allow_targets: Vec<String>,
+    /// Workspace-relative glob patterns that opt paths out of the tracked text
+    /// scan. Defaults match `non_english_text` so generated, binary, and local
+    /// planning trees stay configuration-owned.
+    #[serde(default = "default_dead_doc_refs_exclude_paths")]
+    pub(crate) exclude_paths: Vec<String>,
+}
+
+impl Default for DeadDocRefsConfig {
+    fn default() -> Self {
+        Self {
+            exclude_paths: default_dead_doc_refs_exclude_paths(),
+            allow_targets: Vec::new(),
+        }
+    }
+}
+
+fn default_dead_doc_refs_exclude_paths() -> Vec<String> {
+    let mut paths = default_tracked_text_exclude_paths();
+    // Lint-check implementations carry synthetic fixture paths in their
+    // unit tests; those strings are test vectors, not references.
+    paths.push("**/kithara-devtools/src/style/checks/*.rs".to_string());
+    paths
+}
+
+fn default_tracked_text_exclude_paths() -> Vec<String> {
+    [
+        "assets/**",
+        "**/assets/**",
+        "fonts/**",
+        "**/fonts/**",
+        "models/**",
+        "**/models/**",
+        "fixtures/**",
+        "**/fixtures/**",
+        "target/**",
+        "**/target/**",
+        "docs/plans/**",
+        "docs/specs/**",
+        "android/gradle/wrapper/**",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 fn load_optional<T>(path: &Path) -> Result<T>

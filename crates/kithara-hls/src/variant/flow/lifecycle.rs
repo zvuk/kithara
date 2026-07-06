@@ -4,14 +4,6 @@ use super::HlsVariant;
 use crate::segment::{FetchClaim, Loaded, PlannedFetch};
 
 impl HlsVariant {
-    pub(crate) fn cancel(&self) {
-        self.flow.cancel_epoch.cancel();
-    }
-
-    pub(crate) fn cancel_handle(&self) -> CancelToken {
-        self.flow.cancel_epoch.handle()
-    }
-
     /// Settle hook: shrinks the appropriate size atom to `actual` and
     /// rebuilds the offset map. Called from
     /// [`FetchSlot::settle`] via `Weak<HlsVariant>::upgrade()` once the
@@ -29,20 +21,6 @@ impl HlsVariant {
             self.init_route_size()
         });
         self.complete_exact_seek_if_ready();
-    }
-
-    /// Replace the cancel token with a fresh child of `master_cancel`.
-    /// Called on every re-activation path ([`Self::reset_to_full_range`]
-    /// and [`Self::activate_at_segment_with_shift`]) so a variant that
-    /// was deactivated (cancelled) on a prior ABR commit can dispatch
-    /// fetches again. Without this, the second activation of the same
-    /// `HlsVariant` instance enqueues `FetchCmd`s under a permanently
-    /// cancelled token — every fetch settles immediately as
-    /// `stale (cancelled)` and the reader hangs on `wait_range`.
-    /// In-flight clones held by prior fetches stay cancelled (correct —
-    /// they belong to the previous epoch and must not write).
-    pub(crate) fn rearm_cancel(&self) {
-        self.flow.cancel_epoch.rearm();
     }
 
     /// Settle-side size store: shrink the appropriate atom to `final_len`.
@@ -65,5 +43,27 @@ impl HlsVariant {
                 }
             }
         }
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.flow.cancel_epoch.cancel();
+    }
+
+    pub(crate) fn cancel_handle(&self) -> CancelToken {
+        self.flow.cancel_epoch.handle()
+    }
+
+    /// Replace the cancel token with a fresh child of `master_cancel`.
+    /// Called on every re-activation path ([`Self::reset_to_full_range`]
+    /// and [`Self::activate_at_segment_with_shift`]) so a variant that
+    /// was deactivated (cancelled) on a prior ABR commit can dispatch
+    /// fetches again. Without this, the second activation of the same
+    /// `HlsVariant` instance enqueues `FetchCmd`s under a permanently
+    /// cancelled token — every fetch settles immediately as
+    /// `stale (cancelled)` and the reader hangs on `wait_range`.
+    /// In-flight clones held by prior fetches stay cancelled (correct —
+    /// they belong to the previous epoch and must not write).
+    pub(crate) fn rearm_cancel(&self) {
+        self.flow.cancel_epoch.rearm();
     }
 }

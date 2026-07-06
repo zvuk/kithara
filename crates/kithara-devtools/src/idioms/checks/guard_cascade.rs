@@ -53,8 +53,8 @@ impl Check for GuardCascade {
 
 struct CascadeVisitor<'a> {
     cfg: &'a GuardCascadeConfig,
-    rel: &'a str,
     out: &'a mut Vec<Violation>,
+    rel: &'a str,
 }
 
 impl<'ast> Visit<'ast> for CascadeVisitor<'_> {

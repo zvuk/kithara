@@ -339,7 +339,6 @@ mod tests {
     #[test]
     fn scope_includes_cross_backend_flash_and_common() {
         // Consumer-facing flash control surface + shared common modules ARE
-        // in scope.
         assert!(in_scope("crates/kithara-platform/src/flash/api.rs"));
         assert!(in_scope("crates/kithara-platform/src/flash/ctx.rs"));
         assert!(in_scope("crates/kithara-platform/src/flash/time.rs"));

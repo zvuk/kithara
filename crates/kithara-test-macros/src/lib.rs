@@ -1,8 +1,8 @@
-//! `kithara-test-macros` — proc-macros для kithara test infrastructure.
+//! `kithara-test-macros` — proc-macros for Kithara test infrastructure.
 //!
-//! `lib.rs` содержит только обязательные `#[proc_macro*]` entry-points
-//! (Rust требует их в crate root) и делегирует логику в per-macro модули:
-//! - [`test`] — `#[kithara::test]` (sync/async/native/wasm с case+fixture).
+//! `lib.rs` contains only the required `#[proc_macro*]` entry points
+//! (Rust requires them in the crate root) and delegates logic to per-macro modules:
+//! - [`test`] — `#[kithara::test]` (sync/async/native/wasm with case+fixture).
 //! - [`fixture`] — `#[kithara::fixture]` (rstest-fixture replacement).
 //! - [`probe`] — `#[kithara::probe]` + `#[derive(kithara::Probe)]`
 //!   (USDT + tracing instrumentation; auto-gated
@@ -23,7 +23,7 @@ mod test;
 use proc_macro::TokenStream;
 
 /// `#[kithara::test]` — unified sync/async/native/wasm test attribute.
-/// См. [`test`] для синтаксиса аргументов.
+/// See [`test`] for argument syntax.
 #[proc_macro_attribute]
 pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     test::expand(attr, item)
@@ -45,7 +45,7 @@ pub fn fixture(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `#[kithara::flash]` / `#[kithara::flash(true|false)]` — PROD dynamic-flash
 /// guard. Wraps a fn so its body propagates flash through the callstack and
 /// spawn (sync: RAII guard; async: per-poll combinator). No-op off `flash`.
-/// См. [`flash`] для деталей.
+/// See [`flash`] for details.
 #[proc_macro_attribute]
 pub fn flash(attr: TokenStream, item: TokenStream) -> TokenStream {
     flash::expand(attr, item)
@@ -89,17 +89,17 @@ pub fn facade_allow_block(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// `#[kithara::probe]` — USDT + tracing-event instrumentation.
-/// Тело гейтится `cfg(any(test, feature = "probe"))` → no-op в проде; emit
-/// обёрнут в `rtsan::permit`, поэтому под `--cfg rtsan` пробы активны, но
-/// `RTSan` их не флагает.
+/// Body is gated by `cfg(any(test, feature = "probe"))` → no-op in production;
+/// emit is wrapped in `rtsan::permit`, so under `--cfg rtsan` probes stay active
+/// but `RTSan` does not flag them.
 #[proc_macro_attribute]
 pub fn probe(attr: TokenStream, item: TokenStream) -> TokenStream {
     probe::expand_attr(attr, item)
 }
 
 /// `#[kithara::mock]` — workspace replacement for `#[unimock(...)]`.
-/// Гейтится `cfg(any(test, feature = "mock"))` → trait-декларация
-/// в проде остаётся без mock-impl.
+/// Gated by `cfg(any(test, feature = "mock"))` → the trait declaration
+/// remains without a mock impl in production.
 #[proc_macro_attribute]
 pub fn mock(args: TokenStream, item: TokenStream) -> TokenStream {
     mock::expand(args, item)
@@ -123,9 +123,9 @@ pub fn rtsan_allow_blocking(_attr: TokenStream, item: TokenStream) -> TokenStrea
     rtsan::expand_allow_blocking(item)
 }
 
-/// `#[derive(kithara::Probe)]` — generates `record_probe()` для value-type probes.
-/// Тело гейтится `cfg(any(test, feature = "probe"))`; emit обёрнут в
-/// `rtsan::permit` (активно, но `RTSan`-прозрачно под `--cfg rtsan`).
+/// `#[derive(kithara::Probe)]` — generates `record_probe()` for value-type probes.
+/// Body is gated by `cfg(any(test, feature = "probe"))`; emit is wrapped in
+/// `rtsan::permit` (active but `RTSan`-transparent under `--cfg rtsan`).
 #[proc_macro_derive(Probe, attributes(probe))]
 pub fn derive_probe(input: TokenStream) -> TokenStream {
     probe::expand_derive_entry(input)

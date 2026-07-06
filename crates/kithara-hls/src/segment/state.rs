@@ -57,18 +57,6 @@ impl SegmentSlotState {
         self.flags().contains(SlotFlags::DOWNLOADING)
     }
 
-    /// True while the current in-flight fetch has crossed `soft_timeout`
-    /// without settling. Meaningful only together with [`Self::is_downloading`].
-    pub(crate) fn is_slow(&self) -> bool {
-        self.flags().contains(SlotFlags::SLOW)
-    }
-
-    /// Mark the in-flight fetch slow (the `on_slow` hook fired). Idempotent;
-    /// the next state `store` (terminal transition or fresh claim) clears it.
-    pub(crate) fn mark_slow(&self) {
-        self.0.fetch_or(SlotFlags::SLOW.bits(), Ordering::AcqRel);
-    }
-
     /// Terminal-failure probe. A `Failed` slot will never load (the
     /// downloader gave up); readers surface a terminal error on it.
     pub(crate) fn is_failed(&self) -> bool {
@@ -77,6 +65,12 @@ impl SegmentSlotState {
 
     pub(crate) fn is_loaded(&self) -> bool {
         self.flags().contains(SlotFlags::LOADED)
+    }
+
+    /// True while the current in-flight fetch has crossed `soft_timeout`
+    /// without settling. Meaningful only together with [`Self::is_downloading`].
+    pub(crate) fn is_slow(&self) -> bool {
+        self.flags().contains(SlotFlags::SLOW)
     }
 
     pub(crate) fn mark_failed(&self) {
@@ -89,6 +83,12 @@ impl SegmentSlotState {
 
     pub(crate) fn mark_missing(&self) {
         self.0.store(SlotFlags::empty().bits(), Ordering::Release);
+    }
+
+    /// Mark the in-flight fetch slow (the `on_slow` hook fired). Idempotent;
+    /// the next state `store` (terminal transition or fresh claim) clears it.
+    pub(crate) fn mark_slow(&self) {
+        self.0.fetch_or(SlotFlags::SLOW.bits(), Ordering::AcqRel);
     }
 
     pub(crate) fn missing() -> Arc<Self> {

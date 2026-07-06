@@ -113,19 +113,6 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
             .await
     }
 
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError> {
-        self.retry_loop(|| {
-            self.inner
-                .post_bytes(url.clone(), body.clone(), headers.clone())
-        })
-        .await
-    }
-
     async fn get_range(
         &self,
         url: Url,
@@ -142,6 +129,19 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
         self.retry_loop(|| self.inner.head(url.clone(), headers.clone()))
             .await
+    }
+
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError> {
+        self.retry_loop(|| {
+            self.inner
+                .post_bytes(url.clone(), body.clone(), headers.clone())
+        })
+        .await
     }
 
     async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {

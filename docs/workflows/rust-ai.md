@@ -23,22 +23,22 @@ handoff, integration, or a workflow decision.
 
 ## Load Only What Applies
 
-- `.docs/guides/rule-placement.md`: deciding where a new agent rule belongs.
-- `.docs/guides/red-flags.md`: expanding the `AGENTS.md` red-flag gate.
-- `.docs/guides/rust-shape.md`: Rust idioms, standard traits, loops, errors, and
+- `docs/guides/rule-placement.md`: deciding where a new agent rule belongs.
+- `docs/guides/red-flags.md`: expanding the `AGENTS.md` red-flag gate.
+- `docs/guides/rust-shape.md`: Rust idioms, standard traits, loops, errors, and
   ownership shape.
-- `.docs/guides/architecture-shape.md`: owners, `Arc`, atomics, channels, call
+- `docs/guides/architecture-shape.md`: owners, `Arc`, atomics, channels, call
   flow, and god objects.
-- `.docs/guides/review-validation.md`: tests, review discipline, PR readiness, and
+- `docs/guides/review-validation.md`: tests, review discipline, PR readiness, and
   validation scope.
-- `.docs/guides/test-harness.md`: test entrypoints, scoped probes, regression
+- `docs/guides/test-harness.md`: test entrypoints, scoped probes, regression
   proof, and shared harness helpers.
-- `.docs/guides/cancel-policy.md`: cancellation hierarchy details.
-- `.docs/guides/lint-policy.md`: lint-suppression policy and sanctioned exception
+- `docs/guides/cancel-policy.md`: cancellation hierarchy details.
+- `docs/guides/lint-policy.md`: lint-suppression policy and sanctioned exception
   details.
-- `.docs/guides/tooling.md`: formatter, lint, dependency-audit, and external-tool
+- `docs/guides/tooling.md`: formatter, lint, dependency-audit, and external-tool
   ownership.
-- `.docs/guides/agent-hooks.md`: tool adapter hooks and command guard behavior.
+- `docs/guides/agent-hooks.md`: tool adapter hooks and command guard behavior.
 
 If a lint fails, open only the reported rule or the matching reference file. Do
 not pre-load the whole `ast-grep` or `xtask` tree.
@@ -66,14 +66,14 @@ not pre-load the whole `ast-grep` or `xtask` tree.
 
 ## When A Full Plan Is Required
 
-Use `.docs/plans/_template.md` when the task:
+Use `docs/plans/_template.md` when the task:
 
 - changes public API or shared types;
 - changes workflow, tooling, hooks, or docs that affect multiple agents;
 - affects wasm or perf-sensitive behavior;
 - uses split execution.
 
-Create or update the plan in `.docs/plans/YYYY-MM-DD-<slug>.md`.
+Create or update the plan in `docs/plans/YYYY-MM-DD-<slug>.md`.
 
 ## Validation Ownership
 

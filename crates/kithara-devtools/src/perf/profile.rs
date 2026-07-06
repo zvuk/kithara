@@ -21,21 +21,21 @@ use crate::{
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct IsolatedRun {
-    pub(crate) suite: String,
-    pub(crate) name: String,
-    pub(crate) secs: f64,
     pub(crate) exit_code: Option<i32>,
-    pub(crate) timed_out: bool,
     pub(crate) profile_path: PathBuf,
+    pub(crate) name: String,
+    pub(crate) suite: String,
+    pub(crate) timed_out: bool,
+    pub(crate) secs: f64,
 }
 
 pub(crate) struct ProfileParams {
+    pub(crate) limit: Option<usize>,
     pub(crate) data_dir: PathBuf,
-    pub(crate) run_id: String,
     pub(crate) target_root: PathBuf,
     pub(crate) lane: String,
+    pub(crate) run_id: String,
     pub(crate) timeout_secs: u64,
-    pub(crate) limit: Option<usize>,
 }
 
 pub(crate) fn samply_command(out: &Path, binary: &Path, test: &str) -> Command {
@@ -55,16 +55,16 @@ pub(crate) fn samply_command(out: &Path, binary: &Path, test: &str) -> Command {
 
 #[derive(Debug, Deserialize)]
 struct SymbolSidecar {
-    string_table: Vec<String>,
     data: Vec<SymbolLibrary>,
+    string_table: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SymbolLibrary {
-    debug_name: String,
     code_id: String,
-    symbol_table: Vec<SymbolEntry>,
+    debug_name: String,
     known_addresses: Vec<(u64, usize)>,
+    symbol_table: Vec<SymbolEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,8 +74,8 @@ struct SymbolEntry {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct LibKey {
-    debug_name: String,
     code_id: String,
+    debug_name: String,
 }
 
 impl LibKey {
@@ -355,11 +355,11 @@ pub(crate) fn run(params: &ProfileParams, project: &ProjectConfig) -> Result<()>
             test.suite, test.name
         );
         isolated.push(IsolatedRun {
-            suite: test.suite.clone(),
-            name: test.name.clone(),
             secs,
             exit_code,
             timed_out,
+            suite: test.suite.clone(),
+            name: test.name.clone(),
             profile_path: out,
         });
     }

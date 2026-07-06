@@ -279,6 +279,23 @@ mod tests {
         assert!(res.path().is_none());
     }
 
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn mem_double_commit_is_idempotent() {
+        let mem = MemResource::new(CancelToken::never());
+        let res = StorageResource::from(mem);
+
+        res.write_at(0, b"hello mem").unwrap();
+        res.commit(Some(9)).unwrap();
+        // Second commit through the shared `&self` facade must be a no-op, not
+        // re-snapshot the released working buffer.
+        res.commit(Some(9)).unwrap();
+
+        let mut buf = [0u8; 9];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 9);
+        assert_eq!(&buf, b"hello mem");
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn from_mmap_resource() {

@@ -59,9 +59,12 @@ When metadata is absent, `kithara-audio`'s `AudioConfig::gapless_mode` can selec
 heuristic behaviour via `GaplessMode`:
 
 - `GaplessMode::CodecPriming` — `GaplessTrimmer::codec_priming(frames, sample_rate)`
-  is built from a static codec table (`codec_priming_frames`). AAC LC
-  is 2112, HE-AAC 3072, MP3 LAME-default 1105, Opus 312, and lossless
-  codecs are 0. Predictable and zero-latency.
+  uses `Decoder::default_priming_frames(codec)`: encoder-side priming from
+  `AudioCodec::encoder_priming_frames` plus the selected backend's
+  `FrameCodec::decoder_algo_delay`. That keeps the fallback aligned with the
+  layered gapless probe contract below (for example Symphonia MP3 is 576 + 529
+  = 1105, AAC is 1024 plus the backend delay, Opus is 312, and lossless codecs
+  are 0). Predictable and zero-latency.
 - `GaplessMode::SilenceTrim(SilenceTrimParams)` — `GaplessTrimmer::silence_trim`
   walks the leading buffer until the first sample above a configurable
   dB threshold and trims everything before it. Optionally trims the
@@ -149,11 +152,16 @@ This keeps the strand contained in the decode layer: it never reaches into the
 <table>
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
 <tr><td><code>symphonia</code></td><td>yes</td><td>Software decoder path (Symphonia)</td></tr>
+<tr><td><code>fdk-aac</code></td><td>yes</td><td>Override Symphonia's LC-only AAC decoder with the in-tree libfdk-aac adapter for HE-AAC v1/v2</td></tr>
 <tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder (gated on <code>target_os = "macos" | "ios"</code>)</td></tr>
 <tr><td><code>android</code></td><td>no</td><td>Android <code>MediaExtractor</code>/<code>MediaCodec</code> hardware decoder (gated on <code>target_os = "android"</code>)</td></tr>
 <tr><td><code>probe</code></td><td>no</td><td>USDT probes for tracing</td></tr>
 <tr><td><code>mock</code></td><td>no</td><td><code>unimock</code>-generated mocks of the public traits</td></tr>
 <tr><td><code>perf</code></td><td>no</td><td>Performance instrumentation via <code>hotpath</code></td></tr>
+<tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the default HTTP backend selection to <code>kithara-stream</code></td></tr>
+<tr><td><code>client-wreq</code></td><td>no</td><td>Forward the native <code>wreq</code> HTTP backend selection to <code>kithara-stream</code></td></tr>
+<tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
+<tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
 </table>
 
 When `symphonia` is disabled (`default-features = false` + only `apple` / `android`), the factory has no software fallback — it errors if the active hardware backend cannot handle a codec/container.
@@ -163,8 +171,11 @@ When `symphonia` is disabled (`default-features = false` + only `apple` / `andro
 - `src/traits.rs` — public `Decoder` trait plus typed outcomes (`DecoderChunkOutcome`, `DecoderSeekOutcome`, `InputReadOutcome`) and the `DecoderInput` source supertrait.
 - `src/factory/` — `DecoderConfig`, `DecoderFactory`, and the `DecoderBackend` selector enum. The factory boxes every backend into `Box<dyn Decoder>` so callers stay codec-agnostic.
 - `src/composed.rs` — internal `ComposedDecoder<D: Demuxer, C: FrameCodec>` that implements `Decoder` by pairing a demuxer with a frame-level codec.
-- `src/demuxer/` — internal `Demuxer` trait and concrete demuxers (fMP4, …).
-- `src/fmp4/`, `src/mp4.rs` — fMP4/MP4 container helpers.
+- `src/demuxer.rs` — internal `Demuxer` trait.
+- `src/codec.rs` — internal `FrameCodec` trait and `CodecPriming`.
+- `src/input.rs` — `InputRequirement` contract used by decoder construction gates.
+- `src/mock.rs` — mock support for tests and the `mock` feature.
+- `src/fmp4/`, `src/mp4/` — fMP4/MP4 container helpers.
 - `src/symphonia/` (feature `symphonia`) — Symphonia `Decoder` implementation; probe and direct paths; `ReadSeekAdapter`.
 - `src/apple/` (feature `apple`, macOS / iOS) — Apple `AudioToolbox` backend over `AudioFile` / `AudioConverter` FFI.
 - `src/android/` (feature `android`, Android) — `MediaExtractor` / `MediaCodec` backend over JNI.

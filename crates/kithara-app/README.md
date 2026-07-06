@@ -29,15 +29,20 @@ cargo run -p kithara-app -- --mode tui <TRACK_URL_1> <TRACK_URL_2>
 cargo run -p kithara-app -- --mode gui <TRACK_URL_1> <TRACK_URL_2>
 ```
 
-If no tracks are provided, the app loads built-in defaults (one MP3 + one HLS URL).
+If no tracks are provided, the app loads built-in defaults that include MP3, HLS,
+and DRM-HLS examples.
 
 ## Features
 
 - `tui` — terminal dashboard player (ratatui + crossterm).
 - `gui` — desktop GUI player (iced).
-- `lib` — build as a plain library (used by integration tests).
+- `lib-only` — build as a plain library (used by integration tests).
+- `beat-nn` — NN beat/downbeat detection.
+- `stretch-signalsmith` / `stretch-bungee` / `stretch-all` — time-stretch backends.
+- `client-reqwest` / `client-wreq` — HTTP backend forwarding.
+- `tls-rustls` / `tls-native` — TLS backend forwarding.
 
-Defaults: `tui` + `gui`.
+Defaults: `tui` + `gui` + `beat-nn` + `stretch-signalsmith`.
 
 ## Architecture
 
@@ -52,37 +57,10 @@ flowchart LR
 
 ## Track Analysis Cache
 
-The DJ Studio source analysis is an expensive whole-track decode. It currently
-derives the colored waveform and optional beat/BPM data in one pass, so the
-combined result is memoized (`wave_cache.rs`, owned by the single
-`StateController` listener task). Two distinct identity spaces are kept
-separate on purpose:
-
-- **`TrackId`** (session-scoped `u64` from the queue) — the stale-guard for an
-  in-flight run and the "still current" check at commit. Never persisted.
-- **`AnalysisKey`** (source-derived, query/fragment-stripped URL/path, sha256 for
-  the filename) — the cross-session cache key. The same source shares one entry
-  and the disk tier survives restarts.
-
-These never mix: `TrackId` answers "is this the same queue slot", `AnalysisKey`
-answers "is this the same audio source". `start_analysis` (`plan_analysis`)
-skips when the track is already shown or in flight, serves a cache hit without
-wiping the visible analysis, and only wipes + decodes on a genuine miss;
-`commit_analysis` populates both tiers.
-
-The disk tier stores one blob per track as a resource of the track's
-`AssetScope` (`analysis/track.analysis`), so the artifact follows the track's
-cache lifecycle: it is evicted, moved, and deleted together with the cached
-audio bytes. A `TrackSource` variant with no stable source (the reserved
-non-exhaustive seam) is in-memory-only by capability, not a fallback.
-
-Invalidation is by `ANALYSIS_BYTES_VERSION` (kithara-app): bump it whenever
-the blob encoding, BPM analysis parameters, waveform encoding, or
-`WAVEFORM_MAX_BUCKETS` change. The
-filename is a sha256 of the key — a `std` hasher is not stable across toolchain
-versions and would orphan every blob. Because the key is the source location
-and not the bytes, a file overwritten in place keeps its key until the version
-is bumped (acceptable for a library of stable files).
+DJ Studio memoizes whole-track waveform and beat/BPM analysis in memory and on
+disk. Runtime freshness is guarded by `TrackId`; cross-session cache identity is
+owned by `AnalysisKey`. See CONTEXT.md for the key spaces, disk-tier lifecycle,
+and `ANALYSIS_BYTES_VERSION` invalidation contract.
 
 ## Integration
 

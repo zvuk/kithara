@@ -127,10 +127,6 @@ impl AudioPlayer {
         self.inner.items()
     }
 
-    pub fn pause(&self) {
-        self.inner.pause();
-    }
-
     /// Notify the native player that the platform audio route changed.
     ///
     /// This does not change queue state. If playback is active, the
@@ -143,6 +139,10 @@ impl AudioPlayer {
     /// route invalidation.
     pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), FfiError> {
         self.inner.notify_audio_route_changed(reason)
+    }
+
+    pub fn pause(&self) {
+        self.inner.pause();
     }
 
     pub fn play(&self) {

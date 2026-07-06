@@ -18,8 +18,8 @@ Detailed contracts and invariants for the kithara-platform crate; the README is 
 <table>
 <tr><th>API</th><th>Native</th><th>wasm32</th></tr>
 <tr><td><code>thread::spawn</code></td><td><code>std::thread::spawn</code></td><td><code>wasm_safe_thread::Builder::spawn</code> (Web Worker)</td></tr>
-<tr><td><code>tokio::task::spawn</code></td><td><code>tokio_with_wasm</code> alias runtime</td><td>Worker-aware wrapper with lifecycle hooks</td></tr>
-<tr><td><code>tokio::task::spawn_blocking</code></td><td><code>tokio_with_wasm</code> blocking pool</td><td>Dedicated worker-thread execution</td></tr>
+<tr><td><code>tokio::task::spawn</code></td><td><code>tokio</code> task runtime</td><td>Worker-aware wrapper over <code>tokio_with_wasm</code> with lifecycle hooks</td></tr>
+<tr><td><code>tokio::task::spawn_blocking</code></td><td><code>tokio</code> blocking pool</td><td>Dedicated worker-thread execution</td></tr>
 <tr><td><code>thread::is_main_thread / is_worker_thread</code></td><td>always main / false</td><td>detects browser main vs Worker global scope</td></tr>
 <tr><td><code>thread::assert_main_thread / assert_not_main_thread</code></td><td>no-op</td><td>panic on wrong thread affinity</td></tr>
 </table>
@@ -30,7 +30,18 @@ Detailed contracts and invariants for the kithara-platform crate; the README is 
 - `time::timeout(duration, future)`
 - `time::Instant` (via `web-time`, or the virtual clock under `flash`)
 
-On native these delegate to `tokio` runtime primitives, on wasm they use `setTimeout`-based scheduling. `web_time` is an internal implementation detail of this crate: no other crate may depend on it directly (enforced by the `arch.no-web-time` ast-grep gate), and `std::time::{Instant, Duration}` is likewise banned outside this crate (`arch.no-std-time`). Routing every timestamp through `time::Instant` is what lets the clock be swapped wholesale, below.
+On native these delegate to `tokio` runtime primitives, on wasm they use `setTimeout`-based scheduling. `web_time` is an internal implementation detail of this crate: no other crate may depend on it directly, and `std::time::{Instant, Duration}` is likewise banned outside this crate. The shared gates are `arch.no-direct-time` (covers `std::time`, `web_time`, and `tokio::time`) and `arch.no-implicit-clock`. Routing every timestamp through `time::Instant` is what lets the clock be swapped wholesale, below.
+
+## Feature Flags
+
+<table>
+<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>flash</code></td><td>no</td><td>Native test-only virtual clock and flash-aware primitive wrappers</td></tr>
+<tr><td><code>no-block</code></td><td>no</td><td>Native test-only async poll blocking detector; inert twin off the feature</td></tr>
+<tr><td><code>signal</code></td><td>no</td><td>Enable <code>tokio::signal</code> forwarding for desktop binaries that own process shutdown</td></tr>
+<tr><td><code>tokio-net</code></td><td>no</td><td>Enable native <code>tokio::net</code> and async I/O extension traits for test/server plumbing</td></tr>
+<tr><td><code>tokio-rt-multi-thread</code></td><td>no</td><td>Forward Tokio's multi-thread runtime feature</td></tr>
+</table>
 
 ### Virtual time (`flash`)
 
@@ -148,7 +159,7 @@ Contract:
     may be busy-waiting on that timer, so the clock advances normally (draining
     yielders on the jump); a yielder that cannot make progress re-parks-timed,
     emptying the yield set, so this never livelocks.
-- `time::reset()` clears the timeline and the engine. nextest's per-test process
+- `flash::reset()` clears the timeline and the engine. nextest's per-test process
   isolation keeps the global state clean between tests; `reset()` is for runners
   that share a process.
 
@@ -163,10 +174,10 @@ one (`PoolParticipant` in `flash/system/credit.rs`: an ambient `spawn_blocking`
 closure is real work the clock must not advance past): **virtual time must never
 outrun real time while real I/O is in flight.**
 
-- `time::real_io()` returns a `RealIoScope` RAII bracket for ONE real I/O
-  operation. `kithara-net` holds it across its socket awaits (request
-  establish, full-body reads, and each `Pending` window of a streaming body
-  chunk via a stream adapter).
+- `flash::real_io()` returns a `RealIoScope` RAII bracket for ONE real I/O
+  operation. Consumers normally use `#[kithara::flash(io)]`; `kithara-net`
+  applies that attribute around request establishment, full-body reads, and
+  streaming body pending windows, and the macro expands to the guard.
 - While at least one scope is live the clock is **paced, not pinned**: the
   first scope anchors `(real instant, virtual nanos)`, and the advance rule
   refuses any jump beyond `anchor_virtual + real_elapsed`. A real-time pacer
@@ -213,6 +224,9 @@ spawn chokepoints — native and flash `tokio::task::spawn`/`spawn_on`):
    overrides); the strict 25 ms tier is opt-in via
    `#[kithara::no_block(budget_ms = N)]`. Over-budget reports classify
    CPU-spin vs blocked-wait from the thread-CPU/wall ratio.
+   Blanket coverage panics only on CPU-spin; blocked-wait/unclassified
+   blanket budget hits keep emitting census lines even in panic mode, while
+   the strict tier panics on every over-budget class.
 
 Modes via `KITHARA_NO_BLOCK`: `panic` (default), `census` (log-only; add
 `KITHARA_NO_BLOCK_LOG=<file>` for an append-mode sink — nextest swallows

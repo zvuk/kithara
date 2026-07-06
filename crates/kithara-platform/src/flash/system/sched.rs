@@ -80,6 +80,20 @@ impl WakeBatch {
 }
 
 impl Core {
+    pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
+        if self.registry.active != 0 || self.registry.active_async != 0 {
+            return None;
+        }
+        if self.sched.real_io == 0 {
+            return None;
+        }
+        let (anchor_real, anchor_virtual) = self.sched.pace_anchor?;
+        let (&(min, _), _) = self.sched.timed.iter().next()?;
+        let need = min.saturating_sub(anchor_virtual);
+        let have = u64::try_from(anchor_real.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        Some(StdDuration::from_nanos(need.saturating_sub(have)))
+    }
+
     /// Decrement the async slot count under a held `core` lock and return the
     /// advance the quiescent edge may unblock. The caller fires it after
     /// releasing the lock.
@@ -187,30 +201,11 @@ impl Core {
         self.registry.account_woken(&woken);
         WakeBatch(woken)
     }
-
-    pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
-        if self.registry.active != 0 || self.registry.active_async != 0 {
-            return None;
-        }
-        if self.sched.real_io == 0 {
-            return None;
-        }
-        let (anchor_real, anchor_virtual) = self.sched.pace_anchor?;
-        let (&(min, _), _) = self.sched.timed.iter().next()?;
-        let need = min.saturating_sub(anchor_virtual);
-        let have = u64::try_from(anchor_real.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        Some(StdDuration::from_nanos(need.saturating_sub(have)))
-    }
 }
 
 /// Sync OS-thread wait surface: id mint, parks, sleep, unpark and the
 /// cooperative sync yield.
 impl FlashInner {
-    /// Allocate a fresh condvar id (one per [`crate::sync::Condvar`] under sim).
-    pub(in crate::flash) fn next_condvar_id(&self) -> CvId {
-        self.core.lock().registry.fresh_cv()
-    }
-
     /// Record the provenance of an engine-backed primitive (its kind + creation
     /// site) under its `cvid`, so the hang dump can label that primitive's parked
     /// waiters. A no-op unless sync tracing is on ([`diag::trace_enabled`]) — the
@@ -231,10 +226,15 @@ impl FlashInner {
             cvid.0,
             CvDesc {
                 kind,
-                created_at: loc,
                 created_on,
+                created_at: loc,
             },
         );
+    }
+
+    /// Allocate a fresh condvar id (one per [`crate::sync::Condvar`] under sim).
+    pub(in crate::flash) fn next_condvar_id(&self) -> CvId {
+        self.core.lock().registry.fresh_cv()
     }
 
     /// Test-harness convenience: park for `Duration` from the current virtual

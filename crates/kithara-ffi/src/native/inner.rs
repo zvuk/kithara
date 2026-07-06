@@ -154,6 +154,9 @@ pub(crate) struct NativeInner {
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
     queue: Arc<Queue>,
+    /// App-wide byte pool shared by `NSURLSession` copies, cache processors,
+    /// and resource probes.
+    byte_pool: BytePool,
     /// Master cancel token for this FFI player instance. Propagated
     /// into [`PlayerConfig::cancel`] so the audio worker, downloader,
     /// asset store, HLS peer, and per-track resources all derive
@@ -173,9 +176,6 @@ pub(crate) struct NativeInner {
     /// is always alive, independent of the caller thread (Swift /
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
-    /// App-wide byte pool shared by `NSURLSession` copies, cache processors,
-    /// and resource probes.
-    byte_pool: BytePool,
     event_bridge: Mutex<Option<EventBridge>>,
     /// Mutable [`KeyOptions`] — initialised from [`FfiPlayerConfig`]
     /// and extended at runtime by `setup_hls_aes`. Cloned per-item on
@@ -187,11 +187,11 @@ pub(crate) struct NativeInner {
     /// drives the ABR cap unless cellular is tighter; cellular is held
     /// for future network-state-aware switching.
     peak_bitrate: Mutex<PeakBitrate>,
-    /// Shared storage options (cache dir, etc.) applied to every item.
-    store: StoreOptions,
     /// Shared on-disk layout resolved once from [`StoreOptions::layout`].
     /// `None` keeps the store's `DefaultLayout`.
     layout: Option<Arc<dyn AssetLayout>>,
+    /// Shared storage options (cache dir, etc.) applied to every item.
+    store: StoreOptions,
 }
 
 impl NativeInner {
@@ -216,13 +216,13 @@ impl NativeInner {
         Self {
             downloader,
             byte_pool,
+            layout,
             shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
             peak_bitrate: Mutex::default(),
             queue: Arc::new(Queue::new(queue_config)),
             store: config.store,
-            layout,
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
@@ -321,10 +321,6 @@ impl NativeInner {
             .collect()
     }
 
-    pub(crate) fn pause(&self) {
-        self.queue.pause();
-    }
-
     pub(crate) fn notify_audio_route_changed(&self, reason: &str) -> Result<(), FfiError> {
         self.queue
             .notify_audio_route_changed(reason)
@@ -334,6 +330,10 @@ impl NativeInner {
                     description: other.to_string(),
                 },
             })
+    }
+
+    pub(crate) fn pause(&self) {
+        self.queue.pause();
     }
 
     pub(crate) fn play(&self) {

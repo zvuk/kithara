@@ -24,32 +24,6 @@ pub(crate) const ID: &str = "struct_init_order";
 pub(crate) struct StructInitOrder;
 
 impl Check for StructInitOrder {
-    fn id(&self) -> &'static str {
-        ID
-    }
-
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let cfg = &ctx.config.thresholds.struct_init_order;
-        let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
-                continue;
-            };
-            let rel = relative_to(ctx.workspace_root, &path)
-                .to_string_lossy()
-                .replace('\\', "/");
-
-            let mut v = InitVisitor {
-                cfg,
-                rel: &rel,
-                out: &mut violations,
-            };
-            v.visit_file(&file);
-        }
-        violations.sort_by(|a, b| a.key.cmp(&b.key));
-        Ok(violations)
-    }
-
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.struct_init_order;
         let mut outcome = FixOutcome::default();
@@ -80,14 +54,40 @@ impl Check for StructInitOrder {
         }
         Ok(outcome)
     }
+
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        let cfg = &ctx.config.thresholds.struct_init_order;
+        let mut violations = Vec::new();
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+            let Ok(file) = parse_file(&path) else {
+                continue;
+            };
+            let rel = relative_to(ctx.workspace_root, &path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            let mut v = InitVisitor {
+                cfg,
+                rel: &rel,
+                out: &mut violations,
+            };
+            v.visit_file(&file);
+        }
+        violations.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(violations)
+    }
 }
 
 struct FixVisitor<'a, 'src> {
+    rw: &'a mut SourceRewriter<'src>,
     cfg: &'a StructInitOrderConfig,
+    skipped: &'a mut Vec<String>,
     rel: &'a str,
     src: &'src str,
-    rw: &'a mut SourceRewriter<'src>,
-    skipped: &'a mut Vec<String>,
 }
 
 impl<'ast> Visit<'ast> for FixVisitor<'_, '_> {
@@ -182,8 +182,8 @@ fn try_fix_expr_struct(
 
 struct InitVisitor<'a> {
     cfg: &'a StructInitOrderConfig,
-    rel: &'a str,
     out: &'a mut Vec<Violation>,
+    rel: &'a str,
 }
 
 impl<'ast> Visit<'ast> for InitVisitor<'_> {
@@ -195,10 +195,10 @@ impl<'ast> Visit<'ast> for InitVisitor<'_> {
 
 #[derive(Debug, Clone)]
 struct InitKey {
-    idx: usize,
+    name: String,
     /// 0 = shorthand, 1 = explicit, 2 = unnamed/positional (sorts last).
     bucket: usize,
-    name: String,
+    idx: usize,
 }
 
 fn cmp_init_key(a: &InitKey, b: &InitKey) -> Ordering {
@@ -217,9 +217,9 @@ fn classify(cfg: &StructInitOrderConfig, fv: &FieldValue) -> InitKey {
         Member::Unnamed(i) => i.index.to_string(),
     };
     InitKey {
-        idx: 0,
         bucket,
         name,
+        idx: 0,
     }
 }
 
@@ -370,9 +370,9 @@ mod fix_tests {
         let mut rw = SourceRewriter::new(src);
         let mut skipped = Vec::new();
         let mut visitor = FixVisitor {
+            src,
             cfg: &cfg,
             rel: "fixture.rs",
-            src,
             rw: &mut rw,
             skipped: &mut skipped,
         };

@@ -104,14 +104,6 @@ pub struct HlsConfig {
     /// at the consumer site — production HLS streams need a downloader
     /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
     pub look_ahead_bytes: Option<u64>,
-    /// Number of non-media HLS cache entries reserved when deriving the
-    /// ephemeral media prefetch window from [`StoreOptions::cache_capacity`].
-    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
-    pub ephemeral_cache_non_media_reserve: usize,
-    /// Minimum media-segment prefetch window for ephemeral HLS stores after
-    /// applying [`Self::ephemeral_cache_non_media_reserve`].
-    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
-    pub ephemeral_cache_min_media_window: usize,
     /// Optional name for cache disambiguation.
     pub name: Option<String>,
     /// Buffer pool (shared across all components, created if not provided).
@@ -129,6 +121,14 @@ pub struct HlsConfig {
     /// Max segments to download per step.
     #[builder(default = 3)]
     pub download_batch_size: usize,
+    /// Minimum media-segment prefetch window for ephemeral HLS stores after
+    /// applying [`Self::ephemeral_cache_non_media_reserve`].
+    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
+    pub ephemeral_cache_min_media_window: usize,
+    /// Number of non-media HLS cache entries reserved when deriving the
+    /// ephemeral media prefetch window from [`StoreOptions::cache_capacity`].
+    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
+    pub ephemeral_cache_non_media_reserve: usize,
     /// Capacity of the event bus channel (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
@@ -173,12 +173,12 @@ impl Default for HlsConfig {
 }
 
 impl HlsConfig {
+    pub const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
+    pub const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize = 4;
     /// Default `look_ahead_bytes` cap (~2 `MiB`). Production HLS streams
     /// need a downloader backpressure cap so an idle reader does not
     /// drain the whole playlist into cache.
     pub const DEFAULT_LOOK_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
-    pub const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize = 4;
-    pub const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
 
     /// Create new HLS config with URL.
     #[must_use]

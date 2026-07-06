@@ -107,6 +107,10 @@ pub struct ResourceConfig {
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
     pub preload_chunks: NonZeroUsize,
+    /// App-wide shared asset store. When present, resources for the same
+    /// URL share one download and cached byte surface. `None` builds a private
+    /// per-resource store.
+    pub asset_store: Option<Arc<AssetStore>>,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
     pub bus: Option<EventBus>,
@@ -121,10 +125,6 @@ pub struct ResourceConfig {
     pub downloader: Option<Downloader>,
     /// Shared live audio-engine cost meter (decode + effects).
     pub engine_load: Option<Arc<EngineLoad>>,
-    /// App-wide shared asset store. When present, resources for the same
-    /// URL share one download and cached byte surface. `None` builds a private
-    /// per-resource store.
-    pub asset_store: Option<Arc<AssetStore>>,
     /// Shared flush coordinator for `AssetStore` on-disk indexes.
     pub flush_hub: Option<Arc<FlushHub>>,
     /// Additional HTTP headers to include in all network requests.

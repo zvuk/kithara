@@ -13,20 +13,6 @@ pub struct EvictionRouter {
 }
 
 impl EvictionRouter {
-    /// Register `tx` to receive evictions under `asset_root`, returning an
-    /// RAII guard that deregisters on drop. Last-writer-wins per root.
-    pub(crate) fn subscribe(
-        &self,
-        asset_root: Arc<str>,
-        tx: mpsc::UnboundedSender<ResourceKey>,
-    ) -> EvictionSubscription {
-        self.subscribers.insert(Arc::clone(&asset_root), tx);
-        EvictionSubscription {
-            subscribers: Arc::clone(&self.subscribers),
-            asset_root,
-        }
-    }
-
     /// Route an evicted key to the subscriber that owns its `asset_root`.
     /// No-op for absolute keys (no `asset_root`) or unsubscribed roots.
     pub(crate) fn route(&self, key: &ResourceKey) {
@@ -36,6 +22,20 @@ impl EvictionRouter {
             let _ = tx.send(key.clone());
         }
     }
+
+    /// Register `tx` to receive evictions under `asset_root`, returning an
+    /// RAII guard that deregisters on drop. Last-writer-wins per root.
+    pub(crate) fn subscribe(
+        &self,
+        asset_root: Arc<str>,
+        tx: mpsc::UnboundedSender<ResourceKey>,
+    ) -> EvictionSubscription {
+        self.subscribers.insert(Arc::clone(&asset_root), tx);
+        EvictionSubscription {
+            asset_root,
+            subscribers: Arc::clone(&self.subscribers),
+        }
+    }
 }
 
 /// RAII guard from
@@ -43,8 +43,8 @@ impl EvictionRouter {
 /// deregisters the subscription on drop.
 #[must_use = "drop the guard to deregister the eviction subscription"]
 pub struct EvictionSubscription {
-    subscribers: Arc<DashMap<Arc<str>, mpsc::UnboundedSender<ResourceKey>>>,
     asset_root: Arc<str>,
+    subscribers: Arc<DashMap<Arc<str>, mpsc::UnboundedSender<ResourceKey>>>,
 }
 
 impl Drop for EvictionSubscription {

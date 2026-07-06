@@ -43,10 +43,14 @@ chunk.resize(4096, 0);
 <tr><td><code>BudgetExhausted</code></td><td>Error returned when a budgeted allocation would breach <code>ByteBudget</code></td></tr>
 </table>
 
-The lower-level `SharedPool`, `Pool`, `Pooled`, `PooledOwned`, `Reuse`, and `PoolStats` items are re-exported as `#[doc(hidden)]` for internal use by other workspace crates.
+Advanced pool types are exported for workspace-internal integrations, but most callers use `BytePool`, `PcmPool`, and their RAII handles.
 
 ## Role in the workspace
 
-Used across the workspace to eliminate allocations on hot paths (segment reads, PCM decode and resample, network I/O). Pools are wired through `Config` structs so each surface chooses its own pool sizing; `get`/`put` are lock-free and safe on the real-time produce/consume cores.
+The audio, decode, stream, storage, and network layers receive pools through their configs so each surface owns its sizing policy. `get`/`put` stay lock-free on the hot path.
+
+## Features
+
+- `perf` — enables `hotpath` instrumentation on pool hot paths.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

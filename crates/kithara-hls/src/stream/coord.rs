@@ -44,6 +44,9 @@ const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 /// and the per-track [`AssetStore`] used by reader paths and by every
 /// variant's `dispatch` closures.
 pub(crate) struct HlsCoordEnv {
+    pub(crate) scope: AssetScope,
+    pub(crate) cancel: CancelToken,
+    pub(crate) headers: Option<kithara_net::Headers>,
     /// Unified reader-wake handle: the shared readiness gate paired with the
     /// late-bound audio-worker wake. Every transition that can flip a blocked
     /// reader's `wait_range` predicate (segment write/commit/fail, fence
@@ -54,9 +57,6 @@ pub(crate) struct HlsCoordEnv {
     /// signals use [`SizeSignal::fire_ready_only`]. See `CONTEXT.md`
     /// "Event-driven read wait".
     pub(crate) signal: SizeSignal,
-    pub(crate) scope: AssetScope,
-    pub(crate) cancel: CancelToken,
-    pub(crate) headers: Option<kithara_net::Headers>,
 }
 
 /// Thin router over a fixed `Vec<Arc<HlsVariant>>`. Every `Source`-side
@@ -79,11 +79,6 @@ pub(crate) struct HlsCoord {
     /// Used by internal methods that only need committed position reads.
     playhead_read: Arc<dyn PlayheadRead>,
     playlist_state: Arc<PlaylistState>,
-    /// Unified reader-wake handle for the off-RT blocking `wait_range(_, None)`.
-    /// Shared with every variant's fetch closures (write/commit/fail
-    /// [`SizeSignal::fire`] it) and signalled by the coord on fence/seek
-    /// transitions ([`SizeSignal::fire_ready_only`]). See [`HlsCoordEnv::signal`].
-    signal: SizeSignal,
     /// Backing seek/activity state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     seek: Arc<SeekState>,
@@ -112,6 +107,11 @@ pub(crate) struct HlsCoord {
     /// no format diff is observable there, so without the target the
     /// fence would never clear.
     fence_target: AtomicUsize,
+    /// Unified reader-wake handle for the off-RT blocking `wait_range(_, None)`.
+    /// Shared with every variant's fetch closures (write/commit/fail
+    /// [`SizeSignal::fire`] it) and signalled by the coord on fence/seek
+    /// transitions ([`SizeSignal::fire_ready_only`]). See [`HlsCoordEnv::signal`].
+    signal: SizeSignal,
 }
 
 impl HlsCoord {
@@ -163,23 +163,6 @@ impl HlsCoord {
 
     pub(crate) fn active(&self) -> Option<&Arc<HlsVariant>> {
         self.variants.get(self.variant_index())
-    }
-
-    pub(crate) fn dispatch_pending_size_demands(
-        &self,
-        ctx: &PlanCtx,
-        budget: usize,
-    ) -> Vec<FetchCmd> {
-        let Some(decision) = self.abr.peek_pending_decision() else {
-            return Vec::new();
-        };
-        let target = decision.target().get();
-        if target == self.variant_index() {
-            return Vec::new();
-        }
-        self.variants
-            .get(target)
-            .map_or_else(Vec::new, |variant| variant.dispatch_size_only(ctx, budget))
     }
 
     /// `AbrState` always returns a valid index (constructor asserts
@@ -331,6 +314,37 @@ impl HlsCoord {
         true
     }
 
+    /// Resolve the segment whose fetch queue owns the reader cursor.
+    ///
+    /// This is deliberately wider than [`Self::find_at_offset`]: a cursor in
+    /// the active variant's init prefix is not inside any media segment, but it
+    /// still demands the segment-0 decoder probe plan. Cross-variant media
+    /// lookups keep the existing `find_at_offset` routing for shrunk outgoing
+    /// variants.
+    pub(crate) fn demand_segment_at_offset(&self, byte_offset: u64) -> Option<u32> {
+        let active = self.active_required();
+        active
+            .demand_segment_at_offset(byte_offset)
+            .or_else(|| self.find_at_offset(byte_offset).map(|(idx, _, _)| idx))
+    }
+
+    pub(crate) fn dispatch_pending_size_demands(
+        &self,
+        ctx: &PlanCtx,
+        budget: usize,
+    ) -> Vec<FetchCmd> {
+        let Some(decision) = self.abr.peek_pending_decision() else {
+            return Vec::new();
+        };
+        let target = decision.target().get();
+        if target == self.variant_index() {
+            return Vec::new();
+        }
+        self.variants
+            .get(target)
+            .map_or_else(Vec::new, |variant| variant.dispatch_size_only(ctx, budget))
+    }
+
     /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s
     /// priority: active first, then shrunk `v_old`s. Returns `None` if no
     /// engaged variant claims the offset.
@@ -352,20 +366,6 @@ impl HlsCoord {
             }
         }
         None
-    }
-
-    /// Resolve the segment whose fetch queue owns the reader cursor.
-    ///
-    /// This is deliberately wider than [`Self::find_at_offset`]: a cursor in
-    /// the active variant's init prefix is not inside any media segment, but it
-    /// still demands the segment-0 decoder probe plan. Cross-variant media
-    /// lookups keep the existing `find_at_offset` routing for shrunk outgoing
-    /// variants.
-    pub(crate) fn demand_segment_at_offset(&self, byte_offset: u64) -> Option<u32> {
-        let active = self.active_required();
-        active
-            .demand_segment_at_offset(byte_offset)
-            .or_else(|| self.find_at_offset(byte_offset).map(|(idx, _, _)| idx))
     }
 
     /// Public-API mirror of [`Self::variant_change_pending`] used by the
@@ -407,46 +407,6 @@ impl HlsCoord {
         Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
-    /// Single wake-free readiness probe (the wake-free `HlsVariant::wait_range`
-    /// behind the coord's fence/cancel short-circuits). Shared by the RT probe
-    /// path and the off-RT blocking loop's per-iteration check.
-    fn probe_range(
-        &self,
-        range: Range<u64>,
-        timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome> {
-        if self.cancel.is_cancelled() {
-            return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
-        }
-        if self.variant_change_pending() {
-            return Ok(WaitOutcome::Interrupted);
-        }
-        self.variant_serving(range.start).wait_range(range, timeout)
-    }
-
-    pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
-        if self.cancel.is_cancelled() {
-            return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
-        }
-        if self.variant_change_pending() {
-            return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
-        }
-        self.variant_serving(offset).read_at(offset, buf)
-    }
-
-    /// The unified reader-wake handle, handed to [`PlanCtx`] so variant fetch
-    /// closures can [`SizeSignal::fire`] on segment write/commit/fail.
-    pub(crate) fn signal(&self) -> SizeSignal {
-        self.signal.clone()
-    }
-
-    /// The bare readiness gate, captured by the cancel waker's `on_cancel`
-    /// closure (which needs a hard-`Send + Sync` handle). Re-vended from
-    /// [`Self::signal`].
-    pub(crate) fn ready_gate(&self) -> Arc<ThreadGate> {
-        self.signal.ready_gate()
-    }
-
     /// Seek entry point. Collapses cross-variant byte-continuity layering,
     /// drops a stale ABR boundary decision, and wakes a parked reader.
     ///
@@ -476,6 +436,64 @@ impl HlsCoord {
         self.signal.fire_ready_only();
     }
 
+    /// Single wake-free readiness probe (the wake-free `HlsVariant::wait_range`
+    /// behind the coord's fence/cancel short-circuits). Shared by the RT probe
+    /// path and the off-RT blocking loop's per-iteration check.
+    fn probe_range(
+        &self,
+        range: Range<u64>,
+        timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        if self.cancel.is_cancelled() {
+            return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
+        }
+        if self.variant_change_pending() {
+            return Ok(WaitOutcome::Interrupted);
+        }
+        self.variant_serving(range.start).wait_range(range, timeout)
+    }
+
+    pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+        if self.cancel.is_cancelled() {
+            return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
+        }
+        if self.variant_change_pending() {
+            return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
+        }
+        self.variant_serving(offset).read_at(offset, buf)
+    }
+
+    /// The bare readiness gate, captured by the cancel waker's `on_cancel`
+    /// closure (which needs a hard-`Send + Sync` handle). Re-vended from
+    /// [`Self::signal`].
+    pub(crate) fn ready_gate(&self) -> Arc<ThreadGate> {
+        self.signal.ready_gate()
+    }
+
+    /// Reconcile the ABR escape flag against the live stall geometry. Edge-
+    /// detected against [`AbrHandle::is_escaping`]: a rising edge — the reader
+    /// is newly parked at a clean boundary on a non-delivering segment — marks
+    /// escape and returns `true`, signalling the caller to trigger a controller
+    /// re-tick OUTSIDE the HLS state lock (the tick reads `peer.progress()`,
+    /// which re-locks it, so a synchronous tick here would deadlock). A falling
+    /// edge — the segment now delivers, or a switch was published — clears it.
+    /// Idempotent in the steady state.
+    pub(crate) fn reconcile_escape(&self, reader_seg: u32) -> bool {
+        let stalled = self
+            .active()
+            .is_some_and(|active| active.segment_stalled_at_boundary(reader_seg, self.position()));
+        let was = self.abr.is_escaping();
+        if stalled && !was {
+            self.abr.mark_escape();
+            true
+        } else {
+            if !stalled && was {
+                self.abr.clear_escape();
+            }
+            false
+        }
+    }
+
     /// Collapse the active variant to a "fresh" single-variant layout on
     /// seek. Random seek may land far from the post-ABR-commit window, so
     /// reset `byte_shift` / `served_from` / `served_until` back to the
@@ -501,6 +519,13 @@ impl HlsCoord {
         Arc::clone(&self.seek) as Arc<dyn SeekObserve>
     }
 
+    /// Install the peer's `reader_advanced` wake so the `on_slow` hook can
+    /// re-poll the peer when an in-flight fetch stalls past `soft_timeout`.
+    /// Called once by `HlsPeer::activate`.
+    pub(crate) fn set_peer_wake(&self, wake: Arc<DeferredWake>) {
+        self.signal.set_peer_wake(wake);
+    }
+
     /// Install the audio worker's data-arrival wake (idempotent — only the
     /// first set sticks). Called by `HlsSource::set_worker_wake` once the
     /// worker exists; downloader fetch closures read it lock-free thereafter.
@@ -508,11 +533,27 @@ impl HlsCoord {
         self.signal.set_worker_wake(wake);
     }
 
-    /// Install the peer's `reader_advanced` wake so the `on_slow` hook can
-    /// re-poll the peer when an in-flight fetch stalls past `soft_timeout`.
-    /// Called once by `HlsPeer::activate`.
-    pub(crate) fn set_peer_wake(&self, wake: Arc<DeferredWake>) {
-        self.signal.set_peer_wake(wake);
+    /// The unified reader-wake handle, handed to [`PlanCtx`] so variant fetch
+    /// closures can [`SizeSignal::fire`] on segment write/commit/fail.
+    pub(crate) fn signal(&self) -> SizeSignal {
+        self.signal.clone()
+    }
+
+    /// Generalised boundary-free escape for the startup/stall livelock: the
+    /// reader is parked at a clean segment boundary on the active variant, that
+    /// segment's in-flight fetch has crossed `soft_timeout` without settling
+    /// (the variant cannot deliver the byte range the reader needs), and a
+    /// switch is pending. Unlike [`Self::urgent_rescue_boundary`] this is
+    /// direction- and container-agnostic: the commit reseeds the target at the
+    /// stalled segment (recreate path reseeds by playhead time, byte-continuity
+    /// at the boundary — both continuity-safe with nothing read past it).
+    /// Distinct from a normal startup, where the needed segment settles before
+    /// `soft_timeout` and the slow flag never sets.
+    pub(crate) fn stalled_escape(&self, reader_seg: u32) -> bool {
+        self.abr.peek_pending_decision().is_some()
+            && self.active().is_some_and(|active| {
+                active.segment_stalled_at_boundary(reader_seg, self.position())
+            })
     }
 
     /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
@@ -574,47 +615,6 @@ impl HlsCoord {
             return None;
         }
         Some(head.saturating_sub(1))
-    }
-
-    /// Generalised boundary-free escape for the startup/stall livelock: the
-    /// reader is parked at a clean segment boundary on the active variant, that
-    /// segment's in-flight fetch has crossed `soft_timeout` without settling
-    /// (the variant cannot deliver the byte range the reader needs), and a
-    /// switch is pending. Unlike [`Self::urgent_rescue_boundary`] this is
-    /// direction- and container-agnostic: the commit reseeds the target at the
-    /// stalled segment (recreate path reseeds by playhead time, byte-continuity
-    /// at the boundary — both continuity-safe with nothing read past it).
-    /// Distinct from a normal startup, where the needed segment settles before
-    /// `soft_timeout` and the slow flag never sets.
-    pub(crate) fn stalled_escape(&self, reader_seg: u32) -> bool {
-        self.abr.peek_pending_decision().is_some()
-            && self.active().is_some_and(|active| {
-                active.segment_stalled_at_boundary(reader_seg, self.position())
-            })
-    }
-
-    /// Reconcile the ABR escape flag against the live stall geometry. Edge-
-    /// detected against [`AbrHandle::is_escaping`]: a rising edge — the reader
-    /// is newly parked at a clean boundary on a non-delivering segment — marks
-    /// escape and returns `true`, signalling the caller to trigger a controller
-    /// re-tick OUTSIDE the HLS state lock (the tick reads `peer.progress()`,
-    /// which re-locks it, so a synchronous tick here would deadlock). A falling
-    /// edge — the segment now delivers, or a switch was published — clears it.
-    /// Idempotent in the steady state.
-    pub(crate) fn reconcile_escape(&self, reader_seg: u32) -> bool {
-        let stalled = self
-            .active()
-            .is_some_and(|active| active.segment_stalled_at_boundary(reader_seg, self.position()));
-        let was = self.abr.is_escaping();
-        if stalled && !was {
-            self.abr.mark_escape();
-            true
-        } else {
-            if !stalled && was {
-                self.abr.clear_escape();
-            }
-            false
-        }
     }
 
     fn variant_change_pending(&self) -> bool {

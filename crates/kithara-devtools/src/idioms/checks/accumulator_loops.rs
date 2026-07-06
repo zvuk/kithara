@@ -52,8 +52,8 @@ impl Check for AccumulatorLoops {
 
 struct LoopVisitor<'a> {
     cfg: &'a AccumulatorLoopsConfig,
-    rel: &'a str,
     out: &'a mut Vec<Violation>,
+    rel: &'a str,
 }
 
 impl<'ast> Visit<'ast> for LoopVisitor<'_> {
@@ -76,6 +76,16 @@ enum Pattern {
 }
 
 impl Pattern {
+    fn enabled(&self, cfg: &AccumulatorLoopsConfig) -> bool {
+        let token = match self {
+            Self::Push => "push",
+            Self::Extend => "extend",
+            Self::Sum => "sum",
+            Self::Count => "count",
+        };
+        cfg.detect.iter().any(|t| t == token)
+    }
+
     fn message(&self) -> &'static str {
         match self {
             Self::Push => {
@@ -93,16 +103,6 @@ impl Pattern {
                 "A3: `for ... { if pred(x) { n += 1 } }` — prefer `xs.iter().filter(|x| pred(x)).count()`"
             }
         }
-    }
-
-    fn enabled(&self, cfg: &AccumulatorLoopsConfig) -> bool {
-        let token = match self {
-            Self::Push => "push",
-            Self::Extend => "extend",
-            Self::Sum => "sum",
-            Self::Count => "count",
-        };
-        cfg.detect.iter().any(|t| t == token)
     }
 }
 
@@ -299,17 +299,17 @@ impl<'ast> Visit<'ast> for JumpFinder {
         self.found = true;
     }
 
+    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
+
     fn visit_expr_continue(&mut self, _: &'ast ExprContinue) {
         self.found = true;
     }
 
+    fn visit_expr_for_loop(&mut self, _: &'ast ExprForLoop) {}
+    fn visit_expr_loop(&mut self, _: &'ast syn::ExprLoop) {}
     fn visit_expr_return(&mut self, _: &'ast ExprReturn) {
         self.found = true;
     }
-
-    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
-    fn visit_expr_for_loop(&mut self, _: &'ast ExprForLoop) {}
-    fn visit_expr_loop(&mut self, _: &'ast syn::ExprLoop) {}
     fn visit_expr_while(&mut self, _: &'ast syn::ExprWhile) {}
 }
 
@@ -352,7 +352,6 @@ mod tests {
     fn in_place_element_scale_not_flagged() {
         // `*sample *= gain` mutates the iterated element (a map/scale),
         // not a loop-external accumulator — there is no `.sum()`/`.fold()`
-        // rewrite, so it must not flag.
         let src = "fn f(samples: &mut [f32], gain: f32) { \
                    for sample in samples { *sample *= gain; } }";
         assert_eq!(count(src), 0);

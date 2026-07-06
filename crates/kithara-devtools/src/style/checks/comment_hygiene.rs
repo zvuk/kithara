@@ -20,33 +20,6 @@ pub(crate) const ID: &str = "comment_hygiene";
 pub(crate) struct CommentHygiene;
 
 impl Check for CommentHygiene {
-    fn id(&self) -> &'static str {
-        ID
-    }
-
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let cfg = &ctx.config.thresholds.comment_hygiene;
-        let excludes = compile_excludes(&cfg.exclude_paths);
-        let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if path_excluded(&excludes, &rel) {
-                continue;
-            }
-            let Ok(src) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(file) = parse_file(&path) else {
-                continue;
-            };
-            scan_file(cfg, &rel, &src, &file, &mut violations);
-        }
-        violations.sort_by(|a, b| a.key.cmp(&b.key));
-        Ok(violations)
-    }
-
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.comment_hygiene;
         let excludes = compile_excludes(&cfg.exclude_paths);
@@ -78,6 +51,33 @@ impl Check for CommentHygiene {
             ));
         }
         Ok(outcome)
+    }
+
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        let cfg = &ctx.config.thresholds.comment_hygiene;
+        let excludes = compile_excludes(&cfg.exclude_paths);
+        let mut violations = Vec::new();
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+            let rel = relative_to(ctx.workspace_root, &path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if path_excluded(&excludes, &rel) {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(file) = parse_file(&path) else {
+                continue;
+            };
+            scan_file(cfg, &rel, &src, &file, &mut violations);
+        }
+        violations.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(violations)
     }
 }
 
@@ -131,12 +131,12 @@ struct Comment {
     kind: CommentKind,
     doc_style: DocStyle,
     byte_range: Range<usize>,
-    /// 1-based inclusive line numbers.
-    line_start: usize,
-    line_end: usize,
     /// Comment body without the opening `//`/`/*` and any closing `*/`,
     /// already trimmed of surrounding whitespace.
     body_trimmed: String,
+    line_end: usize,
+    /// 1-based inclusive line numbers.
+    line_start: usize,
 }
 
 fn scan_comments(src: &str) -> Vec<Comment> {
@@ -224,12 +224,12 @@ fn consume_line_comment(src: &str, bytes: &[u8], start: usize) -> Comment {
     let body_trimmed = src[body_start..end].trim().to_string();
     let line = line_of(src, start);
     Comment {
-        kind: CommentKind::Line,
         doc_style,
+        body_trimmed,
+        kind: CommentKind::Line,
         byte_range: start..end,
         line_start: line,
         line_end: line,
-        body_trimmed,
     }
 }
 
@@ -271,12 +271,12 @@ fn consume_block_comment(src: &str, bytes: &[u8], start: usize) -> Comment {
     let line_start = line_of(src, start);
     let line_end = line_of(src, pos.min(bytes.len()).saturating_sub(1));
     Comment {
-        kind: CommentKind::Block,
         doc_style,
-        byte_range: start..pos,
         line_start,
         line_end,
         body_trimmed,
+        kind: CommentKind::Block,
+        byte_range: start..pos,
     }
 }
 
@@ -389,10 +389,10 @@ fn inside_any(byte_offset: usize, spans: &[Range<usize>]) -> bool {
 
 #[derive(Clone, Debug)]
 struct FnSpan {
-    name: String,
-    body_start_line: usize,
-    body_end_line: usize,
     body_byte_range: Range<usize>,
+    name: String,
+    body_end_line: usize,
+    body_start_line: usize,
 }
 
 fn collect_fn_spans(file: &File) -> Vec<FnSpan> {
@@ -456,10 +456,10 @@ fn fn_span_from_block(name: &str, block: &syn::Block) -> FnSpan {
     let close = span.close();
     let body_byte_range = open.byte_range().start..close.byte_range().end;
     FnSpan {
+        body_byte_range,
         name: name.to_string(),
         body_start_line: open.start().line,
         body_end_line: close.end().line,
-        body_byte_range,
     }
 }
 
@@ -540,8 +540,8 @@ fn detect_size(
 struct Block {
     kind: CommentKind,
     doc_style: DocStyle,
-    line_start: usize,
     line_end: usize,
+    line_start: usize,
 }
 
 fn group_blocks(comments: &[&Comment]) -> Vec<Block> {

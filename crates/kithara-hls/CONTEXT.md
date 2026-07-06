@@ -10,17 +10,24 @@ flowchart LR
     Cfg --> Hls["Hls (StreamType marker)"]
     Hls --> Coord["HlsCoord<br/>(internal orchestrator)"]
 
-    subgraph Loading["loading/"]
+    subgraph Playlist["playlist/"]
         PC["PlaylistCache"]
         KM["KeyStore"]
-        AF["atomic_fetch"]
-        SE["size_estimation"]
+        PM["parse.rs"]
+    end
+
+    subgraph Fetch["handle/ + segment/ + variant/flow/"]
+        AF["handle::atomic"]
+        SE["segment::size / variant::flow::size"]
     end
 
     Coord --> Peer["HlsPeer<br/>(impl dl::Peer)"]
     Coord --> PC
     Coord --> KM
+    Coord --> PM
     Peer -- "FetchCmd batches" --> DL["kithara-stream::dl::Downloader"]
+    Peer --> AF
+    Peer --> SE
     DL -- "writer / on_complete" --> AS["AssetStore<br/>(kithara-assets)"]
     AS -- "AES-128-CBC<br/>(kithara-drm)" --> AS
 
@@ -42,9 +49,9 @@ The crate's public surface is `Hls`, `HlsConfig`, `HlsSource`, the playlist pars
 <tr><td><code>VariantIndex</code></td><td>type</td><td>Position of a variant in the master playlist</td></tr>
 <tr><td><code>KeyStore</code></td><td>struct</td><td>Coordinates AES-128 key fetches and caches resolved keys</td></tr>
 <tr><td><code>PlaylistCache</code></td><td>struct</td><td>In-memory cache of parsed playlists keyed by URL</td></tr>
-<tr><td><code>MasterPlaylist</code>, <code>MediaPlaylist</code>, <code>VariantStream</code>, <code>VariantId</code></td><td>types</td><td>Parsed playlist representations from <code>parsing</code></td></tr>
-<tr><td><code>parse_master_playlist</code>, <code>parse_media_playlist</code>, <code>variant_info_from_master</code></td><td>fns</td><td>Standalone playlist parsers usable without the rest of the stack</td></tr>
-<tr><td><code>PlaylistState</code>, <code>SegmentState</code>, <code>VariantSizeMap</code>, <code>VariantState</code></td><td>types</td><td>Runtime view into playlist and segment state for the player / ABR</td></tr>
+<tr><td><code>ParsedMaster</code>, <code>MediaPlaylist</code>, <code>VariantStream</code>, <code>VariantId</code></td><td>types</td><td>Parsed playlist representations from <code>playlist::parse</code></td></tr>
+<tr><td><code>parse_master_playlist</code>, <code>parse_media_playlist</code></td><td>fns</td><td>Standalone playlist parsers usable without the rest of the stack</td></tr>
+<tr><td><code>PlaylistState</code>, <code>SegmentState</code>, <code>VariantState</code></td><td>types</td><td>Runtime view into playlist and segment state for the player / ABR</td></tr>
 </table>
 
 Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`, `KeyProcessorRegistry`, `KeyProcessorRule` from `kithara-drm`.
@@ -64,14 +71,32 @@ On a post-ABR switch into mid-playback, `rebuild_with_decoder_probe` rebuilds th
 
 ### Variant init
 
-`VariantInit` (in `variant.rs`) records whether a variant carries a *separately fetched* init segment. The discriminant is keyed on the playlist `#EXT-X-MAP` URL — a static fact — **not** on the init HEAD size:
+`HlsVariant::build_init_entry` (`variant/io/init.rs`) records a separately
+fetched init segment as `Option<Segment::Init>`. Existence is keyed on the
+playlist `#EXT-X-MAP` URL — a static fact — **not** on the init HEAD size:
 
-- `NotApplicable` — no separate init fetch: no `#EXT-X-MAP` URL, or a byte-range-embedded init (the init lives inside segment 0's byte range, so there is no separate init URL). Carries no resource, so `rebuild` never enqueues `PlannedFetch::Init` and every init query reads as 0.
-- `Pending(InitEntry)` — a real `#EXT-X-MAP` init. Always has a real URL; its size starts at the HEAD estimate, which **may be 0** when the init HEAD failed or was absent (e.g. under load). Enqueued at the front of the fetch queue so the demuxer has the container header before any media segment.
+- `None` — no separate init fetch: no `#EXT-X-MAP` URL, or a byte-range-embedded
+  init (the init lives inside segment 0's byte range, so there is no separate
+  init URL). `rebuild` never enqueues `PlannedFetch::Init` and every init query
+  reads as 0.
+- `Some(init)` — a real `#EXT-X-MAP` init. Always has a real URL; its size starts
+  at the HEAD estimate, which **may be 0** when the init HEAD failed or was
+  absent. It is enqueued at the front of the fetch queue so the demuxer has the
+  container header before any media segment.
 
-Existence is keyed on the URL, not the HEAD size, because a failed init HEAD does **not** mean the init is absent — `#EXT-X-MAP` still declares it and it must be fetched (its commit sets the real size). Keying on the HEAD size misclassifies a failed-HEAD init as `NotApplicable` and drops it: the offset table then seeds segment 0 at offset 0, and `read_at(0)` serves segment 0's container where the demuxer expects the init's `ftyp` (`re_mp4: ftyp not found`), or the reader wedges with no progress.
+A failed init HEAD does **not** mean the init is absent: `#EXT-X-MAP` still
+declares it and it must be fetched (its commit sets the real size). Keying on the
+HEAD size would drop the init, seed segment 0 at offset 0, and make `read_at(0)`
+serve segment 0's container where the demuxer expects the init's `ftyp`
+(`re_mp4: ftyp not found`), or wedge the reader with no progress.
 
-While a `Pending` init is declared but not yet sized (`init_size() == 0` — a failed/absent HEAD, or the pre-commit window), `read_at` on the fresh-activation frame (`served_from() == 0`) holds reads pending: the init prefix `[0, init_size)` is reserved for the init, not for media, until the init's commit sizes it (after which `init_descriptor_at` routes offset 0 to the init). A terminally failed init (`init_failed`) releases the reservation so the read surfaces an error instead of waiting forever. The discriminant itself stays frozen at construction — the `#EXT-X-MAP` URL never appears or disappears — so matching on `VariantInit` needs no runtime flag; a `Pending` init's size may now cross `0 → positive` on commit (failed-HEAD estimate → committed `final_len`) as well as shrink (encrypted HEAD estimate → post-PKCS7 `final_len`).
+While an init is declared but not yet sized (`init_size() == 0` — a failed/absent
+HEAD, or the pre-commit window), `read_at` on the fresh-activation frame
+(`served_from() == 0`) holds reads pending: the init prefix is reserved for the
+init, not for media, until the init's commit sizes it. A terminally failed init
+(`init_failed`) releases the reservation so the read surfaces an error instead
+of waiting forever. The URL-keyed existence fact stays frozen at construction;
+only the size changes when the resource commits.
 
 ### Format-change header byte range
 
@@ -88,9 +113,9 @@ Encrypted segments parse `#EXT-X-KEY` from the media playlist; `KeyStore` resolv
 
 ## Caching
 
-Each segment is stored as its own `AssetResource` via `AssetStore` (`kithara-assets`). Encrypted segments are acquired with `acquire_resource_with_ctx(key, Some(DecryptContext))` so decryption is part of the resource lifecycle. The optional `#EXT-X-ALLOW-CACHE` tag is parsed into playlist metadata for compatibility; the current cache policy is not switched by this flag.
+Each segment is stored as its own `AssetResource` via `AssetStore` (`kithara-assets`). Encrypted segments are acquired with `acquire_resource_with_ctx(key, identity, Some(ProcessCtx))`, where `DecryptContext` is wrapped by `decrypt_processor.rs` as a `ResourceProcessor`, so decryption is part of the resource lifecycle.
 
-HLS cache naming is owned by the `AssetLayout` carried on the scope (`kithara-assets`). Keys are minted once at the semantic site via `scope.key_for(&url)` — every resource (manifest, init, segment, key) is keyed by its URL alone; `stream/hls.rs` resolves the layout (`HlsConfig.layout`, or `DefaultLayout`).
+HLS cache naming is owned by the `AssetLayout` carried on the scope (`kithara-assets`). Keys are minted once at the semantic site via `scope.key_for(&url)` — every resource (manifest, init, segment, key) is keyed by its URL alone; `stream/hls.rs` resolves the layout from `config.store.layout` (`StoreOptions`), or the store default.
 
 ## Seek and wait_range Contract
 
@@ -104,14 +129,19 @@ HLS cache naming is owned by the `AssetLayout` carried on the scope (`kithara-as
 - **`is_canonical_complete` two-step read.** It loads the lock-free `sizes_complete` atomic (`Acquire`) *before* taking the frame lock for the `byte_shift` / `served` / `init_seed` / `offsets` geometry checks. The split is safe because `sizes_complete` is republished only **after** `recompute` inside `Layout::apply_commit` / `reset` (mutate frame under the write lock → materialise the `FrameSnapshot` → drop the guard → `republish`): the atomic flips back to `true` only once the offset table is already exact, so a `true` read can never observe an in-progress recompute. Gates `layout_seek_invariant` / `prepare_for_seek`'s seek-reset skip.
 - **Two `time → segment` resolvers coexist.** The hot per-seek path uses `HlsVariant::seek_point_at_time` (`variant/map/media.rs`, bisect over the cumulative offset table); `HlsCoord::commit_variant_switch` uses the cold `find_seek_point_for_time` (`playlist/state.rs`, linear scan). They are independent implementations and **must agree** on the mapping under S13's on-demand sizing — a variant switch must land the reader on the same segment a plain seek to that time would, or the post-switch read diverges from the pre-switch geometry.
 - **Exact-byte seek gates fold the init in.** The exact-byte seek short-circuits (`set_exact_seek_demand` / `set_exact_byte_seek_demand` / `exact_byte_position_ready` in `variant/flow/size.rs`) gate on `all_sizes_complete()` = `sizes_complete() && exact_init_complete()`, **not** the MEDIA-only `sizes_complete()`. The exact-byte offset table seeds from the `EXT-X-MAP` init size, so for a `needs_exact_byte_sizes` fMP4 profile a seek issued before the init resolves must still register `SizeDemand::Init` and run the `complete_exact_seek_if_ready` anchor correction; a media-only short-circuit would skip both and land on stale bytes once the init commit shifts every segment offset. (Raw WAV/PCM has no `#EXT-X-MAP`, so `exact_init_complete()` is vacuously `true` and the gate reduces to `sizes_complete()` there.)
-- `Eof` is returned **only** when the requested range starts at or after the variant layout's effective total bytes (`HlsVariant::total_bytes()`) **and every served segment's byte size is known** (`HlsVariant::sizes_complete()`). It is never inferred for an in-range segment whose body has not yet arrived, **nor while any served segment's size estimate is still missing** — either case yields `WaitBudgetExceeded` (→ `Pending`/need-data) so the reader holds rather than terminating. This is the EOF contract that prevents the production "silent auto-advance" cascade: segment sizes are normally learned up-front (`#EXT-X-BYTERANGE` or HEAD `Content-Length`, see `loading::size_estimation`), but on an **immediate seek before size-estimation completes** a served segment is still size-`0` (unknown), which under-counts `total_bytes()` and makes an in-range offset look past-the-end → a premature `Eof` would latch the audio consumer into `AtEof` and the queue would skip the track. Gating the three byte-EOF mints (`phase_at` / `read_at` / `wait_range`) on `sizes_complete()` closes that window: while incomplete, `total_bytes()` is treated as a lower bound, not the stream end. `sizes_complete` is republished lock-free alongside `total_bytes` on every layout mutation (one `FrameSnapshot`, so the two never tear). Pinned by `tests/tests/kithara_queue/early_seek_size_withheld_advance.rs` (`immediate_seek_size_and_body_withheld`).
+- `Eof` is returned **only** when the requested range starts at or after the variant layout's effective total bytes (`HlsVariant::total_bytes()`) **and every served segment's byte size is known** (`HlsVariant::sizes_complete()`). It is never inferred for an in-range segment whose body has not yet arrived, **nor while any served segment's size estimate is still missing** — either case yields `WaitBudgetExceeded` (→ `Pending`/need-data) so the reader holds rather than terminating. This is the EOF contract that prevents the production "silent auto-advance" cascade: segment sizes are normally learned up-front (`#EXT-X-BYTERANGE` or HEAD `Content-Length`; see `segment/size.rs` and `variant/flow/size.rs`), but on an **immediate seek before size-estimation completes** a served segment is still size-`0` (unknown), which under-counts `total_bytes()` and makes an in-range offset look past-the-end → a premature `Eof` would latch the audio consumer into `AtEof` and the queue would skip the track. Gating the three byte-EOF mints (`phase_at` / `read_at` / `wait_range`) on `sizes_complete()` closes that window: while incomplete, `total_bytes()` is treated as a lower bound, not the stream end. `sizes_complete` is republished lock-free alongside `total_bytes` on every layout mutation (one `FrameSnapshot`, so the two never tear). Pinned by `tests/tests/kithara_queue/early_seek_size_withheld_advance.rs` (`immediate_seek_size_and_body_withheld`).
 
 ## Features
 
 <table>
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>default</code></td><td>yes</td><td><code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
 <tr><td><code>probe</code></td><td>no</td><td>USDT probe points for tracing</td></tr>
 <tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation (also enables <code>kithara-net/perf</code>)</td></tr>
+<tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to network-reaching deps</td></tr>
+<tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend to network-reaching deps</td></tr>
+<tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
+<tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
 </table>
 
 ## Integration

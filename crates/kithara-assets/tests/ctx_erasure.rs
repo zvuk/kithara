@@ -21,8 +21,8 @@ const CHUNK_SIZE: usize = 64 * 1024;
 
 #[derive(Debug)]
 struct EvolvingXorProcessor {
-    seed: u8,
     identity: Box<[u8]>,
+    seed: u8,
 }
 
 impl EvolvingXorProcessor {
@@ -35,22 +35,22 @@ impl EvolvingXorProcessor {
 }
 
 impl ResourceProcessor for EvolvingXorProcessor {
-    fn identity(&self) -> &[u8] {
-        &self.identity
-    }
-
     fn begin(&self) -> Box<dyn ChunkSink> {
         Box::new(EvolvingXorSink {
             seed: self.seed,
             chunk: 0,
         })
     }
+
+    fn identity(&self) -> &[u8] {
+        &self.identity
+    }
 }
 
 /// Per-commit chaining state: chunk `i` XORs with `seed + i`.
 struct EvolvingXorSink {
-    seed: u8,
     chunk: u8,
+    seed: u8,
 }
 
 impl ChunkSink for EvolvingXorSink {
@@ -70,7 +70,7 @@ impl ChunkSink for EvolvingXorSink {
 }
 
 /// Reference transform computed independently of the processor: the bytes are
-/// split into `CHUNK_SIZE` chunks and chunk `i` is XORed with `seed + i`.
+/// split into `CHUNK_SIZE` chunks and chunk `i` is `XORed` with `seed + i`.
 fn reference_transform(seed: u8, input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(input.len());
     for (idx, chunk) in input.chunks(CHUNK_SIZE).enumerate() {
@@ -218,7 +218,6 @@ fn multi_chunk_chaining_matches_reference() {
 
     // `begin()` must reset chaining state per commit: a second key processed
     // with a fresh sink chains from the seed again, not from where the first
-    // commit's counter left off.
     let key2 = scope.key("segments/big2.m4s");
     let payload2: Vec<u8> = (0u8..=u8::MAX).rev().cycle().take(200 * 1024).collect();
     let expected2 = reference_transform(seed, &payload2);

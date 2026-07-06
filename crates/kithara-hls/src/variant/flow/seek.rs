@@ -25,53 +25,17 @@ impl HlsVariant {
         }
     }
 
-    pub(super) fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
-        let alias = self.seek.alias.load()?;
-        if byte < alias.anchor {
-            return None;
-        }
-        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
-            return self.segment_aware_seek_alias_at(alias, byte);
-        }
-        let size = self.segment_size(alias.segment as usize)?;
-        let end = alias.anchor.saturating_add(size);
-        (byte < end).then_some((alias.segment, alias.anchor, size))
-    }
-
-    fn segment_aware_seek_alias_at(
-        &self,
-        alias: AliasSnapshot,
-        byte: u64,
-    ) -> Option<(u32, u64, u64)> {
-        let mut offset = alias.anchor;
-        for (idx, segment) in self
-            .segments
-            .iter()
-            .enumerate()
-            .skip(alias.segment as usize)
-        {
-            let size = segment.len();
-            let end = offset.saturating_add(size);
-            if byte < end {
-                let idx = u32::try_from(idx).ok()?;
-                return Some((idx, offset, size));
-            }
-            offset = end;
-        }
-        None
-    }
-
-    pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32) {
-        self.seek.alias.set(anchor, segment);
-    }
-
-    pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
-        // Off-RT (exact-prefix settle): a lock-free, alloc-free store of the
-        // resolved exact anchor onto the matching base, tagged with the base
-        // generation so a stale resolver cannot attach to a newer alias.
+    fn clear_segment_aware_seek_tail(&self) {
         self.seek
-            .alias
-            .resolve(demand.segment, demand.anchor, exact_anchor);
+            .segment_aware_tail
+            .store(Self::NO_SEEK_TAIL, Ordering::Release);
+    }
+
+    /// Seek reset is layout-only. Active body fetches stay live: segment-aware
+    /// decoders re-resolve media ranges by segment index, and canceling the
+    /// in-flight target segment would put a streaming seek behind tail prefetch.
+    pub(crate) fn reset_for_seek(&self) {
+        self.reset_layout_to_full_range();
     }
 
     /// Reset variant to a "fresh" single-variant layout: `byte_shift = 0`,
@@ -91,11 +55,34 @@ impl HlsVariant {
         self.rearm_cancel();
     }
 
-    /// Seek reset is layout-only. Active body fetches stay live: segment-aware
-    /// decoders re-resolve media ranges by segment index, and canceling the
-    /// in-flight target segment would put a streaming seek behind tail prefetch.
-    pub(crate) fn reset_for_seek(&self) {
-        self.reset_layout_to_full_range();
+    pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
+        // Off-RT (exact-prefix settle): a lock-free, alloc-free store of the
+        // resolved exact anchor onto the matching base, tagged with the base
+        // generation so a stale resolver cannot attach to a newer alias.
+        self.seek
+            .alias
+            .resolve(demand.segment, demand.anchor, exact_anchor);
+    }
+
+    pub(super) fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
+        let alias = self.seek.alias.load()?;
+        if byte < alias.anchor {
+            return None;
+        }
+        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
+            return self.segment_aware_seek_alias_at(alias, byte);
+        }
+        let size = self.segment_size(alias.segment as usize)?;
+        let end = alias.anchor.saturating_add(size);
+        (byte < end).then_some((alias.segment, alias.anchor, size))
+    }
+
+    pub(super) fn seek_readahead_start_segment(&self, target_segment: u32) -> u32 {
+        if needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
+            target_segment
+        } else {
+            target_segment.saturating_sub(1)
+        }
     }
 
     pub(crate) fn seek_time_anchor(
@@ -141,31 +128,27 @@ impl HlsVariant {
         Ok(Some(anchor))
     }
 
-    pub(crate) fn segment_index_at_time(&self, t: Duration) -> Option<u32> {
-        self.index_at_time(t)
-            .and_then(|idx| u32::try_from(idx).ok())
-    }
-
-    fn clear_segment_aware_seek_tail(&self) {
-        self.seek
-            .segment_aware_tail
-            .store(Self::NO_SEEK_TAIL, Ordering::Release);
-    }
-
-    pub(super) fn set_segment_aware_seek_tail(&self, segment: u32) {
-        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
-            self.seek
-                .segment_aware_tail
-                .store(segment, Ordering::Release);
+    fn segment_aware_seek_alias_at(
+        &self,
+        alias: AliasSnapshot,
+        byte: u64,
+    ) -> Option<(u32, u64, u64)> {
+        let mut offset = alias.anchor;
+        for (idx, segment) in self
+            .segments
+            .iter()
+            .enumerate()
+            .skip(alias.segment as usize)
+        {
+            let size = segment.len();
+            let end = offset.saturating_add(size);
+            if byte < end {
+                let idx = u32::try_from(idx).ok()?;
+                return Some((idx, offset, size));
+            }
+            offset = end;
         }
-    }
-
-    pub(super) fn seek_readahead_start_segment(&self, target_segment: u32) -> u32 {
-        if needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
-            target_segment
-        } else {
-            target_segment.saturating_sub(1)
-        }
+        None
     }
 
     pub(super) fn segment_aware_seek_tail_complete(&self) -> bool {
@@ -181,5 +164,22 @@ impl HlsVariant {
             return false;
         };
         !tail.is_empty() && tail.iter().all(|segment| segment.size().is_exact())
+    }
+
+    pub(crate) fn segment_index_at_time(&self, t: Duration) -> Option<u32> {
+        self.index_at_time(t)
+            .and_then(|idx| u32::try_from(idx).ok())
+    }
+
+    pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32) {
+        self.seek.alias.set(anchor, segment);
+    }
+
+    pub(super) fn set_segment_aware_seek_tail(&self, segment: u32) {
+        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
+            self.seek
+                .segment_aware_tail
+                .store(segment, Ordering::Release);
+        }
     }
 }

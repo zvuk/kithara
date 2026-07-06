@@ -38,9 +38,9 @@ impl AtomicResource for Key {
 /// Typed handle for fetching a small atomic body (playlist or DRM key)
 /// through the disk cache + unified downloader pipeline.
 pub(crate) struct AtomicFetch<R> {
-    downloader: PeerHandle,
     scope: AssetScope,
     byte_pool: BytePool,
+    downloader: PeerHandle,
     _marker: PhantomData<R>,
 }
 
@@ -66,6 +66,14 @@ impl<R: AtomicResource> AtomicFetch<R> {
             byte_pool,
             _marker: PhantomData,
         }
+    }
+
+    /// Execute a custom fetch command through the underlying downloader.
+    ///
+    /// # Errors
+    /// Returns the underlying [`NetError`] when the fetch fails.
+    pub(crate) async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
+        self.downloader.execute(cmd).await
     }
 
     /// Fetch a small atomic body through the disk cache + unified
@@ -140,14 +148,6 @@ impl<R: AtomicResource> AtomicFetch<R> {
             write_back_cache(writer.retain(), bytes, &self.scope, url, rel_path, R::KIND);
         }
         Ok(())
-    }
-
-    /// Execute a custom fetch command through the underlying downloader.
-    ///
-    /// # Errors
-    /// Returns the underlying [`NetError`] when the fetch fails.
-    pub(crate) async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
-        self.downloader.execute(cmd).await
     }
 }
 

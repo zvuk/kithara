@@ -15,13 +15,14 @@ impl Consts {
     const ENV_MODE: &str = "KITHARA_NO_BLOCK";
     const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
     const ENV_BUDGET_MS: &str = "KITHARA_NO_BLOCK_BUDGET_MS";
-    /// Measured legitimate poll maximum: 1.05s across the suite (census 2026-07-06); 3x headroom against CI preemption; `KITHARA_NO_BLOCK_BUDGET_MS` overrides.
+    /// Blanket budget panics on CPU spin only; wait class logs by construction, and `KITHARA_NO_BLOCK_BUDGET_MS` overrides.
     const FALLBACK_BLANKET: Duration = Duration::from_millis(3_000);
 }
 
 #[cfg(test)]
 thread_local! {
     static FORCED: Cell<Option<Mode>> = const { Cell::new(None) };
+    static FORCED_BUDGET: Cell<Option<Duration>> = const { Cell::new(None) };
     static FORCED_LOG: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
@@ -42,6 +43,13 @@ pub(super) fn mode() -> Mode {
 }
 
 pub(super) fn blanket_budget() -> Duration {
+    #[cfg(test)]
+    {
+        if let Some(budget) = FORCED_BUDGET.with(Cell::get) {
+            return budget;
+        }
+    }
+
     static CACHED: OnceLock<Duration> = OnceLock::new();
     *CACHED.get_or_init(|| {
         std::env::var(Consts::ENV_BUDGET_MS)
@@ -69,6 +77,11 @@ pub(super) fn log_path() -> Option<PathBuf> {
 #[cfg(test)]
 pub(crate) fn force_mode(m: Mode) {
     FORCED.with(|forced| forced.set(Some(m)));
+}
+
+#[cfg(test)]
+pub(crate) fn force_blanket_budget(budget: Duration) {
+    FORCED_BUDGET.with(|forced| forced.set(Some(budget)));
 }
 
 #[cfg(test)]

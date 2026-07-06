@@ -31,10 +31,33 @@ impl ResourceHandle {
         Self { scope, key, url }
     }
 
-    /// The segment URL this handle fetches from — consumed by the fetch path
-    /// when building the `FetchCmd` after [`acquire`](Self::acquire).
-    pub(crate) fn url(&self) -> &Url {
-        &self.url
+    /// Acquire the resource for the write path, branching on the segment's
+    /// decryption disposition: `Plain` acquires cleartext; `Encrypted` carries
+    /// the AES-128 [`DecryptContext`] forward as the processing context.
+    pub(crate) fn acquire(&self, content: &SegmentContent) -> AssetsResult<AssetResource> {
+        match content {
+            SegmentContent::Plain => self.scope.store().acquire_resource(&self.key, None),
+            SegmentContent::Encrypted(c) => self.scope.store().acquire_resource_with_ctx(
+                &self.key,
+                None,
+                Some(as_process_ctx(c.clone())),
+            ),
+        }
+    }
+
+    /// Committed on-disk length when the resource is `Committed` with a known
+    /// `final_len` — the skip-fetch guard's size source.
+    pub(crate) fn committed_len(&self) -> Option<u64> {
+        match self.scope.store().resource_state(&self.key) {
+            Ok(AssetResourceState::Committed { final_len }) => final_len,
+            _ => None,
+        }
+    }
+
+    /// Whether every byte in `range` is already present on disk for this
+    /// resource (or `range` is empty).
+    pub(crate) fn contains(&self, range: Range<u64>) -> bool {
+        self.scope.store().contains_range(&self.key, range)
     }
 
     /// The pre-minted [`ResourceKey`] for this resource.
@@ -60,32 +83,9 @@ impl ResourceHandle {
         Ok(Some(n))
     }
 
-    /// Whether every byte in `range` is already present on disk for this
-    /// resource (or `range` is empty).
-    pub(crate) fn contains(&self, range: Range<u64>) -> bool {
-        self.scope.store().contains_range(&self.key, range)
-    }
-
-    /// Committed on-disk length when the resource is `Committed` with a known
-    /// `final_len` — the skip-fetch guard's size source.
-    pub(crate) fn committed_len(&self) -> Option<u64> {
-        match self.scope.store().resource_state(&self.key) {
-            Ok(AssetResourceState::Committed { final_len }) => final_len,
-            _ => None,
-        }
-    }
-
-    /// Acquire the resource for the write path, branching on the segment's
-    /// decryption disposition: `Plain` acquires cleartext; `Encrypted` carries
-    /// the AES-128 [`DecryptContext`] forward as the processing context.
-    pub(crate) fn acquire(&self, content: &SegmentContent) -> AssetsResult<AssetResource> {
-        match content {
-            SegmentContent::Plain => self.scope.store().acquire_resource(&self.key, None),
-            SegmentContent::Encrypted(c) => self.scope.store().acquire_resource_with_ctx(
-                &self.key,
-                None,
-                Some(as_process_ctx(c.clone())),
-            ),
-        }
+    /// The segment URL this handle fetches from — consumed by the fetch path
+    /// when building the `FetchCmd` after [`acquire`](Self::acquire).
+    pub(crate) fn url(&self) -> &Url {
+        &self.url
     }
 }

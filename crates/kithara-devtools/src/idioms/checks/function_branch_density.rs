@@ -133,9 +133,26 @@ impl BranchCounter {
 }
 
 impl<'ast> Visit<'ast> for BranchCounter {
+    fn visit_expr_binary(&mut self, node: &'ast ExprBinary) {
+        if matches!(node.op, BinOp::And(_) | BinOp::Or(_)) {
+            self.own_branches += 1;
+        }
+        visit::visit_expr_binary(self, node);
+    }
+
+    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+        self.own_branches += 1;
+        visit::visit_expr_for_loop(self, node);
+    }
+
     fn visit_expr_if(&mut self, node: &'ast ExprIf) {
         self.own_branches += 1;
         visit::visit_expr_if(self, node);
+    }
+
+    fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
+        self.own_branches += 1;
+        visit::visit_expr_loop(self, node);
     }
 
     fn visit_expr_match(&mut self, node: &'ast ExprMatch) {
@@ -153,21 +170,6 @@ impl<'ast> Visit<'ast> for BranchCounter {
         visit::visit_expr_match(self, node);
     }
 
-    fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
-        self.own_branches += 1;
-        visit::visit_expr_while(self, node);
-    }
-
-    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
-        self.own_branches += 1;
-        visit::visit_expr_for_loop(self, node);
-    }
-
-    fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
-        self.own_branches += 1;
-        visit::visit_expr_loop(self, node);
-    }
-
     fn visit_expr_try(&mut self, node: &'ast syn::ExprTry) {
         // `?` lowers to a discriminant test + cold early-return. LLVM marks
         // the Err/None arm `unlikely` and the branch predictor nails a
@@ -178,11 +180,9 @@ impl<'ast> Visit<'ast> for BranchCounter {
         visit::visit_expr_try(self, node);
     }
 
-    fn visit_expr_binary(&mut self, node: &'ast ExprBinary) {
-        if matches!(node.op, BinOp::And(_) | BinOp::Or(_)) {
-            self.own_branches += 1;
-        }
-        visit::visit_expr_binary(self, node);
+    fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+        self.own_branches += 1;
+        visit::visit_expr_while(self, node);
     }
 
     fn visit_local(&mut self, node: &'ast Local) {

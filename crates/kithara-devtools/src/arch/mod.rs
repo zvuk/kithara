@@ -31,34 +31,34 @@ use crate::common::{
 
 #[derive(Debug, Default, Args)]
 pub struct ArchArgs {
-    /// Run only one check by id (e.g. `direction`, `canonical_types`). Repeatable.
-    #[arg(long = "check")]
-    pub check: Vec<String>,
     /// Write a markdown report to the given path.
     #[arg(long)]
     pub report: Option<PathBuf>,
-    /// Emit JSON to stdout (suppresses human output).
-    #[arg(long)]
-    pub json: bool,
-    /// Re-write baseline.toml from current observations (does not fail on regressions).
-    #[arg(long = "update-baseline")]
-    pub update_baseline: bool,
     /// Override config directory (default `.config/arch`).
     #[arg(long, default_value = ".config/arch")]
     pub config_dir: PathBuf,
+    /// Run only one check by id (e.g. `direction`, `canonical_types`). Repeatable.
+    #[arg(long = "check")]
+    pub check: Vec<String>,
     /// Restrict scan to specific crate(s) by name. Repeatable.
     #[arg(long = "crate", value_name = "NAME")]
     pub crates: Vec<String>,
     /// Restrict scan to workspace-relative path(s). Repeatable.
     #[arg(long = "path", value_name = "PATH")]
     pub paths: Vec<PathBuf>,
+    /// With `--fix`, write changes to disk (otherwise only report the plan).
+    #[arg(long)]
+    pub apply: bool,
     /// Run each selected check's autofix instead of reporting. Dry run unless
     /// `--apply` is also passed.
     #[arg(long)]
     pub fix: bool,
-    /// With `--fix`, write changes to disk (otherwise only report the plan).
+    /// Emit JSON to stdout (suppresses human output).
     #[arg(long)]
-    pub apply: bool,
+    pub json: bool,
+    /// Re-write baseline.toml from current observations (does not fail on regressions).
+    #[arg(long = "update-baseline")]
+    pub update_baseline: bool,
 }
 
 pub(crate) fn run(args: &ArchArgs) -> Result<()> {

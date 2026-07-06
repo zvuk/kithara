@@ -1,7 +1,7 @@
 use kithara::{self, decode::DecoderBackend, platform::time::Duration};
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
-#[ignore = "Plan 10 — pending — probe wiring deferred per .docs/plans/2026-05-12-abr-pull-driven-10-H-test-sweep.md"]
+#[ignore = "pending — ABR probe wiring not implemented yet"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

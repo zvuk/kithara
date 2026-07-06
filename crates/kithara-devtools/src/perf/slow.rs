@@ -21,27 +21,27 @@ type TestSamples = BTreeMap<TestKey, LaneSamples>;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct LaneStat {
+    pub(crate) max_ms: f64,
     pub(crate) median_ms: f64,
     pub(crate) min_ms: f64,
-    pub(crate) max_ms: f64,
-    pub(crate) repeats: u32,
     pub(crate) failed: u32,
+    pub(crate) repeats: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct SlowTest {
-    pub(crate) suite: String,
-    pub(crate) name: String,
     pub(crate) lanes: BTreeMap<String, LaneStat>,
+    pub(crate) name: String,
+    pub(crate) suite: String,
     pub(crate) rank_score: f64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct SlowReport {
-    pub(crate) run_id: String,
-    pub(crate) threshold_ms: f64,
     pub(crate) primary_lane: String,
+    pub(crate) run_id: String,
     pub(crate) tests: Vec<SlowTest>,
+    pub(crate) threshold_ms: f64,
 }
 
 pub(crate) fn median_ms(sorted_secs: &[f64]) -> f64 {
@@ -85,11 +85,11 @@ pub(crate) fn aggregate(
             lanes.insert(
                 lane,
                 LaneStat {
+                    failed,
                     median_ms: median_ms(&secs),
                     min_ms: secs.first().copied().unwrap_or(0.0) * 1000.0,
                     max_ms: secs.last().copied().unwrap_or(0.0) * 1000.0,
                     repeats: u32::try_from(secs.len()).unwrap_or(u32::MAX),
-                    failed,
                 },
             );
         }
@@ -115,10 +115,10 @@ pub(crate) fn aggregate(
             .then_with(|| a.name.cmp(&b.name))
     });
     SlowReport {
-        run_id: run_id.to_owned(),
         threshold_ms,
-        primary_lane: primary_lane.to_owned(),
         tests,
+        run_id: run_id.to_owned(),
+        primary_lane: primary_lane.to_owned(),
     }
 }
 
@@ -230,9 +230,9 @@ mod tests {
 
     fn case(suite: &str, name: &str, secs: f64) -> CaseTiming {
         CaseTiming {
+            secs,
             suite: suite.into(),
             name: name.into(),
-            secs,
             failed: false,
         }
     }

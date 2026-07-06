@@ -27,8 +27,8 @@ impl<T> Mutex<T> {
     pub fn new(value: T) -> Self {
         let meta = diag::register(PrimKind::Mutex, None, Location::caller());
         Self {
-            inner: NativeMutex::new(value),
             meta,
+            inner: NativeMutex::new(value),
         }
     }
 
@@ -45,8 +45,8 @@ impl<T> Mutex<T> {
         }
         MutexGuard {
             inner,
-            meta: self.meta.as_deref(),
             at,
+            meta: self.meta.as_deref(),
         }
     }
 
@@ -65,8 +65,8 @@ impl<T> Mutex<T> {
         }
         Ok(MutexGuard {
             inner,
-            meta: self.meta.as_deref(),
             at,
+            meta: self.meta.as_deref(),
         })
     }
 }
@@ -80,12 +80,32 @@ impl<T: Default> Default for Mutex<T> {
 /// Guard for [`Mutex`]. Clears the holder record on drop and brackets the
 /// `unlocked` window so the registry never shows a released lock as held.
 pub struct MutexGuard<'a, T> {
+    at: &'static Location<'static>,
     inner: NativeGuard<'a, T>,
     meta: Option<&'a PrimEntry>,
-    at: &'static Location<'static>,
 }
 
 impl<'a, T> MutexGuard<'a, T> {
+    /// The diagnostics entry, if tracing, for holder bookkeeping across a wait.
+    #[inline]
+    pub(in crate::flash) fn meta(&self) -> Option<&'a PrimEntry> {
+        self.meta
+    }
+
+    /// The inner native guard, for the flash [`Condvar`](super::Condvar) native
+    /// arm's in-place wait (which must not move the guard — `Drop` forbids it).
+    #[inline]
+    pub(in crate::flash) fn native_mut(&mut self) -> &mut NativeGuard<'a, T> {
+        &mut self.inner
+    }
+
+    /// The site this guard's lock was acquired at — reused as the re-acquire
+    /// site after a condvar wait re-takes the lock.
+    #[inline]
+    pub(in crate::flash) fn site(&self) -> &'static Location<'static> {
+        self.at
+    }
+
     /// Temporarily unlock the mutex, run `f`, then relock before returning.
     ///
     /// The data may change while unlocked: re-validate any predicate after
@@ -99,26 +119,6 @@ impl<'a, T> MutexGuard<'a, T> {
         if let Some(m) = self.meta {
             m.acquired(self.at);
         }
-    }
-
-    /// The inner native guard, for the flash [`Condvar`](super::Condvar) native
-    /// arm's in-place wait (which must not move the guard — `Drop` forbids it).
-    #[inline]
-    pub(in crate::flash) fn native_mut(&mut self) -> &mut NativeGuard<'a, T> {
-        &mut self.inner
-    }
-
-    /// The diagnostics entry, if tracing, for holder bookkeeping across a wait.
-    #[inline]
-    pub(in crate::flash) fn meta(&self) -> Option<&'a PrimEntry> {
-        self.meta
-    }
-
-    /// The site this guard's lock was acquired at — reused as the re-acquire
-    /// site after a condvar wait re-takes the lock.
-    #[inline]
-    pub(in crate::flash) fn site(&self) -> &'static Location<'static> {
-        self.at
     }
 }
 

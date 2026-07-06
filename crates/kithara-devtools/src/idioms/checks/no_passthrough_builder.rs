@@ -198,6 +198,10 @@ fn analyse_body(stmts: &[Stmt], param: &str) -> Option<Usage> {
 }
 
 impl Usage {
+    fn has_only_unique_uses(&self) -> bool {
+        !self.disqualified
+    }
+
     /// Each field must be used exactly once across the body. We track
     /// that implicitly: the analysers below insert into `fields` and
     /// flip `disqualified` if they see a duplicate.
@@ -205,10 +209,6 @@ impl Usage {
         if !self.fields.insert(field.to_string()) {
             self.disqualified = true;
         }
-    }
-
-    fn has_only_unique_uses(&self) -> bool {
-        !self.disqualified
     }
 }
 

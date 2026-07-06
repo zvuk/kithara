@@ -1,8 +1,17 @@
 use std::{fs::OpenOptions, io::Write, panic::Location, time::Duration};
 
-use super::mode::{Mode, log_path, mode};
+use super::{
+    mode::{Mode, log_path, mode},
+    watch::Tier,
+};
 
 const SPIN_CPU_FRACTION: f64 = 0.8;
+
+enum OverBudgetAction {
+    Ignore,
+    Census,
+    Panic,
+}
 
 pub(super) fn forbidden(
     what: &'static str,
@@ -57,18 +66,31 @@ pub(super) fn over_budget(
     wall: Duration,
     cpu: Option<Duration>,
     budget: Duration,
+    tier: Tier,
 ) {
     let kind = classify(wall, cpu);
-    match mode() {
-        Mode::Off => {}
-        Mode::Census => {
+    let action = match mode() {
+        Mode::Off => OverBudgetAction::Ignore,
+        Mode::Census => OverBudgetAction::Census,
+        Mode::Panic => match tier {
+            Tier::Blanket => match kind {
+                "CPU spin" => OverBudgetAction::Panic,
+                _ => OverBudgetAction::Census,
+            },
+            Tier::Strict => OverBudgetAction::Panic,
+        },
+    };
+
+    match action {
+        OverBudgetAction::Ignore => {}
+        OverBudgetAction::Census => {
             let line = format!(
                 "[no_block][census] task `{task}` (spawned at {spawned}): single poll took \
                  {wall:?} (cpu {cpu:?}, budget {budget:?}) - {kind}"
             );
             census_emit(&line);
         }
-        Mode::Panic => panic!(
+        OverBudgetAction::Panic => panic!(
             "[no_block] task `{task}` (spawned at {spawned}): single poll took {wall:?} \
              (cpu {cpu:?}, budget {budget:?}) - {kind}\n  sanctioned blocking? mark \
              the blocking fn with #[kithara::allow_block]"

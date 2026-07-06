@@ -44,8 +44,7 @@ underlying player / audio / hls / file events through a single stream.
 - [`TrackSource`] — input to `append` / `insert` / `set_tracks`, either a
   `Uri(String)` (Queue builds a default `ResourceConfig`) or a
   `Config(Box<ResourceConfig>)` (caller-built, for DRM keys / headers /
-  format hints). `From<&str>` / `String` / `ResourceConfig` /
-  `Box<ResourceConfig>` are implemented.
+  format hints).
 - [`QueueEvent`] — queue-level signals delivered via [`Queue::subscribe`]
   alongside the underlying player / audio / hls / file events.
 

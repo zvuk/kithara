@@ -249,22 +249,6 @@ impl PlayerTrack {
         }
     }
 
-    /// Current visible (post-gapless-trim) duration in seconds.
-    ///
-    /// Mirrors `PlayerResource::duration()` captured under the resource
-    /// lock during the last `read()`. Falls back to a fresh `try_lock`
-    /// when invoked before any `read()` (e.g. immediately after `seek`).
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        if self.observed_duration > 0.0 {
-            return self.observed_duration;
-        }
-        self.resource
-            .try_lock()
-            .ok()
-            .map_or(self.observed_duration, |resource| resource.duration())
-    }
-
     /// Decoded-ahead frontier in seconds — how much content is decoded and
     /// ready to play (always `>=` [`Self::position`]). Reads the live resource
     /// (mirroring [`Self::duration`]) so the buffered/playable window keeps
@@ -280,6 +264,22 @@ impl PlayerTrack {
             .map_or(self.observed_frontier, |resource| {
                 resource.decoded_frontier()
             })
+    }
+
+    /// Current visible (post-gapless-trim) duration in seconds.
+    ///
+    /// Mirrors `PlayerResource::duration()` captured under the resource
+    /// lock during the last `read()`. Falls back to a fresh `try_lock`
+    /// when invoked before any `read()` (e.g. immediately after `seek`).
+    #[must_use]
+    pub fn duration(&self) -> f64 {
+        if self.observed_duration > 0.0 {
+            return self.observed_duration;
+        }
+        self.resource
+            .try_lock()
+            .ok()
+            .map_or(self.observed_duration, |resource| resource.duration())
     }
 
     /// Emit the crossfade-aligned handover trigger once per playback cycle.
@@ -901,10 +901,10 @@ mod tests {
     /// own thread while the player is paused (no render cycle refreshes the
     /// `observed_frontier` cache).
     struct LiveFrontierReader {
+        frontier_ns: Arc<AtomicU64>,
         bus: EventBus,
         spec: PcmSpec,
         metadata: TrackMetadata,
-        frontier_ns: Arc<AtomicU64>,
     }
 
     impl PcmReader for LiveFrontierReader {

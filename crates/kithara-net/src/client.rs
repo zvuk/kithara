@@ -265,23 +265,16 @@ impl HttpClient {
         }
     }
 
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure, timeout, or network error.
-    pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
-        self.net.get_bytes(url, headers).await
+    #[must_use]
+    pub fn connection_count(&self) -> usize {
+        self.connection_metrics.connection_count()
     }
 
     /// # Errors
     ///
     /// Returns [`NetError`] on HTTP failure, timeout, or network error.
-    pub async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> NetResult<Bytes> {
-        self.net.post_bytes(url, body, headers).await
+    pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
+        self.net.get_bytes(url, headers).await
     }
 
     /// # Errors
@@ -308,9 +301,16 @@ impl HttpClient {
         &self.options
     }
 
-    #[must_use]
-    pub fn connection_count(&self) -> usize {
-        self.connection_metrics.connection_count()
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, timeout, or network error.
+    pub async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> NetResult<Bytes> {
+        self.net.post_bytes(url, body, headers).await
     }
 
     /// # Errors
@@ -336,15 +336,6 @@ impl Net for HttpClient {
         self.net.get_bytes(url, headers).await
     }
 
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError> {
-        self.net.post_bytes(url, body, headers).await
-    }
-
     async fn get_range(
         &self,
         url: Url,
@@ -356,6 +347,15 @@ impl Net for HttpClient {
 
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
         self.net.head(url, headers).await
+    }
+
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError> {
+        self.net.post_bytes(url, body, headers).await
     }
 
     async fn stream(
@@ -373,18 +373,6 @@ impl Net for RawHttp {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.clone());
-        let resp = self.send_checked(req, headers, url, false).await?;
-        body_bytes(resp).await
-    }
-
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError> {
-        let req = post_request(&self.inner, url.clone(), body);
         let resp = self.send_checked(req, headers, url, false).await?;
         body_bytes(resp).await
     }
@@ -441,6 +429,18 @@ impl Net for RawHttp {
         }
 
         Ok(out)
+    }
+
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError> {
+        let req = post_request(&self.inner, url.clone(), body);
+        let resp = self.send_checked(req, headers, url, false).await?;
+        body_bytes(resp).await
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]

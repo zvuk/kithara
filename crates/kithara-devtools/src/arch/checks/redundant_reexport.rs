@@ -62,13 +62,13 @@ impl Check for RedundantReexport {
 
 #[derive(Debug)]
 struct CrateInfo {
-    crate_name: String,
     /// All `pub use` records (strict `pub`, not `pub(crate)`/`pub(super)`):
     /// target canonical path → list of sites.
     pub_uses: BTreeMap<String, Vec<ReexportSite>>,
     /// Local types (struct/enum/trait/type alias) defined anywhere in the crate
     /// with `pub` or `pub(crate)` visibility — keyed by the bare ident.
     pub_local_types: BTreeSet<String>,
+    crate_name: String,
     /// `(impl_target_ident, assoc_type_ident, alias_ident, file, span)` —
     /// associated types of public traits on public-reachable types.
     assoc_types: Vec<AssocTypeRecord>,
@@ -78,23 +78,23 @@ struct CrateInfo {
 struct ReexportSite {
     file: String,
     ident: String,
-    line: usize,
-    col: usize,
     /// `true` when the `pub use` lives in `lib.rs` at the crate root (the
     /// primary mountpoint for a type's canonical name). `false` when it lives
     /// in a nested module (`pub mod internal`, `pub mod ffi`, ...) — an
     /// alternative mountpoint that introduces a second path.
     is_root_lib: bool,
+    col: usize,
+    line: usize,
 }
 
 #[derive(Debug, Clone)]
 struct AssocTypeRecord {
-    impl_target: String,
-    assoc_name: String,
     alias_ident: String,
+    assoc_name: String,
     file: String,
-    line: usize,
+    impl_target: String,
     col: usize,
+    line: usize,
 }
 
 fn collect_crate(crate_root: &std::path::Path, crate_name: &str) -> Result<CrateInfo> {
@@ -132,11 +132,11 @@ fn scan_items(items: &[Item], file: &str, info: &mut CrateInfo) {
                         .entry(canonical)
                         .or_default()
                         .push(ReexportSite {
-                            file: file.to_string(),
                             ident,
+                            is_root_lib,
+                            file: file.to_string(),
                             line: s.line,
                             col: s.column,
-                            is_root_lib,
                         });
                 }
             }
@@ -214,9 +214,9 @@ fn collect_impl_assoc(im: &ItemImpl, file: &str, info: &mut CrateInfo) {
         };
         let s = ty_item.ident.span().start();
         info.assoc_types.push(AssocTypeRecord {
+            alias_ident,
             impl_target: target_ident.clone(),
             assoc_name: ty_item.ident.to_string(),
-            alias_ident,
             file: file.to_string(),
             line: s.line,
             col: s.column,

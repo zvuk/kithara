@@ -76,50 +76,20 @@ impl HlsVariant {
         self.segments.init.is_some()
     }
 
-    /// Whether the declared init settled terminally (`Failed`).
-    pub(crate) fn init_failed(&self) -> bool {
+    /// Borrow the init slot — the fetch path matches on it, reading the init
+    /// `Segment`'s `url` / `content` / `resource_id` and claiming its state
+    /// atom. `None` for a variant with no separate init.
+    pub(super) fn init(&self) -> Option<&Segment> {
+        self.segments.init.as_ref()
+    }
+
+    /// Committed on-disk length of the (separately fetched) init segment, as
+    /// [`committed_final_len`](Self::committed_final_len) for media.
+    pub(super) fn init_committed_final_len(&self) -> Option<u64> {
         self.segments
             .init
-            .as_ref()
-            .is_some_and(|seg| seg.state().is_failed())
-    }
-
-    /// Resource key for the variant's init segment — `None` when the
-    /// playlist has no `#EXT-X-MAP` (raw TS/AAC). Test-only assertion helper;
-    /// the reader paths read the init through [`Self::init_handle`].
-    #[cfg(test)]
-    pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
-        Some(self.segments.init.as_ref()?.resource_id().clone())
-    }
-
-    pub(crate) fn init_size(&self) -> u64 {
-        self.segments.init.as_ref().map_or(0, Segment::read_len)
-    }
-
-    pub(super) fn init_route_size(&self) -> u64 {
-        self.segments.init.as_ref().map_or(0, Segment::len)
-    }
-
-    /// Flip the init slot to `Missing`, clearing the Layout seed when the
-    /// variant actually carries an init segment.
-    pub(crate) fn invalidate_init(&self) {
-        let had_init = self.segments.init.as_ref().is_some_and(|seg| {
-            seg.state().mark_missing();
-            true
-        });
-        if had_init {
-            self.layout.clear_init_seed();
-        }
-    }
-
-    /// Whether the next dispatch should issue the separate init fetch
-    /// (CMAF `EXT-X-MAP`) — true only if the variant advertises a
-    /// non-zero init segment that hasn't been loaded yet.
-    pub(super) fn needs_init_fetch(&self) -> bool {
-        self.segments
-            .init
-            .as_ref()
-            .is_some_and(|seg| !seg.state().is_loaded())
+            .as_ref()?
+            .committed_len(&self.segments.scope)
     }
 
     /// Whether every byte in `range` is present on disk for the init segment.
@@ -128,6 +98,27 @@ impl HlsVariant {
             .init
             .as_ref()
             .is_some_and(|seg| seg.size().is_exact() && seg.contains(&self.segments.scope, range))
+    }
+
+    pub(super) fn init_downloading(&self) -> bool {
+        self.segments
+            .init
+            .as_ref()
+            .is_some_and(|seg| seg.state().is_downloading())
+    }
+
+    /// Whether the declared init settled terminally (`Failed`).
+    pub(crate) fn init_failed(&self) -> bool {
+        self.segments
+            .init
+            .as_ref()
+            .is_some_and(|seg| seg.state().is_failed())
+    }
+
+    /// Narrow disk handle for the variant's separately fetched init segment,
+    /// or `None` for a variant with no `#EXT-X-MAP` init.
+    fn init_handle(&self) -> Option<ResourceHandle> {
+        Some(self.segments.init.as_ref()?.resource(&self.segments.scope))
     }
 
     /// Read `range` of the init segment into `dst` via the [`Segment`]
@@ -150,32 +141,41 @@ impl HlsVariant {
         )
     }
 
-    /// Borrow the init slot — the fetch path matches on it, reading the init
-    /// `Segment`'s `url` / `content` / `resource_id` and claiming its state
-    /// atom. `None` for a variant with no separate init.
-    pub(super) fn init(&self) -> Option<&Segment> {
-        self.segments.init.as_ref()
+    /// Resource key for the variant's init segment — `None` when the
+    /// playlist has no `#EXT-X-MAP` (raw TS/AAC). Test-only assertion helper;
+    /// the reader paths read the init through [`Self::init_handle`].
+    #[cfg(test)]
+    pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
+        Some(self.segments.init.as_ref()?.resource_id().clone())
     }
 
-    /// Committed on-disk length of the (separately fetched) init segment, as
-    /// [`committed_final_len`](Self::committed_final_len) for media.
-    pub(super) fn init_committed_final_len(&self) -> Option<u64> {
-        self.segments
-            .init
-            .as_ref()?
-            .committed_len(&self.segments.scope)
+    pub(super) fn init_route_size(&self) -> u64 {
+        self.segments.init.as_ref().map_or(0, Segment::len)
     }
 
-    pub(super) fn init_downloading(&self) -> bool {
+    pub(crate) fn init_size(&self) -> u64 {
+        self.segments.init.as_ref().map_or(0, Segment::read_len)
+    }
+
+    /// Flip the init slot to `Missing`, clearing the Layout seed when the
+    /// variant actually carries an init segment.
+    pub(crate) fn invalidate_init(&self) {
+        let had_init = self.segments.init.as_ref().is_some_and(|seg| {
+            seg.state().mark_missing();
+            true
+        });
+        if had_init {
+            self.layout.clear_init_seed();
+        }
+    }
+
+    /// Whether the next dispatch should issue the separate init fetch
+    /// (CMAF `EXT-X-MAP`) — true only if the variant advertises a
+    /// non-zero init segment that hasn't been loaded yet.
+    pub(super) fn needs_init_fetch(&self) -> bool {
         self.segments
             .init
             .as_ref()
-            .is_some_and(|seg| seg.state().is_downloading())
-    }
-
-    /// Narrow disk handle for the variant's separately fetched init segment,
-    /// or `None` for a variant with no `#EXT-X-MAP` init.
-    fn init_handle(&self) -> Option<ResourceHandle> {
-        Some(self.segments.init.as_ref()?.resource(&self.segments.scope))
+            .is_some_and(|seg| !seg.state().is_loaded())
     }
 }

@@ -10,6 +10,12 @@ use pin_project_lite::pin_project;
 
 use super::{clock, ctx, mode, report};
 
+#[derive(Clone, Copy)]
+pub(super) enum Tier {
+    Blanket,
+    Strict,
+}
+
 pin_project! {
     pub struct PermitPoll<F> {
         #[pin]
@@ -24,6 +30,7 @@ pin_project! {
         name: &'static str,
         loc: &'static Location<'static>,
         budget: Duration,
+        tier: Tier,
     }
 }
 
@@ -54,7 +61,7 @@ impl<F: Future> Future for Watched<F> {
         let wall = wall_start.elapsed().saturating_sub(paused);
         if wall > *this.budget {
             let cpu = clock::thread_cpu_elapsed(cpu_start);
-            report::over_budget(this.name, this.loc, wall, cpu, *this.budget);
+            report::over_budget(this.name, this.loc, wall, cpu, *this.budget, *this.tier);
         }
         res
     }
@@ -84,6 +91,7 @@ pub fn watch_blanket_at<F: Future>(
         name,
         loc,
         budget: mode::blanket_budget(),
+        tier: Tier::Blanket,
     }
 }
 
@@ -96,5 +104,6 @@ pub fn watch_budget<F: Future>(name: &'static str, budget_ms: u64, fut: F) -> Wa
         name,
         loc: Location::caller(),
         budget: Duration::from_millis(budget_ms),
+        tier: Tier::Strict,
     }
 }

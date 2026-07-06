@@ -218,7 +218,7 @@ let item = KitharaPlayerItem(
 
 ## Interactive Playground
 
-There is also an interactive Swift playground at [`Examples/KitharaPlayground.playground`](Examples/KitharaPlayground.playground).
+There is also an interactive Swift playground at [`Examples/KitharaDemo/KitharaPlayground.playground`](Examples/KitharaDemo/KitharaPlayground.playground).
 It is useful for quickly trying core APIs (`load`, `insert`, `play`, `pause`, `seek`, `volume`, `mute`, and playback rate) without running the full demo app.
 
 Open `apple/Package.swift` in Xcode, then open the playground from the Project navigator and run it.

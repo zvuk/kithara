@@ -18,15 +18,15 @@ const CHUNK_SIZE: usize = 128;
 
 #[derive(Debug, Args)]
 pub struct FormatArgs {
-    /// Check formatting without modifying files.
-    #[arg(long)]
-    check: bool,
-    /// Skip the dirty-tree gate when formatting in place.
-    #[arg(long = "allow-dirty")]
-    allow_dirty: bool,
     /// Restrict the formatter to one or more targets.
     #[arg(long = "only", value_enum)]
     only: Vec<FormatTarget>,
+    /// Skip the dirty-tree gate when formatting in place.
+    #[arg(long = "allow-dirty")]
+    allow_dirty: bool,
+    /// Check formatting without modifying files.
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
@@ -175,10 +175,10 @@ fn run_markdown_format(check: bool) -> Result<()> {
         "SECURITY.md",
         "ARCHITECTURE.md",
         "CODE_OF_CONDUCT.md",
-        ".docs/guides",
-        ".docs/workflows",
-        ".docs/agents",
-        ".docs/skills",
+        "docs/guides",
+        "docs/workflows",
+        "docs/agents",
+        "docs/skills",
         "crates",
         "tests",
         "apple",
@@ -191,7 +191,7 @@ fn run_markdown_format(check: bool) -> Result<()> {
         "--ordered-list",
         "one",
         "--exclude",
-        ".docs/plans",
+        "docs/plans",
     ];
     if check {
         args.push("--check");

@@ -21,9 +21,9 @@ pub(crate) const ID: &str = "redundant_accessors";
 pub(crate) struct RedundantAccessors;
 
 struct MethodFacts<'a> {
-    name: String,
     fn_item: &'a syn::ImplItemFn,
     passthrough: Option<AccessPath>,
+    name: String,
 }
 
 /// One impl block contributing to a target type's slice, plus where it came

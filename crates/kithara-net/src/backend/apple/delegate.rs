@@ -225,12 +225,12 @@ impl AppleSessionDelegate {
         ));
     }
 
-    pub(super) fn register_stream(&self, task_id: TaskId, state: StreamState) {
-        self.ivars().streams.insert(task_id, state);
-    }
-
     pub(super) fn register_metrics(&self, task_id: TaskId, metrics: ConnectionMetrics) {
         self.ivars().task_metrics.insert(task_id, metrics);
+    }
+
+    pub(super) fn register_stream(&self, task_id: TaskId, state: StreamState) {
+        self.ivars().streams.insert(task_id, state);
     }
 
     pub(super) fn remove_stream(&self, task_id: TaskId) {

@@ -50,21 +50,21 @@ pub(crate) mod tokio_dep_quarantine;
 pub(crate) mod trait_impl_count;
 
 pub(crate) struct Context<'a> {
-    pub(crate) workspace_root: &'a Path,
-    pub(crate) metadata: &'a Metadata,
     pub(crate) config: &'a ArchConfig,
+    pub(crate) metadata: &'a Metadata,
+    pub(crate) workspace_root: &'a Path,
     pub(crate) scope: &'a Scope,
 }
 
 pub(crate) trait Check {
-    fn id(&self) -> &'static str;
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
-
     /// Apply an automatic fix. Default is a no-op (read-only check). `apply`
     /// distinguishes a dry run (report only) from writing changes to disk.
     fn fix(&self, _ctx: &Context<'_>, _apply: bool) -> Result<FixOutcome> {
         Ok(FixOutcome::default())
     }
+    fn id(&self) -> &'static str;
+
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
 }
 
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {

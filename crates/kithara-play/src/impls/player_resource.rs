@@ -88,17 +88,17 @@ impl PlayerResource {
         }
     }
 
-    /// Total duration in seconds. Returns 0.0 if unknown.
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
-    }
-
     /// Decoded-ahead frontier in seconds: how much content has been decoded
     /// and is ready to play (always `>=` the served playback position).
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
         self.resource.decoded_frontier().as_secs_f64()
+    }
+
+    /// Total duration in seconds. Returns 0.0 if unknown.
+    #[must_use]
+    pub fn duration(&self) -> f64 {
+        self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
     }
 
     fn fill_scratch(&mut self, target_frames: usize) -> bool {

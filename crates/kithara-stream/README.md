@@ -21,11 +21,14 @@ Bridges async producers (network) to sync consumers (decoders). Exposes:
 
 ## Role
 
-Central orchestration layer. Protocol crates (`kithara-file`, `kithara-hls`) implement `StreamType` and `dl::Peer`; `kithara-decode` consumes `Stream<T>`. The `Downloader` is owned at the consumer-crate top so all peers share one HTTP pool. Other crates re-export `AudioCodec`, `ContainerFormat`, `MediaInfo` from here.
+Architectural waist for bytes entering the decoder: protocol crates implement
+`StreamType` and `dl::Peer`, while decoder/audio crates consume `Stream<T>`.
+`AudioCodec`, `ContainerFormat`, and `MediaInfo` are defined here and re-exported
+elsewhere.
 
 ## Key Entry Points
 
-- `Source` — sync random-access surface for decoders (`wait_range`, `read_at`, `position`, `len`, `media_info`, `timeline`, adaptive hooks).
+- `Source` — sync random-access surface for decoders (`wait_range`, `read_at`, `position`, `len`, `media_info`, `byte_map`, `variant_control`, `abr_handle`).
 - `Stream<T>` — `Read + Seek` wrapper around any `T: StreamType`.
 - `StreamType` — marker for protocol types (`File`, `Hls`) with associated `Config` and `Events`.
 - `dl::Downloader` / `dl::Peer` / `dl::PeerHandle` / `dl::FetchCmd` — shared HTTP pool and pull-driven per-track transport.

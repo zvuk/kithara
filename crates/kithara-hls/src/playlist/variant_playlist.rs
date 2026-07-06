@@ -45,8 +45,8 @@ impl VariantPlaylist {
         };
         let resource = ResourceHandle::new(scope.clone(), key, media_url);
         Ok(Self {
-            cache: cache.clone(),
             resource,
+            cache: cache.clone(),
             variant_id: VariantId(variant.id.0),
         })
     }

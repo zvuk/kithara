@@ -114,9 +114,9 @@ fn push(out: &mut Vec<Hit>, scope: &[String], name: &str, g: &Generics) {
         return;
     }
     out.push(Hit {
-        label: qualified(scope, name),
         params,
         where_bounds,
+        label: qualified(scope, name),
     });
 }
 

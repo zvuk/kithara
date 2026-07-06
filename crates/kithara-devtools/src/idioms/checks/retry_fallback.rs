@@ -109,9 +109,9 @@ impl Check for RetryFallback {
 }
 
 struct IdentVisitor<'a> {
-    rel: &'a str,
     suppress: &'a Suppressions,
     out: &'a mut Vec<Violation>,
+    rel: &'a str,
     /// `true` while traversing inside a `#[cfg(test)]` module — test code
     /// can legitimately use names like `flags_max_retries_const` that
     /// describe the rule's own behaviour without smelling like a retry.
@@ -169,23 +169,6 @@ fn name_is_forbidden(name: &str) -> bool {
 }
 
 impl<'ast> Visit<'ast> for IdentVisitor<'_> {
-    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
-        let was_inside = self.inside_test_mod;
-        if is_cfg_test(&node.attrs) {
-            self.inside_test_mod = true;
-        }
-        visit::visit_item_mod(self, node);
-        self.inside_test_mod = was_inside;
-    }
-
-    fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
-        let name = node.ident.to_string();
-        if name_is_forbidden(&name) {
-            self.flag(node.ident.span().start().line, &name, "struct");
-        }
-        visit::visit_item_struct(self, node);
-    }
-
     fn visit_field(&mut self, node: &'ast Field) {
         if let Some(ident) = &node.ident {
             let name = ident.to_string();
@@ -196,20 +179,20 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
         visit::visit_field(self, node);
     }
 
+    fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
+        let name = node.sig.ident.to_string();
+        if name_is_forbidden(&name) {
+            self.flag(node.sig.ident.span().start().line, &name, "fn");
+        }
+        visit::visit_impl_item_fn(self, node);
+    }
+
     fn visit_item_const(&mut self, node: &'ast ItemConst) {
         let name = node.ident.to_string();
         if name_is_forbidden(&name) {
             self.flag(node.ident.span().start().line, &name, "const");
         }
         visit::visit_item_const(self, node);
-    }
-
-    fn visit_item_static(&mut self, node: &'ast ItemStatic) {
-        let name = node.ident.to_string();
-        if name_is_forbidden(&name) {
-            self.flag(node.ident.span().start().line, &name, "static");
-        }
-        visit::visit_item_static(self, node);
     }
 
     fn visit_item_fn(&mut self, node: &'ast ItemFn) {
@@ -220,12 +203,29 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
         visit::visit_item_fn(self, node);
     }
 
-    fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
-        let name = node.sig.ident.to_string();
-        if name_is_forbidden(&name) {
-            self.flag(node.sig.ident.span().start().line, &name, "fn");
+    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
+        let was_inside = self.inside_test_mod;
+        if is_cfg_test(&node.attrs) {
+            self.inside_test_mod = true;
         }
-        visit::visit_impl_item_fn(self, node);
+        visit::visit_item_mod(self, node);
+        self.inside_test_mod = was_inside;
+    }
+
+    fn visit_item_static(&mut self, node: &'ast ItemStatic) {
+        let name = node.ident.to_string();
+        if name_is_forbidden(&name) {
+            self.flag(node.ident.span().start().line, &name, "static");
+        }
+        visit::visit_item_static(self, node);
+    }
+
+    fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
+        let name = node.ident.to_string();
+        if name_is_forbidden(&name) {
+            self.flag(node.ident.span().start().line, &name, "struct");
+        }
+        visit::visit_item_struct(self, node);
     }
 
     fn visit_local(&mut self, node: &'ast Local) {

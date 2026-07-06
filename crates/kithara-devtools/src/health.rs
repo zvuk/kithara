@@ -12,9 +12,6 @@ use crate::common::{project::ProjectConfig, timestamp::utc_timestamp};
 
 struct Consts;
 impl Consts {
-    const REPORT_PATH: &'static str = "target/health-report.md";
-    const LOGS_DIR: &'static str = "target/health-logs";
-    const STDOUT_TAIL_LINES: usize = 80;
     /// Substrings that mark an environment-level failure rather than a real
     /// regression — typically a missing tool or unpublished baseline.
     /// When any of these appear in the stage log on non-zero exit the stage
@@ -25,6 +22,9 @@ impl Consts {
         "not found in registry",
         "Library not loaded",
     ];
+    const LOGS_DIR: &'static str = "target/health-logs";
+    const REPORT_PATH: &'static str = "target/health-report.md";
+    const STDOUT_TAIL_LINES: usize = 80;
 }
 
 #[derive(Debug, Args)]
@@ -82,10 +82,10 @@ impl Stage {
 
 struct StageResult {
     name: &'static str,
-    cmdline: String,
-    status: Status,
-    note: Option<String>,
     duration: Duration,
+    note: Option<String>,
+    status: Status,
+    cmdline: String,
 }
 
 pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
@@ -208,8 +208,8 @@ fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
         Ok(f) => f,
         Err(e) => {
             return StageResult {
-                name: stage.name,
                 cmdline,
+                name: stage.name,
                 status: Status::Fail,
                 note: Some(format!("failed to open log: {e}")),
                 duration: Duration::ZERO,
@@ -220,8 +220,8 @@ fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
         Ok(f) => f,
         Err(e) => {
             return StageResult {
-                name: stage.name,
                 cmdline,
+                name: stage.name,
                 status: Status::Fail,
                 note: Some(format!("failed to clone log handle: {e}")),
                 duration: Duration::ZERO,
@@ -238,11 +238,11 @@ fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
 
     match status_result {
         Ok(s) if s.success() => StageResult {
-            name: stage.name,
             cmdline,
+            duration,
+            name: stage.name,
             status: Status::Pass,
             note: None,
-            duration,
         },
         Ok(s) => {
             let exit = s.code().unwrap_or(-1);
@@ -252,26 +252,26 @@ fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
                 None => (Status::Fail, format!("exit {exit}")),
             };
             StageResult {
-                name: stage.name,
                 cmdline,
                 status,
-                note: Some(note),
                 duration,
+                name: stage.name,
+                note: Some(note),
             }
         }
         Err(e) => {
             let kind = e.kind();
             let is_missing = matches!(kind, std::io::ErrorKind::NotFound);
             StageResult {
-                name: stage.name,
                 cmdline,
+                duration,
+                name: stage.name,
                 status: if is_missing {
                     Status::Skip
                 } else {
                     Status::Fail
                 },
                 note: Some(format!("{kind}: {e}")),
-                duration,
             }
         }
     }

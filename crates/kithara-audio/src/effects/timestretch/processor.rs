@@ -99,14 +99,6 @@ impl TimeStretchProcessor {
         me
     }
 
-    fn options_for(spec: PcmSpec, pool: &PcmPool) -> StretchOptions {
-        StretchOptions::builder()
-            .sample_rate(spec.sample_rate.get())
-            .channels(usize::from(spec.channels.max(1)))
-            .pool(pool.clone())
-            .build()
-    }
-
     /// Push `stretch` to the backend when it moved beyond `RATIO_EPS`. At a
     /// region `boundary` the old region's tail is drained (`flush`, into
     /// `scratch`) and the backend restarted so the new ratio starts clean;
@@ -153,6 +145,14 @@ impl TimeStretchProcessor {
         }
         pcm[..].copy_from_slice(&self.scratch);
         Some(PcmChunk::new(meta, pcm))
+    }
+
+    fn options_for(spec: PcmSpec, pool: &PcmPool) -> StretchOptions {
+        StretchOptions::builder()
+            .sample_rate(spec.sample_rate.get())
+            .channels(usize::from(spec.channels.max(1)))
+            .pool(pool.clone())
+            .build()
     }
 
     /// Rebuild the backend for `kind` at the current `spec`, discarding any

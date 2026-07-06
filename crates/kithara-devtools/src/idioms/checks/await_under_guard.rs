@@ -92,17 +92,17 @@ impl Check for AwaitUnderGuard {
 #[derive(Debug, Clone)]
 struct ActiveGuard {
     binding: String,
-    /// Source line of the `let g = ...` statement.
-    decl_line: usize,
     /// Lock-acquiring method name (e.g. `lock_sync`, `read`).
     method: String,
+    /// Source line of the `let g = ...` statement.
+    decl_line: usize,
 }
 
 struct AwaitVisitor<'a> {
-    rel: &'a str,
     suppress: &'a Suppressions,
-    guards: Vec<ActiveGuard>,
     out: &'a mut Vec<Violation>,
+    rel: &'a str,
+    guards: Vec<ActiveGuard>,
 }
 
 impl<'ast> Visit<'ast> for AwaitVisitor<'_> {
@@ -110,10 +110,6 @@ impl<'ast> Visit<'ast> for AwaitVisitor<'_> {
         let snapshot = self.guards.len();
         self.process_block(b);
         self.guards.truncate(snapshot);
-    }
-
-    fn visit_expr_block(&mut self, b: &'ast ExprBlock) {
-        self.visit_block(&b.block);
     }
 
     fn visit_expr_await(&mut self, a: &'ast ExprAwait) {
@@ -139,6 +135,10 @@ impl<'ast> Visit<'ast> for AwaitVisitor<'_> {
             self.out
                 .push(Violation::warn(ID, key, msg).with_explanation(EXPLANATION));
         }
+    }
+
+    fn visit_expr_block(&mut self, b: &'ast ExprBlock) {
+        self.visit_block(&b.block);
     }
 }
 
@@ -187,9 +187,9 @@ fn guard_from_local(local: &Local) -> Option<ActiveGuard> {
     }
     let span = local.let_token.span().start();
     Some(ActiveGuard {
+        method,
         binding: ident,
         decl_line: span.line,
-        method,
     })
 }
 

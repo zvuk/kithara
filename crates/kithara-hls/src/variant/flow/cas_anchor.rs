@@ -22,16 +22,16 @@ use super::seqlock::AnchorEntry;
 /// each other; off-RT consumers may CAS it to 0. See the crate `CONTEXT.md`
 /// "Seek-state primitives".
 pub(super) struct CasAnchorCell {
+    segment: AtomicU32,
     /// Seqlock version: even = stable, odd = a writer owns the body. Acquired
     /// with a CAS so two concurrent writers cannot both hold it.
     version: AtomicU32,
     /// Present generation: 0 = absent, otherwise the current monotonic
     /// generation. Written only under the version lock.
     active: AtomicU64,
+    anchor: AtomicU64,
     /// Monotonic generation source.
     next_gen: AtomicU64,
-    segment: AtomicU32,
-    anchor: AtomicU64,
 }
 
 impl CasAnchorCell {
@@ -45,12 +45,15 @@ impl CasAnchorCell {
         }
     }
 
+    pub(super) fn clear(&self) {
+        self.active.store(0, Ordering::Release);
+    }
+
     pub(super) fn load(&self) -> Option<AnchorEntry> {
         let start = self.version.load(Ordering::Acquire);
         if start & 1 != 0 {
             // A writer owns the body: bail to not-ready for this poll instead of
             // spinning. The level-triggered re-poll observes the demand a tick
-            // later.
             return None;
         }
         let generation = self.active.load(Ordering::Acquire);
@@ -73,10 +76,25 @@ impl CasAnchorCell {
             return None;
         }
         Some(AnchorEntry {
-            generation,
             segment,
             anchor,
+            generation,
         })
+    }
+
+    fn next_gen(&self) -> u64 {
+        let generation = self
+            .next_gen
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        if generation == 0 {
+            // 2^64 SETs is unreachable in practice; keep 0 reserved for absent.
+            self.next_gen
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_add(1)
+        } else {
+            generation
+        }
     }
 
     /// Multi-writer publish. Acquires the version with a CAS (even -> odd); a
@@ -102,7 +120,6 @@ impl CasAnchorCell {
         };
         let generation = self.next_gen();
         // Hide the demand for the body write so a stale `take_if(old)` cannot
-        // match mid-rewrite.
         self.active.store(0, Ordering::Release);
         self.segment.store(segment, Ordering::Relaxed);
         self.anchor.store(anchor, Ordering::Relaxed);
@@ -111,30 +128,11 @@ impl CasAnchorCell {
         self.version.store(held.wrapping_add(1), Ordering::Release);
     }
 
-    pub(super) fn clear(&self) {
-        self.active.store(0, Ordering::Release);
-    }
-
     /// Consume the demand iff it is still generation `generation`. Safe from any
     /// thread; the CAS picks a single winner across concurrent completers.
     pub(super) fn take_if(&self, generation: u64) -> bool {
         self.active
             .compare_exchange(generation, 0, Ordering::AcqRel, Ordering::Relaxed)
             .is_ok()
-    }
-
-    fn next_gen(&self) -> u64 {
-        let generation = self
-            .next_gen
-            .fetch_add(1, Ordering::Relaxed)
-            .wrapping_add(1);
-        if generation == 0 {
-            // 2^64 SETs is unreachable in practice; keep 0 reserved for absent.
-            self.next_gen
-                .fetch_add(1, Ordering::Relaxed)
-                .wrapping_add(1)
-        } else {
-            generation
-        }
     }
 }

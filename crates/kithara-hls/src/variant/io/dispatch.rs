@@ -132,13 +132,6 @@ impl HlsVariant {
         out
     }
 
-    fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
-        let window = ctx.look_ahead_segments?;
-        let window = u32::try_from(window.max(1)).unwrap_or(u32::MAX);
-        let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
-        Some(base.saturating_add(window.saturating_sub(1)))
-    }
-
     #[kithara::probe(
         seek_epoch = ctx.seek_epoch,
         segment_index = u64::from(seg_idx),
@@ -174,5 +167,12 @@ impl HlsVariant {
             handle,
             ctx.signal.clone(),
         )
+    }
+
+    fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
+        let window = ctx.look_ahead_segments?;
+        let window = u32::try_from(window.max(1)).unwrap_or(u32::MAX);
+        let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
+        Some(base.saturating_add(window.saturating_sub(1)))
     }
 }

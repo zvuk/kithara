@@ -54,11 +54,11 @@ impl Check for BranchChains {
 
 struct ChainVisitor<'a> {
     cfg: &'a BranchChainsConfig,
+    out: &'a mut Vec<Violation>,
     rel: &'a str,
     /// `(line, column)` of `if` tokens already consumed as part of an outer
     /// chain. Prevents double-reporting nested `else if` arms.
     skip: BTreeSet<(usize, usize)>,
-    out: &'a mut Vec<Violation>,
 }
 
 impl<'ast> Visit<'ast> for ChainVisitor<'_> {

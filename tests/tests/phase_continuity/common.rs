@@ -475,7 +475,6 @@ pub(crate) fn scan_rendered_pcm(
 
 #[cfg(test)]
 mod tests {
-    use kithara;
 
     use super::*;
 

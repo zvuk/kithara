@@ -13,41 +13,13 @@ use regex::Regex;
 
 use crate::{
     apple_docgen,
-    config::{KitharaExt, ReleaseConfig},
+    config::{AppleConfig, KitharaExt, ReleaseConfig},
 };
 
-/// Module constants for `cargo xtask apple run`. Grouped per the
+/// Module constants for Apple build protocol details. Grouped per the
 /// `style.multiple-private-module-consts` lint.
 struct Consts;
 impl Consts {
-    /// Default simulator picked when `--simulator` is omitted. Mirrors
-    /// the device installed in the team's typical Xcode 16 setup; CLI
-    /// override is available for everything else.
-    const DEFAULT_SIMULATOR: &'static str = "iPhone 17 Pro Max";
-    /// Default Xcode scheme — the iOS slice of the demo project.
-    const DEFAULT_SCHEME: &'static str = "KitharaDemo_iOS";
-    /// Bundle id installed by the demo target.
-    const DEMO_BUNDLE_ID: &'static str = "com.kithara.demo";
-
-    /// Banned substrings: presence in any apple-slice `libkithara_ffi.a`
-    /// means the build leaked a software decoder backend that should stay
-    /// behind the `symphonia` / desktop feature gate. Note:
-    /// `symphonia_core`, `symphonia_format_isomp4`, `symphonia_common`,
-    /// `symphonia_metadata` are *parser* infrastructure (fMP4 box walker,
-    /// shared types) that the Apple decoder path reuses for demuxing —
-    /// they're not software decoders and are allowed.
-    const BANNED_SYMBOL_NEEDLES: &[&str] = &[
-        "symphonia_bundle_",     // symphonia-bundle-flac, symphonia-bundle-mp3, …
-        "symphonia_codec_",      // symphonia-codec-aac, symphonia-codec-alac, …
-        "symphonia_format_caf",  // CAF — Apple uses AppleAudioFileDemuxer instead
-        "symphonia_format_mkv",  // Matroska — not used on Apple
-        "symphonia_format_ogg",  // Ogg — not used on Apple
-        "symphonia_format_riff", // RIFF/WAV — Apple uses AppleAudioFileDemuxer
-        "fdk_aac",
-    ];
-    /// Positive proof — at least one of these must appear in every slice
-    /// to confirm the Apple HW dispatcher is actually linked in.
-    const APPLE_PROOF_NEEDLES: &[&str] = &["AppleCodec", "AppleAudioFileDemuxer"];
     /// Apple App Store uploads no longer require bitcode, and embedding it
     /// bloats every Rust object stored in the release static archive.
     const RELEASE_RUSTFLAGS: &[&str] = &["-C", "embed-bitcode=no"];
@@ -309,23 +281,28 @@ pub(crate) fn run(cmd: AppleCommand, ctx: &Ctx) -> Result<()> {
             profile,
             debug,
             skip_framework,
+            &ext.apple,
         ),
-        AppleCommand::Audit { path } => audit_symbols(&path),
+        AppleCommand::Audit { path } => audit_symbols(&path, &ext.apple),
         AppleCommand::Docgen { check } => apple_docgen::run(check, &ext.apple.docgen),
-        AppleCommand::Release => run_release(&ext.release),
+        AppleCommand::Release => run_release(&ext.release, &ext.apple),
     }
 }
 
 /// Run `nm` on every slice's static lib and fail if any
 /// software-backend symbol survived linking or the Apple dispatcher
 /// went missing.
-fn audit_symbols(xcframework_dir: &Path) -> Result<()> {
+fn audit_symbols(xcframework_dir: &Path, apple: &AppleConfig) -> Result<()> {
     if !xcframework_dir.is_dir() {
         bail!(
             "xcframework path does not exist or is not a directory: {}",
             xcframework_dir.display()
         );
     }
+    let banned_symbol_needles =
+        require_apple_needles(&apple.banned_symbol_needles, "banned_symbol_needles")?;
+    let apple_proof_needles =
+        require_apple_needles(&apple.apple_proof_needles, "apple_proof_needles")?;
     let mut errors: Vec<String> = Vec::new();
     for slice in Consts::XCFRAMEWORK_SLICES {
         let lib = xcframework_dir.join(slice).join("libkithara_ffi.a");
@@ -342,8 +319,9 @@ fn audit_symbols(xcframework_dir: &Path) -> Result<()> {
             .with_context(|| format!("invoke symbol audit on {}", lib.display()))?;
         let symbols = String::from_utf8_lossy(&output.stdout);
         let strings = archive_strings(&lib)?;
-        for needle in Consts::BANNED_SYMBOL_NEEDLES {
-            let count = symbols.matches(needle).count() + strings.matches(needle).count();
+        for needle in banned_symbol_needles {
+            let count =
+                symbols.matches(needle.as_str()).count() + strings.matches(needle.as_str()).count();
             if count > 0 {
                 errors.push(format!(
                     "slice `{slice}` leaked {count} `{needle}` symbols — \
@@ -351,14 +329,13 @@ fn audit_symbols(xcframework_dir: &Path) -> Result<()> {
                 ));
             }
         }
-        let has_apple_proof = Consts::APPLE_PROOF_NEEDLES
+        let has_apple_proof = apple_proof_needles
             .iter()
-            .any(|n| symbols.contains(n) || strings.contains(n));
+            .any(|n| symbols.contains(n.as_str()) || strings.contains(n.as_str()));
         if !has_apple_proof {
-            let proof = Consts::APPLE_PROOF_NEEDLES;
             errors.push(format!(
                 "slice `{slice}` missing Apple-backend proof symbols \
-                 ({proof:?}) — AppleCodec not linked?"
+                 ({apple_proof_needles:?}) — AppleCodec not linked?"
             ));
         }
     }
@@ -532,7 +509,7 @@ fn set_release_rustflags(cmd: &mut Command) {
     cmd.env("CARGO_ENCODED_RUSTFLAGS", flags);
 }
 
-fn run_release(release: &ReleaseConfig) -> Result<()> {
+fn run_release(release: &ReleaseConfig, apple: &AppleConfig) -> Result<()> {
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to read cargo metadata")?;
@@ -548,7 +525,7 @@ fn run_release(release: &ReleaseConfig) -> Result<()> {
     let internal = apple_dir.join("KitharaFFIInternal.xcframework");
 
     run_build(crate::BuildProfile::Release, None)?;
-    audit_symbols(&internal)?;
+    audit_symbols(&internal, apple)?;
     run_single(crate::BuildProfile::Release)?;
 
     let tmp = env::temp_dir();
@@ -1276,9 +1253,17 @@ fn run_app(
     profile: crate::BuildProfile,
     debug: bool,
     skip_framework: bool,
+    apple: &AppleConfig,
 ) -> Result<()> {
-    let scheme = scheme.unwrap_or(Consts::DEFAULT_SCHEME).to_owned();
-    let simulator = simulator.unwrap_or(Consts::DEFAULT_SIMULATOR).to_owned();
+    let scheme = match scheme {
+        Some(scheme) => scheme.to_owned(),
+        None => require_apple_str(&apple.default_scheme, "default_scheme")?.to_owned(),
+    };
+    let simulator = match simulator {
+        Some(simulator) => simulator.to_owned(),
+        None => require_apple_str(&apple.default_simulator, "default_simulator")?.to_owned(),
+    };
+    let bundle_id = require_apple_str(&apple.demo_bundle_id, "demo_bundle_id")?;
 
     let metadata = MetadataCommand::new()
         .exec()
@@ -1345,7 +1330,7 @@ fn run_app(
         bail!("simctl install failed");
     }
 
-    println!("==> Launching {}", Consts::DEMO_BUNDLE_ID);
+    println!("==> Launching {bundle_id}");
     let mut launch = Command::new("xcrun");
     launch.args(["simctl", "launch"]);
     if debug {
@@ -1354,7 +1339,7 @@ fn run_app(
         // code runs.
         launch.arg("--wait-for-debugger");
     }
-    launch.args([&uuid, Consts::DEMO_BUNDLE_ID]);
+    launch.args([&uuid, bundle_id]);
     let output = launch
         .output()
         .context("failed to run `xcrun simctl launch`")?;
@@ -1481,6 +1466,21 @@ fn parse_launch_pid(stdout: &str) -> Option<u32> {
     stdout
         .lines()
         .find_map(|line| line.split(':').nth(1)?.trim().parse::<u32>().ok())
+}
+
+fn require_apple_str<'a>(value: &'a str, key: &str) -> Result<&'a str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("ext.apple.{key} is not set; fill in the [ext.apple] section of .config/xtask.toml");
+    }
+    Ok(trimmed)
+}
+
+fn require_apple_needles<'a>(needles: &'a [String], key: &str) -> Result<&'a [String]> {
+    if needles.is_empty() {
+        bail!("ext.apple.{key} is not set; fill in the [ext.apple] section of .config/xtask.toml");
+    }
+    Ok(needles)
 }
 
 #[cfg(test)]

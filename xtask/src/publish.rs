@@ -16,7 +16,6 @@ use crate::config::{KitharaExt, PublishConfig};
 struct Consts;
 
 impl Consts {
-    const DEFAULT_DELAY_SECS: u64 = 20;
     /// User-agent used for registry availability checks when the project
     /// config leaves `publish.user_agent` empty.
     const DEFAULT_USER_AGENT: &'static str = "xtask-publish";
@@ -33,11 +32,11 @@ pub(crate) struct PublishArgs {
     #[arg(long, requires = "dry_run")]
     verify_registry: bool,
 
-    /// Delay in seconds between publishes [default: 20].
+    /// Delay in seconds between publishes.
     /// Skipped during dry-run. For first-time publishing of new crates,
     /// use 610 (crates.io allows 5 new crates burst, then 1 per 10 min).
-    #[arg(long, default_value_t = Consts::DEFAULT_DELAY_SECS)]
-    delay: u64,
+    #[arg(long)]
+    delay: Option<u64>,
 
     /// Skip the verification build (`cargo publish --no-verify`). Required for
     /// workspace library crates that leave the HTTP backend to the consumer:
@@ -72,9 +71,10 @@ pub(crate) fn run(args: &PublishArgs, ctx: &Ctx) -> Result<()> {
         println!("Mode: dry-run (validate packaging without upload)");
         run_dry_run(&order, args.verify_registry, &ext.publish)?;
     } else {
-        println!("Mode: publish ({}s delay between crates)", args.delay);
+        let delay = resolve_delay_secs(args, &ext.publish)?;
+        println!("Mode: publish ({delay}s delay between crates)");
         println!();
-        run_publish(&order, args.delay, args.no_verify, &ext.publish)?;
+        run_publish(&order, delay, args.no_verify, &ext.publish)?;
     }
 
     println!();
@@ -144,6 +144,7 @@ fn run_publish(
 ) -> Result<()> {
     let manifests = locate_manifests(order)?;
     let versions = locate_versions(order)?;
+    let http_timeout_secs = resolve_http_timeout_secs(publish)?;
 
     let mut published_count = 0usize;
     let mut last_action_was_publish = false;
@@ -153,7 +154,7 @@ fn run_publish(
         let total = order.len();
         let version = &versions[name];
 
-        if registry_has(name, version, &publish.user_agent)? {
+        if registry_has(name, version, &publish.user_agent, http_timeout_secs)? {
             println!("[{pos}/{total}] Skipping {name} v{version} (already on crates.io).");
             last_action_was_publish = false;
             continue;
@@ -189,6 +190,7 @@ fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()>
     let manifests = locate_manifests(order)?;
     let versions = locate_versions(order)?;
     let deps = locate_publishable_workspace_deps(order)?;
+    let http_timeout_secs = resolve_http_timeout_secs(publish)?;
 
     println!();
     println!("Registry dry-run (cargo publish --dry-run where dependency state allows):");
@@ -198,7 +200,7 @@ fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()>
         let total = order.len();
         let version = &versions[name];
 
-        if registry_has(name, version, &publish.user_agent)? {
+        if registry_has(name, version, &publish.user_agent, http_timeout_secs)? {
             println!("[{pos}/{total}] Skipping {name} v{version} (already on crates.io).");
             continue;
         }
@@ -210,7 +212,7 @@ fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()>
             .iter()
             .filter_map(|dep| {
                 let dep_version = &versions[dep];
-                match registry_has(dep, dep_version, &publish.user_agent) {
+                match registry_has(dep, dep_version, &publish.user_agent, http_timeout_secs) {
                     Ok(true) => None,
                     Ok(false) => Some(Ok(format!("{dep} v{dep_version}"))),
                     Err(err) => Some(Err(err)),
@@ -240,6 +242,18 @@ fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()>
     Ok(())
 }
 
+fn resolve_delay_secs(args: &PublishArgs, publish: &PublishConfig) -> Result<u64> {
+    args.delay.or(publish.delay_secs).context(
+        "ext.publish.delay_secs is not set; fill in the [ext.publish] section of .config/xtask.toml",
+    )
+}
+
+fn resolve_http_timeout_secs(publish: &PublishConfig) -> Result<u64> {
+    publish.http_timeout_secs.context(
+        "ext.publish.http_timeout_secs is not set; fill in the [ext.publish] section of .config/xtask.toml",
+    )
+}
+
 fn locate_versions(order: &[String]) -> Result<HashMap<String, String>> {
     let metadata = MetadataCommand::new()
         .exec()
@@ -264,13 +278,19 @@ fn locate_versions(order: &[String]) -> Result<HashMap<String, String>> {
 /// Returns true if status is 200. Any non-2xx/non-404 is reported as an
 /// error so transient failures don't silently lead to duplicate-publish
 /// attempts.
-fn registry_has(name: &str, version: &str, configured_agent: &str) -> Result<bool> {
+fn registry_has(
+    name: &str,
+    version: &str,
+    configured_agent: &str,
+    http_timeout_secs: u64,
+) -> Result<bool> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
     let user_agent = if configured_agent.is_empty() {
         Consts::DEFAULT_USER_AGENT
     } else {
         configured_agent
     };
+    let timeout = http_timeout_secs.to_string();
     let output = Command::new("curl")
         .args([
             "-sS",
@@ -281,7 +301,7 @@ fn registry_has(name: &str, version: &str, configured_agent: &str) -> Result<boo
             "-A",
             user_agent,
             "--max-time",
-            "20",
+            &timeout,
             &url,
         ])
         .output()
@@ -627,30 +647,53 @@ mod tests {
     fn publish_order_is_resolved() {
         let order = resolve_publish_order().unwrap();
         assert!(!order.is_empty(), "should find publishable crates");
+
+        let metadata = MetadataCommand::new().exec().unwrap();
+        let members: HashSet<_> = metadata.workspace_members.iter().collect();
+        let publishable: HashSet<String> = metadata
+            .packages
+            .iter()
+            .filter(|pkg| members.contains(&pkg.id))
+            .filter(|pkg| !matches!(&pkg.publish, Some(registries) if registries.is_empty()))
+            .map(|pkg| pkg.name.to_string())
+            .collect();
+
+        let ordered: HashSet<String> = order.iter().cloned().collect();
         assert_eq!(
+            ordered.len(),
             order.len(),
-            20,
-            "publish order should cover all publishable crates"
+            "publish order must not repeat crates: {order:?}"
+        );
+        assert_eq!(
+            ordered, publishable,
+            "publish order must cover exactly the publishable workspace members"
         );
 
-        let platform_pos = order.iter().position(|n| n == "kithara-platform");
-        let facade_pos = order.iter().position(|n| n == "kithara");
-        if let (Some(p), Some(f)) = (platform_pos, facade_pos) {
-            assert!(p < f, "kithara-platform must be published before kithara");
+        let position: HashMap<&str, usize> = order
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| (name.as_str(), idx))
+            .collect();
+        for pkg in &metadata.packages {
+            let name = pkg.name.to_string();
+            if !publishable.contains(&name) {
+                continue;
+            }
+            for dep in &pkg.dependencies {
+                let dep_name = dep.name.to_string();
+                if dep.path.is_none()
+                    || dep.kind == DependencyKind::Development
+                    || dep_name == name
+                    || !publishable.contains(&dep_name)
+                {
+                    continue;
+                }
+                assert!(
+                    position[dep_name.as_str()] < position[name.as_str()],
+                    "{dep_name} must be published before its dependent {name}"
+                );
+            }
         }
-
-        let stretch_pos = order
-            .iter()
-            .position(|n| n == "kithara-stretch")
-            .expect("kithara-stretch should be publishable");
-        let audio_pos = order
-            .iter()
-            .position(|n| n == "kithara-audio")
-            .expect("kithara-audio should be publishable");
-        assert!(
-            stretch_pos < audio_pos,
-            "kithara-stretch must be published before kithara-audio"
-        );
     }
 
     #[test]
@@ -695,6 +738,86 @@ bar = { workspace = true }
     fn strip_workspace_hack_keeps_unrelated_lines() {
         let input = "no_hack_here = true\n";
         assert_eq!(strip_workspace_hack(input, "kithara-workspace-hack"), input);
+    }
+
+    #[test]
+    fn publish_delay_uses_config_when_cli_arg_is_absent() {
+        let args = PublishArgs {
+            dry_run: false,
+            verify_registry: false,
+            delay: None,
+            no_verify: false,
+        };
+        let publish = PublishConfig {
+            workspace_hack_crate: String::new(),
+            delay_secs: Some(20),
+            http_timeout_secs: Some(20),
+            user_agent: String::new(),
+        };
+
+        assert_eq!(resolve_delay_secs(&args, &publish).unwrap(), 20);
+    }
+
+    #[test]
+    fn publish_delay_cli_arg_overrides_config() {
+        let args = PublishArgs {
+            dry_run: false,
+            verify_registry: false,
+            delay: Some(610),
+            no_verify: false,
+        };
+        let publish = PublishConfig {
+            workspace_hack_crate: String::new(),
+            delay_secs: Some(20),
+            http_timeout_secs: Some(20),
+            user_agent: String::new(),
+        };
+
+        assert_eq!(resolve_delay_secs(&args, &publish).unwrap(), 610);
+    }
+
+    #[test]
+    fn publish_delay_requires_config_when_cli_arg_is_absent() {
+        let args = PublishArgs {
+            dry_run: false,
+            verify_registry: false,
+            delay: None,
+            no_verify: false,
+        };
+        let publish = PublishConfig {
+            workspace_hack_crate: String::new(),
+            delay_secs: None,
+            http_timeout_secs: Some(20),
+            user_agent: String::new(),
+        };
+
+        let error = resolve_delay_secs(&args, &publish).unwrap_err();
+        assert!(error.to_string().contains("delay_secs"), "{error}");
+    }
+
+    #[test]
+    fn publish_http_timeout_uses_config() {
+        let publish = PublishConfig {
+            workspace_hack_crate: String::new(),
+            delay_secs: Some(20),
+            http_timeout_secs: Some(20),
+            user_agent: String::new(),
+        };
+
+        assert_eq!(resolve_http_timeout_secs(&publish).unwrap(), 20);
+    }
+
+    #[test]
+    fn publish_http_timeout_requires_config() {
+        let publish = PublishConfig {
+            workspace_hack_crate: String::new(),
+            delay_secs: Some(20),
+            http_timeout_secs: None,
+            user_agent: String::new(),
+        };
+
+        let error = resolve_http_timeout_secs(&publish).unwrap_err();
+        assert!(error.to_string().contains("http_timeout_secs"), "{error}");
     }
 
     #[test]

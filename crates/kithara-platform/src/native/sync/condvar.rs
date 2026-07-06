@@ -25,17 +25,6 @@ impl Condvar {
         guard
     }
 
-    #[inline]
-    #[track_caller]
-    pub fn wait_timeout<'a, T>(
-        &self,
-        mut guard: MutexGuard<'a, T>,
-        deadline: Instant,
-    ) -> MutexGuard<'a, T> {
-        self.wait_timeout_ref(&mut guard, deadline);
-        guard
-    }
-
     /// In-place [`wait`](Self::wait): atomically release the guard's mutex and
     /// park, re-acquiring on wake — without consuming the guard. The by-value
     /// `wait` delegates here (so this is exercised in production), and the flash
@@ -46,6 +35,17 @@ impl Condvar {
     pub(crate) fn wait_ref<T>(&self, guard: &mut MutexGuard<'_, T>) {
         crate::no_block::forbid("Condvar::wait");
         self.0.wait(&mut guard.0);
+    }
+
+    #[inline]
+    #[track_caller]
+    pub fn wait_timeout<'a, T>(
+        &self,
+        mut guard: MutexGuard<'a, T>,
+        deadline: Instant,
+    ) -> MutexGuard<'a, T> {
+        self.wait_timeout_ref(&mut guard, deadline);
+        guard
     }
 
     /// In-place [`wait_timeout`](Self::wait_timeout). `deadline` is the real

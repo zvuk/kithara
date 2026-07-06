@@ -9,12 +9,22 @@ use kithara_stream::dl::{Downloader, Peer, PeerHandle};
 /// ([`Self::peer_handle`] / [`Self::scope`] / [`Self::byte_pool`]) for the
 /// loaders that still need full download + disk capability.
 pub(crate) struct StreamPeer {
-    peer_handle: PeerHandle,
     scope: AssetScope,
     byte_pool: kithara_bufpool::BytePool,
+    peer_handle: PeerHandle,
 }
 
 impl StreamPeer {
+    /// Staged-transition distribution accessor (retired S13/S14).
+    pub(crate) fn byte_pool(&self) -> kithara_bufpool::BytePool {
+        self.byte_pool.clone()
+    }
+
+    /// Staged-transition distribution accessor (retired S13/S14).
+    pub(crate) fn peer_handle(&self) -> PeerHandle {
+        self.peer_handle.clone()
+    }
+
     /// Register `peer` on `downloader` and take ownership of the quartet.
     /// The sole `downloader.register(...).with_bus(...)` site.
     pub(crate) fn register(
@@ -26,24 +36,14 @@ impl StreamPeer {
     ) -> Self {
         let peer_handle = downloader.register(peer).with_bus(bus);
         Self {
-            peer_handle,
             scope,
             byte_pool,
+            peer_handle,
         }
-    }
-
-    /// Staged-transition distribution accessor (retired S13/S14).
-    pub(crate) fn peer_handle(&self) -> PeerHandle {
-        self.peer_handle.clone()
     }
 
     /// Staged-transition distribution accessor (retired S13/S14).
     pub(crate) fn scope(&self) -> AssetScope {
         self.scope.clone()
-    }
-
-    /// Staged-transition distribution accessor (retired S13/S14).
-    pub(crate) fn byte_pool(&self) -> kithara_bufpool::BytePool {
-        self.byte_pool.clone()
     }
 }

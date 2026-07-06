@@ -32,8 +32,8 @@ pub(crate) mod pointwise_loop;
 pub(crate) mod retry_fallback;
 
 pub(crate) struct Context<'a> {
-    pub(crate) workspace_root: &'a Path,
     pub(crate) config: &'a IdiomsConfig,
+    pub(crate) workspace_root: &'a Path,
     pub(crate) scope: &'a Scope,
 }
 

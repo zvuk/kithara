@@ -58,18 +58,6 @@ impl HlsVariant {
         u32::try_from(head).unwrap_or(u32::MAX)
     }
 
-    #[kithara::probe(
-        variant = self.variant as u64,
-        from_seg,
-        old_queue_len = self.flow.queue.lock().len() as u64
-    )]
-    pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
-        if self.fetch_plan_satisfied(from_seg) {
-            return;
-        }
-        self.rebuild_queue(from_seg);
-    }
-
     /// True when every fetch a `rebuild_queue(from_seg)` would enqueue is
     /// already `Loaded` — the init (if any) plus every media segment in
     /// `[from_seg, num_segments)`. In that state a rebuild only reseeds
@@ -89,17 +77,16 @@ impl HlsVariant {
         })
     }
 
-    #[kithara::probe]
-    pub(super) fn rebuild_queue(&self, from_seg: u32) {
-        let segs_len = self.num_segments();
-        let init = self
-            .needs_init_fetch()
-            .then_some(PlannedFetch::Init)
-            .into_iter();
-        let tail = (from_seg..segs_len).map(PlannedFetch::Segment);
-        let mut queue = self.flow.queue.lock();
-        queue.clear();
-        queue.extend(init.chain(tail));
+    #[kithara::probe(
+        variant = self.variant as u64,
+        from_seg,
+        old_queue_len = self.flow.queue.lock().len() as u64
+    )]
+    pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
+        if self.fetch_plan_satisfied(from_seg) {
+            return;
+        }
+        self.rebuild_queue(from_seg);
     }
 
     pub(crate) fn rebuild_at_time(&self, ctx: &PlanCtx, target: Duration) -> Option<u32> {
@@ -113,6 +100,19 @@ impl HlsVariant {
             self.set_exact_seek_demand(byte, seg);
         }
         Some(seg)
+    }
+
+    #[kithara::probe]
+    pub(super) fn rebuild_queue(&self, from_seg: u32) {
+        let segs_len = self.num_segments();
+        let init = self
+            .needs_init_fetch()
+            .then_some(PlannedFetch::Init)
+            .into_iter();
+        let tail = (from_seg..segs_len).map(PlannedFetch::Segment);
+        let mut queue = self.flow.queue.lock();
+        queue.clear();
+        queue.extend(init.chain(tail));
     }
 
     /// Same as [`Self::rebuild`] but also enqueues `seg 0` when

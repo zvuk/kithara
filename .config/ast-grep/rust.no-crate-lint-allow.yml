@@ -20,7 +20,7 @@ message: |
   Workspace-wide lint policy belongs in the root `/Cargo.toml`. Per-crate
   carve-outs of this kind are not legitimate — if a lint truly does not fit
   the crate's nature, raise it at the workspace level (root Cargo.toml) and
-  document the rationale in `feedback_no_lint_suppression.md`.
+  document the rationale there.
 severity: error
 language: Yaml
 files:

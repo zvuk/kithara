@@ -32,30 +32,6 @@ struct RawAppleNet {
 }
 
 impl RawAppleNet {
-    #[kithara::flash(io)]
-    async fn raw_body(
-        &self,
-        url: Url,
-        range: Option<RangeSpec>,
-        headers: Option<Headers>,
-        accept_partial: bool,
-    ) -> Result<ByteStream, NetError> {
-        let response = {
-            let request = AppleRequest::new(&url, Method::Get, range, headers, None)?;
-            timeout(
-                self.options.inactivity_timeout,
-                self.session.stream(request, self.cancel.clone()),
-            )
-        }
-        .await
-        .map_err(|_| NetError::Timeout)??;
-        if let Err(error) = check_status(url, response.status, &Bytes::new(), accept_partial) {
-            response.cancel();
-            return Err(error);
-        }
-        Ok(response.into())
-    }
-
     async fn body_stream(
         &self,
         url: Url,
@@ -92,6 +68,30 @@ impl RawAppleNet {
         .map_err(|_| NetError::Timeout)??;
         check_status(url, response.status, &response.body, accept_partial)?;
         Ok(response)
+    }
+
+    #[kithara::flash(io)]
+    async fn raw_body(
+        &self,
+        url: Url,
+        range: Option<RangeSpec>,
+        headers: Option<Headers>,
+        accept_partial: bool,
+    ) -> Result<ByteStream, NetError> {
+        let response = {
+            let request = AppleRequest::new(&url, Method::Get, range, headers, None)?;
+            timeout(
+                self.options.inactivity_timeout,
+                self.session.stream(request, self.cancel.clone()),
+            )
+        }
+        .await
+        .map_err(|_| NetError::Timeout)??;
+        if let Err(error) = check_status(url, response.status, &Bytes::new(), accept_partial) {
+            response.cancel();
+            return Err(error);
+        }
+        Ok(response.into())
     }
 
     fn wrap_resumable(
@@ -152,23 +152,16 @@ impl AppleNet {
         }
     }
 
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
-    pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
-        self.net.get_bytes(url, headers).await
+    #[must_use]
+    pub fn connection_count(&self) -> usize {
+        self.connection_metrics.connection_count()
     }
 
     /// # Errors
     ///
     /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
-    pub async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> NetResult<Bytes> {
-        self.net.post_bytes(url, body, headers).await
+    pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
+        self.net.get_bytes(url, headers).await
     }
 
     /// # Errors
@@ -195,9 +188,16 @@ impl AppleNet {
         &self.options
     }
 
-    #[must_use]
-    pub fn connection_count(&self) -> usize {
-        self.connection_metrics.connection_count()
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
+    pub async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> NetResult<Bytes> {
+        self.net.post_bytes(url, body, headers).await
     }
 
     /// # Errors
@@ -222,15 +222,6 @@ impl Net for AppleNet {
         self.net.get_bytes(url, headers).await
     }
 
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError> {
-        self.net.post_bytes(url, body, headers).await
-    }
-
     async fn get_range(
         &self,
         url: Url,
@@ -244,6 +235,15 @@ impl Net for AppleNet {
         self.net.head(url, headers).await
     }
 
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError> {
+        self.net.post_bytes(url, body, headers).await
+    }
+
     async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
         self.net.stream(url, headers).await
     }
@@ -253,17 +253,6 @@ impl Net for AppleNet {
 impl Net for RawAppleNet {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         self.data(Method::Get, url, None, None, headers, false)
-            .await
-            .map(|response| response.body)
-    }
-
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError> {
-        self.data(Method::Post, url, Some(body), None, headers, false)
             .await
             .map(|response| response.body)
     }
@@ -281,6 +270,17 @@ impl Net for RawAppleNet {
         self.data(Method::Head, url, None, None, headers, true)
             .await
             .map(|response| normalize_head_headers(response.headers))
+    }
+
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError> {
+        self.data(Method::Post, url, Some(body), None, headers, false)
+            .await
+            .map(|response| response.body)
     }
 
     async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {

@@ -17,7 +17,7 @@ Platform-aware runtime primitives for native and `wasm32` targets. This crate is
 ## Usage
 
 ```rust
-use kithara_platform::{Mutex, time};
+use kithara_platform::{sync::Mutex, time};
 
 let lock = Mutex::new(42_u32);
 {
@@ -25,7 +25,7 @@ let lock = Mutex::new(42_u32);
     *guard += 1;
 }
 
-time::sleep(std::time::Duration::from_millis(10)).await;
+time::sleep(time::Duration::from_millis(10)).await;
 ```
 
 ## Key types and entry points
@@ -34,9 +34,17 @@ time::sleep(std::time::Duration::from_millis(10)).await;
 - `MaybeSend` / `MaybeSync` — conditional trait bounds (`Send`/`Sync` on native, blanket no-op on wasm32).
 - `thread::{spawn, spawn_named, is_main_thread, is_worker_thread, assert_main_thread, park_timeout, paced_backoff, unpark}` — thread primitives with thread-affinity helpers.
 - `tokio::task::{spawn, spawn_blocking, yield_now}` — runtime task primitives (native `tokio`, worker-aware on wasm).
-- `time::{sleep, timeout, Instant, real_io, reset}` — timing helpers; the single timestamp source (`web_time` / `std::time` are banned outside this crate).
+- `time::{sleep, timeout, Instant, Duration}` — timing helpers; the single timestamp source (`web_time` / `std::time` are banned outside this crate).
+- `flash::{real_io, reset}` — flash-only control helpers; inert through `flash::` when the feature is off.
 - `CancelToken` — the single workspace cancellation token; `CancelScope`, `CancelGroup`, `CancelToken::{root, never, child}`.
 - `flash` — off-by-default, native, test-only cargo feature that swaps the wall clock for a deterministic virtual timeline.
+
+## Features
+
+- `flash` — native test-only virtual clock and flash-aware primitive wrappers.
+- `signal` — forwards `tokio::signal`.
+- `tokio-net` — enables native `tokio::net` and async I/O extension traits.
+- `tokio-rt-multi-thread` — forwards Tokio's multi-thread runtime feature.
 
 ## Integration
 

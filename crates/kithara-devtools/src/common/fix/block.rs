@@ -56,15 +56,15 @@ pub fn expand_blocks(
     let src_len = src.len();
     if scope_bytes.end > src_len {
         return Err(ExpansionError::SpanOutOfRange {
-            range: scope_bytes,
             src_len,
+            range: scope_bytes,
         });
     }
     for span in item_spans {
         if span.end > src_len || span.start < scope_bytes.start || span.end > scope_bytes.end {
             return Err(ExpansionError::SpanOutOfRange {
-                range: span.clone(),
                 src_len,
+                range: span.clone(),
             });
         }
     }
@@ -205,8 +205,8 @@ fn check_no_floating_comment(src: &str, gap: Range<usize>) -> Result<(), Expansi
                 + 1;
             let snippet = trimmed.trim_end_matches('\n').trim_end().to_string();
             return Err(ExpansionError::FloatingComment {
-                line: line_no,
                 snippet,
+                line: line_no,
             });
         }
         line_start_byte += line_text.len();

@@ -112,6 +112,55 @@ impl EventBridge {
         }
     }
 
+    /// Push refreshed loaded ranges to the current item's observer when the
+    /// polled frontier moves. Using the polled decoded frontier (not the
+    /// lossy byte-ratio telemetry that under-reported a VBR-FLAC quiet
+    /// intro) keeps loaded ranges always covering the playhead, so the
+    /// host never wrongly pauses into a buffering deadlock.
+    fn emit_loaded_ranges(
+        items: &Arc<Mutex<ItemRegistry>>,
+        last_current: &Mutex<Option<TrackId>>,
+        frontier: Option<f64>,
+        last: &mut Option<f64>,
+    ) {
+        let Some(frontier) = frontier else {
+            *last = None;
+            return;
+        };
+        if last.is_some_and(|prev| (prev - frontier).abs() <= Self::TIME_UPDATE_THRESHOLD) {
+            return;
+        }
+        let Some(track_id) = *last_current.lock() else {
+            return;
+        };
+        let Some(item) = items.lock().get(&track_id).cloned() else {
+            return;
+        };
+        let Some(item_obs) = item.observer() else {
+            return;
+        };
+        *last = Some(frontier);
+        item_obs.on_event(FfiItemEvent::LoadedRangesChanged {
+            ranges: Self::loaded_ranges_from_frontier(frontier),
+        });
+    }
+
+    /// Build loaded ranges from the decoded-ahead frontier.
+    ///
+    /// The frontier is the authoritative buffered/playable window (always
+    /// `>=` the playhead), so it is reported as a single range `[0,
+    /// frontier]`. An empty vec means nothing is decoded yet.
+    fn loaded_ranges_from_frontier(frontier: f64) -> Vec<FfiTimeRange> {
+        if frontier > 0.0 {
+            vec![FfiTimeRange {
+                start_seconds: 0.0,
+                duration_seconds: frontier,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+
     fn player_event_to_ffi(event: &PlayerEvent) -> Option<FfiPlayerEvent> {
         Some(match event {
             PlayerEvent::RateChanged { rate } => FfiPlayerEvent::RateChanged { rate: *rate },
@@ -291,55 +340,6 @@ impl EventBridge {
                 Self::emit_loaded_ranges(&items, &last_current, view.buffered, &mut last_buffered);
             }
         })
-    }
-
-    /// Build loaded ranges from the decoded-ahead frontier.
-    ///
-    /// The frontier is the authoritative buffered/playable window (always
-    /// `>=` the playhead), so it is reported as a single range `[0,
-    /// frontier]`. An empty vec means nothing is decoded yet.
-    fn loaded_ranges_from_frontier(frontier: f64) -> Vec<FfiTimeRange> {
-        if frontier > 0.0 {
-            vec![FfiTimeRange {
-                start_seconds: 0.0,
-                duration_seconds: frontier,
-            }]
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Push refreshed loaded ranges to the current item's observer when the
-    /// polled frontier moves. Using the polled decoded frontier (not the
-    /// lossy byte-ratio telemetry that under-reported a VBR-FLAC quiet
-    /// intro) keeps loaded ranges always covering the playhead, so the
-    /// host never wrongly pauses into a buffering deadlock.
-    fn emit_loaded_ranges(
-        items: &Arc<Mutex<ItemRegistry>>,
-        last_current: &Mutex<Option<TrackId>>,
-        frontier: Option<f64>,
-        last: &mut Option<f64>,
-    ) {
-        let Some(frontier) = frontier else {
-            *last = None;
-            return;
-        };
-        if last.is_some_and(|prev| (prev - frontier).abs() <= Self::TIME_UPDATE_THRESHOLD) {
-            return;
-        }
-        let Some(track_id) = *last_current.lock() else {
-            return;
-        };
-        let Some(item) = items.lock().get(&track_id).cloned() else {
-            return;
-        };
-        let Some(item_obs) = item.observer() else {
-            return;
-        };
-        *last = Some(frontier);
-        item_obs.on_event(FfiItemEvent::LoadedRangesChanged {
-            ranges: Self::loaded_ranges_from_frontier(frontier),
-        });
     }
 }
 

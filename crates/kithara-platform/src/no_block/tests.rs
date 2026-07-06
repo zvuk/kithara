@@ -6,17 +6,23 @@ use std::{
     process,
     sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll, Waker},
+    thread,
     time::{Duration, Instant},
 };
 
 use super::{
-    mode::{Mode, force_log_path, force_mode},
+    clock::force_cpu_elapsed,
+    mode::{Mode, force_blanket_budget, force_log_path, force_mode},
     *,
 };
 
 const FIRST_LOG_FILE_ID: usize = 0;
+const BLANKET_TEST_BUDGET_MS: u64 = 10;
+const BLANKET_TEST_SLEEP_MS: u64 = 50;
+const BLANKET_TEST_SPIN_MS: u64 = 50;
 const CENSUS_LOG_BUDGET_MS: u64 = 10_000;
 const CENSUS_LOG_SLEEP_MS: u64 = 1;
+const FORCED_SPIN_CPU_MS: u64 = 10_000;
 
 static LOG_FILE_ID: AtomicUsize = AtomicUsize::new(FIRST_LOG_FILE_ID);
 
@@ -59,6 +65,54 @@ fn budget_flags_over_budget_poll() {
     assert!(msg.contains("[no_block]"), "got: {msg}");
     assert!(msg.contains("spin_task"), "got: {msg}");
     assert!(msg.contains("budget"), "got: {msg}");
+}
+
+#[test]
+fn blanket_wait_over_budget_logs_not_panics() {
+    force_mode(Mode::Panic);
+    force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
+
+    let path = temp_log_path("blanket-wait");
+    let _ = fs::remove_file(&path);
+    force_log_path(path.clone());
+
+    let caught = std::panic::catch_unwind(|| {
+        let fut = watch_blanket("blanket_wait_task", async {
+            thread::sleep(Duration::from_millis(BLANKET_TEST_SLEEP_MS));
+        });
+        let _ = poll_once(fut);
+    });
+    if let Err(err) = caught {
+        let msg = err
+            .downcast_ref::<String>()
+            .map_or("non-string panic payload", String::as_str);
+        panic!("blanket wait must log instead of panic: {msg}");
+    }
+
+    let contents = fs::read_to_string(&path).expect("read blanket census log");
+    assert!(contents.contains("[no_block][census]"), "got: {contents}");
+    assert!(contents.contains("blanket_wait_task"), "got: {contents}");
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn blanket_spin_over_budget_panics() {
+    force_mode(Mode::Panic);
+    force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
+    force_cpu_elapsed(Some(Duration::from_millis(FORCED_SPIN_CPU_MS)));
+
+    let caught = std::panic::catch_unwind(|| {
+        let fut = watch_blanket("blanket_spin_task", async {
+            spin_for(Duration::from_millis(BLANKET_TEST_SPIN_MS));
+        });
+        let _ = poll_once(fut);
+    });
+    force_cpu_elapsed(None);
+
+    let err = caught.expect_err("blanket CPU spin must panic");
+    let msg = err.downcast_ref::<String>().expect("panic payload");
+    assert!(msg.contains("blanket_spin_task"), "got: {msg}");
+    assert!(msg.contains("CPU spin"), "got: {msg}");
 }
 
 #[test]

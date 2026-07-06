@@ -57,6 +57,14 @@ impl AbrHandle {
         }
     }
 
+    /// Clear the escape condition — see [`AbrState::clear_escape`]. No-op for
+    /// stateless handles.
+    pub fn clear_escape(&self) {
+        if let Some(state) = self.inner.state.as_ref() {
+            state.clear_escape();
+        }
+    }
+
     /// Current variant's full metadata (bandwidth, name, codecs,
     /// container, duration shape). Pulled live each call — no caching.
     #[must_use]
@@ -88,14 +96,6 @@ impl AbrHandle {
         }
     }
 
-    /// Clear the escape condition — see [`AbrState::clear_escape`]. No-op for
-    /// stateless handles.
-    pub fn clear_escape(&self) {
-        if let Some(state) = self.inner.state.as_ref() {
-            state.clear_escape();
-        }
-    }
-
     /// `true` while the active variant is flagged non-delivering — see
     /// [`AbrState::is_escaping`].
     #[must_use]
@@ -108,25 +108,6 @@ impl AbrHandle {
         self.inner.state.as_ref().is_some_and(|s| s.is_locked())
     }
 
-    /// Flag the active variant as non-delivering — see
-    /// [`AbrState::mark_escape`]. The caller must follow with
-    /// [`Self::reevaluate`] so a tick observes the flag. No-op when stateless.
-    pub fn mark_escape(&self) {
-        if let Some(state) = self.inner.state.as_ref() {
-            state.mark_escape();
-        }
-    }
-
-    /// Trigger an out-of-band ABR re-evaluation. Used by the HLS layer after
-    /// [`Self::mark_escape`]: the flag is set under the HLS state lock, but the
-    /// tick reads `peer.progress()` (which re-locks that state), so the tick
-    /// must fire OUTSIDE the lock. Mirrors the controller's `on_*` hooks.
-    pub fn reevaluate(&self) {
-        self.inner
-            .controller
-            .tick(self.inner.peer_id, Instant::now());
-    }
-
     /// Lock ABR (used during seek).
     pub fn lock(&self) {
         if let Some(state) = self.inner.state.as_ref() {
@@ -135,6 +116,15 @@ impl AbrHandle {
             if before == 0 {
                 self.inner.controller.on_locked(self.inner.peer_id);
             }
+        }
+    }
+
+    /// Flag the active variant as non-delivering — see
+    /// [`AbrState::mark_escape`]. The caller must follow with
+    /// [`Self::reevaluate`] so a tick observes the flag. No-op when stateless.
+    pub fn mark_escape(&self) {
+        if let Some(state) = self.inner.state.as_ref() {
+            state.mark_escape();
         }
     }
 
@@ -179,6 +169,16 @@ impl AbrHandle {
     #[must_use]
     pub fn peer_id(&self) -> AbrPeerId {
         self.inner.peer_id
+    }
+
+    /// Trigger an out-of-band ABR re-evaluation. Used by the HLS layer after
+    /// [`Self::mark_escape`]: the flag is set under the HLS state lock, but the
+    /// tick reads `peer.progress()` (which re-locks that state), so the tick
+    /// must fire OUTSIDE the lock. Mirrors the controller's `on_*` hooks.
+    pub fn reevaluate(&self) {
+        self.inner
+            .controller
+            .tick(self.inner.peer_id, Instant::now());
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {

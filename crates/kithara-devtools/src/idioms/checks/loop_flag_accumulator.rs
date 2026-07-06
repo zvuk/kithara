@@ -298,16 +298,11 @@ fn read_idents(body: &Block) -> HashSet<String> {
 
 struct WriteScanner<'a> {
     bools: &'a HashSet<String>,
-    in_if: usize,
     hits: &'a mut Vec<String>,
+    in_if: usize,
 }
 
 impl<'ast> Visit<'ast> for WriteScanner<'_> {
-    fn visit_expr_if(&mut self, e: &'ast ExprIf) {
-        self.in_if += 1;
-        syn::visit::visit_expr_if(self, e);
-        self.in_if -= 1;
-    }
     fn visit_expr_assign(&mut self, e: &'ast ExprAssign) {
         if self.in_if > 0
             && let Some(name) = single_ident(&e.left)
@@ -328,6 +323,11 @@ impl<'ast> Visit<'ast> for WriteScanner<'_> {
             self.hits.push(name);
         }
         syn::visit::visit_expr_binary(self, e);
+    }
+    fn visit_expr_if(&mut self, e: &'ast ExprIf) {
+        self.in_if += 1;
+        syn::visit::visit_expr_if(self, e);
+        self.in_if -= 1;
     }
 }
 

@@ -4,8 +4,8 @@ Keep mandatory context small. When a review finding repeats, put the rule at the
 lowest layer that prevents the mistake.
 
 - `AGENTS.md`: repo-wide blockers that should stop a design before code.
-- `.docs/workflows/rust-ai.md`: task flow, split, handoff, and reference routing.
-- `.docs/guides/*`: expanded red flags, examples, review guidance, and policy
+- `docs/workflows/rust-ai.md`: task flow, split, handoff, and reference routing.
+- `docs/guides/*`: expanded red flags, examples, review guidance, and policy
   details loaded only when relevant.
 - Owning crate `CONTEXT.md`: lifecycle, invariants, state ownership, protocol, or
   cache contracts for that crate.

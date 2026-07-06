@@ -99,10 +99,10 @@ kithara = { workspace = true, features = ["apple", "client-wreq"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true, features = ["backend-cpal", "fdk-aac", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
-# fdk-aac пришёл из kithara-decode defaults до Phase 2 (workspace
-# default-features=false). HE-AAC v2 fMP4 фикстуры в rapid-scrub /
-# stress-seek тестах декодятся через symphonia path, и без fdk-aac
-# отдается LC-only — добавляем явно.
+# fdk-aac came from kithara-decode defaults before Phase 2 (workspace
+# default-features=false). HE-AAC v2 fMP4 fixtures in rapid-scrub /
+# stress-seek tests decode through the symphonia path, and without fdk-aac
+# they are reported as LC-only, so add it explicitly.
 kithara-encode = { workspace = true }
 
 assert_no_alloc = { workspace = true }

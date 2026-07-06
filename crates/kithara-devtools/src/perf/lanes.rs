@@ -7,16 +7,11 @@ use crate::common::project::{PerfConfig, PerfLane};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Lane {
-    pub(crate) flash: bool,
     pub(crate) backend: String,
+    pub(crate) flash: bool,
 }
 
 impl Lane {
-    pub(crate) fn name(&self) -> String {
-        let flash = if self.flash { "on" } else { "off" };
-        format!("flash-{flash}-{}", self.backend)
-    }
-
     pub(crate) fn by_name(config: &PerfConfig, name: &str) -> Option<Self> {
         Self::configured(config)
             .into_iter()
@@ -25,6 +20,11 @@ impl Lane {
 
     pub(crate) fn configured(config: &PerfConfig) -> Vec<Self> {
         config.lanes.iter().map(Self::from).collect()
+    }
+
+    pub(crate) fn name(&self) -> String {
+        let flash = if self.flash { "on" } else { "off" };
+        format!("flash-{flash}-{}", self.backend)
     }
 }
 
@@ -58,6 +58,14 @@ impl RunPaths {
         }
     }
 
+    pub(crate) fn matrix_dir(&self) -> PathBuf {
+        self.run_dir.join("matrix")
+    }
+
+    pub(crate) fn profiles_dir(&self, lane: &str) -> PathBuf {
+        self.run_dir.join("profiles").join(lane)
+    }
+
     pub(crate) fn repeat_dir(&self, lane: &str, repeat: u32) -> PathBuf {
         self.run_dir
             .join("matrix")
@@ -65,8 +73,8 @@ impl RunPaths {
             .join(format!("rep{repeat}"))
     }
 
-    pub(crate) fn matrix_dir(&self) -> PathBuf {
-        self.run_dir.join("matrix")
+    pub(crate) fn report_md(&self) -> PathBuf {
+        self.run_dir.join("report.md")
     }
 
     pub(crate) fn slow_json(&self) -> PathBuf {
@@ -76,26 +84,18 @@ impl RunPaths {
     pub(crate) fn slow_md(&self) -> PathBuf {
         self.run_dir.join("slow.md")
     }
-
-    pub(crate) fn profiles_dir(&self, lane: &str) -> PathBuf {
-        self.run_dir.join("profiles").join(lane)
-    }
-
-    pub(crate) fn report_md(&self) -> PathBuf {
-        self.run_dir.join("report.md")
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct RepeatMeta {
-    pub(crate) run_id: String,
-    pub(crate) lane: String,
-    pub(crate) features: Vec<String>,
-    pub(crate) repeat: u32,
-    pub(crate) commit: String,
-    pub(crate) started_unix: u64,
-    pub(crate) duration_secs: f64,
     pub(crate) exit_code: Option<i32>,
+    pub(crate) commit: String,
+    pub(crate) lane: String,
+    pub(crate) run_id: String,
+    pub(crate) features: Vec<String>,
+    pub(crate) duration_secs: f64,
+    pub(crate) repeat: u32,
+    pub(crate) started_unix: u64,
 }
 
 pub(crate) fn sanitize(name: &str) -> String {

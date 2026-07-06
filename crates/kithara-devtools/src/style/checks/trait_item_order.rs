@@ -19,26 +19,6 @@ pub(crate) const ID: &str = "trait_item_order";
 pub(crate) struct TraitItemOrder;
 
 impl Check for TraitItemOrder {
-    fn id(&self) -> &'static str {
-        ID
-    }
-
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let cfg = &ctx.config.thresholds.trait_item_order;
-        let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
-                continue;
-            };
-            let rel = relative_to(ctx.workspace_root, &path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            scan_items(cfg, &rel, &file.items, &mut Vec::new(), &mut violations);
-        }
-        violations.sort_by(|a, b| a.key.cmp(&b.key));
-        Ok(violations)
-    }
-
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.trait_item_order;
         let mut outcome = FixOutcome::default();
@@ -61,6 +41,26 @@ impl Check for TraitItemOrder {
             }
         }
         Ok(outcome)
+    }
+
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        let cfg = &ctx.config.thresholds.trait_item_order;
+        let mut violations = Vec::new();
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+            let Ok(file) = parse_file(&path) else {
+                continue;
+            };
+            let rel = relative_to(ctx.workspace_root, &path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            scan_items(cfg, &rel, &file.items, &mut Vec::new(), &mut violations);
+        }
+        violations.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(violations)
     }
 }
 
@@ -250,13 +250,13 @@ fn scan_items(
 
 #[derive(Debug, Clone)]
 struct ItemKey {
+    name: String,
     idx: usize,
     kind_bucket: usize,
     /// Within the `fn` kind, names listed in `priority_fn_names` get a low
     /// bucket index and rank above the alphabetical tail. Other kinds always
     /// share the same priority bucket so only `name` decides their order.
     priority_bucket: usize,
-    name: String,
 }
 
 fn cmp_item_key(a: &ItemKey, b: &ItemKey) -> Ordering {

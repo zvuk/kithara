@@ -831,7 +831,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
 /// `commit_variant_switch from=0 to=3 cross_codec=true reason=UpSwitch`
 /// fires on the FIRST boundary crossing. Decoder produces some samples
 /// then stalls; `decode_next_chunk` hangs ~10s later. User experience:
-/// "пропал звук, слайдер двигался, потом крэш".
+/// "audio disappeared, the slider kept moving, then the app crashed".
 ///
 /// `abr_switch_real_assets_does_not_hang` and `runtime_cross_codec_manual_switch_no_hang`
 /// already cover the cross-codec path but their assertions accept

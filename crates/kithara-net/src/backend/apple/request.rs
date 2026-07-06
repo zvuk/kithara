@@ -26,8 +26,8 @@ impl Method {
 }
 
 pub(super) struct AppleRequest {
-    body: Option<Bytes>,
     method: Method,
+    body: Option<Bytes>,
     headers: Option<Headers>,
     range: Option<RangeSpec>,
     url: Url,

@@ -1,8 +1,10 @@
 #![no_main]
 
 use arbitrary::{Arbitrary, Unstructured};
-use kithara_platform::CancelToken;
-use kithara_storage::{MemResource, StorageResource};
+use kithara::{
+    platform::CancelToken,
+    storage::{MemResource, StorageResource},
+};
 use libfuzzer_sys::fuzz_target;
 
 #[derive(Debug)]

@@ -1,0 +1,18 @@
+{
+  // Give rust-analyzer its own build directory (`target/rust-analyzer`) so its
+  // background `cargo check` never shares `target/` with `cargo build` /
+  // `cargo clippy` / the pre-commit `just lint-fast`. Sharing the default
+  // target dir lets concurrent boring-sys2 build-script runs race on the
+  // bindgen OUT_DIR, which intermittently corrupts the generated ffi
+  // (E0081 duplicate discriminant + missing SSL_CTX_set_extension_permutation)
+  // and breaks the clippy gate. A dedicated dir removes the race entirely.
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "cargo": {
+          "targetDir": true
+        }
+      }
+    }
+  }
+}

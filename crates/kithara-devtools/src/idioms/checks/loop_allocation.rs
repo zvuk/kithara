@@ -81,17 +81,17 @@ impl Check for LoopAllocation {
 }
 
 struct LoopVisitor<'a> {
-    rel: &'a str,
     suppress: &'a Suppressions,
-    /// Depth of enclosing for/while/loop scopes. Allocation expressions
-    /// only flag when this is > 0.
-    inside_loop: usize,
+    out: &'a mut Vec<Violation>,
+    rel: &'a str,
     /// Depth of enclosing error / early-exit contexts: `return`/`break`
     /// values and `map_err` closures. Allocations there run at most once
     /// (or only on the error path), not per loop iteration — flag only
     /// when this is 0.
     cold_depth: usize,
-    out: &'a mut Vec<Violation>,
+    /// Depth of enclosing for/while/loop scopes. Allocation expressions
+    /// only flag when this is > 0.
+    inside_loop: usize,
 }
 
 impl LoopVisitor<'_> {
@@ -106,15 +106,27 @@ impl LoopVisitor<'_> {
 }
 
 impl<'ast> Visit<'ast> for LoopVisitor<'_> {
-    fn visit_expr_for_loop(&mut self, e: &'ast ExprForLoop) {
-        self.visit_expr(&e.expr);
-        self.inside_loop += 1;
-        self.visit_block(&e.body);
-        self.inside_loop -= 1;
+    fn visit_expr_break(&mut self, e: &'ast ExprBreak) {
+        self.cold_depth += 1;
+        if let Some(inner) = &e.expr {
+            self.visit_expr(inner);
+        }
+        self.cold_depth -= 1;
     }
 
-    fn visit_expr_while(&mut self, e: &'ast ExprWhile) {
-        self.visit_expr(&e.cond);
+    fn visit_expr_call(&mut self, c: &'ast ExprCall) {
+        if self.inside_loop > 0
+            && self.cold_depth == 0
+            && let Some(msg) = call_path_message(c)
+        {
+            let s = c.span().start();
+            self.report(s.line, s.column, msg);
+        }
+        visit::visit_expr_call(self, c);
+    }
+
+    fn visit_expr_for_loop(&mut self, e: &'ast ExprForLoop) {
+        self.visit_expr(&e.expr);
         self.inside_loop += 1;
         self.visit_block(&e.body);
         self.inside_loop -= 1;
@@ -135,17 +147,6 @@ impl<'ast> Visit<'ast> for LoopVisitor<'_> {
             self.report(s.line, s.column, msg);
         }
         visit::visit_expr_macro(self, m);
-    }
-
-    fn visit_expr_call(&mut self, c: &'ast ExprCall) {
-        if self.inside_loop > 0
-            && self.cold_depth == 0
-            && let Some(msg) = call_path_message(c)
-        {
-            let s = c.span().start();
-            self.report(s.line, s.column, msg);
-        }
-        visit::visit_expr_call(self, c);
     }
 
     fn visit_expr_method_call(&mut self, mc: &'ast ExprMethodCall) {
@@ -177,12 +178,11 @@ impl<'ast> Visit<'ast> for LoopVisitor<'_> {
         self.cold_depth -= 1;
     }
 
-    fn visit_expr_break(&mut self, e: &'ast ExprBreak) {
-        self.cold_depth += 1;
-        if let Some(inner) = &e.expr {
-            self.visit_expr(inner);
-        }
-        self.cold_depth -= 1;
+    fn visit_expr_while(&mut self, e: &'ast ExprWhile) {
+        self.visit_expr(&e.cond);
+        self.inside_loop += 1;
+        self.visit_block(&e.body);
+        self.inside_loop -= 1;
     }
 }
 
