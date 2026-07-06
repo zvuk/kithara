@@ -322,6 +322,8 @@ pub(crate) enum SeekMode {
 pub(crate) enum RecreateCause {
     /// Codec boundary detected during playback.
     FormatBoundary,
+    /// Host audio route changed the device sample rate.
+    RouteChange,
     /// ABR switch changed the codec or variant.
     VariantSwitch,
 }
