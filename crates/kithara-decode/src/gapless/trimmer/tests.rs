@@ -89,6 +89,25 @@ fn leading_trim_updates_offset_and_timestamp() {
 }
 
 #[kithara::test]
+fn deferred_leading_trim_leaves_requested_prefix_available() {
+    let spec = mono_spec();
+    let mut trimmer = GaplessTrimmer::with_deferred_leading(
+        GaplessInfo {
+            leading_frames: 3,
+            trailing_frames: 0,
+        },
+        1,
+    );
+
+    let mut ready = trimmer.push(chunk(spec, 0, 10));
+    assert_eq!(ready.len(), 1);
+    let out = ready.remove(0);
+    assert_eq!(out.frames(), 8);
+    assert_eq!(out.meta.frame_offset, 2);
+    assert_eq!(out.samples[0], 2.0);
+}
+
+#[kithara::test]
 fn leading_trim_can_consume_multiple_chunks() {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::from(GaplessInfo {

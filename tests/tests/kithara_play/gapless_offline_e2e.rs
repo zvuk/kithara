@@ -1,10 +1,15 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    sync::Arc,
+};
 
 use kithara::{
     assets::StoreOptions,
-    decode::{GaplessMode, SilenceTrimParams},
+    audio::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
+    decode::{DecodeError, GaplessMode, PcmSpec, SilenceTrimParams, TrackMetadata},
+    events::EventBus,
     platform::time::{self, Duration, Instant},
     play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig},
     stream::AudioCodec,
@@ -27,6 +32,12 @@ use crate::gapless_common::{
 const BLOCK_FRAMES: usize = 512;
 const POST_ROLL_BLOCKS: usize = 8;
 const SILENCE_THRESHOLD: f32 = 1.0e-3;
+const FUSED_FIXTURE_SOURCE_RATE: u32 = 44_100;
+const FUSED_FIXTURE_DEVICE_RATE: u32 = 48_000;
+const FUSED_FIXTURE_SOURCE_FRAMES: u64 = 44_100;
+const FUSED_FIXTURE_IDEAL_DEVICE_FRAMES: usize = 48_000;
+const FUSED_FIXTURE_SEAM_OMEGA: f64 = 0.23925;
+const FUSED_FIXTURE_SEAM_PHASE: f64 = -1.365_523_678_408_751_2;
 /// Phase-locked tone: period = 100 frames at 48 kHz, integer divisor of the
 /// sample rate, integer divisor of the AAC frame size (1024 / 100 ≠ int but
 /// the wave is still perfectly periodic over any block large enough — only
@@ -273,6 +284,40 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     assert!(
         ratio < ContinuityMetric::MAX_RATIO,
         "gapless stitch discontinuity {switch_peak:.6} is {ratio:.1}x the worst same-track control window {control_peak:.6}",
+    );
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn fused_gapless_deficit_compensation_restores_deferred_lead_at_stitch() {
+    let compensated = render_synthetic_fused_deficit_seam(1).await;
+    let uncompensated = render_synthetic_fused_deficit_seam(0).await;
+
+    let stitch_frame = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1;
+    let compensated_db = seam_step_db(&compensated.left, stitch_frame);
+    let uncompensated_db = seam_step_db(&uncompensated.left, stitch_frame);
+    println!(
+        "FUSED_GAPLESS_DEFICIT compensated_db={compensated_db:.2} uncompensated_db={uncompensated_db:.2}"
+    );
+
+    assert_prefetch_before_first_end(&compensated.events, "fused-deficit-1");
+    assert!(
+        compensated_db < -40.0,
+        "compensated seam residual too high: {compensated_db:.2} dB; events={:?}",
+        compensated.events
+    );
+    assert!(
+        uncompensated_db > -32.0,
+        "uncompensated control seam should expose the one-frame deficit: {uncompensated_db:.2} dB; events={:?}",
+        uncompensated.events
+    );
+    assert!(
+        compensated_db + 10.0 < uncompensated_db,
+        "compensation must improve the seam by at least 10 dB: compensated={compensated_db:.2}, uncompensated={uncompensated_db:.2}"
     );
 }
 
@@ -638,6 +683,48 @@ async fn create_resource_with_encoding(
     (resource, item_id)
 }
 
+async fn render_synthetic_fused_deficit_seam(first_deficit_frames: u32) -> SyntheticSeamRender {
+    let expected_device_frames = ceil_scaled_frames(
+        FUSED_FIXTURE_SOURCE_FRAMES,
+        FUSED_FIXTURE_DEVICE_RATE,
+        FUSED_FIXTURE_SOURCE_RATE,
+    );
+    assert_eq!(
+        expected_device_frames,
+        u64::try_from(FUSED_FIXTURE_IDEAL_DEVICE_FRAMES).expect("fixture size fits u64")
+    );
+
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(GaplessMode::Disabled)
+            .build(),
+        FUSED_FIXTURE_DEVICE_RATE,
+    );
+    let first = Resource::from_reader(
+        SyntheticDeficitReader::outgoing_short_by_one(first_deficit_frames),
+        Some(Arc::from("fused-deficit-1")),
+    );
+    let second = Resource::from_reader(
+        SyntheticDeficitReader::armed_next_with_deferred_lead(),
+        Some(Arc::from("fused-deficit-2")),
+    );
+
+    load_tagged_queue(
+        &harness,
+        [
+            (first, Arc::from("fused-deficit-1")),
+            (second, Arc::from("fused-deficit-2")),
+        ],
+    );
+
+    let (rendered, events) = render_until_item_end(&harness, "fused-deficit-2").await;
+    SyntheticSeamRender {
+        left: deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS)),
+        events,
+    }
+}
+
 fn load_tagged_queue<const N: usize>(
     harness: &OfflinePlayerHarness,
     items: [(Resource, Arc<str>); N],
@@ -652,6 +739,198 @@ fn load_tagged_queue<const N: usize>(
         .player()
         .select_item(0, true)
         .expect("select first queue item");
+}
+
+struct SyntheticSeamRender {
+    left: Vec<f32>,
+    events: Vec<TimedPlayerEvent>,
+}
+
+struct SyntheticDeficitReader {
+    bus: EventBus,
+    deferred_leading_frames: u32,
+    duration_frames: usize,
+    frames: Vec<f32>,
+    leading_compensation_frames: u32,
+    metadata: TrackMetadata,
+    output_deficit_frames: u32,
+    position_frames: usize,
+    spec: PcmSpec,
+}
+
+impl SyntheticDeficitReader {
+    fn outgoing_short_by_one(output_deficit_frames: u32) -> Self {
+        let actual_frames = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1;
+        Self::new(
+            (0..actual_frames).map(fused_seam_sample).collect(),
+            FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
+            output_deficit_frames,
+            0,
+        )
+    }
+
+    fn armed_next_with_deferred_lead() -> Self {
+        let start = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1;
+        let end = start + FUSED_FIXTURE_IDEAL_DEVICE_FRAMES + 1;
+        Self::new(
+            (start..end).map(fused_seam_sample).collect(),
+            FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
+            0,
+            1,
+        )
+    }
+
+    fn new(
+        frames: Vec<f32>,
+        duration_frames: usize,
+        output_deficit_frames: u32,
+        deferred_leading_frames: u32,
+    ) -> Self {
+        Self {
+            bus: EventBus::default(),
+            deferred_leading_frames,
+            duration_frames,
+            frames,
+            leading_compensation_frames: 0,
+            metadata: TrackMetadata::default(),
+            output_deficit_frames,
+            position_frames: 0,
+            spec: PcmSpec::new(
+                GAPLESS_CHANNELS,
+                NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("test sample rate"),
+            ),
+        }
+    }
+
+    fn resolve_deferred_leading(&mut self) {
+        let drop_frames = self
+            .deferred_leading_frames
+            .saturating_sub(self.leading_compensation_frames);
+        self.deferred_leading_frames = 0;
+        self.leading_compensation_frames = 0;
+        let drop = usize::try_from(drop_frames).unwrap_or(usize::MAX);
+        self.position_frames = self.position_frames.saturating_add(drop);
+    }
+
+    fn fill_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
+        self.resolve_deferred_leading();
+        let requested = output
+            .iter()
+            .map(|channel| channel.len())
+            .min()
+            .unwrap_or(0);
+        let frames = requested.min(self.frames.len().saturating_sub(self.position_frames));
+        for frame in 0..frames {
+            let sample = self.frames[self.position_frames + frame];
+            for channel in output.iter_mut() {
+                channel[frame] = sample;
+            }
+        }
+        self.position_frames += frames;
+        frames
+    }
+
+    fn fill_interleaved(&mut self, output: &mut [f32]) -> usize {
+        self.resolve_deferred_leading();
+        let channels = usize::from(self.spec.channels);
+        let requested = output.len().saturating_div(channels.max(1));
+        let frames = requested.min(self.frames.len().saturating_sub(self.position_frames));
+        for frame in 0..frames {
+            let sample = self.frames[self.position_frames + frame];
+            let start = frame.saturating_mul(channels);
+            let end = start.saturating_add(channels).min(output.len());
+            output[start..end].fill(sample);
+        }
+        self.position_frames += frames;
+        frames
+    }
+
+    fn read_outcome(&self, frames: usize) -> ReadOutcome {
+        NonZeroUsize::new(frames).map_or_else(
+            || ReadOutcome::Eof {
+                position: self.position(),
+            },
+            |count| ReadOutcome::Frames {
+                count,
+                position: self.position(),
+            },
+        )
+    }
+}
+
+impl PcmReader for SyntheticDeficitReader {
+    fn duration(&self) -> Option<Duration> {
+        Some(duration_for_test_frames(self.duration_frames))
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
+    }
+
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        Ok(ChunkOutcome::Eof {
+            position: self.position(),
+        })
+    }
+
+    fn position(&self) -> Duration {
+        duration_for_test_frames(self.position_frames)
+    }
+
+    fn output_deficit_frames(&self) -> u32 {
+        if self.position_frames >= self.frames.len() {
+            self.output_deficit_frames
+        } else {
+            0
+        }
+    }
+
+    fn compensate_gapless_leading_trim(&mut self, frames: u32) -> u32 {
+        let applied = frames.min(self.deferred_leading_frames);
+        self.leading_compensation_frames = applied;
+        self.duration_frames = self
+            .duration_frames
+            .saturating_add(usize::try_from(applied).unwrap_or(usize::MAX));
+        applied
+    }
+
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        let frames = self.fill_interleaved(buf);
+        Ok(self.read_outcome(frames))
+    }
+
+    fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        let frames = self.fill_planar(output);
+        Ok(self.read_outcome(frames))
+    }
+
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        let frames = frames_for_test_duration(position);
+        if frames >= self.frames.len() {
+            self.position_frames = self.frames.len();
+            Ok(SeekOutcome::PastEof {
+                target: position,
+                duration: self.position(),
+            })
+        } else {
+            self.position_frames = frames;
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: self.position(),
+            })
+        }
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
 }
 
 async fn render_until_item_end(
@@ -797,6 +1076,54 @@ fn gapless_control_peak(left: &[f32], stitch_frame: usize) -> (f32, usize) {
         count += 1;
     }
     (peak, count)
+}
+
+fn ceil_scaled_frames(frames: u64, output_rate: u32, input_rate: u32) -> u64 {
+    let numerator = u128::from(frames).saturating_mul(u128::from(output_rate));
+    let denominator = u128::from(input_rate.max(1));
+    let scaled = numerator.saturating_add(denominator - 1) / denominator;
+    u64::try_from(scaled).unwrap_or(u64::MAX)
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "test-only signal synthesis narrows bounded sine samples to f32"
+)]
+fn fused_seam_sample(global_frame: usize) -> f32 {
+    let global = u32::try_from(global_frame).expect("fixture frame fits u32");
+    let seam = u32::try_from(FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1).expect("seam fits u32");
+    let delta = f64::from(global) - f64::from(seam);
+    (FUSED_FIXTURE_SEAM_PHASE + delta * FUSED_FIXTURE_SEAM_OMEGA).sin() as f32
+}
+
+fn seam_step_db(left: &[f32], stitch_frame: usize) -> f32 {
+    assert!(
+        (1..left.len()).contains(&stitch_frame),
+        "stitch frame must be in 1..{}, got {stitch_frame}",
+        left.len(),
+    );
+    amplitude_db((left[stitch_frame] - left[stitch_frame - 1]).abs())
+}
+
+fn amplitude_db(value: f32) -> f32 {
+    20.0 * value.max(1.0e-9).log10()
+}
+
+fn duration_for_test_frames(frames: usize) -> Duration {
+    let nanos = u128::try_from(frames)
+        .unwrap_or(u128::MAX)
+        .saturating_mul(1_000_000_000)
+        / u128::from(FUSED_FIXTURE_DEVICE_RATE);
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+}
+
+fn frames_for_test_duration(duration: Duration) -> usize {
+    let frames = duration
+        .as_nanos()
+        .saturating_mul(u128::from(FUSED_FIXTURE_DEVICE_RATE))
+        / 1_000_000_000;
+    usize::try_from(frames).unwrap_or(usize::MAX)
 }
 
 /// Index just past the last sample whose absolute amplitude is at or above

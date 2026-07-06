@@ -34,20 +34,22 @@ impl GaplessStage {
         decoder: &dyn Decoder,
         mode: GaplessMode,
         media_info: Option<&MediaInfo>,
+        deferred_leading_frames: u32,
     ) -> Self {
+        let from_info = |info| GaplessTrimmer::with_deferred_leading(info, deferred_leading_frames);
         let trimmer = match mode {
             GaplessMode::MediaOnly => decoder
                 .track_info()
                 .gapless
-                .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from),
-            GaplessMode::CodecPriming => decoder.track_info().gapless.map_or_else(
-                || resolve_codec_priming(decoder, media_info),
-                GaplessTrimmer::from,
-            ),
-            GaplessMode::SilenceTrim(params) => decoder.track_info().gapless.map_or_else(
-                || GaplessTrimmer::silence_trim(params),
-                GaplessTrimmer::from,
-            ),
+                .map_or_else(GaplessTrimmer::disabled, from_info),
+            GaplessMode::CodecPriming => decoder
+                .track_info()
+                .gapless
+                .map_or_else(|| resolve_codec_priming(decoder, media_info), from_info),
+            GaplessMode::SilenceTrim(params) => decoder
+                .track_info()
+                .gapless
+                .map_or_else(|| GaplessTrimmer::silence_trim(params), from_info),
             _ => GaplessTrimmer::disabled(),
         };
         Self {

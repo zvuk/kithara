@@ -93,6 +93,12 @@ impl fmt::Debug for PlayerCmd {
 /// `type_complexity` threshold.
 type ActiveTrackEntry = (usize, Index, bool);
 
+#[derive(Clone, Copy)]
+struct Handover {
+    offset: usize,
+    output_deficit_frames: u32,
+}
+
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
 pub struct PlayerNodeProcessor {
@@ -442,10 +448,41 @@ impl PlayerNodeProcessor {
         }
     }
 
-    fn initial_handover_offset(read_outcome: &TrackReadOutcome) -> Option<usize> {
+    fn bounded_output_deficit_frames(deficit: u32) -> u32 {
+        if deficit <= 1 {
+            return deficit;
+        }
+        debug_assert!(
+            deficit <= 1,
+            "gapless output deficit exceeded one frame: deficit={deficit}"
+        );
+        warn!(
+            deficit,
+            "gapless output deficit exceeded one frame; bounding seam compensation"
+        );
+        1
+    }
+
+    fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {
         match read_outcome {
-            TrackReadOutcome::Partial { frames, .. } => Some(*frames),
-            TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(0),
+            TrackReadOutcome::Partial {
+                frames,
+                output_deficit_frames,
+                ..
+            } => Some(Handover {
+                offset: *frames,
+                output_deficit_frames: *output_deficit_frames,
+            }),
+            TrackReadOutcome::Eof {
+                output_deficit_frames,
+            } => Some(Handover {
+                offset: 0,
+                output_deficit_frames: *output_deficit_frames,
+            }),
+            TrackReadOutcome::Failed => Some(Handover {
+                offset: 0,
+                output_deficit_frames: 0,
+            }),
             TrackReadOutcome::Full { .. } => None,
         }
     }
@@ -494,11 +531,42 @@ impl PlayerNodeProcessor {
             .ok();
     }
 
-    fn next_handover_offset(read_outcome: &TrackReadOutcome, offset: usize) -> Option<usize> {
+    fn next_handover(read_outcome: &TrackReadOutcome, offset: usize) -> Option<Handover> {
         match read_outcome {
             TrackReadOutcome::Full { .. } => None,
-            TrackReadOutcome::Partial { frames, .. } => Some(offset + *frames),
-            TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(offset),
+            TrackReadOutcome::Partial {
+                frames,
+                output_deficit_frames,
+                ..
+            } => Some(Handover {
+                offset: offset.saturating_add(*frames),
+                output_deficit_frames: *output_deficit_frames,
+            }),
+            TrackReadOutcome::Eof {
+                output_deficit_frames,
+            } => Some(Handover {
+                offset,
+                output_deficit_frames: *output_deficit_frames,
+            }),
+            TrackReadOutcome::Failed => Some(Handover {
+                offset,
+                output_deficit_frames: 0,
+            }),
+        }
+    }
+
+    fn apply_gapless_seam_compensation(track: &mut PlayerTrack, deficit_frames: u32) {
+        let bounded = Self::bounded_output_deficit_frames(deficit_frames);
+        if bounded == 0 {
+            return;
+        }
+        let applied = track.compensate_gapless_leading_trim(bounded);
+        if applied < bounded {
+            warn!(
+                requested = bounded,
+                applied,
+                "gapless seam compensation could not keep all deferred leading trim frames"
+            );
         }
     }
 
@@ -529,7 +597,7 @@ impl PlayerNodeProcessor {
                 position, duration, ..
             } => Some((position, duration)),
             TrackReadOutcome::Partial { duration, .. } => Some((duration, duration)),
-            TrackReadOutcome::Eof | TrackReadOutcome::Failed => None,
+            TrackReadOutcome::Eof { .. } | TrackReadOutcome::Failed => None,
         }
     }
 
@@ -617,14 +685,15 @@ impl PlayerNodeProcessor {
                     leading_outcome_pos_dur = Some(snapshot);
                 }
 
-                let mut handover_offset = Self::initial_handover_offset(&read_outcome);
+                let mut handover = Self::initial_handover(&read_outcome);
 
                 for (next_idx, (_, next_handle, next_is_leading)) in
                     active_tracks.iter().enumerate()
                 {
-                    let Some(offset) = handover_offset else {
+                    let Some(handoff) = handover else {
                         break;
                     };
+                    let offset = handoff.offset;
                     if next_idx == track_idx || skip_tracks[next_idx] || !*next_is_leading {
                         continue;
                     }
@@ -649,11 +718,11 @@ impl PlayerNodeProcessor {
                         leading_outcome_pos_dur = Some(snapshot);
                     }
 
-                    handover_offset = Self::next_handover_offset(&read_outcome, offset);
+                    handover = Self::next_handover(&read_outcome, offset);
                 }
 
-                if let Some(offset) = handover_offset
-                    && offset < frames
+                if let Some(handoff) = handover
+                    && handoff.offset < frames
                 {
                     for (next_arena_idx, (next_handle, next_state)) in
                         arena_tracks.iter().enumerate()
@@ -667,11 +736,15 @@ impl PlayerNodeProcessor {
                         let Some(next_track) = tracks.get_by_index_mut(*next_handle) else {
                             continue;
                         };
+                        Self::apply_gapless_seam_compensation(
+                            next_track,
+                            handoff.output_deficit_frames,
+                        );
                         next_track.play();
                         let _ = next_track.read(
                             &mut read_bufs,
                             &mut mix_bufs,
-                            offset..frames,
+                            handoff.offset..frames,
                             &self.shared_state.notification_tx,
                         );
                         break;

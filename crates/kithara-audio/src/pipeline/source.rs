@@ -332,6 +332,7 @@ pub(crate) struct DecodeInit<T: StreamType> {
     pub(crate) decoder: Box<dyn Decoder>,
     pub(crate) decoder_factory: DecoderFactory<T>,
     pub(crate) gapless_mode: GaplessMode,
+    pub(crate) deferred_gapless_leading_trim_frames: u32,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) media_info: Option<MediaInfo>,
     pub(crate) recreate_on_host_rate_change: bool,
@@ -438,6 +439,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             decoder_factory,
             media_info: initial_media_info,
             gapless_mode,
+            deferred_gapless_leading_trim_frames,
             host_sample_rate,
             recreate_on_host_rate_change,
         } = init;
@@ -447,8 +449,12 @@ impl<T: StreamType> StreamAudioSource<T> {
         let seek_obs = shared_stream.seek_observe();
         let activity = shared_stream.activity();
         let peer_wake = shared_stream.peer_wake();
-        let gapless =
-            GaplessStage::build(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
+        let gapless = GaplessStage::build(
+            decoder.as_ref(),
+            gapless_mode,
+            initial_media_info.as_ref(),
+            deferred_gapless_leading_trim_frames,
+        );
         let session = DecoderSession {
             decoder,
             base_offset: 0,
@@ -3514,6 +3520,7 @@ mod rebuilding_decoder_tests {
             DecodeInit {
                 decoder: Box::new(TestDecoder::new(1, Arc::clone(&drops))),
                 decoder_factory,
+                deferred_gapless_leading_trim_frames: 0,
                 gapless_mode: GaplessMode::Disabled,
                 host_sample_rate: Arc::new(AtomicU32::new(Consts::SAMPLE_RATE)),
                 media_info: Some(media_info(0)),
@@ -3564,6 +3571,7 @@ mod rebuilding_decoder_tests {
                     Arc::clone(&drops),
                 )),
                 decoder_factory,
+                deferred_gapless_leading_trim_frames: 0,
                 gapless_mode: GaplessMode::Disabled,
                 host_sample_rate,
                 media_info: Some(media_info(0)),
@@ -4349,6 +4357,7 @@ mod splice_continuity_tests {
             DecodeInit {
                 decoder: initial_decoder,
                 decoder_factory,
+                deferred_gapless_leading_trim_frames: 0,
                 gapless_mode: GaplessMode::Disabled,
                 host_sample_rate,
                 media_info: Some(media_info(Consts::SLQ_VARIANT)),

@@ -20,6 +20,7 @@ pub struct PlayerResource {
     channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
     eof_seen: bool,
     failed: bool,
+    output_deficit_frames: u32,
     write_len: usize,
     write_pos: usize,
 }
@@ -38,9 +39,12 @@ pub enum ReadOutcome {
     /// The payload is the number of written frames. This outcome is reserved
     /// for natural EOF inside the requested block; the next read must return
     /// [`ReadOutcome::Eof`].
-    Partial(usize),
+    Partial {
+        frames: usize,
+        output_deficit_frames: u32,
+    },
     /// The resource was already drained and nothing was written.
-    Eof,
+    Eof { output_deficit_frames: u32 },
     /// The underlying decoder/source reported a non-recoverable error
     /// mid-stream. Distinct from [`Eof`](Self::Eof): the track did NOT
     /// reach its natural end — surface this as a track-failed signal
@@ -85,6 +89,7 @@ impl PlayerResource {
             write_pos: 0,
             eof_seen: false,
             failed: false,
+            output_deficit_frames: 0,
         }
     }
 
@@ -120,6 +125,7 @@ impl PlayerResource {
                 Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
                 Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
                 Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
+                    self.output_deficit_frames = self.resource.output_deficit_frames();
                     self.eof_seen = true;
                     eof_reached = true;
                     0
@@ -147,6 +153,17 @@ impl PlayerResource {
     #[must_use]
     pub fn frames_until_eof(&self) -> Option<usize> {
         self.eof_seen.then_some(self.write_len)
+    }
+
+    /// Measured output deficit captured when the wrapped reader reached EOF.
+    #[must_use]
+    pub fn output_deficit_frames(&self) -> u32 {
+        self.output_deficit_frames
+    }
+
+    /// Keep deferred leading trim frames for cross-track seam compensation.
+    pub fn compensate_gapless_leading_trim(&mut self, frames: u32) -> u32 {
+        self.resource.compensate_gapless_leading_trim(frames)
     }
 
     /// Read PCM frames into the output buffers for the given range.
@@ -202,7 +219,10 @@ impl PlayerResource {
                     frames: frames_to_write,
                 }
             } else if eof_reached {
-                ReadOutcome::Partial(frames_to_write)
+                ReadOutcome::Partial {
+                    frames: frames_to_write,
+                    output_deficit_frames: self.output_deficit_frames,
+                }
             } else {
                 for ch in output.iter_mut() {
                     ch[frames_to_write..frames_to_read].fill(0.0);
@@ -212,7 +232,9 @@ impl PlayerResource {
                 }
             }
         } else if eof_reached {
-            ReadOutcome::Eof
+            ReadOutcome::Eof {
+                output_deficit_frames: self.output_deficit_frames,
+            }
         } else {
             let range_len = range.len();
             for ch in output.iter_mut() {
@@ -233,6 +255,7 @@ impl PlayerResource {
                 self.write_pos = 0;
                 self.eof_seen = false;
                 self.failed = false;
+                self.output_deficit_frames = 0;
             }
             Err(err) => {
                 warn!("failed to seek: {err}");

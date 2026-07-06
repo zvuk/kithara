@@ -321,7 +321,7 @@ async fn read_returns_partial_when_eof_inside_buffer() {
     let result = pr.read(&mut output, 0..4096);
 
     let frames = match result {
-        BlockReadOutcome::Partial(frames) => frames,
+        BlockReadOutcome::Partial { frames, .. } => frames,
         other => panic!("expected Partial outcome, got {other:?}"),
     };
     assert!(frames > 0);
@@ -329,7 +329,7 @@ async fn read_returns_partial_when_eof_inside_buffer() {
 
     let mut output2: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result2 = pr.read(&mut output2, 0..4096);
-    assert!(matches!(result2, BlockReadOutcome::Eof));
+    assert!(matches!(result2, BlockReadOutcome::Eof { .. }));
 }
 
 /// Reader that returns a typed decode `Err` on every read — models
@@ -412,7 +412,7 @@ async fn read_returns_failed_not_eof_on_decoder_error() {
 
     match result {
         BlockReadOutcome::Failed => {}
-        BlockReadOutcome::Eof | BlockReadOutcome::Partial(_) => panic!(
+        BlockReadOutcome::Eof { .. } | BlockReadOutcome::Partial { .. } => panic!(
             "decoder Err must NOT be conflated with natural EOF — got {result:?}; \
              this is the false-EOF bug from app.log"
         ),
@@ -440,13 +440,13 @@ async fn read_returns_eof_when_already_drained() {
     loop {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
         match pr.read(&mut output, 0..4096) {
-            BlockReadOutcome::Full { .. } | BlockReadOutcome::Partial(_) => {}
-            BlockReadOutcome::Eof => break,
+            BlockReadOutcome::Full { .. } | BlockReadOutcome::Partial { .. } => {}
+            BlockReadOutcome::Eof { .. } => break,
             BlockReadOutcome::Failed => panic!("unexpected Failed in EOF test"),
         }
     }
 
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result = pr.read(&mut output, 0..4096);
-    assert!(matches!(result, BlockReadOutcome::Eof));
+    assert!(matches!(result, BlockReadOutcome::Eof { .. }));
 }

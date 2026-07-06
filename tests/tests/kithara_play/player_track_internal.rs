@@ -246,7 +246,7 @@ async fn read_outcome_partial_then_eof() {
                 assert!(frames > 0);
                 saw_partial = true;
             }
-            TrackReadOutcome::Eof => {
+            TrackReadOutcome::Eof { .. } => {
                 if saw_partial {
                     saw_eof_after_partial = true;
                     break;
@@ -599,5 +599,5 @@ async fn read_outcome_eof_when_track_finished() {
 
     let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
 
-    assert!(matches!(outcome, TrackReadOutcome::Eof));
+    assert!(matches!(outcome, TrackReadOutcome::Eof { .. }));
 }

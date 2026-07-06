@@ -192,6 +192,15 @@ impl GaplessTrimmer {
     }
 
     #[must_use]
+    pub fn with_deferred_leading(info: GaplessInfo, deferred_leading_frames: u32) -> Self {
+        let deferred = u64::from(deferred_leading_frames).min(info.leading_frames);
+        Self::from(GaplessInfo {
+            leading_frames: info.leading_frames.saturating_sub(deferred),
+            trailing_frames: info.trailing_frames,
+        })
+    }
+
+    #[must_use]
     pub fn flush(&mut self) -> GaplessOutput {
         match &mut self.mode {
             GaplessMode::Disabled => GaplessOutput::new(),

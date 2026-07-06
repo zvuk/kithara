@@ -85,9 +85,11 @@ pub enum TrackReadOutcome {
         frames: usize,
         /// Visible (post-gapless-trim) duration snapshot in seconds.
         duration: f64,
+        /// Device frames missing from the track's expected output length.
+        output_deficit_frames: u32,
     },
     /// No frames were written because the track is already finished.
-    Eof,
+    Eof { output_deficit_frames: u32 },
     /// The underlying decoder / source reported a non-recoverable error
     /// mid-stream. Distinct from `Eof`: track did NOT reach natural
     /// end. Upstream surfaces this as a track-failed signal (a
@@ -249,6 +251,22 @@ impl PlayerTrack {
         }
     }
 
+    /// Current visible (post-gapless-trim) duration in seconds.
+    ///
+    /// Mirrors `PlayerResource::duration()` captured under the resource
+    /// lock during the last `read()`. Falls back to a fresh `try_lock`
+    /// when invoked before any `read()` (e.g. immediately after `seek`).
+    #[must_use]
+    pub fn duration(&self) -> f64 {
+        if self.observed_duration > 0.0 {
+            return self.observed_duration;
+        }
+        self.resource
+            .try_lock()
+            .ok()
+            .map_or(self.observed_duration, |resource| resource.duration())
+    }
+
     /// Decoded-ahead frontier in seconds — how much content is decoded and
     /// ready to play (always `>=` [`Self::position`]). Reads the live resource
     /// (mirroring [`Self::duration`]) so the buffered/playable window keeps
@@ -266,20 +284,11 @@ impl PlayerTrack {
             })
     }
 
-    /// Current visible (post-gapless-trim) duration in seconds.
-    ///
-    /// Mirrors `PlayerResource::duration()` captured under the resource
-    /// lock during the last `read()`. Falls back to a fresh `try_lock`
-    /// when invoked before any `read()` (e.g. immediately after `seek`).
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        if self.observed_duration > 0.0 {
-            return self.observed_duration;
-        }
-        self.resource
-            .try_lock()
-            .ok()
-            .map_or(self.observed_duration, |resource| resource.duration())
+    /// Keep deferred leading trim frames for this track's first read.
+    pub fn compensate_gapless_leading_trim(&mut self, frames: u32) -> u32 {
+        self.resource.try_lock().ok().map_or(0, |mut resource| {
+            resource.compensate_gapless_leading_trim(frames)
+        })
     }
 
     /// Emit the crossfade-aligned handover trigger once per playback cycle.
@@ -446,7 +455,9 @@ impl PlayerTrack {
         /// Minimum number of channels required for stereo processing.
         const MIN_STEREO_CHANNELS: usize = 2;
         if self.state == TrackState::Finished {
-            return TrackReadOutcome::Eof;
+            return TrackReadOutcome::Eof {
+                output_deficit_frames: 0,
+            };
         }
 
         let read_outcome = {
@@ -477,12 +488,23 @@ impl PlayerTrack {
                         position: 0.0,
                     }
                 }
-                ReadOutcome::Partial(frames) => {
+                ReadOutcome::Partial {
+                    frames,
+                    output_deficit_frames,
+                } => {
                     let duration = guard.duration();
                     drop(guard);
-                    TrackReadOutcome::Partial { frames, duration }
+                    TrackReadOutcome::Partial {
+                        frames,
+                        duration,
+                        output_deficit_frames,
+                    }
                 }
-                ReadOutcome::Eof => TrackReadOutcome::Eof,
+                ReadOutcome::Eof {
+                    output_deficit_frames,
+                } => TrackReadOutcome::Eof {
+                    output_deficit_frames,
+                },
                 ReadOutcome::Failed => {
                     drop(guard);
                     TrackReadOutcome::Failed
@@ -545,9 +567,11 @@ impl PlayerTrack {
                 }
             }
             TrackReadOutcome::Partial {
-                frames, duration, ..
+                frames,
+                duration,
+                output_deficit_frames,
             } => {
-                self.advance_served_frames(frames as u64);
+                self.advance_served_frames(frames.to_u64().unwrap_or(0));
                 let position = self.position();
                 self.observed_duration = if position > 0.0 { position } else { duration };
                 let duration = self.observed_duration;
@@ -571,11 +595,19 @@ impl PlayerTrack {
                 self.check_notifications(notification_tx, range.len(), Some(0));
                 self.handle_natural_end(notification_tx);
 
-                TrackReadOutcome::Partial { frames, duration }
+                TrackReadOutcome::Partial {
+                    frames,
+                    duration,
+                    output_deficit_frames,
+                }
             }
-            TrackReadOutcome::Eof => {
+            TrackReadOutcome::Eof {
+                output_deficit_frames,
+            } => {
                 self.handle_natural_end(notification_tx);
-                TrackReadOutcome::Eof
+                TrackReadOutcome::Eof {
+                    output_deficit_frames,
+                }
             }
             TrackReadOutcome::Failed => {
                 self.handle_failed_end(notification_tx);
@@ -868,6 +900,133 @@ mod tests {
         }
     }
 
+    struct DeferredLeadReader {
+        bus: EventBus,
+        compensation_frames: u32,
+        deferred_frames: u32,
+        frames: Vec<f32>,
+        metadata: TrackMetadata,
+        position_frames: usize,
+        spec: PcmSpec,
+    }
+
+    impl DeferredLeadReader {
+        fn new(values: &[f32], deferred_frames: u32) -> Self {
+            let spec = mock_spec();
+            let channels = usize::from(spec.channels);
+            let mut frames = Vec::with_capacity(values.len().saturating_mul(channels));
+            for value in values {
+                frames.extend(std::iter::repeat_n(*value, channels));
+            }
+            Self {
+                bus: EventBus::default(),
+                compensation_frames: 0,
+                deferred_frames,
+                frames,
+                metadata: TrackMetadata::default(),
+                position_frames: 0,
+                spec,
+            }
+        }
+
+        fn resolve_deferred_lead(&mut self) {
+            let drop_frames = self
+                .deferred_frames
+                .saturating_sub(self.compensation_frames);
+            self.deferred_frames = 0;
+            self.compensation_frames = 0;
+            let drop = usize::try_from(drop_frames).unwrap_or(usize::MAX);
+            self.position_frames = self.position_frames.saturating_add(drop);
+        }
+
+        fn remaining_frames(&self) -> usize {
+            let channels = usize::from(self.spec.channels);
+            self.frames
+                .len()
+                .saturating_div(channels.max(1))
+                .saturating_sub(self.position_frames)
+        }
+    }
+
+    impl PcmReader for DeferredLeadReader {
+        fn compensate_gapless_leading_trim(&mut self, frames: u32) -> u32 {
+            let applied = frames.min(self.deferred_frames);
+            self.compensation_frames = applied;
+            applied
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(1))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.metadata
+        }
+
+        fn position(&self) -> Duration {
+            let frames = u64::try_from(self.position_frames).unwrap_or(u64::MAX);
+            Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate.get()))
+        }
+
+        fn read(
+            &mut self,
+            _buf: &mut [f32],
+        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
+            Ok(kithara_audio::ReadOutcome::Eof {
+                position: self.position(),
+            })
+        }
+
+        fn read_planar<'a>(
+            &mut self,
+            output: &'a mut [&'a mut [f32]],
+        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
+            self.resolve_deferred_lead();
+            let frames = output
+                .iter()
+                .map(|channel| channel.len())
+                .min()
+                .unwrap_or(0)
+                .min(self.remaining_frames());
+            if frames == 0 {
+                return Ok(kithara_audio::ReadOutcome::Eof {
+                    position: self.position(),
+                });
+            }
+            let channels = usize::from(self.spec.channels);
+            for frame in 0..frames {
+                let source = self.position_frames.saturating_add(frame);
+                let sample = self.frames[source.saturating_mul(channels)];
+                for channel in output.iter_mut() {
+                    channel[frame] = sample;
+                }
+            }
+            self.position_frames = self.position_frames.saturating_add(frames);
+            Ok(kithara_audio::ReadOutcome::Frames {
+                count: std::num::NonZeroUsize::new(frames).expect("BUG: frames > 0"),
+                position: self.position(),
+            })
+        }
+
+        fn seek(
+            &mut self,
+            position: Duration,
+        ) -> Result<kithara_audio::SeekOutcome, kithara_audio::DecodeError> {
+            Ok(kithara_audio::SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
     fn collect_notifications(
         rx: &mut impl Consumer<Item = PlayerNotification>,
     ) -> Vec<PlayerNotification> {
@@ -896,15 +1055,53 @@ mod tests {
         assert!(!TrackState::Finished.is_leading());
     }
 
+    #[kithara::test]
+    fn gapless_leading_trim_compensation_keeps_deferred_frame() {
+        let uncompensated_src = Arc::from("uncompensated.m4a");
+        let uncompensated_resource = Resource::from_reader(
+            DeferredLeadReader::new(&[10.0, 20.0, 30.0], 1),
+            Some(Arc::clone(&uncompensated_src)),
+        );
+        let mut uncompensated =
+            make_track_from_resource(uncompensated_resource, uncompensated_src, None);
+        uncompensated.play();
+
+        let compensated_src = Arc::from("compensated.m4a");
+        let compensated_resource = Resource::from_reader(
+            DeferredLeadReader::new(&[10.0, 20.0, 30.0], 1),
+            Some(Arc::clone(&compensated_src)),
+        );
+        let mut compensated = make_track_from_resource(compensated_resource, compensated_src, None);
+        assert_eq!(compensated.compensate_gapless_leading_trim(1), 1);
+        compensated.play();
+
+        let (tx, _rx) = HeapRb::<PlayerNotification>::new(8).split();
+        let tx = Mutex::new(tx);
+        let mut scratch_l = [0.0; 2];
+        let mut scratch_r = [0.0; 2];
+        let mut mix_l = [0.0; 2];
+        let mut mix_r = [0.0; 2];
+        let mut scratch = [&mut scratch_l[..], &mut scratch_r[..]];
+        let mut mix = [&mut mix_l[..], &mut mix_r[..]];
+
+        let _ = uncompensated.read(&mut scratch, &mut mix, 0..2, &tx);
+        assert_eq!(mix[0][0], 20.0);
+
+        mix[0].fill(0.0);
+        mix[1].fill(0.0);
+        let _ = compensated.read(&mut scratch, &mut mix, 0..2, &tx);
+        assert_eq!(mix[0][0], 10.0);
+    }
+
     /// `PcmReader` fixture whose decoded frontier the test advances *after* the
     /// track is built — modelling the decode worker filling lookahead on its
     /// own thread while the player is paused (no render cycle refreshes the
     /// `observed_frontier` cache).
     struct LiveFrontierReader {
-        frontier_ns: Arc<AtomicU64>,
         bus: EventBus,
         spec: PcmSpec,
         metadata: TrackMetadata,
+        frontier_ns: Arc<AtomicU64>,
     }
 
     impl PcmReader for LiveFrontierReader {
