@@ -15,7 +15,7 @@ mod probe;
 mod trimmer;
 
 pub use heuristic::{GaplessMode, SilenceTrimParams};
-pub use info::GaplessInfo;
+pub use info::{GaplessInfo, GaplessTailCompensation};
 pub use mp4::probe_mp4_gapless;
 #[cfg(any(
     feature = "symphonia",

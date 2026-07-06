@@ -364,19 +364,14 @@ fn build_apple_standalone_decoder(
         open_mode,
         startup_probe.duration,
     )?;
-    let output_gapless = scale_gapless_for_output_domain(
-        probed_gapless,
-        demuxer.track_info().sample_rate,
-        config.target_output_rate,
-    )?;
-    if output_gapless.is_some() {
-        demuxer.set_gapless(output_gapless);
+    demuxer.set_gapless(probed_gapless);
+    let output_track =
+        track_with_output_domain_gapless(demuxer.track_info(), config.target_output_rate)?;
+    if output_track.gapless.is_some() {
+        demuxer.set_gapless(output_track.gapless);
     }
-    let codec_impl = AppleCodec::open_with_config(
-        demuxer.track_info(),
-        config.gapless,
-        config.target_output_rate,
-    )?;
+    let codec_impl =
+        AppleCodec::open_with_config(&output_track, config.gapless, config.target_output_rate)?;
     let pool = config
         .pcm_pool
         .clone()

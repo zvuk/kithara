@@ -22,6 +22,7 @@ use super::{
     flac,
 };
 use crate::{
+    GaplessTailCompensation,
     codec::{CodecPriming, FrameCodec},
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
@@ -65,6 +66,8 @@ pub(crate) struct AppleCodec {
     /// True once a source-rate-changing converter has reported no more
     /// SRC tail frames after true EOF.
     eof_drained: bool,
+    tail_compensation_enabled: bool,
+    source_frames_seen: u64,
 }
 
 // SAFETY: `AudioConverterRef` is an opaque CoreAudio handle. Apple's
@@ -138,6 +141,8 @@ impl AppleCodec {
             gapless_enabled: false,
             prime_info_refresh_pending: false,
             eof_drained: false,
+            tail_compensation_enabled: output_sample_rate != track.sample_rate,
+            source_frames_seen: 0,
         })
     }
 
@@ -195,6 +200,17 @@ impl AppleCodec {
 
     fn needs_src_eof_drain(&self) -> bool {
         self.spec.sample_rate.get() != self.source_sample_rate
+    }
+
+    fn refresh_tail_compensation(&mut self) {
+        if !self.tail_compensation_enabled {
+            return;
+        }
+        self.track_info.gapless_tail = GaplessTailCompensation::for_source_frames(
+            self.source_frames_seen,
+            self.source_sample_rate,
+            self.spec.sample_rate.get(),
+        );
     }
 
     fn eof_flush_frame_capacity(&self) -> DecodeResult<u32> {
@@ -340,10 +356,16 @@ impl FrameCodec for AppleCodec {
 
         let input_frames = if self.input_bytes_per_packet > 0 {
             let packets = frame_data.len() / usize::try_from(self.input_bytes_per_packet)?;
-            u32::try_from(packets)?
+            let frames =
+                u64::try_from(packets)?.saturating_mul(u64::from(self.frames_per_packet.max(1)));
+            u32::try_from(frames)?
         } else {
             self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET)
         };
+        self.source_frames_seen = self
+            .source_frames_seen
+            .saturating_add(u64::from(input_frames));
+        self.refresh_tail_compensation();
         let target_frames = output_frame_capacity(
             input_frames,
             self.source_sample_rate,
@@ -369,6 +391,9 @@ impl FrameCodec for AppleCodec {
         }
         self.input_state.clear();
         self.eof_drained = false;
+        self.source_frames_seen = 0;
+        self.tail_compensation_enabled = false;
+        self.track_info.gapless_tail = None;
         Ok(())
     }
 

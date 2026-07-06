@@ -13,7 +13,6 @@ use fast_interleave::deinterleave_variable;
 use kithara_bufpool::{BytePool, PcmBuf, PcmPool};
 use kithara_decode::{
     Decoder, DecoderConfig, DecoderFactory, GaplessMode, PcmChunk, PcmMeta, PcmSpec, TrackMetadata,
-    duration_for_frames,
 };
 use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
@@ -72,48 +71,8 @@ fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
     })
 }
 
-fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
-    let frames = duration
-        .as_nanos()
-        .saturating_mul(u128::from(sample_rate))
-        .saturating_add(500_000_000)
-        .saturating_div(1_000_000_000);
-    u64::try_from(frames).unwrap_or(u64::MAX)
-}
-
 fn warm_channels_from_media_info(info: Option<&MediaInfo>) -> usize {
     info.and_then(|info| info.channels).map_or(2, usize::from)
-}
-
-fn trim_pcm_chunk_start(chunk: &mut PcmChunk, trim_frames: u32) {
-    let channels = usize::from(chunk.meta.spec.channels.max(1));
-    let trim_frames_usize = usize::try_from(trim_frames).unwrap_or(usize::MAX);
-    let trim_samples = trim_frames_usize.saturating_mul(channels);
-    let len = chunk.samples.len();
-    if trim_samples >= len {
-        chunk.samples.clear();
-        chunk.meta.frame_offset = chunk
-            .meta
-            .frame_offset
-            .saturating_add(u64::from(trim_frames));
-        chunk.meta.frames = 0;
-        chunk.meta.timestamp = chunk.meta.timestamp.saturating_add(duration_for_frames(
-            chunk.meta.spec.sample_rate.get(),
-            u64::from(trim_frames),
-        ));
-        return;
-    }
-    chunk.samples.copy_within(trim_samples..len, 0);
-    chunk.samples.truncate(len.saturating_sub(trim_samples));
-    chunk.meta.frame_offset = chunk
-        .meta
-        .frame_offset
-        .saturating_add(u64::from(trim_frames));
-    chunk.meta.frames = u32::try_from(chunk.samples.len() / channels.max(1)).unwrap_or(u32::MAX);
-    chunk.meta.timestamp = chunk.meta.timestamp.saturating_add(duration_for_frames(
-        chunk.meta.spec.sample_rate.get(),
-        u64::from(trim_frames),
-    ));
 }
 
 enum FetchOutcome {
@@ -179,15 +138,6 @@ pub struct Audio<S> {
 
     /// Current chunk being read (auto-recycles to pool on drop).
     pub(crate) current_chunk: Option<PcmChunk>,
-
-    /// Leading metadata trim frames intentionally left at the front of the
-    /// first fused-SRC output chunk until the queue seam either keeps or drops them.
-    deferred_leading_trim_frames: u32,
-
-    /// Portion of `deferred_leading_trim_frames` kept for cross-track compensation.
-    leading_trim_compensation_frames: u32,
-
-    output_deficit_compensation_enabled: bool,
 
     /// Current audio specification (updated from chunks).
     pub(crate) spec: PcmSpec,
@@ -409,88 +359,6 @@ impl<S> Audio<S> {
         self.playhead.duration()
     }
 
-    fn resolve_deferred_leading_trim_for_chunk(&mut self, chunk: &mut PcmChunk) -> bool {
-        let drop_frames = self
-            .deferred_leading_trim_frames
-            .saturating_sub(self.leading_trim_compensation_frames);
-        self.deferred_leading_trim_frames = 0;
-        self.leading_trim_compensation_frames = 0;
-        if drop_frames == 0 {
-            return true;
-        }
-        if chunk.meta.frames <= drop_frames {
-            return false;
-        }
-        trim_pcm_chunk_start(chunk, drop_frames);
-        chunk.meta.frames > 0
-    }
-
-    fn resolve_deferred_leading_trim_for_current_chunk(&mut self) {
-        let Some(mut chunk) = self.current_chunk.take() else {
-            return;
-        };
-        if self.current_chunk_consumed_frames != 0 {
-            self.current_chunk = Some(chunk);
-            return;
-        }
-        if self.resolve_deferred_leading_trim_for_chunk(&mut chunk) {
-            self.current_chunk = Some(chunk);
-        } else {
-            self.discard_chunk(chunk);
-            self.current_chunk_consumed_frames = 0;
-        }
-    }
-
-    /// Keep deferred gapless-leading frames for cross-track deficit compensation.
-    pub fn compensate_gapless_leading_trim(&mut self, frames: u32) -> u32 {
-        if self.current_chunk_consumed_frames != 0 {
-            return 0;
-        }
-        let applied = frames.min(self.deferred_leading_trim_frames);
-        if applied == 0 {
-            return 0;
-        }
-        self.leading_trim_compensation_frames = applied;
-        if let Some(duration) = self.playhead.duration() {
-            let extra = duration_for_frames(self.spec.sample_rate.get(), u64::from(applied));
-            self.playhead
-                .set_duration(Some(duration.saturating_add(extra)));
-        }
-        applied
-    }
-
-    /// Natural-EOF device-frame deficit available to the queue seam.
-    #[must_use]
-    pub fn output_deficit_frames(&self) -> u32 {
-        if !self.output_deficit_compensation_enabled {
-            return 0;
-        }
-        if self.validator.epoch != 0 {
-            return 0;
-        }
-        let Some(duration) = self.playhead.duration() else {
-            return 0;
-        };
-        let sample_rate = self.spec.sample_rate.get();
-        let expected = frames_for_duration_rounded(sample_rate, duration);
-        let actual = frames_for_duration_rounded(sample_rate, self.position());
-        let deficit = expected.saturating_sub(actual);
-        if deficit <= 1 {
-            return u32::try_from(deficit).unwrap_or(1);
-        }
-        debug_assert!(
-            deficit <= 1,
-            "gapless output deficit exceeded one frame: deficit={deficit}, expected={expected}, actual={actual}"
-        );
-        warn!(
-            deficit,
-            expected,
-            actual,
-            "gapless output deficit exceeded one frame; bounding seam compensation"
-        );
-        1
-    }
-
     fn emit_audio_event(&self, event: AudioEvent) {
         self.bus.publish(event);
     }
@@ -682,16 +550,6 @@ impl<S> Audio<S> {
 
         while written < buf.len() {
             hang_tick!();
-
-            if self.current_chunk.is_some() {
-                self.resolve_deferred_leading_trim_for_current_chunk();
-                if self.current_chunk.is_none() {
-                    if !self.fill_buffer() {
-                        break;
-                    }
-                    continue;
-                }
-            }
 
             if let Some(chunk) = self.current_chunk.as_ref() {
                 let channels = u64::from(chunk.meta.spec.channels.max(1));
@@ -1087,7 +945,6 @@ struct StreamSourceRegistration<'a, T: StreamType> {
     cancel: &'a CancelToken,
     decoder: Box<dyn Decoder>,
     decoder_factory: crate::pipeline::source::DecoderFactory<T>,
-    deferred_gapless_leading_trim_frames: u32,
     effects: Vec<Box<dyn AudioEffect>>,
     emit: DeferredBus<AudioEvent>,
     engine_load: Option<Arc<EngineLoad>>,
@@ -1116,21 +973,6 @@ struct RegisteredStreamSource {
 
 fn current_decoder_target_output_rate(rate: Option<&Arc<AtomicU32>>) -> Option<u32> {
     rate.and_then(|rate| NonZeroU32::new(rate.load(Ordering::Acquire)).map(NonZeroU32::get))
-}
-
-#[derive(Clone, Copy)]
-struct GaplessDeficitSettings {
-    deferred_leading_trim_frames: u32,
-    output_deficit_compensation_enabled: bool,
-}
-
-impl GaplessDeficitSettings {
-    fn for_decoder() -> Self {
-        Self {
-            deferred_leading_trim_frames: 0,
-            output_deficit_compensation_enabled: false,
-        }
-    }
 }
 
 /// Provides async constructor that creates Stream internally.
@@ -1226,7 +1068,6 @@ where
         let decoder = decoder?;
 
         let initial_spec = decoder.spec();
-        let deficit_settings = GaplessDeficitSettings::for_decoder();
         let total_duration = decoder.duration().or_else(|| playhead.duration());
         playhead.set_duration(total_duration);
         let metadata = decoder.metadata();
@@ -1265,7 +1106,6 @@ where
             cancel: &cancel,
             decoder,
             decoder_factory: Self::create_decoder_factory(&deps, &epoch, &byte_len_handle),
-            deferred_gapless_leading_trim_frames: deficit_settings.deferred_leading_trim_frames,
             effects,
             emit: Self::create_emit(&bus),
             engine_load: config_engine_load,
@@ -1302,10 +1142,6 @@ where
             validator: EpochValidator::default(),
             spec: output_spec,
             current_chunk: None,
-            deferred_leading_trim_frames: deficit_settings.deferred_leading_trim_frames,
-            leading_trim_compensation_frames: 0,
-            output_deficit_compensation_enabled: deficit_settings
-                .output_deficit_compensation_enabled,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
             cancel: Some(cancel),
@@ -1328,7 +1164,6 @@ where
             cancel,
             decoder,
             decoder_factory,
-            deferred_gapless_leading_trim_frames,
             effects,
             emit,
             engine_load,
@@ -1362,7 +1197,6 @@ where
             DecodeInit {
                 decoder,
                 decoder_factory,
-                deferred_gapless_leading_trim_frames,
                 gapless_mode,
                 host_sample_rate,
                 media_info: initial_media_info,
@@ -1687,32 +1521,26 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
 
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         self.preloaded = true;
-        let chunk = loop {
-            let Some(mut chunk) = self
-                .current_chunk
-                .take()
-                .or_else(|| self.recv_valid_chunk())
-            else {
-                let position = self.position();
-                return match self.consumer_phase {
-                    ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
-                    ConsumerPhase::Failed => Err(DecodeError::Io {
-                        source: IoError::other("pcm channel closed / producer failed"),
-                    }),
-                    ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
-                        position,
-                        reason: PendingReason::SeekInProgress,
-                    }),
-                    _ => Ok(ChunkOutcome::Pending {
-                        position,
-                        reason: PendingReason::Buffering,
-                    }),
-                };
+        let Some(chunk) = self
+            .current_chunk
+            .take()
+            .or_else(|| self.recv_valid_chunk())
+        else {
+            let position = self.position();
+            return match self.consumer_phase {
+                ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
+                ConsumerPhase::Failed => Err(DecodeError::Io {
+                    source: IoError::other("pcm channel closed / producer failed"),
+                }),
+                ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
+                    position,
+                    reason: PendingReason::SeekInProgress,
+                }),
+                _ => Ok(ChunkOutcome::Pending {
+                    position,
+                    reason: PendingReason::Buffering,
+                }),
             };
-            if self.resolve_deferred_leading_trim_for_chunk(&mut chunk) {
-                break chunk;
-            }
-            self.discard_chunk(chunk);
         };
         self.spec = chunk.spec();
 
@@ -1737,14 +1565,6 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
 
     fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
         Some(self.preload_gate.clone())
-    }
-
-    fn output_deficit_frames(&self) -> u32 {
-        Self::output_deficit_frames(self)
-    }
-
-    fn compensate_gapless_leading_trim(&mut self, frames: u32) -> u32 {
-        Self::compensate_gapless_leading_trim(self, frames)
     }
 
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
@@ -1894,9 +1714,6 @@ mod tests {
             spec: PcmMeta::default().spec,
             stretch: None,
             current_chunk: None,
-            deferred_leading_trim_frames: 0,
-            leading_trim_compensation_frames: 0,
-            output_deficit_compensation_enabled: false,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
             playhead: Arc::clone(&playhead) as Arc<dyn PlayheadWrite>,
@@ -2017,9 +1834,6 @@ mod tests {
             spec: PcmMeta::default().spec,
             stretch: None,
             current_chunk: None,
-            deferred_leading_trim_frames: 0,
-            leading_trim_compensation_frames: 0,
-            output_deficit_compensation_enabled: false,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
             playhead: Arc::clone(&playhead) as Arc<dyn PlayheadWrite>,

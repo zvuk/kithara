@@ -332,7 +332,6 @@ pub(crate) struct DecodeInit<T: StreamType> {
     pub(crate) decoder: Box<dyn Decoder>,
     pub(crate) decoder_factory: DecoderFactory<T>,
     pub(crate) gapless_mode: GaplessMode,
-    pub(crate) deferred_gapless_leading_trim_frames: u32,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) media_info: Option<MediaInfo>,
     pub(crate) recreate_on_host_rate_change: bool,
@@ -381,7 +380,7 @@ impl<T: StreamType> DecoderRebuildJob<T> {
                 Err(RecreateOutcome::SoftFailed)
             }
         };
-        let complete = DecoderRebuildComplete { ticket, result };
+        let complete = DecoderRebuildComplete { result, ticket };
         // `prepare_rebuild` is the only spawn site and the FSM guarantees
         // at most one outstanding rebuild job, so this push never contends;
         // the pop/retry/warn branch is defensive only.
@@ -439,7 +438,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             decoder_factory,
             media_info: initial_media_info,
             gapless_mode,
-            deferred_gapless_leading_trim_frames,
             host_sample_rate,
             recreate_on_host_rate_change,
         } = init;
@@ -449,12 +447,8 @@ impl<T: StreamType> StreamAudioSource<T> {
         let seek_obs = shared_stream.seek_observe();
         let activity = shared_stream.activity();
         let peer_wake = shared_stream.peer_wake();
-        let gapless = GaplessStage::build(
-            decoder.as_ref(),
-            gapless_mode,
-            initial_media_info.as_ref(),
-            deferred_gapless_leading_trim_frames,
-        );
+        let gapless =
+            GaplessStage::build(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
         let session = DecoderSession {
             decoder,
             base_offset: 0,
@@ -1859,6 +1853,8 @@ impl<T: StreamType> StreamAudioSource<T> {
                     continue;
                 }
                 Ok(DecoderChunkOutcome::Eof) => {
+                    self.gapless
+                        .set_tail_compensation(self.session.decoder.track_info().gapless_tail);
                     self.gapless.flush();
                     if let Some(ready) = self.next_gapless_output() {
                         return Ok(DecoderChunkOutcome::Chunk(ready));
@@ -3520,7 +3516,6 @@ mod rebuilding_decoder_tests {
             DecodeInit {
                 decoder: Box::new(TestDecoder::new(1, Arc::clone(&drops))),
                 decoder_factory,
-                deferred_gapless_leading_trim_frames: 0,
                 gapless_mode: GaplessMode::Disabled,
                 host_sample_rate: Arc::new(AtomicU32::new(Consts::SAMPLE_RATE)),
                 media_info: Some(media_info(0)),
@@ -3571,7 +3566,6 @@ mod rebuilding_decoder_tests {
                     Arc::clone(&drops),
                 )),
                 decoder_factory,
-                deferred_gapless_leading_trim_frames: 0,
                 gapless_mode: GaplessMode::Disabled,
                 host_sample_rate,
                 media_info: Some(media_info(0)),
@@ -3657,8 +3651,8 @@ mod rebuilding_decoder_tests {
         drops: Arc<Mutex<Vec<u64>>>,
     ) {
         let pushed = source.rebuild_completion.push(DecoderRebuildComplete {
-            ticket,
             result: Ok(Box::new(TestDecoder::new(decoder_id, drops))),
+            ticket,
         });
         assert!(pushed.is_ok());
     }
@@ -4357,7 +4351,6 @@ mod splice_continuity_tests {
             DecodeInit {
                 decoder: initial_decoder,
                 decoder_factory,
-                deferred_gapless_leading_trim_frames: 0,
                 gapless_mode: GaplessMode::Disabled,
                 host_sample_rate,
                 media_info: Some(media_info(Consts::SLQ_VARIANT)),

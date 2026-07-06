@@ -189,17 +189,6 @@ impl Resource {
         self.inner.position()
     }
 
-    /// Measured bounded output-frame deficit at natural EOF.
-    #[must_use]
-    pub fn output_deficit_frames(&self) -> u32 {
-        self.inner.output_deficit_frames()
-    }
-
-    /// Keep deferred leading trim frames for cross-track seam compensation.
-    pub fn compensate_gapless_leading_trim(&mut self, frames: u32) -> u32 {
-        self.inner.compensate_gapless_leading_trim(frames)
-    }
-
     /// Wait for first decoded chunk to be available, then move it to internal buffer.
     ///
     /// After preload completes, the first `read()` returns data without blocking.

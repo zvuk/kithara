@@ -13,7 +13,10 @@ use kithara::decode::DecoderBackend;
 use kithara::{
     assets::StoreOptions,
     audio::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
-    decode::{DecodeError, GaplessMode, PcmSpec, SilenceTrimParams, TrackMetadata},
+    decode::{
+        DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
+        PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
+    },
     events::EventBus,
     platform::time::{self, Duration, Instant},
     play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig},
@@ -313,20 +316,25 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn fused_gapless_deficit_compensation_restores_deferred_lead_at_stitch() {
-    let compensated = render_synthetic_fused_deficit_seam(1).await;
-    let uncompensated = render_synthetic_fused_deficit_seam(0).await;
+async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch() {
+    let compensated = render_synthetic_fused_deficit_seam(true).await;
+    let uncompensated = render_synthetic_fused_deficit_seam(false).await;
 
-    let stitch_frame = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1;
+    let stitch_frame = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES;
     let compensated_db = seam_step_db(&compensated.left, stitch_frame);
-    let uncompensated_db = seam_step_db(&uncompensated.left, stitch_frame);
+    let uncompensated_db = seam_step_db(&uncompensated.left, stitch_frame - 1);
     println!(
         "FUSED_GAPLESS_DEFICIT compensated_db={compensated_db:.2} uncompensated_db={uncompensated_db:.2}"
     );
 
     assert_prefetch_before_first_end(&compensated.events, "fused-deficit-1");
+    assert_eq!(compensated.first_frames, FUSED_FIXTURE_IDEAL_DEVICE_FRAMES);
+    assert_eq!(
+        uncompensated.first_frames,
+        FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1
+    );
     assert!(
-        compensated_db < -40.0,
+        compensated_db < -30.0,
         "compensated seam residual too high: {compensated_db:.2} dB; events={:?}",
         compensated.events
     );
@@ -336,8 +344,8 @@ async fn fused_gapless_deficit_compensation_restores_deferred_lead_at_stitch() {
         uncompensated.events
     );
     assert!(
-        compensated_db + 10.0 < uncompensated_db,
-        "compensation must improve the seam by at least 10 dB: compensated={compensated_db:.2}, uncompensated={uncompensated_db:.2}"
+        compensated_db + 1.0 < uncompensated_db,
+        "tail-side compensation must measurably improve the seam: compensated={compensated_db:.2}, uncompensated={uncompensated_db:.2}"
     );
 }
 
@@ -384,22 +392,16 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
     .await;
     let probe = drain_resource_to_eof(probe).await;
     assert_eq!(
-        probe.output_deficit_frames, 0,
-        "head-side path must be disabled"
-    );
-    assert_eq!(
-        probe.output_frames.saturating_add(1),
-        expected_device_frames,
-        "neutralized fused seam bookkeeping should keep the uncompensated ideal-1 length"
+        probe.output_frames, expected_device_frames,
+        "tail-side compensation should restore exact visible device-frame length"
     );
 
     let pending_decision =
         render_apple_fused_deficit_seam(&server, temp_dir.path(), probe.output_frames).await;
 
     println!(
-        "APPLE_FUSED_PENDING_SEAM reported_deficit={} measured_frames={} ideal_frames={} length_delta={} \
+        "APPLE_FUSED_TAIL_SEAM measured_frames={} ideal_frames={} length_delta={} \
          seam_db={:.2} control_db={:.2} stitch_frame={} nearby={:?}",
-        probe.output_deficit_frames,
         probe.output_frames,
         expected_device_frames,
         isize::try_from(probe.output_frames).expect("probe frames fit isize")
@@ -410,11 +412,10 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
         pending_decision.nearby_db
     );
 
-    // W5 step 6 compensation ownership is pending an owner decision.
     assert!(pending_decision.seam_db.is_finite());
     assert!(
-        pending_decision.seam_db < -20.0,
-        "neutralized fused seam regression floor: {:.2} dB",
+        pending_decision.seam_db < -26.0,
+        "tail-side fused seam regression floor: {:.2} dB",
         pending_decision.seam_db
     );
 }
@@ -922,7 +923,7 @@ async fn create_apple_fused_resource(
     (resource, item_id)
 }
 
-async fn render_synthetic_fused_deficit_seam(first_deficit_frames: u32) -> SyntheticSeamRender {
+async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> SyntheticSeamRender {
     let expected_device_frames = ceil_scaled_frames(
         FUSED_FIXTURE_SOURCE_FRAMES,
         FUSED_FIXTURE_DEVICE_RATE,
@@ -940,12 +941,17 @@ async fn render_synthetic_fused_deficit_seam(first_deficit_frames: u32) -> Synth
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     );
+    let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation);
+    let first_frame_count = first_frames.len();
     let first = Resource::from_reader(
-        SyntheticDeficitReader::outgoing_short_by_one(first_deficit_frames),
+        SyntheticPcmReader::new(first_frames, first_frame_count),
         Some(Arc::from("fused-deficit-1")),
     );
     let second = Resource::from_reader(
-        SyntheticDeficitReader::armed_next_with_deferred_lead(),
+        SyntheticPcmReader::new(
+            synthetic_second_track_frames(),
+            FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
+        ),
         Some(Arc::from("fused-deficit-2")),
     );
 
@@ -961,7 +967,69 @@ async fn render_synthetic_fused_deficit_seam(first_deficit_frames: u32) -> Synth
     SyntheticSeamRender {
         left: deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS)),
         events,
+        first_frames: first_frame_count,
     }
+}
+
+fn synthetic_tail_trimmed_first_frames(tail_compensation: bool) -> Vec<f32> {
+    const TRAILING_FRAMES: u64 = 1;
+
+    let actual_pre_trim_frames =
+        FUSED_FIXTURE_IDEAL_DEVICE_FRAMES + usize::try_from(TRAILING_FRAMES).expect("fits") - 1;
+    let ideal_pre_trim_frames =
+        u64::try_from(actual_pre_trim_frames).expect("fixture frame count fits u64") + 1;
+    let source =
+        synthetic_interleaved_chunk((0..actual_pre_trim_frames).map(fused_seam_sample).collect());
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo::new(0, TRAILING_FRAMES))
+        .with_tail_compensation(
+            tail_compensation.then_some(GaplessTailCompensation::new(ideal_pre_trim_frames)),
+        );
+
+    let mut output = Vec::new();
+    output.extend(left_frames_from_chunks(trimmer.push(source)));
+    output.extend(left_frames_from_chunks(trimmer.flush()));
+    output
+}
+
+fn synthetic_second_track_frames() -> Vec<f32> {
+    let start = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES;
+    let end = start + FUSED_FIXTURE_IDEAL_DEVICE_FRAMES;
+    (start..end).map(fused_seam_sample).collect()
+}
+
+fn synthetic_interleaved_chunk(frames: Vec<f32>) -> PcmChunk {
+    let spec = PcmSpec::new(
+        GAPLESS_CHANNELS,
+        NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("test sample rate"),
+    );
+    let mut chunk = PcmChunk::default();
+    chunk.meta = PcmMeta {
+        frames: u32::try_from(frames.len()).expect("fixture frame count fits u32"),
+        spec,
+        ..Default::default()
+    };
+    chunk
+        .samples
+        .reserve(frames.len() * usize::from(GAPLESS_CHANNELS));
+    for sample in frames {
+        for _ in 0..GAPLESS_CHANNELS {
+            chunk.samples.push(sample);
+        }
+    }
+    chunk
+}
+
+fn left_frames_from_chunks(chunks: impl IntoIterator<Item = PcmChunk>) -> Vec<f32> {
+    chunks
+        .into_iter()
+        .flat_map(|chunk| {
+            chunk
+                .samples
+                .chunks_exact(usize::from(GAPLESS_CHANNELS))
+                .map(|frame| frame[0])
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn load_tagged_queue<const N: usize>(
@@ -983,6 +1051,7 @@ fn load_tagged_queue<const N: usize>(
 struct SyntheticSeamRender {
     left: Vec<f32>,
     events: Vec<TimedPlayerEvent>,
+    first_frames: usize,
 }
 
 #[cfg(all(
@@ -1003,7 +1072,6 @@ struct AppleFusedSeamRender {
 ))]
 #[derive(Debug)]
 struct DrainedResource {
-    output_deficit_frames: u32,
     output_frames: usize,
 }
 
@@ -1034,63 +1102,28 @@ async fn drain_resource_to_eof(mut resource: Resource) -> DrainedResource {
                 time::sleep(Duration::from_millis(1)).await;
             }
             ChunkOutcome::Eof { .. } => {
-                return DrainedResource {
-                    output_deficit_frames: resource.output_deficit_frames(),
-                    output_frames,
-                };
+                return DrainedResource { output_frames };
             }
         }
     }
 }
 
-struct SyntheticDeficitReader {
+struct SyntheticPcmReader {
     bus: EventBus,
-    deferred_leading_frames: u32,
     duration_frames: usize,
     frames: Vec<f32>,
-    leading_compensation_frames: u32,
     metadata: TrackMetadata,
-    output_deficit_frames: u32,
     position_frames: usize,
     spec: PcmSpec,
 }
 
-impl SyntheticDeficitReader {
-    fn outgoing_short_by_one(output_deficit_frames: u32) -> Self {
-        let actual_frames = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1;
-        Self::new(
-            (0..actual_frames).map(fused_seam_sample).collect(),
-            FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
-            output_deficit_frames,
-            0,
-        )
-    }
-
-    fn armed_next_with_deferred_lead() -> Self {
-        let start = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1;
-        let end = start + FUSED_FIXTURE_IDEAL_DEVICE_FRAMES + 1;
-        Self::new(
-            (start..end).map(fused_seam_sample).collect(),
-            FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
-            0,
-            1,
-        )
-    }
-
-    fn new(
-        frames: Vec<f32>,
-        duration_frames: usize,
-        output_deficit_frames: u32,
-        deferred_leading_frames: u32,
-    ) -> Self {
+impl SyntheticPcmReader {
+    fn new(frames: Vec<f32>, duration_frames: usize) -> Self {
         Self {
             bus: EventBus::default(),
-            deferred_leading_frames,
             duration_frames,
             frames,
-            leading_compensation_frames: 0,
             metadata: TrackMetadata::default(),
-            output_deficit_frames,
             position_frames: 0,
             spec: PcmSpec::new(
                 GAPLESS_CHANNELS,
@@ -1099,18 +1132,7 @@ impl SyntheticDeficitReader {
         }
     }
 
-    fn resolve_deferred_leading(&mut self) {
-        let drop_frames = self
-            .deferred_leading_frames
-            .saturating_sub(self.leading_compensation_frames);
-        self.deferred_leading_frames = 0;
-        self.leading_compensation_frames = 0;
-        let drop = usize::try_from(drop_frames).unwrap_or(usize::MAX);
-        self.position_frames = self.position_frames.saturating_add(drop);
-    }
-
     fn fill_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
-        self.resolve_deferred_leading();
         let requested = output
             .iter()
             .map(|channel| channel.len())
@@ -1128,7 +1150,6 @@ impl SyntheticDeficitReader {
     }
 
     fn fill_interleaved(&mut self, output: &mut [f32]) -> usize {
-        self.resolve_deferred_leading();
         let channels = usize::from(self.spec.channels);
         let requested = output.len().saturating_div(channels.max(1));
         let frames = requested.min(self.frames.len().saturating_sub(self.position_frames));
@@ -1155,7 +1176,7 @@ impl SyntheticDeficitReader {
     }
 }
 
-impl PcmReader for SyntheticDeficitReader {
+impl PcmReader for SyntheticPcmReader {
     fn duration(&self) -> Option<Duration> {
         Some(duration_for_test_frames(self.duration_frames))
     }
@@ -1176,23 +1197,6 @@ impl PcmReader for SyntheticDeficitReader {
 
     fn position(&self) -> Duration {
         duration_for_test_frames(self.position_frames)
-    }
-
-    fn output_deficit_frames(&self) -> u32 {
-        if self.position_frames >= self.frames.len() {
-            self.output_deficit_frames
-        } else {
-            0
-        }
-    }
-
-    fn compensate_gapless_leading_trim(&mut self, frames: u32) -> u32 {
-        let applied = frames.min(self.deferred_leading_frames);
-        self.leading_compensation_frames = applied;
-        self.duration_frames = self
-            .duration_frames
-            .saturating_add(usize::try_from(applied).unwrap_or(usize::MAX));
-        applied
     }
 
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {

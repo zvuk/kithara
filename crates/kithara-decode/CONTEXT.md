@@ -47,6 +47,11 @@ metadata through `DecoderTrackInfo::gapless: Option<GaplessInfo>`, where
 `leading_frames` and `trailing_frames` are decoder-output PCM frame counts. When
 Apple fused decode+SRC is active, the factory scales source-rate container
 metadata once before codec open so `GaplessTrimmer` never sees mixed domains.
+For fused SRC, the factory also carries the ideal pre-trim output length
+(`ceil(source_frames * output_rate / source_rate)`) into the trimmer. At EOF the
+trimmer compares that value to the decoder-output frames it actually received
+and reduces fixed trailing trim by the bounded deficit (currently at most one
+frame), keeping the compensation track-local.
 
 The contract has one owner for actual trimming:
 

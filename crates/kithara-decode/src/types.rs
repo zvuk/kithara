@@ -3,7 +3,7 @@ use std::{fmt, num::NonZeroU32, sync::Arc};
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::time::Duration;
 
-use crate::gapless::GaplessInfo;
+use crate::gapless::{GaplessInfo, GaplessTailCompensation};
 
 /// Decoder-owned per-track playback contract.
 ///
@@ -16,6 +16,8 @@ use crate::gapless::GaplessInfo;
 pub struct DecoderTrackInfo {
     /// Gapless trim information applied by the engine pipeline.
     pub gapless: Option<GaplessInfo>,
+    /// Fused-SRC tail compensation contract for gapless trailing trim.
+    pub gapless_tail: Option<GaplessTailCompensation>,
 }
 
 /// Audio track metadata extracted from Symphonia tags.
