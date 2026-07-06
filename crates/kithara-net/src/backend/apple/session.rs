@@ -149,8 +149,8 @@ impl AppleSession {
         task.resume();
 
         Ok(StartedStream {
-            body_queue,
             task,
+            body_queue,
             head_receiver,
             task_id,
         })
@@ -210,9 +210,9 @@ impl SharedSession {
         };
 
         Self {
-            key,
             delegate,
             session,
+            key,
         }
     }
 }

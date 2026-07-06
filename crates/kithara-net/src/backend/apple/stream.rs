@@ -324,10 +324,10 @@ pub(super) async fn wait_for_stream_head(
                     Ok(AppleStreamResponse {
                         headers,
                         status,
-                        partial,
-                        body_queue,
                         task,
+                        body_queue,
                         cancel,
+                        partial,
                     })
                 }
                 Ok(Err(error)) => {
