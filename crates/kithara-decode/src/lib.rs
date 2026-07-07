@@ -27,7 +27,6 @@ mod gapless;
 mod input;
 mod mp4;
 mod pcm_time;
-#[cfg(feature = "resample-rubato")]
 mod resampler;
 mod resampler_quality;
 #[cfg(feature = "symphonia")]
@@ -52,8 +51,9 @@ pub use gapless::{
 };
 pub use input::InputRequirement;
 pub use pcm_time::{duration_for_frames, frames_for_duration};
-#[cfg(feature = "resample-rubato")]
-pub use resampler::{ResampleError, ResamplerConstructionError, ResamplerKind};
+pub use resampler::{
+    Resampler, ResamplerBackend, ResamplerBuildError, ResamplerError, create_resampler,
+};
 pub use resampler_quality::ResamplerQuality;
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,

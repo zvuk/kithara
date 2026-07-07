@@ -1,0 +1,275 @@
+use num_traits::cast::ToPrimitive;
+use rubato::{
+    Async, FixedAsync, PolynomialDegree, ResampleError, Resampler as RubatoResamplerTrait,
+    ResamplerConstructionError, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    audioadapter_buffers::direct::SequentialSliceOfVecs,
+};
+
+use crate::{
+    ResamplerQuality,
+    resampler::{Resampler, ResamplerError},
+};
+
+impl From<ResamplerQuality> for SincInterpolationParameters {
+    fn from(quality: ResamplerQuality) -> Self {
+        const OVERSAMPLING_HIGH: usize = 256;
+        const OVERSAMPLING_NORMAL: usize = 128;
+        const CUTOFF: f32 = 0.95;
+        const LEN_GOOD: usize = 128;
+        const LEN_HIGH: usize = 256;
+        const LEN_NORMAL: usize = 64;
+
+        match quality {
+            ResamplerQuality::Good => Self {
+                sinc_len: LEN_GOOD,
+                f_cutoff: CUTOFF,
+                interpolation: SincInterpolationType::Linear,
+                oversampling_factor: OVERSAMPLING_HIGH,
+                window: WindowFunction::BlackmanHarris2,
+            },
+            ResamplerQuality::High => Self {
+                sinc_len: LEN_HIGH,
+                f_cutoff: CUTOFF,
+                interpolation: SincInterpolationType::Cubic,
+                oversampling_factor: OVERSAMPLING_HIGH,
+                window: WindowFunction::BlackmanHarris2,
+            },
+            ResamplerQuality::Normal | ResamplerQuality::Fast => Self {
+                sinc_len: LEN_NORMAL,
+                f_cutoff: CUTOFF,
+                interpolation: SincInterpolationType::Linear,
+                oversampling_factor: OVERSAMPLING_NORMAL,
+                window: WindowFunction::BlackmanHarris2,
+            },
+        }
+    }
+}
+
+/// Enum wrapper for rubato resamplers (trait is not object-safe).
+pub(crate) enum ResamplerKind {
+    Poly(Async<f32>),
+    Sinc(Async<f32>),
+}
+
+pub(crate) struct RubatoResampler {
+    inner: ResamplerKind,
+    source_rate: u32,
+    target_rate: u32,
+    channels: usize,
+}
+
+impl RubatoResampler {
+    pub(crate) fn new(
+        quality: ResamplerQuality,
+        source_rate: u32,
+        target_rate: u32,
+        channels: usize,
+        chunk_size: usize,
+    ) -> Result<Self, ResamplerConstructionError> {
+        let ratio = ResamplerKind::ratio_for_target(source_rate, target_rate);
+        let inner = ResamplerKind::new(quality, ratio, channels, chunk_size)?;
+        Ok(Self {
+            inner,
+            source_rate,
+            target_rate,
+            channels,
+        })
+    }
+}
+
+impl ResamplerKind {
+    /// Maximum ratio adjustment factor for async resamplers.
+    const MAX_RATIO_ADJUSTMENT: f64 = 8.0;
+
+    /// Build the selected rubato resampler engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResamplerConstructionError`] when rubato rejects the
+    /// supplied ratio, channel count, or chunk size.
+    pub(crate) fn new(
+        quality: ResamplerQuality,
+        ratio: f64,
+        channels: usize,
+        chunk_size: usize,
+    ) -> Result<Self, ResamplerConstructionError> {
+        match quality {
+            ResamplerQuality::Fast => {
+                let poly = Async::new_poly(
+                    ratio,
+                    Self::MAX_RATIO_ADJUSTMENT,
+                    PolynomialDegree::Cubic,
+                    chunk_size,
+                    channels,
+                    FixedAsync::Input,
+                )?;
+                Ok(Self::Poly(poly))
+            }
+            ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
+                let sinc = Async::new_sinc(
+                    ratio,
+                    Self::MAX_RATIO_ADJUSTMENT,
+                    &SincInterpolationParameters::from(quality),
+                    chunk_size,
+                    channels,
+                    FixedAsync::Input,
+                )?;
+                Ok(Self::Sinc(sinc))
+            }
+        }
+    }
+
+    fn inner(&self) -> &Async<f32> {
+        match self {
+            Self::Poly(r) | Self::Sinc(r) => r,
+        }
+    }
+
+    fn inner_mut(&mut self) -> &mut Async<f32> {
+        match self {
+            Self::Poly(r) | Self::Sinc(r) => r,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn input_frames_max(&self) -> usize {
+        self.inner().input_frames_max()
+    }
+
+    #[must_use]
+    pub(crate) fn input_frames_next(&self) -> usize {
+        self.inner().input_frames_next()
+    }
+
+    #[must_use]
+    pub(crate) fn output_frames_max(&self) -> usize {
+        self.inner().output_frames_max()
+    }
+
+    #[must_use]
+    pub(crate) fn output_frames_next(&self) -> usize {
+        self.inner().output_frames_next()
+    }
+
+    /// Resample one planar input block into caller-owned output buffers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResampleError`] when the input/output buffer shape is
+    /// insufficient or when rubato rejects the block.
+    ///
+    pub(crate) fn process_into_buffer(
+        &mut self,
+        input: &[Vec<f32>],
+        output: &mut [Vec<f32>],
+    ) -> Result<(usize, usize), ResampleError> {
+        let channels = input.len();
+        let input_frames = input.first().map(Vec::len).ok_or_else(|| {
+            ResampleError::InsufficientInputBufferSize {
+                expected: self.input_frames_next(),
+                actual: 0,
+            }
+        })?;
+        let output_frames = output.first().map(Vec::len).ok_or_else(|| {
+            ResampleError::InsufficientOutputBufferSize {
+                expected: self.output_frames_next(),
+                actual: 0,
+            }
+        })?;
+
+        let input_adapter =
+            SequentialSliceOfVecs::new(input, channels, input_frames).map_err(|_| {
+                ResampleError::InsufficientInputBufferSize {
+                    expected: input_frames,
+                    actual: 0,
+                }
+            })?;
+        let mut output_adapter = SequentialSliceOfVecs::new_mut(output, channels, output_frames)
+            .map_err(|_| ResampleError::InsufficientOutputBufferSize {
+                expected: output_frames,
+                actual: 0,
+            })?;
+
+        self.inner_mut()
+            .process_into_buffer(&input_adapter, &mut output_adapter, None)
+    }
+
+    /// Compute the output/input resampling ratio for a target sample rate.
+    #[must_use]
+    pub(crate) fn ratio_for_target(source_rate: u32, target_rate: u32) -> f64 {
+        if source_rate > 0 {
+            f64::from(target_rate) / f64::from(source_rate)
+        } else {
+            1.0
+        }
+    }
+
+    #[must_use]
+    fn resample_ratio(&self) -> f64 {
+        self.inner().resample_ratio()
+    }
+
+    fn reset_inner(&mut self) {
+        self.inner_mut().reset();
+    }
+}
+
+impl Resampler for RubatoResampler {
+    fn channels(&self) -> usize {
+        self.channels
+    }
+
+    fn input_frames_max(&self) -> usize {
+        self.inner.input_frames_max()
+    }
+
+    fn input_frames_next(&self) -> usize {
+        self.inner.input_frames_next()
+    }
+
+    fn output_frames_for_input(&self, input_frames: usize) -> usize {
+        let Some(input_frames) = input_frames.to_f64() else {
+            return usize::MAX;
+        };
+        let frames = (input_frames * self.ratio()).ceil();
+        if !frames.is_finite() || frames <= 0.0 {
+            return 0;
+        }
+
+        frames.to_usize().unwrap_or(usize::MAX)
+    }
+
+    fn output_frames_max(&self) -> usize {
+        self.inner.output_frames_max()
+    }
+
+    fn output_frames_next(&self) -> usize {
+        self.inner.output_frames_next()
+    }
+
+    fn process_into_buffer(
+        &mut self,
+        input: &[Vec<f32>],
+        output: &mut [Vec<f32>],
+    ) -> Result<(usize, usize), ResamplerError> {
+        self.inner
+            .process_into_buffer(input, output)
+            .map_err(ResamplerError::from)
+    }
+
+    fn ratio(&self) -> f64 {
+        self.inner.resample_ratio()
+    }
+
+    fn reset(&mut self) {
+        self.inner.reset_inner();
+    }
+
+    fn source_rate(&self) -> u32 {
+        self.source_rate
+    }
+
+    fn target_rate(&self) -> u32 {
+        self.target_rate
+    }
+}

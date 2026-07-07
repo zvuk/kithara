@@ -10,7 +10,10 @@ use std::{
 use bon::Builder;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, ResampleError, ResamplerKind, ResamplerQuality};
+use kithara_decode::{
+    PcmChunk, PcmMeta, PcmSpec, Resampler, ResamplerBackend, ResamplerError, ResamplerQuality,
+    create_resampler,
+};
 use smallvec::SmallVec;
 use tracing::{debug, info, trace};
 
@@ -57,13 +60,9 @@ impl ResamplerParams {
 /// passthrough mode.
 pub struct ResamplerProcessor {
     host_sample_rate: Arc<AtomicU32>,
-    /// Most recently observed input `PcmMeta`. Carried over to each
-    /// resampled output chunk so the timeline still gets the decoder's
-    /// authoritative `timestamp` / `end_timestamp` after rate
-    /// conversion (rubato changes frame counts but not wall-clock
-    /// duration). `None` until the first input chunk arrives.
+    /// Last input metadata; resampled output keeps decoder timestamps.
     last_input_meta: Option<PcmMeta>,
-    resampler: Option<ResamplerKind>,
+    resampler: Option<Box<dyn Resampler>>,
     /// Pool for interleave output buffers.
     pool: PcmPool,
     output_spec: PcmSpec,
@@ -83,6 +82,7 @@ pub struct ResamplerProcessor {
 impl ResamplerProcessor {
     /// Default resampler chunk size in frames.
     const DEFAULT_CHUNK_SIZE: usize = 4096;
+    const RATIO_CHANGE_TOLERANCE: f64 = 0.0001;
 
     /// Create a new resampler from configuration parameters.
     pub fn new(params: ResamplerParams) -> Self {
@@ -133,7 +133,10 @@ impl ResamplerProcessor {
             return;
         }
 
-        let frames = interleaved.len() / self.channels;
+        let Some(num_channels) = NonZeroUsize::new(self.channels) else {
+            return;
+        };
+        let frames = interleaved.len() / num_channels.get();
 
         if self.temp_deinterleave.len() < self.channels {
             self.temp_deinterleave.resize_with(self.channels, Vec::new);
@@ -143,7 +146,6 @@ impl ResamplerProcessor {
             buf.resize(frames, 0.0);
         }
 
-        let num_channels = NonZeroUsize::new(self.channels).expect("channels must be > 0");
         deinterleave_variable(
             interleaved,
             num_channels,
@@ -206,22 +208,32 @@ impl ResamplerProcessor {
                 let Some(mut resampler) = self.resampler.take() else {
                     return false;
                 };
-                let res = self.process_block(&mut resampler, input_frames, output_frames);
+                let res = self.process_block(resampler.as_mut(), input_frames, output_frames);
                 self.resampler = Some(resampler);
                 res
             };
 
             match result {
-                Ok(out_len) => {
+                Ok((consumed, out_len)) => {
+                    if consumed > input_frames {
+                        trace!(
+                            consumed,
+                            input_frames, "Resampler consumed more frames than provided"
+                        );
+                        return false;
+                    }
                     for ch in 0..channels {
                         let src = &self.temp_output_bufs[ch][..out_len];
                         self.temp_output_all[ch].extend_from_slice(src);
                     }
-                    for buf in &mut self.input_buffer {
-                        buf.drain(..input_frames);
+
+                    if consumed > 0 {
+                        for buf in &mut self.input_buffer {
+                            buf.drain(..consumed);
+                        }
                     }
 
-                    if self.input_buffer[0].len() < input_frames {
+                    if consumed == 0 || self.input_buffer[0].len() < input_frames {
                         break;
                     }
                 }
@@ -284,13 +296,13 @@ impl ResamplerProcessor {
 
         let result = {
             let mut resampler = self.resampler.take()?;
-            let res = self.process_block(&mut resampler, input_frames, output_frames);
+            let res = self.process_block(resampler.as_mut(), input_frames, output_frames);
             self.resampler = Some(resampler);
             res
         };
 
         match result {
-            Ok(out_len) => self.build_flush_output(buffered, out_len),
+            Ok((_, out_len)) => self.build_flush_output(buffered, out_len),
             Err(e) => {
                 trace!(err = %e, "Resampler flush error");
                 None
@@ -313,7 +325,9 @@ impl ResamplerProcessor {
             return self.pool.get();
         }
 
-        let num_channels = NonZeroUsize::new(self.channels).expect("channels must be > 0");
+        let Some(num_channels) = NonZeroUsize::new(self.channels) else {
+            return self.pool.get();
+        };
         interleave_variable(planar, 0..frames, &mut result[..], num_channels);
 
         result
@@ -337,7 +351,7 @@ impl ResamplerProcessor {
     /// reallocates them mid-playback. Sizes come from the resampler's
     /// worst-case input/output blocks (`*_frames_max`, which already fold in
     /// the `MAX_RATIO_ADJUSTMENT` window), so even a live host/source-rate
-    /// ratio move stays allocation-free. No-op in passthrough — there is no
+    /// ratio move stays allocation-free. No-op in passthrough - there is no
     /// resampler and the scratch is unused. Pure capacity reservation: output
     /// is bit-exact.
     fn presize_scratch(&mut self) {
@@ -368,10 +382,10 @@ impl ResamplerProcessor {
 
     fn process_block(
         &mut self,
-        resampler: &mut ResamplerKind,
+        resampler: &mut dyn Resampler,
         input_frames: usize,
         output_frames: usize,
-    ) -> Result<usize, ResampleError> {
+    ) -> Result<(usize, usize), ResamplerError> {
         let channels = self.channels;
 
         for ch in 0..channels {
@@ -383,19 +397,30 @@ impl ResamplerProcessor {
             self.temp_output_bufs[ch].resize(output_frames, 0.0);
         }
 
-        let (_, out_len) = resampler.process_into_buffer(
+        let (consumed, out_len) = resampler.process_into_buffer(
             &self.temp_input_slice[..channels],
             &mut self.temp_output_bufs[..channels],
         )?;
-        Ok(out_len)
+        Ok((consumed, out_len))
     }
 
     fn ratio_for_target(&self, target_rate: u32) -> f64 {
-        ResamplerKind::ratio_for_target(self.source_rate, target_rate)
+        if self.source_rate > 0 {
+            f64::from(target_rate) / f64::from(self.source_rate)
+        } else {
+            1.0
+        }
     }
 
-    fn recreate_resampler(&mut self, new_ratio: f64) {
-        match ResamplerKind::new(self.quality, new_ratio, self.channels, self.chunk_size) {
+    fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
+        match create_resampler(
+            ResamplerBackend::default(),
+            self.quality,
+            self.source_rate,
+            target_rate,
+            self.channels,
+            self.chunk_size,
+        ) {
             Ok(resampler) => {
                 self.resampler = Some(resampler);
                 self.current_ratio = new_ratio;
@@ -473,10 +498,10 @@ impl ResamplerProcessor {
         // target_rate() returns source_rate when host==0 (non-zero) or host_sr (non-zero by contract).
         self.output_spec.sample_rate =
             NonZeroU32::new(target_rate).unwrap_or(self.output_spec.sample_rate);
-        let should_pt = ResamplerKind::should_passthrough(self.source_rate, target_rate);
+        let should_pt = self.source_rate == target_rate || target_rate == 0;
         let currently_pt = self.is_passthrough();
         let new_ratio = self.ratio_for_target(target_rate);
-        let ratio_changed = ResamplerKind::ratio_changed(self.current_ratio, new_ratio);
+        let ratio_changed = (new_ratio - self.current_ratio).abs() > Self::RATIO_CHANGE_TOLERANCE;
 
         if should_pt {
             self.switch_to_passthrough(target_rate, currently_pt);
@@ -484,7 +509,7 @@ impl ResamplerProcessor {
         }
 
         if currently_pt || self.resampler.is_none() || ratio_changed {
-            self.recreate_resampler(new_ratio);
+            self.recreate_resampler(target_rate, new_ratio);
         }
     }
 }
@@ -496,7 +521,7 @@ fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
 }
 
 /// Reserve `cap` floats of capacity on each per-channel scratch Vec,
-/// growing the outer `SmallVec` to `channels` first. Pure capacity — the
+/// growing the outer `SmallVec` to `channels` first. Pure capacity - the
 /// lengths and contents are untouched, so resampler output stays bit-exact.
 fn reserve_channel_scratch(bufs: &mut SmallVec<[Vec<f32>; 8]>, channels: usize, cap: usize) {
     if bufs.len() < channels {
