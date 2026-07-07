@@ -22,7 +22,7 @@ use tracing::{debug, info, warn};
 use super::{
     arena_registry::ArenaRegistry,
     player_processor::PlayerCmd,
-    session::{PlayerId, SessionDispatcher, session_client},
+    session::{PlayerId, SessionDispatcher, SessionHandle, session_client},
     shared_eq::SharedEq,
     shared_player_state::SharedPlayerState,
 };
@@ -92,7 +92,7 @@ pub struct EngineImpl {
     /// Audio session backend. Production paths default to the
     /// process-wide cpal-backed `SessionClient`; tests inject a
     /// per-instance offline dispatcher through [`EngineConfig::session`].
-    session: Arc<dyn SessionDispatcher>,
+    session: SessionHandle,
 
     /// Whether this engine/player instance is currently running.
     running: AtomicBool,
@@ -145,7 +145,7 @@ impl EngineImpl {
         let session = config
             .session
             .take()
-            .unwrap_or_else(|| session_client() as Arc<dyn SessionDispatcher>);
+            .map_or_else(|| SessionHandle::new(session_client()), SessionHandle::new);
         Self::with_session(config, bus, session)
     }
 
@@ -194,7 +194,7 @@ impl EngineImpl {
     /// Process-wide session ducking mode.
     #[must_use]
     pub fn session_ducking() -> SessionDuckingMode {
-        match session_client().ducking() {
+        match SessionHandle::new(session_client()).ducking() {
             Ok(mode) => mode,
             Err(err) => {
                 warn!(?err, "failed to query session ducking");
@@ -210,7 +210,7 @@ impl EngineImpl {
 
     /// Set process-wide session ducking mode.
     pub fn set_session_ducking(mode: SessionDuckingMode) -> Result<(), PlayError> {
-        session_client().set_ducking(mode)
+        SessionHandle::new(session_client()).set_ducking(mode)
     }
 
     pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
@@ -234,11 +234,7 @@ impl EngineImpl {
         self.session.tick()
     }
 
-    fn with_session(
-        config: EngineConfig,
-        bus: EventBus,
-        session: Arc<dyn SessionDispatcher>,
-    ) -> Self {
+    fn with_session(config: EngineConfig, bus: EventBus, session: SessionHandle) -> Self {
         let max_slots = config.max_slots;
         let resolved_pool = config
             .pcm_pool

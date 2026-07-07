@@ -10,6 +10,7 @@ pub mod player_processor;
 pub mod player_resource;
 pub mod player_track;
 pub mod resource;
+#[path = "../session/mod.rs"]
 pub mod session;
 pub mod shared_eq;
 pub mod shared_player_state;

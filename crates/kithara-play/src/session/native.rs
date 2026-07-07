@@ -9,16 +9,12 @@ use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
 use super::{
-    client::SessionDispatcher,
-    state::{Cmd, CmdMsg, Reply, SessionState, StartStreamFn, run_cmd},
+    dispatch::run_cmd,
+    protocol::{Cmd, CmdMsg, Reply, SessionDispatcher, StartStreamFn},
+    state::SessionState,
 };
 use crate::error::PlayError;
 
-/// Native session client: sends `CmdMsg`s over an engine-aware channel drained
-/// by a dedicated `kithara-engine` worker thread. The worker blocks on the
-/// command-arrival EVENT (`recv`), not a `park_timeout` budget, so a
-/// latency-sensitive control command wakes it the instant it lands — under both
-/// the real and the virtual clock, with no cross-thread park/unpark to lose.
 pub(crate) struct SessionClient {
     cmd_tx: Mutex<mpsc::Sender<CmdMsg>>,
 }
@@ -51,8 +47,6 @@ fn engine_thread<B: AudioBackend>(
 ) {
     let mut state = SessionState::<B>::new(start_stream_fn);
     debug!("[KITHARA-ROUTE] native session worker started");
-    // Block on the command-arrival event. `recv` returns `Err` only once
-    // every sender has been dropped, which is the worker's exit signal.
     for CmdMsg { cmd, reply_tx } in cmd_rx.iter() {
         let reply = run_cmd(&mut state, cmd);
         if reply_tx.send(reply).is_err() {
@@ -75,17 +69,14 @@ fn spawn_session_client<B: AudioBackend + Send + 'static>(
     })
 }
 
-mod session_holder {
+mod holder {
     use super::*;
 
-    /// Singleton session client shared across the process. First caller
-    /// wins — either `session_client()` (production, spawns cpal) or
-    /// integration-test offline init.
     pub(super) static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
 }
 
-pub(crate) fn session_client() -> Arc<SessionClient> {
-    session_holder::SESSION_CLIENT
+pub(crate) fn session_client() -> Arc<dyn SessionDispatcher> {
+    holder::SESSION_CLIENT
         .get_or_init(|| {
             spawn_session_client::<firewheel::cpal::CpalBackend>(
                 "kithara-engine",

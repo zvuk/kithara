@@ -27,8 +27,8 @@ pub use impls::{
     player_node::PlayerNode,
     resource::Resource,
     session::{
-        AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionState,
-        StartStreamFn, run_cmd,
+        AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionError,
+        SessionHandle, SessionState, StartStreamFn, run_cmd,
     },
     shared_eq::SharedEq,
     shared_player_state::PlaybackSnapshot,

@@ -1,6 +1,6 @@
 use kithara_platform::time::Duration;
 
-use crate::types::SlotId;
+use crate::{impls::session::SessionError, types::SlotId};
 
 #[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -58,6 +58,9 @@ pub enum PlayError {
 
     #[error("end of resource")]
     Eof,
+
+    #[error(transparent)]
+    Session(#[from] SessionError),
 
     #[error("{0}")]
     Internal(String),
