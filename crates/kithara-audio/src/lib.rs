@@ -18,7 +18,6 @@ pub mod effects;
 pub mod mock;
 mod pipeline;
 mod region;
-#[cfg(feature = "resample-rubato")]
 mod resampler;
 mod runtime;
 mod traits;
@@ -42,7 +41,6 @@ pub use pipeline::{
     fetch::{EpochValidator, Fetch},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
-#[cfg(feature = "resample-rubato")]
 pub use resampler::{ResamplerParams, ResamplerProcessor};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,

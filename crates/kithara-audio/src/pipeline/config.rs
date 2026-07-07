@@ -27,7 +27,6 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResamplerStage {
     Present(ResamplerQuality),
-    #[cfg(feature = "apple-fused-src")]
     Absent,
 }
 

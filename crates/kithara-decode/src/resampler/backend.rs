@@ -7,12 +7,6 @@ pub enum ResamplerBackend {
     Apple,
 }
 
-impl Default for ResamplerBackend {
-    fn default() -> Self {
-        Self::all()[0]
-    }
-}
-
 impl ResamplerBackend {
     /// Backends compiled into this target/feature set, in selector order.
     #[must_use]
@@ -23,5 +17,11 @@ impl ResamplerBackend {
             #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
             Self::Apple,
         ]
+    }
+
+    /// Preferred backend for this target/feature set.
+    #[must_use]
+    pub fn preferred() -> Option<Self> {
+        Self::all().first().copied()
     }
 }

@@ -77,6 +77,7 @@ pub struct ResamplerProcessor {
     source_rate: u32,
     channels: usize,
     chunk_size: usize,
+    missing_backend_logged: bool,
 }
 
 impl ResamplerProcessor {
@@ -110,6 +111,7 @@ impl ResamplerProcessor {
             temp_output_all: smallvec_new_vecs(channels),
             temp_output_bufs: smallvec_new_vecs(channels),
             last_input_meta: None,
+            missing_backend_logged: false,
         };
 
         processor.update_resampler_if_needed();
@@ -412,9 +414,9 @@ impl ResamplerProcessor {
         }
     }
 
-    fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
+    fn recreate_resampler(&mut self, backend: ResamplerBackend, target_rate: u32, new_ratio: f64) {
         match create_resampler(
-            ResamplerBackend::default(),
+            backend,
             self.quality,
             self.source_rate,
             target_rate,
@@ -432,6 +434,25 @@ impl ResamplerProcessor {
             Err(e) => {
                 debug!(err = %e, "Failed to create resampler, staying in current mode");
             }
+        }
+    }
+
+    fn switch_to_source_passthrough(&mut self, target_rate: u32, currently_pt: bool) {
+        if !currently_pt {
+            self.resampler = None;
+        }
+        if !self.missing_backend_logged {
+            debug!(
+                source_rate = self.source_rate,
+                target_rate, "No resampler backend compiled; leaving PCM in source-rate domain"
+            );
+            self.missing_backend_logged = true;
+        }
+        self.current_ratio = 1.0;
+        self.output_spec.sample_rate =
+            NonZeroU32::new(self.source_rate).unwrap_or(self.output_spec.sample_rate);
+        for buf in &mut self.input_buffer {
+            buf.clear();
         }
     }
 
@@ -508,8 +529,13 @@ impl ResamplerProcessor {
             return;
         }
 
+        let Some(backend) = ResamplerBackend::preferred() else {
+            self.switch_to_source_passthrough(target_rate, currently_pt);
+            return;
+        };
+
         if currently_pt || self.resampler.is_none() || ratio_changed {
-            self.recreate_resampler(target_rate, new_ratio);
+            self.recreate_resampler(backend, target_rate, new_ratio);
         }
     }
 }

@@ -22,20 +22,44 @@ pub(crate) fn resampler_stage(
     }
 }
 
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
 fn fused_src_active(backend: DecoderBackend) -> bool {
     matches!(backend, DecoderBackend::Apple)
 }
 
+#[cfg(not(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+)))]
+fn fused_src_active(_backend: DecoderBackend) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(all(
+        feature = "apple-fused-src",
+        any(target_os = "macos", target_os = "ios")
+    ))]
     use std::{num::NonZeroU32, sync::atomic::Ordering};
 
     use super::*;
 
+    #[cfg(all(
+        feature = "apple-fused-src",
+        any(target_os = "macos", target_os = "ios")
+    ))]
     fn current_target_output_rate(rate: Option<&Arc<AtomicU32>>) -> Option<u32> {
         rate.and_then(|rate| NonZeroU32::new(rate.load(Ordering::Acquire)).map(NonZeroU32::get))
     }
 
+    #[cfg(all(
+        feature = "apple-fused-src",
+        any(target_os = "macos", target_os = "ios")
+    ))]
     #[test]
     fn apple_backend_uses_fused_output_rate_and_omits_stage() {
         let host_rate = Arc::new(AtomicU32::new(48_000));
@@ -59,6 +83,21 @@ mod tests {
         assert!(target.is_none());
         assert_eq!(
             resampler_stage(DecoderBackend::Symphonia, ResamplerQuality::High),
+            ResamplerStage::Present(ResamplerQuality::High)
+        );
+    }
+
+    #[cfg(not(all(
+        feature = "apple-fused-src",
+        any(target_os = "macos", target_os = "ios")
+    )))]
+    #[test]
+    fn non_fused_build_keeps_decoder_source_rate_and_resampler_stage() {
+        let host_rate = Arc::new(AtomicU32::new(48_000));
+
+        assert!(decoder_target_output_rate(DecoderBackend::default(), &host_rate).is_none());
+        assert_eq!(
+            resampler_stage(DecoderBackend::default(), ResamplerQuality::High),
             ResamplerStage::Present(ResamplerQuality::High)
         );
     }
