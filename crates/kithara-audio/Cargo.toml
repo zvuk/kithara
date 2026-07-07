@@ -65,8 +65,8 @@ symphonia = ["kithara-decode/symphonia", "resample-rubato"]
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
 resample-rubato = ["kithara-decode/resample-rubato"]
-resample-fft = ["analysis-beat", "rubato/fft_resampler"]
-analysis-beat = ["dep:rubato"]
+resample-fft = ["analysis-beat", "kithara-decode/resample-fft"]
+analysis-beat = ["kithara-decode/resample-rubato"]
 analysis-waveform = ["dep:realfft"]
 # Native-only C++ time-stretch backends. Default native builds use signalsmith;
 # bungee stays opt-in. Wasm builds pass `--no-default-features`, so they carry
@@ -90,7 +90,6 @@ kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 arc-swap = { workspace = true }
-audioadapter-buffers = { workspace = true }
 biquad = { workspace = true }
 bon = { workspace = true }
 crossbeam-queue = { workspace = true }
@@ -101,7 +100,6 @@ num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 realfft = { workspace = true, optional = true }
 ringbuf = { workspace = true }
-rubato = { workspace = true, optional = true }
 serde = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }

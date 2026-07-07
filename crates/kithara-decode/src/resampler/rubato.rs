@@ -4,6 +4,8 @@ use rubato::{
     ResamplerConstructionError, SincInterpolationParameters, SincInterpolationType, WindowFunction,
     audioadapter_buffers::direct::SequentialSliceOfVecs,
 };
+#[cfg(feature = "resample-fft")]
+use rubato::{Fft, FixedSync};
 
 use crate::{
     ResamplerQuality,
@@ -45,11 +47,8 @@ impl From<ResamplerQuality> for SincInterpolationParameters {
     }
 }
 
-/// Enum wrapper for rubato resamplers (trait is not object-safe).
-pub(crate) enum ResamplerKind {
-    Poly(Async<f32>),
-    Sinc(Async<f32>),
-}
+/// Thin wrapper around the selected rubato engine.
+pub(crate) struct ResamplerKind(Box<dyn RubatoResamplerTrait<f32>>);
 
 pub(crate) struct RubatoResampler {
     inner: ResamplerKind,
@@ -68,6 +67,22 @@ impl RubatoResampler {
     ) -> Result<Self, ResamplerConstructionError> {
         let ratio = ResamplerKind::ratio_for_target(source_rate, target_rate);
         let inner = ResamplerKind::new(quality, ratio, channels, chunk_size)?;
+        Ok(Self {
+            inner,
+            source_rate,
+            target_rate,
+            channels,
+        })
+    }
+
+    #[cfg(feature = "resample-fft")]
+    pub(crate) fn new_fft(
+        source_rate: u32,
+        target_rate: u32,
+        channels: usize,
+        chunk_size: usize,
+    ) -> Result<Self, ResamplerConstructionError> {
+        let inner = ResamplerKind::new_fft(source_rate, target_rate, channels, chunk_size)?;
         Ok(Self {
             inner,
             source_rate,
@@ -103,7 +118,7 @@ impl ResamplerKind {
                     channels,
                     FixedAsync::Input,
                 )?;
-                Ok(Self::Poly(poly))
+                Ok(Self(Box::new(poly)))
             }
             ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
                 let sinc = Async::new_sinc(
@@ -114,41 +129,61 @@ impl ResamplerKind {
                     channels,
                     FixedAsync::Input,
                 )?;
-                Ok(Self::Sinc(sinc))
+                Ok(Self(Box::new(sinc)))
             }
         }
     }
 
-    fn inner(&self) -> &Async<f32> {
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => r,
-        }
+    #[cfg(feature = "resample-fft")]
+    pub(crate) fn new_fft(
+        source_rate: u32,
+        target_rate: u32,
+        channels: usize,
+        chunk_size: usize,
+    ) -> Result<Self, ResamplerConstructionError> {
+        let fft = Fft::<f32>::new(
+            source_rate as usize,
+            target_rate as usize,
+            chunk_size,
+            2,
+            channels,
+            FixedSync::Input,
+        )?;
+        Ok(Self(Box::new(fft)))
     }
 
-    fn inner_mut(&mut self) -> &mut Async<f32> {
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => r,
+    /// Compute the output/input resampling ratio for a target sample rate.
+    #[must_use]
+    pub(crate) fn ratio_for_target(source_rate: u32, target_rate: u32) -> f64 {
+        if source_rate > 0 {
+            f64::from(target_rate) / f64::from(source_rate)
+        } else {
+            1.0
         }
     }
-
     #[must_use]
     pub(crate) fn input_frames_max(&self) -> usize {
-        self.inner().input_frames_max()
+        self.0.input_frames_max()
     }
 
     #[must_use]
     pub(crate) fn input_frames_next(&self) -> usize {
-        self.inner().input_frames_next()
+        self.0.input_frames_next()
+    }
+
+    #[must_use]
+    pub(crate) fn output_delay(&self) -> usize {
+        self.0.output_delay()
     }
 
     #[must_use]
     pub(crate) fn output_frames_max(&self) -> usize {
-        self.inner().output_frames_max()
+        self.0.output_frames_max()
     }
 
     #[must_use]
     pub(crate) fn output_frames_next(&self) -> usize {
-        self.inner().output_frames_next()
+        self.0.output_frames_next()
     }
 
     /// Resample one planar input block into caller-owned output buffers.
@@ -157,7 +192,6 @@ impl ResamplerKind {
     ///
     /// Returns [`ResampleError`] when the input/output buffer shape is
     /// insufficient or when rubato rejects the block.
-    ///
     pub(crate) fn process_into_buffer(
         &mut self,
         input: &[Vec<f32>],
@@ -190,27 +224,17 @@ impl ResamplerKind {
                 actual: 0,
             })?;
 
-        self.inner_mut()
+        self.0
             .process_into_buffer(&input_adapter, &mut output_adapter, None)
-    }
-
-    /// Compute the output/input resampling ratio for a target sample rate.
-    #[must_use]
-    pub(crate) fn ratio_for_target(source_rate: u32, target_rate: u32) -> f64 {
-        if source_rate > 0 {
-            f64::from(target_rate) / f64::from(source_rate)
-        } else {
-            1.0
-        }
     }
 
     #[must_use]
     fn resample_ratio(&self) -> f64 {
-        self.inner().resample_ratio()
+        self.0.resample_ratio()
     }
 
     fn reset_inner(&mut self) {
-        self.inner_mut().reset();
+        self.0.reset();
     }
 }
 
@@ -225,6 +249,10 @@ impl Resampler for RubatoResampler {
 
     fn input_frames_next(&self) -> usize {
         self.inner.input_frames_next()
+    }
+
+    fn output_delay(&self) -> usize {
+        self.inner.output_delay()
     }
 
     fn output_frames_for_input(&self, input_frames: usize) -> usize {

@@ -36,6 +36,11 @@ pub trait Resampler: Send + 'static {
     /// Return the preferred caller input frame count for the next process call.
     fn input_frames_next(&self) -> usize;
 
+    /// Backend group delay in output frames.
+    fn output_delay(&self) -> usize {
+        0
+    }
+
     /// Return the output frame capacity for a caller-sized input block.
     fn output_frames_for_input(&self, input_frames: usize) -> usize;
 

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use kithara_decode::{PcmChunk, PcmSpec};
 use num_traits::cast::AsPrimitive;
 
@@ -7,11 +5,7 @@ use super::{
     WaveformPass,
     track_analysis::{Analyzer, TrackAnalysis},
 };
-use crate::analysis::beat::{BeatPass, GridParams, SharedBeatDetector};
 
-/// Cache fingerprint of the active beat-analysis configuration (detector
-/// kind, model, grid tuning); folding it into the analysis cache key makes a
-/// config change a cache miss. `None` when no beat detector is compiled in.
 #[must_use]
 pub fn beat_cache_tag() -> Option<String> {
     super::nn::tag()
@@ -19,18 +13,17 @@ pub fn beat_cache_tag() -> Option<String> {
 
 #[derive(Default)]
 pub(crate) struct TrackAnalyzers {
-    beat: Option<BeatPass>,
+    beat: beat::Slot,
     waveform: Option<WaveformPass>,
     source_frames: u64,
 }
 
 impl TrackAnalyzers {
-    /// Emit the fast waveform first, then waveform+beat.
     pub(crate) fn finish_staged<F: FnMut(TrackAnalysis)>(mut self, mut emit: F) {
         let source_frames = self.source_frames;
         let waveform = self.waveform.take().map(Analyzer::finish);
 
-        if self.beat.is_none() {
+        if beat::is_empty(&self.beat) {
             emit(TrackAnalysis {
                 waveform,
                 source_frames,
@@ -45,9 +38,8 @@ impl TrackAnalyzers {
             waveform: waveform.clone(),
         });
 
-        let beat = self.beat.and_then(Analyzer::finish);
         emit(TrackAnalysis {
-            beat,
+            beat: beat::finish(self.beat),
             waveform,
             source_frames,
         });
@@ -61,26 +53,20 @@ impl TrackAnalyzers {
             a.push(chunk);
         }
 
-        if let Some(a) = &mut self.beat {
-            a.push(chunk);
-        }
+        beat::push(&mut self.beat, chunk);
     }
 }
 
-/// Configures which analyzers run, then mints a fresh [`TrackAnalyzers`]
-/// per track at the source spec.
 #[derive(Default)]
 pub struct AnalyzerBuilder {
-    beat: Option<(SharedBeatDetector, GridParams)>,
+    beat: beat::Config,
     waveform_buckets: Option<usize>,
 }
 
 impl AnalyzerBuilder {
     pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers {
         TrackAnalyzers {
-            beat: self.beat.as_ref().map(|(detector, params)| {
-                BeatPass::new(spec.sample_rate.get(), params.clone(), Arc::clone(detector))
-            }),
+            beat: beat::build(&self.beat, spec),
             waveform: self
                 .waveform_buckets
                 .map(|buckets| WaveformPass::new(spec.sample_rate.get(), buckets)),
@@ -88,35 +74,29 @@ impl AnalyzerBuilder {
         }
     }
 
-    /// `true` when no analyzer would run — the runtime signal to skip the
-    /// decode pass entirely.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.waveform_buckets.is_none() && self.beat.is_none()
+        self.waveform_buckets.is_none() && beat::config_is_empty(&self.beat)
     }
 
-    /// Run the NN beat analyzer. No-op when no detector is compiled in or
-    /// its model fails to load (`beat-nn`).
     #[must_use]
     pub fn with_beat(self) -> Self {
-        Self {
-            beat: super::nn::detector().map(|d| (d, GridParams::default())),
-            ..self
-        }
+        let mut builder = self;
+        beat::with_default(&mut builder.beat);
+        builder
     }
 
-    /// Test seam: install a mock detector without loading the NN model.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "analysis-beat"))]
     pub(crate) fn with_beat_detector(
-        mut self,
-        detector: SharedBeatDetector,
-        params: GridParams,
+        self,
+        detector: crate::analysis::beat::SharedBeatDetector,
+        params: crate::analysis::beat::GridParams,
     ) -> Self {
-        self.beat = Some((detector, params));
-        self
+        let mut builder = self;
+        beat::with_detector(&mut builder.beat, detector, params);
+        builder
     }
 
-    /// Run a waveform analyzer at `buckets` resolution.
     #[must_use]
     #[cfg(feature = "analysis-waveform")]
     pub fn with_waveform(self, buckets: usize) -> Self {
@@ -126,7 +106,6 @@ impl AnalyzerBuilder {
         }
     }
 
-    /// Run a waveform analyzer at `buckets` resolution.
     #[must_use]
     #[cfg(not(feature = "analysis-waveform"))]
     pub fn with_waveform(self, _buckets: usize) -> Self {
@@ -134,7 +113,93 @@ impl AnalyzerBuilder {
     }
 }
 
-#[cfg(all(test, feature = "analysis-waveform"))]
+#[cfg(feature = "analysis-beat")]
+mod beat {
+    use std::sync::Arc;
+
+    use kithara_decode::{PcmChunk, PcmSpec};
+
+    use super::{super::nn, Analyzer};
+    use crate::{
+        analysis::beat::{BeatPass, GridParams, SharedBeatDetector},
+        waveform::BeatGrid,
+    };
+
+    pub(super) type Config = Option<(SharedBeatDetector, GridParams)>;
+    pub(super) type Slot = Option<BeatPass>;
+
+    pub(super) fn build(config: &Config, spec: PcmSpec) -> Slot {
+        config.as_ref().map(|(detector, params)| {
+            BeatPass::new(spec.sample_rate.get(), params.clone(), Arc::clone(detector))
+        })
+    }
+
+    pub(super) fn config_is_empty(config: &Config) -> bool {
+        config.is_none()
+    }
+
+    pub(super) fn finish(slot: Slot) -> Option<BeatGrid> {
+        slot.and_then(Analyzer::finish)
+    }
+
+    pub(super) fn is_empty(slot: &Slot) -> bool {
+        slot.is_none()
+    }
+
+    pub(super) fn push(slot: &mut Slot, chunk: &PcmChunk) {
+        if let Some(a) = slot {
+            a.push(chunk);
+        }
+    }
+
+    pub(super) fn with_default(config: &mut Config) {
+        *config = nn::detector().map(|d| (d, GridParams::default()));
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_detector(
+        config: &mut Config,
+        detector: SharedBeatDetector,
+        params: GridParams,
+    ) {
+        *config = Some((detector, params));
+    }
+}
+
+#[cfg(not(feature = "analysis-beat"))]
+mod beat {
+    use kithara_decode::{PcmChunk, PcmSpec};
+
+    use crate::waveform::BeatGrid;
+
+    #[derive(Default)]
+    pub(super) struct Config;
+
+    #[derive(Default)]
+    pub(super) struct Slot;
+
+    pub(super) fn build(_config: &Config, _spec: PcmSpec) -> Slot {
+        Slot
+    }
+
+    pub(super) fn config_is_empty(_config: &Config) -> bool {
+        true
+    }
+
+    pub(super) fn finish(_slot: Slot) -> Option<BeatGrid> {
+        None
+    }
+
+    pub(super) fn is_empty(_slot: &Slot) -> bool {
+        true
+    }
+
+    pub(super) fn push(_slot: &mut Slot, _chunk: &PcmChunk) {}
+
+    pub(super) fn with_default(_config: &mut Config) {}
+}
+
+#[cfg(all(test, feature = "analysis-beat", feature = "analysis-waveform"))]
 mod tests {
     use std::{num::NonZeroU32, sync::Arc};
 
@@ -143,10 +208,10 @@ mod tests {
     use kithara_platform::sync::Mutex;
     use unimock::{MockFn, Unimock, matching};
 
-    use super::{
-        super::track_analysis::TrackAnalysis, AnalyzerBuilder, GridParams, TrackAnalyzers,
+    use super::{super::track_analysis::TrackAnalysis, AnalyzerBuilder, TrackAnalyzers};
+    use crate::analysis::beat::{
+        BeatDetector, BeatDetectorMock, GridParams, RawBeats, SharedBeatDetector,
     };
-    use crate::analysis::beat::{BeatDetector, BeatDetectorMock, RawBeats, SharedBeatDetector};
 
     fn chunk(frames: usize, channels: u16) -> PcmChunk {
         let samples = vec![0.0_f32; frames * usize::from(channels)];

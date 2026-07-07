@@ -33,6 +33,7 @@ fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]
 probe = []
 mock = []
 resample-rubato = ["dep:rubato"]
+resample-fft = ["resample-rubato", "rubato/fft_resampler"]
 # HTTP backend forwarding (kithara-net reached via kithara-stream).
 client-reqwest = ["kithara-stream/client-reqwest"]
 client-wreq = ["kithara-stream/client-wreq"]

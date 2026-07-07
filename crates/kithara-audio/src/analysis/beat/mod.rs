@@ -7,10 +7,6 @@ mod detector_factory;
 mod detector_kind;
 mod grid;
 mod resampler;
-#[cfg(feature = "resample-fft")]
-mod resampler_fft;
-#[cfg(not(feature = "resample-fft"))]
-mod resampler_sinc;
 
 pub(crate) use analyzer::{BeatPass, SharedBeatDetector};
 pub(in crate::analysis::beat) use consts::{BLOCK_FRAMES, TARGET_RATE};

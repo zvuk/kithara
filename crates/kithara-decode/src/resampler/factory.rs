@@ -32,6 +32,12 @@ pub fn create_resampler(
                 RubatoResampler::new(quality, source_rate, target_rate, channels, chunk_size)?;
             Ok(Box::new(resampler))
         }
+        #[cfg(feature = "resample-fft")]
+        ResamplerBackend::Fft => {
+            let resampler =
+                RubatoResampler::new_fft(source_rate, target_rate, channels, chunk_size)?;
+            Ok(Box::new(resampler))
+        }
         #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
         ResamplerBackend::Apple => {
             let _ = quality;
