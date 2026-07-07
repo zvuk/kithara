@@ -35,7 +35,7 @@ pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     timestretch::StretchControls,
 };
-pub use kithara_decode::ResamplerQuality;
+pub use kithara_decode::{ResamplerOptions, ResamplerQuality};
 pub use pipeline::{
     config::AudioConfig,
     fetch::{EpochValidator, Fetch},

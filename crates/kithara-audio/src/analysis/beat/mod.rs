@@ -1,5 +1,4 @@
 mod analyzer;
-mod consts;
 mod detector;
 #[cfg(feature = "beat-nn")]
 mod detector_factory;
@@ -9,7 +8,6 @@ mod grid;
 mod resampler;
 
 pub(crate) use analyzer::{BeatPass, SharedBeatDetector};
-pub(in crate::analysis::beat) use consts::{BLOCK_FRAMES, TARGET_RATE};
 #[cfg(test)]
 pub(crate) use detector::{BeatDetector, BeatDetectorMock, RawBeats};
 pub(crate) use grid::GridParams;

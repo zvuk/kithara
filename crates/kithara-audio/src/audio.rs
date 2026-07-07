@@ -1012,6 +1012,7 @@ where
             decoder_backend,
             preload_chunks,
             block_on_underrun,
+            resampler_options,
             resampler_quality,
             stream: stream_config,
             bus: config_bus,
@@ -1080,7 +1081,7 @@ where
             initial_spec,
             &host_sample_rate,
             config_stretch.as_ref(),
-            fused_src::resampler_stage(decoder_backend, resampler_quality),
+            fused_src::resampler_stage(decoder_backend, resampler_quality, resampler_options),
             Some(pool.clone()),
             custom_effects,
         );

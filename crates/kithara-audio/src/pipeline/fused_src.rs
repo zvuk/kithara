@@ -1,6 +1,6 @@
 use std::sync::{Arc, atomic::AtomicU32};
 
-use kithara_decode::{DecoderBackend, ResamplerQuality};
+use kithara_decode::{DecoderBackend, ResamplerOptions, ResamplerQuality};
 
 use crate::pipeline::config::ResamplerStage;
 
@@ -14,11 +14,12 @@ pub(crate) fn decoder_target_output_rate(
 pub(crate) fn resampler_stage(
     backend: DecoderBackend,
     quality: ResamplerQuality,
+    options: ResamplerOptions,
 ) -> ResamplerStage {
     if fused_src_active(backend) {
         ResamplerStage::Absent
     } else {
-        ResamplerStage::Present(quality)
+        ResamplerStage::Present { quality, options }
     }
 }
 
@@ -68,7 +69,11 @@ mod tests {
 
         assert_eq!(current_target_output_rate(target.as_ref()), Some(48_000));
         assert_eq!(
-            resampler_stage(DecoderBackend::Apple, ResamplerQuality::default()),
+            resampler_stage(
+                DecoderBackend::Apple,
+                ResamplerQuality::default(),
+                ResamplerOptions::default()
+            ),
             ResamplerStage::Absent
         );
     }
@@ -82,8 +87,15 @@ mod tests {
 
         assert!(target.is_none());
         assert_eq!(
-            resampler_stage(DecoderBackend::Symphonia, ResamplerQuality::High),
-            ResamplerStage::Present(ResamplerQuality::High)
+            resampler_stage(
+                DecoderBackend::Symphonia,
+                ResamplerQuality::High,
+                ResamplerOptions::default()
+            ),
+            ResamplerStage::Present {
+                quality: ResamplerQuality::High,
+                options: ResamplerOptions::default()
+            }
         );
     }
 
@@ -97,8 +109,15 @@ mod tests {
 
         assert!(decoder_target_output_rate(DecoderBackend::default(), &host_rate).is_none());
         assert_eq!(
-            resampler_stage(DecoderBackend::default(), ResamplerQuality::High),
-            ResamplerStage::Present(ResamplerQuality::High)
+            resampler_stage(
+                DecoderBackend::default(),
+                ResamplerQuality::High,
+                ResamplerOptions::default()
+            ),
+            ResamplerStage::Present {
+                quality: ResamplerQuality::High,
+                options: ResamplerOptions::default()
+            }
         );
     }
 }

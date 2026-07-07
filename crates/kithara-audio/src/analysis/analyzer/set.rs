@@ -1,4 +1,5 @@
-use kithara_decode::{PcmChunk, PcmSpec};
+use bon::Builder;
+use kithara_decode::{PcmChunk, PcmSpec, ResamplerQuality};
 use num_traits::cast::AsPrimitive;
 
 use super::{
@@ -9,6 +10,34 @@ use super::{
 #[must_use]
 pub fn beat_cache_tag() -> Option<String> {
     super::nn::tag()
+}
+
+/// Beat-analysis resampler tunables used by [`AnalyzerBuilder`].
+#[derive(Clone, Copy, Debug, PartialEq, Builder)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct BeatAnalysisConfig {
+    /// Mono resampler input block size in frames.
+    #[builder(default = DEFAULT_BEAT_ANALYSIS_CONFIG.block_frames)]
+    pub block_frames: usize,
+    /// Detector input sample rate in Hz.
+    #[builder(default = DEFAULT_BEAT_ANALYSIS_CONFIG.target_rate)]
+    pub target_rate: u32,
+    /// Quality used by the rubato sinc beat-resampler backend.
+    #[builder(default = ResamplerQuality::High)]
+    pub resampler_quality: ResamplerQuality,
+}
+
+const DEFAULT_BEAT_ANALYSIS_CONFIG: BeatAnalysisConfig = BeatAnalysisConfig {
+    block_frames: 1024,
+    target_rate: 22_050,
+    resampler_quality: ResamplerQuality::High,
+};
+
+impl Default for BeatAnalysisConfig {
+    fn default() -> Self {
+        DEFAULT_BEAT_ANALYSIS_CONFIG
+    }
 }
 
 #[derive(Default)]
@@ -60,6 +89,7 @@ impl TrackAnalyzers {
 #[derive(Default)]
 pub struct AnalyzerBuilder {
     beat: beat::Config,
+    beat_config: BeatAnalysisConfig,
     waveform_buckets: Option<usize>,
 }
 
@@ -82,7 +112,15 @@ impl AnalyzerBuilder {
     #[must_use]
     pub fn with_beat(self) -> Self {
         let mut builder = self;
-        beat::with_default(&mut builder.beat);
+        beat::with_default(&mut builder.beat, builder.beat_config);
+        builder
+    }
+
+    #[must_use]
+    pub fn with_beat_config(self, config: BeatAnalysisConfig) -> Self {
+        let mut builder = self;
+        builder.beat_config = config;
+        beat::set_resampler(&mut builder.beat, config);
         builder
     }
 
@@ -93,7 +131,7 @@ impl AnalyzerBuilder {
         params: crate::analysis::beat::GridParams,
     ) -> Self {
         let mut builder = self;
-        beat::with_detector(&mut builder.beat, detector, params);
+        beat::with_detector(&mut builder.beat, detector, params, builder.beat_config);
         builder
     }
 
@@ -121,16 +159,30 @@ mod beat {
 
     use super::{super::nn, Analyzer};
     use crate::{
-        analysis::beat::{BeatPass, GridParams, SharedBeatDetector},
+        analysis::{
+            analyzer::BeatAnalysisConfig,
+            beat::{BeatPass, GridParams, SharedBeatDetector},
+        },
         waveform::BeatGrid,
     };
 
-    pub(super) type Config = Option<(SharedBeatDetector, GridParams)>;
+    pub(super) struct BeatConfig {
+        detector: SharedBeatDetector,
+        params: GridParams,
+        resampler: BeatAnalysisConfig,
+    }
+
+    pub(super) type Config = Option<BeatConfig>;
     pub(super) type Slot = Option<BeatPass>;
 
     pub(super) fn build(config: &Config, spec: PcmSpec) -> Slot {
-        config.as_ref().map(|(detector, params)| {
-            BeatPass::new(spec.sample_rate.get(), params.clone(), Arc::clone(detector))
+        config.as_ref().map(|config| {
+            BeatPass::new(
+                spec.sample_rate.get(),
+                config.params.clone(),
+                Arc::clone(&config.detector),
+                config.resampler,
+            )
         })
     }
 
@@ -152,8 +204,18 @@ mod beat {
         }
     }
 
-    pub(super) fn with_default(config: &mut Config) {
-        *config = nn::detector().map(|d| (d, GridParams::default()));
+    pub(super) fn with_default(config: &mut Config, resampler: BeatAnalysisConfig) {
+        *config = nn::detector().map(|detector| BeatConfig {
+            detector,
+            params: GridParams::default(),
+            resampler,
+        });
+    }
+
+    pub(super) fn set_resampler(config: &mut Config, resampler: BeatAnalysisConfig) {
+        if let Some(config) = config {
+            config.resampler = resampler;
+        }
     }
 
     #[cfg(test)]
@@ -161,8 +223,13 @@ mod beat {
         config: &mut Config,
         detector: SharedBeatDetector,
         params: GridParams,
+        resampler: BeatAnalysisConfig,
     ) {
-        *config = Some((detector, params));
+        *config = Some(BeatConfig {
+            detector,
+            params,
+            resampler,
+        });
     }
 }
 
@@ -196,7 +263,9 @@ mod beat {
 
     pub(super) fn push(_slot: &mut Slot, _chunk: &PcmChunk) {}
 
-    pub(super) fn with_default(_config: &mut Config) {}
+    pub(super) fn with_default(_config: &mut Config, _resampler: super::BeatAnalysisConfig) {}
+
+    pub(super) fn set_resampler(_config: &mut Config, _resampler: super::BeatAnalysisConfig) {}
 }
 
 #[cfg(all(test, feature = "analysis-beat", feature = "analysis-waveform"))]

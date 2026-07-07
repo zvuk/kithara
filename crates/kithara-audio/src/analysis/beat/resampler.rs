@@ -1,10 +1,10 @@
 use std::iter;
 
-use kithara_decode::{Resampler, ResamplerBackend, ResamplerQuality, create_resampler};
+use kithara_decode::{Resampler, ResamplerBackend, ResamplerOptions, create_resampler};
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
 
-use super::{BLOCK_FRAMES, TARGET_RATE};
+use crate::analysis::BeatAnalysisConfig;
 
 pub(in crate::analysis::beat) struct MonoResampler {
     delay: usize,
@@ -18,15 +18,20 @@ pub(in crate::analysis::beat) struct MonoResampler {
 }
 
 impl MonoResampler {
-    pub(in crate::analysis::beat) fn new(source_rate: u32) -> Option<Self> {
+    pub(in crate::analysis::beat) fn new(
+        source_rate: u32,
+        config: BeatAnalysisConfig,
+    ) -> Option<Self> {
         let backend = beat_resampler_backend();
         let resampler = create_resampler(
             backend,
-            ResamplerQuality::High,
+            config.resampler_quality,
             source_rate,
-            TARGET_RATE,
+            config.target_rate,
             1,
-            BLOCK_FRAMES,
+            ResamplerOptions::builder()
+                .chunk_size(config.block_frames)
+                .build(),
         )
         .map_err(|e| {
             warn!(
@@ -39,7 +44,7 @@ impl MonoResampler {
         .ok()?;
 
         let delay = resampler.output_delay();
-        let ratio = f64::from(TARGET_RATE) / f64::from(source_rate);
+        let ratio = f64::from(config.target_rate) / f64::from(source_rate);
 
         Some(Self {
             delay,

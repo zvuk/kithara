@@ -4,7 +4,7 @@ use crate::apple::resampler::AppleResampler;
 use crate::resampler::rubato::RubatoResampler;
 use crate::{
     ResamplerQuality,
-    resampler::{Resampler, ResamplerBackend, ResamplerBuildError},
+    resampler::{Resampler, ResamplerBackend, ResamplerBuildError, ResamplerOptions},
 };
 
 /// Build a fixed-ratio planar PCM resampler for the selected backend.
@@ -20,7 +20,7 @@ pub fn create_resampler(
     source_rate: u32,
     target_rate: u32,
     channels: usize,
-    chunk_size: usize,
+    options: ResamplerOptions,
 ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
     validate_sample_rate("source", source_rate)?;
     validate_sample_rate("target", target_rate)?;
@@ -29,19 +29,19 @@ pub fn create_resampler(
         #[cfg(feature = "resample-rubato")]
         ResamplerBackend::Rubato => {
             let resampler =
-                RubatoResampler::new(quality, source_rate, target_rate, channels, chunk_size)?;
+                RubatoResampler::new(quality, source_rate, target_rate, channels, options)?;
             Ok(Box::new(resampler))
         }
         #[cfg(feature = "resample-fft")]
         ResamplerBackend::Fft => {
-            let resampler =
-                RubatoResampler::new_fft(source_rate, target_rate, channels, chunk_size)?;
+            let resampler = RubatoResampler::new_fft(source_rate, target_rate, channels, options)?;
             Ok(Box::new(resampler))
         }
         #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
         ResamplerBackend::Apple => {
             let _ = quality;
-            let resampler = AppleResampler::new(source_rate, target_rate, channels, chunk_size)?;
+            let resampler =
+                AppleResampler::new(source_rate, target_rate, channels, options.chunk_size)?;
             Ok(Box::new(resampler))
         }
     }

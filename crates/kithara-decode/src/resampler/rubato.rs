@@ -8,7 +8,7 @@ use rubato::{
 use rubato::{Fft, FixedSync};
 
 use crate::{
-    ResamplerQuality,
+    ResamplerOptions, ResamplerQuality,
     resampler::{Resampler, ResamplerError},
 };
 
@@ -63,10 +63,10 @@ impl RubatoResampler {
         source_rate: u32,
         target_rate: u32,
         channels: usize,
-        chunk_size: usize,
+        options: ResamplerOptions,
     ) -> Result<Self, ResamplerConstructionError> {
         let ratio = ResamplerKind::ratio_for_target(source_rate, target_rate);
-        let inner = ResamplerKind::new(quality, ratio, channels, chunk_size)?;
+        let inner = ResamplerKind::new(quality, ratio, channels, options)?;
         Ok(Self {
             inner,
             source_rate,
@@ -80,9 +80,9 @@ impl RubatoResampler {
         source_rate: u32,
         target_rate: u32,
         channels: usize,
-        chunk_size: usize,
+        options: ResamplerOptions,
     ) -> Result<Self, ResamplerConstructionError> {
-        let inner = ResamplerKind::new_fft(source_rate, target_rate, channels, chunk_size)?;
+        let inner = ResamplerKind::new_fft(source_rate, target_rate, channels, options)?;
         Ok(Self {
             inner,
             source_rate,
@@ -93,9 +93,6 @@ impl RubatoResampler {
 }
 
 impl ResamplerKind {
-    /// Maximum ratio adjustment factor for async resamplers.
-    const MAX_RATIO_ADJUSTMENT: f64 = 8.0;
-
     /// Build the selected rubato resampler engine.
     ///
     /// # Errors
@@ -106,15 +103,15 @@ impl ResamplerKind {
         quality: ResamplerQuality,
         ratio: f64,
         channels: usize,
-        chunk_size: usize,
+        options: ResamplerOptions,
     ) -> Result<Self, ResamplerConstructionError> {
         match quality {
             ResamplerQuality::Fast => {
                 let poly = Async::new_poly(
                     ratio,
-                    Self::MAX_RATIO_ADJUSTMENT,
+                    options.max_ratio_adjustment,
                     PolynomialDegree::Cubic,
-                    chunk_size,
+                    options.chunk_size,
                     channels,
                     FixedAsync::Input,
                 )?;
@@ -123,9 +120,9 @@ impl ResamplerKind {
             ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
                 let sinc = Async::new_sinc(
                     ratio,
-                    Self::MAX_RATIO_ADJUSTMENT,
+                    options.max_ratio_adjustment,
                     &SincInterpolationParameters::from(quality),
-                    chunk_size,
+                    options.chunk_size,
                     channels,
                     FixedAsync::Input,
                 )?;
@@ -139,12 +136,12 @@ impl ResamplerKind {
         source_rate: u32,
         target_rate: u32,
         channels: usize,
-        chunk_size: usize,
+        options: ResamplerOptions,
     ) -> Result<Self, ResamplerConstructionError> {
         let fft = Fft::<f32>::new(
             source_rate as usize,
             target_rate as usize,
-            chunk_size,
+            options.chunk_size,
             2,
             channels,
             FixedSync::Input,

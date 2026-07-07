@@ -285,7 +285,7 @@ mod tests {
 
     use crate::{
         ResamplerQuality,
-        resampler::{ResamplerBackend, create_resampler},
+        resampler::{ResamplerBackend, ResamplerOptions, create_resampler},
     };
 
     mod test_consts {
@@ -408,7 +408,7 @@ mod tests {
             source_rate,
             target_rate,
             channels,
-            frames,
+            ResamplerOptions::builder().chunk_size(frames).build(),
         )
         .unwrap_or_else(|err| panic!("create_resampler({backend:?}) failed: {err}"));
         let contract_frames = resampler.output_frames_for_input(frames);

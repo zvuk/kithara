@@ -11,8 +11,8 @@ use bon::Builder;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{
-    PcmChunk, PcmMeta, PcmSpec, Resampler, ResamplerBackend, ResamplerError, ResamplerQuality,
-    create_resampler,
+    PcmChunk, PcmMeta, PcmSpec, Resampler, ResamplerBackend, ResamplerError, ResamplerOptions,
+    ResamplerQuality, create_resampler,
 };
 use smallvec::SmallVec;
 use tracing::{debug, info, trace};
@@ -37,9 +37,9 @@ pub struct ResamplerParams {
     pub source_sample_rate: u32,
     /// Number of audio channels.
     pub channels: usize,
-    /// Number of input frames per resampler processing block.
-    #[builder(default = ResamplerProcessor::DEFAULT_CHUNK_SIZE)]
-    pub chunk_size: usize,
+    /// Resampler implementation tunables.
+    #[builder(default)]
+    pub options: ResamplerOptions,
 }
 
 impl ResamplerParams {
@@ -74,21 +74,18 @@ pub struct ResamplerProcessor {
     temp_output_all: SmallVec<[Vec<f32>; 8]>,
     temp_output_bufs: SmallVec<[Vec<f32>; 8]>,
     current_ratio: f64,
+    options: ResamplerOptions,
     source_rate: u32,
     channels: usize,
-    chunk_size: usize,
     missing_backend_logged: bool,
 }
 
 impl ResamplerProcessor {
-    /// Default resampler chunk size in frames.
-    const DEFAULT_CHUNK_SIZE: usize = 4096;
-    const RATIO_CHANGE_TOLERANCE: f64 = 0.0001;
-
     /// Create a new resampler from configuration parameters.
     pub fn new(params: ResamplerParams) -> Self {
         let source_rate = params.source_sample_rate;
         let channels = params.channels;
+        let options = params.options;
         let host_sr = params.host_sample_rate.load(Ordering::Relaxed);
         let target_rate = if host_sr == 0 { source_rate } else { host_sr };
         // target_rate is always non-zero: either source_rate (non-zero by upstream contract)
@@ -99,8 +96,8 @@ impl ResamplerProcessor {
             channels,
             output_spec,
             source_rate,
-            chunk_size: params.chunk_size,
             current_ratio: 1.0,
+            options,
             host_sample_rate: params.host_sample_rate,
             input_buffer: smallvec_new_vecs(channels),
             pool: params.pool.unwrap_or_else(|| PcmPool::default().clone()),
@@ -123,6 +120,9 @@ impl ResamplerProcessor {
             channels,
             active = !processor.is_passthrough(),
             quality = ?params.quality,
+            chunk_size = options.chunk_size,
+            passthrough_tolerance = options.passthrough_tolerance,
+            max_ratio_adjustment = options.max_ratio_adjustment,
             "Resampler initialized"
         );
 
@@ -352,7 +352,7 @@ impl ResamplerProcessor {
     /// front (construction / resampler-recreate), so the produce-core never
     /// reallocates them mid-playback. Sizes come from the resampler's
     /// worst-case input/output blocks (`*_frames_max`, which already fold in
-    /// the `MAX_RATIO_ADJUSTMENT` window), so even a live host/source-rate
+    /// the configured max-ratio-adjustment window), so even a live host/source-rate
     /// ratio move stays allocation-free. No-op in passthrough - there is no
     /// resampler and the scratch is unused. Pure capacity reservation: output
     /// is bit-exact.
@@ -367,7 +367,7 @@ impl ResamplerProcessor {
             return;
         };
         let channels = self.channels;
-        let chunk = self.chunk_size;
+        let chunk = self.options.chunk_size;
         // `input_buffer` carries a sub-block residual plus one freshly
         // appended decoder chunk before the next drain.
         let in_buf_cap = in_max + chunk;
@@ -421,7 +421,7 @@ impl ResamplerProcessor {
             self.source_rate,
             target_rate,
             self.channels,
-            self.chunk_size,
+            self.options,
         ) {
             Ok(resampler) => {
                 self.resampler = Some(resampler);
@@ -522,7 +522,8 @@ impl ResamplerProcessor {
         let should_pt = self.source_rate == target_rate || target_rate == 0;
         let currently_pt = self.is_passthrough();
         let new_ratio = self.ratio_for_target(target_rate);
-        let ratio_changed = (new_ratio - self.current_ratio).abs() > Self::RATIO_CHANGE_TOLERANCE;
+        let ratio_changed =
+            (new_ratio - self.current_ratio).abs() > self.options.passthrough_tolerance;
 
         if should_pt {
             self.switch_to_passthrough(target_rate, currently_pt);

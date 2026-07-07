@@ -73,6 +73,10 @@ today and by mobile surfaces (kithara-ffi) next:
   `with_waveform(buckets)` enables waveform extraction, `with_beat()` enables
   the NN beat slot when `beat-nn` is compiled and the model loads, and
   `is_empty()` lets callers skip scheduling an analysis pass.
+- **Beat-analysis config.** `AnalyzerBuilder::with_beat_config` carries the
+  implementation-affecting beat tunables. The defaults preserve the current
+  detector contract: 1024-frame mono resampler blocks, 22 050 Hz detector input,
+  and `ResamplerQuality::High` for the rubato sinc backend.
 - **`analyze_reader`** — the synchronous decode loop over any `PcmReader`:
   cancel-aware, `Pending`-tolerant, and callback-based
   (`analyze_reader(..., emit) -> ()`). It emits staged `TrackAnalysis` values
@@ -98,10 +102,11 @@ today and by mobile surfaces (kithara-ffi) next:
   types (`Waveform`, `BeatGrid`, `Bucket`, `GridSegment`, `AnalysisParams`) are
   unconditional because region/stretch logic and cache keys use them even when a
   pass is absent. `analysis-waveform` gates only the `realfft` waveform
-  analyzer. `analysis-beat` gates the beat analyzer/worker path and the rubato
-  mono-resampler it uses; `resample-fft` selects the FFT backend for that
-  resampler, otherwise the beat pass uses rubato sinc. `beat-nn` is a detector
-  backend layered on top of `analysis-beat`.
+  analyzer. `analysis-beat` gates the beat analyzer/worker path and its
+  mono-resampler, which is built through `kithara-decode::create_resampler`;
+  `resample-fft` selects the FFT backend for that beat-only resampler,
+  otherwise the beat pass uses rubato sinc. `beat-nn` is a detector backend
+  layered on top of `analysis-beat`.
 - **Runtime switch.** Consumers use `AnalyzerBuilder::is_empty()` as the runtime
   signal to skip scheduling. When `analysis-beat` is absent,
   `AnalyzerBuilder::with_beat()` is a compile-time no-op. Apple FFI device
@@ -195,6 +200,13 @@ The resampler stage is fixed-ratio only: it converts decoder/source PCM to the
 current host/device sample rate and never carries playback speed. Speed and
 key-lock live in the time-stretch slot below.
 
+`AudioConfig.resampler_options` carries `kithara-decode::ResamplerOptions`
+through the stage decision into `ResamplerParams` and finally
+`create_resampler`. The defaults preserve the shipped playback values:
+4096-frame process blocks, 0.0001 host-rate ratio tolerance, and an 8.0 rubato
+max-ratio-adjustment window. These are implementation tunables, not hidden
+constants in the processing code.
+
 `apple-fused-src` is the Apple device path. When the selected decoder backend is
 Apple AudioToolbox, `AudioConfig.host_sample_rate` is threaded to
 `DecoderConfig.target_output_rate`, the Apple converter emits PCM directly in
@@ -203,6 +215,11 @@ structurally. Non-Apple backends in the same build keep the resampler stage.
 
 `resample-rubato` enables the staged `ResamplerProcessor` and rubato sinc SRC.
 Default desktop and Android builds keep it. Apple fused FFI builds omit it.
+
+The staged resampler's output capacity remains a correctness invariant: the
+decode-owned backend reports `output_frames_for_input` in the ceil frame domain
+and the audio stage sizes buffers from that contract. It is not a user-facing
+configuration knob.
 
 Route changes that actually change the host sample rate store the new rate,
 then drive the existing decoder recreate state machine with

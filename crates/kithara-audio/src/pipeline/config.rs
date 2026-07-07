@@ -8,7 +8,7 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{DecoderBackend, GaplessMode, PcmSpec, ResamplerQuality};
+use kithara_decode::{DecoderBackend, GaplessMode, PcmSpec, ResamplerOptions, ResamplerQuality};
 use kithara_events::EventBus;
 use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
@@ -24,9 +24,12 @@ use crate::{
     worker::{EngineLoad, handle},
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum ResamplerStage {
-    Present(ResamplerQuality),
+    Present {
+        quality: ResamplerQuality,
+        options: ResamplerOptions,
+    },
     Absent,
 }
 
@@ -82,6 +85,9 @@ pub struct AudioConfig<T: StreamType> {
     /// Resampling quality preset.
     #[builder(default)]
     pub resampler_quality: ResamplerQuality,
+    /// Resampler implementation tunables.
+    #[builder(default)]
+    pub resampler_options: ResamplerOptions,
     /// Additional effects to append after resampler in the processing chain.
     #[builder(default)]
     pub effects: Vec<Box<dyn AudioEffect>>,
@@ -235,6 +241,13 @@ mod tests {
         PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
     }
 
+    fn present_stage() -> ResamplerStage {
+        ResamplerStage::Present {
+            quality: ResamplerQuality::default(),
+            options: ResamplerOptions::default(),
+        }
+    }
+
     /// Without a compiled-in stretch backend, `stretch` does not add a speed
     /// slot: playback remains at unity and the resampler stays fixed-ratio.
     #[cfg(not(all(
@@ -249,7 +262,7 @@ mod tests {
             spec(),
             &host_sr,
             Some(&controls),
-            ResamplerStage::Present(ResamplerQuality::default()),
+            present_stage(),
             None,
             Vec::new(),
         );
@@ -264,7 +277,7 @@ mod tests {
             spec(),
             &host_sr,
             None,
-            ResamplerStage::Present(ResamplerQuality::default()),
+            present_stage(),
             None,
             vec![Box::new(PassthroughEffect)],
         );
@@ -314,7 +327,7 @@ mod tests {
             spec(),
             &host_sr,
             Some(&controls),
-            ResamplerStage::Present(ResamplerQuality::default()),
+            present_stage(),
             None,
             vec![Box::new(PassthroughEffect)],
         );
@@ -338,7 +351,7 @@ mod tests {
             spec(),
             &host_sr,
             Some(&controls),
-            ResamplerStage::Present(ResamplerQuality::default()),
+            present_stage(),
             None,
             Vec::new(),
         );

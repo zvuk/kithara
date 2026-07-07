@@ -4,7 +4,7 @@ pub use kithara::audio::analysis::TrackAnalysis;
 use kithara::{
     audio::{
         PcmReader,
-        analysis::{AnalysisWorker, AnalyzerBuilder},
+        analysis::{AnalysisWorker, AnalyzerBuilder, BeatAnalysisConfig},
     },
     prelude::{Resource, ResourceConfig},
 };
@@ -44,6 +44,7 @@ impl TrackAnalysisRunner {
     #[must_use]
     pub fn new(master: &CancelToken, buckets: usize) -> Self {
         let builder = AnalyzerBuilder::default()
+            .with_beat_config(BeatAnalysisConfig::default())
             .with_waveform(buckets)
             .with_beat();
         let active = !builder.is_empty();

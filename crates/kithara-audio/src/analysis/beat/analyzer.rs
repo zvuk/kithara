@@ -6,12 +6,14 @@ use num_traits::cast::ToPrimitive;
 use tracing::warn;
 
 use super::{
-    TARGET_RATE,
     detector::{BeatDetectError, BeatDetector},
     grid::{GridParams, build_grid},
     resampler::MonoResampler,
 };
-use crate::{analysis::analyzer::Analyzer, waveform::BeatGrid};
+use crate::{
+    analysis::analyzer::{Analyzer, BeatAnalysisConfig},
+    waveform::BeatGrid,
+};
 
 /// Detector shared across sequential per-track analyzers; model load is
 /// paid once at registration, the worker runs one analysis at a time.
@@ -37,11 +39,11 @@ enum MonoFeed {
 
 impl BeatAnalyzer {
     #[must_use]
-    pub(crate) fn new(source_rate: u32, params: GridParams) -> Self {
-        let feed = if source_rate == TARGET_RATE {
+    pub(crate) fn new(source_rate: u32, params: GridParams, config: BeatAnalysisConfig) -> Self {
+        let feed = if source_rate == config.target_rate {
             MonoFeed::Pass(Vec::new())
         } else {
-            MonoResampler::new(source_rate)
+            MonoResampler::new(source_rate, config)
                 .map(Box::new)
                 .map_or(MonoFeed::Broken, MonoFeed::Resample)
         };
@@ -100,10 +102,15 @@ pub(crate) struct BeatPass {
 }
 
 impl BeatPass {
-    pub(crate) fn new(source_rate: u32, params: GridParams, detector: SharedBeatDetector) -> Self {
+    pub(crate) fn new(
+        source_rate: u32,
+        params: GridParams,
+        detector: SharedBeatDetector,
+        config: BeatAnalysisConfig,
+    ) -> Self {
         Self {
             detector,
-            analyzer: BeatAnalyzer::new(source_rate, params),
+            analyzer: BeatAnalyzer::new(source_rate, params, config),
         }
     }
 }
@@ -140,7 +147,7 @@ mod tests {
         super::detector::{BeatDetectError, BeatDetectorMock, RawBeats},
         BeatAnalyzer,
     };
-    use crate::analysis::beat::GridParams;
+    use crate::analysis::{BeatAnalysisConfig, beat::GridParams};
 
     struct Consts;
 
@@ -201,7 +208,11 @@ mod tests {
             let t: f32 = n.as_();
             0.5 * (step * t).sin()
         });
-        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
+        let mut analyzer = BeatAnalyzer::new(
+            Consts::SRC,
+            GridParams::default(),
+            BeatAnalysisConfig::default(),
+        );
         push_chunked(&mut analyzer, &pcm, 1000);
 
         let mut detector = detector(|mono| {
@@ -230,7 +241,11 @@ mod tests {
         // 1 s silence then 1 s of DC 0.5: the step must sit at output
         // sample ~22050. An untrimmed resampler delay shifts it late.
         let pcm = stereo(2 * 44_100, |n| if n < 44_100 { 0.0 } else { 0.5 });
-        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
+        let mut analyzer = BeatAnalyzer::new(
+            Consts::SRC,
+            GridParams::default(),
+            BeatAnalysisConfig::default(),
+        );
         push_chunked(&mut analyzer, &pcm, 4096);
 
         let mut detector = detector(|mono| {
@@ -257,7 +272,11 @@ mod tests {
             pcm.push(0.8);
             pcm.push(-0.8);
         }
-        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
+        let mut analyzer = BeatAnalyzer::new(
+            Consts::SRC,
+            GridParams::default(),
+            BeatAnalysisConfig::default(),
+        );
         analyzer.push_interleaved(&pcm, 2);
 
         let mut detector = detector(|mono| {
@@ -273,11 +292,28 @@ mod tests {
     fn passthrough_at_detector_rate() {
         // A 22 050 Hz source needs no resampling: the detector sees the input.
         let pcm = stereo(10_000, |_| 0.25);
-        let mut analyzer = BeatAnalyzer::new(22_050, GridParams::default());
+        let mut analyzer =
+            BeatAnalyzer::new(22_050, GridParams::default(), BeatAnalysisConfig::default());
         push_chunked(&mut analyzer, &pcm, 999);
 
         let mut detector = detector(|mono| {
             assert_eq!(mono, vec![0.25_f32; 10_000].as_slice());
+            empty_raw()
+        });
+        analyzer.finalize(&mut detector).expect("mock detects");
+    }
+
+    #[kithara::test]
+    fn custom_detector_rate_controls_passthrough_domain() {
+        let config = BeatAnalysisConfig::builder()
+            .target_rate(Consts::SRC)
+            .build();
+        let pcm = stereo(4096, |_| 0.25);
+        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default(), config);
+        analyzer.push_interleaved(&pcm, 2);
+
+        let mut detector = detector(|mono| {
+            assert_eq!(mono, vec![0.25_f32; 4096].as_slice());
             empty_raw()
         });
         analyzer.finalize(&mut detector).expect("mock detects");
@@ -301,7 +337,8 @@ mod tests {
                 })
                 .collect(),
         };
-        let mut analyzer = BeatAnalyzer::new(48_000, GridParams::default());
+        let mut analyzer =
+            BeatAnalyzer::new(48_000, GridParams::default(), BeatAnalysisConfig::default());
         analyzer.push_interleaved(&stereo(48_000, |_| 0.1), 2);
 
         let mut detector = detector(move |_| raw.clone());
@@ -323,7 +360,11 @@ mod tests {
 
     #[kithara::test]
     fn detector_failure_propagates() {
-        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
+        let mut analyzer = BeatAnalyzer::new(
+            Consts::SRC,
+            GridParams::default(),
+            BeatAnalysisConfig::default(),
+        );
         analyzer.push_interleaved(&stereo(4096, |_| 0.1), 2);
         let mut detector =
             Unimock::new(BeatDetectorMock.next_call(matching!(_)).answers(&|_, _| {
