@@ -2,7 +2,7 @@ use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
 use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_platform::time::Duration;
+use kithara_platform::{maybe_send::WasmSend, time::Duration};
 use tracing::warn;
 
 #[rustfmt::skip]
@@ -16,7 +16,7 @@ use crate::impls::resource::Resource;
 /// potentially-blocking decoder on every callback.
 pub struct PlayerResource {
     src: Arc<str>,
-    resource: Resource,
+    resource: WasmSend<Resource>,
     channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
     eof_seen: bool,
     failed: bool,
@@ -78,7 +78,7 @@ impl PlayerResource {
         });
 
         Self {
-            resource,
+            resource: WasmSend::new(resource),
             channel_buffers,
             src,
             write_len: 0,
@@ -88,17 +88,26 @@ impl PlayerResource {
         }
     }
 
+    /// Source identifier attached to this resource.
+    #[must_use]
+    pub fn src(&self) -> &Arc<str> {
+        &self.src
+    }
+
     /// Decoded-ahead frontier in seconds: how much content has been decoded
     /// and is ready to play (always `>=` the served playback position).
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
-        self.resource.decoded_frontier().as_secs_f64()
+        self.resource.get().decoded_frontier().as_secs_f64()
     }
 
     /// Total duration in seconds. Returns 0.0 if unknown.
     #[must_use]
     pub fn duration(&self) -> f64 {
-        self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
+        self.resource
+            .get()
+            .duration()
+            .map_or(0.0, |d| d.as_secs_f64())
     }
 
     fn fill_scratch(&mut self, target_frames: usize) -> bool {
@@ -116,7 +125,7 @@ impl PlayerResource {
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
             let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
 
-            let n = match self.resource.read_planar(&mut planar) {
+            let n = match self.resource.get_mut().read_planar(&mut planar) {
                 Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
                 Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
                 Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
@@ -227,7 +236,7 @@ impl PlayerResource {
     /// Clears the internal scratch buffers on success.
     pub fn seek(&mut self, seconds: f64) {
         let position = Duration::from_secs_f64(seconds);
-        match self.resource.seek(position) {
+        match self.resource.get_mut().seek(position) {
             Ok(_) => {
                 self.write_len = 0;
                 self.write_pos = 0;
@@ -242,16 +251,16 @@ impl PlayerResource {
 
     /// Set the target sample rate of the audio host.
     pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
-        self.resource.set_host_sample_rate(sample_rate);
+        self.resource.get().set_host_sample_rate(sample_rate);
     }
 
     /// Set the playback rate for pitch-shifted speed control.
     pub(crate) fn set_playback_rate(&self, rate: f32) {
-        self.resource.set_playback_rate(rate);
+        self.resource.get().set_playback_rate(rate);
     }
 
     /// Update the scheduling priority hint for the shared worker.
     pub(crate) fn set_service_class(&self, class: ServiceClass) {
-        self.resource.set_service_class(class);
+        self.resource.get().set_service_class(class);
     }
 }

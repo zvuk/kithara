@@ -1,23 +1,15 @@
 mod wire {
-    use std::sync::Arc;
-
     use firewheel::FirewheelCtx;
     use kithara_audio::EqBandConfig;
     use kithara_bufpool::PcmPool;
     use kithara_platform::sync::mpsc;
-    use ringbuf::HeapProd;
 
     use crate::{
-        impls::{
-            player_processor::PlayerCmd, shared_eq::SharedEq,
-            shared_player_state::SharedPlayerState,
-        },
+        bridge::SlotControl,
         types::{SessionDuckingMode, SlotId},
     };
 
     pub type PlayerId = u64;
-
-    pub const PLAYER_CMD_RINGBUF_CAPACITY: usize = 32;
 
     pub type StartStreamFn<B> = fn(&mut FirewheelCtx<B>, u32) -> Result<(), String>;
 
@@ -103,22 +95,16 @@ mod wire {
         Ok,
         PlayerRegistered(PlayerId),
         SessionDucking(SessionDuckingMode),
-        SlotAllocated(
-            SlotId,
-            HeapProd<PlayerCmd>,
-            Arc<SharedPlayerState>,
-            SharedEq,
-        ),
+        SlotAllocated(AllocatedSlot),
         SampleRate(u32),
         Err(SessionError),
     }
 
-    pub type AllocatedSlot = (
-        SlotId,
-        HeapProd<PlayerCmd>,
-        Arc<SharedPlayerState>,
-        SharedEq,
-    );
+    #[non_exhaustive]
+    pub struct AllocatedSlot {
+        pub slot: SlotId,
+        pub control: SlotControl,
+    }
 }
 
 mod handle {
@@ -155,9 +141,7 @@ mod handle {
 
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
             match self.exec_ok(Cmd::AllocateSlot { player_id })? {
-                Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
-                    Ok((slot_id, cmd_tx, shared_state, eq))
-                }
+                Reply::SlotAllocated(allocated) => Ok(allocated),
                 _ => Err(PlayError::Internal(
                     "unexpected reply for session allocate slot".into(),
                 )),
@@ -288,7 +272,4 @@ mod handle {
 }
 
 pub use handle::{SessionDispatcher, SessionHandle};
-pub use wire::{
-    AllocatedSlot, Cmd, CmdMsg, PLAYER_CMD_RINGBUF_CAPACITY, PlayerId, Reply, SessionError,
-    StartStreamFn,
-};
+pub use wire::{AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionError, StartStreamFn};

@@ -4,10 +4,8 @@ use tracing::{debug, warn};
 
 use super::core::PlayerImpl;
 use crate::{
-    error::PlayError,
-    events::PlayerEvent,
-    impls::{player_processor::PlayerCmd, shared_player_state::PlaybackSnapshot},
-    types::SlotId,
+    bridge::PlaybackSnapshot, error::PlayError, events::PlayerEvent,
+    impls::player_processor::PlayerCmd, types::SlotId,
 };
 
 impl PlayerImpl {
@@ -79,7 +77,7 @@ impl PlayerImpl {
     /// thin derivations of this snapshot — one shared read primitive.
     pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
         let slot_id = self.slot()?;
-        Some(self.core.engine.slot_shared_state(slot_id)?.snapshot())
+        Some(self.core.engine.slot_playback(slot_id)?.snapshot())
     }
 
     /// Current playback position in seconds.

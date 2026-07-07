@@ -8,17 +8,17 @@ use firewheel::FirewheelCtx;
 use tracing::warn;
 
 use super::client::{WASM_SESSION_STATE, worker};
-use crate::impls::{
-    session::{dispatch::run_cmd, protocol::Reply, state::ensure_ctx},
-    shared_player_state::SharedPlayerState,
+use crate::{
+    bridge::PlaybackShared,
+    impls::session::{dispatch::run_cmd, protocol::Reply, state::ensure_ctx},
 };
 
 thread_local! {
-    static BRIDGE_PLAYER_STATE: RefCell<Option<Arc<SharedPlayerState>>> = const { RefCell::new(None) };
+    static BRIDGE_PLAYBACK: RefCell<Option<Arc<PlaybackShared>>> = const { RefCell::new(None) };
 }
 
 pub(super) fn init_bridge_state() {
-    BRIDGE_PLAYER_STATE.with(|_| {});
+    BRIDGE_PLAYBACK.with(|_| {});
 }
 
 pub(crate) fn tick_and_poll_remote() {
@@ -33,9 +33,9 @@ pub(crate) fn tick_and_poll_remote() {
         if let Some(ref rx) = *rx_guard {
             for msg in rx.try_iter() {
                 let reply = run_cmd(state, msg.cmd);
-                if let Reply::SlotAllocated(_, _, ref shared, _) = reply {
-                    BRIDGE_PLAYER_STATE.with(|ps| {
-                        *ps.borrow_mut() = Some(Arc::clone(shared));
+                if let Reply::SlotAllocated(ref allocated) = reply {
+                    BRIDGE_PLAYBACK.with(|ps| {
+                        *ps.borrow_mut() = Some(Arc::clone(&allocated.control.playback));
                     });
                 }
                 let _ = msg.reply_tx.send(reply);
@@ -52,7 +52,7 @@ pub(crate) fn tick_and_poll_remote() {
 }
 
 pub(crate) fn bridge_position_secs() -> f64 {
-    BRIDGE_PLAYER_STATE.with(|cell| {
+    BRIDGE_PLAYBACK.with(|cell| {
         cell.borrow()
             .as_ref()
             .map_or(0.0, |s| s.position.load(Ordering::Relaxed))
@@ -60,7 +60,7 @@ pub(crate) fn bridge_position_secs() -> f64 {
 }
 
 pub(crate) fn bridge_duration_secs() -> f64 {
-    BRIDGE_PLAYER_STATE.with(|cell| {
+    BRIDGE_PLAYBACK.with(|cell| {
         cell.borrow()
             .as_ref()
             .map_or(0.0, |s| s.duration.load(Ordering::Relaxed))
@@ -68,7 +68,7 @@ pub(crate) fn bridge_duration_secs() -> f64 {
 }
 
 pub(crate) fn bridge_is_playing() -> bool {
-    BRIDGE_PLAYER_STATE.with(|cell| {
+    BRIDGE_PLAYBACK.with(|cell| {
         cell.borrow()
             .as_ref()
             .is_some_and(|s| s.playing.load(Ordering::Relaxed))

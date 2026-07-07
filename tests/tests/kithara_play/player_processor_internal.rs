@@ -14,23 +14,19 @@ use kithara::{
     self,
     bufpool::PcmPool,
     decode::PcmSpec,
-    platform::sync::Mutex as PlatformMutex,
     play::{
-        Resource,
+        Resource, SharedEq,
+        bridge::{SlotControl, slot_channels},
         impls::{
             player_notification::PlayerNotification,
-            player_processor::{PlayerCmd, PlayerNodeProcessor},
+            player_processor::{PlayerCmd, PlayerNodeProcessor, StreamShape},
             player_resource::PlayerResource,
             player_track::{TrackState, TrackTransition},
-            shared_player_state::SharedPlayerState,
         },
     },
 };
 use kithara_integration_tests::audio_mock::TestPcmReader;
-use ringbuf::{
-    HeapProd, HeapRb,
-    traits::{Producer, Split},
-};
+use ringbuf::traits::{Consumer, Producer};
 
 #[derive(Clone, Copy)]
 enum TrackCommandScenario {
@@ -39,41 +35,34 @@ enum TrackCommandScenario {
     LoadThenUnload,
 }
 
-fn make_shared_state() -> Arc<SharedPlayerState> {
-    Arc::new(SharedPlayerState::new())
-}
-
-fn make_processor() -> (PlayerNodeProcessor, HeapProd<PlayerCmd>) {
-    let shared_state = make_shared_state();
-    let (tx, rx) = HeapRb::<PlayerCmd>::new(32).split();
-    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero");
-    let max_block_frames = NonZeroU32::new(512).expect("BUG: non-zero");
-    let processor = PlayerNodeProcessor::new(
-        rx,
-        shared_state,
+fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
+    StreamShape {
         sample_rate,
-        max_block_frames,
-        &PcmPool::default(),
-    );
-    (processor, tx)
+        max_block_frames: NonZeroU32::new(512).expect("BUG: non-zero"),
+    }
 }
 
-fn create_mock_player_resource(src: &str) -> Arc<PlatformMutex<PlayerResource>> {
+fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
+    let (inputs, control) = slot_channels(SharedEq::new(0));
+    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero");
+    let processor =
+        PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &PcmPool::default());
+    (processor, control)
+}
+
+fn create_mock_player_resource(src: &str) -> Box<PlayerResource> {
     create_mock_player_resource_with_duration(src, 60.0)
 }
 
-fn create_mock_player_resource_with_duration(
-    src: &str,
-    duration_secs: f64,
-) -> Arc<PlatformMutex<PlayerResource>> {
+fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> Box<PlayerResource> {
     let spec = PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
     let reader = TestPcmReader::new(spec, duration_secs);
     let resource = Resource::from_reader(reader, None);
-    Arc::new(PlatformMutex::new(PlayerResource::new(
+    Box::new(PlayerResource::new(
         resource,
         Arc::from(src),
         &PcmPool::default(),
-    )))
+    ))
 }
 
 #[kithara::test(tokio)]
@@ -85,31 +74,37 @@ async fn processor_track_command_scenarios(
     #[case] expected_tracks: usize,
     #[case] should_contain_track: bool,
 ) {
-    let (mut processor, mut tx) = make_processor();
+    let (mut processor, mut control) = make_processor();
     let track_src = Arc::from("track1.mp3");
 
-    tx.try_push(PlayerCmd::LoadTrack {
-        resource: create_mock_player_resource("track1.mp3"),
-        item_id: None,
-        src: Arc::clone(&track_src),
-    })
-    .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource("track1.mp3"),
+            item_id: None,
+            src: Arc::clone(&track_src),
+        })
+        .ok();
 
     match scenario {
         TrackCommandScenario::LoadOnly => {}
         TrackCommandScenario::DuplicateLoad => {
-            tx.try_push(PlayerCmd::LoadTrack {
-                resource: create_mock_player_resource("track1.mp3"),
-                item_id: None,
-                src: Arc::clone(&track_src),
-            })
-            .ok();
+            control
+                .cmd_tx
+                .try_push(PlayerCmd::LoadTrack {
+                    resource: create_mock_player_resource("track1.mp3"),
+                    item_id: None,
+                    src: Arc::clone(&track_src),
+                })
+                .ok();
         }
         TrackCommandScenario::LoadThenUnload => {
-            tx.try_push(PlayerCmd::UnloadTrack {
-                src: Arc::clone(&track_src),
-            })
-            .ok();
+            control
+                .cmd_tx
+                .try_push(PlayerCmd::UnloadTrack {
+                    src: Arc::clone(&track_src),
+                })
+                .ok();
         }
     }
 
@@ -121,7 +116,7 @@ async fn processor_track_command_scenarios(
     if matches!(scenario, TrackCommandScenario::DuplicateLoad) {
         let mut loaded = 0usize;
         let mut unloaded = false;
-        while let Some(notification) = processor.try_pop_notification() {
+        while let Some(notification) = control.notif_rx.try_pop() {
             match notification {
                 PlayerNotification::Loaded { .. } => loaded += 1,
                 PlayerNotification::Unloaded { .. } => unloaded = true,
@@ -135,15 +130,17 @@ async fn processor_track_command_scenarios(
 
 #[kithara::test(tokio)]
 async fn processor_fade_in_restarts_track_from_zero() {
-    let (mut processor, mut tx) = make_processor();
+    let (mut processor, mut control) = make_processor();
     let src = Arc::from("track1.mp3");
 
-    tx.try_push(PlayerCmd::LoadTrack {
-        resource: create_mock_player_resource("track1.mp3"),
-        item_id: None,
-        src: Arc::clone(&src),
-    })
-    .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource("track1.mp3"),
+            item_id: None,
+            src: Arc::clone(&src),
+        })
+        .ok();
     processor.drain_commands();
 
     if let Some(track) = processor.track_mut(&src) {
@@ -153,10 +150,12 @@ async fn processor_fade_in_restarts_track_from_zero() {
         panic!("track must be loaded");
     }
 
-    tx.try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
-        &src,
-    ))))
-    .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+            &src,
+        ))))
+        .ok();
     processor.drain_commands();
 
     if let Some(track) = processor.track(&src) {
@@ -168,15 +167,17 @@ async fn processor_fade_in_restarts_track_from_zero() {
 
 #[kithara::test(tokio)]
 async fn processor_cleanup_finished_tracks() {
-    let (mut processor, mut tx) = make_processor();
+    let (mut processor, mut control) = make_processor();
 
     let resource = create_mock_player_resource("track1.mp3");
-    tx.try_push(PlayerCmd::LoadTrack {
-        resource,
-        item_id: None,
-        src: Arc::from("track1.mp3"),
-    })
-    .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            resource,
+            item_id: None,
+            src: Arc::from("track1.mp3"),
+        })
+        .ok();
     processor.drain_commands();
 
     let key: Arc<str> = Arc::from("track1.mp3");
@@ -190,23 +191,27 @@ async fn processor_cleanup_finished_tracks() {
 
 #[kithara::test(tokio)]
 async fn render_audio_handover_fills_tail_from_next_playing_track() {
-    let (mut processor, mut tx) = make_processor();
+    let (mut processor, mut control) = make_processor();
     let short_src = Arc::from("short.mp3");
     let long_src = Arc::from("long.mp3");
     let frames = 1024usize;
 
-    tx.try_push(PlayerCmd::LoadTrack {
-        resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
-        item_id: None,
-        src: Arc::clone(&short_src),
-    })
-    .ok();
-    tx.try_push(PlayerCmd::LoadTrack {
-        resource: create_mock_player_resource("long.mp3"),
-        item_id: None,
-        src: Arc::clone(&long_src),
-    })
-    .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
+            item_id: None,
+            src: Arc::clone(&short_src),
+        })
+        .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource("long.mp3"),
+            item_id: None,
+            src: Arc::clone(&long_src),
+        })
+        .ok();
     processor.drain_commands();
 
     processor
@@ -244,23 +249,27 @@ async fn render_audio_handover_fills_tail_from_next_playing_track() {
 
 #[kithara::test(tokio)]
 async fn render_audio_handover_promotes_preloading_track_without_silence() {
-    let (mut processor, mut tx) = make_processor();
+    let (mut processor, mut control) = make_processor();
     let short_src = Arc::from("short.mp3");
     let preload_src = Arc::from("preload.mp3");
     let frames = 1024usize;
 
-    tx.try_push(PlayerCmd::LoadTrack {
-        resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
-        item_id: None,
-        src: Arc::clone(&short_src),
-    })
-    .ok();
-    tx.try_push(PlayerCmd::LoadTrack {
-        resource: create_mock_player_resource("preload.mp3"),
-        item_id: None,
-        src: Arc::clone(&preload_src),
-    })
-    .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
+            item_id: None,
+            src: Arc::clone(&short_src),
+        })
+        .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource("preload.mp3"),
+            item_id: None,
+            src: Arc::clone(&preload_src),
+        })
+        .ok();
     processor.drain_commands();
 
     processor
@@ -301,30 +310,36 @@ async fn render_audio_handover_promotes_preloading_track_without_silence() {
 
 #[kithara::test(tokio)]
 async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
-    let (mut processor, mut tx) = make_processor();
+    let (mut processor, mut control) = make_processor();
     let short_src = Arc::from("short.mp3");
     let fading_src = Arc::from("fading.mp3");
     let preload_src = Arc::from("preload.mp3");
     let frames = 1024usize;
 
-    tx.try_push(PlayerCmd::LoadTrack {
-        resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
-        item_id: None,
-        src: Arc::clone(&short_src),
-    })
-    .ok();
-    tx.try_push(PlayerCmd::LoadTrack {
-        resource: create_mock_player_resource("fading.mp3"),
-        item_id: None,
-        src: Arc::clone(&fading_src),
-    })
-    .ok();
-    tx.try_push(PlayerCmd::LoadTrack {
-        resource: create_mock_player_resource("preload.mp3"),
-        item_id: None,
-        src: Arc::clone(&preload_src),
-    })
-    .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
+            item_id: None,
+            src: Arc::clone(&short_src),
+        })
+        .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource("fading.mp3"),
+            item_id: None,
+            src: Arc::clone(&fading_src),
+        })
+        .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource("preload.mp3"),
+            item_id: None,
+            src: Arc::clone(&preload_src),
+        })
+        .ok();
     processor.drain_commands();
 
     processor

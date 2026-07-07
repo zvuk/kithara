@@ -107,12 +107,12 @@ impl PlayerImpl {
             return Err(PlayError::NotReady);
         };
 
-        let Some(shared_state) = self.core.engine.slot_shared_state(slot_id) else {
+        let Some(playback) = self.core.engine.slot_playback(slot_id) else {
             return Err(PlayError::SlotNotFound(slot_id));
         };
 
-        let seek_epoch = shared_state.next_seek_epoch();
-        shared_state.seek_epoch.store(seek_epoch, Ordering::SeqCst);
+        let seek_epoch = playback.next_seek_epoch();
+        playback.seek_epoch.store(seek_epoch, Ordering::SeqCst);
 
         let target_secs = seconds.max(0.0);
         let target = Duration::from_secs_f64(target_secs);
@@ -133,7 +133,7 @@ impl PlayerImpl {
         })?;
 
         if matches!(outcome, SeekOutcome::Landed { .. }) {
-            shared_state.position.store(target_secs, Ordering::Relaxed);
+            playback.position.store(target_secs, Ordering::Relaxed);
         }
 
         Ok(outcome)

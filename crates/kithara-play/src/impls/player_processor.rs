@@ -11,11 +11,10 @@ use firewheel::{
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_platform::sync::Mutex;
 use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{
-    HeapCons,
+    HeapCons, HeapProd,
     traits::{Consumer, Producer},
 };
 use smallvec::SmallVec;
@@ -27,15 +26,15 @@ use super::{
     crossfade::CrossfadeSettings,
     player_notification::PlayerNotification,
     player_resource::PlayerResource,
-    player_track::{PlayerTrack, TrackReadOutcome, TrackState, TrackTransition},
-    shared_player_state::SharedPlayerState,
+    player_track::{PlayerTrack, TrackParams, TrackReadOutcome, TrackState, TrackTransition},
 };
+use crate::bridge::{NodeInputs, PlaybackShared};
 
 /// Commands sent from the main thread to the processor.
 pub enum PlayerCmd {
     /// Load a track into the processor arena.
     LoadTrack {
-        resource: Arc<Mutex<PlayerResource>>,
+        resource: Box<PlayerResource>,
         item_id: Option<Arc<str>>,
         src: Arc<str>,
     },
@@ -96,14 +95,23 @@ type ActiveTrackEntry = (usize, Index, bool);
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
 pub struct PlayerNodeProcessor {
-    shared_state: Arc<SharedPlayerState>,
+    playback: Arc<PlaybackShared>,
     tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
     crossfade: CrossfadeSettings,
     cmd_rx: HeapCons<PlayerCmd>,
+    notif_tx: HeapProd<PlayerNotification>,
+    trash_tx: HeapProd<PlayerTrack>,
     sample_rate: NonZeroU32,
     tracks_transitions: VecDeque<TrackTransition>,
     scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
     prefetch_duration: f32,
+}
+
+/// Stream dimensions needed to pre-size RT scratch buffers.
+#[derive(Clone, Copy)]
+pub struct StreamShape {
+    pub sample_rate: NonZeroU32,
+    pub max_block_frames: NonZeroU32,
 }
 
 impl PlayerNodeProcessor {
@@ -121,14 +129,8 @@ impl PlayerNodeProcessor {
 
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
-    pub fn new(
-        cmd_rx: HeapCons<PlayerCmd>,
-        shared_state: Arc<SharedPlayerState>,
-        sample_rate: NonZeroU32,
-        max_block_frames: NonZeroU32,
-        pool: &PcmPool,
-    ) -> Self {
-        let max_frames: usize = max_block_frames.get().as_();
+    pub fn new(inputs: NodeInputs, shape: StreamShape, pool: &PcmPool) -> Self {
+        let max_frames: usize = shape.max_block_frames.get().as_();
         let scratch_bufs = std::array::from_fn(|_| {
             let mut buf = pool.get();
             let cap = buf.capacity();
@@ -139,10 +141,12 @@ impl PlayerNodeProcessor {
         });
 
         Self {
-            cmd_rx,
-            sample_rate,
+            cmd_rx: inputs.cmd_rx,
+            notif_tx: inputs.notif_tx,
+            trash_tx: inputs.trash_tx,
+            playback: inputs.playback,
+            sample_rate: shape.sample_rate,
             scratch_bufs,
-            shared_state,
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
@@ -168,7 +172,7 @@ impl PlayerNodeProcessor {
 
     /// Apply seek to active tracks.
     fn apply_seek(&mut self, seconds: f64, seek_epoch: u64) {
-        if seek_epoch != self.shared_state.seek_epoch.load(Ordering::SeqCst) {
+        if seek_epoch != self.playback.seek_epoch.load(Ordering::SeqCst) {
             return;
         }
 
@@ -195,8 +199,12 @@ impl PlayerNodeProcessor {
             }
         }
         if revived {
-            self.shared_state.playing.store(true, Ordering::SeqCst);
+            self.playback.playing.store(true, Ordering::SeqCst);
         }
+    }
+
+    fn discard_track(&mut self, track: PlayerTrack) {
+        let _ = self.trash_tx.try_push(track);
     }
 
     /// Clean up finished tracks.
@@ -248,10 +256,8 @@ impl PlayerNodeProcessor {
                 continue;
             }
             if let Some(track) = self.tracks.remove_by_index(*idx) {
-                self.shared_state.discard_track(track);
-                self.shared_state
-                    .notification_tx
-                    .lock()
+                self.discard_track(track);
+                self.notif_tx
                     .try_push(PlayerNotification::Unloaded {
                         src: Arc::clone(key),
                     })
@@ -264,14 +270,14 @@ impl PlayerNodeProcessor {
         // track is left. The retained track is inert in `render_audio` (gated
         // by `is_playing`), so `is_playing()` correctly stays false until a
         if self.tracks.len() == 0 || retain.is_some() {
-            self.shared_state.playing.store(false, Ordering::SeqCst);
+            self.playback.playing.store(false, Ordering::SeqCst);
         }
     }
 
     /// Unload every track from the arena and reset the published
     /// position/duration snapshot to zero. Backs [`PlayerCmd::Clear`],
     /// sent when the queue is explicitly cleared, so a subsequent read of
-    /// `shared_state` reflects an empty player instead of a stale snapshot.
+    /// `playback` reflects an empty player instead of a stale snapshot.
     fn clear_all_tracks(&mut self) {
         let keys: SmallVec<[Arc<str>; Self::MAX_TRACKS]> = self
             .tracks
@@ -282,10 +288,10 @@ impl PlayerNodeProcessor {
             self.unload_track(&key);
         }
         self.tracks_transitions.clear();
-        self.shared_state.playing.store(false, Ordering::SeqCst);
-        self.shared_state.position.store(0.0, Ordering::Relaxed);
-        self.shared_state.frontier.store(0.0, Ordering::Relaxed);
-        self.shared_state.duration.store(0.0, Ordering::Relaxed);
+        self.playback.playing.store(false, Ordering::SeqCst);
+        self.playback.position.store(0.0, Ordering::Relaxed);
+        self.playback.frontier.store(0.0, Ordering::Relaxed);
+        self.playback.duration.store(0.0, Ordering::Relaxed);
     }
 
     /// Drain all pending commands from the channel.
@@ -297,7 +303,7 @@ impl PlayerNodeProcessor {
                     item_id,
                     src,
                 } => {
-                    self.load_track(resource, item_id, &src);
+                    self.load_track(resource, item_id, src);
                 }
                 PlayerCmd::UnloadTrack { src } => {
                     self.unload_track(&src);
@@ -316,7 +322,7 @@ impl PlayerNodeProcessor {
                 }
                 PlayerCmd::SetPaused(paused) => {
                     let playing = !paused;
-                    self.shared_state.playing.store(playing, Ordering::SeqCst);
+                    self.playback.playing.store(playing, Ordering::SeqCst);
                 }
                 PlayerCmd::SetFadeDuration(duration) => {
                     self.apply_fade_duration(duration);
@@ -327,8 +333,7 @@ impl PlayerNodeProcessor {
                 PlayerCmd::SetPlaybackRate(rate) => {
                     self.tracks
                         .iter()
-                        .filter_map(|(_, track)| track.resource().try_lock().ok())
-                        .for_each(|resource| resource.set_playback_rate(rate));
+                        .for_each(|(_, track)| track.resource().set_playback_rate(rate));
                 }
             }
         }
@@ -363,10 +368,8 @@ impl PlayerNodeProcessor {
                     );
                 }
                 if let Some(track) = self.tracks.remove(&key) {
-                    self.shared_state.discard_track(track);
-                    self.shared_state
-                        .notification_tx
-                        .lock()
+                    self.discard_track(track);
+                    self.notif_tx
                         .try_push(PlayerNotification::Unloaded { src: key })
                         .ok();
                 }
@@ -403,7 +406,7 @@ impl PlayerNodeProcessor {
 
         self.tracks_transitions.push_back(transition);
 
-        let shared_state = Arc::clone(&self.shared_state);
+        let playback = Arc::clone(&self.playback);
         self.tracks_transitions.retain(|transition| {
             let track_src = match transition {
                 TrackTransition::FadeIn(src) | TrackTransition::FadeOut(src) => Arc::clone(src),
@@ -415,12 +418,8 @@ impl PlayerNodeProcessor {
                             track.seek(0.0);
                         }
                         track.fade_in();
-                        shared_state
-                            .position
-                            .store(track.position(), Ordering::Relaxed);
-                        shared_state
-                            .duration
-                            .store(track.duration(), Ordering::Relaxed);
+                        playback.position.store(track.position(), Ordering::Relaxed);
+                        playback.duration.store(track.duration(), Ordering::Relaxed);
                     }
                     TrackTransition::FadeOut(_) => {
                         track.fade_out();
@@ -434,9 +433,7 @@ impl PlayerNodeProcessor {
         if old_track.is_some()
             && let Some(new_src) = new_track
         {
-            self.shared_state
-                .notification_tx
-                .lock()
+            self.notif_tx
                 .try_push(PlayerNotification::Changed { src: new_src })
                 .ok();
         }
@@ -453,44 +450,35 @@ impl PlayerNodeProcessor {
     /// Load a new track into the arena.
     fn load_track(
         &mut self,
-        resource: Arc<Mutex<PlayerResource>>,
+        resource: Box<PlayerResource>,
         item_id: Option<Arc<str>>,
-        src: &Arc<str>,
+        src: Arc<str>,
     ) {
-        if let Some(track) = self.tracks.remove(src) {
-            self.shared_state.discard_track(track);
-            self.shared_state
-                .notification_tx
-                .lock()
+        if let Some(track) = self.tracks.remove(&src) {
+            self.discard_track(track);
+            self.notif_tx
                 .try_push(PlayerNotification::Unloaded {
-                    src: Arc::clone(src),
+                    src: Arc::clone(&src),
                 })
                 .ok();
         }
 
         self.evict_tracks_if_needed();
 
-        if let Ok(res) = resource.try_lock() {
-            res.set_host_sample_rate(self.sample_rate);
-        }
+        let resource = *resource;
+        resource.set_host_sample_rate(self.sample_rate);
 
-        let track = PlayerTrack::new(
-            resource,
-            item_id,
-            Arc::clone(src),
-            self.crossfade.duration,
-            self.prefetch_duration,
-            self.sample_rate,
-            self.crossfade.fade_curve(),
-        );
-        self.tracks.insert(Arc::clone(src), track);
+        let loaded_src = Arc::clone(&src);
+        let params = TrackParams::new(Arc::clone(&src), self.sample_rate)
+            .with_item_id(item_id)
+            .with_fade_duration(self.crossfade.duration)
+            .with_prefetch_duration(self.prefetch_duration)
+            .with_fade_curve(self.crossfade.fade_curve());
+        let track = PlayerTrack::new(resource, params);
+        self.tracks.insert(src, track);
 
-        self.shared_state
-            .notification_tx
-            .lock()
-            .try_push(PlayerNotification::Loaded {
-                src: Arc::clone(src),
-            })
+        self.notif_tx
+            .try_push(PlayerNotification::Loaded { src: loaded_src })
             .ok();
     }
 
@@ -503,8 +491,8 @@ impl PlayerNodeProcessor {
     }
 
     /// Captured position/duration snapshot from the leading track's read
-    /// outcome, in the same units as `shared_state.position` /
-    /// `shared_state.duration`.
+    /// outcome, in the same units as `playback.position` /
+    /// `playback.duration`.
     fn outcome_position_duration(outcome: &TrackReadOutcome) -> Option<(f64, f64)> {
         match *outcome {
             TrackReadOutcome::Full {
@@ -524,7 +512,7 @@ impl PlayerNodeProcessor {
     /// * `leading_outcome_pos_dur` — the leading track's
     ///   position/duration snapshot lifted out of [`TrackReadOutcome`]
     ///   so [`Self::update_position_duration`] can publish it to
-    ///   `shared_state` without re-locking the resource.
+    ///   `playback` without re-locking the resource.
     pub fn render_audio(
         &mut self,
         buffers: &mut ProcBuffers,
@@ -551,7 +539,7 @@ impl PlayerNodeProcessor {
         let (mix_buf0, mix_buf1) = right.split_at_mut(1);
         let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
         let mut mix_bufs = [&mut mix_buf0[0][..frames], &mut mix_buf1[0][..frames]];
-        let notification_tx = &self.shared_state.notification_tx;
+        let notification_tx = &mut self.notif_tx;
         let tracks = &mut self.tracks;
         let arena_tracks: SmallVec<[(Index, TrackState); Self::MAX_TRACKS]> = if is_playing {
             tracks
@@ -654,7 +642,7 @@ impl PlayerNodeProcessor {
                             &mut read_bufs,
                             &mut mix_bufs,
                             offset..frames,
-                            &self.shared_state.notification_tx,
+                            notification_tx,
                         );
                         break;
                     }
@@ -673,10 +661,10 @@ impl PlayerNodeProcessor {
         (playback_started, leading_outcome_pos_dur)
     }
 
-    /// Reference to the shared state used to bridge processor and main thread.
+    /// Reference to the playback atomics used by the processor.
     #[must_use]
-    pub fn shared_state(&self) -> &Arc<SharedPlayerState> {
-        &self.shared_state
+    pub fn playback(&self) -> &Arc<PlaybackShared> {
+        &self.playback
     }
 
     /// Look up a track by its source identifier.
@@ -696,18 +684,11 @@ impl PlayerNodeProcessor {
         self.tracks.get_mut(src)
     }
 
-    /// Pop one notification from the processor → main-thread channel.
-    pub fn try_pop_notification(&self) -> Option<PlayerNotification> {
-        self.shared_state.notification_rx.lock().try_pop()
-    }
-
     /// Unload a track from the arena.
     fn unload_track(&mut self, src: &Arc<str>) {
         if let Some(track) = self.tracks.remove(src) {
-            self.shared_state.discard_track(track);
-            self.shared_state
-                .notification_tx
-                .lock()
+            self.discard_track(track);
+            self.notif_tx
                 .try_push(PlayerNotification::Unloaded {
                     src: Arc::clone(src),
                 })
@@ -715,14 +696,11 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Update `shared_state.position` / `shared_state.duration` from the
+    /// Update `playback.position` / `playback.duration` from the
     /// leading track's last [`TrackReadOutcome`].
     ///
     /// `render_audio` captures the snapshot directly out of the outcome
-    /// returned by `PlayerTrack::read` — the same call that just held the
-    /// resource lock to mix audio. Routing the snapshot through the
-    /// outcome avoids a second `PlayerResource::try_lock` race here, where
-    /// a busy decoder writer can leave us with a stale or skipped read.
+    /// returned by `PlayerTrack::read`.
     /// Falls back to `track.position()` / `track.duration()` only when no
     /// leading track produced an outcome this cycle (cold start before
     /// the first render block, or every active track was a non-leading
@@ -733,7 +711,7 @@ impl PlayerNodeProcessor {
         // window the FFI polls for loaded ranges.
         for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
-                self.shared_state
+                self.playback
                     .frontier
                     .store(track.decoded_frontier(), Ordering::Relaxed);
                 break;
@@ -741,21 +719,17 @@ impl PlayerNodeProcessor {
         }
 
         if let Some((position, duration)) = leading_outcome {
-            self.shared_state
-                .position
-                .store(position, Ordering::Relaxed);
-            self.shared_state
-                .duration
-                .store(duration, Ordering::Relaxed);
+            self.playback.position.store(position, Ordering::Relaxed);
+            self.playback.duration.store(duration, Ordering::Relaxed);
             return;
         }
 
         for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
-                self.shared_state
+                self.playback
                     .position
                     .store(track.position(), Ordering::Relaxed);
-                self.shared_state
+                self.playback
                     .duration
                     .store(track.duration(), Ordering::Relaxed);
                 break;
@@ -786,7 +760,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         let new_sr = stream_info.sample_rate;
         self.sample_rate = new_sr;
-        self.shared_state
+        self.playback
             .sample_rate
             .store(new_sr.get(), Ordering::Relaxed);
 
@@ -800,8 +774,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         self.tracks
             .iter()
-            .filter_map(|(_, track)| track.resource().try_lock().ok())
-            .for_each(|resource| resource.set_host_sample_rate(new_sr));
+            .for_each(|(_, track)| track.resource().set_host_sample_rate(new_sr));
     }
 
     #[kithara::rtsan_forbid_blocking]
@@ -812,15 +785,13 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         _events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        self.shared_state
-            .process_count
-            .fetch_add(1, Ordering::Relaxed);
+        self.playback.process_count.fetch_add(1, Ordering::Relaxed);
 
         self.drain_commands();
 
         self.cleanup_finished_tracks();
 
-        let is_playing = self.shared_state.playing.load(Ordering::SeqCst);
+        let is_playing = self.playback.playing.load(Ordering::SeqCst);
 
         let (playback_started, leading_outcome_pos_dur) =
             self.render_audio(&mut buffers, info.frames, is_playing);
@@ -845,33 +816,29 @@ mod tests {
     use kithara_audio::PcmReader;
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
-    use kithara_platform::{sync::Mutex as PlatformMutex, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
-    use ringbuf::{
-        HeapProd, HeapRb,
-        traits::{Producer, Split},
-    };
+    use ringbuf::traits::Producer;
 
     use super::*;
-    use crate::impls::resource::Resource;
+    use crate::{
+        bridge::{SlotControl, slot_channels},
+        impls::{resource::Resource, shared_eq::SharedEq},
+    };
 
-    fn make_shared_state() -> Arc<SharedPlayerState> {
-        Arc::new(SharedPlayerState::new())
+    fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
+        StreamShape {
+            sample_rate,
+            max_block_frames: NonZeroU32::new(512).expect("BUG: non-zero"),
+        }
     }
 
-    fn make_processor() -> (PlayerNodeProcessor, HeapProd<PlayerCmd>) {
-        let shared_state = make_shared_state();
-        let (tx, rx) = HeapRb::<PlayerCmd>::new(32).split();
+    fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
+        let (inputs, control) = slot_channels(SharedEq::new(0));
         let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero");
-        let max_block_frames = NonZeroU32::new(512).expect("BUG: non-zero");
-        let processor = PlayerNodeProcessor::new(
-            rx,
-            shared_state,
-            sample_rate,
-            max_block_frames,
-            &PcmPool::default(),
-        );
-        (processor, tx)
+        let processor =
+            PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &PcmPool::default());
+        (processor, control)
     }
 
     /// Reader that records the last `host_sample_rate` set via `set_host_sample_rate`.
@@ -968,31 +935,25 @@ mod tests {
         ));
 
         let resource = Resource::from_reader(reader, None);
-        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+        let player_resource = Box::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
             &PcmPool::default(),
-        )));
+        ));
 
-        let shared_state = make_shared_state();
-        let (tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
+        let (inputs, mut control) = slot_channels(SharedEq::new(0));
         let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
-        let max_block_frames = NonZeroU32::new(512).expect("BUG: non-zero");
-        let mut processor = PlayerNodeProcessor::new(
-            rx,
-            shared_state,
-            sample_rate,
-            max_block_frames,
-            &PcmPool::default(),
-        );
+        let mut processor =
+            PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &PcmPool::default());
 
-        let mut tx = tx;
-        tx.try_push(PlayerCmd::LoadTrack {
-            resource: player_resource,
-            item_id: None,
-            src: Arc::from("track.mp3"),
-        })
-        .ok();
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::LoadTrack {
+                resource: player_resource,
+                item_id: None,
+                src: Arc::from("track.mp3"),
+            })
+            .ok();
         processor.drain_commands();
 
         assert_eq!(recorded.load(AtomicOrdering::Relaxed), host_rate);
@@ -1000,39 +961,44 @@ mod tests {
 
     #[kithara::test]
     fn processor_renders_silence_when_no_tracks() {
-        let (processor, _tx) = make_processor();
+        let (processor, _control) = make_processor();
         assert_eq!(processor.tracks.len(), 0);
     }
 
     #[kithara::test]
     fn processor_seek_without_tracks_does_not_panic() {
-        let (mut processor, mut tx) = make_processor();
-        tx.try_push(PlayerCmd::Seek {
-            seconds: 30.0,
-            seek_epoch: 1,
-        })
-        .ok();
+        let (mut processor, mut control) = make_processor();
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Seek {
+                seconds: 30.0,
+                seek_epoch: 1,
+            })
+            .ok();
         processor.drain_commands();
     }
 
     #[kithara::test]
     fn processor_set_playback_rate_without_tracks_does_not_panic() {
-        let (mut processor, mut tx) = make_processor();
-        tx.try_push(PlayerCmd::SetPlaybackRate(2.0)).ok();
+        let (mut processor, mut control) = make_processor();
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::SetPlaybackRate(2.0))
+            .ok();
         processor.drain_commands();
     }
 
     #[kithara::test]
-    fn processor_set_paused_updates_shared_state() {
-        let (mut processor, mut tx) = make_processor();
+    fn processor_set_paused_updates_playback() {
+        let (mut processor, mut control) = make_processor();
 
-        tx.try_push(PlayerCmd::SetPaused(false)).ok();
+        control.cmd_tx.try_push(PlayerCmd::SetPaused(false)).ok();
         processor.drain_commands();
-        assert!(processor.shared_state.playing.load(Ordering::SeqCst));
+        assert!(processor.playback.playing.load(Ordering::SeqCst));
 
-        tx.try_push(PlayerCmd::SetPaused(true)).ok();
+        control.cmd_tx.try_push(PlayerCmd::SetPaused(true)).ok();
         processor.drain_commands();
-        assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
+        assert!(!processor.playback.playing.load(Ordering::SeqCst));
     }
 
     #[kithara::test(tokio)]
@@ -1042,112 +1008,107 @@ mod tests {
             NonZeroU32::new(44100).expect("test rate"),
         ));
         let resource = Resource::from_reader(reader, None);
-        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+        let player_resource = Box::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
             &PcmPool::default(),
-        )));
+        ));
 
-        let (mut processor, mut tx) = make_processor();
+        let (mut processor, mut control) = make_processor();
 
-        tx.try_push(PlayerCmd::LoadTrack {
-            resource: player_resource,
-            item_id: None,
-            src: Arc::from("track.mp3"),
-        })
-        .ok();
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::LoadTrack {
+                resource: player_resource,
+                item_id: None,
+                src: Arc::from("track.mp3"),
+            })
+            .ok();
         processor.drain_commands();
         assert_eq!(processor.tracks.len(), 1);
 
-        processor.shared_state.playing.store(true, Ordering::SeqCst);
-        processor
-            .shared_state
-            .position
-            .store(42.0, Ordering::Relaxed);
-        processor
-            .shared_state
-            .duration
-            .store(60.0, Ordering::Relaxed);
+        processor.playback.playing.store(true, Ordering::SeqCst);
+        processor.playback.position.store(42.0, Ordering::Relaxed);
+        processor.playback.duration.store(60.0, Ordering::Relaxed);
 
-        tx.try_push(PlayerCmd::Clear).ok();
+        control.cmd_tx.try_push(PlayerCmd::Clear).ok();
         processor.drain_commands();
 
         assert_eq!(processor.tracks.len(), 0, "arena must be empty after Clear");
-        assert_eq!(processor.shared_state.position.load(Ordering::Relaxed), 0.0);
-        assert_eq!(processor.shared_state.duration.load(Ordering::Relaxed), 0.0);
-        assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
+        assert_eq!(processor.playback.position.load(Ordering::Relaxed), 0.0);
+        assert_eq!(processor.playback.duration.load(Ordering::Relaxed), 0.0);
+        assert!(!processor.playback.playing.load(Ordering::SeqCst));
     }
 
-    fn create_duration_player_resource(
-        src: &str,
-        duration: Duration,
-    ) -> Arc<PlatformMutex<PlayerResource>> {
+    fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerResource> {
         let (reader, _recorded) = SampleRateTrackingReader::with_duration(
             PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
             duration,
         );
         let resource = Resource::from_reader(reader, None);
-        Arc::new(PlatformMutex::new(PlayerResource::new(
+        Box::new(PlayerResource::new(
             resource,
             Arc::from(src),
             &PcmPool::default(),
-        )))
+        ))
     }
 
     #[kithara::test(tokio)]
     async fn fade_in_switches_public_snapshot_without_render() {
-        let (mut processor, mut tx) = make_processor();
+        let (mut processor, mut control) = make_processor();
         let first_src: Arc<str> = Arc::from("first.mp3");
         let second_src: Arc<str> = Arc::from("second.mp3");
 
-        tx.try_push(PlayerCmd::LoadTrack {
-            resource: create_duration_player_resource(&first_src, Duration::from_secs(64)),
-            item_id: None,
-            src: Arc::clone(&first_src),
-        })
-        .ok();
-        tx.try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
-            &first_src,
-        ))))
-        .ok();
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::LoadTrack {
+                resource: create_duration_player_resource(&first_src, Duration::from_secs(64)),
+                item_id: None,
+                src: Arc::clone(&first_src),
+            })
+            .ok();
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+                &first_src,
+            ))))
+            .ok();
+        processor.drain_commands();
+
+        assert_eq!(processor.playback.duration.load(Ordering::Relaxed), 64.0);
+
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::LoadTrack {
+                resource: create_duration_player_resource(&second_src, Duration::from_secs(162)),
+                item_id: None,
+                src: Arc::clone(&second_src),
+            })
+            .ok();
         processor.drain_commands();
 
         assert_eq!(
-            processor.shared_state.duration.load(Ordering::Relaxed),
-            64.0
-        );
-
-        tx.try_push(PlayerCmd::LoadTrack {
-            resource: create_duration_player_resource(&second_src, Duration::from_secs(162)),
-            item_id: None,
-            src: Arc::clone(&second_src),
-        })
-        .ok();
-        processor.drain_commands();
-
-        assert_eq!(
-            processor.shared_state.duration.load(Ordering::Relaxed),
+            processor.playback.duration.load(Ordering::Relaxed),
             64.0,
             "preload must not publish the next track duration"
         );
 
-        tx.try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
-            &second_src,
-        ))))
-        .ok();
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+                &second_src,
+            ))))
+            .ok();
         processor.drain_commands();
 
-        assert_eq!(processor.shared_state.position.load(Ordering::Relaxed), 0.0);
-        assert_eq!(
-            processor.shared_state.duration.load(Ordering::Relaxed),
-            162.0
-        );
+        assert_eq!(processor.playback.position.load(Ordering::Relaxed), 0.0);
+        assert_eq!(processor.playback.duration.load(Ordering::Relaxed), 162.0);
     }
 
     fn create_tracking_player_resource(
         src: &str,
         seek_log: TestArc<Mutex<Vec<u64>>>,
-    ) -> Arc<PlatformMutex<PlayerResource>> {
+    ) -> Box<PlayerResource> {
         #[derive(Clone)]
         struct SeekTrackingReader {
             spec: PcmSpec,
@@ -1226,11 +1187,11 @@ mod tests {
         };
 
         let resource = Resource::from_reader(reader, None);
-        Arc::new(PlatformMutex::new(PlayerResource::new(
+        Box::new(PlayerResource::new(
             resource,
             Arc::from(src),
             &PcmPool::default(),
-        )))
+        ))
     }
 
     #[kithara::test(tokio)]
@@ -1238,43 +1199,53 @@ mod tests {
         let seek_log = TestArc::new(Mutex::new(Vec::new()));
         let resource = create_tracking_player_resource("track1.mp3", Arc::clone(&seek_log));
 
-        let (mut processor, mut tx) = make_processor();
+        let (mut processor, mut control) = make_processor();
         let src = Arc::from("track1.mp3");
-        tx.try_push(PlayerCmd::LoadTrack {
-            resource,
-            item_id: None,
-            src: Arc::clone(&src),
-        })
-        .ok();
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::LoadTrack {
+                resource,
+                item_id: None,
+                src: Arc::clone(&src),
+            })
+            .ok();
         processor.drain_commands();
-        tx.try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
-            &src,
-        ))))
-        .ok();
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+                &src,
+            ))))
+            .ok();
         processor.drain_commands();
 
-        let shared_state = Arc::clone(&processor.shared_state);
-        let first = shared_state.next_seek_epoch();
-        shared_state.seek_epoch.store(first, Ordering::SeqCst);
-        tx.try_push(PlayerCmd::Seek {
-            seconds: 10.0,
-            seek_epoch: first,
-        })
-        .ok();
-        let second = shared_state.next_seek_epoch();
-        shared_state.seek_epoch.store(second, Ordering::SeqCst);
-        tx.try_push(PlayerCmd::Seek {
-            seconds: 20.0,
-            seek_epoch: second,
-        })
-        .ok();
-        let third = shared_state.next_seek_epoch();
-        shared_state.seek_epoch.store(third, Ordering::SeqCst);
-        tx.try_push(PlayerCmd::Seek {
-            seconds: 30.0,
-            seek_epoch: third,
-        })
-        .ok();
+        let playback = Arc::clone(&processor.playback);
+        let first = playback.next_seek_epoch();
+        playback.seek_epoch.store(first, Ordering::SeqCst);
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Seek {
+                seconds: 10.0,
+                seek_epoch: first,
+            })
+            .ok();
+        let second = playback.next_seek_epoch();
+        playback.seek_epoch.store(second, Ordering::SeqCst);
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Seek {
+                seconds: 20.0,
+                seek_epoch: second,
+            })
+            .ok();
+        let third = playback.next_seek_epoch();
+        playback.seek_epoch.store(third, Ordering::SeqCst);
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Seek {
+                seconds: 30.0,
+                seek_epoch: third,
+            })
+            .ok();
 
         processor.drain_commands();
 
@@ -1285,6 +1256,6 @@ mod tests {
             seek_log.clone()
         };
         assert_eq!(recorded_seeks, [30000]);
-        assert_eq!(shared_state.seek_epoch.load(Ordering::SeqCst), third);
+        assert_eq!(playback.seek_epoch.load(Ordering::SeqCst), third);
     }
 }

@@ -14,7 +14,8 @@ pub struct SharedEq {
 }
 
 impl SharedEq {
-    pub(crate) fn new(bands: usize) -> Self {
+    #[must_use]
+    pub fn new(bands: usize) -> Self {
         let gains = (0..bands)
             .map(|_| AtomicF32::new(0.0))
             .collect::<Vec<_>>()

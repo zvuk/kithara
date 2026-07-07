@@ -13,7 +13,6 @@ pub mod resource;
 #[path = "../session/mod.rs"]
 pub mod session;
 pub mod shared_eq;
-pub mod shared_player_state;
 pub mod source_type;
 
 pub use config::{ResourceConfig, ResourceSrc};

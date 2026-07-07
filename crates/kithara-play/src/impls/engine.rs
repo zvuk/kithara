@@ -16,17 +16,18 @@ use kithara_platform::{
     CancelScope, CancelToken, sync::Mutex, tokio::runtime::Handle as RuntimeHandle,
 };
 use portable_atomic::AtomicF32;
-use ringbuf::{HeapProd, traits::Producer};
+use ringbuf::traits::{Consumer, Producer};
 use tracing::{debug, info, warn};
 
 use super::{
     arena_registry::ArenaRegistry,
+    player_notification::PlayerNotification,
     player_processor::PlayerCmd,
     session::{PlayerId, SessionDispatcher, SessionHandle, session_client},
     shared_eq::SharedEq,
-    shared_player_state::SharedPlayerState,
 };
 use crate::{
+    bridge::{PlaybackShared, SlotControl},
     error::PlayError,
     events::EngineEvent,
     types::{SessionDuckingMode, SlotId},
@@ -77,12 +78,7 @@ impl Default for EngineConfig {
     }
 }
 
-/// Handle for a slot, providing command channel and shared state.
-pub(crate) struct SlotHandle {
-    pub(crate) shared_state: Arc<SharedPlayerState>,
-    pub(crate) cmd_tx: HeapProd<PlayerCmd>,
-    pub(crate) eq: SharedEq,
-}
+type SlotHandle = SlotControl;
 
 /// Concrete engine implementation backed by a process-wide session.
 ///
@@ -223,11 +219,32 @@ impl EngineImpl {
         self.slot_registry.lock().get(&slot).map(|h| h.eq.clone())
     }
 
-    pub(crate) fn slot_shared_state(&self, slot: SlotId) -> Option<Arc<SharedPlayerState>> {
+    pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>> {
         self.slot_registry
             .lock()
             .get(&slot)
-            .map(|h| Arc::clone(&h.shared_state))
+            .map(|h| Arc::clone(&h.playback))
+    }
+
+    pub(crate) fn drain_slot_notifications(
+        &self,
+        slot: SlotId,
+        notifications: &mut Vec<PlayerNotification>,
+    ) -> bool {
+        self.slot_registry
+            .lock()
+            .get_mut(&slot)
+            .is_some_and(|handle| {
+                Self::drain_slot_handle(handle, notifications);
+                true
+            })
+    }
+
+    fn drain_slot_handle(handle: &mut SlotHandle, notifications: &mut Vec<PlayerNotification>) {
+        while let Some(notification) = handle.notif_rx.try_pop() {
+            notifications.push(notification);
+        }
+        while handle.trash_rx.try_pop().is_some() {}
     }
 
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
@@ -302,17 +319,11 @@ impl EngineImpl {
         }
 
         let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
-        let (slot_id, cmd_tx, shared_state, eq) = self.session.allocate_slot(player_id)?;
+        let allocated = self.session.allocate_slot(player_id)?;
+        let slot_id = allocated.slot;
 
         self.active_slots.lock().push(slot_id);
-        self.slot_registry.lock().insert(
-            slot_id,
-            SlotHandle {
-                shared_state,
-                cmd_tx,
-                eq,
-            },
-        );
+        self.slot_registry.lock().insert(slot_id, allocated.control);
 
         debug!(?slot_id, player_id, "slot allocated");
         self.emit(EngineEvent::SlotAllocated { slot: slot_id });

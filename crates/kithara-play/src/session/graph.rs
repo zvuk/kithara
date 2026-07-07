@@ -1,21 +1,16 @@
-use std::sync::Arc;
-
 use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo, node::NodeID,
     nodes::volume_pan::VolumePanNode,
 };
-use ringbuf::{HeapRb, traits::Split};
 use tracing::{debug, warn};
 
 use super::{
-    protocol::{PLAYER_CMD_RINGBUF_CAPACITY, PlayerId, Reply, SessionError},
+    protocol::{AllocatedSlot, PlayerId, Reply, SessionError},
     state::{PlayerState, SessionState, SlotNodes, ensure_ctx},
 };
 use crate::{
-    impls::{
-        master_eq_node::MasterEqNode, player_node::PlayerNode, player_processor::PlayerCmd,
-        shared_player_state::SharedPlayerState,
-    },
+    bridge::slot_channels,
+    impls::{master_eq_node::MasterEqNode, player_node::PlayerNode},
     types::{SessionDuckingMode, SlotId},
 };
 pub(super) fn ducking_gain(mode: SessionDuckingMode) -> f32 {
@@ -202,14 +197,9 @@ pub(super) mod slots {
         };
         let slot_id = SlotId::new(state.players[idx].next_slot_id);
         state.players[idx].next_slot_id += 1;
-        let (cmd_tx, cmd_rx) = HeapRb::<PlayerCmd>::new(PLAYER_CMD_RINGBUF_CAPACITY).split();
-        let shared_state = Arc::new(SharedPlayerState::new());
         let shared_eq = state.players[idx].shared_eq.clone();
-        let player_node = PlayerNode::with_channel(
-            cmd_rx,
-            Arc::clone(&shared_state),
-            state.players[idx].pcm_pool.clone(),
-        );
+        let (inputs, control) = slot_channels(shared_eq);
+        let player_node = PlayerNode::new(inputs, state.players[idx].pcm_pool.clone());
         let player_node_id = fw_ctx.add_node(player_node, None);
         let slot_vol_pan = VolumePanNode::from_volume(Volume::Linear(1.0));
         let slot_vol_pan_memo = Memo::new(slot_vol_pan);
@@ -239,7 +229,10 @@ pub(super) mod slots {
             slots = state.players[idx].slots.len(),
             "[KITHARA-ROUTE] player slot allocated"
         );
-        let reply = Reply::SlotAllocated(slot_id, cmd_tx, shared_state, shared_eq);
+        let reply = Reply::SlotAllocated(AllocatedSlot {
+            slot: slot_id,
+            control,
+        });
         Ok(reply)
     }
     pub(in crate::impls::session) fn release_slot<B: AudioBackend>(

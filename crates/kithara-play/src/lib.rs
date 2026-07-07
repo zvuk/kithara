@@ -7,6 +7,7 @@ mod events;
 mod guard;
 mod types;
 
+pub mod bridge;
 pub mod impls;
 pub mod traits;
 
@@ -16,6 +17,7 @@ pub mod wasm_support;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
+pub use bridge::{NodeInputs, PlaybackShared, PlaybackSnapshot, SlotControl};
 pub use error::PlayError;
 pub use events::{
     DjEvent, EngineEvent, InterruptionKind, ItemEvent, PlayerEvent, RouteChangeReason, SessionEvent,
@@ -31,7 +33,6 @@ pub use impls::{
         SessionHandle, SessionState, StartStreamFn, run_cmd,
     },
     shared_eq::SharedEq,
-    shared_player_state::PlaybackSnapshot,
     source_type::SourceType,
 };
 pub use kithara_assets::{AssetLayout, DefaultLayout};

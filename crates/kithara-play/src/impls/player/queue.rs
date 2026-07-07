@@ -1,7 +1,5 @@
 use std::sync::{Arc, atomic::Ordering};
 
-use kithara_platform::sync::Mutex;
-use ringbuf::traits::Consumer;
 use tracing::debug;
 
 use super::{
@@ -206,12 +204,11 @@ impl PlayerImpl {
 
         let src = Arc::clone(resource.src());
         let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.core.pcm_pool);
-        let arc_resource = Arc::new(Mutex::new(player_resource));
         drop(items);
 
         let _ = self.send_to_slot(PlayerCmd::LoadTrack {
             item_id,
-            resource: arc_resource,
+            resource: Box::new(player_resource),
             src: Arc::clone(&src),
         });
 
@@ -282,15 +279,14 @@ impl PlayerImpl {
     pub fn process_notifications(&self) {
         let mut notifications = Vec::new();
         for slot_id in self.core.engine.active_slots() {
-            let Some(state) = self.core.engine.slot_shared_state(slot_id) else {
-                tracing::warn!(?slot_id, "process_notifications: slot has no shared state");
+            if !self
+                .core
+                .engine
+                .drain_slot_notifications(slot_id, &mut notifications)
+            {
+                tracing::warn!(?slot_id, "process_notifications: slot has no control state");
                 continue;
-            };
-
-            while let Some(notification) = state.notification_rx.lock().try_pop() {
-                notifications.push(notification);
             }
-            state.drain_trash();
         }
 
         if !notifications.is_empty() {
@@ -309,11 +305,11 @@ impl PlayerImpl {
         let Some(slot_id) = self.slot() else {
             return;
         };
-        let Some(shared_state) = self.core.engine.slot_shared_state(slot_id) else {
+        let Some(playback) = self.core.engine.slot_playback(slot_id) else {
             return;
         };
-        shared_state.position.store(0.0, Ordering::Relaxed);
-        shared_state
+        playback.position.store(0.0, Ordering::Relaxed);
+        playback
             .duration
             .store(duration_seconds.max(0.0), Ordering::Relaxed);
     }

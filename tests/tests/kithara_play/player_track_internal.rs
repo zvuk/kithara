@@ -14,13 +14,12 @@ use kithara::{
     self,
     bufpool::PcmPool,
     decode::PcmSpec,
-    platform::sync::Mutex,
     play::{
         Resource,
         impls::{
             player_notification::{PlayerNotification, TrackPlaybackStopReason},
             player_resource::PlayerResource,
-            player_track::{PlayerTrack, TrackReadOutcome, TrackState},
+            player_track::{PlayerTrack, TrackParams, TrackReadOutcome, TrackState},
         },
     },
 };
@@ -55,17 +54,12 @@ fn make_track_from_resource(
     item_id: Option<Arc<str>>,
 ) -> PlayerTrack {
     let player_resource = PlayerResource::new(resource, Arc::clone(&src), &PcmPool::default());
-    let arc_resource = Arc::new(Mutex::new(player_resource));
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    PlayerTrack::new(
-        arc_resource,
-        item_id,
-        src,
-        1.0,
-        0.0,
-        sample_rate,
-        FadeCurve::SquareRoot,
-    )
+    let params = TrackParams::new(src, sample_rate)
+        .with_item_id(item_id)
+        .with_fade_duration(1.0)
+        .with_fade_curve(FadeCurve::SquareRoot);
+    PlayerTrack::new(player_resource, params)
 }
 
 fn make_track() -> PlayerTrack {
@@ -160,7 +154,7 @@ async fn track_seek_position_is_derived_from_served_frames() {
 async fn eof_playback_stopped_notification_carries_item_id() {
     let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(8).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -172,7 +166,12 @@ async fn eof_playback_stopped_notification_carries_item_id() {
 
     let mut saw_eof_stop = false;
     for _ in 0..4 {
-        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+        let _ = track.read(
+            &mut scratch_bufs,
+            &mut mix_bufs,
+            0..512,
+            &mut notification_tx,
+        );
 
         while let Some(notification) = rx.try_pop() {
             if let PlayerNotification::PlaybackStopped {
@@ -197,7 +196,7 @@ async fn eof_playback_stopped_notification_carries_item_id() {
 async fn read_outcome_full_on_normal_read() {
     let mut track = make_track_with(60.0, None);
     let (tx, _) = HeapRb::<PlayerNotification>::new(8).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -207,7 +206,12 @@ async fn read_outcome_full_on_normal_read() {
 
     track.play();
 
-    let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+    let outcome = track.read(
+        &mut scratch_bufs,
+        &mut mix_bufs,
+        0..512,
+        &mut notification_tx,
+    );
 
     assert!(matches!(
         outcome,
@@ -223,7 +227,7 @@ async fn read_outcome_full_on_normal_read() {
 async fn read_outcome_partial_then_eof() {
     let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -238,7 +242,12 @@ async fn read_outcome_partial_then_eof() {
     let mut eof_stop_count = 0;
 
     for _ in 0..8 {
-        let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+        let outcome = track.read(
+            &mut scratch_bufs,
+            &mut mix_bufs,
+            0..512,
+            &mut notification_tx,
+        );
 
         match outcome {
             TrackReadOutcome::Partial { frames, .. } => {
@@ -275,7 +284,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.2, sample_rate);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -290,7 +299,12 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
     let mut saw_eof_stop = false;
 
     for _ in 0..4 {
-        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+        let _ = track.read(
+            &mut scratch_bufs,
+            &mut mix_bufs,
+            0..512,
+            &mut notification_tx,
+        );
         for notification in collect_notifications(&mut rx) {
             match notification {
                 PlayerNotification::HandoverRequested => {
@@ -318,7 +332,12 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
         "threshold-triggered handover should precede EOF"
     );
 
-    let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+    let _ = track.read(
+        &mut scratch_bufs,
+        &mut mix_bufs,
+        0..512,
+        &mut notification_tx,
+    );
     let notifications = collect_notifications(&mut rx);
     assert!(
         notifications
@@ -334,7 +353,7 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.0, sample_rate);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -344,7 +363,12 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
 
     track.play();
 
-    let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+    let outcome = track.read(
+        &mut scratch_bufs,
+        &mut mix_bufs,
+        0..512,
+        &mut notification_tx,
+    );
     assert!(matches!(outcome, TrackReadOutcome::Partial { .. }));
 
     let notifications = collect_notifications(&mut rx);
@@ -378,7 +402,7 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.2, sample_rate);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -392,7 +416,12 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
     let mut eof_stop_count = 0;
 
     for _ in 0..600 {
-        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+        let _ = track.read(
+            &mut scratch_bufs,
+            &mut mix_bufs,
+            0..512,
+            &mut notification_tx,
+        );
 
         for notification in collect_notifications(&mut rx) {
             match notification {
@@ -428,7 +457,7 @@ async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
     track.update_fade_duration(0.0, sample_rate);
     track.set_prefetch_duration(2.0);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -439,7 +468,12 @@ async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
     track.play();
     track.seek(8.5);
 
-    let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+    let _ = track.read(
+        &mut scratch_bufs,
+        &mut mix_bufs,
+        0..512,
+        &mut notification_tx,
+    );
 
     let notifications = collect_notifications(&mut rx);
     let saw_prefetch = notifications
@@ -465,7 +499,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
     track.update_fade_duration(0.2, sample_rate);
     track.set_prefetch_duration(2.0);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -476,7 +510,12 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
     track.play();
     track.seek(8.5);
 
-    let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+    let _ = track.read(
+        &mut scratch_bufs,
+        &mut mix_bufs,
+        0..512,
+        &mut notification_tx,
+    );
     let after_prefetch = collect_notifications(&mut rx);
     assert!(
         after_prefetch
@@ -493,7 +532,12 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
 
     let mut saw_handover = false;
     for _ in 0..4 {
-        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+        let _ = track.read(
+            &mut scratch_bufs,
+            &mut mix_bufs,
+            0..512,
+            &mut notification_tx,
+        );
         for notification in collect_notifications(&mut rx) {
             if matches!(notification, PlayerNotification::HandoverRequested) {
                 saw_handover = true;
@@ -516,7 +560,7 @@ async fn prefetch_fires_immediately_when_track_shorter_than_prefetch_duration() 
     track.update_fade_duration(0.0, sample_rate);
     track.set_prefetch_duration(5.0);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -525,7 +569,12 @@ async fn prefetch_fires_immediately_when_track_shorter_than_prefetch_duration() 
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+    let _ = track.read(
+        &mut scratch_bufs,
+        &mut mix_bufs,
+        0..512,
+        &mut notification_tx,
+    );
 
     let notifications = collect_notifications(&mut rx);
     assert!(
@@ -542,7 +591,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
     track.update_fade_duration(0.2, sample_rate);
     track.set_prefetch_duration(0.0);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -552,7 +601,12 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
 
     track.play();
     track.seek(5.0);
-    let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+    let _ = track.read(
+        &mut scratch_bufs,
+        &mut mix_bufs,
+        0..512,
+        &mut notification_tx,
+    );
     let mid = collect_notifications(&mut rx);
     assert!(mid.iter().all(|notification| !matches!(
         notification,
@@ -563,7 +617,12 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
     let mut prefetch_count = 0;
     let mut handover_count = 0;
     for _ in 0..4 {
-        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+        let _ = track.read(
+            &mut scratch_bufs,
+            &mut mix_bufs,
+            0..512,
+            &mut notification_tx,
+        );
         for notification in collect_notifications(&mut rx) {
             match notification {
                 PlayerNotification::Requested => {
@@ -587,7 +646,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
 async fn read_outcome_eof_when_track_finished() {
     let mut track = make_track();
     let (tx, _) = HeapRb::<PlayerNotification>::new(8).split();
-    let notification_tx = Mutex::new(tx);
+    let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
     let mut scratch_r = [0.0; 512];
     let mut mix_l = [0.0; 512];
@@ -597,7 +656,12 @@ async fn read_outcome_eof_when_track_finished() {
 
     track.stop();
 
-    let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+    let outcome = track.read(
+        &mut scratch_bufs,
+        &mut mix_bufs,
+        0..512,
+        &mut notification_tx,
+    );
 
     assert!(matches!(outcome, TrackReadOutcome::Eof));
 }

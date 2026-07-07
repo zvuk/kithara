@@ -9,7 +9,6 @@ use firewheel::dsp::{
     mix::{Mix, MixDSP},
 };
 use kithara_audio::ServiceClass;
-use kithara_platform::sync::Mutex;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 use ringbuf::{HeapProd, traits::Producer};
 
@@ -96,13 +95,60 @@ pub enum TrackReadOutcome {
     Failed,
 }
 
+/// Parameters used to create a track around an owned resource.
+pub struct TrackParams {
+    item_id: Option<Arc<str>>,
+    src: Arc<str>,
+    fade_duration: f32,
+    prefetch_duration: f32,
+    sample_rate: NonZeroU32,
+    fade_curve: FadeCurve,
+}
+
+impl TrackParams {
+    #[must_use]
+    pub fn new(src: Arc<str>, sample_rate: NonZeroU32) -> Self {
+        Self {
+            item_id: None,
+            src,
+            fade_duration: 0.0,
+            prefetch_duration: 0.0,
+            sample_rate,
+            fade_curve: FadeCurve::SquareRoot,
+        }
+    }
+
+    #[must_use]
+    pub fn with_fade_curve(mut self, fade_curve: FadeCurve) -> Self {
+        self.fade_curve = fade_curve;
+        self
+    }
+
+    #[must_use]
+    pub fn with_fade_duration(mut self, fade_duration: f32) -> Self {
+        self.fade_duration = fade_duration;
+        self
+    }
+
+    #[must_use]
+    pub fn with_item_id(mut self, item_id: Option<Arc<str>>) -> Self {
+        self.item_id = item_id;
+        self
+    }
+
+    #[must_use]
+    pub fn with_prefetch_duration(mut self, prefetch_duration: f32) -> Self {
+        self.prefetch_duration = prefetch_duration;
+        self
+    }
+}
+
 /// Per-track state in the processor arena.
 ///
 /// Manages the `MixDSP` fade, track state, cached position/duration,
 /// and notification logic for a single loaded track.
 pub struct PlayerTrack {
-    resource: Arc<Mutex<PlayerResource>>,
-    src: Arc<str>,
+    resource: PlayerResource,
     fade_curve: FadeCurve,
     mix: MixDSP,
     item_id: Option<Arc<str>>,
@@ -130,11 +176,6 @@ pub struct PlayerTrack {
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
     /// duration) captured under the resource lock.
     observed_duration: f64,
-    /// Last decoded-ahead frontier (seconds) captured under the resource lock
-    /// during `read()`. Fallback for [`Self::decoded_frontier`] when the
-    /// resource lock is momentarily held by the decoder; the live resource is
-    /// the authoritative source. Always `>=` the served position.
-    observed_frontier: f64,
     sample_rate: u32,
     /// Cumulative frames this track has actually served into the mix output.
     ///
@@ -151,31 +192,25 @@ impl PlayerTrack {
     /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
     /// `fade_in()` or `play()` is required to produce audio.
     #[must_use]
-    pub fn new(
-        resource: Arc<Mutex<PlayerResource>>,
-        item_id: Option<Arc<str>>,
-        src: Arc<str>,
-        fade_duration: f32,
-        prefetch_duration: f32,
-        sample_rate: NonZeroU32,
-        fade_curve: FadeCurve,
-    ) -> Self {
+    pub fn new(resource: PlayerResource, params: TrackParams) -> Self {
+        let TrackParams {
+            item_id,
+            src: _src,
+            fade_duration,
+            prefetch_duration,
+            sample_rate,
+            fade_curve,
+        } = params;
         let fade_conf = SmootherConfig {
             smooth_seconds: fade_duration,
             settle_epsilon: DEFAULT_SETTLE_EPSILON,
         };
-        // Seed from the resource's already-known duration (set synchronously at
-        // source open, before `Loaded`) so a freshly-loaded track reports its
-        // duration on the first render cycle — before any decode-backed `read`.
-        // Without this the render path publishes 0.0 whenever the decode worker
-        // holds the resource lock, leaving `duration_seconds()` racy at load.
-        let observed_duration = resource.try_lock().ok().map_or(0.0, |r| r.duration());
+        let observed_duration = resource.duration();
         let track = Self {
             resource,
             fade_curve,
             fade_duration,
             item_id,
-            src,
             state: TrackState::Preloading,
             state_dirty: false,
             notified_track_requested: false,
@@ -185,7 +220,6 @@ impl PlayerTrack {
             sample_rate: sample_rate.get(),
             served_frames: 0,
             observed_duration,
-            observed_frontier: 0.0,
             ended_at_eof: false,
         };
         track.update_service_class(TrackState::Preloading);
@@ -211,7 +245,7 @@ impl PlayerTrack {
     ///   `imminent = true` so the handler can fade-in / hand over.
     fn check_notifications(
         &mut self,
-        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
+        notification_tx: &mut HeapProd<PlayerNotification>,
         block_frames: usize,
         frames_until_eof: Option<usize>,
     ) {
@@ -249,47 +283,28 @@ impl PlayerTrack {
         }
     }
 
-    /// Decoded-ahead frontier in seconds — how much content is decoded and
-    /// ready to play (always `>=` [`Self::position`]). Reads the live resource
-    /// (mirroring [`Self::duration`]) so the buffered/playable window keeps
-    /// growing while the player is paused — the decode worker advances the
-    /// frontier on its own thread, but `read()` (which refreshes
-    /// `observed_frontier`) only runs while rendering. Falls back to the last
-    /// rendered value when the resource lock is momentarily held by the decoder.
+    /// Decoded-ahead frontier in seconds.
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
-        self.resource
-            .try_lock()
-            .ok()
-            .map_or(self.observed_frontier, |resource| {
-                resource.decoded_frontier()
-            })
+        self.resource.decoded_frontier()
     }
 
     /// Current visible (post-gapless-trim) duration in seconds.
-    ///
-    /// Mirrors `PlayerResource::duration()` captured under the resource
-    /// lock during the last `read()`. Falls back to a fresh `try_lock`
-    /// when invoked before any `read()` (e.g. immediately after `seek`).
     #[must_use]
     pub fn duration(&self) -> f64 {
         if self.observed_duration > 0.0 {
             return self.observed_duration;
         }
-        self.resource
-            .try_lock()
-            .ok()
-            .map_or(self.observed_duration, |resource| resource.duration())
+        self.resource.duration()
     }
 
     /// Emit the crossfade-aligned handover trigger once per playback cycle.
-    fn emit_handover_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+    fn emit_handover_requested(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
         if self.notified_track_requested {
             return;
         }
 
         if notification_tx
-            .lock()
             .try_push(PlayerNotification::HandoverRequested)
             .is_ok()
         {
@@ -298,13 +313,12 @@ impl PlayerTrack {
     }
 
     /// Emit the prefetch (preload-only) trigger once per playback cycle.
-    fn emit_track_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+    fn emit_track_requested(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
         if self.notified_prefetch_requested {
             return;
         }
 
         if notification_tx
-            .lock()
             .try_push(PlayerNotification::Requested)
             .is_ok()
         {
@@ -341,15 +355,14 @@ impl PlayerTrack {
     /// errors get conflated with natural EOF and the queue auto-
     /// advances as if the track played out — observed in the GUI as
     /// "track shows pos=91s of 169s and skips to next".
-    fn handle_failed_end(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+    fn handle_failed_end(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
         if self.state == TrackState::Finished {
             return;
         }
         self.set_state(TrackState::Finished);
         notification_tx
-            .lock()
             .try_push(PlayerNotification::PlaybackStopped {
-                src: Arc::clone(&self.src),
+                src: Arc::clone(self.src()),
                 item_id: self.item_id.clone(),
                 reason: TrackPlaybackStopReason::Failed,
             })
@@ -358,7 +371,7 @@ impl PlayerTrack {
     }
 
     /// Handle natural EOF.
-    fn handle_natural_end(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+    fn handle_natural_end(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
         if self.state == TrackState::Finished {
             return;
         }
@@ -367,9 +380,8 @@ impl PlayerTrack {
         self.set_state(TrackState::Finished);
         self.ended_at_eof = true;
         notification_tx
-            .lock()
             .try_push(PlayerNotification::PlaybackStopped {
-                src: Arc::clone(&self.src),
+                src: Arc::clone(self.src()),
                 item_id: self.item_id.clone(),
                 reason: TrackPlaybackStopReason::Eof,
             })
@@ -378,25 +390,25 @@ impl PlayerTrack {
     }
 
     /// Emit notification when state changes.
-    fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+    fn notify_state_change(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
         if !self.state_dirty {
             return;
         }
         let notification = match self.state {
             TrackState::Preloading => PlayerNotification::Loaded {
-                src: Arc::clone(&self.src),
+                src: Arc::clone(self.src()),
             },
             TrackState::FadingIn => PlayerNotification::FadingIn,
             TrackState::FadingOut => PlayerNotification::FadingOut,
             TrackState::Playing => PlayerNotification::PlaybackStarted,
             TrackState::Finished => PlayerNotification::PlaybackStopped {
-                src: Arc::clone(&self.src),
+                src: Arc::clone(self.src()),
                 item_id: self.item_id.clone(),
                 reason: TrackPlaybackStopReason::Stop,
             },
         };
 
-        if notification_tx.lock().try_push(notification).is_ok() {
+        if notification_tx.try_push(notification).is_ok() {
             self.state_dirty = false;
         }
     }
@@ -425,10 +437,8 @@ impl PlayerTrack {
 
     /// Read audio from this track into scratch/mix buffers.
     ///
-    /// 1. Tries to lock the resource (non-blocking).
-    /// 2. Reads PCM into `scratch_bufs`.
-    /// 3. Mixes through `MixDSP` into `mix_bufs`.
-    /// 4. Detects fade completion and updates state.
+    /// Reads PCM into `scratch_bufs`, mixes through `MixDSP`, then updates
+    /// notification and fade state.
     ///
     /// On [`TrackReadOutcome::Partial`], the last written frame belongs to this
     /// track and EOF stop notifications are emitted immediately in the same
@@ -441,7 +451,7 @@ impl PlayerTrack {
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
         range: Range<usize>,
-        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
+        notification_tx: &mut HeapProd<PlayerNotification>,
     ) -> TrackReadOutcome {
         /// Minimum number of channels required for stereo processing.
         const MIN_STEREO_CHANNELS: usize = 2;
@@ -450,26 +460,17 @@ impl PlayerTrack {
         }
 
         let read_outcome = {
-            let Some(mut guard) = self.resource.try_lock().ok() else {
-                return TrackReadOutcome::Full {
-                    position: self.position(),
-                    duration: self.observed_duration,
-                    frames: 0,
-                    frames_until_eof: None,
-                };
-            };
-            self.observed_frontier = guard.decoded_frontier();
+            let resource = &mut self.resource;
             let (scratch_left, scratch_right) = scratch_bufs.split_at_mut(1);
             let mut scratch_window = [
                 &mut scratch_left[0][range.clone()],
                 &mut scratch_right[0][range.clone()],
             ];
 
-            match guard.read(&mut scratch_window, 0..range.len()) {
+            match resource.read(&mut scratch_window, 0..range.len()) {
                 ReadOutcome::Full { frames } => {
-                    let duration = guard.duration();
-                    let frames_until_eof = guard.frames_until_eof();
-                    drop(guard);
+                    let duration = resource.duration();
+                    let frames_until_eof = resource.frames_until_eof();
                     TrackReadOutcome::Full {
                         duration,
                         frames,
@@ -478,15 +479,11 @@ impl PlayerTrack {
                     }
                 }
                 ReadOutcome::Partial(frames) => {
-                    let duration = guard.duration();
-                    drop(guard);
+                    let duration = resource.duration();
                     TrackReadOutcome::Partial { frames, duration }
                 }
                 ReadOutcome::Eof => TrackReadOutcome::Eof,
-                ReadOutcome::Failed => {
-                    drop(guard);
-                    TrackReadOutcome::Failed
-                }
+                ReadOutcome::Failed => TrackReadOutcome::Failed,
             }
         };
 
@@ -584,18 +581,16 @@ impl PlayerTrack {
         }
     }
 
-    /// Reference to the underlying shared resource.
+    /// Reference to the owned resource.
     #[must_use]
-    pub fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
+    pub fn resource(&self) -> &PlayerResource {
         &self.resource
     }
 
     /// Seek the underlying resource and re-sync the served-frame counter
     /// so trigger thresholds reflect the new playback origin.
     pub fn seek(&mut self, seconds: f64) {
-        if let Ok(mut resource) = self.resource.try_lock() {
-            resource.seek(seconds);
-        }
+        self.resource.seek(seconds);
         let frames = Self::seek_frame_index(seconds, self.sample_rate, self.observed_duration);
         self.served_frames = frames;
         self.notified_track_requested = false;
@@ -643,7 +638,7 @@ impl PlayerTrack {
     /// Source identifier.
     #[must_use]
     pub fn src(&self) -> &Arc<str> {
-        &self.src
+        self.resource.src()
     }
 
     /// Current track state.
@@ -676,11 +671,6 @@ impl PlayerTrack {
     }
 
     /// Map track state to worker scheduling priority and push the update.
-    ///
-    /// Uses `try_lock()` + `mpsc::send` — not strictly lock-free, but the
-    /// update is a best-effort scheduling hint. If the lock is contended or
-    /// the send briefly blocks, the track keeps its previous priority until
-    /// the next state change.
     fn update_service_class(&self, state: TrackState) {
         let class = match state {
             TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => {
@@ -689,9 +679,7 @@ impl PlayerTrack {
             TrackState::Preloading => ServiceClass::Warm,
             TrackState::Finished => ServiceClass::Idle,
         };
-        if let Ok(resource) = self.resource.try_lock() {
-            resource.set_service_class(class);
-        }
+        self.resource.set_service_class(class);
     }
 
     /// Transition state after a fade completes.
@@ -750,17 +738,12 @@ mod tests {
         item_id: Option<Arc<str>>,
     ) -> PlayerTrack {
         let player_resource = PlayerResource::new(resource, Arc::clone(&src), &PcmPool::default());
-        let arc_resource = Arc::new(Mutex::new(player_resource));
         let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-        PlayerTrack::new(
-            arc_resource,
-            item_id,
-            src,
-            1.0,
-            0.0,
-            sample_rate,
-            FadeCurve::SquareRoot,
-        )
+        let params = TrackParams::new(src, sample_rate)
+            .with_item_id(item_id)
+            .with_fade_duration(1.0)
+            .with_fade_curve(FadeCurve::SquareRoot);
+        PlayerTrack::new(player_resource, params)
     }
 
     /// `PcmReader` fixture that reports a 10s duration but actually serves
@@ -896,10 +879,7 @@ mod tests {
         assert!(!TrackState::Finished.is_leading());
     }
 
-    /// `PcmReader` fixture whose decoded frontier the test advances *after* the
-    /// track is built — modelling the decode worker filling lookahead on its
-    /// own thread while the player is paused (no render cycle refreshes the
-    /// `observed_frontier` cache).
+    /// `PcmReader` fixture whose decoded frontier can advance independently.
     struct LiveFrontierReader {
         frontier_ns: Arc<AtomicU64>,
         bus: EventBus,
@@ -963,12 +943,6 @@ mod tests {
 
     #[kithara::test]
     fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
-        // The decode worker advances the frontier on its own thread; while the
-        // player is paused no render cycle runs, so the `observed_frontier`
-        // cache stays at its construction value. `decoded_frontier()` must read
-        // the live resource (mirroring `duration()`) so the FFI buffered/loaded
-        // ranges keep growing past a forward-seek target while paused. Without
-        // it the host app's `isPlayable` gate never reopens and seek hangs.
         let frontier_ns = Arc::new(AtomicU64::new(0));
         let reader = LiveFrontierReader {
             bus: EventBus::default(),
@@ -980,16 +954,13 @@ mod tests {
         let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
         let track = make_track_from_resource(resource, src, None);
 
-        // No `read()` has run (paused / no render): cache is the initial 0.
         assert_eq!(track.decoded_frontier(), 0.0);
 
-        // Decode worker fills lookahead past the forward-seek target while paused.
         frontier_ns.store(
             u64::try_from(Duration::from_millis(81_000).as_nanos()).expect("fits in u64"),
             Ordering::Relaxed,
         );
 
-        // Must reflect the live decoded frontier, not the stale render cache.
         let live = track.decoded_frontier();
         assert!(
             (live - 81.0).abs() < 1e-6,
@@ -1006,7 +977,7 @@ mod tests {
         let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.0, sample_rate);
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
-        let notification_tx = Mutex::new(tx);
+        let mut notification_tx = tx;
         let mut scratch_l = [0.0; 512];
         let mut scratch_r = [0.0; 512];
         let mut mix_l = [0.0; 512];
@@ -1016,7 +987,12 @@ mod tests {
 
         track.play();
 
-        let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
+        let outcome = track.read(
+            &mut scratch_bufs,
+            &mut mix_bufs,
+            0..512,
+            &mut notification_tx,
+        );
 
         assert!(matches!(
             outcome,

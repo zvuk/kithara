@@ -7,36 +7,26 @@ use firewheel::{
 };
 use kithara_bufpool::PcmPool;
 use kithara_platform::sync::Mutex;
-use ringbuf::{HeapCons, HeapRb, traits::Split};
 
 use super::{
-    player_processor::{PlayerCmd, PlayerNodeProcessor},
-    shared_player_state::SharedPlayerState,
+    player_processor::{PlayerNodeProcessor, StreamShape},
+    shared_eq::SharedEq,
 };
+use crate::bridge::{NodeInputs, slot_channels};
 
 /// A player source node that outputs mixed audio from loaded tracks.
 ///
 /// Commands (load, unload, seek, pause, fade) are sent to the processor
-/// via a channel stored in the node. The `Diff`/`Patch` derives
+/// via channels stored in the node. The `Diff`/`Patch` derives
 /// only apply to the `active` field; all runtime state is `#[diff(skip)]`.
-///
-/// # Construction
-///
-/// Use [`PlayerNode::with_channel`] to create a node wired to a command
-/// channel and shared state. [`PlayerNode::new`] creates a standalone
-/// node (useful for tests or when wiring is deferred to Task 9).
 #[derive(Clone, Diff, Patch)]
 pub struct PlayerNode {
     /// Whether the node is active (used by Diff/Patch for graph updates).
     pub(crate) active: bool,
 
-    /// Receiver for commands from the main thread. Taken by the processor.
+    /// Inputs taken by the processor.
     #[diff(skip)]
-    cmd_rx: Arc<Mutex<Option<HeapCons<PlayerCmd>>>>,
-
-    /// Shared atomic state for position, duration, notifications, etc.
-    #[diff(skip)]
-    shared_state: Arc<SharedPlayerState>,
+    inputs: Arc<Mutex<Option<NodeInputs>>>,
 
     /// PCM buffer pool for scratch buffer allocation.
     #[diff(skip)]
@@ -44,34 +34,12 @@ pub struct PlayerNode {
 }
 
 impl PlayerNode {
-    /// Create a new player node with a self-contained command channel.
-    ///
-    /// This constructor creates an internal noop channel. Use
-    /// [`PlayerNode::with_channel`] when you need to send commands
-    /// from the main thread.
-    #[cfg(test)]
-    // ast-grep-ignore: style.prefer-default-derive
-    pub(crate) fn new() -> Self {
-        let (_, rx) = HeapRb::<PlayerCmd>::new(1).split();
-        Self {
-            active: true,
-            cmd_rx: Arc::new(Mutex::new(Some(rx))),
-            pcm_pool: PcmPool::default().clone(),
-            shared_state: Arc::new(SharedPlayerState::new()),
-        }
-    }
-
-    /// Create a player node wired to the given command channel and shared state.
-    pub fn with_channel(
-        cmd_rx: HeapCons<PlayerCmd>,
-        shared_state: Arc<SharedPlayerState>,
-        pcm_pool: PcmPool,
-    ) -> Self {
+    /// Create a player node wired to RT input channels.
+    pub fn new(inputs: NodeInputs, pcm_pool: PcmPool) -> Self {
         Self {
             pcm_pool,
-            shared_state,
             active: true,
-            cmd_rx: Arc::new(Mutex::new(Some(cmd_rx))),
+            inputs: Arc::new(Mutex::new(Some(inputs))),
         }
     }
 }
@@ -86,17 +54,16 @@ impl AudioNode for PlayerNode {
     ) -> impl AudioNodeProcessor {
         let sample_rate = cx.stream_info.sample_rate;
         let max_block_frames = cx.stream_info.max_block_frames;
-        let cmd_rx = self.cmd_rx.lock().take().unwrap_or_else(|| {
-            let (_, rx) = HeapRb::<PlayerCmd>::new(1).split();
-            rx
-        });
-        PlayerNodeProcessor::new(
-            cmd_rx,
-            Arc::clone(&self.shared_state),
+        let shape = StreamShape {
             sample_rate,
             max_block_frames,
-            &self.pcm_pool,
-        )
+        };
+        let inputs = self
+            .inputs
+            .lock()
+            .take()
+            .unwrap_or_else(|| slot_channels(SharedEq::new(0)).0);
+        PlayerNodeProcessor::new(inputs, shape, &self.pcm_pool)
     }
 
     fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
@@ -111,47 +78,57 @@ impl AudioNode for PlayerNode {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
-
     use kithara_test_utils::kithara;
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
+    use crate::impls::shared_eq::SharedEq;
+
+    fn make_node() -> (PlayerNode, crate::bridge::SlotControl) {
+        let (inputs, control) = slot_channels(SharedEq::new(0));
+        let node = PlayerNode::new(inputs, PcmPool::default().clone());
+        (node, control)
+    }
 
     #[kithara::test]
     fn player_node_defaults_active() {
-        let node = PlayerNode::new();
+        let (node, _control) = make_node();
         assert!(node.active);
     }
 
     #[kithara::test]
     fn player_node_info_has_stereo_output() {
-        let node = PlayerNode::new();
+        let (node, _control) = make_node();
         let info = node.info(&EmptyConfig);
         let _ = info;
     }
 
     #[kithara::test]
-    #[case(PlayerCmd::SetPaused(true))]
-    #[case(PlayerCmd::SetPaused(false))]
-    #[case(PlayerCmd::SetFadeDuration(0.25))]
-    fn player_node_with_channel(#[case] cmd: PlayerCmd) {
-        let (mut tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
-        let shared_state = Arc::new(SharedPlayerState::new());
-        let node = PlayerNode::with_channel(rx, shared_state, PcmPool::default().clone());
+    #[case(crate::impls::player_processor::PlayerCmd::SetPaused(true))]
+    #[case(crate::impls::player_processor::PlayerCmd::SetPaused(false))]
+    #[case(crate::impls::player_processor::PlayerCmd::SetFadeDuration(0.25))]
+    fn player_node_with_inputs(#[case] cmd: crate::impls::player_processor::PlayerCmd) {
+        let (node, mut control) = make_node();
         assert!(node.active);
 
-        tx.try_push(cmd).ok();
+        control.cmd_tx.try_push(cmd).ok();
         let received = {
-            let mut guard = node.cmd_rx.lock();
-            (*guard).as_mut().and_then(Consumer::try_pop)
+            let mut guard = node.inputs.lock();
+            (*guard).as_mut().and_then(|inputs| inputs.cmd_rx.try_pop())
         };
         assert!(received.is_some());
     }
 
     #[kithara::test]
-    fn player_node_shared_state_accessible() {
-        let node = PlayerNode::new();
-        assert!(!node.shared_state.playing.load(Ordering::Relaxed));
+    fn player_node_playback_accessible() {
+        let (node, _control) = make_node();
+        let guard = node.inputs.lock();
+        let inputs = guard.as_ref().expect("inputs not yet taken");
+        assert!(
+            !inputs
+                .playback
+                .playing
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
     }
 }

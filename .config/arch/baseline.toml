@@ -76,7 +76,6 @@ schema_version = 1
 "crates/kithara-play/src/impls/player/core.rs:PlayerCore::bus" = 1
 "crates/kithara-play/src/impls/player/core.rs:PlayerCore::cancel" = 1
 "crates/kithara-play/src/impls/player/core.rs:PlayerCore::pcm_pool" = 1
-"crates/kithara-play/src/impls/player_track.rs:PlayerTrack::src" = 1
 "crates/kithara-queue/src/queue/state.rs:Queue::bus" = 3
 "crates/kithara-queue/src/queue/state.rs:Queue::player" = 1
 "crates/kithara-queue/src/queue/state.rs:Queue::tracks" = 1
@@ -176,8 +175,6 @@ schema_version = 1
 "crates/kithara-hls/src/variant.rs::HlsVariant::build_segment_entries" = 1
 "crates/kithara-hls/src/variant.rs::HlsVariant::new" = 1
 "crates/kithara-net/src/types.rs::tests::test_retry_policy_delay_for_attempt_custom" = 1
-"crates/kithara-play/src/impls/player_processor.rs::PlayerNodeProcessor::new" = 1
-"crates/kithara-play/src/impls/player_track.rs::PlayerTrack::new" = 1
 "crates/kithara-queue/src/queue/playback.rs::tests::should_arm_crossfade_cases" = 1
 "crates/kithara-stream/src/dl/batch.rs::abort_request" = 1
 "crates/kithara-stream/src/dl/batch.rs::establish" = 1
@@ -319,7 +316,6 @@ schema_version = 1
 "crates/kithara-hls/src/playlist.rs:PlaylistState" = 1
 "crates/kithara-play/src/impls/engine.rs:EngineImpl" = 1
 "crates/kithara-play/src/impls/player/core.rs:PlayerImpl" = 1
-"crates/kithara-play/src/impls/player_node.rs:PlayerNode" = 1
 "crates/kithara-stream/src/dl/response.rs:BodyStream" = 1
 
 [no_lib_statics]
@@ -379,7 +375,6 @@ schema_version = 1
 "crates/kithara-play/src/impls/config.rs::ResourceConfig" = 1
 "crates/kithara-play/src/impls/engine.rs::EngineConfig" = 1
 "crates/kithara-play/src/impls/player/core.rs::PlayerConfig" = 1
-"crates/kithara-play/src/impls/shared_player_state.rs::SharedPlayerState" = 1
 "crates/kithara-queue/src/config.rs::QueueConfig" = 1
 "crates/kithara-queue/src/track.rs::TrackEntry" = 1
 "crates/kithara-storage/src/backend/mmap/driver.rs::MmapOptions" = 1
@@ -407,7 +402,6 @@ schema_version = 1
 "crates/kithara-app/src/state.rs" = 1
 "crates/kithara-ffi/src/native/bridge/event_bridge.rs" = 1
 "crates/kithara-ffi/src/native/bridge/item_bridge.rs" = 1
-"crates/kithara-play/src/impls/player_track.rs" = 1
 "crates/kithara-queue/src/queue/state.rs" = 1
 
 [single_impl_size]
@@ -480,7 +474,6 @@ schema_version = 1
 "crates/kithara-play/src/impls/player_resource.rs" = 1
 "crates/kithara-play/src/impls/player_track.rs" = 1
 "crates/kithara-play/src/impls/shared_eq.rs" = 1
-"crates/kithara-play/src/impls/shared_player_state.rs" = 1
 "crates/kithara-play/src/impls/source_type.rs" = 1
 "crates/kithara-play/src/wasm_support.rs" = 1
 
