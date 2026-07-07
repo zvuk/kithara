@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::sync::OnceLock;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -15,13 +13,12 @@ use portable_atomic::AtomicF32;
 use ringbuf::traits::{Consumer, Producer};
 use tracing::{debug, info, warn};
 
-use super::config::EngineConfig;
+use super::{config::EngineConfig, session::default_session_handle, slots::SlotTable};
 use crate::{
-    api::{EngineEvent, SessionDuckingMode, SlotId},
+    api::{EngineEvent, SlotId},
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl},
     error::PlayError,
-    rt::ArenaRegistry,
-    session::{PlayerId, SessionHandle, session_client},
+    session::{PlayerId, SessionHandle},
 };
 
 type SlotHandle = SlotControl;
@@ -33,9 +30,8 @@ pub struct EngineImpl {
     worker: AudioWorkerHandle,
     config: EngineConfig,
     bus: EventBus,
-    active_slots: Mutex<Vec<SlotId>>,
     player_id: Mutex<Option<PlayerId>>,
-    slot_registry: Mutex<ArenaRegistry<SlotId, SlotHandle>>,
+    slots: Mutex<SlotTable>,
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
     pcm_pool: PcmPool,
@@ -48,7 +44,7 @@ impl EngineImpl {
         let session = config
             .session
             .take()
-            .map_or_else(|| SessionHandle::new(session_client()), SessionHandle::new);
+            .map_or_else(default_session_handle, SessionHandle::new);
         let max_slots = config.max_slots;
         let resolved_pool = config
             .pcm_pool
@@ -60,13 +56,12 @@ impl EngineImpl {
             config,
             bus,
             session,
-            active_slots: Mutex::default(),
             master_volume: AtomicF32::new(1.0),
             pcm_pool: resolved_pool,
             player_id: Mutex::default(),
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
-            slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
+            slots: Mutex::new(SlotTable::with_capacity(max_slots)),
             worker: AudioWorkerHandle::with_cancel(worker_cancel),
             runtime: RuntimeHandle::try_current().ok(),
         }
@@ -124,38 +119,21 @@ impl EngineImpl {
     }
 
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
-        let mut slot_registry = self.slot_registry.lock();
-        let result = match slot_registry.get_mut(&slot) {
+        let mut slots = self.slots.lock();
+        let result = match slots.get_mut(slot) {
             Some(handle) => handle
                 .cmd_tx
                 .try_push(cmd)
                 .map_err(|_| PlayError::SlotChannelFull { slot }),
             None => Err(PlayError::SlotNotFound(slot)),
         };
-        drop(slot_registry);
+        drop(slots);
         result
-    }
-
-    /// Process-wide session ducking mode.
-    #[must_use]
-    pub fn session_ducking() -> SessionDuckingMode {
-        match SessionHandle::new(session_client()).ducking() {
-            Ok(mode) => mode,
-            Err(err) => {
-                warn!(?err, "failed to query session ducking");
-                SessionDuckingMode::Off
-            }
-        }
     }
 
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
         let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)
-    }
-
-    /// Set process-wide session ducking mode.
-    pub fn set_session_ducking(mode: SessionDuckingMode) -> Result<(), PlayError> {
-        SessionHandle::new(session_client()).set_ducking(mode)
     }
 
     pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
@@ -165,24 +143,18 @@ impl EngineImpl {
     }
 
     pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq> {
-        self.slot_registry.lock().get(&slot).map(|h| h.eq.clone())
+        self.slots.lock().slot_eq(slot)
     }
 
     pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>> {
-        self.slot_registry
-            .lock()
-            .get(&slot)
-            .map(|h| Arc::clone(&h.playback))
+        self.slots.lock().playback(slot)
     }
 
     pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {
-        self.slot_registry
-            .lock()
-            .get_mut(&slot)
-            .is_some_and(|handle| {
-                Self::drain_slot_trash_handle(handle);
-                true
-            })
+        self.slots.lock().get_mut(slot).is_some_and(|handle| {
+            Self::drain_slot_trash_handle(handle);
+            true
+        })
     }
 
     fn drain_slot_trash_handle(handle: &mut SlotHandle) {
@@ -190,9 +162,9 @@ impl EngineImpl {
     }
 
     pub(crate) fn pop_slot_notification(&self, slot: SlotId) -> Option<PlayerNotification> {
-        self.slot_registry
+        self.slots
             .lock()
-            .get_mut(&slot)
+            .get_mut(slot)
             .and_then(|handle| handle.notif_rx.try_pop())
     }
 
@@ -232,7 +204,7 @@ impl Drop for EngineImpl {
 
 impl EngineImpl {
     pub fn active_slots(&self) -> Vec<SlotId> {
-        self.active_slots.lock().clone()
+        self.slots.lock().ids()
     }
 
     pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
@@ -241,7 +213,7 @@ impl EngineImpl {
         }
 
         {
-            let slots = self.active_slots.lock();
+            let slots = self.slots.lock();
             if slots.len() >= self.config.max_slots {
                 return Err(PlayError::ArenaFull);
             }
@@ -251,8 +223,7 @@ impl EngineImpl {
         let allocated = self.session.allocate_slot(player_id)?;
         let slot_id = allocated.slot;
 
-        self.active_slots.lock().push(slot_id);
-        self.slot_registry.lock().insert(slot_id, allocated.control);
+        self.slots.lock().insert(slot_id, allocated.control);
 
         debug!(?slot_id, player_id, "slot allocated");
         self.emit(EngineEvent::SlotAllocated { slot: slot_id });
@@ -288,8 +259,8 @@ impl EngineImpl {
         }
 
         {
-            let slots = self.active_slots.lock();
-            if !slots.contains(&slot) {
+            let slots = self.slots.lock();
+            if !slots.contains(slot) {
                 return Err(PlayError::SlotNotFound(slot));
             }
         }
@@ -297,8 +268,7 @@ impl EngineImpl {
         let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
         self.session.release_slot(player_id, slot)?;
 
-        self.active_slots.lock().retain(|s| *s != slot);
-        let _ = self.slot_registry.lock().remove(&slot);
+        let _ = self.slots.lock().remove(slot);
 
         debug!(?slot, player_id, "slot released");
         self.emit(EngineEvent::SlotReleased { slot });
@@ -337,8 +307,7 @@ impl EngineImpl {
         let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
         self.session.stop_player(player_id)?;
 
-        self.active_slots.lock().clear();
-        self.slot_registry.lock().clear();
+        self.slots.lock().clear();
 
         self.running.store(false, Ordering::Release);
         info!(player_id, "engine stopped");
@@ -362,12 +331,6 @@ impl EngineImpl {
         }
         self.session.query_sample_rate(self.config.sample_rate)
     }
-}
-
-#[cfg(test)]
-pub(crate) fn ducking_test_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 #[cfg(test)]

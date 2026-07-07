@@ -2,9 +2,8 @@ use tracing::{debug, warn};
 
 use super::super::core::PlayerImpl;
 use crate::{
-    api::{PlayerEvent, SessionDuckingMode},
+    api::{PlayerEvent, SlotId},
     bridge::PlayerCmd,
-    engine::EngineImpl,
     error::PlayError,
 };
 
@@ -19,6 +18,24 @@ impl PlayerImpl {
         } else {
             debug!(volume, "apply_effective_volume: no slot allocated yet");
         }
+    }
+
+    /// Ensure we have an active slot, allocating one if needed.
+    pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
+        if let Some(id) = self.slot() {
+            return Ok(id);
+        }
+        let id = self.core.engine.allocate_slot()?;
+        self.enter_loading_with_slot(id);
+        let effective = if self.is_muted() { 0.0 } else { self.volume() };
+        self.core.engine.set_slot_volume(id, effective)?;
+        Ok(id)
+    }
+
+    /// Notify the audio host that the platform route changed and the
+    /// native output stream must be recreated if playback is active.
+    pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
+        self.core.engine.invalidate_audio_route(reason)
     }
 
     /// Reset EQ gains to 0 dB for all bands.
@@ -86,9 +103,9 @@ impl PlayerImpl {
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(clamped));
     }
 
-    /// Set ducking mode for this player's engine session.
-    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        EngineImpl::set_session_ducking(mode)
+    /// Pump audio backend/runtime state.
+    pub fn tick(&self) -> Result<(), PlayError> {
+        self.core.engine.tick()
     }
 
     /// Set playback rate.

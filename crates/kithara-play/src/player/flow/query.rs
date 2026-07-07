@@ -1,17 +1,9 @@
-use std::{num::NonZeroU32, sync::Arc};
-
 use kithara_audio::{AudioWorkerHandle, EngineLoadSnapshot};
 use kithara_events::EventBus;
 use kithara_platform::tokio::runtime::Handle as RuntimeHandle;
 
 use super::super::core::PlayerImpl;
-use crate::{
-    api::{PlayerStatus, SessionDuckingMode, SlotId},
-    bridge::PlaybackSnapshot,
-    engine::EngineImpl,
-    error::PlayError,
-    resource::ResourceConfig,
-};
+use crate::{api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl};
 
 impl PlayerImpl {
     /// Whether the built-in linear auto-advance handler is enabled.
@@ -62,12 +54,6 @@ impl PlayerImpl {
         self.core.engine_load.snapshot()
     }
 
-    /// Notify the audio host that the platform route changed and the
-    /// native output stream must be recreated if playback is active.
-    pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-        self.core.engine.invalidate_audio_route(reason)
-    }
-
     /// Number of EQ bands available for this player.
     pub fn eq_band_count(&self) -> usize {
         self.core.engine.eq_band_count()
@@ -84,18 +70,6 @@ impl PlayerImpl {
     pub fn duration_seconds(&self) -> Option<f64> {
         let dur = self.playback_snapshot()?.duration;
         (dur > 0.0).then_some(dur)
-    }
-
-    /// Ensure we have an active slot, allocating one if needed.
-    pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
-        if let Some(id) = self.slot() {
-            return Ok(id);
-        }
-        let id = self.core.engine.allocate_slot()?;
-        self.enter_loading_with_slot(id);
-        let effective = if self.is_muted() { 0.0 } else { self.volume() };
-        self.core.engine.set_slot_volume(id, effective)?;
-        Ok(id)
     }
 
     /// Get EQ gain for a band in dB.
@@ -142,36 +116,6 @@ impl PlayerImpl {
         self.core.params.prefetch_duration()
     }
 
-    /// Apply shared worker, host sample rate, ABR, and bus to a resource
-    /// config so the resource integrates with this player's engine.
-    ///
-    /// Call this before [`Resource::new`](crate::resource::Resource::new) to
-    /// ensure the resource shares the player's decode thread and resampler is
-    /// pre-initialised with the correct ratio. Callers that want a shared HTTP
-    /// pool / tokio runtime must build their own downloader and attach it via
-    /// [`ResourceConfig::with_downloader`] before passing the config in.
-    #[must_use]
-    pub fn prepare_config(&self, config: ResourceConfig) -> ResourceConfig {
-        let bus = config.bus.or_else(|| Some(self.core.engine.bus().scoped()));
-        let cancel = config
-            .cancel
-            .or_else(|| self.core.engine.cancel_token())
-            .map(|parent| parent.child());
-        let stretch = Some(Arc::clone(&self.core.timestretch));
-        let host_sample_rate = NonZeroU32::new(self.core.engine.master_sample_rate())
-            .or_else(|| NonZeroU32::new(self.core.engine.configured_sample_rate()));
-        ResourceConfig {
-            bus,
-            cancel,
-            worker: Some(self.core.engine.worker().clone()),
-            host_sample_rate,
-            gapless_mode: self.core.gapless_mode,
-            stretch,
-            engine_load: Some(Arc::clone(&self.core.engine_load)),
-            ..config
-        }
-    }
-
     /// Current playback rate (0.0 = paused).
     pub fn rate(&self) -> f32 {
         self.core.params.rate()
@@ -183,11 +127,6 @@ impl PlayerImpl {
         self.core.engine.runtime()
     }
 
-    /// Get ducking mode for this player's engine session.
-    pub fn session_ducking(&self) -> SessionDuckingMode {
-        EngineImpl::session_ducking()
-    }
-
     /// Get current player status.
     pub fn status(&self) -> PlayerStatus {
         *self.core.status.lock()
@@ -196,11 +135,6 @@ impl PlayerImpl {
     /// Subscribe to player events.
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.core.engine.bus().subscribe()
-    }
-
-    /// Pump audio backend/runtime state.
-    pub fn tick(&self) -> Result<(), PlayError> {
-        self.core.engine.tick()
     }
 
     /// Get current volume (0.0..=1.0).

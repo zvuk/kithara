@@ -11,10 +11,10 @@ use crate::{
 /// RT-owned channel halves and playback atomics for one player node.
 #[non_exhaustive]
 pub struct NodeInputs {
-    pub cmd_rx: HeapCons<PlayerCmd>,
-    pub notif_tx: HeapProd<PlayerNotification>,
-    pub trash_tx: HeapProd<PlayerTrack>,
-    pub playback: Arc<PlaybackShared>,
+    pub(crate) cmd_rx: HeapCons<PlayerCmd>,
+    pub(crate) notif_tx: HeapProd<PlayerNotification>,
+    pub(crate) trash_tx: HeapProd<PlayerTrack>,
+    pub(crate) playback: Arc<PlaybackShared>,
 }
 
 /// Control-owned channel halves and shared controls for one allocated slot.

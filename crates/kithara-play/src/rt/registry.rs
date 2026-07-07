@@ -15,12 +15,6 @@ impl<K, V> ArenaRegistry<K, V>
 where
     K: Clone + Eq + Hash,
 {
-    pub(crate) fn clear(&mut self) {
-        self.by_index.clear();
-        self.by_key.clear();
-        self.values.clear();
-    }
-
     pub(crate) fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,

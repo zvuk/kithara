@@ -234,6 +234,7 @@ mod tests {
         state::SessionState,
     };
 
+    #[derive(Default)]
     struct RouteLossProbe {
         fail_next_poll: AtomicBool,
         fail_next_start: AtomicBool,
@@ -248,11 +249,13 @@ mod tests {
         }
     }
 
-    static ROUTE_LOSS: RouteLossProbe = RouteLossProbe {
-        fail_next_poll: AtomicBool::new(false),
-        fail_next_start: AtomicBool::new(false),
-        start_count: AtomicUsize::new(0),
-    };
+    thread_local! {
+        static ROUTE_LOSS: RouteLossProbe = RouteLossProbe::default();
+    }
+
+    fn route_loss<R>(f: impl FnOnce(&RouteLossProbe) -> R) -> R {
+        ROUTE_LOSS.with(f)
+    }
 
     struct RouteLossBackend {
         _processor: Option<FirewheelProcessor<Self>>,
@@ -292,7 +295,7 @@ mod tests {
         fn enumerator() -> Self::Enumerator {}
 
         fn poll_status(&mut self) -> Result<(), Self::StreamError> {
-            if ROUTE_LOSS.fail_next_poll.swap(false, Ordering::SeqCst) {
+            if route_loss(|probe| probe.fail_next_poll.swap(false, Ordering::SeqCst)) {
                 Err(RouteLossError)
             } else {
                 Ok(())
@@ -306,8 +309,8 @@ mod tests {
         fn start_stream(
             config: Self::Config,
         ) -> Result<(Self, StreamInfo), Self::StartStreamError> {
-            ROUTE_LOSS.start_count.fetch_add(1, Ordering::SeqCst);
-            if ROUTE_LOSS.fail_next_start.swap(false, Ordering::SeqCst) {
+            route_loss(|probe| probe.start_count.fetch_add(1, Ordering::SeqCst));
+            if route_loss(|probe| probe.fail_next_start.swap(false, Ordering::SeqCst)) {
                 return Err(RouteLossError);
             }
 
@@ -353,7 +356,7 @@ mod tests {
 
     #[kithara::test]
     fn explicit_audio_route_invalidation_restarts_stream_without_backend_error() {
-        ROUTE_LOSS.reset();
+        route_loss(RouteLossProbe::reset);
 
         let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
         let player_id = register_player(&mut state);
@@ -373,7 +376,10 @@ mod tests {
             run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
             Reply::SlotAllocated(..)
         ));
-        assert_eq!(ROUTE_LOSS.start_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
+            1
+        );
 
         assert!(matches!(
             run_cmd(
@@ -386,7 +392,7 @@ mod tests {
         ));
 
         assert_eq!(
-            ROUTE_LOSS.start_count.load(Ordering::SeqCst),
+            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             2,
             "explicit platform route invalidation must restart the audio stream"
         );
@@ -417,7 +423,7 @@ mod tests {
 
     #[kithara::test]
     fn unexpected_stream_stop_restarts_stream_without_dropping_player_graph_or_future_slots() {
-        ROUTE_LOSS.reset();
+        route_loss(RouteLossProbe::reset);
 
         let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
         let player_id = register_player(&mut state);
@@ -435,18 +441,21 @@ mod tests {
         ));
         assert!(state.ctx.is_some());
         assert!(state.players[0].started);
-        assert_eq!(ROUTE_LOSS.start_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
+            1
+        );
         assert!(matches!(
             run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
             Reply::SlotAllocated(..)
         ));
         assert_eq!(state.players[0].slots.len(), 1);
 
-        ROUTE_LOSS.fail_next_poll.store(true, Ordering::SeqCst);
+        route_loss(|probe| probe.fail_next_poll.store(true, Ordering::SeqCst));
         assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
 
         assert_eq!(
-            ROUTE_LOSS.start_count.load(Ordering::SeqCst),
+            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             2,
             "stream loss must restart the audio stream immediately"
         );
@@ -481,7 +490,7 @@ mod tests {
 
     #[kithara::test]
     fn failed_stream_restart_is_retried_on_next_tick() {
-        ROUTE_LOSS.reset();
+        route_loss(RouteLossProbe::reset);
 
         let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
         let player_id = register_player(&mut state);
@@ -497,10 +506,15 @@ mod tests {
             ),
             Reply::Ok
         ));
-        assert_eq!(ROUTE_LOSS.start_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
+            1
+        );
 
-        ROUTE_LOSS.fail_next_poll.store(true, Ordering::SeqCst);
-        ROUTE_LOSS.fail_next_start.store(true, Ordering::SeqCst);
+        route_loss(|probe| {
+            probe.fail_next_poll.store(true, Ordering::SeqCst);
+            probe.fail_next_start.store(true, Ordering::SeqCst);
+        });
         match run_cmd(&mut state, Cmd::Tick) {
             Reply::Err(err) => assert!(
                 matches!(err, SessionError::RestartFailed { .. }),
@@ -513,11 +527,14 @@ mod tests {
             state.stream_needs_restart,
             "a failed restart must leave retry state armed"
         );
-        assert_eq!(ROUTE_LOSS.start_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
+            2
+        );
 
         assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
         assert_eq!(
-            ROUTE_LOSS.start_count.load(Ordering::SeqCst),
+            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             3,
             "next tick must retry the stream restart"
         );

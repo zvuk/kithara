@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use kithara::{
+    audio::{EqBandConfig, StretchControls},
+    decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
     platform::sync::Mutex,
     play::{PlayerConfig, PlayerImpl, SessionDispatcher},
@@ -15,11 +17,70 @@ pub(crate) struct OfflinePlayerHarness {
     session: Arc<OfflineSession>,
 }
 
+#[derive(Clone)]
+pub(crate) struct OfflinePlayerOptions {
+    crossfade_duration: f32,
+    eq_layout: Option<Vec<EqBandConfig>>,
+    gapless_mode: GaplessMode,
+    timestretch: Option<Arc<StretchControls>>,
+}
+
+impl Default for OfflinePlayerOptions {
+    fn default() -> Self {
+        Self {
+            crossfade_duration: 1.0,
+            eq_layout: None,
+            gapless_mode: GaplessMode::default(),
+            timestretch: None,
+        }
+    }
+}
+
+impl OfflinePlayerOptions {
+    #[must_use]
+    pub(crate) fn crossfade_duration(mut self, duration: f32) -> Self {
+        self.crossfade_duration = duration;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn eq_layout(mut self, layout: Vec<EqBandConfig>) -> Self {
+        self.eq_layout = Some(layout);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn gapless_mode(mut self, mode: GaplessMode) -> Self {
+        self.gapless_mode = mode;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn timestretch(mut self, controls: Arc<StretchControls>) -> Self {
+        self.timestretch = Some(controls);
+        self
+    }
+}
+
 impl OfflinePlayerHarness {
-    pub(crate) fn with_sample_rate(mut player_config: PlayerConfig, sample_rate: u32) -> Self {
+    pub(crate) fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
         let session = Arc::new(OfflineSession::new_manual());
-        player_config.sample_rate = sample_rate;
-        player_config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
+        let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
+        let builder = || {
+            PlayerConfig::builder()
+                .crossfade_duration(options.crossfade_duration)
+                .gapless_mode(options.gapless_mode)
+                .sample_rate(sample_rate)
+                .session(Arc::clone(&session_dispatcher))
+        };
+        let player_config = match (options.eq_layout, options.timestretch) {
+            (Some(layout), Some(controls)) => {
+                builder().eq_layout(layout).timestretch(controls).build()
+            }
+            (Some(layout), None) => builder().eq_layout(layout).build(),
+            (None, Some(controls)) => builder().timestretch(controls).build(),
+            (None, None) => builder().build(),
+        };
 
         let player = Arc::new(PlayerImpl::new(player_config));
         let events = player.subscribe();

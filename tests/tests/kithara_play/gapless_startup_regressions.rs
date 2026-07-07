@@ -6,7 +6,7 @@ use kithara::{
     assets::StoreOptions,
     decode::{GaplessMode, SilenceTrimParams},
     platform::time::{Duration, Instant},
-    play::{PlayerConfig, Resource, ResourceConfig},
+    play::{Resource, ResourceConfig},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -17,7 +17,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-use super::offline_player_harness::OfflinePlayerHarness;
+use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 use crate::gapless_common::{
     AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_TRAILING_DELAY,
     GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
@@ -46,7 +46,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 ) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().gapless_mode(gapless_mode).build(),
+        OfflinePlayerOptions::default().gapless_mode(gapless_mode),
         GAPLESS_SAMPLE_RATE,
     );
     let resource =

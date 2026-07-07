@@ -6,14 +6,14 @@ use kithara::{
     self,
     decode::PcmSpec,
     events::TrackStatus,
-    play::{PlayerConfig, Resource},
+    play::Resource,
     queue::{Queue, QueueConfig, Transition},
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader, offline::resource_from_reader_with_src,
 };
 
-use super::offline_player_harness::OfflinePlayerHarness;
+use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -57,7 +57,7 @@ fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usiz
 
 fn make_fixture() -> (OfflinePlayerHarness, Queue) {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        OfflinePlayerOptions::default().crossfade_duration(0.0),
         SAMPLE_RATE,
     );
     let mut config = QueueConfig::default().with_player(Arc::clone(harness.player()));

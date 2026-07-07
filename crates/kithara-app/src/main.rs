@@ -3,7 +3,7 @@ compile_error!("`kithara` binary requires at least one of `tui` or `gui` feature
 
 use std::{
     io::{self, IsTerminal},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use clap::Parser;
@@ -11,7 +11,7 @@ use kithara::{
     assets::{AssetStoreBuilder, BytePool, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
     audio::generate_log_spaced_bands,
     net::{HttpClient, NetOptions},
-    play::{PlayerConfig, PlayerImpl, StretchControls},
+    play::{PlayerConfig, PlayerImpl, SessionHandle, StretchControls},
     stream::dl::{Downloader, DownloaderConfig},
 };
 #[cfg(not(feature = "tui"))]
@@ -54,6 +54,12 @@ enum Mode {
 
 type AppError = Box<dyn std::error::Error + Send + Sync>;
 type AppResult<T = ()> = Result<T, AppError>;
+
+static APP_SESSION: OnceLock<SessionHandle> = OnceLock::new();
+
+fn app_session_handle() -> SessionHandle {
+    APP_SESSION.get_or_init(SessionHandle::spawn_native).clone()
+}
 
 /// Resolve `Mode::Auto` into a concrete mode.
 fn resolve_mode(mode: Mode) -> Mode {
@@ -141,6 +147,7 @@ fn main() -> AppResult {
         .cancel(shutdown.child())
         .crossfade_duration(config.crossfade_seconds)
         .eq_layout(generate_log_spaced_bands(config.eq_band_count))
+        .session(app_session_handle().dispatcher())
         .timestretch(Arc::clone(&timestretch))
         .build();
     let player = Arc::new(PlayerImpl::new(player_config));

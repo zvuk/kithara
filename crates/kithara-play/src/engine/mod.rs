@@ -1,8 +1,8 @@
 mod config;
 mod core;
+mod session;
+mod slots;
 
 pub use core::EngineImpl;
-#[cfg(test)]
-pub(crate) use core::ducking_test_lock;
 
 pub use config::EngineConfig;

@@ -50,7 +50,7 @@ impl AnalysisKey {
 pub(crate) fn source_key(source: &TrackSource) -> Option<AnalysisKey> {
     match source {
         TrackSource::Uri(src) => key_for_src(&ResourceConfig::parse_src(src).ok()?, None),
-        TrackSource::Config(cfg) => key_for_src(&cfg.src, cfg.name.as_deref()),
+        TrackSource::Config(cfg) => key_for_src(cfg.source(), cfg.name()),
         _ => None,
     }
 }

@@ -117,6 +117,7 @@ warn_where = 4
 warn = 4
 # Per-crate overrides: app/test/macro crates may relax the threshold.
 [module_fan_out.overrides]
+"kithara-play" = 9       # Player/session orchestration spans sibling modules by crate contract; see crates/kithara-play/CONTEXT.md.
 "kithara-app" = 8
 "kithara-ffi" = 8
 "kithara-test-utils" = 8

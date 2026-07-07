@@ -127,7 +127,7 @@ async fn open_reader(
     if cancel.is_cancelled() {
         return None;
     }
-    config.cancel = Some(cancel.child());
+    config.set_cancel(cancel.child());
     let mut resource = match Resource::new(config).await {
         Ok(r) => r,
         Err(e) => {

@@ -29,82 +29,79 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 pub struct ResourceConfig {
     /// Initial ABR mode passed to the HLS stream.
     #[builder(default)]
-    pub initial_abr_mode: AbrMode,
+    pub(crate) initial_abr_mode: AbrMode,
     /// Selects the decoder backend explicitly.
     #[builder(default)]
-    pub decoder_backend: DecoderBackend,
+    pub(crate) decoder_backend: DecoderBackend,
     /// How leading/trailing PCM is trimmed after decode.
     #[builder(default)]
-    pub gapless_mode: kithara_decode::GaplessMode,
+    pub(crate) gapless_mode: kithara_decode::GaplessMode,
     /// Encryption key handling configuration.
     #[builder(default)]
-    pub keys: KeyOptions,
+    pub(crate) keys: KeyOptions,
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
-    pub preload_chunks: NonZeroUsize,
+    pub(crate) preload_chunks: NonZeroUsize,
     /// App-wide shared asset store. When present, resources for the same
     /// URL share one download and cached byte surface. `None` builds a private
     /// per-resource store.
-    pub asset_store: Option<Arc<AssetStore>>,
+    pub(crate) asset_store: Option<Arc<AssetStore>>,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
-    pub bus: Option<EventBus>,
+    pub(crate) bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
-    pub byte_pool: Option<BytePool>,
+    pub(crate) byte_pool: Option<BytePool>,
     /// Per-track parent cancel. The atomic flag reaches the HLS coord's
     /// lock-free `is_cancelled()` read; downloader / file / decode paths derive
     /// children via [`CancelToken::child`]. `None` lets each subsystem own a
     /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
-    pub cancel: Option<CancelToken>,
+    pub(crate) cancel: Option<CancelToken>,
     /// Shared downloader instance.
-    pub downloader: Option<Downloader>,
+    pub(crate) downloader: Option<Downloader>,
     /// Shared live audio-engine cost meter (decode + effects).
-    pub engine_load: Option<Arc<EngineLoad>>,
+    pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Shared flush coordinator for `AssetStore` on-disk indexes.
-    pub flush_hub: Option<Arc<FlushHub>>,
+    pub(crate) flush_hub: Option<Arc<FlushHub>>,
     /// Additional HTTP headers to include in all network requests.
-    pub headers: Option<Headers>,
+    pub(crate) headers: Option<Headers>,
     /// Optional format hint (file extension like "mp3", "wav").
-    pub hint: Option<String>,
+    pub(crate) hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
-    pub hls_base_url: Option<Url>,
+    pub(crate) hls_base_url: Option<Url>,
     /// Target sample rate of the audio host (for resampling).
-    pub host_sample_rate: Option<NonZeroU32>,
+    pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
-    pub look_ahead_bytes: Option<u64>,
+    pub(crate) look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
-    pub name: Option<String>,
+    pub(crate) name: Option<String>,
     /// Shared PCM pool for temporary buffers.
-    pub pcm_pool: Option<PcmPool>,
+    pub(crate) pcm_pool: Option<PcmPool>,
     /// Shared playback rate atomic for the audio pipeline resampler in the
     /// non-tempo (no-`stretch`) chain.
-    pub playback_rate: Option<Arc<AtomicF32>>,
+    pub(crate) playback_rate: Option<Arc<AtomicF32>>,
     /// Live time-stretch controls (speed + key-lock + backend). `Some` selects
     /// tempo mode; the same `Arc` must flow to every track so live changes
     /// reach the running effect chain. `None` keeps the resampler-first chain.
-    pub stretch: Option<Arc<StretchControls>>,
+    pub(crate) stretch: Option<Arc<StretchControls>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
-    pub worker: Option<AudioWorkerHandle>,
+    pub(crate) worker: Option<AudioWorkerHandle>,
     /// Resampling quality preset.
     #[builder(default)]
-    pub resampler_quality: ResamplerQuality,
+    pub(crate) resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
-    pub src: ResourceSrc,
+    pub(crate) src: ResourceSrc,
     /// Method used by HLS size estimation to probe segment lengths.
     /// Default is [`SizeProbeMethod::Head`]; switch to
     /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
     /// `HEAD` (zvuk stage `/drm/`).
     #[builder(default)]
-    pub size_probe_method: SizeProbeMethod,
+    pub(crate) size_probe_method: SizeProbeMethod,
     /// Storage configuration (cache directory, eviction limits).
     #[builder(default)]
-    pub store: StoreOptions,
+    pub(crate) store: StoreOptions,
     /// Maximum peak bitrate in bits per second for ABR variant selection.
     #[builder(default = 0.0)]
-    pub preferred_peak_bitrate: f64,
-    /// Maximum peak bitrate for expensive networks (e.g., cellular).
-    #[builder(default = 0.0)]
-    pub preferred_peak_bitrate_for_expensive_networks: f64,
+    pub(crate) preferred_peak_bitrate: f64,
 }
 
 impl ResourceConfig {
@@ -248,7 +245,6 @@ mod tests {
     fn config_bitrate_fields_default_zero() {
         let config = ResourceConfig::new("https://example.com/live.m3u8").unwrap();
         assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
-        assert!((config.preferred_peak_bitrate_for_expensive_networks - 0.0).abs() < f64::EPSILON);
     }
 
     #[kithara::test]

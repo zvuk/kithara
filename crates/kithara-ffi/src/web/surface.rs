@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use js_sys::Function;
-use kithara_play::wasm::tick_and_poll;
 use num_traits::cast;
 use wasm_bindgen::prelude::*;
 
@@ -346,7 +345,7 @@ impl AudioPlayer {
     /// `player_tick` for the unified facade.
     #[wasm_bindgen(js_name = tick)]
     pub fn tick_js(&self) {
-        tick_and_poll();
+        crate::web::bridge::tick_and_poll();
         crate::web::key_processor_bridge::pump();
     }
 

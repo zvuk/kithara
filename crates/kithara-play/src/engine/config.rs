@@ -15,23 +15,23 @@ pub struct EngineConfig {
     /// Master cancel token for the engine. The worker scheduler derives a
     /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.
-    pub cancel: Option<CancelToken>,
+    pub(crate) cancel: Option<CancelToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
-    pub pcm_pool: Option<PcmPool>,
+    pub(crate) pcm_pool: Option<PcmPool>,
     /// Pre-built audio session dispatcher.
-    pub session: Option<Arc<dyn SessionDispatcher>>,
+    pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout per player. Default: 10-band log-spaced.
     #[builder(default = generate_log_spaced_bands(10))]
-    pub eq_layout: Vec<EqBandConfig>,
+    pub(crate) eq_layout: Vec<EqBandConfig>,
     /// Number of output channels. Default: 2 (stereo).
     #[builder(default = 2)]
-    pub channels: u16,
+    pub(crate) channels: u16,
     /// Sample rate passed to the runtime backend as a hint. Default: 44100.
     #[builder(default = 44100)]
-    pub sample_rate: u32,
+    pub(crate) sample_rate: u32,
     /// Maximum number of concurrent player slots. Default: 4.
     #[builder(default = 4)]
-    pub max_slots: usize,
+    pub(crate) max_slots: usize,
 }
 
 impl fmt::Debug for EngineConfig {

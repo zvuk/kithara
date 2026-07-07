@@ -181,10 +181,11 @@ mod tests {
 
     #[kithara::test]
     fn commit_next_publishes_snapshot_before_current_item_changed() {
-        let player = PlayerImpl::new(PlayerConfig {
-            session: Some(testing::test_session()),
-            ..PlayerConfig::default()
-        });
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .session(testing::test_session())
+                .build(),
+        );
         player
             .ensure_engine_started()
             .expect("engine start must succeed");

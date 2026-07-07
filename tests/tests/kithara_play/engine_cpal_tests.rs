@@ -12,11 +12,16 @@ enum Backend {
 }
 
 fn engine_config(backend: Backend) -> EngineConfig {
-    let mut config = EngineConfig::default();
+    engine_config_with_max_slots(backend, 4)
+}
+
+fn engine_config_with_max_slots(backend: Backend, max_slots: usize) -> EngineConfig {
+    let builder = EngineConfig::builder().max_slots(max_slots);
     if matches!(backend, Backend::Offline) {
-        config.session = Some(OfflineSession::arc_auto());
+        builder.session(OfflineSession::arc_auto()).build()
+    } else {
+        builder.build()
     }
-    config
 }
 
 #[kithara::test]
@@ -51,8 +56,7 @@ fn engine_allocate_and_release_slot(#[case] backend: Backend) {
 #[case::cpal(Backend::Cpal)]
 #[case::offline(Backend::Offline)]
 fn engine_arena_full_error(#[case] backend: Backend) {
-    let mut config = engine_config(backend);
-    config.max_slots = 1;
+    let config = engine_config_with_max_slots(backend, 1);
     let engine = EngineImpl::new(config, EventBus::default());
     engine.start().unwrap();
 

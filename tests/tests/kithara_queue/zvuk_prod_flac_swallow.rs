@@ -10,7 +10,7 @@ use kithara::{
     queue::TrackSource,
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_app::config::AppConfig;
 use kithara_integration_tests::{
     TestTempDir, kithara, offline::OfflinePlayer, swallow_detector::assert_no_committed_swallow,
 };
@@ -84,13 +84,16 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
     let temp = TestTempDir::new();
 
-    let TrackSource::Config(mut cfg) = build_source(PROD_TRACK, &config) else {
+    let TrackSource::Config(cfg) = super::app_track_source(
+        PROD_TRACK,
+        &config,
+        StoreOptions::new(temp.path()),
+        backend,
+        AbrMode::Auto(None),
+        Some("t0"),
+    ) else {
         panic!("expected an HLS config source for {PROD_TRACK}");
     };
-    cfg.store = StoreOptions::new(temp.path());
-    cfg.decoder_backend = backend;
-    cfg.initial_abr_mode = AbrMode::Auto(None);
-    cfg.name = Some("t0".to_string());
 
     let resource = Resource::new(*cfg)
         .await

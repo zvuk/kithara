@@ -6,7 +6,7 @@ use kithara::{
     assets::StoreOptions,
     decode::{GaplessMode, SilenceTrimParams},
     platform::time::{self, Duration, Instant},
-    play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig},
+    play::{PlayerEvent, Resource, ResourceConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-use super::offline_player_harness::OfflinePlayerHarness;
+use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 use crate::gapless_common::{
     AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS,
     AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
@@ -40,10 +40,9 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
         trim_trailing: true,
         ..SilenceTrimParams::default()
     };
-    let player_config = PlayerConfig::builder()
+    let player_config = OfflinePlayerOptions::default()
         .crossfade_duration(0.0)
-        .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
-        .build();
+        .gapless_mode(GaplessMode::SilenceTrim(gapless_params));
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE);
     let first = create_gapless_hls_resource(
         harness.player(),
@@ -114,10 +113,9 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
         trim_trailing: true,
         ..SilenceTrimParams::default()
     };
-    let player_config = PlayerConfig::builder()
+    let player_config = OfflinePlayerOptions::default()
         .crossfade_duration(1.0)
-        .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
-        .build();
+        .gapless_mode(GaplessMode::SilenceTrim(gapless_params));
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE);
     let first = create_gapless_hls_resource(
         harness.player(),

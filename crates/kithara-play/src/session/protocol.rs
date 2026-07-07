@@ -114,10 +114,7 @@ mod handle {
     use kithara_bufpool::PcmPool;
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply};
-    use crate::{
-        api::{SessionDuckingMode, SlotId},
-        error::PlayError,
-    };
+    use crate::{api::SlotId, error::PlayError};
 
     pub trait SessionDispatcher: Send + Sync + 'static {
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
@@ -139,20 +136,16 @@ mod handle {
             Self(dispatcher)
         }
 
+        #[must_use]
+        pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
+            Arc::clone(&self.0)
+        }
+
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
             match self.exec_ok(Cmd::AllocateSlot { player_id })? {
                 Reply::SlotAllocated(allocated) => Ok(allocated),
                 _ => Err(PlayError::Internal(
                     "unexpected reply for session allocate slot".into(),
-                )),
-            }
-        }
-
-        pub fn ducking(&self) -> Result<SessionDuckingMode, PlayError> {
-            match self.exec_ok(Cmd::SessionDucking)? {
-                Reply::SessionDucking(mode) => Ok(mode),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session ducking query".into(),
                 )),
             }
         }
@@ -199,10 +192,6 @@ mod handle {
         pub fn release_slot(&self, player_id: PlayerId, slot: SlotId) -> Result<(), PlayError> {
             self.exec_ok(Cmd::ReleaseSlot { player_id, slot })
                 .map(|_| ())
-        }
-
-        pub fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetSessionDucking { mode }).map(|_| ())
         }
 
         pub fn set_player_eq_gain(

@@ -2,14 +2,10 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{
-    self,
-    decode::PcmSpec,
-    play::{PlayerConfig, Resource},
-};
+use kithara::{self, decode::PcmSpec, play::Resource};
 use kithara_integration_tests::offline::resource_from_reader;
 
-use super::offline_player_harness::OfflinePlayerHarness;
+use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -30,7 +26,8 @@ fn make_resource(duration_secs: f64) -> Resource {
 
 #[kithara::test]
 fn offline_harness_smoke() {
-    let harness = OfflinePlayerHarness::with_sample_rate(PlayerConfig::default(), SAMPLE_RATE);
+    let harness =
+        OfflinePlayerHarness::with_sample_rate(OfflinePlayerOptions::default(), SAMPLE_RATE);
     harness.player().insert(make_resource(0.1), None, None);
     harness.player().insert(make_resource(0.1), None, None);
 

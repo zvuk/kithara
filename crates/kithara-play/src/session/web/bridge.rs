@@ -5,12 +5,17 @@ use std::{
 };
 
 use firewheel::FirewheelCtx;
+use kithara_platform::sync::mpsc;
 use tracing::warn;
 
-use super::client::{WASM_SESSION_STATE, worker};
+use super::client::WASM_SESSION_STATE;
 use crate::{
     bridge::PlaybackShared,
-    session::{dispatch::run_cmd, protocol::Reply, state::ensure_ctx},
+    session::{
+        dispatch::run_cmd,
+        protocol::{CmdMsg, Reply},
+        state::ensure_ctx,
+    },
 };
 
 thread_local! {
@@ -21,27 +26,22 @@ pub(super) fn init_bridge_state() {
     BRIDGE_PLAYBACK.with(|_| {});
 }
 
-pub(crate) fn tick_and_poll_remote() {
+pub(crate) fn tick_and_poll_remote(rx: &mpsc::Receiver<CmdMsg>) {
     WASM_SESSION_STATE.with(|state_cell| {
         let mut state_opt = state_cell.borrow_mut();
         let Some(ref mut state) = *state_opt else {
             return;
         };
 
-        let rx_guard = worker::RX.lock();
-
-        if let Some(ref rx) = *rx_guard {
-            for msg in rx.try_iter() {
-                let reply = run_cmd(state, msg.cmd);
-                if let Reply::SlotAllocated(ref allocated) = reply {
-                    BRIDGE_PLAYBACK.with(|ps| {
-                        *ps.borrow_mut() = Some(Arc::clone(&allocated.control.playback));
-                    });
-                }
-                let _ = msg.reply_tx.send(reply);
+        for msg in rx.try_iter() {
+            let reply = run_cmd(state, msg.cmd);
+            if let Reply::SlotAllocated(ref allocated) = reply {
+                BRIDGE_PLAYBACK.with(|ps| {
+                    *ps.borrow_mut() = Some(Arc::clone(&allocated.control.playback));
+                });
             }
+            let _ = msg.reply_tx.send(reply);
         }
-        drop(rx_guard);
 
         if let Some(ctx) = state.ctx_mut()
             && let Err(err) = ctx.update()

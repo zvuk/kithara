@@ -75,7 +75,7 @@ impl Loader {
     ) -> Result<Resource, QueueError> {
         let config = self.build_config(source)?;
         let slow_watcher =
-            Self::watch_for_slow_status(id, config.bus.clone(), Arc::clone(&self.tracks));
+            Self::watch_for_slow_status(id, config.bus().cloned(), Arc::clone(&self.tracks));
         let resource_fut = async {
             Resource::new(config)
                 .await
@@ -216,7 +216,7 @@ mod tests {
             panic!("build_config should succeed");
         };
         assert!(
-            (returned.preferred_peak_bitrate - 321.0).abs() < f64::EPSILON,
+            (returned.preferred_peak_bitrate() - 321.0).abs() < f64::EPSILON,
             "caller-set fields must be preserved"
         );
     }

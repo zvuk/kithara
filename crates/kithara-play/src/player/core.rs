@@ -77,15 +77,14 @@ impl PlayerImpl {
         let cancel = CancelScope::new(config.cancel.clone()).token();
         config.cancel = Some(cancel.clone());
 
-        let engine_config = EngineConfig {
-            eq_layout: config.eq_layout.clone(),
-            max_slots: config.max_slots,
-            sample_rate: config.sample_rate,
-            pcm_pool: Some(resolved_pool.clone()),
-            session: config.session.clone(),
-            cancel: Some(cancel.clone()),
-            ..EngineConfig::default()
-        };
+        let engine_config = EngineConfig::builder()
+            .eq_layout(config.eq_layout.clone())
+            .max_slots(config.max_slots)
+            .sample_rate(config.sample_rate)
+            .pcm_pool(resolved_pool.clone())
+            .maybe_session(config.session.clone())
+            .cancel(cancel.clone())
+            .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
         if config.abr.is_none() {
             config.abr = Some(AbrController::new(AbrSettings::default(), cancel.child()));
@@ -297,11 +296,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        api::{SessionDuckingMode, SlotId},
-        bridge::PlayerCmd,
-        session::testing,
-    };
+    use crate::{api::SlotId, bridge::PlayerCmd, session::testing};
 
     #[derive(Clone, Copy)]
     enum PlayerBasicScenario {
@@ -314,10 +309,11 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_applies_player_gapless_mode() {
-        let player = PlayerImpl::new(PlayerConfig {
-            gapless_mode: GaplessMode::Disabled,
-            ..PlayerConfig::default()
-        });
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .gapless_mode(GaplessMode::Disabled)
+                .build(),
+        );
         let mut config = crate::resource::ResourceConfig::new("https://example.com/song.mp3")
             .expect("BUG: valid resource config");
 
@@ -352,10 +348,11 @@ mod tests {
     #[kithara::test]
     fn prepare_config_preserves_caller_supplied_master() {
         let parent_master = CancelToken::never();
-        let player = PlayerImpl::new(PlayerConfig {
-            cancel: Some(parent_master.clone()),
-            ..PlayerConfig::default()
-        });
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .cancel(parent_master.clone())
+                .build(),
+        );
         let mut rc = crate::resource::ResourceConfig::new("https://example.com/song.mp3")
             .expect("BUG: valid resource config");
         rc = player.prepare_config(rc);
@@ -425,17 +422,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn player_session_ducking_roundtrip() {
-        let _lock = crate::engine::ducking_test_lock().lock();
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player
-            .set_session_ducking(SessionDuckingMode::Soft)
-            .unwrap();
-        assert_eq!(player.session_ducking(), SessionDuckingMode::Soft);
-        player.set_session_ducking(SessionDuckingMode::Off).unwrap();
-    }
-
-    #[kithara::test]
     fn player_crossfade_duration() {
         let player = PlayerImpl::new(PlayerConfig::default());
         assert!((player.crossfade_duration() - 1.0).abs() < f32::EPSILON);
@@ -464,22 +450,16 @@ mod tests {
 
     #[kithara::test]
     fn player_config_custom() {
-        let config = PlayerConfig {
-            abr: None,
-            bus: None,
-            crossfade_duration: 2.0,
-            prefetch_duration: 5.0,
-            default_rate: 0.5,
-            eq_layout: generate_log_spaced_bands(5),
-            gapless_mode: GaplessMode::MediaOnly,
-            max_slots: 2,
-            sample_rate: 44_100,
-            pcm_pool: None,
-            auto_advance_enabled: true,
-            session: None,
-            cancel: None,
-            timestretch: StretchControls::new(1.0),
-        };
+        let config = PlayerConfig::builder()
+            .crossfade_duration(2.0)
+            .prefetch_duration(5.0)
+            .default_rate(0.5)
+            .eq_layout(generate_log_spaced_bands(5))
+            .gapless_mode(GaplessMode::MediaOnly)
+            .max_slots(2)
+            .sample_rate(44_100)
+            .timestretch(StretchControls::new(1.0))
+            .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
     }
@@ -561,10 +541,11 @@ mod tests {
 
     #[kithara::test]
     fn timestretch_is_address_stable_across_play_pause() {
-        let player = PlayerImpl::new(PlayerConfig {
-            session: Some(testing::test_session()),
-            ..PlayerConfig::default()
-        });
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .session(testing::test_session())
+                .build(),
+        );
         let ptr_before = Arc::as_ptr(&player.core.timestretch);
         player.play();
         player.pause();
@@ -650,10 +631,7 @@ mod tests {
 
     #[kithara::test]
     fn auto_advance_disabled_via_config() {
-        let player = PlayerImpl::new(PlayerConfig {
-            auto_advance_enabled: false,
-            ..PlayerConfig::default()
-        });
+        let player = PlayerImpl::new(PlayerConfig::builder().auto_advance_enabled(false).build());
         assert!(!player.auto_advance_enabled());
     }
 }

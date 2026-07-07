@@ -72,6 +72,11 @@ RT handles, `resource/` owns source/config/reader construction, `player/` owns
 main-thread queue and flow state, `engine/` owns session/slot registration, and
 `rt/` owns lock-free audio-node rendering.
 
+`player`, `engine`, and `session` are intentional orchestration planes: their
+entry files import several sibling modules to bind API state, RT controls, and
+session commands. The per-crate `module_fan_out` threshold is raised for
+`kithara-play`; do not add re-export hops solely to lower that count.
+
 ## Engine Lifecycle
 
 `start()` -> `allocate_slot()` -> attach `PlayerImpl` -> `replace_current_item(Some(item))`

@@ -76,9 +76,11 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let session = Arc::new(OfflineSession::new_manual());
-        let mut config = PlayerConfig::builder().crossfade_duration(0.0).build();
-        config.sample_rate = SAMPLE_RATE;
-        config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
+        let config = PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .sample_rate(SAMPLE_RATE)
+            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+            .build();
         let player = Arc::new(PlayerImpl::new(config));
         Self { player, session }
     }
@@ -181,8 +183,9 @@ async fn run_case(mode: GateMode) {
 
     let harness = Harness::new();
     let queue = Queue::new(
-        QueueConfig::default()
-            .with_should_autoplay(false)
+        QueueConfig::builder()
+            .should_autoplay(false)
+            .build()
             .with_player(Arc::clone(&harness.player)),
     );
     let mut rx = harness.player.subscribe();

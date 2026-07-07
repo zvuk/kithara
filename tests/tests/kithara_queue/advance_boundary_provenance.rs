@@ -11,7 +11,7 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, StretchControls},
+    play::{PlayerImpl, Resource, ResourceConfig, StretchControls},
     queue::{Queue, QueueConfig, Transition},
 };
 use kithara_integration_tests::{
@@ -24,7 +24,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-use super::offline_player_harness::OfflinePlayerHarness;
+use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const RESAMPLED_RENDER_RATE: u32 = 48_000;
@@ -957,7 +957,7 @@ async fn run_crossfade_flac_case(
     render_sample_rate: u32,
     collapse_runs: fn(&[ClassRun]) -> Vec<ClassRun>,
     label: &str,
-    build_player_config: impl FnOnce() -> PlayerConfig,
+    build_player_config: impl FnOnce() -> OfflinePlayerOptions,
 ) {
     let setup = setup_flac_queue_with_player_config(
         server,
@@ -982,25 +982,21 @@ async fn run_crossfade_flac_case(
     );
 }
 
-fn crossfade_player_config() -> PlayerConfig {
-    PlayerConfig::builder()
-        .crossfade_duration(CROSSFADE_SECS)
-        .build()
+fn crossfade_player_config() -> OfflinePlayerOptions {
+    OfflinePlayerOptions::default().crossfade_duration(CROSSFADE_SECS)
 }
 
-fn crossfade_eq_player_config() -> PlayerConfig {
-    PlayerConfig::builder()
+fn crossfade_eq_player_config() -> OfflinePlayerOptions {
+    OfflinePlayerOptions::default()
         .crossfade_duration(CROSSFADE_SECS)
         .eq_layout(generate_log_spaced_bands(10))
-        .build()
 }
 
-fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> PlayerConfig {
-    PlayerConfig::builder()
+fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> OfflinePlayerOptions {
+    OfflinePlayerOptions::default()
         .crossfade_duration(CROSSFADE_SECS)
         .eq_layout(generate_log_spaced_bands(10))
         .timestretch(Arc::clone(timestretch))
-        .build()
 }
 
 async fn setup_queue(server: &TestServerHelper, temp_dir: &TestTempDir, flac: bool) -> QueueSetup {
@@ -1014,7 +1010,7 @@ async fn setup_queue_with_sample_rate(
     render_sample_rate: u32,
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        OfflinePlayerOptions::default().crossfade_duration(0.0),
         render_sample_rate,
     );
     let queue = Queue::new(with_autoplay(
@@ -1053,7 +1049,7 @@ async fn setup_multivariant_flac_queue(
     temp_dir: &TestTempDir,
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        OfflinePlayerOptions::default().crossfade_duration(0.0),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
@@ -1090,7 +1086,7 @@ async fn setup_flac_queue_with_player_config(
     temp_dir: &TestTempDir,
     render_sample_rate: u32,
     segments: usize,
-    player_config: PlayerConfig,
+    player_config: OfflinePlayerOptions,
 ) -> QueueSetup {
     setup_flac_queue_with_player_config_autoplay(
         server,
@@ -1108,7 +1104,7 @@ async fn setup_flac_queue_with_player_config_autoplay(
     temp_dir: &TestTempDir,
     render_sample_rate: u32,
     segments: usize,
-    player_config: PlayerConfig,
+    player_config: OfflinePlayerOptions,
     should_autoplay: bool,
 ) -> QueueSetup {
     setup_flac_queue_with_player_config_autoplay_geometry(
@@ -1129,7 +1125,7 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
     render_sample_rate: u32,
     segments: usize,
     segment_duration_secs: f64,
-    player_config: PlayerConfig,
+    player_config: OfflinePlayerOptions,
     should_autoplay: bool,
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate);
@@ -1177,7 +1173,7 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
 
 async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        OfflinePlayerOptions::default().crossfade_duration(0.0),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(

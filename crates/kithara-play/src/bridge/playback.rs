@@ -7,15 +7,15 @@ use portable_atomic::{AtomicF64, AtomicU32};
 #[non_exhaustive]
 pub struct PlaybackSnapshot {
     /// Whether playback is active.
-    pub playing: bool,
+    pub(crate) playing: bool,
     /// Total media duration in seconds; `0.0` when unknown.
-    pub duration: f64,
+    pub(crate) duration: f64,
     /// Decoded-ahead frontier in seconds. Always `>= position`.
-    pub frontier: f64,
+    pub(crate) frontier: f64,
     /// Playback position in seconds.
-    pub position: f64,
+    pub(crate) position: f64,
     /// Current output sample rate.
-    pub sample_rate: u32,
+    pub(crate) sample_rate: u32,
 }
 
 /// Atomic playback state written by the RT processor and read by control code.
@@ -36,6 +36,38 @@ pub struct PlaybackShared {
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
+}
+
+impl PlaybackSnapshot {
+    /// Whether playback is active.
+    #[must_use]
+    pub fn is_playing(&self) -> bool {
+        self.playing
+    }
+
+    /// Total media duration in seconds; `0.0` when unknown.
+    #[must_use]
+    pub fn duration(&self) -> f64 {
+        self.duration
+    }
+
+    /// Decoded-ahead frontier in seconds. Always `>= position`.
+    #[must_use]
+    pub fn frontier(&self) -> f64 {
+        self.frontier
+    }
+
+    /// Playback position in seconds.
+    #[must_use]
+    pub fn position(&self) -> f64 {
+        self.position
+    }
+
+    /// Current output sample rate.
+    #[must_use]
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
 }
 
 impl PlaybackShared {

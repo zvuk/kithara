@@ -16,7 +16,7 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_app::config::AppConfig;
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 
@@ -83,15 +83,14 @@ async fn build_ctx() -> Ctx {
 }
 
 fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource {
-    match build_source(url, &ctx.config) {
-        TrackSource::Config(mut cfg) => {
-            cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder_backend = backend;
-            cfg.initial_abr_mode = AbrMode::Auto(None);
-            TrackSource::Config(cfg)
-        }
-        other => other,
-    }
+    super::app_track_source(
+        url,
+        &ctx.config,
+        StoreOptions::new(ctx.cache.path()),
+        backend,
+        AbrMode::Auto(None),
+        None,
+    )
 }
 
 async fn wait_for_loaded(

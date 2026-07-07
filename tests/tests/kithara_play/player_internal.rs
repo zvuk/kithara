@@ -58,10 +58,11 @@ fn make_tagged_resource(item_id: &'static str, duration_secs: f64) -> (Resource,
 fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSession>) {
     let bus = EventBus::default();
     let session = Arc::new(OfflineSession::new_manual());
-    let mut player_config = PlayerConfig::default();
-    player_config.bus = Some(bus);
-    player_config.crossfade_duration = crossfade_duration;
-    player_config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
+    let player_config = PlayerConfig::builder()
+        .bus(bus)
+        .crossfade_duration(crossfade_duration)
+        .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+        .build();
     let player = PlayerImpl::new(player_config);
     (player, session)
 }

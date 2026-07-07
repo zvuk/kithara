@@ -9,7 +9,7 @@ use kithara_platform::{
     time::{Duration, sleep},
     tokio::task::spawn as task_spawn,
 };
-use kithara_play::ResourceConfig;
+use kithara_play::{ResourceConfig, wasm};
 use kithara_queue::{Queue, QueueConfig, TrackId, TrackSource};
 
 use crate::{
@@ -39,7 +39,10 @@ macro_rules! clog {
 /// Creates and owns the [`Queue`] (mirroring
 /// [`NativeInner`](crate::native::inner::NativeInner)'s construction),
 /// spawns a periodic `tick` loop, then drives the command channel.
-pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
+pub(crate) fn worker_main(
+    cmd_rx: mpsc::Receiver<WorkerCmd>,
+    session_tx: mpsc::Sender<kithara_play::CmdMsg>,
+) {
     /// Default crossfade window, in seconds. Mirrors the legacy worker.
     const CROSSFADE_SECONDS: f32 = 5.0;
 
@@ -51,7 +54,13 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     keep_worker_alive();
 
     task_spawn(async move {
-        let queue = Rc::new(Queue::new(QueueConfig::default()));
+        let session = wasm::remote_session(session_tx);
+        let player = std::sync::Arc::new(kithara_play::PlayerImpl::new(
+            kithara_play::PlayerConfig::builder()
+                .session(session.dispatcher())
+                .build(),
+        ));
+        let queue = Rc::new(Queue::new(QueueConfig::builder().player(player).build()));
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
 
         let build_state = Rc::new(RefCell::new(BuildState::default()));

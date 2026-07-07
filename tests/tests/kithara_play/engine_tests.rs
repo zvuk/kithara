@@ -1,9 +1,9 @@
-use std::sync::{Mutex as StdMutex, OnceLock};
-
 use kithara::{
     self,
     events::EventBus,
-    play::{EngineConfig, EngineImpl, PlayError, SessionDuckingMode, SlotId},
+    play::{
+        Cmd, EngineConfig, EngineImpl, PlayError, Reply, SessionDuckingMode, SessionHandle, SlotId,
+    },
 };
 
 fn slot_id(value: u64) -> SlotId {
@@ -12,11 +12,6 @@ fn slot_id(value: u64) -> SlotId {
 
 fn make_engine() -> EngineImpl {
     EngineImpl::new(EngineConfig::default(), EventBus::default())
-}
-
-fn session_ducking_lock() -> &'static StdMutex<()> {
-    static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| StdMutex::new(()))
 }
 
 #[derive(Clone, Copy)]
@@ -35,11 +30,9 @@ enum NotRunningErrorScenario {
 
 #[kithara::test]
 fn engine_config_defaults() {
-    let config = EngineConfig::default();
-    assert_eq!(config.channels, 2);
-    assert_eq!(config.eq_layout.len(), 10);
-    assert_eq!(config.max_slots, 4);
-    assert_eq!(config.sample_rate, 44100);
+    let engine = make_engine();
+    assert_eq!(engine.max_slots(), 4);
+    assert_eq!(engine.master_sample_rate(), 44100);
 }
 
 #[kithara::test]
@@ -50,10 +43,9 @@ fn engine_config_builder() {
         .channels(1)
         .eq_layout(kithara::audio::generate_log_spaced_bands(5))
         .build();
-    assert_eq!(config.max_slots, 8);
-    assert_eq!(config.sample_rate, 48000);
-    assert_eq!(config.channels, 1);
-    assert_eq!(config.eq_layout.len(), 5);
+    let engine = EngineImpl::new(config, EventBus::default());
+    assert_eq!(engine.max_slots(), 8);
+    assert_eq!(engine.master_sample_rate(), 48000);
 }
 
 #[kithara::test]
@@ -105,26 +97,42 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
     assert_eq!(engine.master_sample_rate(), 48000);
 }
 
-#[kithara::test]
-fn engine_session_ducking_roundtrip() {
-    let _lock = session_ducking_lock().lock().unwrap();
-    EngineImpl::set_session_ducking(SessionDuckingMode::Soft).unwrap();
-    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Soft);
-    EngineImpl::set_session_ducking(SessionDuckingMode::Hard).unwrap();
-    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Hard);
-    EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
-    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Off);
+fn set_ducking(session: &SessionHandle, mode: SessionDuckingMode) {
+    session
+        .exec_ok(Cmd::SetSessionDucking { mode })
+        .expect("set ducking");
+}
+
+fn ducking(session: &SessionHandle) -> SessionDuckingMode {
+    match session.exec_ok(Cmd::SessionDucking).expect("ducking") {
+        Reply::SessionDucking(mode) => mode,
+        _ => panic!("unexpected ducking reply"),
+    }
 }
 
 #[kithara::test]
-fn engine_instances_share_session_ducking() {
-    let _lock = session_ducking_lock().lock().unwrap();
-    let _a = make_engine();
-    let _b = make_engine();
+fn engine_session_ducking_roundtrip() {
+    let session = SessionHandle::spawn_native();
+    set_ducking(&session, SessionDuckingMode::Soft);
+    assert_eq!(ducking(&session), SessionDuckingMode::Soft);
+    set_ducking(&session, SessionDuckingMode::Hard);
+    assert_eq!(ducking(&session), SessionDuckingMode::Hard);
+    set_ducking(&session, SessionDuckingMode::Off);
+    assert_eq!(ducking(&session), SessionDuckingMode::Off);
+}
 
-    EngineImpl::set_session_ducking(SessionDuckingMode::Soft).unwrap();
-    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Soft);
+#[kithara::test]
+fn injected_engine_instances_share_session_ducking() {
+    let session = SessionHandle::spawn_native();
+    let config = EngineConfig::builder()
+        .session(session.dispatcher())
+        .build();
+    let _a = EngineImpl::new(config.clone(), EventBus::default());
+    let _b = EngineImpl::new(config, EventBus::default());
 
-    EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
-    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Off);
+    set_ducking(&session, SessionDuckingMode::Soft);
+    assert_eq!(ducking(&session), SessionDuckingMode::Soft);
+
+    set_ducking(&session, SessionDuckingMode::Off);
+    assert_eq!(ducking(&session), SessionDuckingMode::Off);
 }

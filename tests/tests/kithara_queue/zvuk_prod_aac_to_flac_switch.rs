@@ -14,7 +14,7 @@ use kithara::{
     queue::TrackSource,
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_app::config::AppConfig;
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflinePlayer};
 use tracing::info;
 
@@ -184,13 +184,16 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
     let temp = TestTempDir::new();
 
-    let TrackSource::Config(mut cfg) = build_source(PROD_TRACK, &config) else {
+    let TrackSource::Config(cfg) = super::app_track_source(
+        PROD_TRACK,
+        &config,
+        StoreOptions::new(temp.path()),
+        backend,
+        AbrMode::manual(START_VARIANT),
+        Some(TRACK_NAME),
+    ) else {
         panic!("expected an HLS config source for {PROD_TRACK}");
     };
-    cfg.store = StoreOptions::new(temp.path());
-    cfg.decoder_backend = backend;
-    cfg.initial_abr_mode = AbrMode::manual(START_VARIANT);
-    cfg.name = Some(TRACK_NAME.to_string());
 
     let resource = Resource::new(*cfg)
         .await

@@ -97,13 +97,6 @@ impl QueueConfig {
         self.player = Some(player);
         self
     }
-
-    /// Set whether the queue auto-advances at EOF.
-    #[must_use]
-    pub fn with_should_autoplay(mut self, value: bool) -> Self {
-        self.should_autoplay = value;
-        self
-    }
 }
 
 #[cfg(test)]

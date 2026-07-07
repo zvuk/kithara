@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend};
 use kithara_platform::{
@@ -10,7 +10,7 @@ use tracing::{debug, warn};
 
 use super::{
     dispatch::run_cmd,
-    protocol::{Cmd, CmdMsg, Reply, SessionDispatcher, StartStreamFn},
+    protocol::{Cmd, CmdMsg, Reply, SessionDispatcher, SessionHandle, StartStreamFn},
     state::SessionState,
 };
 use crate::error::PlayError;
@@ -69,23 +69,6 @@ fn spawn_session_client<B: AudioBackend + Send + 'static>(
     })
 }
 
-mod holder {
-    use super::*;
-
-    pub(super) static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
-}
-
-pub(crate) fn session_client() -> Arc<dyn SessionDispatcher> {
-    holder::SESSION_CLIENT
-        .get_or_init(|| {
-            spawn_session_client::<firewheel::cpal::CpalBackend>(
-                "kithara-engine",
-                start_stream_cpal,
-            )
-        })
-        .clone()
-}
-
 fn start_stream_cpal(
     ctx: &mut FirewheelCtx<firewheel::cpal::CpalBackend>,
     sample_rate: u32,
@@ -111,5 +94,16 @@ fn start_stream_cpal(
             );
             Err(err.to_string())
         }
+    }
+}
+
+impl SessionHandle {
+    /// Spawn a dedicated native engine session worker and return its handle.
+    #[must_use]
+    pub fn spawn_native() -> Self {
+        Self::new(spawn_session_client::<firewheel::cpal::CpalBackend>(
+            "kithara-engine",
+            start_stream_cpal,
+        ))
     }
 }
