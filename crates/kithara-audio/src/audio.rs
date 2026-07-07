@@ -864,6 +864,8 @@ impl<S> Audio<S> {
     /// signals `reader_wake`. `timeout` is the watchdog's remaining liveness
     /// budget (see `hang_park!`): a genuine stall releases the park at the
     /// deadline so the watchdog fires; progress unparks it first.
+    /// `no_block`: `block_on_underrun` reader park is watchdog-budgeted and woken by worker progress.
+    #[kithara::allow_block]
     fn wait_for_fetch(timeout: Duration) {
         #[cfg(not(target_arch = "wasm32"))]
         {

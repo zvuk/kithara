@@ -41,7 +41,7 @@ unimock = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
 proptest = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

@@ -92,5 +92,7 @@ mod kithara_play;
 mod kithara_queue;
 mod kithara_storage;
 mod kithara_stream;
+#[cfg(not(target_arch = "wasm32"))]
+mod no_block;
 mod thread_budget;
 mod timeout_guard;

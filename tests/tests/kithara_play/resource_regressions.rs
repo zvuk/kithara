@@ -256,8 +256,14 @@ async fn read_hls_stream_some(url: &url::Url, store: StoreOptions) -> usize {
         .await
         .unwrap_or_else(|err| panic!("HLS stream should open for {}: {err}", url));
     let mut buf = [0_u8; 4096];
+    read_hls_stream_bytes(&mut stream, &mut buf, url)
+}
+
+/// `no_block`: the synchronous HLS stream read crosses the platform gate that this regression exercises.
+#[kithara::allow_block]
+fn read_hls_stream_bytes(stream: &mut Stream<Hls>, buf: &mut [u8], url: &url::Url) -> usize {
     stream
-        .read(&mut buf)
+        .read(buf)
         .unwrap_or_else(|err| panic!("HLS stream should read for {}: {err}", url))
 }
 

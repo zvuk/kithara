@@ -81,6 +81,8 @@ impl OfflineSession {
     /// Synchronously drive one render iteration. Returns
     /// stereo-interleaved samples, or an empty `Vec` if the firewheel
     /// context has not been initialised yet (no player started).
+    /// `no_block`: sync command-reply bridge to the dedicated offline render thread; flash coordinates the bridged wait.
+    #[kithara::allow_block]
     pub fn render(&self, frames: usize) -> Vec<f32> {
         let (reply_tx, reply_rx) = mpsc::channel();
         if self
@@ -116,6 +118,8 @@ impl Drop for OfflineSession {
 }
 
 impl SessionDispatcher for OfflineSession {
+    /// `no_block`: sync command-reply bridge to the dedicated offline render thread; flash coordinates the bridged wait.
+    #[kithara::allow_block]
     fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.cmd_tx

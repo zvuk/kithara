@@ -1,16 +1,28 @@
+use std::panic::Location;
+
 pub use super::backend::task::*;
 use super::runtime::Handle;
 
-/// Spawn `future` on a specific runtime [`Handle`]: a direct `handle.spawn`.
-///
-/// The native backend has no orchestration around task polls, so spawning
-/// onto a specific runtime [`Handle`] needs no wrapping.
+/// Spawn a future on the current runtime through the platform chokepoint.
+#[track_caller]
+pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let loc = Location::caller();
+    super::backend::task::spawn(crate::no_block::watch_blanket_at("spawn", loc, future))
+}
+
+/// Spawn `future` on a specific runtime [`Handle`] through the platform chokepoint.
+#[track_caller]
 pub fn spawn_on<F>(handle: &Handle, future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    handle.spawn(future)
+    let loc = Location::caller();
+    handle.spawn(crate::no_block::watch_blanket_at("spawn", loc, future))
 }
 
 /// Spawn a blocking computation on the runtime's blocking pool.

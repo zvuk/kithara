@@ -318,6 +318,7 @@ impl FlashInner {
         // The guard is minted LAST (after the transition's own debug_asserts),
         // so an assertion panic here never double-panics in the guard's Drop.
         if in_async_poll() {
+            crate::no_block::forbid_bridged(ctx::cur_async().map(|(_, loc)| loc));
             // Bridged wait: a runtime worker is blocking on the engine mid async-poll.
             // The task it drives is parked for the block, so release its `active_async`
             // slot (re-acquired by `resume_after_wait` on wake) — otherwise the slot

@@ -134,10 +134,11 @@ doc:
 #   * Android       → Android MediaCodec + Symphonia software
 #   * Linux / other → Symphonia only
 #
-# The flash virtual clock is ENABLED by default (`--features flash`): tests
-# run on a deterministic engine-driven clock that collapses artificial waits, so
-# the suite is fast and reproducible. Opt out with `--flash=off` (`--no-flash` /
-# `--flash=false`) to run on the real wall clock — the regression baseline.
+# The flash virtual clock and no-block poll detection are ENABLED by default
+# (`--features flash,no-block`): tests run on a deterministic engine-driven
+# clock that collapses artificial waits, so the suite is fast and reproducible.
+# Opt out with `--flash=off` (`--no-flash` / `--flash=false`) to run on the real
+# wall clock — the regression baseline.
 # `--net-backend=apple` opts the integration crate into `kithara/apple-net`;
 # the default backend is the target's normal test backend (`wreq` on Apple
 # hosts). Recipe-level `--flash=*` / `--net-backend=*` tokens are stripped
@@ -163,9 +164,9 @@ gate *ARGS:
     #!/usr/bin/env bash
     set -eo pipefail
     echo "=== gate: flash ON ==="
-    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features flash {{ARGS}}
+    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features flash,no-block {{ARGS}}
     echo "=== gate: flash OFF ==="
-    CARGO_TARGET_DIR=target-flash-off cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+    CARGO_TARGET_DIR=target-flash-off cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features no-block {{ARGS}}
 
 # RealtimeSanitizer: compile the player RT path under `-Zsanitizer=realtime`
 # and run the offline-render tests, which enter the
@@ -189,6 +190,19 @@ _rtsan SUITE FILTER:
         cargo +nightly test -p kithara-integration-tests --test {{SUITE}} \
         --features apple-fused-src \
         --target "$target" -- --nocapture {{FILTER}}
+
+# RTSan async-executor lane: every no_block-watched poll is a nonblocking RT
+# context; allocations are suppressed, locks are measured unsuppressed first,
+# and fs/net/sleep abort with the exact blocking call stack.
+rtsan-async FILTER="no_block":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target="$(rustc -vV | sed -n 's/^host: //p')"
+    RTSAN_OPTIONS="suppressions=$(pwd)/.config/rtsan/async-suppressions.txt" \
+    RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
+    RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
+        cargo +nightly test -p kithara-integration-tests --test suite_light \
+        --features kithara/no-block,kithara-test-utils/no-block --target "$target" -- --nocapture {{FILTER}}
 
 # RTSan mock produce-core lane (suite_light, fast tripwire).
 rtsan FILTER="offline_harness": (_rtsan "suite_light" FILTER)

@@ -13,6 +13,7 @@ default = ["hang"]
 flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
+no-block = ["kithara-platform/no-block"]
 probe = ["dep:usdt", "tracing-subscriber/env-filter"]
 # HTTP backend forwarding (kithara-net reached via kithara-events).
 client-reqwest = ["kithara-events/client-reqwest"]
@@ -38,10 +39,14 @@ url = { workspace = true }
 backtrace = { workspace = true }
 usdt = { workspace = true, optional = true }
 
+[target.'cfg(rtsan)'.dependencies]
+pin-project-lite = { workspace = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tracing-wasm = { workspace = true }
 
 [dev-dependencies]
+kithara-test-utils = { path = ".", default-features = false, features = ["no-block"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [lints]

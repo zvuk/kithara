@@ -102,6 +102,7 @@ where
 /// true wall-clock sleep. Unlike [`park_timeout`] a sleep has no early wake. See
 /// `crate::flash::system::sleep_timed`.
 #[inline]
+#[track_caller]
 pub fn sleep(duration: Duration) {
     if crate::flash::flash_enabled() {
         crate::flash::system::sleep_timed(duration);
@@ -121,6 +122,7 @@ pub fn sleep(duration: Duration) {
 /// I/O), never inflating the clock on its own. Off the sim path it is a real
 /// `sleep(duration)` throttle (no busy-spin), via the native arm.
 #[inline]
+#[track_caller]
 pub fn paced_backoff(duration: Duration) {
     if crate::flash::flash_enabled() {
         crate::flash::system::yield_until_advance();
@@ -136,6 +138,7 @@ pub fn paced_backoff(duration: Duration) {
 /// engine jumps the virtual clock to the earliest deadline. See
 /// `crate::flash` and the crate CONTEXT.md.
 #[inline]
+#[track_caller]
 pub fn park_timeout(duration: Duration) {
     if crate::flash::flash_enabled() {
         crate::flash::system::park_timed_unparkable(duration, ThreadKey::of(current().id()));

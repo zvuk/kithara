@@ -78,7 +78,7 @@ impl PrimEntry {
         let key = thread.key;
         let mut s = self.state.lock();
         s.pending.remove(&key);
-        s.holder = Some(HolderRec { thread, at });
+        s.holder = Some(HolderRec { at, thread });
     }
 
     /// Record that the current thread is now blocked trying to acquire this lock
@@ -89,7 +89,7 @@ impl PrimEntry {
         self.state
             .lock()
             .pending
-            .insert(key, AcquireRec { thread, at });
+            .insert(key, AcquireRec { at, thread });
     }
 
     #[cfg(test)]

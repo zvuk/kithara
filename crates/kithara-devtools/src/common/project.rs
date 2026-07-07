@@ -121,6 +121,7 @@ fn default_perf_nextest_profile() -> String {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TestCommandConfig {
+    pub features: Vec<String>,
     pub lanes: BTreeMap<String, TestLaneConfig>,
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
     pub default_backend: String,

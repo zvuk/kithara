@@ -31,6 +31,7 @@ pub(crate) fn emit_async_runtime_test(
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
     let flash = args.flash.unwrap_or(true);
+    let fn_name_str = fn_name.to_string();
     let inner_body = if !args.soft_fail_patterns.is_empty() {
         wrap_with_soft_fail(
             &quote! { { #body } },
@@ -73,9 +74,15 @@ pub(crate) fn emit_async_runtime_test(
                             // forbidden here: its cancel-drop on a timeout
                             // `Elapsed` is a non-LIFO mode restore (stale
                             // ambient resurrect). Identity off the feature.
-                            ::kithara_test_utils::kithara_platform::flash::with_ambient(#flash, async {
-                                #inner_body
-                            })),
+                            ::kithara_test_utils::kithara_platform::flash::with_ambient(
+                                #flash,
+                                ::kithara_test_utils::no_block::watch_root(
+                                    #fn_name_str,
+                                    async {
+                                        #inner_body
+                                    },
+                                ),
+                            )),
                     ::core::panic::Location::caller(),
                 ),
             )
@@ -229,9 +236,15 @@ pub(crate) fn emit_async_timeout_test(
                                         // mode restore (stale ambient resurrect).
                                         // `timeout` itself stays REAL (gates on
                                         // FLASH_ACTIVE, untouched here).
-                                        ::kithara_test_utils::kithara_platform::flash::with_ambient(#flash, async {
-                                            #inner_body
-                                        }),
+                                        ::kithara_test_utils::kithara_platform::flash::with_ambient(
+                                            #flash,
+                                            ::kithara_test_utils::no_block::watch_root(
+                                                #fn_name_str,
+                                                async {
+                                                    #inner_body
+                                                },
+                                            ),
+                                        ),
                                     )
                                     .await
                                     .unwrap_or_else(|_| {

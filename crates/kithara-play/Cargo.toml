@@ -125,7 +125,7 @@ firewheel-web-audio = { workspace = true, optional = true }
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["probe"] }
 kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

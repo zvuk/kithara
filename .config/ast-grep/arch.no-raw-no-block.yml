@@ -1,0 +1,77 @@
+id: arch.no-raw-no-block
+message: |
+  Direct use of the no_block expansion internals. `no_block::watch*` /
+  `no_block::permit*` / `no_block::pause` / `forbid*` are private expansion
+  targets for the `#[kithara::no_block]` and `#[kithara::allow_block]`
+  attributes, plus audited platform/flash internals. Never call them by hand.
+
+  To budget-check an async function, annotate it with
+  `#[kithara::no_block(budget_ms = N)]` (or `#[kithara::no_block]` for the
+  default budget). To sanction a genuinely blocking region, annotate the
+  function with `#[kithara::allow_block]`; the macro emits the sync RAII permit
+  or async per-poll permit correctly. Blanket coverage is automatic at test
+  roots and platform spawn chokepoints.
+
+  Suppress with `// ast-grep-ignore: arch.no-raw-no-block` ONLY for
+  platform-internal work on the no_block implementation or its flash/native
+  chokepoints.
+
+  This is an ERROR gate covering ALL workspace Rust - production AND tests.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+ignores:
+  # The real no_block implementation owns these primitives.
+  - "crates/kithara-platform/src/no_block/**"
+  # The off-feature inert mirror owns no-op stubs of the same API.
+  - "crates/kithara-platform/src/common/no_block_inert.rs"
+  # Flash interop legitimately calls pause/forbid_bridged and wraps spawned work.
+  - "crates/kithara-platform/src/flash/**"
+  # Native chokepoints legitimately call forbid/watch_blanket_at.
+  - "crates/kithara-platform/src/native/**"
+  # The macros emit these calls as their expansion.
+  - "crates/kithara-test-macros/src/**"
+  # The test-utils facade is the public macro target for watch/watch_root.
+  - "crates/kithara-test-utils/src/no_block.rs"
+rule:
+  any:
+    - pattern: no_block::watch($$$REST)
+    - pattern: no_block::watch_root($$$REST)
+    - pattern: no_block::watch_blanket($$$REST)
+    - pattern: no_block::watch_blanket_at($$$REST)
+    - pattern: no_block::watch_budget($$$REST)
+    - pattern: no_block::permit($$$REST)
+    - pattern: no_block::permit_poll($$$REST)
+    - pattern: no_block::pause($$$REST)
+    - pattern: no_block::forbid($$$REST)
+    - pattern: no_block::forbid_bridged($$$REST)
+    - pattern: $ROOT::no_block::watch($$$REST)
+    - pattern: $ROOT::no_block::watch_root($$$REST)
+    - pattern: $ROOT::no_block::watch_blanket($$$REST)
+    - pattern: $ROOT::no_block::watch_blanket_at($$$REST)
+    - pattern: $ROOT::no_block::watch_budget($$$REST)
+    - pattern: $ROOT::no_block::permit($$$REST)
+    - pattern: $ROOT::no_block::permit_poll($$$REST)
+    - pattern: $ROOT::no_block::pause($$$REST)
+    - pattern: $ROOT::no_block::forbid($$$REST)
+    - pattern: $ROOT::no_block::forbid_bridged($$$REST)
+    - pattern: ::$ROOT::no_block::watch($$$REST)
+    - pattern: ::$ROOT::no_block::watch_root($$$REST)
+    - pattern: ::$ROOT::no_block::watch_blanket($$$REST)
+    - pattern: ::$ROOT::no_block::watch_blanket_at($$$REST)
+    - pattern: ::$ROOT::no_block::watch_budget($$$REST)
+    - pattern: ::$ROOT::no_block::permit($$$REST)
+    - pattern: ::$ROOT::no_block::permit_poll($$$REST)
+    - pattern: ::$ROOT::no_block::pause($$$REST)
+    - pattern: ::$ROOT::no_block::forbid($$$REST)
+    - pattern: ::$ROOT::no_block::forbid_bridged($$$REST)
+    - kind: use_declaration
+      regex: '\buse\s+(::)?(kithara|kithara_platform|kithara_test_utils)::no_block::(watch|watch_root|watch_blanket|watch_blanket_at|watch_budget|permit|permit_poll|pause|forbid|forbid_bridged)\b'
+    - kind: use_declaration
+      regex: '\buse\s+(::)?(kithara|kithara_platform|kithara_test_utils)::no_block::\{[\s\S]*\b(watch|watch_root|watch_blanket|watch_blanket_at|watch_budget|permit|permit_poll|pause|forbid|forbid_bridged)\b'
+    - kind: use_declaration
+      regex: '\buse\s+(::)?(kithara|kithara_platform|kithara_test_utils)::\{[\s\S]*\bno_block::(watch|watch_root|watch_blanket|watch_blanket_at|watch_budget|permit|permit_poll|pause|forbid|forbid_bridged)\b'
+    - kind: use_declaration
+      regex: '\buse\s+(::)?(kithara|kithara_platform|kithara_test_utils)::\{[\s\S]*\bno_block::\{[\s\S]*\b(watch|watch_root|watch_blanket|watch_blanket_at|watch_budget|permit|permit_poll|pause|forbid|forbid_bridged)\b'

@@ -41,7 +41,9 @@ impl<T> Receiver<T> {
     /// # Errors
     ///
     /// Returns [`RecvError`] if all senders have been dropped.
+    #[track_caller]
     pub fn recv(&self) -> Result<T, RecvError> {
+        crate::no_block::forbid("mpsc::recv");
         self.0.recv()
     }
 
@@ -52,7 +54,9 @@ impl<T> Receiver<T> {
     /// Returns [`RecvTimeoutError::Timeout`] when no value arrives before
     /// `deadline`, or [`RecvTimeoutError::Disconnected`] if all senders are
     /// dropped.
+    #[track_caller]
     pub fn recv_timeout(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
+        crate::no_block::forbid("mpsc::recv_timeout");
         let now = Instant::now();
         let remaining = deadline.saturating_duration_since(now);
         self.0.recv_timeout(remaining)

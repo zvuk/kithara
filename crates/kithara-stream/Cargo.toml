@@ -50,7 +50,7 @@ wasm_safe_thread = { workspace = true }
 
 [dev-dependencies]
 kithara-stream = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
 
 dashmap = { workspace = true }
 tempfile = { workspace = true }
