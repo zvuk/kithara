@@ -1,3 +1,5 @@
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use crate::apple::resampler::AppleResampler;
 #[cfg(feature = "resample-rubato")]
 use crate::resampler::rubato::RubatoResampler;
 use crate::{
@@ -23,14 +25,17 @@ pub fn create_resampler(
     validate_sample_rate("source", source_rate)?;
     validate_sample_rate("target", target_rate)?;
 
-    #[cfg(not(feature = "resample-rubato"))]
-    let _ = (quality, channels, chunk_size);
-
     match backend {
         #[cfg(feature = "resample-rubato")]
         ResamplerBackend::Rubato => {
             let resampler =
                 RubatoResampler::new(quality, source_rate, target_rate, channels, chunk_size)?;
+            Ok(Box::new(resampler))
+        }
+        #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+        ResamplerBackend::Apple => {
+            let _ = quality;
+            let resampler = AppleResampler::new(source_rate, target_rate, channels, chunk_size)?;
             Ok(Box::new(resampler))
         }
     }

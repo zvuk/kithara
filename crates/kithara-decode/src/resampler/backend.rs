@@ -3,6 +3,8 @@
 pub enum ResamplerBackend {
     #[cfg(feature = "resample-rubato")]
     Rubato,
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    Apple,
 }
 
 impl Default for ResamplerBackend {
@@ -18,6 +20,8 @@ impl ResamplerBackend {
         &[
             #[cfg(feature = "resample-rubato")]
             Self::Rubato,
+            #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+            Self::Apple,
         ]
     }
 }
