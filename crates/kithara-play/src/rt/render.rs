@@ -1,42 +1,55 @@
+use std::sync::Arc;
+
 use firewheel::node::ProcBuffers;
+use kithara_bufpool::{PcmBuf, PcmPool};
+use ringbuf::HeapProd;
 use smallvec::SmallVec;
 use thunderdome::Index;
 
-use super::{processor::PlayerNodeProcessor, track::TrackReadOutcome};
-use crate::bridge::TrackState;
+use super::{
+    processor::PlayerNodeProcessor,
+    track::{PlayerTrack, TrackReadOutcome},
+};
+use crate::{
+    bridge::{PlayerNotification, TrackState},
+    rt::ArenaRegistry,
+};
 
 type ActiveTrackEntry = (usize, Index, bool);
 
-impl PlayerNodeProcessor {
-    fn initial_handover_offset(read_outcome: &TrackReadOutcome) -> Option<usize> {
-        match read_outcome {
-            TrackReadOutcome::Partial { frames, .. } => Some(*frames),
-            TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(0),
-            TrackReadOutcome::Full { .. } => None,
-        }
-    }
+pub(crate) struct RenderTargets<'a> {
+    pub(crate) tracks: &'a mut ArenaRegistry<Arc<str>, PlayerTrack>,
+    pub(crate) notification_tx: &'a mut HeapProd<PlayerNotification>,
+}
 
-    fn next_handover_offset(read_outcome: &TrackReadOutcome, offset: usize) -> Option<usize> {
-        match read_outcome {
-            TrackReadOutcome::Full { .. } => None,
-            TrackReadOutcome::Partial { frames, .. } => Some(offset + *frames),
-            TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(offset),
-        }
-    }
+pub(crate) struct RenderPass {
+    scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
+}
 
-    fn outcome_position_duration(outcome: &TrackReadOutcome) -> Option<(f64, f64)> {
-        match *outcome {
-            TrackReadOutcome::Full {
-                position, duration, ..
-            } => Some((position, duration)),
-            TrackReadOutcome::Partial { duration, .. } => Some((duration, duration)),
-            TrackReadOutcome::Eof | TrackReadOutcome::Failed => None,
-        }
+impl RenderPass {
+    /// Minimum stereo channel count for output processing.
+    const MIN_STEREO: usize = 2;
+
+    /// Number of scratch buffers for stereo processing.
+    const SCRATCH_BUF_COUNT: usize = 4;
+
+    pub(crate) fn new(pool: &PcmPool, max_frames: usize) -> Self {
+        let scratch_bufs = std::array::from_fn(|_| {
+            let mut buf = pool.get();
+            let cap = buf.capacity();
+            if cap < max_frames {
+                buf.reserve(max_frames - cap);
+            }
+            buf
+        });
+
+        Self { scratch_bufs }
     }
 
     /// Render audio for all active tracks into the output buffers.
-    pub fn render_audio(
+    pub(crate) fn render_audio(
         &mut self,
+        targets: RenderTargets<'_>,
         buffers: &mut ProcBuffers,
         frames: usize,
         is_playing: bool,
@@ -61,27 +74,29 @@ impl PlayerNodeProcessor {
         let (mix_buf0, mix_buf1) = right.split_at_mut(1);
         let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
         let mut mix_bufs = [&mut mix_buf0[0][..frames], &mut mix_buf1[0][..frames]];
-        let notification_tx = &mut self.notif_tx;
-        let tracks = &mut self.tracks;
-        let arena_tracks: SmallVec<[(Index, TrackState); Self::MAX_TRACKS]> = if is_playing {
-            tracks
+        let tracks = targets.tracks;
+        let notification_tx = targets.notification_tx;
+        let arena_tracks: SmallVec<[(Index, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
+            if is_playing {
+                tracks
+                    .iter()
+                    .map(|(idx, track)| (idx, track.state()))
+                    .collect()
+            } else {
+                SmallVec::new()
+            };
+        let active_tracks: SmallVec<[ActiveTrackEntry; PlayerNodeProcessor::MAX_TRACKS]> =
+            arena_tracks
                 .iter()
-                .map(|(idx, track)| (idx, track.state()))
-                .collect()
-        } else {
-            SmallVec::new()
-        };
-        let active_tracks: SmallVec<[ActiveTrackEntry; Self::MAX_TRACKS]> = arena_tracks
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, state))| state.is_playing())
-            .map(|(arena_idx, (idx, state))| (arena_idx, *idx, state.is_leading()))
-            .collect();
-        let mut active_arena_slots = [false; Self::MAX_TRACKS];
+                .enumerate()
+                .filter(|(_, (_, state))| state.is_playing())
+                .map(|(arena_idx, (idx, state))| (arena_idx, *idx, state.is_leading()))
+                .collect();
+        let mut active_arena_slots = [false; PlayerNodeProcessor::MAX_TRACKS];
         for (arena_idx, _, _) in &active_tracks {
             active_arena_slots[*arena_idx] = true;
         }
-        let mut skip_tracks = [false; Self::MAX_TRACKS];
+        let mut skip_tracks = [false; PlayerNodeProcessor::MAX_TRACKS];
 
         for (track_idx, (_arena_slot, track_handle, was_leading)) in
             active_tracks.iter().enumerate()
@@ -105,11 +120,11 @@ impl PlayerNodeProcessor {
             };
 
             if *was_leading {
-                if let Some(snapshot) = Self::outcome_position_duration(&read_outcome) {
+                if let Some(snapshot) = outcome_position_duration(&read_outcome) {
                     leading_outcome_pos_dur = Some(snapshot);
                 }
 
-                let mut handover_offset = Self::initial_handover_offset(&read_outcome);
+                let mut handover_offset = initial_handover_offset(&read_outcome);
 
                 for (next_idx, (_, next_handle, next_is_leading)) in
                     active_tracks.iter().enumerate()
@@ -137,11 +152,11 @@ impl PlayerNodeProcessor {
                     read_outcome = outcome;
                     skip_tracks[next_idx] = true;
 
-                    if let Some(snapshot) = Self::outcome_position_duration(&read_outcome) {
+                    if let Some(snapshot) = outcome_position_duration(&read_outcome) {
                         leading_outcome_pos_dur = Some(snapshot);
                     }
 
-                    handover_offset = Self::next_handover_offset(&read_outcome, offset);
+                    handover_offset = next_handover_offset(&read_outcome, offset);
                 }
 
                 if let Some(offset) = handover_offset
@@ -160,7 +175,7 @@ impl PlayerNodeProcessor {
                             continue;
                         };
                         next_track.play();
-                        let _ = next_track.read(
+                        next_track.read(
                             &mut read_bufs,
                             &mut mix_bufs,
                             offset..frames,
@@ -181,6 +196,41 @@ impl PlayerNodeProcessor {
         }
 
         (playback_started, leading_outcome_pos_dur)
+    }
+
+    pub(crate) fn resize(&mut self, max_frames: usize) {
+        for buf in &mut self.scratch_bufs {
+            let cap = buf.capacity();
+            if cap < max_frames {
+                buf.reserve(max_frames - cap);
+            }
+        }
+    }
+}
+
+fn initial_handover_offset(read_outcome: &TrackReadOutcome) -> Option<usize> {
+    match read_outcome {
+        TrackReadOutcome::Partial { frames, .. } => Some(*frames),
+        TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(0),
+        TrackReadOutcome::Full { .. } => None,
+    }
+}
+
+fn next_handover_offset(read_outcome: &TrackReadOutcome, offset: usize) -> Option<usize> {
+    match read_outcome {
+        TrackReadOutcome::Full { .. } => None,
+        TrackReadOutcome::Partial { frames, .. } => Some(offset + *frames),
+        TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(offset),
+    }
+}
+
+fn outcome_position_duration(outcome: &TrackReadOutcome) -> Option<(f64, f64)> {
+    match *outcome {
+        TrackReadOutcome::Full {
+            position, duration, ..
+        } => Some((position, duration)),
+        TrackReadOutcome::Partial { duration, .. } => Some((duration, duration)),
+        TrackReadOutcome::Eof | TrackReadOutcome::Failed => None,
     }
 }
 

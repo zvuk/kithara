@@ -8,6 +8,24 @@ pub enum PlayError {
     #[error("player not ready")]
     NotReady,
 
+    #[error("no active slot")]
+    NoActiveSlot,
+
+    #[error("slot command channel full: {slot:?}")]
+    SlotChannelFull { slot: SlotId },
+
+    #[error("item {index} has no resource (already consumed)")]
+    ItemConsumed { index: usize },
+
+    #[error("item index out of range: {index} (len {len})")]
+    IndexOutOfRange { index: usize, len: usize },
+
+    #[error("commit index mismatch: requested {requested}, armed {armed}")]
+    ArmIndexMismatch { requested: usize, armed: usize },
+
+    #[error("eq band out of range: {band} (bands: {bands})")]
+    EqBandOutOfRange { band: usize, bands: usize },
+
     #[error("item failed to load: {reason}")]
     ItemFailed { reason: String },
 

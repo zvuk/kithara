@@ -119,13 +119,14 @@ mod tests {
     #[kithara::test]
     fn player_node_playback_accessible() {
         let (node, _control) = make_node();
-        let guard = node.inputs.lock();
-        let inputs = guard.as_ref().expect("inputs not yet taken");
-        assert!(
-            !inputs
-                .playback
-                .playing
-                .load(std::sync::atomic::Ordering::Relaxed)
-        );
+        let playing = node
+            .inputs
+            .lock()
+            .as_ref()
+            .expect("inputs not yet taken")
+            .playback
+            .playing
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(!playing);
     }
 }

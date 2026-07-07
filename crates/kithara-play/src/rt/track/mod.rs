@@ -1,4 +1,5 @@
 mod core;
+mod fade;
 mod feeder;
 mod read;
 mod triggers;

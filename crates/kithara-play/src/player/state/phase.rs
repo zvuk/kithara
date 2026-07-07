@@ -1,19 +1,13 @@
 use std::sync::Arc;
 
 use super::super::core::PlayerImpl;
-use crate::{api::SlotId, bridge::PlayerCmd, error::PlayError, resource::Resource};
+use crate::{api::SlotId, bridge::PlayerCmd, error::PlayError};
 
 /// Internal phase-transition error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TransitionError {
     /// The requested action is not valid from the current phase.
     WrongPhase,
-}
-
-/// A queued resource plus its optional queue-item identity.
-pub(crate) struct QueuedResource {
-    pub(crate) item_id: Option<Arc<str>>,
-    pub(crate) resource: Resource,
 }
 
 /// Whether the armed successor has been activated for the current handover.
@@ -35,7 +29,7 @@ impl PendingNextState {
 
 /// Internal auto-advance state for the next queue item.
 ///
-/// The queue still owns `current_index`; `PendingNext` only tracks the
+/// `Playlist` owns the current index; `PendingNext` only tracks the
 /// already-enqueued successor and whether it has been activated.
 pub(crate) struct PendingNext {
     pub(crate) src: Arc<str>,
@@ -317,7 +311,7 @@ impl PlayerImpl {
     pub(crate) fn send_to_slot(&self, cmd: PlayerCmd) -> Result<(), PlayError> {
         let slot_id = self
             .require_active_slot()
-            .map_err(|TransitionError::WrongPhase| PlayError::Internal("no active slot".into()))?;
+            .map_err(|TransitionError::WrongPhase| PlayError::NoActiveSlot)?;
         self.core.engine.send_slot_cmd(slot_id, cmd)
     }
 

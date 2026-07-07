@@ -39,10 +39,10 @@ impl SharedEq {
 
     pub(crate) fn set_gain(&self, band: usize, gain_db: f32) -> Result<f32, PlayError> {
         let Some(current) = self.gains.get(band) else {
-            return Err(PlayError::Internal(format!(
-                "eq band out of range: {band} (bands: {})",
-                self.gains.len()
-            )));
+            return Err(PlayError::EqBandOutOfRange {
+                band,
+                bands: self.gains.len(),
+            });
         };
         let clamped = gain_db.clamp(EQ_MIN_GAIN_DB, EQ_MAX_GAIN_DB);
         current.store(clamped, Ordering::Relaxed);

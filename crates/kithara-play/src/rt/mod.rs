@@ -10,3 +10,4 @@ pub(crate) use eq::MasterEqNode;
 pub use node::PlayerNode;
 pub use processor::{PlayerNodeProcessor, StreamShape};
 pub(crate) use registry::ArenaRegistry;
+pub(crate) use render::{RenderPass, RenderTargets};

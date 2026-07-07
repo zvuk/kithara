@@ -1,7 +1,4 @@
-use std::{
-    num::NonZeroU32,
-    sync::{Arc, atomic::Ordering},
-};
+use std::{num::NonZeroU32, sync::Arc};
 
 use kithara_audio::{AudioWorkerHandle, EngineLoadSnapshot};
 use kithara_events::EventBus;
@@ -13,7 +10,6 @@ use crate::{
     bridge::PlaybackSnapshot,
     engine::EngineImpl,
     error::PlayError,
-    player::PlayerConfig,
     resource::ResourceConfig,
 };
 
@@ -21,33 +17,28 @@ impl PlayerImpl {
     /// Whether the built-in linear auto-advance handler is enabled.
     #[must_use]
     pub fn auto_advance_enabled(&self) -> bool {
-        self.core.auto_advance_enabled.load(Ordering::Relaxed)
+        self.core.params.auto_advance_enabled()
     }
 
     /// Root event bus for this player.
     #[must_use]
     pub fn bus(&self) -> &EventBus {
-        &self.core.bus
-    }
-
-    /// Get player configuration.
-    pub fn config(&self) -> &PlayerConfig {
-        &self.core.config
+        self.core.engine.bus()
     }
 
     /// Get crossfade duration in seconds.
     pub fn crossfade_duration(&self) -> f32 {
-        self.core.crossfade_duration.load(Ordering::Relaxed)
+        self.core.params.crossfade_duration()
     }
 
     /// Current item index in the queue.
     pub fn current_index(&self) -> usize {
-        self.core.current_index.load(Ordering::Relaxed)
+        self.core.playlist.lock().current()
     }
 
     /// Default playback rate used by `play()` and `select_item()`.
     pub fn default_rate(&self) -> f32 {
-        self.core.default_rate.load(Ordering::Relaxed)
+        self.core.params.default_rate()
     }
 
     /// ABR handle of the currently loaded item, if any.
@@ -79,7 +70,7 @@ impl PlayerImpl {
 
     /// Number of EQ bands available for this player.
     pub fn eq_band_count(&self) -> usize {
-        self.core.config.eq_layout.len()
+        self.core.engine.eq_band_count()
     }
 
     /// Current media duration in seconds.
@@ -123,12 +114,12 @@ impl PlayerImpl {
 
     /// Returns `true` if the player is muted.
     pub fn is_muted(&self) -> bool {
-        self.core.muted.load(Ordering::Relaxed)
+        self.core.params.is_muted()
     }
 
     /// Get the number of items in the queue (including consumed items).
     pub fn item_count(&self) -> usize {
-        self.core.items.lock().len()
+        self.core.playlist.lock().len()
     }
 
     /// Single coherent read of the active slot's live playback scalars.
@@ -148,7 +139,7 @@ impl PlayerImpl {
 
     /// Get prefetch lead time in seconds.
     pub fn prefetch_duration(&self) -> f32 {
-        self.core.prefetch_duration.load(Ordering::Relaxed)
+        self.core.params.prefetch_duration()
     }
 
     /// Apply shared worker, host sample rate, ABR, and bus to a resource
@@ -161,16 +152,20 @@ impl PlayerImpl {
     /// [`ResourceConfig::with_downloader`] before passing the config in.
     #[must_use]
     pub fn prepare_config(&self, config: ResourceConfig) -> ResourceConfig {
-        let bus = config.bus.or_else(|| Some(self.core.bus.scoped()));
-        let parent = config.cancel.unwrap_or_else(|| self.core.cancel.clone());
-        let cancel = Some(parent.child());
-        let stretch = Some(Arc::clone(&self.core.config.timestretch));
+        let bus = config.bus.or_else(|| Some(self.core.engine.bus().scoped()));
+        let cancel = config
+            .cancel
+            .or_else(|| self.core.engine.cancel_token())
+            .map(|parent| parent.child());
+        let stretch = Some(Arc::clone(&self.core.timestretch));
+        let host_sample_rate = NonZeroU32::new(self.core.engine.master_sample_rate())
+            .or_else(|| NonZeroU32::new(self.core.engine.configured_sample_rate()));
         ResourceConfig {
             bus,
             cancel,
             worker: Some(self.core.engine.worker().clone()),
-            host_sample_rate: NonZeroU32::new(self.core.engine.master_sample_rate()),
-            gapless_mode: self.core.config.gapless_mode,
+            host_sample_rate,
+            gapless_mode: self.core.gapless_mode,
             stretch,
             engine_load: Some(Arc::clone(&self.core.engine_load)),
             ..config
@@ -179,7 +174,7 @@ impl PlayerImpl {
 
     /// Current playback rate (0.0 = paused).
     pub fn rate(&self) -> f32 {
-        self.core.rate.load(Ordering::Relaxed)
+        self.core.params.rate()
     }
 
     /// Runtime handle captured by this player's engine.
@@ -200,7 +195,7 @@ impl PlayerImpl {
 
     /// Subscribe to player events.
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
-        self.core.bus.subscribe()
+        self.core.engine.bus().subscribe()
     }
 
     /// Pump audio backend/runtime state.
@@ -210,7 +205,7 @@ impl PlayerImpl {
 
     /// Get current volume (0.0..=1.0).
     pub fn volume(&self) -> f32 {
-        self.core.volume.load(Ordering::Relaxed)
+        self.core.params.volume()
     }
 
     /// Shared audio worker handle for this player's engine.

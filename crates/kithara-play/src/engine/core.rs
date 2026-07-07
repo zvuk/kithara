@@ -8,7 +8,9 @@ use std::sync::{
 use kithara_audio::AudioWorkerHandle;
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
-use kithara_platform::{CancelScope, sync::Mutex, tokio::runtime::Handle as RuntimeHandle};
+use kithara_platform::{
+    CancelScope, CancelToken, sync::Mutex, tokio::runtime::Handle as RuntimeHandle,
+};
 use portable_atomic::AtomicF32;
 use ringbuf::traits::{Consumer, Producer};
 use tracing::{debug, info, warn};
@@ -24,69 +26,72 @@ use crate::{
 
 type SlotHandle = SlotControl;
 
-/// Concrete engine implementation backed by a process-wide session.
-///
-/// Multiple `EngineImpl` instances share one CPAL/Firewheel stream while
-/// retaining independent per-player graph controls.
 pub struct EngineImpl {
-    /// Audio session backend. Production paths default to the
-    /// process-wide cpal-backed `SessionClient`; tests inject a
-    /// per-instance offline dispatcher through [`EngineConfig::session`].
     session: SessionHandle,
-
-    /// Whether this engine/player instance is currently running.
     running: AtomicBool,
-
-    /// Master output volume for this player instance (linear 0.0 ..= 1.0).
     master_volume: AtomicF32,
-
-    /// Shared audio worker for cooperative multi-track decoding.
-    ///
-    /// All tracks loaded by this engine share this single worker thread.
     worker: AudioWorkerHandle,
-
     config: EngineConfig,
-
-    /// Shared event bus (passed from `PlayerImpl`).
     bus: EventBus,
-
-    /// Per-slot tracking (owned by the main side, mirrored).
     active_slots: Mutex<Vec<SlotId>>,
-
-    /// Session player ID allocated lazily on first start.
     player_id: Mutex<Option<PlayerId>>,
-
-    /// Per-slot command channels and shared state.
     slot_registry: Mutex<ArenaRegistry<SlotId, SlotHandle>>,
-
-    /// Serialises [`Self::start`]'s check-then-act on `running`, so two
-    /// concurrent starters cannot both pass the `!running` gate and
-    /// double-dispatch `session.start_player`. The loser observes
-    /// `running == true` under the lock and returns `EngineAlreadyRunning`.
     start_lock: Mutex<()>,
-
     runtime: Option<RuntimeHandle>,
-    /// Resolved PCM pool used when registering this player in the session.
     pcm_pool: PcmPool,
 }
 
 impl EngineImpl {
     /// Create a new engine with the given configuration.
-    ///
-    /// If `config.session` is `Some(_)` the engine binds to the supplied
-    /// dispatcher (used by integration tests for offline render). If
-    /// `None`, it falls back to the process-wide cpal-backed session
-    /// client.
-    ///
-    /// The engine is created in the *stopped* state. Call [`Self::start`]
-    /// to begin audio processing.
     #[must_use]
     pub fn new(mut config: EngineConfig, bus: EventBus) -> Self {
         let session = config
             .session
             .take()
             .map_or_else(|| SessionHandle::new(session_client()), SessionHandle::new);
-        Self::with_session(config, bus, session)
+        let max_slots = config.max_slots;
+        let resolved_pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| PcmPool::default().clone());
+        let worker_cancel = CancelScope::new(config.cancel.clone()).token();
+
+        Self {
+            config,
+            bus,
+            session,
+            active_slots: Mutex::default(),
+            master_volume: AtomicF32::new(1.0),
+            pcm_pool: resolved_pool,
+            player_id: Mutex::default(),
+            running: AtomicBool::new(false),
+            start_lock: Mutex::new(()),
+            slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
+            worker: AudioWorkerHandle::with_cancel(worker_cancel),
+            runtime: RuntimeHandle::try_current().ok(),
+        }
+    }
+
+    pub(crate) fn bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    pub(crate) fn cancel(&self) {
+        if let Some(cancel) = &self.config.cancel {
+            cancel.cancel();
+        }
+    }
+
+    pub(crate) fn cancel_token(&self) -> Option<CancelToken> {
+        self.config.cancel.clone()
+    }
+
+    pub(crate) fn configured_sample_rate(&self) -> u32 {
+        self.config.sample_rate
+    }
+
+    pub(crate) fn eq_band_count(&self) -> usize {
+        self.config.eq_layout.len()
     }
 
     fn emit(&self, event: EngineEvent) {
@@ -124,8 +129,8 @@ impl EngineImpl {
             Some(handle) => handle
                 .cmd_tx
                 .try_push(cmd)
-                .map_err(|_| PlayError::Internal("slot channel full".into())),
-            None => Err(PlayError::Internal("slot handle not found".into())),
+                .map_err(|_| PlayError::SlotChannelFull { slot }),
+            None => Err(PlayError::SlotNotFound(slot)),
         };
         drop(slot_registry);
         result
@@ -195,28 +200,8 @@ impl EngineImpl {
         self.session.tick()
     }
 
-    fn with_session(config: EngineConfig, bus: EventBus, session: SessionHandle) -> Self {
-        let max_slots = config.max_slots;
-        let resolved_pool = config
-            .pcm_pool
-            .clone()
-            .unwrap_or_else(|| PcmPool::default().clone());
-        let worker_cancel = CancelScope::new(config.cancel.clone()).token();
-
-        Self {
-            config,
-            bus,
-            session,
-            active_slots: Mutex::default(),
-            master_volume: AtomicF32::new(1.0),
-            pcm_pool: resolved_pool,
-            player_id: Mutex::default(),
-            running: AtomicBool::new(false),
-            start_lock: Mutex::new(()),
-            slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
-            worker: AudioWorkerHandle::with_cancel(worker_cancel),
-            runtime: RuntimeHandle::try_current().ok(),
-        }
+    pub(crate) fn pcm_pool(&self) -> &PcmPool {
+        &self.pcm_pool
     }
 
     /// Shared audio worker handle for this engine.
@@ -321,12 +306,6 @@ impl EngineImpl {
     }
 
     pub fn start(&self) -> Result<(), PlayError> {
-        // Hold across the whole check-then-act: `running` flips to `true`
-        // only after `start_player` has fully succeeded, so a concurrent
-        // starter either blocks here and then observes `running == true`
-        // (and returns `EngineAlreadyRunning`) or sees a fully-started
-        // engine — never a half-started one, and never a second
-        // `start_player` dispatch.
         let _start = self.start_lock.lock();
         if self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineAlreadyRunning);

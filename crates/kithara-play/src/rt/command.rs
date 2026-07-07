@@ -72,12 +72,8 @@ impl PlayerNodeProcessor {
     pub fn drain_commands(&mut self) {
         while let Some(cmd) = self.cmd_rx.try_pop() {
             match cmd {
-                PlayerCmd::LoadTrack {
-                    resource,
-                    item_id,
-                    src,
-                } => {
-                    self.load_track(resource, item_id, src);
+                PlayerCmd::LoadTrack { resource, item_id } => {
+                    self.load_track(resource, item_id);
                 }
                 PlayerCmd::UnloadTrack { src } => {
                     self.unload_track(&src);
@@ -117,22 +113,22 @@ impl PlayerNodeProcessor {
         let (mut old_track, mut new_track) = (None, None);
 
         if let TrackTransition::FadeIn(ref nt) = transition {
-            new_track = Some(Arc::clone(nt));
+            new_track = Some(nt.clone());
             self.tracks_transitions.clear();
 
             let maybe_old = self.tracks.iter_keys().find_map(|(key, idx)| {
                 self.tracks
                     .get_by_index(*idx)
                     .filter(|t| t.state().is_leading())
-                    .map(|_| Arc::clone(key))
+                    .map(|_| key.clone())
             });
 
             if let Some(ref ot) = maybe_old
                 && ot != nt
             {
-                old_track = Some(Arc::clone(ot));
+                old_track = Some(ot.clone());
                 self.tracks_transitions
-                    .push_back(TrackTransition::FadeOut(Arc::clone(ot)));
+                    .push_back(TrackTransition::FadeOut(ot.clone()));
             }
         }
 
@@ -140,7 +136,7 @@ impl PlayerNodeProcessor {
         let playback = Arc::clone(&self.playback);
         self.tracks_transitions.retain(|transition| {
             let track_src = match transition {
-                TrackTransition::FadeIn(src) | TrackTransition::FadeOut(src) => Arc::clone(src),
+                TrackTransition::FadeIn(src) | TrackTransition::FadeOut(src) => src.clone(),
             };
             if let Some(track) = self.tracks.get_mut(&track_src) {
                 match transition {
@@ -170,18 +166,12 @@ impl PlayerNodeProcessor {
         }
     }
 
-    fn load_track(
-        &mut self,
-        resource: Box<PlayerResource>,
-        item_id: Option<Arc<str>>,
-        src: Arc<str>,
-    ) {
+    fn load_track(&mut self, resource: Box<PlayerResource>, item_id: Option<Arc<str>>) {
+        let src = Arc::clone(resource.src());
         if let Some(track) = self.tracks.remove(&src) {
             self.discard_track(track);
             self.notif_tx
-                .try_push(PlayerNotification::Unloaded {
-                    src: Arc::clone(&src),
-                })
+                .try_push(PlayerNotification::Unloaded { src: src.clone() })
                 .ok();
         }
 
@@ -190,8 +180,8 @@ impl PlayerNodeProcessor {
         let resource = *resource;
         resource.set_host_sample_rate(self.sample_rate);
 
-        let loaded_src = Arc::clone(&src);
-        let params = TrackParams::new(Arc::clone(&src), self.sample_rate)
+        let loaded_src = src.clone();
+        let params = TrackParams::new(src.clone(), self.sample_rate)
             .with_item_id(item_id)
             .with_fade_duration(self.crossfade.duration)
             .with_prefetch_duration(self.prefetch_duration)

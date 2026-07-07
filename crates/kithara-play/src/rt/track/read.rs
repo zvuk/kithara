@@ -9,6 +9,17 @@ use super::{
 };
 use crate::bridge::{PlayerNotification, TrackPlaybackStopReason, TrackState};
 
+struct TrackReadContext<'a> {
+    notification_tx: &'a mut HeapProd<PlayerNotification>,
+    range: Range<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct PartialRead {
+    frames: usize,
+    duration: f64,
+}
+
 /// Result of a single track render attempt.
 #[derive(Debug)]
 pub enum TrackReadOutcome {
@@ -68,8 +79,7 @@ impl PlayerTrack {
         &mut self,
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
-        range: Range<usize>,
-        notification_tx: &mut HeapProd<PlayerNotification>,
+        ctx: TrackReadContext<'_>,
         outcome: TrackReadOutcome,
     ) -> TrackReadOutcome {
         let TrackReadOutcome::Full {
@@ -89,21 +99,23 @@ impl PlayerTrack {
         let position = self.position();
         let duration = self.observed_duration;
 
-        self.mix_range(scratch_bufs, mix_bufs, range.clone(), range.len());
+        let range_len = ctx.range.len();
+        self.fade
+            .mix_range(scratch_bufs, mix_bufs, ctx.range, range_len);
         Self::check_notifications(
             &mut self.triggers,
-            notification_tx,
+            ctx.notification_tx,
             TriggerInput {
-                block_frames: range.len(),
+                block_frames: range_len,
                 duration,
-                fade_duration: self.fade_duration,
+                fade_duration: self.fade.duration(),
                 frames_until_eof,
                 position,
                 prefetch_duration: self.prefetch_duration,
                 sample_rate: self.sample_rate,
             },
         );
-        self.update_after_mix(notification_tx);
+        self.update_after_mix(ctx.notification_tx);
 
         TrackReadOutcome::Full {
             position,
@@ -135,29 +147,30 @@ impl PlayerTrack {
         &mut self,
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
-        range: Range<usize>,
-        notification_tx: &mut HeapProd<PlayerNotification>,
-        frames: usize,
-        duration: f64,
+        ctx: TrackReadContext<'_>,
+        partial: PartialRead,
     ) -> TrackReadOutcome {
+        let TrackReadContext {
+            notification_tx,
+            range,
+        } = ctx;
+        let PartialRead { frames, duration } = partial;
         self.advance_served_frames(frames as u64);
         let position = self.position();
         self.observed_duration = if position > 0.0 { position } else { duration };
         let duration = self.observed_duration;
+        let block_frames = range.len();
+        let mix_range = range.start..range.start + frames;
 
-        self.mix_range(
-            scratch_bufs,
-            mix_bufs,
-            range.start..range.start + frames,
-            frames,
-        );
+        self.fade
+            .mix_range(scratch_bufs, mix_bufs, mix_range, frames);
         Self::check_notifications(
             &mut self.triggers,
             notification_tx,
             TriggerInput {
-                block_frames: range.len(),
+                block_frames,
                 duration,
-                fade_duration: self.fade_duration,
+                fade_duration: self.fade.duration(),
                 frames_until_eof: Some(0),
                 position,
                 prefetch_duration: self.prefetch_duration,
@@ -167,31 +180,6 @@ impl PlayerTrack {
         self.handle_natural_end(notification_tx);
 
         TrackReadOutcome::Partial { frames, duration }
-    }
-
-    fn mix_range(
-        &mut self,
-        scratch_bufs: &mut [&mut [f32]],
-        mix_bufs: &mut [&mut [f32]],
-        range: Range<usize>,
-        frames: usize,
-    ) {
-        const MIN_STEREO_CHANNELS: usize = 2;
-        if scratch_bufs.len() < MIN_STEREO_CHANNELS || mix_bufs.len() < MIN_STEREO_CHANNELS {
-            return;
-        }
-
-        let (output_l_slice, output_r_slice) = mix_bufs.split_at_mut(1);
-        let output_l = &mut output_l_slice[0][range.clone()];
-        let output_r = &mut output_r_slice[0][range.clone()];
-
-        self.mix.mix_dry_into_wet_stereo(
-            &scratch_bufs[0][range.clone()],
-            &scratch_bufs[1][range],
-            output_l,
-            output_r,
-            frames,
-        );
     }
 
     fn notify_state_change(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
@@ -231,16 +219,23 @@ impl PlayerTrack {
 
         let read_outcome = self.read_resource(scratch_bufs, range.clone());
         match read_outcome {
-            TrackReadOutcome::Full { .. } => {
-                self.handle_full_read(scratch_bufs, mix_bufs, range, notification_tx, read_outcome)
-            }
+            TrackReadOutcome::Full { .. } => self.handle_full_read(
+                scratch_bufs,
+                mix_bufs,
+                TrackReadContext {
+                    notification_tx,
+                    range,
+                },
+                read_outcome,
+            ),
             TrackReadOutcome::Partial { frames, duration } => self.handle_partial_read(
                 scratch_bufs,
                 mix_bufs,
-                range,
-                notification_tx,
-                frames,
-                duration,
+                TrackReadContext {
+                    notification_tx,
+                    range,
+                },
+                PartialRead { frames, duration },
             ),
             TrackReadOutcome::Eof => {
                 self.handle_natural_end(notification_tx);
@@ -282,7 +277,7 @@ impl PlayerTrack {
     }
 
     fn update_after_mix(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
-        if self.mix.has_settled() {
+        if self.fade.has_settled() {
             self.update_state_after_fade();
         }
 

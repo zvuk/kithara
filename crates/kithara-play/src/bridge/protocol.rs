@@ -8,7 +8,6 @@ pub enum PlayerCmd {
     LoadTrack {
         resource: Box<PlayerResource>,
         item_id: Option<Arc<str>>,
-        src: Arc<str>,
     },
     /// Unload a track by its source identifier.
     UnloadTrack { src: Arc<str> },
@@ -32,10 +31,10 @@ pub enum PlayerCmd {
 impl fmt::Debug for PlayerCmd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::LoadTrack { item_id, src, .. } => f
+            Self::LoadTrack { item_id, resource } => f
                 .debug_struct("LoadTrack")
                 .field("item_id", item_id)
-                .field("src", src)
+                .field("src", resource.src())
                 .finish_non_exhaustive(),
             Self::UnloadTrack { src } => f.debug_struct("UnloadTrack").field("src", src).finish(),
             Self::Clear => f.write_str("Clear"),

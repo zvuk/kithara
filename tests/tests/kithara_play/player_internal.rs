@@ -482,7 +482,7 @@ fn arm_next_replaces_previously_armed_slot() {
 }
 
 #[kithara::test]
-fn commit_next_index_mismatch_returns_internal() {
+fn commit_next_index_mismatch_returns_typed_error() {
     let (player, _session) = make_offline_player(1.0);
     player.set_auto_advance_enabled(false);
     let (first, _) = make_tagged_resource("a", 0.05);
@@ -494,7 +494,13 @@ fn commit_next_index_mismatch_returns_internal() {
     player.arm_next(1).unwrap();
 
     let err = player.commit_next(2).expect_err("mismatch");
-    assert!(matches!(err, PlayError::Internal(_)));
+    assert!(matches!(
+        err,
+        PlayError::ArmIndexMismatch {
+            requested: 2,
+            armed: 1
+        }
+    ));
 }
 
 #[kithara::test]

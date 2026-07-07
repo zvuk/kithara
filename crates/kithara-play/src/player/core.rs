@@ -1,19 +1,14 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 
 use kithara_abr::{AbrController, AbrSettings};
-use kithara_audio::EngineLoad;
-use kithara_bufpool::PcmPool;
-use kithara_events::EventBus;
-use kithara_platform::{CancelScope, CancelToken, sync::Mutex};
-use portable_atomic::AtomicF32;
+use kithara_audio::{EngineLoad, StretchControls};
+use kithara_decode::GaplessMode;
+use kithara_platform::{CancelScope, sync::Mutex};
 use tracing::debug;
 
 use super::{
     config::PlayerConfig,
-    state::{PlayerPhase, QueuedResource},
+    state::{PlayerParams, PlayerPhase, Playlist, QueuedResource},
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus},
@@ -34,33 +29,18 @@ pub(crate) struct PlayerCore {
     /// Constructed once and kept address-stable for the player's lifetime.
     pub(crate) engine_load: Arc<EngineLoad>,
 
-    pub(crate) auto_advance_enabled: AtomicBool,
-    pub(crate) muted: AtomicBool,
-    pub(crate) crossfade_duration: AtomicF32,
-    pub(crate) default_rate: AtomicF32,
-    pub(crate) prefetch_duration: AtomicF32,
-    pub(crate) rate: AtomicF32,
-    pub(crate) volume: AtomicF32,
-    pub(crate) current_index: AtomicUsize,
-    /// Index last announced via `CurrentItemChanged` (sentinel `usize::MAX`
-    /// until the first announce).
-    pub(crate) last_announced_index: AtomicUsize,
-    /// Master cancel token. Drop fires `cancel.cancel()` so subsystems
-    /// observe the pulse before structural Arc teardown unwinds. See
-    /// `crates/kithara-play/CONTEXT.md` "Cancel hierarchy" section.
-    pub(crate) cancel: CancelToken,
+    pub(crate) params: PlayerParams,
+    pub(crate) timestretch: Arc<StretchControls>,
+    pub(crate) gapless_mode: GaplessMode,
     /// Engine drops last — worker shutdown happens after all tracks
     /// unregister and after `items` releases their resources.
     pub(crate) engine: EngineImpl,
-    pub(crate) bus: EventBus,
     /// Items drop before engine — Audio tracks unregister from worker
     /// while it is still alive.
-    pub(crate) items: Mutex<Vec<Option<QueuedResource>>>,
+    pub(crate) playlist: Mutex<Playlist>,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
-    pub(crate) pcm_pool: PcmPool,
-    pub(crate) config: PlayerConfig,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -82,7 +62,7 @@ pub struct PlayerImpl {
 
 impl PlayerImpl {
     /// Minimum playback rate to prevent stalling.
-    pub(crate) const MIN_PLAYBACK_RATE: f32 = 0.01;
+    pub(crate) const MIN_PLAYBACK_RATE: f32 = PlayerParams::MIN_PLAYBACK_RATE;
 
     /// Create a new player with the given configuration.
     #[must_use]
@@ -111,22 +91,32 @@ impl PlayerImpl {
             config.abr = Some(AbrController::new(AbrSettings::default(), cancel.child()));
         }
 
-        Self::new_with_engine(config, resolved_pool, bus, engine)
+        // Seed the single speed source with the configured default rate.
+        config.timestretch.set_speed(config.default_rate);
+        let core = PlayerCore {
+            engine_load: Arc::new(EngineLoad::default()),
+            params: PlayerParams::from(&config),
+            timestretch: config.timestretch,
+            gapless_mode: config.gapless_mode,
+            status: Mutex::default(),
+            playlist: Mutex::default(),
+            engine,
+        };
+        Self {
+            core,
+            phase: Mutex::new(PlayerPhase::Idle),
+        }
     }
 
     /// Advance to the next item in the queue.
     ///
     /// Does nothing if the current item is already the last one.
     pub fn advance_to_next_item(&self) {
-        let items = self.core.items.lock();
-        let current = self.core.current_index.load(Ordering::Relaxed);
-        if current + 1 < items.len() {
-            self.core
-                .current_index
-                .store(current + 1, Ordering::Relaxed);
-            drop(items);
-            self.announce_current_item(current + 1);
-            debug!(new_index = current + 1, "advanced to next item");
+        let mut playlist = self.core.playlist.lock();
+        if let Some(index) = playlist.advance() {
+            drop(playlist);
+            self.announce_current_item(index);
+            debug!(new_index = index, "advanced to next item");
         }
     }
 
@@ -134,13 +124,11 @@ impl PlayerImpl {
     /// from the last announced item, so a `play()` resume of the same item
     /// stays quiet.
     pub(crate) fn announce_current_item(&self, index: usize) {
-        if self
-            .core
-            .last_announced_index
-            .swap(index, Ordering::Relaxed)
-            != index
-        {
-            self.core.bus.publish(PlayerEvent::CurrentItemChanged);
+        if self.core.playlist.lock().mark_announced(index) {
+            self.core
+                .engine
+                .bus()
+                .publish(PlayerEvent::CurrentItemChanged);
         }
     }
 
@@ -153,10 +141,10 @@ impl PlayerImpl {
     /// `TrackRequested` notification near EOF would arm it for
     /// handover, surfacing as a barge-in.
     pub fn clear_item(&self, index: usize) {
-        let mut items = self.core.items.lock();
-        if index < items.len() {
-            items[index] = None;
-            drop(items);
+        let mut playlist = self.core.playlist.lock();
+        if index < playlist.len() {
+            playlist.clear_item(index);
+            drop(playlist);
             debug!(index, "item cleared");
         }
     }
@@ -169,19 +157,22 @@ impl PlayerImpl {
         item_id: Option<Arc<str>>,
         at_position: Option<usize>,
     ) {
-        let mut items = self.core.items.lock();
-        let pos = at_position.map_or(items.len(), |i| i.min(items.len()));
-        items.insert(pos, Some(QueuedResource { item_id, resource }));
-        debug!(count = items.len(), pos, "item inserted");
+        let count = {
+            let mut playlist = self.core.playlist.lock();
+            playlist.insert(QueuedResource { item_id, resource }, at_position);
+            playlist.len()
+        };
+        let pos = at_position.map_or_else(|| count.saturating_sub(1), |i| i.min(count));
+        debug!(count, pos, "item inserted");
     }
 
     pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(Arc<str>, f64)> {
-        let mut items = self.core.items.lock();
-        if index >= items.len() {
+        let mut playlist = self.core.playlist.lock();
+        if index >= playlist.len() {
             return None;
         }
 
-        let queued = items[index].take()?;
+        let queued = playlist.take(index)?;
         let (item_id, resource) = (queued.item_id, queued.resource);
 
         let duration_seconds = resource
@@ -190,7 +181,7 @@ impl PlayerImpl {
         let abr_handle = resource.abr_handle();
         self.phase.lock().set_abr_handle(abr_handle);
 
-        let current_rate = self.core.config.timestretch.speed();
+        let current_rate = self.core.timestretch.speed();
         resource.set_playback_rate(current_rate);
 
         let host_sr = self.core.engine.master_sample_rate();
@@ -199,53 +190,16 @@ impl PlayerImpl {
         }
 
         let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.core.pcm_pool);
-        drop(items);
+        let returned_src = Arc::clone(&src);
+        let player_resource = PlayerResource::new(resource, src, self.core.engine.pcm_pool());
+        drop(playlist);
 
         let _ = self.send_to_slot(PlayerCmd::LoadTrack {
             item_id,
             resource: Box::new(player_resource),
-            src: Arc::clone(&src),
         });
 
-        Some((src, duration_seconds))
-    }
-
-    pub(crate) fn new_with_engine(
-        config: PlayerConfig,
-        resolved_pool: PcmPool,
-        bus: EventBus,
-        engine: EngineImpl,
-    ) -> Self {
-        let cancel = config
-            .cancel
-            .clone()
-            .expect("BUG: PlayerImpl::new / with_engine must populate config.cancel");
-        // Seed the single speed source with the configured default rate.
-        config.timestretch.set_speed(config.default_rate);
-        let core = PlayerCore {
-            engine_load: Arc::new(EngineLoad::default()),
-            auto_advance_enabled: AtomicBool::new(config.auto_advance_enabled),
-            muted: AtomicBool::new(false),
-            crossfade_duration: AtomicF32::new(config.crossfade_duration),
-            default_rate: AtomicF32::new(config.default_rate),
-            prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
-            rate: AtomicF32::new(0.0),
-            volume: AtomicF32::new(1.0),
-            current_index: AtomicUsize::new(0),
-            last_announced_index: AtomicUsize::new(usize::MAX),
-            cancel,
-            bus,
-            status: Mutex::default(),
-            pcm_pool: resolved_pool,
-            config,
-            items: Mutex::default(),
-            engine,
-        };
-        Self {
-            core,
-            phase: Mutex::new(PlayerPhase::Idle),
-        }
+        Some((returned_src, duration_seconds))
     }
 
     /// Remove item at index. Returns the removed resource, or `None` if out of
@@ -253,37 +207,18 @@ impl PlayerImpl {
     pub fn remove_at(&self, index: usize) -> Option<Resource> {
         self.unarm_next();
 
-        let mut items = self.core.items.lock();
-        if index >= items.len() {
-            return None;
-        }
-        let removed = items.remove(index);
-        let current = self.core.current_index.load(Ordering::Relaxed);
-        if index < current {
-            self.core
-                .current_index
-                .store(current.saturating_sub(1), Ordering::Relaxed);
-        } else if index == current && current >= items.len() && !items.is_empty() {
-            self.core
-                .current_index
-                .store(items.len() - 1, Ordering::Relaxed);
-        }
-        // A removal shifts indices, so re-open announce (index match is stale).
-        self.core
-            .last_announced_index
-            .store(usize::MAX, Ordering::Relaxed);
-        debug!(index, remaining = items.len(), "item removed");
+        let mut playlist = self.core.playlist.lock();
+        let removed = playlist.remove_at(index);
+        let remaining = playlist.len();
+        drop(playlist);
+        debug!(index, remaining, "item removed");
         removed.map(|queued| queued.resource)
     }
 
     /// Remove all items from the queue.
     pub fn remove_all_items(&self) {
         self.unarm_next();
-        self.core.items.lock().clear();
-        self.core.current_index.store(0, Ordering::Relaxed);
-        self.core
-            .last_announced_index
-            .store(usize::MAX, Ordering::Relaxed);
+        self.core.playlist.lock().clear();
         self.set_status(PlayerStatus::Unknown);
         let _ = self.send_to_slot(PlayerCmd::Clear);
         self.enter_stopped();
@@ -301,23 +236,17 @@ impl PlayerImpl {
     /// Replace a consumed (or existing) resource at the given index with item
     /// identity metadata.
     pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>) {
-        let mut items = self.core.items.lock();
-        if index < items.len() {
-            items[index] = Some(QueuedResource { item_id, resource });
-            drop(items);
-            // Replacing the announced item re-opens announce for the next play.
-            if index == self.core.last_announced_index.load(Ordering::Relaxed) {
-                self.core
-                    .last_announced_index
-                    .store(usize::MAX, Ordering::Relaxed);
-            }
+        let mut playlist = self.core.playlist.lock();
+        if index < playlist.len() {
+            playlist.replace(index, QueuedResource { item_id, resource });
+            drop(playlist);
             debug!(index, "item replaced");
         }
     }
 
     /// Pre-allocate empty slots so `replace_item` can fill them by index.
     pub fn reserve_slots(&self, count: usize) {
-        self.core.items.lock().resize_with(count, || None);
+        self.core.playlist.lock().reserve(count);
         debug!(count, "slots reserved");
     }
 
@@ -328,7 +257,8 @@ impl PlayerImpl {
             *status = new_status;
             drop(status);
             self.core
-                .bus
+                .engine
+                .bus()
                 .publish(PlayerEvent::StatusChanged { status: new_status });
         }
     }
@@ -336,7 +266,7 @@ impl PlayerImpl {
 
 impl Drop for PlayerImpl {
     fn drop(&mut self) {
-        self.core.cancel.cancel();
+        self.core.engine.cancel();
     }
 }
 
@@ -363,6 +293,7 @@ mod tests {
     use kithara_audio::{StretchControls, generate_log_spaced_bands};
     use kithara_decode::GaplessMode;
     use kithara_events::Event;
+    use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -471,7 +402,7 @@ mod tests {
     #[kithara::test]
     fn player_pause_sets_rate_zero() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        player.core.rate.store(1.0, Ordering::Relaxed);
+        player.core.params.set_rate(1.0);
         player.pause();
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
     }
@@ -614,7 +545,7 @@ mod tests {
     fn set_rate_updates_shared_speed() {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_rate(2.0);
-        assert!((player.core.config.timestretch.speed() - 2.0).abs() < f32::EPSILON);
+        assert!((player.core.timestretch.speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -622,7 +553,7 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_rate(0.0);
         assert!(player.rate() >= 0.01);
-        assert!(player.core.config.timestretch.speed() >= 0.01);
+        assert!(player.core.timestretch.speed() >= 0.01);
 
         player.set_rate(-1.0);
         assert!(player.rate() >= 0.01);
@@ -634,11 +565,11 @@ mod tests {
             session: Some(testing::test_session()),
             ..PlayerConfig::default()
         });
-        let ptr_before = Arc::as_ptr(&player.core.config.timestretch);
+        let ptr_before = Arc::as_ptr(&player.core.timestretch);
         player.play();
         player.pause();
         player.play();
-        let ptr_after = Arc::as_ptr(&player.core.config.timestretch);
+        let ptr_after = Arc::as_ptr(&player.core.timestretch);
         assert_eq!(
             ptr_before, ptr_after,
             "timestretch controls must stay address-stable across transitions"
@@ -674,10 +605,10 @@ mod tests {
     #[kithara::test]
     fn drop_player_releases_tracks_before_engine() {
         // Worker-registered tracks live in `engine`; undelivered resources in
-        // `items` carry worker references. The phase (slot/abr/pending) holds
+        // `playlist` carry worker references. The phase (slot/abr/pending) holds
         // no worker-registered track directly. This pins that constructing,
         // arming a phase, and dropping does not panic / UAF: `phase` and
-        // `core.items` must drop before `core.engine`.
+        // `core.playlist` must drop before `core.engine`.
         let player = PlayerImpl::new(PlayerConfig::default());
         *player.phase.lock() = PlayerPhase::Playing {
             slot: SlotId::new(0),

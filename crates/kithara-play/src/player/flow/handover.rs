@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 
 use super::super::{
     core::PlayerImpl,
@@ -30,10 +30,10 @@ impl PlayerImpl {
             .and_then(|slot| slot.as_mut())
             .ok_or(PlayError::NotReady)?;
         if pending.index != index {
-            return Err(PlayError::Internal(format!(
-                "commit_next index mismatch: requested {index}, armed {}",
-                pending.index
-            )));
+            return Err(PlayError::ArmIndexMismatch {
+                requested: index,
+                armed: pending.index,
+            });
         }
         let outcome = if pending.state.activated() {
             None
@@ -59,7 +59,7 @@ impl PlayerImpl {
     /// `None` if `items[index]` is empty (loader hasn't filled it yet) or
     /// `index` is out of range.
     pub fn arm_next(&self, index: usize) -> Option<Arc<str>> {
-        let current_index = self.core.current_index.load(Ordering::Relaxed);
+        let current_index = self.current_index();
         if index >= self.item_count() {
             return None;
         }
@@ -71,11 +71,11 @@ impl PlayerImpl {
         let existing = phase.pending_mut().and_then(|slot| slot.as_ref());
         let decision = match existing {
             Some(existing) if existing.index == index => {
-                ArmDecision::AlreadyArmed(Arc::clone(&existing.src))
+                ArmDecision::AlreadyArmed(existing.src.clone())
             }
             Some(existing) => {
                 let unload = (!(existing.state.activated() && existing.index == current_index))
-                    .then(|| Arc::clone(&existing.src));
+                    .then(|| existing.src.clone());
                 if let Some(slot) = phase.pending_mut() {
                     *slot = None;
                 }
@@ -98,7 +98,7 @@ impl PlayerImpl {
             *pending_slot = Some(PendingNext {
                 index,
                 duration_seconds,
-                src: Arc::clone(&src),
+                src: src.clone(),
                 state: PendingNextState::Armed,
             });
         }
@@ -119,11 +119,11 @@ impl PlayerImpl {
     /// Commit the previously armed next track and start the cross-fade.
     ///
     /// Sends `FadeIn` to the audio thread for the armed slot, updates
-    /// `current_index`, and publishes `CurrentItemChanged`.
+    /// the playlist current index, and publishes `CurrentItemChanged`.
     ///
     /// # Errors
     /// - [`PlayError::NotReady`] if no slot is armed.
-    /// - [`PlayError::Internal`] if `index` does not match
+    /// - [`PlayError::ArmIndexMismatch`] if `index` does not match
     ///   [`Self::armed_next`].
     pub fn commit_next(&self, index: usize) -> Result<(), PlayError> {
         // `None` ⇒ the slot was already activated (idempotent no-op).
@@ -133,9 +133,9 @@ impl PlayerImpl {
 
         self.start_playback(activated.src);
         self.publish_current_track_snapshot(activated.duration_seconds);
-        let current_index = self.core.current_index.load(Ordering::Relaxed);
+        let current_index = self.current_index();
         if index != current_index {
-            self.core.current_index.store(index, Ordering::Relaxed);
+            self.core.playlist.lock().set_current(index);
             self.announce_current_item(index);
         }
         Ok(())
@@ -148,7 +148,7 @@ impl PlayerImpl {
     /// already been activated for the current index (the activated track
     /// is now the leading one — unloading would silence playback).
     pub fn unarm_next(&self) {
-        self.unarm_next_internal(Some(self.core.current_index.load(Ordering::Relaxed)));
+        self.unarm_next_internal(Some(self.current_index()));
     }
 
     pub(crate) fn unarm_next_internal(&self, current_index_hint: Option<usize>) {

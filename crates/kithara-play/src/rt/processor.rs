@@ -10,7 +10,7 @@ use firewheel::{
     event::ProcEvents,
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_bufpool::PcmPool;
 use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapCons, HeapProd, traits::Producer};
@@ -22,7 +22,7 @@ use crate::{
     bridge::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
     },
-    rt::ArenaRegistry,
+    rt::{ArenaRegistry, RenderPass, RenderTargets},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -71,7 +71,7 @@ pub struct PlayerNodeProcessor {
     trash_tx: HeapProd<PlayerTrack>,
     pub(super) sample_rate: NonZeroU32,
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
-    pub(super) scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
+    pub(super) render: RenderPass,
     pub(super) prefetch_duration: f32,
 }
 
@@ -89,32 +89,16 @@ impl PlayerNodeProcessor {
     /// Maximum number of concurrent tracks per player node.
     pub(super) const MAX_TRACKS: usize = 4;
 
-    /// Minimum stereo channel count for output processing.
-    pub(super) const MIN_STEREO: usize = 2;
-
-    /// Number of scratch buffers for stereo processing.
-    const SCRATCH_BUF_COUNT: usize = 4;
-
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
     pub fn new(inputs: NodeInputs, shape: StreamShape, pool: &PcmPool) -> Self {
-        let max_frames: usize = shape.max_block_frames.get().as_();
-        let scratch_bufs = std::array::from_fn(|_| {
-            let mut buf = pool.get();
-            let cap = buf.capacity();
-            if cap < max_frames {
-                buf.reserve(max_frames - cap);
-            }
-            buf
-        });
-
         Self {
             cmd_rx: inputs.cmd_rx,
             notif_tx: inputs.notif_tx,
             trash_tx: inputs.trash_tx,
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
-            scratch_bufs,
+            render: RenderPass::new(pool, shape.max_block_frames.get().as_()),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
@@ -257,6 +241,23 @@ impl PlayerNodeProcessor {
         self.tracks.get_mut(src)
     }
 
+    pub fn render_audio(
+        &mut self,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+        is_playing: bool,
+    ) -> (bool, Option<(f64, f64)>) {
+        self.render.render_audio(
+            RenderTargets {
+                tracks: &mut self.tracks,
+                notification_tx: &mut self.notif_tx,
+            },
+            buffers,
+            frames,
+            is_playing,
+        )
+    }
+
     /// Unload a track from the arena.
     pub(super) fn unload_track(&mut self, src: &Arc<str>) {
         if let Some(track) = self.tracks.remove(src) {
@@ -319,13 +320,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             .sample_rate
             .store(new_sr.get(), Ordering::Relaxed);
 
-        let max_frames: usize = stream_info.max_block_frames.get().as_();
-        for buf in &mut self.scratch_bufs {
-            let cap = buf.capacity();
-            if cap < max_frames {
-                buf.reserve(max_frames - cap);
-            }
-        }
+        self.render.resize(stream_info.max_block_frames.get().as_());
 
         self.tracks
             .iter()

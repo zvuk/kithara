@@ -37,19 +37,21 @@ impl PlayerImpl {
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
             let default_rate = self.default_rate();
-            self.core.rate.store(default_rate, Ordering::Relaxed);
+            self.core.params.set_rate(default_rate);
             let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
             self.enter_playing();
             self.core
-                .bus
+                .engine
+                .bus()
                 .publish(PlayerEvent::RateChanged { rate: default_rate });
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
-            self.core.rate.store(0.0, Ordering::Relaxed);
+            self.core.params.set_paused_rate();
             let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
             self.enter_paused();
             self.core
-                .bus
+                .engine
+                .bus()
                 .publish(PlayerEvent::RateChanged { rate: 0.0 });
         }
     }
@@ -59,7 +61,7 @@ impl PlayerImpl {
     /// Takes the resource out of the queue (replacing with `None`), wraps it
     /// in `PlayerResource`, and sends `LoadTrack` + `FadeIn` to the processor.
     fn load_current_item(&self) {
-        let index = self.core.current_index.load(Ordering::Relaxed);
+        let index = self.current_index();
         if let Some((src, duration_seconds)) = self.enqueue_to_processor(index) {
             self.publish_current_track_snapshot(duration_seconds);
             self.start_playback(src);
@@ -68,11 +70,12 @@ impl PlayerImpl {
 
     /// Pause playback (sets rate to 0.0).
     pub fn pause(&self) {
-        self.core.rate.store(0.0, Ordering::Relaxed);
+        self.core.params.set_paused_rate();
         let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
         self.enter_paused();
         self.core
-            .bus
+            .engine
+            .bus()
             .publish(PlayerEvent::RateChanged { rate: 0.0 });
         debug!(phase = ?self.phase_kind(), "pause");
     }
@@ -80,8 +83,8 @@ impl PlayerImpl {
     /// Start playback at the configured default rate.
     pub fn play(&self) {
         let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
-        self.core.rate.store(rate, Ordering::Relaxed);
-        self.core.config.timestretch.set_speed(rate);
+        self.core.params.set_rate(rate);
+        self.core.timestretch.set_speed(rate);
 
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");
@@ -101,8 +104,11 @@ impl PlayerImpl {
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);
         // Resuming the same item is not a track change; announce gates on it.
-        self.announce_current_item(self.core.current_index.load(Ordering::Relaxed));
-        self.core.bus.publish(PlayerEvent::RateChanged { rate });
+        self.announce_current_item(self.current_index());
+        self.core
+            .engine
+            .bus()
+            .publish(PlayerEvent::RateChanged { rate });
         debug!(rate, phase = ?self.phase_kind(), "play");
     }
 
@@ -180,9 +186,10 @@ impl PlayerImpl {
         } = transition;
         let items_len = self.item_count();
         if index >= items_len {
-            return Err(PlayError::Internal(format!(
-                "item index out of range: {index} (len: {items_len})"
-            )));
+            return Err(PlayError::IndexOutOfRange {
+                index,
+                len: items_len,
+            });
         }
 
         // Re-selecting the already-current item: its resource was consumed by
@@ -190,11 +197,13 @@ impl PlayerImpl {
         // the playing track). Like the armed case, an emptied slot here is
         // expected, not stale — so the consumed-slot guard must not fire and we
         // take the no-reload path (no `enqueue_to_processor`, no re-announce).
-        // Gated on `last_announced_index` so it covers only an item already
-        // loaded as current, not a fresh select of `current_index` whose
+        // Gated on `Playlist::last_announced` so it covers only an item
+        // already loaded as current, not a fresh select of the current index whose
         // resource genuinely still sits in the slot.
-        let reselecting_current = index == self.core.current_index.load(Ordering::Relaxed)
-            && index == self.core.last_announced_index.load(Ordering::Relaxed);
+        let playlist = self.core.playlist.lock();
+        let reselecting_current = index == playlist.current() && playlist.is_announced(index);
+        let has_resource = playlist.has_resource(index);
+        drop(playlist);
 
         let armed_for_index = self
             .phase
@@ -206,18 +215,8 @@ impl PlayerImpl {
         // `enqueue_to_processor` takes it out, so an emptied slot means the
         // caller's view of the item is stale. Fail before any bookkeeping so
         // the UI cannot drift from the audio.
-        if !armed_for_index
-            && !reselecting_current
-            && self
-                .core
-                .items
-                .lock()
-                .get(index)
-                .is_none_or(Option::is_none)
-        {
-            return Err(PlayError::Internal(format!(
-                "item {index} has no resource (already consumed)"
-            )));
+        if !armed_for_index && !reselecting_current && !has_resource {
+            return Err(PlayError::ItemConsumed { index });
         }
 
         self.ensure_engine_started()?;
@@ -230,7 +229,7 @@ impl PlayerImpl {
             self.commit_next(index)?;
         } else if !reselecting_current {
             self.unarm_next_internal(Some(index));
-            self.core.current_index.store(index, Ordering::Relaxed);
+            self.core.playlist.lock().set_current(index);
             self.load_current_item();
             self.announce_current_item(index);
         }
@@ -259,7 +258,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn select_item_out_of_range_returns_internal() {
+    fn select_item_out_of_range_returns_typed_error() {
         let player = PlayerImpl::new(PlayerConfig::default());
         let err = player
             .select_item_with_crossfade(
@@ -270,12 +269,15 @@ mod tests {
                 },
             )
             .expect_err("must error");
-        assert!(matches!(err, PlayError::Internal(_)));
+        assert!(matches!(
+            err,
+            PlayError::IndexOutOfRange { index: 5, len: 0 }
+        ));
     }
 
     /// `enqueue_to_processor` takes the resource out of the slot, so a
     /// select against an emptied (consumed) slot has nothing to load: it
-    /// must fail loudly instead of moving `current_index` / announcing
+    /// must fail loudly instead of moving the playlist current index / announcing
     /// `CurrentItemChanged` while the old audio keeps playing.
     #[kithara::test]
     fn select_item_on_consumed_slot_errors_without_bookkeeping() {

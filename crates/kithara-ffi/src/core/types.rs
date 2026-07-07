@@ -28,13 +28,19 @@ pub enum FfiError {
 impl From<PlayError> for FfiError {
     fn from(err: PlayError) -> Self {
         match err {
-            PlayError::NotReady => Self::NotReady,
+            PlayError::NotReady | PlayError::NoActiveSlot => Self::NotReady,
             PlayError::ItemFailed { reason } => Self::ItemFailed { reason },
             PlayError::SeekFailed { position } => Self::SeekFailed {
                 reason: format!("position {position:?}"),
             },
             PlayError::EngineNotRunning => Self::EngineNotRunning,
-            _ => Self::Internal {
+            err @ (PlayError::IndexOutOfRange { .. }
+            | PlayError::ItemConsumed { .. }
+            | PlayError::ArmIndexMismatch { .. }
+            | PlayError::EqBandOutOfRange { .. }) => Self::InvalidArgument {
+                reason: err.to_string(),
+            },
+            err => Self::Internal {
                 description: err.to_string(),
             },
         }
@@ -446,9 +452,14 @@ mod tests {
 
     #[kithara::test]
     #[case::not_ready(PlayError::NotReady, (|f: &FfiError| matches!(f, FfiError::NotReady)) as fn(&FfiError) -> bool)]
+    #[case::no_active_slot(PlayError::NoActiveSlot, (|f: &FfiError| matches!(f, FfiError::NotReady)) as fn(&FfiError) -> bool)]
     #[case::item_failed(
         PlayError::ItemFailed { reason: "bad codec".into() },
         (|f: &FfiError| matches!(f, FfiError::ItemFailed { .. })) as fn(&FfiError) -> bool
+    )]
+    #[case::index_out_of_range(
+        PlayError::IndexOutOfRange { index: 3, len: 2 },
+        (|f: &FfiError| matches!(f, FfiError::InvalidArgument { .. })) as fn(&FfiError) -> bool
     )]
     #[case::internal_fallback(PlayError::ArenaFull, (|f: &FfiError| matches!(f, FfiError::Internal { .. })) as fn(&FfiError) -> bool)]
     fn play_error_maps_to_expected_ffi_variant(

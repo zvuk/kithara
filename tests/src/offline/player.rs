@@ -75,7 +75,6 @@ impl OfflinePlayer {
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
                 resource: Box::new(pr),
-                src: Arc::clone(&src),
                 item_id: None,
             })
             .expect("BUG: send LoadTrack");

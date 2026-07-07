@@ -1,17 +1,10 @@
 use std::{num::NonZeroU32, sync::Arc};
 
-#[rustfmt::skip]
-use firewheel::dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON;
-#[rustfmt::skip]
-use firewheel::param::smoother::SmootherConfig;
-use firewheel::dsp::{
-    fade::FadeCurve,
-    mix::{Mix, MixDSP},
-};
+use firewheel::dsp::fade::FadeCurve;
 use kithara_audio::ServiceClass;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
-use super::{PlayerResource, triggers::TrackTriggers};
+use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
 use crate::bridge::TrackState;
 
 /// Parameters used to create a track around an owned resource.
@@ -68,8 +61,7 @@ impl TrackParams {
 /// and notification logic for a single loaded track.
 pub struct PlayerTrack {
     pub(super) resource: PlayerResource,
-    pub(super) fade_curve: FadeCurve,
-    pub(super) mix: MixDSP,
+    pub(super) fade: TrackFade,
     pub(super) item_id: Option<Arc<str>>,
     pub(super) state: TrackState,
     /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
@@ -80,8 +72,6 @@ pub struct PlayerTrack {
     pub(super) ended_at_eof: bool,
     pub(super) triggers: TrackTriggers,
     pub(super) state_dirty: bool,
-    /// Current crossfade duration used for near-end trigger checks.
-    pub(super) fade_duration: f32,
     /// Lead time before EOF at which the prefetch trigger fires.
     ///
     /// Effective preload threshold is
@@ -119,20 +109,14 @@ impl PlayerTrack {
             sample_rate,
             fade_curve,
         } = params;
-        let fade_conf = SmootherConfig {
-            smooth_seconds: fade_duration,
-            settle_epsilon: DEFAULT_SETTLE_EPSILON,
-        };
         let observed_duration = resource.duration();
         let track = Self {
             resource,
-            fade_curve,
-            fade_duration,
             item_id,
             state: TrackState::Preloading,
             state_dirty: false,
             triggers: TrackTriggers::default(),
-            mix: MixDSP::new(Mix::FULLY_WET, fade_curve, fade_conf, sample_rate),
+            fade: TrackFade::new(fade_duration, fade_curve, sample_rate),
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
             served_frames: 0,
@@ -153,9 +137,10 @@ impl PlayerTrack {
     #[must_use]
     pub fn duration(&self) -> f64 {
         if self.observed_duration > 0.0 {
-            return self.observed_duration;
+            self.observed_duration
+        } else {
+            self.resource.duration()
         }
-        self.resource.duration()
     }
 
     /// Whether this track reached *natural* EOF (vs `stop()` / faded-out).
@@ -169,21 +154,20 @@ impl PlayerTrack {
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
     pub fn fade_in(&mut self) {
         self.set_state(TrackState::FadingIn);
-        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
+        self.fade.fade_in();
         self.triggers.reset();
     }
 
     /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
     pub fn fade_out(&mut self) {
         self.set_state(TrackState::FadingOut);
-        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
+        self.fade.fade_out();
     }
 
     /// Instantly start playing at full volume.
     pub fn play(&mut self) {
         self.set_state(TrackState::Playing);
-        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
-        self.mix.reset_to_target();
+        self.fade.play();
         self.triggers.reset();
         self.ended_at_eof = false;
     }
@@ -210,30 +194,10 @@ impl PlayerTrack {
     /// so trigger thresholds reflect the new playback origin.
     pub fn seek(&mut self, seconds: f64) {
         self.resource.seek(seconds);
-        let frames = Self::seek_frame_index(seconds, self.sample_rate, self.observed_duration);
+        let frames = seek_frame_index(seconds, self.sample_rate, self.observed_duration);
         self.served_frames = frames;
         self.triggers.reset();
         self.ended_at_eof = false;
-    }
-
-    fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {
-        let sample_rate = sample_rate.max(1);
-        let target_seconds = if seconds.is_nan() {
-            0.0
-        } else if seconds.is_finite() {
-            seconds.max(0.0)
-        } else if seconds.is_sign_positive() {
-            duration.max(0.0)
-        } else {
-            0.0
-        };
-        let bounded_seconds = if duration > 0.0 {
-            target_seconds.min(duration)
-        } else {
-            target_seconds
-        };
-        let frames = bounded_seconds * f64::from(sample_rate);
-        ToPrimitive::to_u64(&frames).unwrap_or(0)
     }
 
     /// Update the prefetch lead time used for the preload trigger.
@@ -268,36 +232,48 @@ impl PlayerTrack {
     /// Instantly stop (silent, finished state).
     pub fn stop(&mut self) {
         self.set_state(TrackState::Finished);
-        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
-        self.mix.reset_to_target();
+        self.fade.stop();
     }
 
     /// Re-create the `MixDSP` with a new fade duration.
     pub fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
-        let fade_conf = SmootherConfig {
-            smooth_seconds: fade_duration,
-            settle_epsilon: DEFAULT_SETTLE_EPSILON,
-        };
-        let target_mix = if self.state.is_leading() {
-            Mix::FULLY_DRY
-        } else {
-            Mix::FULLY_WET
-        };
-        self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
-        self.fade_duration = fade_duration;
+        self.fade
+            .update_duration(fade_duration, sample_rate, self.state.is_leading());
         self.sample_rate = sample_rate.get();
     }
 
     /// Map track state to worker scheduling priority and push the update.
     fn update_service_class(&self, state: TrackState) {
-        let class = match state {
-            TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => {
-                ServiceClass::Audible
-            }
-            TrackState::Preloading => ServiceClass::Warm,
-            TrackState::Finished => ServiceClass::Idle,
-        };
-        self.resource.set_service_class(class);
+        self.resource
+            .set_service_class(service_class_for_state(state));
+    }
+}
+
+fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {
+    let sample_rate = sample_rate.max(1);
+    let target_seconds = if seconds.is_nan() {
+        0.0
+    } else if seconds.is_finite() {
+        seconds.max(0.0)
+    } else if seconds.is_sign_positive() {
+        duration.max(0.0)
+    } else {
+        0.0
+    };
+    let bounded_seconds = if duration > 0.0 {
+        target_seconds.min(duration)
+    } else {
+        target_seconds
+    };
+    let frames = bounded_seconds * f64::from(sample_rate);
+    ToPrimitive::to_u64(&frames).unwrap_or(0)
+}
+
+fn service_class_for_state(state: TrackState) -> ServiceClass {
+    match state {
+        TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => ServiceClass::Audible,
+        TrackState::Preloading => ServiceClass::Warm,
+        TrackState::Finished => ServiceClass::Idle,
     }
 }
 
@@ -309,12 +285,9 @@ mod tests {
 
     #[kithara::test]
     fn seek_frame_index_clamps_unrepresentable_targets() {
-        assert_eq!(
-            PlayerTrack::seek_frame_index(f64::INFINITY, 44_100, 10.0),
-            441_000
-        );
-        assert_eq!(PlayerTrack::seek_frame_index(f64::INFINITY, 44_100, 0.0), 0);
-        assert_eq!(PlayerTrack::seek_frame_index(f64::NAN, 44_100, 10.0), 0);
+        assert_eq!(seek_frame_index(f64::INFINITY, 44_100, 10.0), 441_000);
+        assert_eq!(seek_frame_index(f64::INFINITY, 44_100, 0.0), 0);
+        assert_eq!(seek_frame_index(f64::NAN, 44_100, 10.0), 0);
     }
 
     #[kithara::test]

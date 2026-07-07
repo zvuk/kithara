@@ -23,7 +23,7 @@ impl PlayerImpl {
             }
             _ => {
                 if let Some(event) = player_event_from_notification(notification.clone()) {
-                    self.core.bus.publish(event);
+                    self.core.engine.bus().publish(event);
                 } else {
                     tracing::trace!(
                         src = ?notification.src(),
@@ -50,7 +50,7 @@ impl PlayerImpl {
         }
         let index = pending.index;
         self.publish_current_track_snapshot(pending.duration_seconds);
-        self.core.current_index.store(index, Ordering::Relaxed);
+        self.core.playlist.lock().set_current(index);
         self.announce_current_item(index);
     }
 
@@ -58,7 +58,10 @@ impl PlayerImpl {
         if self.crossfade_duration() <= 0.0 {
             return;
         }
-        self.core.bus.publish(PlayerEvent::HandoverRequested);
+        self.core
+            .engine
+            .bus()
+            .publish(PlayerEvent::HandoverRequested);
         if self.auto_advance_enabled()
             && let Some(idx) = self.armed_next()
         {
@@ -68,16 +71,19 @@ impl PlayerImpl {
 
     fn handle_track_playback_stopped(&self, notification: PlayerNotification) {
         if let Some(event) = player_event_from_notification(notification) {
-            self.core.bus.publish(event);
+            self.core.engine.bus().publish(event);
         }
 
         self.finalize_handover_if_armed();
     }
 
     fn handle_track_requested(&self) {
-        self.core.bus.publish(PlayerEvent::PrefetchRequested);
+        self.core
+            .engine
+            .bus()
+            .publish(PlayerEvent::PrefetchRequested);
         if self.auto_advance_enabled() {
-            let next_index = self.core.current_index.load(Ordering::Relaxed) + 1;
+            let next_index = self.current_index() + 1;
             if next_index < self.item_count() {
                 let _ = self.arm_next(next_index);
             }

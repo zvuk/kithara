@@ -113,7 +113,6 @@ async fn load_track_propagates_host_sample_rate() {
         .try_push(PlayerCmd::LoadTrack {
             resource: player_resource,
             item_id: None,
-            src: Arc::from("track.mp3"),
         })
         .ok();
     processor.drain_commands();
@@ -181,7 +180,6 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
         .try_push(PlayerCmd::LoadTrack {
             resource: player_resource,
             item_id: None,
-            src: Arc::from("track.mp3"),
         })
         .ok();
     processor.drain_commands();
@@ -230,7 +228,6 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .try_push(PlayerCmd::LoadTrack {
             resource: create_duration_player_resource(&first_src, Duration::from_secs(64)),
             item_id: None,
-            src: Arc::clone(&first_src),
         })
         .ok();
     control
@@ -251,7 +248,6 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .try_push(PlayerCmd::LoadTrack {
             resource: create_duration_player_resource(&second_src, Duration::from_secs(162)),
             item_id: None,
-            src: Arc::clone(&second_src),
         })
         .ok();
     processor.drain_commands();
@@ -283,7 +279,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
 #[kithara::test(tokio)]
 async fn processor_multiple_seek_epochs_only_last_applies() {
     let seek_log = Arc::new(Mutex::new(Vec::new()));
-    let resource = create_tracking_player_resource("track1.mp3", Arc::clone(&seek_log));
+    let resource = create_tracking_player_resource("track1.mp3", seek_log.clone());
 
     let (mut processor, mut control) = make_processor();
     let src = Arc::from("track1.mp3");
@@ -292,7 +288,6 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
         .try_push(PlayerCmd::LoadTrack {
             resource,
             item_id: None,
-            src: Arc::clone(&src),
         })
         .ok();
     processor.drain_commands();
@@ -304,7 +299,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
         .ok();
     processor.drain_commands();
 
-    let playback = Arc::clone(processor.playback());
+    let playback = processor.playback().clone();
     let first = playback.next_seek_epoch();
     playback.seek_epoch.store(first, AtomicOrdering::SeqCst);
     control
@@ -362,7 +357,6 @@ async fn processor_track_command_scenarios(
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("track1.mp3"),
             item_id: None,
-            src: Arc::clone(&track_src),
         })
         .ok();
 
@@ -374,7 +368,6 @@ async fn processor_track_command_scenarios(
                 .try_push(PlayerCmd::LoadTrack {
                     resource: create_mock_player_resource("track1.mp3"),
                     item_id: None,
-                    src: Arc::clone(&track_src),
                 })
                 .ok();
         }
@@ -418,7 +411,6 @@ async fn processor_fade_in_restarts_track_from_zero() {
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("track1.mp3"),
             item_id: None,
-            src: Arc::clone(&src),
         })
         .ok();
     processor.drain_commands();
@@ -455,7 +447,6 @@ async fn processor_cleanup_finished_tracks() {
         .try_push(PlayerCmd::LoadTrack {
             resource,
             item_id: None,
-            src: Arc::from("track1.mp3"),
         })
         .ok();
     processor.drain_commands();
@@ -481,7 +472,6 @@ async fn render_audio_handover_fills_tail_from_next_playing_track() {
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
             item_id: None,
-            src: Arc::clone(&short_src),
         })
         .ok();
     control
@@ -489,7 +479,6 @@ async fn render_audio_handover_fills_tail_from_next_playing_track() {
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("long.mp3"),
             item_id: None,
-            src: Arc::clone(&long_src),
         })
         .ok();
     processor.drain_commands();
@@ -539,7 +528,6 @@ async fn render_audio_handover_promotes_preloading_track_without_silence() {
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
             item_id: None,
-            src: Arc::clone(&short_src),
         })
         .ok();
     control
@@ -547,7 +535,6 @@ async fn render_audio_handover_promotes_preloading_track_without_silence() {
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("preload.mp3"),
             item_id: None,
-            src: Arc::clone(&preload_src),
         })
         .ok();
     processor.drain_commands();
@@ -601,7 +588,6 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
             item_id: None,
-            src: Arc::clone(&short_src),
         })
         .ok();
     control
@@ -609,7 +595,6 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("fading.mp3"),
             item_id: None,
-            src: Arc::clone(&fading_src),
         })
         .ok();
     control
@@ -617,7 +602,6 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("preload.mp3"),
             item_id: None,
-            src: Arc::clone(&preload_src),
         })
         .ok();
     processor.drain_commands();

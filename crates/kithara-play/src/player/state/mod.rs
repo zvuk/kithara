@@ -2,4 +2,6 @@ mod params;
 pub(crate) mod phase;
 mod playlist;
 
-pub(crate) use phase::{PendingNext, PendingNextState, PlayerPhase, QueuedResource};
+pub(crate) use params::PlayerParams;
+pub(crate) use phase::{PendingNext, PendingNextState, PlayerPhase};
+pub(crate) use playlist::{Playlist, QueuedResource};
