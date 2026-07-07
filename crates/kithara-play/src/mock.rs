@@ -1,1 +1,1 @@
-pub use crate::traits::dj::eq::EqualizerMock;
+pub use crate::api::equalizer::EqualizerMock;

@@ -39,7 +39,7 @@ pub struct PlaybackShared {
 }
 
 impl PlaybackShared {
-    pub(crate) fn next_seek_epoch(&self) -> u64 {
+    pub fn next_seek_epoch(&self) -> u64 {
         self.seek_epoch
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)

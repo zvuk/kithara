@@ -3,9 +3,9 @@ use std::sync::Arc;
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
 
 use super::PlaybackShared;
-use crate::impls::{
-    player_notification::PlayerNotification, player_processor::PlayerCmd,
-    player_track::PlayerTrack, shared_eq::SharedEq,
+use crate::{
+    bridge::{PlayerCmd, PlayerNotification, SharedEq},
+    rt::track::PlayerTrack,
 };
 
 /// RT-owned channel halves and playback atomics for one player node.

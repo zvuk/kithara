@@ -4,12 +4,9 @@ use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};
 use kithara::{
     audio::PcmReader,
     play::{
-        PlayerNode, Resource, SharedEq,
-        bridge::{PlaybackShared, SlotControl, slot_channels},
-        impls::{
-            player_processor::PlayerCmd, player_resource::PlayerResource,
-            player_track::TrackTransition,
-        },
+        PlayerNode, Resource, SharedEq, TrackTransition,
+        bridge::{PlaybackShared, PlayerCmd, SlotControl, slot_channels},
+        rt::track::PlayerResource,
     },
 };
 use ringbuf::traits::{Consumer, Producer};
@@ -140,7 +137,7 @@ impl OfflinePlayer {
     pub fn take_notification_kinds(&mut self) -> Vec<NotificationKind> {
         let mut out = Vec::new();
         while let Some(n) = self.control.notif_rx.try_pop() {
-            use kithara::play::impls::player_notification::PlayerNotification as N;
+            use kithara::play::PlayerNotification as N;
             out.push(match n {
                 N::Loaded { .. } => NotificationKind::Loaded,
                 N::Unloaded { .. } => NotificationKind::Unloaded,

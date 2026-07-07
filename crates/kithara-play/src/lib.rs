@@ -3,45 +3,40 @@
 #![cfg_attr(rtsan, feature(sanitize))]
 
 mod error;
-mod events;
 mod guard;
-mod types;
 
+pub mod api;
 pub mod bridge;
-pub mod impls;
-pub mod traits;
+pub mod engine;
+pub mod player;
+pub mod resource;
+pub mod rt;
+pub mod session;
 
 #[cfg(target_arch = "wasm32")]
-pub mod wasm_support;
+pub mod wasm;
 
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
-pub use bridge::{NodeInputs, PlaybackShared, PlaybackSnapshot, SlotControl};
+pub use api::{
+    DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlayerEvent,
+    PlayerStatus, RouteChangeReason, SessionDuckingMode, SessionEvent, SlotId, TimeControlStatus,
+    TimeRange, WaitingReason,
+};
+pub use bridge::{
+    AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
+    PlayerNotification, Reply, SessionDispatcher, SessionError, SessionHandle, SessionState,
+    SharedEq, SlotControl, StartStreamFn, TrackPlaybackStopReason, TrackState, TrackTransition,
+    run_cmd,
+};
+pub use engine::{EngineConfig, EngineImpl};
 pub use error::PlayError;
-pub use events::{
-    DjEvent, EngineEvent, InterruptionKind, ItemEvent, PlayerEvent, RouteChangeReason, SessionEvent,
-};
-pub use impls::{
-    config::{ResourceConfig, ResourceSrc},
-    engine::{EngineConfig, EngineImpl},
-    player::{PlayerConfig, PlayerImpl, SelectTransition},
-    player_node::PlayerNode,
-    resource::Resource,
-    session::{
-        AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionError,
-        SessionHandle, SessionState, StartStreamFn, run_cmd,
-    },
-    shared_eq::SharedEq,
-    source_type::SourceType,
-};
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::{
     AudioWorkerHandle, EngineLoadSnapshot, SeekOutcome, ServiceClass, StretchControls,
 };
 pub use kithara_net::Headers;
-pub use traits::dj::eq::Equalizer;
-pub use types::{
-    ItemStatus, PlayerStatus, SessionDuckingMode, SlotId, TimeControlStatus, TimeRange,
-    WaitingReason,
-};
+pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
+pub use resource::{Resource, ResourceConfig, ResourceSrc, SourceType};
+pub use rt::PlayerNode;

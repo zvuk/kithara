@@ -1,6 +1,6 @@
 use kithara_platform::time::Duration;
 
-use crate::{impls::session::SessionError, types::SlotId};
+use crate::{api::SlotId, session::SessionError};
 
 #[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]

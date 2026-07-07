@@ -229,7 +229,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::impls::session::{
+    use crate::session::{
         protocol::{Cmd, Reply, SessionError},
         state::SessionState,
     };

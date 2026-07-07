@@ -7,23 +7,28 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::{
+    num::NonZeroU32,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use firewheel::dsp::fade::FadeCurve;
 use kithara::{
     self,
     bufpool::PcmPool,
     decode::PcmSpec,
+    platform::time::Duration,
     play::{
-        Resource,
-        impls::{
-            player_notification::{PlayerNotification, TrackPlaybackStopReason},
-            player_resource::PlayerResource,
-            player_track::{PlayerTrack, TrackParams, TrackReadOutcome, TrackState},
-        },
+        PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
+        rt::track::{PlayerResource, PlayerTrack, TrackParams, TrackReadOutcome},
     },
 };
-use kithara_integration_tests::audio_mock::TestPcmReader;
+use kithara_integration_tests::audio_mock::{
+    LiveFrontierReader, MisreportedDurationReader, TestPcmReader,
+};
 use ringbuf::{
     HeapRb,
     traits::{Consumer, Split},
@@ -223,6 +228,28 @@ async fn read_outcome_full_on_normal_read() {
     ));
 }
 
+#[kithara::test]
+fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
+    let frontier_ns = Arc::new(AtomicU64::new(0));
+    let reader = LiveFrontierReader::new(mock_spec(), Arc::clone(&frontier_ns));
+    let src: Arc<str> = Arc::from("frontier.flac");
+    let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
+    let track = make_track_from_resource(resource, src, None);
+
+    assert_eq!(track.decoded_frontier(), 0.0);
+
+    frontier_ns.store(
+        u64::try_from(Duration::from_millis(81_000).as_nanos()).expect("fits in u64"),
+        Ordering::Relaxed,
+    );
+
+    let live = track.decoded_frontier();
+    assert!(
+        (live - 81.0).abs() < 1e-6,
+        "decoded_frontier must read the live resource, got {live}"
+    );
+}
+
 #[kithara::test(tokio)]
 async fn read_outcome_partial_then_eof() {
     let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
@@ -344,6 +371,63 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
             .iter()
             .all(|notification| !matches!(notification, PlayerNotification::HandoverRequested)),
         "TrackHandoverRequested must not be emitted twice in one playback cycle"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
+    let src = Arc::from("misreported.mp3");
+    let resource = Resource::from_reader(
+        MisreportedDurationReader::new(mock_spec(), 900),
+        Some(Arc::clone(&src)),
+    );
+    let mut track = make_track_from_resource(resource, src, None);
+    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
+    track.update_fade_duration(0.0, sample_rate);
+    let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
+    let mut notification_tx = tx;
+    let mut scratch_l = [0.0; 512];
+    let mut scratch_r = [0.0; 512];
+    let mut mix_l = [0.0; 512];
+    let mut mix_r = [0.0; 512];
+    let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
+    let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
+
+    track.play();
+
+    let outcome = track.read(
+        &mut scratch_bufs,
+        &mut mix_bufs,
+        0..512,
+        &mut notification_tx,
+    );
+
+    assert!(matches!(
+        outcome,
+        TrackReadOutcome::Full {
+            frames_until_eof: Some(388),
+            duration,
+            ..
+        } if duration < 10.0
+    ));
+    let notifications = collect_notifications(&mut rx);
+    assert!(
+        notifications
+            .iter()
+            .any(|notification| matches!(notification, PlayerNotification::HandoverRequested)),
+        "handover must be emitted before the EOF block when the resource has already observed EOF"
+    );
+    assert!(
+        !notifications.iter().any(|notification| {
+            matches!(
+                notification,
+                PlayerNotification::PlaybackStopped {
+                    reason: TrackPlaybackStopReason::Eof,
+                    ..
+                }
+            )
+        }),
+        "first full block must only request preload, not emit EOF"
     );
 }
 

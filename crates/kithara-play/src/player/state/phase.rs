@@ -1,0 +1,401 @@
+use std::sync::Arc;
+
+use super::super::core::PlayerImpl;
+use crate::{api::SlotId, bridge::PlayerCmd, error::PlayError, resource::Resource};
+
+/// Internal phase-transition error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransitionError {
+    /// The requested action is not valid from the current phase.
+    WrongPhase,
+}
+
+/// A queued resource plus its optional queue-item identity.
+pub(crate) struct QueuedResource {
+    pub(crate) item_id: Option<Arc<str>>,
+    pub(crate) resource: Resource,
+}
+
+/// Whether the armed successor has been activated for the current handover.
+///
+/// Mirrors the pre-split `PendingNext::activated: bool`:
+/// - `Armed` ⇒ `activated == false` (armed, not yet committed).
+/// - `ActivatedReady` ⇒ `activated == true` (committed, leading slot).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PendingNextState {
+    Armed,
+    ActivatedReady,
+}
+
+impl PendingNextState {
+    pub(crate) fn activated(self) -> bool {
+        matches!(self, Self::ActivatedReady)
+    }
+}
+
+/// Internal auto-advance state for the next queue item.
+///
+/// The queue still owns `current_index`; `PendingNext` only tracks the
+/// already-enqueued successor and whether it has been activated.
+pub(crate) struct PendingNext {
+    pub(crate) src: Arc<str>,
+    pub(crate) state: PendingNextState,
+    pub(crate) duration_seconds: f64,
+    pub(crate) index: usize,
+}
+
+/// Discriminant for [`PlayerPhase`] without its payload.
+///
+/// `#[non_exhaustive]` so adding a variant later is not a breaking change for
+/// in-crate match sites that already handle the wildcard arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub(crate) enum PlayerPhaseKind {
+    Idle,
+    Loading,
+    Playing,
+    Paused,
+    Stopped,
+}
+
+/// Active phase of the player, folding the previously-independent
+/// `current_slot` / `current_abr_handle` / `pending_next` mutexes into a
+/// single typed phase guarded by one `Mutex<PlayerPhase>`.
+///
+/// A slot, once allocated, is reused for the player's lifetime: both
+/// `Playing` and `Paused` carry the same `slot`. `Loading` is the transient
+/// state between slot allocation and the first track being driven; `Idle` is
+/// the freshly-constructed state with no slot; `Stopped` follows
+/// `remove_all_items` (cleared queue, slot may still exist).
+pub(crate) enum PlayerPhase {
+    Idle,
+    Loading {
+        slot: SlotId,
+        abr_handle: Option<kithara_abr::AbrHandle>,
+        pending: Option<PendingNext>,
+    },
+    Playing {
+        slot: SlotId,
+        abr_handle: Option<kithara_abr::AbrHandle>,
+        pending: Option<PendingNext>,
+    },
+    Paused {
+        slot: SlotId,
+        abr_handle: Option<kithara_abr::AbrHandle>,
+        pending: Option<PendingNext>,
+    },
+    Stopped {
+        slot: Option<SlotId>,
+        abr_handle: Option<kithara_abr::AbrHandle>,
+    },
+}
+
+impl From<&PlayerPhase> for PlayerPhaseKind {
+    fn from(phase: &PlayerPhase) -> Self {
+        match phase {
+            PlayerPhase::Idle => Self::Idle,
+            PlayerPhase::Loading { .. } => Self::Loading,
+            PlayerPhase::Playing { .. } => Self::Playing,
+            PlayerPhase::Paused { .. } => Self::Paused,
+            PlayerPhase::Stopped { .. } => Self::Stopped,
+        }
+    }
+}
+
+impl PlayerPhase {
+    /// The ABR handle of the resource currently in the processor, if any.
+    pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.abr_handle_ref().cloned()
+    }
+
+    /// Borrow of the active ABR handle slot. Returning a reference makes this
+    /// a true accessor (not a `self -> Other` conversion).
+    fn abr_handle_ref(&self) -> Option<&kithara_abr::AbrHandle> {
+        match self {
+            Self::Idle => None,
+            Self::Loading { abr_handle, .. }
+            | Self::Playing { abr_handle, .. }
+            | Self::Paused { abr_handle, .. }
+            | Self::Stopped { abr_handle, .. } => abr_handle.as_ref(),
+        }
+    }
+
+    pub(crate) fn kind(&self) -> PlayerPhaseKind {
+        self.into()
+    }
+
+    /// Shared read access to the armed-next slot, if any.
+    pub(crate) fn pending(&self) -> Option<&PendingNext> {
+        match self {
+            Self::Loading { pending, .. }
+            | Self::Playing { pending, .. }
+            | Self::Paused { pending, .. } => pending.as_ref(),
+            Self::Idle | Self::Stopped { .. } => None,
+        }
+    }
+
+    /// Mutable access to the armed-next slot for transition bookkeeping.
+    pub(crate) fn pending_mut(&mut self) -> Option<&mut Option<PendingNext>> {
+        match self {
+            Self::Loading { pending, .. }
+            | Self::Playing { pending, .. }
+            | Self::Paused { pending, .. } => Some(pending),
+            Self::Idle | Self::Stopped { .. } => None,
+        }
+    }
+
+    /// Replace the ABR handle on the active phase (no-op from `Idle`).
+    pub(crate) fn set_abr_handle(&mut self, handle: Option<kithara_abr::AbrHandle>) {
+        match self {
+            Self::Loading { abr_handle, .. }
+            | Self::Playing { abr_handle, .. }
+            | Self::Paused { abr_handle, .. }
+            | Self::Stopped { abr_handle, .. } => *abr_handle = handle,
+            Self::Idle => {}
+        }
+    }
+
+    /// The active slot, if any phase currently holds one.
+    pub(crate) fn slot(&self) -> Option<SlotId> {
+        self.slot_ref().copied()
+    }
+
+    /// Borrow of the active slot. Returning a reference makes this a true
+    /// accessor (not a `self -> Other` conversion).
+    fn slot_ref(&self) -> Option<&SlotId> {
+        match self {
+            Self::Idle => None,
+            Self::Loading { slot, .. } | Self::Playing { slot, .. } | Self::Paused { slot, .. } => {
+                Some(slot)
+            }
+            Self::Stopped { slot, .. } => slot.as_ref(),
+        }
+    }
+}
+
+impl PlayerImpl {
+    /// Promote the phase to `Loading` carrying `slot`, preserving any armed
+    /// next / ABR handle the previous active phase held. A no-op transition
+    /// when the phase already holds a slot keeps the existing payload.
+    pub(crate) fn enter_loading_with_slot(&self, slot: SlotId) {
+        let mut phase = self.phase.lock();
+        let (abr_handle, pending) = match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
+            PlayerPhase::Loading {
+                abr_handle,
+                pending,
+                ..
+            }
+            | PlayerPhase::Playing {
+                abr_handle,
+                pending,
+                ..
+            }
+            | PlayerPhase::Paused {
+                abr_handle,
+                pending,
+                ..
+            } => (abr_handle, pending),
+            PlayerPhase::Stopped { abr_handle, .. } => (abr_handle, None),
+            PlayerPhase::Idle => (None, None),
+        };
+        *phase = PlayerPhase::Loading {
+            slot,
+            abr_handle,
+            pending,
+        };
+    }
+
+    /// Move an active (slot-holding) phase into `Paused`. No-op from `Idle`.
+    pub(crate) fn enter_paused(&self) {
+        let mut phase = self.phase.lock();
+        match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
+            PlayerPhase::Loading {
+                slot,
+                abr_handle,
+                pending,
+            }
+            | PlayerPhase::Playing {
+                slot,
+                abr_handle,
+                pending,
+            }
+            | PlayerPhase::Paused {
+                slot,
+                abr_handle,
+                pending,
+            } => {
+                *phase = PlayerPhase::Paused {
+                    slot,
+                    abr_handle,
+                    pending,
+                };
+            }
+            PlayerPhase::Stopped { slot, abr_handle } => {
+                *phase = match slot {
+                    Some(slot) => PlayerPhase::Paused {
+                        slot,
+                        abr_handle,
+                        pending: None,
+                    },
+                    None => PlayerPhase::Stopped { slot, abr_handle },
+                };
+            }
+            PlayerPhase::Idle => *phase = PlayerPhase::Idle,
+        }
+    }
+
+    /// Move an active (slot-holding) phase into `Playing`. No-op from `Idle`.
+    pub(crate) fn enter_playing(&self) {
+        let mut phase = self.phase.lock();
+        match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
+            PlayerPhase::Loading {
+                slot,
+                abr_handle,
+                pending,
+            }
+            | PlayerPhase::Playing {
+                slot,
+                abr_handle,
+                pending,
+            }
+            | PlayerPhase::Paused {
+                slot,
+                abr_handle,
+                pending,
+            } => {
+                *phase = PlayerPhase::Playing {
+                    slot,
+                    abr_handle,
+                    pending,
+                };
+            }
+            PlayerPhase::Stopped { slot, abr_handle } => {
+                *phase = match slot {
+                    Some(slot) => PlayerPhase::Playing {
+                        slot,
+                        abr_handle,
+                        pending: None,
+                    },
+                    None => PlayerPhase::Stopped { slot, abr_handle },
+                };
+            }
+            PlayerPhase::Idle => *phase = PlayerPhase::Idle,
+        }
+    }
+
+    /// Move the player into `Stopped`, preserving the slot/ABR handle.
+    pub(crate) fn enter_stopped(&self) {
+        let mut phase = self.phase.lock();
+        let (slot, abr_handle) = match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
+            PlayerPhase::Loading {
+                slot, abr_handle, ..
+            }
+            | PlayerPhase::Playing {
+                slot, abr_handle, ..
+            }
+            | PlayerPhase::Paused {
+                slot, abr_handle, ..
+            } => (Some(slot), abr_handle),
+            PlayerPhase::Stopped { slot, abr_handle } => (slot, abr_handle),
+            PlayerPhase::Idle => (None, None),
+        };
+        *phase = PlayerPhase::Stopped { slot, abr_handle };
+    }
+
+    /// Discriminant of the current phase under a short lock.
+    pub(crate) fn phase_kind(&self) -> PlayerPhaseKind {
+        self.phase.lock().kind()
+    }
+
+    /// Phase gate: the active slot, or [`TransitionError::WrongPhase`] when
+    /// the player holds no slot (phases `Idle` / `Stopped`-without-slot).
+    pub(crate) fn require_active_slot(&self) -> Result<SlotId, TransitionError> {
+        self.phase.lock().slot().ok_or(TransitionError::WrongPhase)
+    }
+
+    /// Send a command to the current slot's processor.
+    pub(crate) fn send_to_slot(&self, cmd: PlayerCmd) -> Result<(), PlayError> {
+        let slot_id = self
+            .require_active_slot()
+            .map_err(|TransitionError::WrongPhase| PlayError::Internal("no active slot".into()))?;
+        self.core.engine.send_slot_cmd(slot_id, cmd)
+    }
+
+    /// Snapshot of the active slot under a short phase lock.
+    pub(crate) fn slot(&self) -> Option<SlotId> {
+        self.require_active_slot().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn pending_next_state_maps_activated_bool() {
+        // `Armed` mirrors the pre-split `activated == false`,
+        // `ActivatedReady` mirrors `activated == true`.
+        assert!(!PendingNextState::Armed.activated());
+        assert!(PendingNextState::ActivatedReady.activated());
+    }
+
+    #[kithara::test]
+    fn player_phase_kind_exhaustive() {
+        assert_eq!(PlayerPhase::Idle.kind(), PlayerPhaseKind::Idle);
+        let slot = SlotId::new(0);
+        assert_eq!(
+            PlayerPhase::Loading {
+                slot,
+                abr_handle: None,
+                pending: None,
+            }
+            .kind(),
+            PlayerPhaseKind::Loading
+        );
+        assert_eq!(
+            PlayerPhase::Playing {
+                slot,
+                abr_handle: None,
+                pending: None,
+            }
+            .kind(),
+            PlayerPhaseKind::Playing
+        );
+        assert_eq!(
+            PlayerPhase::Paused {
+                slot,
+                abr_handle: None,
+                pending: None,
+            }
+            .kind(),
+            PlayerPhaseKind::Paused
+        );
+        assert_eq!(
+            PlayerPhase::Stopped {
+                slot: None,
+                abr_handle: None,
+            }
+            .kind(),
+            PlayerPhaseKind::Stopped
+        );
+    }
+
+    #[kithara::test]
+    fn idle_phase_has_no_slot_or_handle() {
+        let phase = PlayerPhase::Idle;
+        assert!(phase.slot().is_none());
+        assert!(phase.abr_handle().is_none());
+        assert!(phase.pending().is_none());
+    }
+
+    #[kithara::test]
+    fn require_active_slot_errors_from_idle() {
+        let player = PlayerImpl::new(crate::player::PlayerConfig::default());
+        assert_eq!(
+            player.require_active_slot(),
+            Err(TransitionError::WrongPhase)
+        );
+    }
+}

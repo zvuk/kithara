@@ -5,8 +5,8 @@ mod wire {
     use kithara_platform::sync::mpsc;
 
     use crate::{
+        api::{SessionDuckingMode, SlotId},
         bridge::SlotControl,
-        types::{SessionDuckingMode, SlotId},
     };
 
     pub type PlayerId = u64;
@@ -115,8 +115,8 @@ mod handle {
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply};
     use crate::{
+        api::{SessionDuckingMode, SlotId},
         error::PlayError,
-        types::{SessionDuckingMode, SlotId},
     };
 
     pub trait SessionDispatcher: Send + Sync + 'static {

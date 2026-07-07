@@ -14,8 +14,9 @@ use super::{
     protocol::{PlayerId, SessionError, StartStreamFn},
 };
 use crate::{
-    impls::{master_eq_node::MasterEqNode, shared_eq::SharedEq},
-    types::{SessionDuckingMode, SlotId},
+    api::{SessionDuckingMode, SlotId},
+    bridge::SharedEq,
+    rt::MasterEqNode,
 };
 
 #[derive(Debug)]

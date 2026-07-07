@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use js_sys::Function;
-use kithara_play::wasm_support::tick_and_poll;
+use kithara_play::wasm::tick_and_poll;
 use num_traits::cast;
 use wasm_bindgen::prelude::*;
 
@@ -260,7 +260,7 @@ impl AudioPlayer {
 
     /// Register a JS callback as the per-item observer for the track at
     /// `index`. The callback receives marshalled
-    /// [`FfiItemEvent`](crate::types::FfiItemEvent) objects.
+    /// [`FfiItemEvent`](crate::api::FfiItemEvent) objects.
     ///
     /// # Errors
     /// Returns a JS error if `index` is out of range or `obj` is not a
@@ -287,7 +287,7 @@ impl AudioPlayer {
 
     /// Register a JS callback (`obj`) as the player-level observer. The
     /// callback receives one marshalled event object per
-    /// [`FfiPlayerEvent`](crate::types::FfiPlayerEvent). This is one of
+    /// [`FfiPlayerEvent`](crate::api::FfiPlayerEvent). This is one of
     /// the FFI boundary sites: a JS `Function` is adapted into the typed
     /// `Arc<dyn PlayerObserver>` the facade expects.
     ///

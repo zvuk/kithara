@@ -10,7 +10,7 @@ use tracing::warn;
 use super::client::{WASM_SESSION_STATE, worker};
 use crate::{
     bridge::PlaybackShared,
-    impls::session::{dispatch::run_cmd, protocol::Reply, state::ensure_ctx},
+    session::{dispatch::run_cmd, protocol::Reply, state::ensure_ctx},
 };
 
 thread_local! {

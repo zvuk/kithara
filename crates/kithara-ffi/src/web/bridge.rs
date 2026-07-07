@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
-use kithara_play::wasm_support;
+use kithara_play::wasm;
 use wasm_bindgen::JsValue;
 
 use crate::web::commands::WorkerCmd;
@@ -56,7 +56,7 @@ impl WorkerBridge {
     /// session bridge. `0.0` when unknown.
     pub(crate) fn duration_secs(&self) -> f64 {
         let _ = self;
-        wasm_support::bridge_duration_secs()
+        wasm::bridge_duration_secs()
     }
 
     /// Boot the engine worker once. Idempotent: subsequent calls return
@@ -71,14 +71,14 @@ impl WorkerBridge {
             return;
         }
 
-        wasm_support::ensure_main_session();
-        wasm_support::init_worker_session();
+        wasm::ensure_main_session();
+        wasm::init_worker_session();
         // Creates the (suspended) AudioContext + loads the AudioWorklet so the
         // worker's Remote session has a Local output to hand decoded samples
         // to; firewheel-web-audio auto-resumes it on the first user gesture.
         // Without this no AudioContext exists, the session handshake never
         // completes, and the worker stalls before making a track current.
-        wasm_support::warm_up_audio();
+        wasm::warm_up_audio();
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
@@ -92,7 +92,7 @@ impl WorkerBridge {
     /// Whether the worker's audio session is currently playing.
     pub(crate) fn is_playing(&self) -> bool {
         let _ = self;
-        wasm_support::bridge_is_playing()
+        wasm::bridge_is_playing()
     }
 
     fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
@@ -103,7 +103,7 @@ impl WorkerBridge {
     /// session bridge. `0.0` when no item is loaded.
     pub(crate) fn position_secs(&self) -> f64 {
         let _ = self;
-        wasm_support::bridge_position_secs()
+        wasm::bridge_position_secs()
     }
 
     /// Forward a command to the worker, respawning the worker once if the

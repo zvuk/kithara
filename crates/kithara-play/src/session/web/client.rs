@@ -8,7 +8,7 @@ use kithara_platform::sync::{Mutex, mpsc};
 use super::bridge::{init_bridge_state, start_stream_web_audio};
 use crate::{
     error::PlayError,
-    impls::session::{
+    session::{
         dispatch::run_cmd,
         protocol::{Cmd, CmdMsg, Reply, SessionDispatcher},
         state::SessionState,

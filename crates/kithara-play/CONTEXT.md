@@ -65,6 +65,13 @@ policy (`next = current + 1`). `kithara-queue::Queue` disables that built-in
 policy and reacts to `HandoverRequested` by selecting the loaded successor via
 `select_item_with_crossfade`; it does not call `arm_next` / `commit_next`.
 
+## Planes & Ownership
+
+`api/` owns stable public shapes, `bridge/` owns cross-plane protocol and shared
+RT handles, `resource/` owns source/config/reader construction, `player/` owns
+main-thread queue and flow state, `engine/` owns session/slot registration, and
+`rt/` owns lock-free audio-node rendering.
+
 ## Engine Lifecycle
 
 `start()` -> `allocate_slot()` -> attach `PlayerImpl` -> `replace_current_item(Some(item))`
@@ -144,14 +151,14 @@ attributes would fragment the shared `kithara::` facade and shed nothing.
 
 ## Session Hosting
 
-Platform-asymmetric by necessity. Native (`impls/session/host_native.rs`): a
-dedicated engine worker thread drains an `mpsc::Receiver<CmdMsg>`. Ring buffers
-live in session state / engine slots, not in the command host. Web
-(`impls/session/host_web.rs`): `AudioContext` lives on the browser main thread,
-and Worker-side clients proxy commands over an `mpsc` bridge. The cross-platform
-core (`state.rs`, `client.rs`) carries zero `#[cfg]`; the structural gates are
-the four cfg lines around `mod host_native`, `mod host_web`, and their re-exports
-in `mod.rs`.
+Platform-asymmetric by necessity. Native (`session/native.rs`): a dedicated
+engine worker thread drains an `mpsc::Receiver<CmdMsg>`. Ring buffers live in
+session state / engine slots, not in the command host. Web
+(`session/web/{bridge,client}.rs`): `AudioContext` lives on the browser main
+thread, and Worker-side clients proxy commands over an `mpsc` bridge. The
+cross-platform core (`session/{state,dispatch,protocol}.rs`) carries zero
+`#[cfg]`; the structural gates are the cfg lines around `mod native`, `mod web`,
+and their re-exports in `mod.rs`.
 
 ## Feature Flags
 

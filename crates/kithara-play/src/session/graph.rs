@@ -9,9 +9,9 @@ use super::{
     state::{PlayerState, SessionState, SlotNodes, ensure_ctx},
 };
 use crate::{
+    api::{SessionDuckingMode, SlotId},
     bridge::slot_channels,
-    impls::{master_eq_node::MasterEqNode, player_node::PlayerNode},
-    types::{SessionDuckingMode, SlotId},
+    rt::{MasterEqNode, PlayerNode},
 };
 pub(super) fn ducking_gain(mode: SessionDuckingMode) -> f32 {
     match mode {
@@ -48,7 +48,7 @@ fn connect_stereo<B: AudioBackend>(
 pub(super) mod lifecycle {
     use super::*;
 
-    pub(in crate::impls::session) fn start_player<B: AudioBackend>(
+    pub(in crate::session) fn start_player<B: AudioBackend>(
         state: &mut SessionState<B>,
         player_id: PlayerId,
         sample_rate: u32,
@@ -98,7 +98,7 @@ pub(super) mod lifecycle {
         );
         Ok(())
     }
-    pub(in crate::impls::session) fn stop_player<B: AudioBackend>(
+    pub(in crate::session) fn stop_player<B: AudioBackend>(
         state: &mut SessionState<B>,
         player_id: PlayerId,
     ) -> Result<(), SessionError> {
@@ -181,7 +181,7 @@ pub(super) mod lifecycle {
 pub(super) mod slots {
     use super::*;
 
-    pub(in crate::impls::session) fn allocate_slot<B: AudioBackend>(
+    pub(in crate::session) fn allocate_slot<B: AudioBackend>(
         state: &mut SessionState<B>,
         player_id: PlayerId,
     ) -> Result<Reply, SessionError> {
@@ -235,7 +235,7 @@ pub(super) mod slots {
         });
         Ok(reply)
     }
-    pub(in crate::impls::session) fn release_slot<B: AudioBackend>(
+    pub(in crate::session) fn release_slot<B: AudioBackend>(
         state: &mut SessionState<B>,
         player_id: PlayerId,
         slot: SlotId,
@@ -287,7 +287,7 @@ pub(super) mod slots {
 pub(super) mod controls {
     use super::*;
 
-    pub(in crate::impls::session) fn set_player_master_volume<B: AudioBackend>(
+    pub(in crate::session) fn set_player_master_volume<B: AudioBackend>(
         state: &mut SessionState<B>,
         player_id: PlayerId,
         volume: f32,
@@ -311,7 +311,7 @@ pub(super) mod controls {
         memo.update_memo(&mut queue);
         Ok(())
     }
-    pub(in crate::impls::session) fn set_player_slot_volume<B: AudioBackend>(
+    pub(in crate::session) fn set_player_slot_volume<B: AudioBackend>(
         state: &mut SessionState<B>,
         player_id: PlayerId,
         slot: SlotId,
@@ -334,7 +334,7 @@ pub(super) mod controls {
         slot_nodes.vol_pan_memo.update_memo(&mut queue);
         Ok(())
     }
-    pub(in crate::impls::session) fn set_player_eq_gain<B: AudioBackend>(
+    pub(in crate::session) fn set_player_eq_gain<B: AudioBackend>(
         state: &mut SessionState<B>,
         player_id: PlayerId,
         band: usize,
@@ -363,7 +363,7 @@ pub(super) mod controls {
         memo.update_memo(&mut queue);
         Ok(())
     }
-    pub(in crate::impls::session) fn set_session_ducking<B: AudioBackend>(
+    pub(in crate::session) fn set_session_ducking<B: AudioBackend>(
         state: &mut SessionState<B>,
         mode: SessionDuckingMode,
     ) {
