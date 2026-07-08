@@ -26,10 +26,10 @@ directly. Backends do not choose another backend when a requested mode is
 unavailable. Hot paths use caller-owned buffers or scratch from an injected
 `kithara-bufpool::PcmPool`; library code must not create a hidden default pool.
 
-The current built-in backend is feature-gated explicitly:
+The current built-in backend is exposed by one crate feature:
 
 - `resample-rubato` enables the Rubato backend; its algorithm is selected by
-  `rubato::RubatoConfig`.
+  `rubato::RubatoConfig`, not by separate Kithara feature flags.
 
 See [CONTEXT.md](CONTEXT.md) for the backend contract, allocation contract, and
 decoder integration rules.

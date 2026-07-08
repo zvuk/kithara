@@ -207,12 +207,13 @@ The resampler stage is fixed-ratio only: it converts decoder/source PCM to the
 current host/device sample rate and never carries playback speed. Speed and
 key-lock live in the time-stretch slot below.
 
+`AudioConfig.resampler_backend` selects the playback resampler backend, and
 `AudioConfig.resampler_options` carries `kithara-resampler::ResamplerOptions`
-through the stage decision into `ResamplerParams` and finally the configured
-`ResamplerBackend`. The defaults preserve the shipped playback values:
-4096-frame process blocks, 0.0001 host-rate ratio tolerance, and an 8.0 rubato
-max-ratio-adjustment window. These are implementation tunables, not hidden
-constants in the processing code.
+through the stage decision into `ResamplerParams` and finally that backend. The
+defaults preserve the shipped playback values: Rubato backend on builds that
+compile `resample-rubato`, 4096-frame process blocks, 0.0001 host-rate ratio
+tolerance, and an 8.0 rubato max-ratio-adjustment window. These are
+implementation tunables, not hidden constants in the processing code.
 
 `apple-fused-src` is the Apple device path. When the selected decoder backend is
 Apple AudioToolbox, `AudioConfig.host_sample_rate` is threaded to

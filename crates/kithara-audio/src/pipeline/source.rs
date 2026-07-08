@@ -4326,6 +4326,7 @@ mod splice_continuity_tests {
                 quality: crate::ResamplerQuality::default(),
                 options: crate::ResamplerOptions::default(),
             },
+            crate::ResamplerBackendConfig::default(),
             &pcm_pool,
             Vec::new(),
         );

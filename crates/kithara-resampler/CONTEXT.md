@@ -96,7 +96,7 @@ resampler is codec-embedded or adapter-based.
 
 <table>
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
-<tr><td><code>resample-rubato</code></td><td>no</td><td>Rubato fixed-ratio backend family, including config-selected FFT</td></tr>
+<tr><td><code>resample-rubato</code></td><td>no</td><td>Rubato fixed-ratio backend; algorithm selection lives in <code>RubatoConfig</code></td></tr>
 </table>
 
 ## Module Layout

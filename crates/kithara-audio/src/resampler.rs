@@ -52,8 +52,14 @@ impl ResamplerBackendConfig {
 }
 
 impl Default for ResamplerBackendConfig {
+    #[cfg(feature = "resample-rubato")]
     fn default() -> Self {
-        default_resampler_backend()
+        Self::new(RubatoBackend::new())
+    }
+
+    #[cfg(not(feature = "resample-rubato"))]
+    fn default() -> Self {
+        Self::none()
     }
 }
 
@@ -65,7 +71,6 @@ impl Default for ResamplerBackendConfig {
 #[non_exhaustive]
 pub struct ResamplerParams {
     /// Resampler backend factory selected by the caller.
-    #[builder(default)]
     pub backend: ResamplerBackendConfig,
     /// Shared atomic for dynamic host sample rate tracking.
     pub host_sample_rate: Arc<AtomicU32>,
@@ -83,25 +88,17 @@ pub struct ResamplerParams {
     pub options: ResamplerOptions,
 }
 
-#[cfg(feature = "resample-rubato")]
-fn default_resampler_backend() -> ResamplerBackendConfig {
-    ResamplerBackendConfig::new(RubatoBackend::new())
-}
-
-#[cfg(not(feature = "resample-rubato"))]
-fn default_resampler_backend() -> ResamplerBackendConfig {
-    ResamplerBackendConfig::none()
-}
-
 impl ResamplerParams {
-    /// Create resampler params with required runtime values and default settings.
+    /// Create resampler params with required runtime values and selected backend.
     pub fn new(
         host_sample_rate: Arc<AtomicU32>,
         source_sample_rate: u32,
         channels: usize,
         pool: PcmPool,
+        backend: ResamplerBackendConfig,
     ) -> Self {
         Self::builder()
+            .backend(backend)
             .host_sample_rate(host_sample_rate)
             .source_sample_rate(source_sample_rate)
             .channels(channels)
@@ -741,7 +738,13 @@ mod tests {
     }
 
     fn params(host_sr: Arc<AtomicU32>, source_rate: u32, channels: usize) -> ResamplerParams {
-        ResamplerParams::new(host_sr, source_rate, channels, PcmPool::default().clone())
+        ResamplerParams::new(
+            host_sr,
+            source_rate,
+            channels,
+            PcmPool::default().clone(),
+            ResamplerBackendConfig::default(),
+        )
     }
 
     fn params_with_quality(
@@ -751,6 +754,7 @@ mod tests {
         quality: ResamplerQuality,
     ) -> ResamplerParams {
         ResamplerParams::builder()
+            .backend(ResamplerBackendConfig::default())
             .host_sample_rate(host_sr)
             .source_sample_rate(source_rate)
             .channels(channels)

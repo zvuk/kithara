@@ -1016,6 +1016,7 @@ where
             block_on_underrun,
             resampler_options,
             resampler_quality,
+            resampler_backend,
             stream: stream_config,
             bus: config_bus,
             effects: custom_effects,
@@ -1084,6 +1085,7 @@ where
             &host_sample_rate,
             config_stretch.as_ref(),
             fused_src::resampler_stage(decoder_backend, resampler_quality, resampler_options),
+            resampler_backend,
             pool,
             custom_effects,
         );

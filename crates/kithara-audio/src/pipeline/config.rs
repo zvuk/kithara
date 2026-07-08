@@ -21,6 +21,7 @@ use portable_atomic::AtomicF32;
 use crate::effects::timestretch::TimeStretchProcessor;
 use crate::{
     effects::timestretch::StretchControls,
+    resampler::ResamplerBackendConfig,
     traits::AudioEffect,
     worker::{EngineLoad, handle},
 };
@@ -89,6 +90,9 @@ pub struct AudioConfig<T: StreamType> {
     /// Resampler implementation tunables.
     #[builder(default)]
     pub resampler_options: ResamplerOptions,
+    /// Resampler backend factory selected for the playback stage.
+    #[builder(default)]
+    pub resampler_backend: ResamplerBackendConfig,
     /// Additional effects to append after resampler in the processing chain.
     #[builder(default)]
     pub effects: Vec<Box<dyn AudioEffect>>,
@@ -152,6 +156,7 @@ pub(crate) fn create_effects(
     host_sample_rate: &Arc<AtomicU32>,
     stretch: Option<&Arc<StretchControls>>,
     resampler_stage: ResamplerStage,
+    resampler_backend: ResamplerBackendConfig,
     pool: &PcmPool,
     custom_effects: Vec<Box<dyn AudioEffect>>,
 ) -> Vec<Box<dyn AudioEffect>> {
@@ -162,6 +167,7 @@ pub(crate) fn create_effects(
     crate::pipeline::resampler_stage::append(
         &mut chain,
         resampler_stage,
+        resampler_backend,
         initial_spec,
         host_sample_rate,
         pool,
@@ -269,6 +275,7 @@ mod tests {
             &host_sr,
             Some(&controls),
             present_stage(),
+            ResamplerBackendConfig::default(),
             &pool,
             Vec::new(),
         );
@@ -285,6 +292,7 @@ mod tests {
             &host_sr,
             None,
             present_stage(),
+            ResamplerBackendConfig::default(),
             &pool,
             vec![Box::new(PassthroughEffect)],
         );
@@ -302,6 +310,7 @@ mod tests {
             &host_sr,
             None,
             ResamplerStage::Absent,
+            ResamplerBackendConfig::default(),
             &pool,
             Vec::new(),
         );
@@ -318,6 +327,7 @@ mod tests {
             &host_sr,
             None,
             ResamplerStage::Absent,
+            ResamplerBackendConfig::default(),
             &pool,
             vec![Box::new(PassthroughEffect)],
         );
@@ -338,6 +348,7 @@ mod tests {
             &host_sr,
             Some(&controls),
             present_stage(),
+            ResamplerBackendConfig::default(),
             &pool,
             vec![Box::new(PassthroughEffect)],
         );
@@ -363,6 +374,7 @@ mod tests {
             &host_sr,
             Some(&controls),
             present_stage(),
+            ResamplerBackendConfig::default(),
             &pool,
             Vec::new(),
         );

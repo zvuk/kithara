@@ -5,13 +5,14 @@ use kithara_decode::PcmSpec;
 
 use crate::{
     pipeline::config::ResamplerStage,
-    resampler::{ResamplerParams, ResamplerProcessor},
+    resampler::{ResamplerBackendConfig, ResamplerParams, ResamplerProcessor},
     traits::AudioEffect,
 };
 
 pub(crate) fn append(
     chain: &mut Vec<Box<dyn AudioEffect>>,
     stage: ResamplerStage,
+    backend: ResamplerBackendConfig,
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
     pool: &PcmPool,
@@ -21,6 +22,7 @@ pub(crate) fn append(
     };
 
     let params = ResamplerParams::builder()
+        .backend(backend)
         .host_sample_rate(Arc::clone(host_sample_rate))
         .source_sample_rate(initial_spec.sample_rate.get())
         .channels(usize::from(initial_spec.channels))
