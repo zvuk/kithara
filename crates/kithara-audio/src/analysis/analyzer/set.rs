@@ -15,11 +15,6 @@ impl Consts {
     const DEFAULT_BEAT_TARGET_RATE: u32 = 22_050;
 }
 
-#[must_use]
-pub fn beat_cache_tag(config: BeatAnalysisConfig) -> Option<String> {
-    super::nn::tag(config)
-}
-
 /// Beat-analysis tunables used by [`AnalyzerBuilder`].
 #[derive(Clone, Copy, Debug, PartialEq, Builder)]
 #[builder(state_mod(vis = "pub"))]
@@ -40,6 +35,13 @@ pub struct BeatAnalysisConfig {
     /// Seconds carried from the end of one detector window into the next.
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
     pub detector_overlap_seconds: u32,
+}
+
+impl BeatAnalysisConfig {
+    #[must_use]
+    pub fn cache_tag(self) -> Option<String> {
+        super::nn::tag(self)
+    }
 }
 
 impl Default for BeatAnalysisConfig {

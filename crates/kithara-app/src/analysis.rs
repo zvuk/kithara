@@ -2,7 +2,7 @@ use std::{collections::VecDeque, sync::Arc};
 
 use kithara::{
     assets::AssetStore,
-    audio::analysis::{BeatAnalysisConfig, beat_cache_tag},
+    audio::analysis::BeatAnalysisConfig,
     events::{Event, EventReceiver, TrackId},
     prelude::ResourceConfig,
 };
@@ -288,7 +288,7 @@ impl AnalysisController {
 /// Fingerprint of the active analysis configuration, stored inside each durable blob.
 /// A mismatch is a cache miss, so config changes re-analyse.
 fn analysis_fingerprint(beat_config: BeatAnalysisConfig) -> String {
-    let beat = beat_cache_tag(beat_config).unwrap_or_else(|| "off".to_string());
+    let beat = beat_config.cache_tag().unwrap_or_else(|| "off".to_string());
     format!("wave=native:max{WAVEFORM_MAX_BUCKETS};beat={beat}")
 }
 
