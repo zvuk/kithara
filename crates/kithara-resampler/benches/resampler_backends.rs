@@ -2,8 +2,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_bufpool::PcmPool;
-#[cfg(feature = "resample-readhead")]
-use kithara_resampler::read_head::ReadHeadBackend;
+#[cfg(feature = "resample-glide")]
+use kithara_resampler::glide::GlideBackend;
 #[cfg(feature = "resample-rubato")]
 use kithara_resampler::rubato::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
 use kithara_resampler::{
@@ -71,11 +71,11 @@ fn bench_compiled_backends<M>(
         channels,
         block,
     );
-    #[cfg(feature = "resample-readhead")]
+    #[cfg(feature = "resample-glide")]
     bench_backend(
         group,
-        "read-head",
-        ReadHeadBackend::new(),
+        "glide",
+        GlideBackend::new(),
         source_rate,
         target_rate,
         channels,

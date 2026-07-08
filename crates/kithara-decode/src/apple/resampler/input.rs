@@ -1,6 +1,8 @@
 use std::{ffi::c_void, ptr};
 
+use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
 use kithara_resampler::ResamplerError;
+use smallvec::SmallVec;
 
 use super::{buffer::audio_buffer_ptr, channel_byte_len};
 use crate::apple::{
@@ -14,7 +16,7 @@ use crate::apple::{
 const PARAM_ERR: OSStatus = -50;
 
 pub(super) struct AppleResamplerInputState {
-    staged: Vec<Vec<f32>>,
+    staged: SmallVec<[PcmBuf; 8]>,
     channels: usize,
     frames: usize,
     offset: usize,
@@ -23,18 +25,26 @@ pub(super) struct AppleResamplerInputState {
 }
 
 impl AppleResamplerInputState {
-    pub(super) fn new(channels: usize, chunk_size: usize) -> Self {
-        let staged = (0..channels)
-            .map(|_| Vec::with_capacity(chunk_size))
-            .collect();
-        Self {
+    pub(super) fn new(
+        channels: usize,
+        chunk_size: usize,
+        pcm_pool: &PcmPool,
+    ) -> Result<Self, BudgetExhausted> {
+        let mut staged = SmallVec::new();
+        for _ in 0..channels {
+            let mut buffer = pcm_pool.get();
+            buffer.ensure_len(chunk_size)?;
+            buffer.clear();
+            staged.push(buffer);
+        }
+        Ok(Self {
             staged,
             channels,
             frames: 0,
             offset: 0,
             consumed: 0,
             eos: false,
-        }
+        })
     }
 
     pub(super) fn clear(&mut self) {
@@ -64,7 +74,8 @@ impl AppleResamplerInputState {
         let frames = validate_input(input, self.channels, chunk_size)?;
         for (staged, source) in self.staged.iter_mut().zip(input.iter()) {
             staged.clear();
-            staged.extend_from_slice(source);
+            staged.ensure_len(source.len())?;
+            staged[..source.len()].copy_from_slice(source);
         }
         self.frames = frames;
         self.offset = 0;

@@ -179,7 +179,7 @@ When `symphonia` is disabled (`default-features = false` + only `apple` / `andro
 ## Resampler integration
 
 `kithara-resampler` owns standalone resampler traits, config, and backend
-families such as Rubato and ReadHead. `kithara-decode` imports that crate for
+families such as Rubato and Glide. `kithara-decode` imports that crate for
 decoder integration and keeps only decoder-owned placement decisions.
 `DecoderConfig.resampler` carries an optional `DecoderResamplerConfig`;
 codec-embedded Apple conversion is spelled as
@@ -195,10 +195,12 @@ There are two decoder-side placements:
   wraps the chosen decoder in `src/resampled.rs`. This works with any decoder
   backend that compiles in the current target; invalid backend/config pairs fail
   at construction instead of trying another backend.
-  ReadHead and Rubato use this generic adapter route from `kithara-resampler`.
-  On macOS/iOS, `AppleAudioConverterBackend` exposes the standalone
-  PCM-to-PCM `AudioConverter` adapter under `src/apple/resampler*` through the
-  same trait while keeping Apple FFI inside the sanctioned Apple decode path.
+  Glide and Rubato use this generic adapter route from `kithara-resampler`.
+  On macOS/iOS, `kithara_resampler::apple::AppleAudioConverterBackend` exposes
+  the standalone PCM-to-PCM `AudioConverter` backend and receives
+  `kithara_decode::AudioToolboxConverterFactory` as its concrete factory. The
+  backend/config owner stays in `kithara-resampler`; only the unsafe
+  AudioToolbox factory bridge stays under the sanctioned Apple decode path.
 
 `AppleCodec::SRC_OUTPUT_MARGIN_FRAMES = 1` is not configuration. It is the
 ceil-domain slack used by fused decode+SRC when carrying the ideal output length

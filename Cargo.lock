@@ -4370,6 +4370,7 @@ dependencies = [
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
+ "kithara-resampler",
  "kithara-storage",
  "kithara-stream",
  "kithara-test-utils",

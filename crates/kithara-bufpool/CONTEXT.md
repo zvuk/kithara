@@ -13,7 +13,7 @@ Each shard's queue capacity is fixed at construction (`max_buffers / SHARDS`, cl
 
 ## Integration
 
-Used across the workspace to eliminate allocations on hot paths (segment reads, PCM decode and resample, network I/O). Pools are wired through `Config` structs (`AudioConfig::byte_pool` / `pcm_pool`, `FileConfig` / `HlsConfig`, `ResamplerParams::pool`) so each surface is responsible for choosing its own pool sizing.
+Used across the workspace to eliminate allocations on hot paths (segment reads, PCM decode and resample, network I/O). Pools are wired through `Config` structs (`AudioConfig::byte_pool` / `pcm_pool`, `FileConfig` / `HlsConfig`, `ResamplerSettings::pcm_pool`) so each surface is responsible for choosing its own pool sizing.
 
 ## Lower-level re-exports
 

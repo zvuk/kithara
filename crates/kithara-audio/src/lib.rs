@@ -18,7 +18,6 @@ pub mod effects;
 pub mod mock;
 mod pipeline;
 mod region;
-mod resampler;
 mod runtime;
 mod traits;
 mod waveform;
@@ -43,7 +42,6 @@ pub use pipeline::{
     fetch::{EpochValidator, Fetch},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
-pub use resampler::{ResamplerParams, ResamplerProcessor};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
     SeekOutcome,

@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::PcmPool;
 
-use super::{ReadHeadBackend, ReadHeadConfig, ReadHeadInterpolation, resampler::ReadHeadResampler};
+use super::{GlideBackend, GlideConfig, GlideInterpolation, resampler::GlideResampler};
 use crate::{
     RatioGlide, Resampler, ResamplerBackend, ResamplerCapabilities, ResamplerConfig,
     ResamplerControl, ResamplerMode, ResamplerOptions, ResamplerSettings, create_resampler,
@@ -32,18 +32,17 @@ fn fixed_mode(source: u32, target: u32) -> ResamplerMode {
     }
 }
 
-fn build_read_head(source: u32, target: u32) -> Box<dyn Resampler> {
+fn build_glide(source: u32, target: u32) -> Box<dyn Resampler> {
     let config = ResamplerConfig::builder()
-        .backend(ReadHeadBackend::new())
+        .backend(GlideBackend::new())
         .settings(settings(fixed_mode(source, target)))
         .build();
-    create_resampler(&config)
-        .unwrap_or_else(|err| panic!("read-head resampler should build: {err}"))
+    create_resampler(&config).unwrap_or_else(|err| panic!("glide resampler should build: {err}"))
 }
 
 #[test]
-fn backend_reports_read_head_capabilities() {
-    let capabilities = ReadHeadBackend::new().capabilities();
+fn backend_reports_glide_capabilities() {
+    let capabilities = GlideBackend::new().capabilities();
 
     assert!(capabilities.contains(ResamplerCapabilities::FIXED_RATIO));
     assert!(capabilities.contains(ResamplerCapabilities::VARIABLE_RATIO));
@@ -53,15 +52,15 @@ fn backend_reports_read_head_capabilities() {
 }
 
 #[test]
-fn fixed_ratio_output_contract_uses_read_head_ratio() {
-    let resampler = build_read_head(44_100, 48_000);
+fn fixed_ratio_output_contract_uses_glide_ratio() {
+    let resampler = build_glide(44_100, 48_000);
 
     assert_eq!(resampler.output_frames_for_input(4_410), 4_800);
 }
 
 #[test]
 fn unity_fast_path_copies_input() {
-    let mut resampler = build_read_head(44_100, 44_100);
+    let mut resampler = build_glide(44_100, 44_100);
     let input = [0.0, 0.25, -0.5, 0.75];
     let mut output = [0.0; 4];
     let process = resampler
@@ -75,12 +74,12 @@ fn unity_fast_path_copies_input() {
 
 #[test]
 fn quadratic_interpolates_between_input_frames() {
-    let mut resampler = build_read_head(44_100, 88_200);
+    let mut resampler = build_glide(44_100, 88_200);
     let input = [0.0, 1.0, 0.0, -1.0, 0.0, 1.0];
     let mut output = [0.0; 12];
     let process = resampler
         .process_into_buffer(&[&input], &mut [&mut output])
-        .unwrap_or_else(|err| panic!("read-head process should succeed: {err}"));
+        .unwrap_or_else(|err| panic!("glide process should succeed: {err}"));
 
     assert!(process.output_frames > input.len());
     assert!(output[..process.output_frames].iter().any(|sample| {
@@ -100,8 +99,8 @@ fn glide_ratio_reaches_target_without_discontinuity() {
         }),
     };
     let settings = settings(mode);
-    let mut resampler = ReadHeadResampler::new("read-head", ReadHeadConfig::default(), &settings)
-        .unwrap_or_else(|err| panic!("read-head resampler should build: {err}"));
+    let mut resampler = GlideResampler::new("glide", GlideConfig::default(), &settings)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
     ResamplerControl::glide_ratio(
         &mut resampler,
         RatioGlide {
@@ -123,35 +122,35 @@ fn glide_ratio_reaches_target_without_discontinuity() {
 }
 
 #[test]
-fn factory_output_exposes_read_head_control_surface() {
+fn factory_output_exposes_glide_control_surface() {
     let mode = ResamplerMode::VariableRatio {
         sample_rate: rate(48_000),
         initial_ratio: 1.0,
         glide: None,
     };
     let config = ResamplerConfig::builder()
-        .backend(ReadHeadBackend::new())
+        .backend(GlideBackend::new())
         .settings(settings(mode))
         .build();
     let mut resampler = create_resampler(&config)
-        .unwrap_or_else(|err| panic!("read-head resampler should build: {err}"));
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
 
     let control = resampler
         .control_mut()
-        .unwrap_or_else(|| panic!("read-head should expose ratio controls"));
+        .unwrap_or_else(|| panic!("glide should expose ratio controls"));
     control
         .glide_ratio(RatioGlide {
             frames: rate(4),
             target_ratio: 0.75,
         })
-        .unwrap_or_else(|err| panic!("read-head glide should be accepted: {err}"));
+        .unwrap_or_else(|err| panic!("glide glide should be accepted: {err}"));
 }
 
 #[test]
 fn linear_mode_can_be_selected_by_config() {
-    let backend = ReadHeadBackend::with_config(
-        ReadHeadConfig::builder()
-            .interpolation(ReadHeadInterpolation::Linear)
+    let backend = GlideBackend::with_config(
+        GlideConfig::builder()
+            .interpolation(GlideInterpolation::Linear)
             .build(),
     );
     let config = ResamplerConfig::builder()
@@ -160,24 +159,24 @@ fn linear_mode_can_be_selected_by_config() {
         .build();
 
     create_resampler(&config)
-        .unwrap_or_else(|err| panic!("linear read-head resampler should build: {err}"));
+        .unwrap_or_else(|err| panic!("linear glide resampler should build: {err}"));
 }
 
 #[test]
-fn anti_alias_smooths_fast_read_head() {
+fn anti_alias_smooths_fast_glide() {
     let input = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
-    let mut plain = ReadHeadResampler::new(
-        "read-head",
-        ReadHeadConfig::builder().anti_alias(false).build(),
+    let mut plain = GlideResampler::new(
+        "glide",
+        GlideConfig::builder().anti_alias(false).build(),
         &settings(fixed_mode(96_000, 48_000)),
     )
-    .unwrap_or_else(|err| panic!("plain read-head should build: {err}"));
-    let mut filtered = ReadHeadResampler::new(
-        "read-head",
-        ReadHeadConfig::builder().anti_alias(true).build(),
+    .unwrap_or_else(|err| panic!("plain glide should build: {err}"));
+    let mut filtered = GlideResampler::new(
+        "glide",
+        GlideConfig::builder().anti_alias(true).build(),
         &settings(fixed_mode(96_000, 48_000)),
     )
-    .unwrap_or_else(|err| panic!("filtered read-head should build: {err}"));
+    .unwrap_or_else(|err| panic!("filtered glide should build: {err}"));
     let mut plain_output = [0.0; 8];
     let mut filtered_output = [0.0; 8];
     let plain_frames = plain

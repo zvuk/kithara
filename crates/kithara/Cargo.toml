@@ -92,8 +92,8 @@ symphonia = [
 # LC-only AAC decoder; without this feature, HE-AAC v2 (parametric
 # stereo + SBR) streams fail in the software pipeline.
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac", "kithara-queue?/fdk-aac"]
-resample-readhead = ["kithara-audio/resample-readhead", "kithara-decode/resample-readhead", "kithara-play/resample-readhead"]
-resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato", "kithara-play/resample-rubato"]
+resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide", "kithara-play/resample-glide", "kithara-resampler/resample-glide"]
+resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato", "kithara-play/resample-rubato", "kithara-resampler/resample-rubato"]
 analysis-beat = ["kithara-audio/analysis-beat", "kithara-play/analysis-beat"]
 analysis-waveform = ["kithara-audio/analysis-waveform", "kithara-play/analysis-waveform"]
 # Native-only C++ time-stretch backends (selectable at runtime in the DJ
@@ -190,6 +190,7 @@ kithara-net = { workspace = true, optional = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
 kithara-queue = { workspace = true, optional = true, default-features = false }
+kithara-resampler = { workspace = true, default-features = false }
 kithara-storage = { workspace = true, optional = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }

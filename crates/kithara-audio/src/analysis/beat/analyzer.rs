@@ -1,15 +1,15 @@
-use std::sync::Arc;
+use std::{num::NonZeroU32, sync::Arc};
 
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::PcmChunk;
 use kithara_platform::sync::Mutex;
+use kithara_resampler::{MonoStream, MonoStreamConfig, ResamplerOptions};
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
 
 use super::{
     detector::{BeatDetectError, BeatDetector, RawBeats},
     grid::{GridParams, build_grid},
-    resampler::MonoResampleBuffer,
 };
 use crate::{
     analysis::analyzer::{Analyzer, BeatAnalysisConfig},
@@ -28,7 +28,7 @@ pub(crate) struct BeatAnalyzer {
     failure: Option<BeatDetectError>,
     params: GridParams,
     feed: MonoFeed,
-    resampler: Option<MonoResampleBuffer>,
+    resampler: Option<MonoStream>,
     windows: WindowedBeats,
     source_rate: u32,
 }
@@ -50,7 +50,7 @@ impl BeatAnalyzer {
         let (feed, resampler) = if source_rate == config.target_rate {
             (MonoFeed::Pass, None)
         } else {
-            MonoResampleBuffer::new(source_rate, config, pcm_pool).map_or_else(
+            build_mono_stream(source_rate, config, pcm_pool).map_or_else(
                 || (MonoFeed::Broken, None),
                 |r| (MonoFeed::Resample, Some(r)),
             )
@@ -82,7 +82,8 @@ impl BeatAnalyzer {
             let flushed = resampler.finish(|samples| {
                 capture_failure(&mut failure, || windows.push_slice(samples, detector));
             });
-            if !flushed {
+            if let Err(e) = flushed {
+                warn!(?e, "beat analysis: resampler flush failed");
                 return Err(BeatDetectError::Buffer);
             }
             failure.map_or(Ok(()), Err)
@@ -120,16 +121,48 @@ impl BeatAnalyzer {
                     let pushed = resampler.push(mono, |samples| {
                         capture_failure(&mut failure, || windows.push_slice(samples, detector));
                     });
-                    self.failure = if pushed {
-                        failure
-                    } else {
-                        Some(BeatDetectError::Buffer)
+                    self.failure = match pushed {
+                        Ok(()) => failure,
+                        Err(e) => {
+                            warn!(?e, "beat analysis: resample block failed");
+                            Some(BeatDetectError::Buffer)
+                        }
                     };
                 }
             }
             MonoFeed::Broken => {}
         }
     }
+}
+
+fn build_mono_stream(
+    source_rate: u32,
+    config: &BeatAnalysisConfig,
+    pcm_pool: &PcmPool,
+) -> Option<MonoStream> {
+    let backend = config.resampler_backend.backend()?;
+    let source_sample_rate = NonZeroU32::new(source_rate)?;
+    let target_sample_rate = NonZeroU32::new(config.target_rate)?;
+    let stream_config = MonoStreamConfig::builder()
+        .backend(backend)
+        .source_sample_rate(source_sample_rate)
+        .target_sample_rate(target_sample_rate)
+        .quality(config.resampler_quality)
+        .options(
+            ResamplerOptions::builder()
+                .chunk_size(config.block_frames)
+                .build(),
+        )
+        .pcm_pool(pcm_pool.clone())
+        .build();
+    MonoStream::new(stream_config)
+        .map_err(|e| {
+            warn!(
+                ?e,
+                source_rate, "beat analysis: resampler construction failed"
+            );
+        })
+        .ok()
 }
 
 fn capture_failure<F>(failure: &mut Option<BeatDetectError>, detect: F)

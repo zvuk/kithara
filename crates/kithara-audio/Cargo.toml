@@ -63,7 +63,7 @@ symphonia = ["kithara-decode/symphonia"]
 # decoder is LC-only; without this feature, HE-AAC v2 streams fail to
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
-resample-readhead = ["kithara-decode/resample-readhead", "kithara-resampler/resample-readhead"]
+resample-glide = ["kithara-decode/resample-glide", "kithara-resampler/resample-glide"]
 resample-rubato = ["kithara-resampler/resample-rubato"]
 analysis-beat = []
 analysis-waveform = ["dep:realfft"]

@@ -2,7 +2,7 @@ use bon::Builder;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum ReadHeadInterpolation {
+pub enum GlideInterpolation {
     Linear,
     #[default]
     Quadratic,
@@ -11,18 +11,18 @@ pub enum ReadHeadInterpolation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct ReadHeadConfig {
+pub struct GlideConfig {
     #[builder(default = true)]
     pub anti_alias: bool,
     #[builder(default)]
-    pub interpolation: ReadHeadInterpolation,
+    pub interpolation: GlideInterpolation,
 }
 
-impl Default for ReadHeadConfig {
+impl Default for GlideConfig {
     fn default() -> Self {
         Self {
             anti_alias: true,
-            interpolation: ReadHeadInterpolation::Quadratic,
+            interpolation: GlideInterpolation::Quadratic,
         }
     }
 }

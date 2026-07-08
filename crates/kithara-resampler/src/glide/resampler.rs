@@ -2,29 +2,30 @@ use std::num::NonZeroUsize;
 
 use kithara_bufpool::{PcmBuf, PcmPool};
 use num_traits::cast::ToPrimitive;
+use smallvec::SmallVec;
 
-use super::{ReadHeadConfig, interpolator};
+use super::{GlideConfig, interpolator};
 use crate::{
     RatioGlide, Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerControl,
     ResamplerError, ResamplerMode, ResamplerOptions, ResamplerProcess, ResamplerSettings,
 };
 
-pub(super) struct ReadHeadResampler {
+pub(super) struct GlideResampler {
     channels: NonZeroUsize,
-    config: ReadHeadConfig,
+    config: GlideConfig,
     current_ratio: f64,
     glide: GlideState,
     input_frames: usize,
     mode: ResamplerMode,
     options: ResamplerOptions,
-    previous: Vec<PcmBuf>,
-    read_head: f64,
+    previous: SmallVec<[PcmBuf; 8]>,
+    cursor: f64,
 }
 
-impl ReadHeadResampler {
+impl GlideResampler {
     pub(super) fn new(
         backend: &'static str,
-        config: ReadHeadConfig,
+        config: GlideConfig,
         settings: &ResamplerSettings,
     ) -> Result<Self, ResamplerBuildError> {
         let ratio = initial_ratio(settings.mode);
@@ -40,7 +41,7 @@ impl ReadHeadResampler {
             input_frames: settings.options.chunk_size,
             mode: settings.mode,
             options: settings.options,
-            read_head: 0.0,
+            cursor: 0.0,
         })
     }
 
@@ -66,13 +67,13 @@ impl ReadHeadResampler {
             return produced;
         }
         let consumed = self
-            .read_head
+            .cursor
             .floor()
             .to_usize()
             .unwrap_or(usize::MAX)
             .min(input_frames.saturating_sub(1));
         self.store_previous(input, consumed);
-        self.read_head -= consumed.to_f64().unwrap_or(0.0);
+        self.cursor -= consumed.to_f64().unwrap_or(0.0);
         consumed
     }
 
@@ -92,19 +93,19 @@ impl ReadHeadResampler {
         output_capacity: usize,
     ) -> usize {
         let mut produced = 0;
-        while produced < output_capacity && can_sample(self.read_head, input_frames) {
+        while produced < output_capacity && can_sample(self.cursor, input_frames) {
             let ratio = self.current_ratio;
             for channel in 0..self.channels.get() {
                 output[channel][produced] = interpolator::interpolate(
                     input[channel],
                     self.previous[channel][0],
-                    self.read_head,
+                    self.cursor,
                     ratio,
                     self.config.interpolation,
                     self.config.anti_alias,
                 );
             }
-            self.read_head += ratio;
+            self.cursor += ratio;
             self.advance_glide();
             produced += 1;
         }
@@ -132,7 +133,7 @@ impl ReadHeadResampler {
     }
 }
 
-impl Resampler for ReadHeadResampler {
+impl Resampler for GlideResampler {
     fn capabilities(&self) -> ResamplerCapabilities {
         ResamplerCapabilities::FIXED_RATIO
             | ResamplerCapabilities::VARIABLE_RATIO
@@ -202,11 +203,11 @@ impl Resampler for ReadHeadResampler {
         for previous in &mut self.previous {
             previous[0] = 0.0;
         }
-        self.read_head = 0.0;
+        self.cursor = 0.0;
     }
 }
 
-impl ResamplerControl for ReadHeadResampler {
+impl ResamplerControl for GlideResampler {
     fn glide_ratio(&mut self, glide: RatioGlide) -> Result<(), ResamplerError> {
         validate_runtime_ratio(self.options, glide.target_ratio)?;
         let frames = glide.frames.get();
@@ -234,11 +235,11 @@ struct GlideState {
     target: f64,
 }
 
-fn can_sample(read_head: f64, input_frames: usize) -> bool {
+fn can_sample(cursor: f64, input_frames: usize) -> bool {
     if input_frames < 2 {
         return false;
     }
-    let Some(base) = read_head.floor().to_usize() else {
+    let Some(base) = cursor.floor().to_usize() else {
         return false;
     };
     base.saturating_add(1) < input_frames
@@ -290,8 +291,8 @@ fn previous_buffers(
     pool: &PcmPool,
     channels: NonZeroUsize,
     backend: &'static str,
-) -> Result<Vec<PcmBuf>, ResamplerBuildError> {
-    let mut buffers = Vec::with_capacity(channels.get());
+) -> Result<SmallVec<[PcmBuf; 8]>, ResamplerBuildError> {
+    let mut buffers = SmallVec::new();
     for _ in 0..channels.get() {
         let mut buffer = pool.get();
         buffer
@@ -309,7 +310,7 @@ fn previous_buffers(
 fn validate_input(input: &[&[f32]], channels: usize) -> Result<usize, ResamplerError> {
     if input.len() < channels {
         return Err(ResamplerError::InvalidBuffer {
-            detail: "not enough input channels for read-head resampler",
+            detail: "not enough input channels for glide resampler",
         });
     }
     let frames = input[0].len();
@@ -328,7 +329,7 @@ fn validate_input(input: &[&[f32]], channels: usize) -> Result<usize, ResamplerE
 fn validate_output(output: &[&mut [f32]], channels: usize) -> Result<usize, ResamplerError> {
     if output.len() < channels {
         return Err(ResamplerError::InvalidBuffer {
-            detail: "not enough output channels for read-head resampler",
+            detail: "not enough output channels for glide resampler",
         });
     }
     let frames = output[0].len();
@@ -352,14 +353,14 @@ fn validate_ratio_bounds(
     if !ratio.is_finite() || ratio <= 0.0 {
         return Err(ResamplerBuildError::InvalidRatio {
             ratio,
-            resource: "read-head",
+            resource: "glide",
         });
     }
     let min = 1.0 / options.max_ratio_adjustment;
     if ratio < min || ratio > options.max_ratio_adjustment {
         return Err(ResamplerBuildError::BackendBuild {
             backend,
-            detail: "read-head ratio exceeds configured max_ratio_adjustment".into(),
+            detail: "glide ratio exceeds configured max_ratio_adjustment".into(),
         });
     }
     Ok(())
@@ -368,14 +369,14 @@ fn validate_ratio_bounds(
 fn validate_runtime_ratio(options: ResamplerOptions, ratio: f64) -> Result<(), ResamplerError> {
     if !ratio.is_finite() || ratio <= 0.0 {
         return Err(ResamplerError::Backend {
-            op: "read-head ratio",
+            op: "glide ratio",
             detail: "ratio must be finite and positive".into(),
         });
     }
     let min = 1.0 / options.max_ratio_adjustment;
     if ratio < min || ratio > options.max_ratio_adjustment {
         return Err(ResamplerError::Backend {
-            op: "read-head ratio",
+            op: "glide ratio",
             detail: "ratio exceeds configured max_ratio_adjustment".into(),
         });
     }

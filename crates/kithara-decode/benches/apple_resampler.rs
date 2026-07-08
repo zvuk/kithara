@@ -4,10 +4,10 @@ mod apple {
 
     use criterion::{BenchmarkId, Criterion, Throughput};
     use kithara_bufpool::PcmPool;
-    use kithara_decode::AppleAudioConverterBackend;
+    use kithara_decode::AudioToolboxConverterFactory;
     use kithara_resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerSettings,
-        create_resampler,
+        apple::AppleAudioConverterBackend, create_resampler,
     };
     use num_traits::cast::ToPrimitive;
 
@@ -83,7 +83,9 @@ mod apple {
             ))
             .build();
         let config = ResamplerConfig::builder()
-            .backend(AppleAudioConverterBackend::new())
+            .backend(AppleAudioConverterBackend::new(
+                AudioToolboxConverterFactory::new(),
+            ))
             .settings(settings)
             .build();
         create_resampler(&config)

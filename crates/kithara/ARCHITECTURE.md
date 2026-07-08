@@ -29,7 +29,7 @@ sits in the audio path.
 <tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder (<code>kithara-audio/symphonia</code>, <code>kithara-decode/symphonia</code>) plus queue decode forwarding when <code>queue</code> is enabled</td></tr>
 <tr><td><code>fdk-aac</code></td><td>no</td><td>FDK-AAC decoder override across decode/audio and queue when <code>queue</code> is enabled</td></tr>
 <tr><td><code>resample-rubato</code></td><td>yes</td><td>Default fixed-ratio Rubato backend for playback decode adapters and beat analysis in default builds</td></tr>
-<tr><td><code>resample-readhead</code></td><td>no</td><td>Moving-read-head resampler backend for explicit playback/decode config selection without Rubato</td></tr>
+<tr><td><code>resample-glide</code></td><td>no</td><td>Glide resampler backend for explicit playback/decode config selection without Rubato</td></tr>
 <tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass in <code>kithara-audio</code>; the mono resampler backend comes from <code>BeatAnalysisConfig</code>. Apple FFI device sets omit this feature.</td></tr>
 <tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-audio</code>; waveform/blob types remain unconditional</td></tr>
 <tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Signalsmith time-stretch backend through <code>kithara-audio</code> / <code>kithara-stretch</code></td></tr>

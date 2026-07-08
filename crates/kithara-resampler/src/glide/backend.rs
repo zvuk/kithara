@@ -1,39 +1,39 @@
-use super::{ReadHeadConfig, resampler::ReadHeadResampler};
+use super::{GlideConfig, resampler::GlideResampler};
 use crate::{
     Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings,
 };
 
-const BACKEND_READ_HEAD: &str = "read-head";
+const BACKEND_GLIDE: &str = "glide";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ReadHeadBackend {
-    config: ReadHeadConfig,
+pub struct GlideBackend {
+    config: GlideConfig,
 }
 
-impl ReadHeadBackend {
+impl GlideBackend {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            config: ReadHeadConfig {
+            config: GlideConfig {
                 anti_alias: true,
-                interpolation: super::ReadHeadInterpolation::Quadratic,
+                interpolation: super::GlideInterpolation::Quadratic,
             },
         }
     }
 
     #[must_use]
-    pub const fn with_config(config: ReadHeadConfig) -> Self {
+    pub const fn with_config(config: GlideConfig) -> Self {
         Self { config }
     }
 }
 
-impl ResamplerBackend for ReadHeadBackend {
+impl ResamplerBackend for GlideBackend {
     fn build(
         &self,
         settings: &ResamplerSettings,
     ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
         settings.validate(self)?;
-        let resampler = ReadHeadResampler::new(self.name(), self.config, settings)?;
+        let resampler = GlideResampler::new(self.name(), self.config, settings)?;
         Ok(Box::new(resampler))
     }
 
@@ -46,6 +46,6 @@ impl ResamplerBackend for ReadHeadBackend {
     }
 
     fn name(&self) -> &'static str {
-        BACKEND_READ_HEAD
+        BACKEND_GLIDE
     }
 }

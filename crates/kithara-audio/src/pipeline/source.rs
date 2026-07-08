@@ -925,7 +925,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     ///
     /// Returns `None` when we can't form a ratio (duration unknown, stream
     /// length unknown, or zero-length stream). Callers fall back to the
-    /// historical read-head readiness check in that case.
+    /// historical readiness check in that case.
     fn estimate_target_byte(&self, position: Duration) -> Option<u64> {
         let duration = self.session.decoder.duration()?;
         let stream_len = self.shared_stream.len()?;

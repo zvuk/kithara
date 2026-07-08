@@ -1,13 +1,13 @@
 use num_traits::cast::ToPrimitive;
 
-use super::{ReadHeadInterpolation, filter};
+use super::{GlideInterpolation, filter};
 
 pub(super) fn interpolate(
     input: &[f32],
     previous: f32,
     position: f64,
     ratio: f64,
-    interpolation: ReadHeadInterpolation,
+    interpolation: GlideInterpolation,
     anti_alias: bool,
 ) -> f32 {
     let base = position.floor().to_usize().unwrap_or(usize::MAX);
@@ -25,8 +25,8 @@ pub(super) fn interpolate(
     let center = input[base];
     let right = input.get(base.saturating_add(1)).copied().unwrap_or(0.0);
     let interpolated = match interpolation {
-        ReadHeadInterpolation::Linear => linear(center, right, frac),
-        ReadHeadInterpolation::Quadratic => quadratic(left, center, right, frac),
+        GlideInterpolation::Linear => linear(center, right, frac),
+        GlideInterpolation::Quadratic => quadratic(left, center, right, frac),
     };
     filter::anti_alias_sample(anti_alias, ratio, interpolated, left, center, right)
 }

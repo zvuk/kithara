@@ -5,7 +5,6 @@ mod detector_factory;
 #[cfg(feature = "beat-nn")]
 mod detector_kind;
 mod grid;
-mod resampler;
 
 pub(crate) use analyzer::{BeatPass, SharedBeatDetector};
 #[cfg(test)]

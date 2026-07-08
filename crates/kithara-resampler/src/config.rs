@@ -108,12 +108,12 @@ fn default_backend_config() -> ResamplerBackendConfig {
     ResamplerBackendConfig::new(crate::rubato::RubatoBackend::new())
 }
 
-#[cfg(all(not(feature = "resample-rubato"), feature = "resample-readhead"))]
+#[cfg(all(not(feature = "resample-rubato"), feature = "resample-glide"))]
 fn default_backend_config() -> ResamplerBackendConfig {
-    ResamplerBackendConfig::new(crate::read_head::ReadHeadBackend::new())
+    ResamplerBackendConfig::new(crate::glide::GlideBackend::new())
 }
 
-#[cfg(not(any(feature = "resample-rubato", feature = "resample-readhead")))]
+#[cfg(not(any(feature = "resample-rubato", feature = "resample-glide")))]
 fn default_backend_config() -> ResamplerBackendConfig {
     ResamplerBackendConfig::none()
 }
@@ -335,8 +335,8 @@ mod tests {
     fn default_backend_config_uses_compiled_portable_backend_order() {
         let expected = if cfg!(feature = "resample-rubato") {
             Some("rubato")
-        } else if cfg!(feature = "resample-readhead") {
-            Some("read-head")
+        } else if cfg!(feature = "resample-glide") {
+            Some("glide")
         } else {
             None
         };

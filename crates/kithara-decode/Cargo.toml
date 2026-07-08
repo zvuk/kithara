@@ -34,7 +34,7 @@ symphonia = ["dep:symphonia"]
 fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]
 probe = []
 mock = []
-resample-readhead = ["kithara-resampler/resample-readhead"]
+resample-glide = ["kithara-resampler/resample-glide"]
 resample-rubato = ["kithara-resampler/resample-rubato"]
 # HTTP backend forwarding (kithara-net reached via kithara-stream).
 client-reqwest = ["kithara-stream/client-reqwest"]

@@ -11,7 +11,7 @@ categories = ["multimedia::audio"]
 
 [features]
 default = []
-resample-readhead = []
+resample-glide = []
 resample-rubato = ["dep:rubato"]
 
 [dependencies]

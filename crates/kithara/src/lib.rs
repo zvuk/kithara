@@ -42,6 +42,10 @@ pub mod play {
     pub use kithara_play::*;
 }
 
+pub mod resampler {
+    pub use kithara_resampler::*;
+}
+
 #[cfg(feature = "queue")]
 pub mod queue {
     pub use kithara_queue::*;

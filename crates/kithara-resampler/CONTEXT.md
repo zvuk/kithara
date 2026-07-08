@@ -15,9 +15,9 @@ resampling contract:
 - `ResamplerCapabilities` reports fixed-ratio, variable-ratio, glide,
   standalone, latency-reporting, and real-time properties.
 - `ResamplerBackendConfig` is the shared backend handle used by playback and
-  analysis config. Its portable default order is Rubato, then ReadHead, then
-  none; platform backends such as Apple AudioConverter are injected explicitly
-  by the crate that exposes them.
+  analysis config. Its portable default order is Rubato, then Glide, then
+  none. Platform backend contracts such as Apple AudioConverter live here and
+  receive platform factories from the crate that owns the concrete OS handle.
 - `ResamplerSettings`, `ResamplerConfig`, and `ResamplerOptions` carry
   construction settings through BON builders.
 - `create_resampler` constructs exactly the requested standalone backend or
@@ -76,7 +76,7 @@ exactly that backend or returns a typed error.
 
 - `Rubato`: fixed-ratio backend moved from the old decode-owned
   implementation. `rubato::RubatoConfig` selects async poly/sinc or FFT.
-- `ReadHead`: Rust port of the moving read-head renderer with fixed-ratio
+- `Glide`: Rust port of the cursor-based glide renderer with fixed-ratio
   support, variable-ratio controls, and ratio glide. The scalar path is the
   portable baseline; Apple Accelerate acceleration is an implementation detail
   for a future Apple-specific support module.
@@ -84,10 +84,13 @@ exactly that backend or returns a typed error.
 ## Platform Backend Families
 
 - `AppleAudioConverter`: standalone PCM-to-PCM `AudioConverter` backend on
-  macOS/iOS. It implements this crate's `ResamplerBackend` trait, but its FFI
-  implementation lives in `kithara-decode/src/apple/**` because the current
-  repository unsafe policy sanctions Apple FFI only there. Codec-embedded Apple
-  decode also remains in `kithara-decode`.
+  macOS/iOS. `apple::AppleAudioConverterBackend` and
+  `apple::AppleAudioConverterConfig` live in this crate and accept an
+  `AudioConverterFactory`. The current concrete AudioToolbox factory is
+  `kithara_decode::AudioToolboxConverterFactory`; its FFI implementation stays
+  in `kithara-decode/src/apple/**` because the current repository unsafe policy
+  sanctions Apple FFI only there. Codec-embedded Apple decode also remains in
+  `kithara-decode`.
 
 No Android placeholder exists until there is a real Android PCM resampler
 backend.
@@ -117,19 +120,21 @@ resampler is codec-embedded or adapter-based.
 <table>
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
 <tr><td><code>resample-rubato</code></td><td>no</td><td>Rubato fixed-ratio backend; algorithm selection lives in <code>RubatoConfig</code></td></tr>
-<tr><td><code>resample-readhead</code></td><td>no</td><td>Scalar moving-read-head backend with fixed-ratio, variable-ratio, and glide capability</td></tr>
+<tr><td><code>resample-glide</code></td><td>no</td><td>Glide backend with fixed-ratio, variable-ratio, and glide capability</td></tr>
 </table>
 
 ## Module Layout
 
+- `src/apple.rs` - Apple AudioConverter backend contract and config.
 - `src/backend.rs` - backend factory trait.
 - `src/capabilities.rs` - `bitflags` capability set.
 - `src/config.rs` - `ResamplerConfig`, `ResamplerOptions`, quality, and glide
   config.
 - `src/error.rs` - construction and processing errors.
 - `src/factory.rs` - standalone backend construction.
+- `src/glide/` - scalar Glide backend.
+- `src/mono.rs` - pooled mono streaming adapter used by beat analysis.
 - `src/mode.rs` - fixed-ratio and variable-ratio mode types.
 - `src/placement.rs` - placement vocabulary shared with decode planning.
-- `src/read_head/` - scalar moving-read-head backend.
 - `src/rubato/` - Rubato backend.
 - `src/traits.rs` - public processing traits and status types.

@@ -4,10 +4,10 @@ use std::{
 };
 
 use kithara_bufpool::PcmPool;
-#[cfg(feature = "resample-readhead")]
+#[cfg(feature = "resample-glide")]
 use kithara_resampler::ResamplerOptions;
-#[cfg(feature = "resample-readhead")]
-use kithara_resampler::read_head::ReadHeadBackend;
+#[cfg(feature = "resample-glide")]
+use kithara_resampler::glide::GlideBackend;
 use kithara_resampler::{
     Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode,
     ResamplerPlacement, ResamplerProcess, ResamplerSettings,
@@ -160,9 +160,9 @@ fn standalone_decoder_adapter_wraps_configured_backend() {
     assert_eq!(&*output.samples, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
 }
 
-#[cfg(feature = "resample-readhead")]
+#[cfg(feature = "resample-glide")]
 #[test]
-fn standalone_decoder_adapter_accepts_read_head_backend() {
+fn standalone_decoder_adapter_accepts_glide_backend() {
     let sample_rate = NonZeroU32::new(44_100).expect("test rate");
     let spec = PcmSpec::new(1, sample_rate);
     let meta = PcmMeta {
@@ -178,7 +178,7 @@ fn standalone_decoder_adapter_accepts_read_head_backend() {
     let config = DecoderResamplerConfig::builder()
         .target_sample_rate(sample_rate)
         .placement(ResamplerPlacement::Standalone)
-        .backend(Arc::new(ReadHeadBackend::new()) as Arc<dyn ResamplerBackend>)
+        .backend(Arc::new(GlideBackend::new()) as Arc<dyn ResamplerBackend>)
         .options(ResamplerOptions::builder().chunk_size(4).build())
         .build();
 

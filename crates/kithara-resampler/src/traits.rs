@@ -97,7 +97,7 @@ pub trait ResamplerControl: Resampler {
     /// the target ratio is outside its configured range.
     fn glide_ratio(&mut self, glide: RatioGlide) -> Result<(), ResamplerError>;
 
-    /// Set the source-read-head ratio used for subsequent output frames.
+    /// Set the source cursor ratio used for subsequent output frames.
     ///
     /// # Errors
     ///

@@ -95,11 +95,8 @@ mod tests {
     fn default_beat_config_uses_compiled_backend_order() {
         let expected = if cfg!(all(feature = "analysis-beat", feature = "resample-rubato")) {
             Some("rubato")
-        } else if cfg!(all(
-            feature = "analysis-beat",
-            feature = "resample-readhead"
-        )) {
-            Some("read-head")
+        } else if cfg!(all(feature = "analysis-beat", feature = "resample-glide")) {
+            Some("glide")
         } else {
             None
         };

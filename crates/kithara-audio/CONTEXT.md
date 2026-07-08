@@ -87,7 +87,7 @@ today and by mobile surfaces (kithara-ffi) next:
   `BeatAnalysisConfig` carries both numeric beat-analysis tunables and a
   standalone resampler backend handle. When beat analysis is compiled in, that
   handle uses the portable `kithara-resampler` default backend order (Rubato,
-  then ReadHead, then none). Callers may inject any compiled
+  then Glide, then none). Callers may inject any compiled
   `ResamplerBackend`, including platform backends exposed by decode.
 - **`analyze_reader`** — the synchronous decode loop over any `PcmReader`:
   cancel-aware, `Pending`-tolerant, and callback-based
@@ -218,14 +218,15 @@ change the sample-rate-conversion ratio.
 `DecoderResamplerSettings.options` carries
 `kithara-resampler::ResamplerOptions` into the selected backend. The backend
 handle is owned by `kithara-resampler`, not by `kithara-audio`; its portable
-default order is Rubato, then ReadHead, then none. On Apple targets, callers
+default order is Rubato, then Glide, then none. On Apple targets, callers
 that want standalone Apple PCM resampling inject
-`kithara_decode::AppleAudioConverterBackend` explicitly through the same
-decoder config surface. The defaults preserve the shipped desktop playback
-values: Rubato backend on default builds, 4096-frame process blocks, 0.0001
-host-rate ratio tolerance, and an 8.0 max-ratio-adjustment window. These are
-implementation tunables, not hidden constants in the processing code. Quality
-and backend family remain separate decisions.
+`kithara_resampler::apple::AppleAudioConverterBackend` configured with
+`kithara_decode::AudioToolboxConverterFactory` through the same decoder config
+surface. The defaults preserve the shipped desktop playback values: Rubato
+backend on default builds, 4096-frame process blocks, 0.0001 host-rate ratio
+tolerance, and an 8.0 max-ratio-adjustment window. These are implementation
+tunables, not hidden constants in the processing code. Quality and backend
+family remain separate decisions.
 
 `apple-fused-src` is the Apple device path. When the selected decoder backend is
 Apple AudioToolbox, `AudioConfig.host_sample_rate` is threaded to
@@ -236,7 +237,7 @@ backend, so the decoder object still exposes target-rate PCM without adding a
 playback effect stage.
 
 `resample-rubato` enables the portable default playback backend.
-`resample-readhead` forwards the ReadHead backend for explicit config selection
+`resample-glide` forwards the Glide backend for explicit config selection
 and as the portable default when Rubato is not compiled. Default desktop and
 Android builds keep Rubato. Apple fused FFI builds omit Rubato unless another
 feature explicitly pulls it back in.
