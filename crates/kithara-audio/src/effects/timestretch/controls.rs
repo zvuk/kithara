@@ -13,19 +13,7 @@ use {
 
 use crate::region::RegionPlan;
 
-/// Single source of truth for live playback-speed control, shared (via `Arc`)
-/// between the consumer/UI and the audio worker's effect chain. Replaces the
-/// former split `playback_rate` / `tempo_ratio` mirror.
-///
-/// Region plans can be installed independently of backend availability.
-/// Key-lock and backend selection exist only when a stretch backend is compiled
-/// in (`stretch-signalsmith` / `stretch-bungee`, native targets); without one
-/// speed DSP is absent and playback remains pinned to unity.
-///
-/// All fields are read each chunk by the effect chain and may be written at
-/// any time from the control thread; updates take effect on the next
-/// processed chunk. See the crate `CONTEXT.md` ("Live stretch controls")
-/// for the speed contract.
+/// Live playback-speed control shared by the caller and the effect chain.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct StretchControls {
@@ -50,15 +38,8 @@ struct EngineControls {
     backend: AtomicU8,
 }
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
-const DEFAULT_KEYLOCK: bool = cfg!(any(feature = "apple-fused-src", feature = "android"));
-
 impl StretchControls {
-    /// Build a handle at `speed` (1.0 = normal) with the platform default
-    /// key-lock mode and default backend.
+    /// Build a handle at `speed` (1.0 = normal) with key-lock off.
     #[must_use]
     pub fn new(speed: f32) -> Arc<Self> {
         Arc::new(Self {
@@ -69,7 +50,7 @@ impl StretchControls {
                 any(feature = "stretch-signalsmith", feature = "stretch-bungee")
             ))]
             engine: EngineControls {
-                keylock: AtomicBool::new(DEFAULT_KEYLOCK),
+                keylock: AtomicBool::new(false),
                 backend: AtomicU8::new(u8::from(StretchKind::default())),
             },
         })

@@ -2,7 +2,7 @@ use std::{collections::VecDeque, sync::Arc};
 
 use kithara::{
     assets::AssetStore,
-    audio::analysis::beat_cache_tag,
+    audio::analysis::{BeatAnalysisConfig, beat_cache_tag},
     events::{Event, EventReceiver, TrackId},
     prelude::ResourceConfig,
 };
@@ -38,7 +38,11 @@ pub(crate) async fn listen(
     cancel: CancelToken,
     mut rx: EventReceiver,
 ) {
-    let mut driver = AnalysisController::new(&cancel, Some(Arc::clone(&config.asset_store)));
+    let mut driver = AnalysisController::new(
+        &cancel,
+        Some(Arc::clone(&config.asset_store)),
+        config.beat_analysis,
+    );
 
     // Analyse whatever is already loaded; later tracks arrive as events.
     driver.on_tracks_changed(&queue, &state, &config);
@@ -102,10 +106,14 @@ impl AnalysisController {
     /// `cancel` must be a child of the app master so analysis stops on app
     /// shutdown; `store` is the shared file store whose per-track asset
     /// scopes hold the durable analysis blobs.
-    pub(crate) fn new(cancel: &CancelToken, store: Option<Arc<AssetStore>>) -> Self {
+    pub(crate) fn new(
+        cancel: &CancelToken,
+        store: Option<Arc<AssetStore>>,
+        beat_config: BeatAnalysisConfig,
+    ) -> Self {
         Self {
-            runner: TrackAnalysisRunner::new(cancel, WAVEFORM_MAX_BUCKETS),
-            cache: TrackAnalysisCache::new(store, analysis_fingerprint()),
+            runner: TrackAnalysisRunner::new(cancel, WAVEFORM_MAX_BUCKETS, beat_config),
+            cache: TrackAnalysisCache::new(store, analysis_fingerprint(beat_config)),
             current: None,
             displayed: None,
             pending: VecDeque::new(),
@@ -279,8 +287,8 @@ impl AnalysisController {
 
 /// Fingerprint of the active analysis configuration, stored inside each durable blob.
 /// A mismatch is a cache miss, so config changes re-analyse.
-fn analysis_fingerprint() -> String {
-    let beat = beat_cache_tag().unwrap_or_else(|| "off".to_string());
+fn analysis_fingerprint(beat_config: BeatAnalysisConfig) -> String {
+    let beat = beat_cache_tag(beat_config).unwrap_or_else(|| "off".to_string());
     format!("wave=native:max{WAVEFORM_MAX_BUCKETS};beat={beat}")
 }
 
@@ -361,7 +369,10 @@ fn resource_config_from_source(source: TrackSource, config: &AppConfig) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::{audio::Waveform, events::TrackId};
+    use ::kithara::{
+        audio::{Waveform, analysis::BeatAnalysisConfig},
+        events::TrackId,
+    };
     use kithara_platform::{CancelToken, sync::Mutex, tokio::sync::watch};
     use kithara_queue::{Queue, QueueConfig};
     use kithara_test_utils::kithara;
@@ -406,7 +417,7 @@ mod tests {
         value: Option<TrackAnalysis>,
     ) -> (AnalysisController, watch::Sender<Option<TrackAnalysis>>) {
         let cancel = CancelToken::root();
-        let mut controller = AnalysisController::new(&cancel, None);
+        let mut controller = AnalysisController::new(&cancel, None, BeatAnalysisConfig::default());
         let (tx, rx) = watch::channel(value);
         controller.current = Some(Run {
             track_id,

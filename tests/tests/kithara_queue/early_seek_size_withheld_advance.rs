@@ -180,11 +180,9 @@ async fn run_case(mode: GateMode) {
     );
 
     let harness = Harness::new();
-    let queue = Queue::new(
-        QueueConfig::default()
-            .with_should_autoplay(false)
-            .with_player(Arc::clone(&harness.player)),
-    );
+    let mut queue_config = QueueConfig::default().with_player(Arc::clone(&harness.player));
+    queue_config.should_autoplay = false;
+    let queue = Queue::new(queue_config);
     let mut rx = harness.player.subscribe();
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward

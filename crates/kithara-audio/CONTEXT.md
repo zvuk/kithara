@@ -76,7 +76,15 @@ today and by mobile surfaces (kithara-ffi) next:
 - **Beat-analysis config.** `AnalyzerBuilder::with_beat_config` carries the
   implementation-affecting beat tunables. The defaults preserve the current
   detector contract: 1024-frame mono resampler blocks, 22 050 Hz detector input,
-  and `ResamplerQuality::High` for the rubato sinc backend.
+  30-second detector windows with 2 seconds of overlap, and
+  `ResamplerQuality::High` for the rubato sinc backend. The analyzer never
+  stores whole-track PCM for beat detection; it downmixes/resamples into a
+  bounded detector window, runs the detector as each window becomes ready,
+  offsets the window-relative events, and only keeps raw event times for final
+  grid cleanup. Beat PCM scratch buffers (the detector window and mono
+  resampler blocks) come from the `PcmPool` owned by `AnalyzerBuilder`
+  (`with_pcm_pool` lets consumers inject their app-wide pool); `BeatAnalysisConfig`
+  remains only the numeric beat-analysis tunables.
 - **`analyze_reader`** — the synchronous decode loop over any `PcmReader`:
   cancel-aware, `Pending`-tolerant, and callback-based
   (`analyze_reader(..., emit) -> ()`). It emits staged `TrackAnalysis` values
@@ -104,9 +112,10 @@ today and by mobile surfaces (kithara-ffi) next:
   pass is absent. `analysis-waveform` gates only the `realfft` waveform
   analyzer. `analysis-beat` gates the beat analyzer/worker path and its
   mono-resampler, which is built through `kithara-decode::create_resampler`;
-  `resample-fft` selects the FFT backend for that beat-only resampler,
-  otherwise the beat pass uses rubato sinc. `beat-nn` is a detector backend
-  layered on top of `analysis-beat`.
+  beat analysis uses the rubato backend selected explicitly by that call.
+  `resample-fft` only compiles the decode-owned FFT backend variant for
+  explicit callers; playback quality and beat analysis do not auto-select it.
+  `beat-nn` is a detector backend layered on top of `analysis-beat`.
 - **Runtime switch.** Consumers use `AnalyzerBuilder::is_empty()` as the runtime
   signal to skip scheduling. When `analysis-beat` is absent,
   `AnalyzerBuilder::with_beat()` is a compile-time no-op. Apple FFI device

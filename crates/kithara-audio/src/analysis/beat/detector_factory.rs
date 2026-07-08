@@ -40,10 +40,10 @@ impl NnDetector {
 
 #[cfg(feature = "beat-nn")]
 impl BeatDetector for NnDetector {
-    fn detect(&mut self, mono_22050: &[f32]) -> Result<RawBeats, BeatDetectError> {
+    fn detect(&mut self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
         let raw = self
             .inner
-            .analyze(mono_22050)
+            .analyze(mono_window)
             .map_err(|e| BeatDetectError::Detect {
                 reason: e.to_string(),
             })?;

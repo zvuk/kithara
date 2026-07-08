@@ -10,7 +10,7 @@ name = "kithara"
 path = "src/main.rs"
 
 [features]
-default = ["tui", "gui", "beat-nn", "stretch-signalsmith"]
+default = ["tui", "gui", "analysis-waveform", "beat-nn", "stretch-signalsmith"]
 tui = ["dep:ratatui", "dep:crossterm"]
 # HTTP backend forwarding to every kithara-net-reaching production dep
 # (kithara facade + kithara-queue). NOT in `default`: the backend is selected
@@ -26,6 +26,8 @@ tls-native = ["kithara/tls-native", "kithara-queue/tls-native"]
 gui = ["dep:iced"]
 # NN beat/downbeat detection.
 beat-nn = ["kithara/beat-nn"]
+# Waveform analysis for the deck overview.
+analysis-waveform = ["kithara/analysis-waveform"]
 # Build kithara-app as a plain library — exposes `config`/`sources`/`drm`
 # modules without pulling in iced/ratatui. Used by integration tests
 # (`tests/tests/kithara_queue/real_playlist.rs`).

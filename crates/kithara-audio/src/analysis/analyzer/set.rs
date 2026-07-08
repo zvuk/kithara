@@ -1,56 +1,70 @@
 use bon::Builder;
+use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmSpec, ResamplerQuality};
 use num_traits::cast::AsPrimitive;
 
-use super::{
-    WaveformPass,
-    track_analysis::{Analyzer, TrackAnalysis},
-};
+use super::track_analysis::TrackAnalysis;
 
-#[must_use]
-pub fn beat_cache_tag() -> Option<String> {
-    super::nn::tag()
+struct Consts;
+
+impl Consts {
+    const DEFAULT_BEAT_BLOCK_FRAMES: usize = 1024;
+    const DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS: u32 = 2;
+    const DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS: u32 = 30;
+    const DEFAULT_BEAT_RESAMPLER_QUALITY: ResamplerQuality = ResamplerQuality::High;
+    const DEFAULT_BEAT_TARGET_RATE: u32 = 22_050;
 }
 
-/// Beat-analysis resampler tunables used by [`AnalyzerBuilder`].
+#[must_use]
+pub fn beat_cache_tag(config: BeatAnalysisConfig) -> Option<String> {
+    super::nn::tag(config)
+}
+
+/// Beat-analysis tunables used by [`AnalyzerBuilder`].
 #[derive(Clone, Copy, Debug, PartialEq, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct BeatAnalysisConfig {
     /// Mono resampler input block size in frames.
-    #[builder(default = DEFAULT_BEAT_ANALYSIS_CONFIG.block_frames)]
+    #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
     pub block_frames: usize,
     /// Detector input sample rate in Hz.
-    #[builder(default = DEFAULT_BEAT_ANALYSIS_CONFIG.target_rate)]
+    #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]
     pub target_rate: u32,
     /// Quality used by the rubato sinc beat-resampler backend.
-    #[builder(default = ResamplerQuality::High)]
+    #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
     pub resampler_quality: ResamplerQuality,
+    /// Maximum NN detector window length in seconds.
+    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
+    pub detector_window_seconds: u32,
+    /// Seconds carried from the end of one detector window into the next.
+    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
+    pub detector_overlap_seconds: u32,
 }
-
-const DEFAULT_BEAT_ANALYSIS_CONFIG: BeatAnalysisConfig = BeatAnalysisConfig {
-    block_frames: 1024,
-    target_rate: 22_050,
-    resampler_quality: ResamplerQuality::High,
-};
 
 impl Default for BeatAnalysisConfig {
     fn default() -> Self {
-        DEFAULT_BEAT_ANALYSIS_CONFIG
+        Self {
+            block_frames: Consts::DEFAULT_BEAT_BLOCK_FRAMES,
+            target_rate: Consts::DEFAULT_BEAT_TARGET_RATE,
+            resampler_quality: Consts::DEFAULT_BEAT_RESAMPLER_QUALITY,
+            detector_window_seconds: Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS,
+            detector_overlap_seconds: Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS,
+        }
     }
 }
 
 #[derive(Default)]
 pub(crate) struct TrackAnalyzers {
     beat: beat::Slot,
-    waveform: Option<WaveformPass>,
+    waveform: waveform::Slot,
     source_frames: u64,
 }
 
 impl TrackAnalyzers {
-    pub(crate) fn finish_staged<F: FnMut(TrackAnalysis)>(mut self, mut emit: F) {
+    pub(crate) fn finish_staged<F: FnMut(TrackAnalysis)>(self, mut emit: F) {
         let source_frames = self.source_frames;
-        let waveform = self.waveform.take().map(Analyzer::finish);
+        let waveform = waveform::finish(self.waveform);
 
         if beat::is_empty(&self.beat) {
             emit(TrackAnalysis {
@@ -78,10 +92,7 @@ impl TrackAnalyzers {
         let frames: u64 = chunk.frames().as_();
         self.source_frames = self.source_frames.saturating_add(frames);
 
-        if let Some(a) = &mut self.waveform {
-            a.push(chunk);
-        }
-
+        waveform::push(&mut self.waveform, chunk);
         beat::push(&mut self.beat, chunk);
     }
 }
@@ -90,23 +101,22 @@ impl TrackAnalyzers {
 pub struct AnalyzerBuilder {
     beat: beat::Config,
     beat_config: BeatAnalysisConfig,
-    waveform_buckets: Option<usize>,
+    pcm_pool: PcmPool,
+    waveform: waveform::Config,
 }
 
 impl AnalyzerBuilder {
     pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers {
         TrackAnalyzers {
-            beat: beat::build(&self.beat, spec),
-            waveform: self
-                .waveform_buckets
-                .map(|buckets| WaveformPass::new(spec.sample_rate.get(), buckets)),
+            beat: beat::build(&self.beat, spec, &self.pcm_pool),
+            waveform: waveform::build(&self.waveform, spec),
             source_frames: 0,
         }
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.waveform_buckets.is_none() && beat::config_is_empty(&self.beat)
+        waveform::config_is_empty(&self.waveform) && beat::config_is_empty(&self.beat)
     }
 
     #[must_use]
@@ -136,18 +146,19 @@ impl AnalyzerBuilder {
     }
 
     #[must_use]
-    #[cfg(feature = "analysis-waveform")]
-    pub fn with_waveform(self, buckets: usize) -> Self {
+    pub fn with_pcm_pool(self, pool: PcmPool) -> Self {
         Self {
-            waveform_buckets: Some(buckets),
+            pcm_pool: pool,
             ..self
         }
     }
 
     #[must_use]
-    #[cfg(not(feature = "analysis-waveform"))]
-    pub fn with_waveform(self, _buckets: usize) -> Self {
-        self
+    #[cfg(feature = "analysis-waveform")]
+    pub fn with_waveform(self, buckets: usize) -> Self {
+        let mut builder = self;
+        waveform::with_buckets(&mut builder.waveform, buckets);
+        builder
     }
 }
 
@@ -155,9 +166,10 @@ impl AnalyzerBuilder {
 mod beat {
     use std::sync::Arc;
 
+    use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmSpec};
 
-    use super::{super::nn, Analyzer};
+    use super::super::{nn, track_analysis::Analyzer};
     use crate::{
         analysis::{
             analyzer::BeatAnalysisConfig,
@@ -175,13 +187,14 @@ mod beat {
     pub(super) type Config = Option<BeatConfig>;
     pub(super) type Slot = Option<BeatPass>;
 
-    pub(super) fn build(config: &Config, spec: PcmSpec) -> Slot {
+    pub(super) fn build(config: &Config, spec: PcmSpec, pcm_pool: &PcmPool) -> Slot {
         config.as_ref().map(|config| {
             BeatPass::new(
                 spec.sample_rate.get(),
                 config.params.clone(),
                 Arc::clone(&config.detector),
                 config.resampler,
+                pcm_pool,
             )
         })
     }
@@ -235,6 +248,7 @@ mod beat {
 
 #[cfg(not(feature = "analysis-beat"))]
 mod beat {
+    use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmSpec};
 
     use crate::waveform::BeatGrid;
@@ -245,7 +259,7 @@ mod beat {
     #[derive(Default)]
     pub(super) struct Slot;
 
-    pub(super) fn build(_config: &Config, _spec: PcmSpec) -> Slot {
+    pub(super) fn build(_config: &Config, _spec: PcmSpec, _pcm_pool: &PcmPool) -> Slot {
         Slot
     }
 
@@ -266,6 +280,68 @@ mod beat {
     pub(super) fn with_default(_config: &mut Config, _resampler: super::BeatAnalysisConfig) {}
 
     pub(super) fn set_resampler(_config: &mut Config, _resampler: super::BeatAnalysisConfig) {}
+}
+
+#[cfg(feature = "analysis-waveform")]
+mod waveform {
+    use kithara_decode::{PcmChunk, PcmSpec};
+
+    use super::super::{WaveformPass, track_analysis::Analyzer};
+    use crate::waveform::Waveform;
+
+    pub(super) type Config = Option<usize>;
+    pub(super) type Slot = Option<WaveformPass>;
+
+    pub(super) fn build(config: &Config, spec: PcmSpec) -> Slot {
+        config
+            .as_ref()
+            .map(|buckets| WaveformPass::new(spec.sample_rate.get(), *buckets))
+    }
+
+    pub(super) fn config_is_empty(config: &Config) -> bool {
+        config.is_none()
+    }
+
+    pub(super) fn finish(slot: Slot) -> Option<Waveform> {
+        slot.map(Analyzer::finish)
+    }
+
+    pub(super) fn push(slot: &mut Slot, chunk: &PcmChunk) {
+        if let Some(analyzer) = slot {
+            analyzer.push(chunk);
+        }
+    }
+
+    pub(super) fn with_buckets(config: &mut Config, buckets: usize) {
+        *config = Some(buckets);
+    }
+}
+
+#[cfg(not(feature = "analysis-waveform"))]
+mod waveform {
+    use kithara_decode::{PcmChunk, PcmSpec};
+
+    use crate::waveform::Waveform;
+
+    #[derive(Default)]
+    pub(super) struct Config;
+
+    #[derive(Default)]
+    pub(super) struct Slot;
+
+    pub(super) fn build(_config: &Config, _spec: PcmSpec) -> Slot {
+        Slot
+    }
+
+    pub(super) fn config_is_empty(_config: &Config) -> bool {
+        true
+    }
+
+    pub(super) fn finish(_slot: Slot) -> Option<Waveform> {
+        None
+    }
+
+    pub(super) fn push(_slot: &mut Slot, _chunk: &PcmChunk) {}
 }
 
 #[cfg(all(test, feature = "analysis-beat", feature = "analysis-waveform"))]

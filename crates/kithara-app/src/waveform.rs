@@ -6,6 +6,7 @@ use kithara::{
         PcmReader,
         analysis::{AnalysisWorker, AnalyzerBuilder, BeatAnalysisConfig},
     },
+    bufpool::PcmPool,
     prelude::{Resource, ResourceConfig},
 };
 use kithara_platform::{
@@ -42,11 +43,13 @@ impl TrackAnalysisRunner {
     /// and every run scope live under it. `buckets` caps the waveform output;
     /// the native window count is the real resolution.
     #[must_use]
-    pub fn new(master: &CancelToken, buckets: usize) -> Self {
+    pub fn new(master: &CancelToken, _buckets: usize, beat_config: BeatAnalysisConfig) -> Self {
         let builder = AnalyzerBuilder::default()
-            .with_beat_config(BeatAnalysisConfig::default())
-            .with_waveform(buckets)
-            .with_beat();
+            .with_pcm_pool(PcmPool::default())
+            .with_beat_config(beat_config);
+        #[cfg(feature = "analysis-waveform")]
+        let builder = builder.with_waveform(_buckets);
+        let builder = builder.with_beat();
         let active = !builder.is_empty();
         let worker = Arc::new(AnalysisWorker::new(master, builder));
         Self {

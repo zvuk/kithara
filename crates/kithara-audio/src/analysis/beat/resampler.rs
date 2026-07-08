@@ -1,28 +1,31 @@
 use std::iter;
 
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{Resampler, ResamplerBackend, ResamplerOptions, create_resampler};
-use num_traits::cast::ToPrimitive;
+use num_traits::cast::{AsPrimitive, ToPrimitive};
 use tracing::warn;
 
 use crate::analysis::BeatAnalysisConfig;
 
-pub(in crate::analysis::beat) struct MonoResampler {
-    delay: usize,
-    input_block: Vec<Vec<f32>>,
-    out: Vec<f32>,
-    output_block: Vec<Vec<f32>>,
-    pending: Vec<f32>,
-    ratio: f64,
+pub(in crate::analysis::beat) struct MonoResampleBuffer {
     resampler: Box<dyn Resampler>,
+    ratio: f64,
+    input_block: PcmBuf,
+    output_block: PcmBuf,
+    emitted: usize,
+    pending: PcmBuf,
+    ready: PcmBuf,
+    skip: usize,
     total_in: u64,
 }
 
-impl MonoResampler {
+impl MonoResampleBuffer {
     pub(in crate::analysis::beat) fn new(
         source_rate: u32,
         config: BeatAnalysisConfig,
+        pcm_pool: &PcmPool,
     ) -> Option<Self> {
-        let backend = beat_resampler_backend();
+        let backend = ResamplerBackend::Rubato;
         let resampler = create_resampler(
             backend,
             config.resampler_quality,
@@ -45,57 +48,79 @@ impl MonoResampler {
 
         let delay = resampler.output_delay();
         let ratio = f64::from(config.target_rate) / f64::from(source_rate);
+        let input_block =
+            pcm_pool.get_with(|buf| reserve_capacity(buf, resampler.input_frames_max()));
+        let output_block =
+            pcm_pool.get_with(|buf| reserve_capacity(buf, resampler.output_frames_max()));
 
         Some(Self {
-            delay,
             resampler,
             ratio,
-            pending: Vec::new(),
-            input_block: vec![Vec::new()],
-            output_block: vec![Vec::new()],
-            out: Vec::new(),
+            input_block,
+            output_block,
+            emitted: 0,
+            pending: pcm_pool.get(),
+            ready: pcm_pool.get(),
+            skip: delay,
             total_in: 0,
         })
     }
 
-    pub(in crate::analysis::beat) fn finish(mut self) -> Vec<f32> {
-        let expected = self
-            .total_in
-            .to_f64()
-            .map(|frames| frames * self.ratio)
-            .and_then(|frames| frames.round().to_usize())
-            .unwrap_or(0);
+    fn emit_ready<F: FnMut(&[f32])>(&mut self, emit: &mut F) {
+        let ready = self
+            .expected_output_frames()
+            .saturating_sub(self.emitted)
+            .min(self.ready.len());
+        if ready == 0 {
+            return;
+        }
 
-        while self.out.len() < self.delay + expected {
+        emit(&self.ready[..ready]);
+        self.ready.drain(..ready);
+        self.emitted += ready;
+    }
+
+    fn expected_output_frames(&self) -> usize {
+        let frames: f64 = self.total_in.as_();
+        (frames * self.ratio)
+            .round()
+            .to_usize()
+            .unwrap_or(usize::MAX)
+    }
+
+    pub(in crate::analysis::beat) fn finish<F: FnMut(&[f32])>(mut self, mut emit: F) {
+        let expected = self.expected_output_frames();
+        while self.emitted < expected {
             let needed = self.resampler.input_frames_next();
             let pad = needed.saturating_sub(self.pending.len());
             self.pending.extend(iter::repeat_n(0.0_f32, pad));
             if !self.process_block() {
                 break;
             }
+            self.emit_ready(&mut emit);
         }
-
-        let mut out = self.out;
-        out.drain(..self.delay.min(out.len()));
-        out.truncate(expected);
-        out
     }
 
     fn process_block(&mut self) -> bool {
         let needed = self.resampler.input_frames_next();
         let out_next = self.resampler.output_frames_next();
-        self.input_block[0].clear();
-        self.input_block[0].extend_from_slice(&self.pending[..needed]);
-        self.output_block[0].resize(out_next, 0.0);
+        self.input_block.clear();
+        self.input_block.extend_from_slice(&self.pending[..needed]);
+        self.output_block.resize(out_next, 0.0);
 
-        let written = self
-            .resampler
-            .process_into_buffer(&self.input_block, &mut self.output_block);
+        let written = {
+            let input = std::slice::from_ref(&*self.input_block);
+            let output = std::slice::from_mut(&mut *self.output_block);
+            self.resampler.process_into_buffer(input, output)
+        };
         self.pending.drain(..needed);
 
         match written {
             Ok((_, written)) => {
-                self.out.extend_from_slice(&self.output_block[0][..written]);
+                let out = &self.output_block[..written];
+                let skip = self.skip.min(out.len());
+                self.skip -= skip;
+                self.ready.extend_from_slice(&out[skip..]);
                 true
             }
             Err(e) => {
@@ -105,7 +130,11 @@ impl MonoResampler {
         }
     }
 
-    pub(in crate::analysis::beat) fn push(&mut self, mono: impl Iterator<Item = f32>) {
+    pub(in crate::analysis::beat) fn push<F: FnMut(&[f32])>(
+        &mut self,
+        mono: impl Iterator<Item = f32>,
+        mut emit: F,
+    ) {
         let before = self.pending.len();
         self.pending.extend(mono);
         self.total_in += (self.pending.len() - before).to_u64().unwrap_or(0);
@@ -114,16 +143,13 @@ impl MonoResampler {
             if !self.process_block() {
                 return;
             }
+            self.emit_ready(&mut emit);
         }
     }
 }
 
-#[cfg(feature = "resample-fft")]
-fn beat_resampler_backend() -> ResamplerBackend {
-    ResamplerBackend::Fft
-}
-
-#[cfg(not(feature = "resample-fft"))]
-fn beat_resampler_backend() -> ResamplerBackend {
-    ResamplerBackend::Rubato
+fn reserve_capacity(buf: &mut Vec<f32>, capacity: usize) {
+    if buf.capacity() < capacity {
+        buf.reserve(capacity - buf.capacity());
+    }
 }

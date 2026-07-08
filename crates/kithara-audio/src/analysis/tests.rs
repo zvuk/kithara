@@ -271,7 +271,7 @@ mod run {
         let builder =
             AnalyzerBuilder::default().with_beat_detector(detector, GridParams::default());
 
-        let mut reader = FakeReader::chunked(&sine(8192), 3);
+        let mut reader = FakeReader::chunked(&sine(17 * usize::try_from(SR).unwrap()), 3);
         let out = stages(&mut reader, &builder, &CancelToken::root());
         assert_eq!(
             out.len(),

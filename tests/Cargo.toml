@@ -99,7 +99,7 @@ kithara = { workspace = true, features = ["apple", "client-wreq"] }
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true, features = ["backend-cpal", "fdk-aac", "tokio-net", "tokio-rt-multi-thread"] }
-kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
+kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
 # fdk-aac came from kithara-decode defaults before Phase 2 (workspace
 # default-features=false). HE-AAC v2 fMP4 fixtures in rapid-scrub /
 # stress-seek tests decode through the symphonia path, and without fdk-aac

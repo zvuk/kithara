@@ -27,11 +27,10 @@ pub(crate) enum BeatDetectError {
     Detect { reason: String },
 }
 
-/// Swappable beat/downbeat detector. Input is whole-track mono f32 at
-/// 22 050 Hz by contract — downmix/resample is the caller's job.
+/// Swappable beat/downbeat detector over one mono analysis window.
 #[cfg_attr(test, kithara::mock(api = [BeatDetectorMock]))]
 pub(crate) trait BeatDetector: Send {
     /// # Errors
     /// [`BeatDetectError::Detect`] when the backend fails on this input.
-    fn detect(&mut self, mono_22050: &[f32]) -> Result<RawBeats, BeatDetectError>;
+    fn detect(&mut self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError>;
 }

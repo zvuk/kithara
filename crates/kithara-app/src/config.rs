@@ -3,6 +3,7 @@ use std::{fmt, sync::Arc};
 use bon::Builder;
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, BytePool, EvictConfig, FlushHub, StoreOptions},
+    audio::analysis::BeatAnalysisConfig,
     hls::SizeProbeMethod,
     stream::dl::Downloader,
 };
@@ -62,6 +63,9 @@ pub struct AppConfig {
     /// Number of EQ bands for the UI.
     #[builder(default = baked::BAKED_EQ_BAND_COUNT)]
     pub eq_band_count: usize,
+    /// Source beat-analysis tunables.
+    #[builder(default)]
+    pub beat_analysis: BeatAnalysisConfig,
 }
 
 fn default_tracks() -> Vec<String> {
@@ -85,6 +89,7 @@ impl fmt::Debug for AppConfig {
             )
             .field("crossfade_seconds", &self.crossfade_seconds)
             .field("eq_band_count", &self.eq_band_count)
+            .field("beat_analysis", &self.beat_analysis)
             .field("size_probe_method", &self.size_probe_method)
             .finish_non_exhaustive()
     }
