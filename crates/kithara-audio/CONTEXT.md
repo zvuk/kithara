@@ -217,9 +217,10 @@ implementation tunables, not hidden constants in the processing code.
 
 `apple-fused-src` is the Apple device path. When the selected decoder backend is
 Apple AudioToolbox, `AudioConfig.host_sample_rate` is threaded to
-`DecoderConfig.target_output_rate`, the Apple converter emits PCM directly in
-the device domain, and the effect chain omits `ResamplerProcessor`
-structurally. Non-Apple backends in the same build keep the resampler stage.
+`DecoderConfig.resampler` as a codec-embedded decoder resampler config, the
+Apple converter emits PCM directly in the device domain, and the effect chain
+omits `ResamplerProcessor` structurally. Non-Apple backends in the same build
+keep the resampler stage.
 
 `resample-rubato` enables the staged `ResamplerProcessor` and the Rubato backend.
 Default desktop and Android builds keep it. Apple fused FFI builds omit it.

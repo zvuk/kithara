@@ -1,10 +1,12 @@
 use std::{
     io::{Read, Seek},
+    num::NonZeroU32,
     sync::{Arc, atomic::AtomicU64},
 };
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
+use kithara_resampler::ResamplerPlacement;
 use kithara_stream::{
     AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes,
 };
@@ -87,6 +89,39 @@ impl std::fmt::Display for DecoderBackend {
     }
 }
 
+/// Decoder-side resampler placement selected by the caller.
+///
+/// This describes conversion that is part of decoder construction, not the
+/// playback graph's standalone resampler stage.
+#[derive(Clone, Copy, Debug, Builder, Eq, PartialEq)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct DecoderResamplerConfig {
+    #[builder(default = ResamplerPlacement::DecoderEmbedded)]
+    pub placement: ResamplerPlacement,
+    pub target_sample_rate: NonZeroU32,
+}
+
+impl DecoderResamplerConfig {
+    #[must_use]
+    pub fn codec_embedded(target_sample_rate: NonZeroU32) -> Self {
+        Self {
+            target_sample_rate,
+            placement: ResamplerPlacement::DecoderEmbedded,
+        }
+    }
+
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    fn codec_embedded_rate(self) -> DecodeResult<u32> {
+        if self.placement != ResamplerPlacement::DecoderEmbedded {
+            return Err(DecodeError::InvalidData {
+                detail: "decoder standalone resampler adapter is not configured",
+            });
+        }
+        Ok(self.target_sample_rate.get())
+    }
+}
+
 /// Configuration for `DecoderFactory`.
 ///
 /// `pcm_pool` / `byte_pool` are intentionally `Option<_>` — the
@@ -120,9 +155,9 @@ pub struct DecoderConfig {
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
     pub pcm_pool: Option<PcmPool>,
-    /// Optional hardware-decoder output sample rate. `None` means the
-    /// backend emits at the source rate.
-    pub target_output_rate: Option<u32>,
+    /// Optional decoder-side resampler plan. `None` means the decoder emits
+    /// at the source rate.
+    pub resampler: Option<DecoderResamplerConfig>,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
@@ -291,7 +326,7 @@ fn create_apple(
                 "fmp4_segment: dispatching to segment-aware Apple HW codec path"
             );
             let gapless = config.gapless;
-            let target_output_rate = config.target_output_rate;
+            let target_output_rate = decoder_embedded_target_output_rate(&config)?;
             return build_fmp4_segment_decoder(source, layout, config, |track| {
                 let output_track = track_with_output_domain_gapless(track, target_output_rate)?;
                 AppleCodec::open_with_config(&output_track, gapless, target_output_rate)
@@ -365,13 +400,13 @@ fn build_apple_standalone_decoder(
         startup_probe.duration,
     )?;
     demuxer.set_gapless(probed_gapless);
-    let output_track =
-        track_with_output_domain_gapless(demuxer.track_info(), config.target_output_rate)?;
+    let target_output_rate = decoder_embedded_target_output_rate(&config)?;
+    let output_track = track_with_output_domain_gapless(demuxer.track_info(), target_output_rate)?;
     if output_track.gapless.is_some() {
         demuxer.set_gapless(output_track.gapless);
     }
     let codec_impl =
-        AppleCodec::open_with_config(&output_track, config.gapless, config.target_output_rate)?;
+        AppleCodec::open_with_config(&output_track, config.gapless, target_output_rate)?;
     let pool = config
         .pcm_pool
         .clone()
@@ -387,6 +422,14 @@ fn build_apple_standalone_decoder(
         },
     );
     Ok(Box::new(decoder))
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+fn decoder_embedded_target_output_rate(config: &DecoderConfig) -> DecodeResult<Option<u32>> {
+    config
+        .resampler
+        .map(DecoderResamplerConfig::codec_embedded_rate)
+        .transpose()
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -710,6 +753,22 @@ where
         },
     );
     Ok(Box::new(decoder))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoder_resampler_config_defaults_to_decoder_embedded() {
+        let target_sample_rate = NonZeroU32::new(48_000).expect("test rate");
+        let config = DecoderResamplerConfig::builder()
+            .target_sample_rate(target_sample_rate)
+            .build();
+
+        assert_eq!(config.placement, ResamplerPlacement::DecoderEmbedded);
+        assert_eq!(config.target_sample_rate, target_sample_rate);
+    }
 }
 
 /// RED (device repro): on the size-reduced apple-only build (no symphonia

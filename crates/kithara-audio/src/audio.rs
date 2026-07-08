@@ -12,7 +12,8 @@ use delegate::delegate;
 use fast_interleave::deinterleave_variable;
 use kithara_bufpool::{BytePool, PcmBuf, PcmPool};
 use kithara_decode::{
-    Decoder, DecoderConfig, DecoderFactory, GaplessMode, PcmChunk, PcmMeta, PcmSpec, TrackMetadata,
+    Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig, GaplessMode, PcmChunk, PcmMeta,
+    PcmSpec, TrackMetadata,
 };
 use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
@@ -923,7 +924,7 @@ struct DecoderDeps {
     byte_pool: BytePool,
     backend: kithara_decode::DecoderBackend,
     pcm_pool: PcmPool,
-    target_output_rate: Option<Arc<AtomicU32>>,
+    decoder_resampler_rate: Option<Arc<AtomicU32>>,
 }
 
 impl DecoderDeps {
@@ -937,7 +938,10 @@ impl DecoderDeps {
             byte_pool,
             backend,
             pcm_pool,
-            target_output_rate: fused_src::decoder_target_output_rate(backend, host_sample_rate),
+            decoder_resampler_rate: fused_src::decoder_resampler_target_rate(
+                backend,
+                host_sample_rate,
+            ),
         }
     }
 }
@@ -973,8 +977,12 @@ struct RegisteredStreamSource {
     worker: AudioWorkerHandle,
 }
 
-fn current_decoder_target_output_rate(rate: Option<&Arc<AtomicU32>>) -> Option<u32> {
-    rate.and_then(|rate| NonZeroU32::new(rate.load(Ordering::Acquire)).map(NonZeroU32::get))
+fn current_decoder_resampler_config(
+    rate: Option<&Arc<AtomicU32>>,
+) -> Option<DecoderResamplerConfig> {
+    rate.and_then(|rate| {
+        NonZeroU32::new(rate.load(Ordering::Acquire)).map(DecoderResamplerConfig::codec_embedded)
+    })
 }
 
 /// Provides async constructor that creates Stream internally.
@@ -1119,7 +1127,7 @@ where
             initial_media_info,
             pcm_buffer_chunks,
             preload_chunks,
-            recreate_on_host_rate_change: deps.target_output_rate.is_some(),
+            recreate_on_host_rate_change: deps.decoder_resampler_rate.is_some(),
             runtime_handle,
             shared_stream,
             worker: config_worker,
@@ -1257,14 +1265,14 @@ where
         let factory_byte_len = Arc::clone(byte_len_handle);
         let factory_pool = deps.pcm_pool.clone();
         let factory_byte_pool = deps.byte_pool.clone();
-        let factory_target_output_rate = deps.target_output_rate.clone();
+        let factory_decoder_resampler_rate = deps.decoder_resampler_rate.clone();
         Arc::new(move |stream, info, base_offset| {
             let byte_len = stream
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
             factory_byte_len.store(byte_len, Ordering::Release);
-            let target_output_rate =
-                current_decoder_target_output_rate(factory_target_output_rate.as_ref());
+            let resampler =
+                current_decoder_resampler_config(factory_decoder_resampler_rate.as_ref());
             let config = DecoderConfig::builder()
                 .backend(decoder_backend)
                 .byte_len_handle(Arc::clone(&factory_byte_len))
@@ -1273,7 +1281,7 @@ where
                 .epoch(factory_epoch.load(Ordering::Acquire))
                 .maybe_byte_map(stream.byte_map())
                 .maybe_hooks(stream.take_reader_event_sink())
-                .maybe_target_output_rate(target_output_rate)
+                .maybe_resampler(resampler)
                 .build();
             let source = OffsetReader::new(stream.clone(), base_offset);
             match DecoderFactory::create_from_media_info(source, &info, config) {
@@ -1319,8 +1327,8 @@ where
             .maybe_byte_map(shared_stream.byte_map())
             .maybe_hooks(shared_stream.take_reader_event_sink())
             .maybe_hint(hint.clone())
-            .maybe_target_output_rate(current_decoder_target_output_rate(
-                deps.target_output_rate.as_ref(),
+            .maybe_resampler(current_decoder_resampler_config(
+                deps.decoder_resampler_rate.as_ref(),
             ))
             .build();
         let hint_for_decoder = hint;

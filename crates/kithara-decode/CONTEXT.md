@@ -180,10 +180,13 @@ When `symphonia` is disabled (`default-features = false` + only `apple` / `andro
 
 `kithara-resampler` owns standalone resampler traits, config, and Rubato
 backends. `kithara-decode` imports that crate for decoder integration and keeps
-only decoder-owned placement decisions. Apple sample-rate conversion currently
-uses the codec-embedded `AudioConverter` path in `AppleCodec`; the standalone
-Apple PCM-to-PCM adapter under `src/apple/resampler*` is a test-only parity
-harness for that backend boundary, not a production resampler backend.
+only decoder-owned placement decisions. `DecoderConfig.resampler` carries an
+optional `DecoderResamplerConfig`; codec-embedded Apple conversion is spelled as
+`DecoderResamplerConfig::codec_embedded(target_rate)`, not as a bare sample-rate
+field. Apple sample-rate conversion currently uses the codec-embedded
+`AudioConverter` path in `AppleCodec`; the standalone Apple PCM-to-PCM adapter
+under `src/apple/resampler*` is a test-only parity harness for that backend
+boundary, not a production resampler backend.
 
 `AppleCodec::SRC_OUTPUT_MARGIN_FRAMES = 1` is not configuration. It is the
 ceil-domain slack used by fused decode+SRC when carrying the ideal output length

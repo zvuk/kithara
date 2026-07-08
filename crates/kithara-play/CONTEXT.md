@@ -174,8 +174,9 @@ loaded resource. When the numeric rate changes, resources enter the existing
 decoder recreate path with `RecreateCause::RouteChange`; the same machinery
 preserves playback position and gapless state. Equal-rate notifications only
 refresh the host state and do not recreate. On Apple fused builds the recreated
-decoder receives the current host rate as `DecoderConfig.target_output_rate`;
-all non-fused builds continue to use the fixed-ratio resampler stage.
+decoder receives the current host rate through `DecoderConfig.resampler` as a
+codec-embedded resampler plan; all non-fused builds continue to use the
+fixed-ratio resampler stage.
 
 ## Feature Flags
 
