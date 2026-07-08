@@ -183,10 +183,19 @@ backends. `kithara-decode` imports that crate for decoder integration and keeps
 only decoder-owned placement decisions. `DecoderConfig.resampler` carries an
 optional `DecoderResamplerConfig`; codec-embedded Apple conversion is spelled as
 `DecoderResamplerConfig::codec_embedded(target_rate)`, not as a bare sample-rate
-field. Apple sample-rate conversion currently uses the codec-embedded
-`AudioConverter` path in `AppleCodec`; the standalone Apple PCM-to-PCM adapter
-under `src/apple/resampler*` is a test-only parity harness for that backend
-boundary, not a production resampler backend.
+field.
+
+There are two decoder-side placements:
+
+- `DecoderEmbedded` lets a backend that already owns a converter emit target-rate
+  PCM directly. Apple uses the codec-embedded `AudioConverter` path in
+  `AppleCodec`; the standalone Apple PCM-to-PCM adapter under
+  `src/apple/resampler*` is a test-only parity harness for that backend boundary,
+  not a production resampler backend.
+- `Standalone` builds the selected `kithara-resampler::ResamplerBackend` and
+  wraps the chosen decoder in `src/resampled.rs`. This works with any decoder
+  backend that compiles in the current target; invalid backend/config pairs fail
+  at construction instead of trying another backend.
 
 `AppleCodec::SRC_OUTPUT_MARGIN_FRAMES = 1` is not configuration. It is the
 ceil-domain slack used by fused decode+SRC when carrying the ideal output length
@@ -197,6 +206,7 @@ contract, not a tunable, so it stays named and local to the Apple codec owner.
 
 - `src/traits.rs` — public `Decoder` trait plus typed outcomes (`DecoderChunkOutcome`, `DecoderSeekOutcome`, `InputReadOutcome`) and the `DecoderInput` source supertrait.
 - `src/factory/` — `DecoderConfig`, `DecoderFactory`, and the `DecoderBackend` selector enum. The factory boxes every backend into `Box<dyn Decoder>` so callers stay codec-agnostic.
+- `src/resampled.rs` — generic decoder wrapper for `DecoderResamplerConfig::Standalone`; it owns interleaving, pooled planar scratch, target-rate metadata, and seek/gapless domain scaling.
 - `src/composed.rs` — internal `ComposedDecoder<D: Demuxer, C: FrameCodec>` that implements `Decoder` by pairing a demuxer with a frame-level codec.
 - `src/demuxer.rs` — internal `Demuxer` trait.
 - `src/codec.rs` — internal `FrameCodec` trait and `CodecPriming`.

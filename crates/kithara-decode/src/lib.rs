@@ -27,6 +27,7 @@ mod gapless;
 mod input;
 mod mp4;
 mod pcm_time;
+mod resampled;
 #[cfg(feature = "symphonia")]
 mod symphonia;
 mod traits;

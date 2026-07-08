@@ -6,7 +6,7 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_resampler::ResamplerPlacement;
+use kithara_resampler::{ResamplerBackend, ResamplerOptions, ResamplerPlacement, ResamplerQuality};
 use kithara_stream::{
     AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes,
 };
@@ -93,12 +93,17 @@ impl std::fmt::Display for DecoderBackend {
 ///
 /// This describes conversion that is part of decoder construction, not the
 /// playback graph's standalone resampler stage.
-#[derive(Clone, Copy, Debug, Builder, Eq, PartialEq)]
+#[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct DecoderResamplerConfig {
+    pub backend: Option<Box<dyn ResamplerBackend>>,
+    #[builder(default)]
+    pub options: ResamplerOptions,
     #[builder(default = ResamplerPlacement::DecoderEmbedded)]
     pub placement: ResamplerPlacement,
+    #[builder(default)]
+    pub quality: ResamplerQuality,
     pub target_sample_rate: NonZeroU32,
 }
 
@@ -107,18 +112,37 @@ impl DecoderResamplerConfig {
     pub fn codec_embedded(target_sample_rate: NonZeroU32) -> Self {
         Self {
             target_sample_rate,
+            backend: None,
+            options: ResamplerOptions::default(),
             placement: ResamplerPlacement::DecoderEmbedded,
+            quality: ResamplerQuality::default(),
         }
     }
 
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-    fn codec_embedded_rate(self) -> DecodeResult<u32> {
-        if self.placement != ResamplerPlacement::DecoderEmbedded {
-            return Err(DecodeError::InvalidData {
-                detail: "decoder standalone resampler adapter is not configured",
-            });
+    fn codec_embedded_rate(&self) -> DecodeResult<Option<u32>> {
+        match self.placement {
+            ResamplerPlacement::DecoderEmbedded => Ok(Some(self.target_sample_rate.get())),
+            ResamplerPlacement::Standalone => Ok(None),
+            _ => Err(DecodeError::InvalidData {
+                detail: "unsupported decoder resampler placement",
+            }),
         }
-        Ok(self.target_sample_rate.get())
+    }
+}
+
+impl std::fmt::Debug for DecoderResamplerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecoderResamplerConfig")
+            .field(
+                "backend",
+                &self.backend.as_ref().map(ResamplerBackend::name),
+            )
+            .field("options", &self.options)
+            .field("placement", &self.placement)
+            .field("quality", &self.quality)
+            .field("target_sample_rate", &self.target_sample_rate)
+            .finish()
     }
 }
 
@@ -411,25 +435,28 @@ fn build_apple_standalone_decoder(
         .pcm_pool
         .clone()
         .unwrap_or_else(|| PcmPool::default().clone());
+    let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         DecoderRuntime {
-            pool,
+            pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    Ok(Box::new(decoder))
+    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 fn decoder_embedded_target_output_rate(config: &DecoderConfig) -> DecodeResult<Option<u32>> {
     config
         .resampler
+        .as_ref()
         .map(DecoderResamplerConfig::codec_embedded_rate)
         .transpose()
+        .map(Option::flatten)
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -576,17 +603,18 @@ fn build_android_standalone_decoder(
         .pcm_pool
         .clone()
         .unwrap_or_else(|| PcmPool::default().clone());
+    let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         DecoderRuntime {
-            pool,
+            pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    Ok(Box::new(decoder))
+    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
 }
 
 #[cfg(feature = "symphonia")]
@@ -655,17 +683,18 @@ fn create_file_symphonia_universal(
         .pcm_pool
         .clone()
         .unwrap_or_else(|| PcmPool::default().clone());
+    let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         DecoderRuntime {
-            pool,
+            pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    Ok(Box::new(decoder))
+    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
 }
 
 /// Gate for the segment-aware fMP4 path. Routes AAC / FLAC fMP4 with a
@@ -742,17 +771,18 @@ where
         .pcm_pool
         .clone()
         .unwrap_or_else(|| PcmPool::default().clone());
+    let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec,
         DecoderRuntime {
-            pool,
+            pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    Ok(Box::new(decoder))
+    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
 }
 
 #[cfg(test)]
@@ -768,6 +798,7 @@ mod tests {
 
         assert_eq!(config.placement, ResamplerPlacement::DecoderEmbedded);
         assert_eq!(config.target_sample_rate, target_sample_rate);
+        assert!(config.backend.is_none());
     }
 }
 

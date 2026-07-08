@@ -11,7 +11,7 @@ categories = ["multimedia::audio"]
 
 [features]
 default = []
-resample-rubato = ["dep:rubato", "rubato/fft_resampler"]
+resample-rubato = ["dep:rubato"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }

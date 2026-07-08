@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::PcmPool;
 
-use super::RubatoBackend;
+use super::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
 use crate::{
     ResamplerBackend, ResamplerCapabilities, ResamplerConfig, ResamplerMode, ResamplerOptions,
     ResamplerSettings, create_resampler,
@@ -48,4 +48,33 @@ fn rubato_resamples_borrowed_planar_slices() {
 
     assert_eq!(process.input_frames, resampler.input_frames_next());
     assert!(process.output_frames > 0);
+}
+
+#[test]
+fn rubato_fft_is_selected_by_backend_config() {
+    let channels = NonZeroUsize::new(1).unwrap_or_else(|| panic!("test channels"));
+    let settings = ResamplerSettings::builder()
+        .channels(channels)
+        .mode(ResamplerMode::FixedRatio {
+            source_sample_rate: NonZeroU32::new(48_000)
+                .unwrap_or_else(|| panic!("test source rate")),
+            target_sample_rate: NonZeroU32::new(44_100)
+                .unwrap_or_else(|| panic!("test target rate")),
+        })
+        .options(ResamplerOptions::builder().chunk_size(256).build())
+        .pcm_pool(PcmPool::new(4, 4_096))
+        .build();
+    let backend = RubatoBackend::with_config(RubatoConfig {
+        algorithm: RubatoAlgorithm::Fft,
+    });
+    let config = ResamplerConfig::builder()
+        .backend(backend)
+        .settings(settings)
+        .build();
+
+    let resampler =
+        create_resampler(&config).unwrap_or_else(|err| panic!("rubato FFT build failed: {err}"));
+
+    assert_eq!(resampler.input_frames_next(), 256);
+    assert!(resampler.output_frames_next() > 0);
 }

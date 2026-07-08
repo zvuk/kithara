@@ -77,7 +77,7 @@ module lands. Empty placeholder features are not part of the public contract.
 
 ## Decoder Integration
 
-`kithara-decode` imports this crate and plans one of two placements:
+`kithara-decode` imports this crate and supports one of two placements:
 
 - codec-embedded: the decoder emits target-rate PCM internally, initially Apple
   decoder plus Apple `AudioConverter`;
