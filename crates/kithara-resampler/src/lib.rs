@@ -9,6 +9,8 @@ mod error;
 mod factory;
 mod mode;
 mod placement;
+#[cfg(feature = "resample-rubato")]
+pub mod rubato;
 mod traits;
 
 pub use backend::ResamplerBackend;

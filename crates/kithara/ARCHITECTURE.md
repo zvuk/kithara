@@ -28,8 +28,7 @@ sits in the audio path.
 <tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>, <code>kithara-drm</code>)</td></tr>
 <tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder (<code>kithara-audio/symphonia</code>, <code>kithara-decode/symphonia</code>) plus queue decode forwarding when <code>queue</code> is enabled</td></tr>
 <tr><td><code>fdk-aac</code></td><td>no</td><td>FDK-AAC decoder override across decode/audio and queue when <code>queue</code> is enabled</td></tr>
-<tr><td><code>resample-rubato</code></td><td>yes</td><td>Fixed-ratio rubato sinc resampler stage for non-fused playback</td></tr>
-<tr><td><code>resample-fft</code></td><td>yes</td><td>FFT mono-resampler backend for beat analysis; requires <code>analysis-beat</code></td></tr>
+<tr><td><code>resample-rubato</code></td><td>yes</td><td>Fixed-ratio rubato resampler backend for non-fused playback and beat analysis</td></tr>
 <tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass and rubato mono-resampler in <code>kithara-audio</code>; absent from the Apple FFI device set. NN-only beat fallback is future work.</td></tr>
 <tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-audio</code>; waveform/blob types remain unconditional</td></tr>
 <tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Signalsmith time-stretch backend through <code>kithara-audio</code> / <code>kithara-stretch</code></td></tr>

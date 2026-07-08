@@ -1,6 +1,6 @@
 use crate::{Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings};
 
-pub trait ResamplerBackend: Send + Sync + 'static {
+pub trait ResamplerBackend: Send + Sync {
     /// Build a standalone resampler for the supplied settings.
     ///
     /// # Errors
@@ -34,5 +34,25 @@ where
 
     fn name(&self) -> &'static str {
         self.as_ref().name()
+    }
+}
+
+impl<T> ResamplerBackend for &T
+where
+    T: ResamplerBackend + ?Sized,
+{
+    fn build(
+        &self,
+        settings: &ResamplerSettings,
+    ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
+        (*self).build(settings)
+    }
+
+    fn capabilities(&self) -> ResamplerCapabilities {
+        (*self).capabilities()
+    }
+
+    fn name(&self) -> &'static str {
+        (*self).name()
     }
 }

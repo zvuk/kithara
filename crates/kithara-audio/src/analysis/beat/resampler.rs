@@ -1,7 +1,13 @@
-use std::iter;
+use std::{
+    iter,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{Resampler, ResamplerBackend, ResamplerOptions, create_resampler};
+use kithara_resampler::{
+    Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerSettings,
+    create_resampler, rubato::RubatoBackend,
+};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 use tracing::warn;
 
@@ -25,26 +31,34 @@ impl MonoResampleBuffer {
         config: BeatAnalysisConfig,
         pcm_pool: &PcmPool,
     ) -> Option<Self> {
-        let backend = ResamplerBackend::Rubato;
-        let resampler = create_resampler(
-            backend,
-            config.resampler_quality,
-            source_rate,
-            config.target_rate,
-            1,
-            ResamplerOptions::builder()
-                .chunk_size(config.block_frames)
-                .build(),
-        )
-        .map_err(|e| {
-            warn!(
-                ?e,
-                source_rate,
-                ?backend,
-                "beat analysis: resampler construction failed"
-            );
-        })
-        .ok()?;
+        let source_sample_rate = NonZeroU32::new(source_rate)?;
+        let target_sample_rate = NonZeroU32::new(config.target_rate)?;
+        let settings = ResamplerSettings::builder()
+            .channels(NonZeroUsize::MIN)
+            .mode(ResamplerMode::FixedRatio {
+                source_sample_rate,
+                target_sample_rate,
+            })
+            .quality(config.resampler_quality)
+            .options(
+                ResamplerOptions::builder()
+                    .chunk_size(config.block_frames)
+                    .build(),
+            )
+            .pcm_pool(pcm_pool.clone())
+            .build();
+        let resampler_config = ResamplerConfig::builder()
+            .backend(RubatoBackend::new())
+            .settings(settings)
+            .build();
+        let resampler = create_resampler(&resampler_config)
+            .map_err(|e| {
+                warn!(
+                    ?e,
+                    source_rate, "beat analysis: resampler construction failed"
+                );
+            })
+            .ok()?;
 
         let delay = resampler.output_delay();
         let ratio = f64::from(config.target_rate) / f64::from(source_rate);
@@ -109,14 +123,17 @@ impl MonoResampleBuffer {
         self.output_block.resize(out_next, 0.0);
 
         let written = {
-            let input = std::slice::from_ref(&*self.input_block);
-            let output = std::slice::from_mut(&mut *self.output_block);
-            self.resampler.process_into_buffer(input, output)
+            let input_ref: &[f32] = &self.input_block;
+            let output_ref: &mut [f32] = &mut self.output_block;
+            let input = [input_ref];
+            let mut output = [output_ref];
+            self.resampler.process_into_buffer(&input, &mut output)
         };
         self.pending.drain(..needed);
 
         match written {
-            Ok((_, written)) => {
+            Ok(process) => {
+                let written = process.output_frames;
                 let out = &self.output_block[..written];
                 let skip = self.skip.min(out.len());
                 self.skip -= skip;

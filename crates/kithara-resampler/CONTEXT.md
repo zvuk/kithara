@@ -56,15 +56,14 @@ Variable ratio and glide controls are advertised through
 pitch/glide modes.
 
 `ResamplerQuality` adjusts implementation quality inside a selected backend. It
-does not select a backend. FFT is a built-in backend module selected by config
-when that module is compiled, not a quality level. External backends can ignore
-quality or map it into their own config.
+does not select a backend. Rubato-specific algorithm choices, including FFT, are
+`rubato::RubatoConfig` fields, not separate backend families or cargo features.
+External backends can ignore quality or map it into their own config.
 
 ## Planned Built-In Backend Families
 
-- `Rubato`: fixed-ratio sinc/poly backend, moved from the old decode-owned
-  implementation.
-- `RubatoFft`: cfg-gated FFT backend variant for explicit offline callers.
+- `Rubato`: fixed-ratio backend moved from the old decode-owned
+  implementation. `rubato::RubatoConfig` selects async poly/sinc or FFT.
 - `AppleAudioConverter`: standalone PCM-to-PCM `AudioConverter` backend on
   macOS/iOS. Codec-embedded Apple decode remains in `kithara-decode`.
 - `ReadHead`: Rust port of the moving read-head renderer with fixed-ratio
@@ -72,6 +71,9 @@ quality or map it into their own config.
 
 No Android placeholder exists until there is a real Android PCM resampler
 backend.
+
+Future backend families get cargo features only when their implementation
+module lands. Empty placeholder features are not part of the public contract.
 
 ## Decoder Integration
 
@@ -94,10 +96,7 @@ resampler is codec-embedded or adapter-based.
 
 <table>
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
-<tr><td><code>resample-rubato</code></td><td>no</td><td>Rubato fixed-ratio backend family</td></tr>
-<tr><td><code>resample-fft</code></td><td>no</td><td>Rubato FFT backend variant for explicit callers</td></tr>
-<tr><td><code>apple</code></td><td>no</td><td>Apple <code>AudioConverter</code> PCM resampler on macOS/iOS</td></tr>
-<tr><td><code>resample-readhead</code></td><td>no</td><td>Moving read-head backend</td></tr>
+<tr><td><code>resample-rubato</code></td><td>no</td><td>Rubato fixed-ratio backend family, including config-selected FFT</td></tr>
 </table>
 
 ## Module Layout

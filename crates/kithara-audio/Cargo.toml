@@ -13,7 +13,6 @@ categories = ["multimedia::audio"]
 default = [
     "symphonia",
     "resample-rubato",
-    "resample-fft",
     "analysis-beat",
     "analysis-waveform",
     "stretch-signalsmith",
@@ -64,9 +63,8 @@ symphonia = ["kithara-decode/symphonia", "resample-rubato"]
 # decoder is LC-only; without this feature, HE-AAC v2 streams fail to
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
-resample-rubato = ["kithara-decode/resample-rubato"]
-resample-fft = ["analysis-beat", "kithara-decode/resample-fft"]
-analysis-beat = ["kithara-decode/resample-rubato"]
+resample-rubato = ["kithara-resampler/resample-rubato"]
+analysis-beat = ["kithara-resampler/resample-rubato"]
 analysis-waveform = ["dep:realfft"]
 # Native-only C++ time-stretch backends. Default native builds use signalsmith;
 # bungee stays opt-in. Wasm builds pass `--no-default-features`, so they carry
@@ -84,6 +82,7 @@ kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-resampler = { workspace = true, default-features = false }
 kithara-stream = { workspace = true, default-features = false }
 kithara-stretch = { workspace = true, default-features = false, optional = true }
 kithara-test-macros = { workspace = true }

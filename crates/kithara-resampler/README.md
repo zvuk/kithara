@@ -26,13 +26,10 @@ directly. Backends do not choose another backend when a requested mode is
 unavailable. Hot paths use caller-owned buffers or scratch from an injected
 `kithara-bufpool::PcmPool`; library code must not create a hidden default pool.
 
-Feature flags will select compiled built-in backend modules as they are moved
-into this crate:
+The current built-in backend is feature-gated explicitly:
 
-- `resample-rubato` enables the Rubato fixed-ratio backend family.
-- `resample-fft` enables the Rubato FFT backend variant for explicit callers.
-- `apple` enables Apple `AudioConverter` PCM resampling on Apple targets.
-- `resample-readhead` enables the moving read-head backend.
+- `resample-rubato` enables the Rubato backend; its algorithm is selected by
+  `rubato::RubatoConfig`.
 
 See [CONTEXT.md](CONTEXT.md) for the backend contract, allocation contract, and
 decoder integration rules.

@@ -176,21 +176,14 @@ This keeps the strand contained in the decode layer: it never reaches into the
 
 When `symphonia` is disabled (`default-features = false` + only `apple` / `android`), the factory has no software fallback — it errors if the active hardware backend cannot handle a codec/container.
 
-## Resampler protocol
+## Resampler integration
 
-`kithara-decode` owns the fixed-ratio `Resampler` trait, the
-`ResamplerBackend` selector, `create_resampler`, and `ResamplerOptions`.
-Backends implement the same planar PCM contract: rubato supplies the Poly/Sinc
-and beat-only FFT variants, and Apple supplies the AudioConverter PCM-to-PCM
-variant under `src/apple/`.
-
-`ResamplerOptions` is the single public surface for implementation-affecting
-resampler tunables. Its defaults preserve the current behavior:
-4096-frame process blocks, 0.0001 passthrough/ratio-change tolerance for
-playback callers, and an 8.0 maximum ratio-adjustment window for async rubato
-backends. Callers that need a different block size or tolerance pass options
-through `create_resampler`; backends should not reintroduce hidden constants for
-those values.
+`kithara-resampler` owns standalone resampler traits, config, and Rubato
+backends. `kithara-decode` imports that crate for decoder integration and keeps
+only decoder-owned placement decisions. Apple sample-rate conversion currently
+uses the codec-embedded `AudioConverter` path in `AppleCodec`; the standalone
+Apple PCM-to-PCM adapter under `src/apple/resampler*` is a test-only parity
+harness for that backend boundary, not a production resampler backend.
 
 `AppleCodec::SRC_OUTPUT_MARGIN_FRAMES = 1` is not configuration. It is the
 ceil-domain slack used by fused decode+SRC when carrying the ideal output length
@@ -206,8 +199,6 @@ contract, not a tunable, so it stays named and local to the Apple codec owner.
 - `src/codec.rs` — internal `FrameCodec` trait and `CodecPriming`.
 - `src/input.rs` — `InputRequirement` contract used by decoder construction gates.
 - `src/mock.rs` — mock support for tests and the `mock` feature.
-- `src/resampler/` — fixed-ratio resampler trait, backend selector, options,
-  factory, and rubato implementation.
 - `src/fmp4/`, `src/mp4/` — fMP4/MP4 container helpers.
 - `src/symphonia/` (feature `symphonia`) — Symphonia `Decoder` implementation; probe and direct paths; `ReadSeekAdapter`.
 - `src/apple/` (feature `apple`, macOS / iOS) — Apple `AudioToolbox` backend over `AudioFile` / `AudioConverter` FFI.

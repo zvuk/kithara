@@ -8,8 +8,9 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{DecoderBackend, GaplessMode, PcmSpec, ResamplerOptions, ResamplerQuality};
+use kithara_decode::{DecoderBackend, GaplessMode, PcmSpec};
 use kithara_events::EventBus;
+use kithara_resampler::{ResamplerOptions, ResamplerQuality};
 use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
 
@@ -151,12 +152,12 @@ pub(crate) fn create_effects(
     host_sample_rate: &Arc<AtomicU32>,
     stretch: Option<&Arc<StretchControls>>,
     resampler_stage: ResamplerStage,
-    pool: Option<PcmPool>,
+    pool: &PcmPool,
     custom_effects: Vec<Box<dyn AudioEffect>>,
 ) -> Vec<Box<dyn AudioEffect>> {
     let mut chain: Vec<Box<dyn AudioEffect>> = Vec::new();
 
-    append_stretch_slot(stretch, &mut chain, initial_spec, pool.as_ref());
+    append_stretch_slot(stretch, &mut chain, initial_spec, pool);
 
     crate::pipeline::resampler_stage::append(
         &mut chain,
@@ -178,7 +179,7 @@ fn append_stretch_slot(
     controls: Option<&Arc<StretchControls>>,
     chain: &mut Vec<Box<dyn AudioEffect>>,
     initial_spec: PcmSpec,
-    pool: Option<&PcmPool>,
+    pool: &PcmPool,
 ) {
     let Some(controls) = controls else {
         return;
@@ -186,7 +187,7 @@ fn append_stretch_slot(
     chain.push(Box::new(TimeStretchProcessor::new(
         Arc::clone(controls),
         initial_spec,
-        pool.cloned().unwrap_or_default(),
+        pool.clone(),
     )));
 }
 
@@ -200,7 +201,7 @@ fn append_stretch_slot(
     _controls: Option<&Arc<StretchControls>>,
     _chain: &mut Vec<Box<dyn AudioEffect>>,
     _initial_spec: PcmSpec,
-    _pool: Option<&PcmPool>,
+    _pool: &PcmPool,
 ) {
 }
 
@@ -248,6 +249,10 @@ mod tests {
         }
     }
 
+    fn pool() -> PcmPool {
+        PcmPool::default().clone()
+    }
+
     /// Without a compiled-in stretch backend, `stretch` does not add a speed
     /// slot: playback remains at unity and the resampler stays fixed-ratio.
     #[cfg(not(all(
@@ -258,12 +263,13 @@ mod tests {
     fn create_effects_stretch_without_backends_is_resampler_first() {
         let host_sr = Arc::new(AtomicU32::new(44100));
         let controls = StretchControls::new(1.5);
+        let pool = pool();
         let effects = create_effects(
             spec(),
             &host_sr,
             Some(&controls),
             present_stage(),
-            None,
+            &pool,
             Vec::new(),
         );
         // [Resampler] only — no stretch backend exists in this build.
@@ -273,12 +279,13 @@ mod tests {
     #[kithara::test]
     fn create_effects_includes_custom_effects() {
         let host_sr = Arc::new(AtomicU32::new(44100));
+        let pool = pool();
         let effects = create_effects(
             spec(),
             &host_sr,
             None,
             present_stage(),
-            None,
+            &pool,
             vec![Box::new(PassthroughEffect)],
         );
         // [Resampler, custom] -- resampler-first, no pre slot.
@@ -289,12 +296,13 @@ mod tests {
     #[kithara::test]
     fn create_effects_fused_omits_resampler_stage() {
         let host_sr = Arc::new(AtomicU32::new(48000));
+        let pool = pool();
         let effects = create_effects(
             spec(),
             &host_sr,
             None,
             ResamplerStage::Absent,
-            None,
+            &pool,
             Vec::new(),
         );
         assert!(effects.is_empty());
@@ -304,12 +312,13 @@ mod tests {
     #[kithara::test]
     fn create_effects_fused_keeps_custom_effects_without_resampler() {
         let host_sr = Arc::new(AtomicU32::new(48000));
+        let pool = pool();
         let effects = create_effects(
             spec(),
             &host_sr,
             None,
             ResamplerStage::Absent,
-            None,
+            &pool,
             vec![Box::new(PassthroughEffect)],
         );
         assert_eq!(effects.len(), 1);
@@ -323,12 +332,13 @@ mod tests {
     fn create_effects_tempo_mode_prepends_stretch_slot() {
         let host_sr = Arc::new(AtomicU32::new(44100));
         let controls = StretchControls::new(1.0);
+        let pool = pool();
         let effects = create_effects(
             spec(),
             &host_sr,
             Some(&controls),
             present_stage(),
-            None,
+            &pool,
             vec![Box::new(PassthroughEffect)],
         );
         // [TimeStretch, Resampler, custom] -- speed is owned by the pre slot.
@@ -347,12 +357,13 @@ mod tests {
         let host_sr = Arc::new(AtomicU32::new(44100));
         let controls = StretchControls::new(1.5);
         controls.set_keylock(false);
+        let pool = pool();
         let mut effects = create_effects(
             spec(),
             &host_sr,
             Some(&controls),
             present_stage(),
-            None,
+            &pool,
             Vec::new(),
         );
         // Drive one chunk through the stretch slot (index 0).

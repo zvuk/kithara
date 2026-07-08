@@ -15,7 +15,6 @@ default = [
     "hls",
     "symphonia",
     "resample-rubato",
-    "resample-fft",
     "analysis-beat",
     "analysis-waveform",
     "stretch-signalsmith",
@@ -95,7 +94,6 @@ symphonia = [
 # stereo + SBR) streams fail in the software pipeline.
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac", "kithara-queue?/fdk-aac"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato", "kithara-play/resample-rubato"]
-resample-fft = ["kithara-audio/resample-fft", "kithara-play/resample-fft"]
 analysis-beat = ["kithara-audio/analysis-beat", "kithara-play/analysis-beat"]
 analysis-waveform = ["kithara-audio/analysis-waveform", "kithara-play/analysis-waveform"]
 # Native-only C++ time-stretch backends (selectable at runtime in the DJ

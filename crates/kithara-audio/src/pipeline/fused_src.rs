@@ -1,6 +1,7 @@
 use std::sync::{Arc, atomic::AtomicU32};
 
-use kithara_decode::{DecoderBackend, ResamplerOptions, ResamplerQuality};
+use kithara_decode::DecoderBackend;
+use kithara_resampler::{ResamplerOptions, ResamplerQuality};
 
 use crate::pipeline::config::ResamplerStage;
 

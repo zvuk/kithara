@@ -1,6 +1,7 @@
 use bon::Builder;
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmSpec, ResamplerQuality};
+use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_resampler::ResamplerQuality;
 use num_traits::cast::AsPrimitive;
 
 use super::track_analysis::TrackAnalysis;

@@ -5,6 +5,9 @@ use crate::ResamplerPlacement;
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum ResamplerBuildError {
+    #[error("invalid {resource} sample rate for resampler: {rate}")]
+    InvalidSampleRate { resource: &'static str, rate: u32 },
+
     #[error("invalid resampler options: {detail}")]
     InvalidOptions { detail: &'static str },
 
@@ -26,7 +29,7 @@ pub enum ResamplerBuildError {
     #[error("resampler backend {backend} construction failed: {detail}")]
     BackendBuild {
         backend: &'static str,
-        detail: &'static str,
+        detail: String,
     },
 }
 
@@ -40,8 +43,5 @@ pub enum ResamplerError {
     BudgetExhausted(#[from] kithara_bufpool::BudgetExhausted),
 
     #[error("resampler backend failed during {op}: {detail}")]
-    Backend {
-        op: &'static str,
-        detail: &'static str,
-    },
+    Backend { op: &'static str, detail: String },
 }

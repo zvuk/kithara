@@ -5,11 +5,10 @@ use std::{
     ptr::{self, NonNull},
 };
 
-use super::{channel_byte_len, constants};
-use crate::{
-    apple::ffi::{AudioBuffer, AudioBufferList},
-    resampler::{ResamplerBuildError, ResamplerError},
-};
+use kithara_resampler::{ResamplerBuildError, ResamplerError};
+
+use super::{apple_build_config, channel_byte_len, constants};
+use crate::apple::ffi::{AudioBuffer, AudioBufferList};
 
 pub(super) struct PlanarAudioBufferList {
     layout: Layout,
@@ -23,9 +22,8 @@ impl PlanarAudioBufferList {
         // SAFETY: `layout` is non-zero and was computed for an AudioBufferList
         // header followed by `channels` AudioBuffer entries.
         let raw = unsafe { alloc_zeroed(layout) };
-        let ptr = NonNull::new(raw.cast::<AudioBufferList>()).ok_or_else(|| {
-            ResamplerBuildError::apple_config("audio buffer list allocation failed")
-        })?;
+        let ptr = NonNull::new(raw.cast::<AudioBufferList>())
+            .ok_or_else(|| apple_build_config("audio buffer list allocation failed"))?;
         let mut list = Self {
             layout,
             ptr,
@@ -33,9 +31,8 @@ impl PlanarAudioBufferList {
         };
         // SAFETY: `list.ptr` owns enough initialized storage for the header.
         unsafe {
-            (*list.ptr.as_ptr()).mNumberBuffers = u32::try_from(channels).map_err(|_| {
-                ResamplerBuildError::apple_config("channel count exceeds CoreAudio limit")
-            })?;
+            (*list.ptr.as_ptr()).mNumberBuffers = u32::try_from(channels)
+                .map_err(|_| apple_build_config("channel count exceeds CoreAudio limit"))?;
         }
         list.clear_buffers();
         Ok(list)
@@ -73,7 +70,7 @@ impl PlanarAudioBufferList {
 
     pub(super) fn set_output(
         &mut self,
-        output: &mut [Vec<f32>],
+        output: &mut [&mut [f32]],
         output_frames: usize,
     ) -> Result<(), ResamplerError> {
         for (channel_idx, channel) in output.iter_mut().enumerate().take(self.channels) {
@@ -118,10 +115,10 @@ pub(super) unsafe fn audio_buffer_ptr(
 fn buffer_list_layout(channels: usize) -> Result<Layout, ResamplerBuildError> {
     let buffer_bytes = size_of::<AudioBuffer>()
         .checked_mul(channels)
-        .ok_or_else(|| ResamplerBuildError::apple_config("audio buffer list size overflow"))?;
+        .ok_or_else(|| apple_build_config("audio buffer list size overflow"))?;
     let total_bytes = constants::AUDIO_BUFFER_LIST_HEADER_BYTES
         .checked_add(buffer_bytes)
-        .ok_or_else(|| ResamplerBuildError::apple_config("audio buffer list size overflow"))?;
+        .ok_or_else(|| apple_build_config("audio buffer list size overflow"))?;
     Layout::from_size_align(total_bytes, align_of::<AudioBufferList>())
-        .map_err(|_| ResamplerBuildError::apple_config("invalid audio buffer list layout"))
+        .map_err(|_| apple_build_config("invalid audio buffer list layout"))
 }

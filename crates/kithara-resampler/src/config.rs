@@ -19,28 +19,28 @@ pub enum ResamplerQuality {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct RatioGlide {
-    pub target_ratio: f64,
     pub frames: NonZeroU32,
+    pub target_ratio: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct ResamplerOptions {
-    #[builder(default = 4_096)]
-    pub chunk_size: usize,
-    #[builder(default = 0.0001)]
-    pub passthrough_tolerance: f64,
     #[builder(default = 8.0)]
     pub max_ratio_adjustment: f64,
+    #[builder(default = 0.0001)]
+    pub passthrough_tolerance: f64,
+    #[builder(default = 4_096)]
+    pub chunk_size: usize,
 }
 
 impl Default for ResamplerOptions {
     fn default() -> Self {
         Self {
-            chunk_size: 4_096,
-            passthrough_tolerance: 0.0001,
             max_ratio_adjustment: 8.0,
+            passthrough_tolerance: 0.0001,
+            chunk_size: 4_096,
         }
     }
 }
@@ -50,14 +50,14 @@ impl Default for ResamplerOptions {
 #[non_exhaustive]
 pub struct ResamplerSettings {
     pub channels: NonZeroUsize,
+    pub pcm_pool: PcmPool,
     pub mode: ResamplerMode,
+    #[builder(default)]
+    pub options: ResamplerOptions,
     #[builder(default = ResamplerPlacement::Standalone)]
     pub placement: ResamplerPlacement,
     #[builder(default)]
     pub quality: ResamplerQuality,
-    #[builder(default)]
-    pub options: ResamplerOptions,
-    pub pcm_pool: PcmPool,
 }
 
 impl ResamplerSettings {
@@ -219,7 +219,7 @@ mod tests {
         ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
             Err(ResamplerBuildError::BackendBuild {
                 backend: self.name(),
-                detail: "test backend has no processor",
+                detail: "test backend has no processor".into(),
             })
         }
 

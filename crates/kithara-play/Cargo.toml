@@ -14,7 +14,6 @@ default = [
     "backend-cpal",
     "symphonia",
     "resample-rubato",
-    "resample-fft",
     "analysis-beat",
     "analysis-waveform",
     "client-reqwest",
@@ -73,7 +72,6 @@ apple-fused-src = ["kithara-audio/apple-fused-src", "kithara-decode/apple"]
 symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia", "resample-rubato"]
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
-resample-fft = ["kithara-audio/resample-fft"]
 analysis-beat = ["kithara-audio/analysis-beat"]
 analysis-waveform = ["kithara-audio/analysis-waveform"]
 # Re-export of testing helpers (engine module + macro mocks).

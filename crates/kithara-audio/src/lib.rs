@@ -2,7 +2,7 @@
 //!
 //! - [`Audio`] — generic audio pipeline running in a separate thread
 //! - [`AudioConfig`] — pipeline configuration
-//! - [`ResamplerQuality`] — sample rate conversion quality
+//! - [`ResamplerQuality`] - sample rate conversion quality
 //! - `Audio` implements [`PcmReader`] for pull-based PCM consumers
 //!
 //! See the crate `README.md` for usage and `CONTEXT.md` for threading model and architecture.
@@ -35,13 +35,13 @@ pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     timestretch::StretchControls,
 };
-pub use kithara_decode::{ResamplerOptions, ResamplerQuality};
+pub use kithara_resampler::{ResamplerOptions, ResamplerQuality};
 pub use pipeline::{
     config::AudioConfig,
     fetch::{EpochValidator, Fetch},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
-pub use resampler::{ResamplerParams, ResamplerProcessor};
+pub use resampler::{ResamplerBackendConfig, ResamplerParams, ResamplerProcessor};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
     SeekOutcome,

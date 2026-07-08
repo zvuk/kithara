@@ -9,6 +9,16 @@ pub struct ResamplerProcess {
     pub output_frames: usize,
 }
 
+impl ResamplerProcess {
+    #[must_use]
+    pub const fn new(input_frames: usize, output_frames: usize) -> Self {
+        Self {
+            input_frames,
+            output_frames,
+        }
+    }
+}
+
 /// Standalone planar PCM resampler.
 pub trait Resampler: Send + 'static {
     fn capabilities(&self) -> ResamplerCapabilities;

@@ -4317,6 +4317,7 @@ mod splice_continuity_tests {
         .expect("create initial slq fMP4 decoder");
         let initial_spec = initial_decoder.spec();
         let host_sample_rate = Arc::new(AtomicU32::new(Consts::SAMPLE_RATE));
+        let pcm_pool = PcmPool::default().clone();
         let effects = crate::pipeline::config::create_effects(
             initial_spec,
             &host_sample_rate,
@@ -4325,7 +4326,7 @@ mod splice_continuity_tests {
                 quality: crate::ResamplerQuality::default(),
                 options: crate::ResamplerOptions::default(),
             },
-            Some(PcmPool::default().clone()),
+            &pcm_pool,
             Vec::new(),
         );
         let factory_byte_len = Arc::new(AtomicU64::new(0));

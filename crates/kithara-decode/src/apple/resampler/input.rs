@@ -1,15 +1,14 @@
 use std::{ffi::c_void, ptr};
 
+use kithara_resampler::ResamplerError;
+
 use super::{buffer::audio_buffer_ptr, channel_byte_len};
-use crate::{
-    apple::{
-        consts::Consts,
-        ffi::{
-            AudioBuffer, AudioBufferList, AudioConverterRef, AudioStreamPacketDescription,
-            OSStatus, UInt32,
-        },
+use crate::apple::{
+    consts::Consts,
+    ffi::{
+        AudioBuffer, AudioBufferList, AudioConverterRef, AudioStreamPacketDescription, OSStatus,
+        UInt32,
     },
-    resampler::ResamplerError,
 };
 
 const PARAM_ERR: OSStatus = -50;
@@ -38,10 +37,6 @@ impl AppleResamplerInputState {
         }
     }
 
-    pub(super) fn channels(&self) -> usize {
-        self.channels
-    }
-
     pub(super) fn clear(&mut self) {
         for channel in &mut self.staged {
             channel.clear();
@@ -62,7 +57,7 @@ impl AppleResamplerInputState {
 
     pub(super) fn stage(
         &mut self,
-        input: &[Vec<f32>],
+        input: &[&[f32]],
         chunk_size: usize,
         eos: bool,
     ) -> Result<(), ResamplerError> {
@@ -157,24 +152,31 @@ pub(super) extern "C" fn apple_resampler_input_callback(
 }
 
 fn validate_input(
-    input: &[Vec<f32>],
+    input: &[&[f32]],
     channels: usize,
     chunk_size: usize,
 ) -> Result<usize, ResamplerError> {
     if input.len() != channels {
-        return Err(ResamplerError::apple_buffer("input channel count mismatch"));
+        return Err(ResamplerError::InvalidBuffer {
+            detail: "input channel count mismatch",
+        });
     }
-    let frames = input
-        .first()
-        .map(Vec::len)
-        .ok_or_else(|| ResamplerError::apple_buffer("missing input channel"))?;
+    let frames =
+        input
+            .first()
+            .map(|channel| channel.len())
+            .ok_or(ResamplerError::InvalidBuffer {
+                detail: "missing input channel",
+            })?;
     if frames > chunk_size {
-        return Err(ResamplerError::apple_buffer(
-            "input frame count exceeds adapter quantum",
-        ));
+        return Err(ResamplerError::InvalidBuffer {
+            detail: "input frame count exceeds adapter quantum",
+        });
     }
     if input.iter().any(|channel| channel.len() != frames) {
-        return Err(ResamplerError::apple_buffer("input channel lengths differ"));
+        return Err(ResamplerError::InvalidBuffer {
+            detail: "input channel lengths differ",
+        });
     }
     Ok(frames)
 }

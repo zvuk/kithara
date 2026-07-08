@@ -14,7 +14,7 @@ pub(crate) fn append(
     stage: ResamplerStage,
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
-    pool: Option<PcmPool>,
+    pool: &PcmPool,
 ) {
     let ResamplerStage::Present { quality, options } = stage else {
         return;
@@ -26,7 +26,7 @@ pub(crate) fn append(
         .channels(usize::from(initial_spec.channels))
         .quality(quality)
         .options(options)
-        .maybe_pool(pool)
+        .pool(pool.clone())
         .build();
 
     chain.push(Box::new(ResamplerProcessor::new(params)));

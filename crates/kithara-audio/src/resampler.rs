@@ -10,14 +10,52 @@ use std::{
 use bon::Builder;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{
-    PcmChunk, PcmMeta, PcmSpec, Resampler, ResamplerBackend, ResamplerError, ResamplerOptions,
-    ResamplerQuality, create_resampler,
+use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+#[cfg(feature = "resample-rubato")]
+use kithara_resampler::rubato::RubatoBackend;
+use kithara_resampler::{
+    Resampler, ResamplerBackend, ResamplerConfig, ResamplerError, ResamplerMode, ResamplerOptions,
+    ResamplerQuality, ResamplerSettings, create_resampler,
 };
 use smallvec::SmallVec;
 use tracing::{debug, info, trace};
 
 use crate::traits::AudioEffect;
+
+pub struct ResamplerBackendConfig {
+    backend: Option<Box<dyn ResamplerBackend>>,
+}
+
+impl ResamplerBackendConfig {
+    #[must_use]
+    pub fn new<B>(backend: B) -> Self
+    where
+        B: ResamplerBackend + 'static,
+    {
+        Self {
+            backend: Some(Box::new(backend)),
+        }
+    }
+
+    fn as_ref(&self) -> Option<&dyn ResamplerBackend> {
+        self.backend.as_deref()
+    }
+
+    fn is_none(&self) -> bool {
+        self.backend.is_none()
+    }
+
+    #[must_use]
+    pub const fn none() -> Self {
+        Self { backend: None }
+    }
+}
+
+impl Default for ResamplerBackendConfig {
+    fn default() -> Self {
+        default_resampler_backend()
+    }
+}
 
 /// Configuration parameters for the resampler effect.
 ///
@@ -26,10 +64,13 @@ use crate::traits::AudioEffect;
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct ResamplerParams {
+    /// Resampler backend factory selected by the caller.
+    #[builder(default)]
+    pub backend: ResamplerBackendConfig,
     /// Shared atomic for dynamic host sample rate tracking.
     pub host_sample_rate: Arc<AtomicU32>,
     /// Shared PCM pool for output buffers.
-    pub pool: Option<PcmPool>,
+    pub pool: PcmPool,
     /// Quality preset controlling resampling algorithm.
     #[builder(default)]
     pub quality: ResamplerQuality,
@@ -42,13 +83,29 @@ pub struct ResamplerParams {
     pub options: ResamplerOptions,
 }
 
+#[cfg(feature = "resample-rubato")]
+fn default_resampler_backend() -> ResamplerBackendConfig {
+    ResamplerBackendConfig::new(RubatoBackend::new())
+}
+
+#[cfg(not(feature = "resample-rubato"))]
+fn default_resampler_backend() -> ResamplerBackendConfig {
+    ResamplerBackendConfig::none()
+}
+
 impl ResamplerParams {
     /// Create resampler params with required runtime values and default settings.
-    pub fn new(host_sample_rate: Arc<AtomicU32>, source_sample_rate: u32, channels: usize) -> Self {
+    pub fn new(
+        host_sample_rate: Arc<AtomicU32>,
+        source_sample_rate: u32,
+        channels: usize,
+        pool: PcmPool,
+    ) -> Self {
         Self::builder()
             .host_sample_rate(host_sample_rate)
             .source_sample_rate(source_sample_rate)
             .channels(channels)
+            .pool(pool)
             .build()
     }
 }
@@ -66,6 +123,7 @@ pub struct ResamplerProcessor {
     /// Pool for interleave output buffers.
     pool: PcmPool,
     output_spec: PcmSpec,
+    backend: ResamplerBackendConfig,
     quality: ResamplerQuality,
     /// Accumulated input buffer (planar format).
     input_buffer: SmallVec<[Vec<f32>; 8]>,
@@ -100,7 +158,8 @@ impl ResamplerProcessor {
             options,
             host_sample_rate: params.host_sample_rate,
             input_buffer: smallvec_new_vecs(channels),
-            pool: params.pool.unwrap_or_else(|| PcmPool::default().clone()),
+            backend: params.backend,
+            pool: params.pool,
             quality: params.quality,
             resampler: None,
             temp_deinterleave: smallvec_new_vecs(channels),
@@ -399,11 +458,16 @@ impl ResamplerProcessor {
             self.temp_output_bufs[ch].resize(output_frames, 0.0);
         }
 
-        let (consumed, out_len) = resampler.process_into_buffer(
-            &self.temp_input_slice[..channels],
-            &mut self.temp_output_bufs[..channels],
-        )?;
-        Ok((consumed, out_len))
+        let input = self.temp_input_slice[..channels]
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<SmallVec<[&[f32]; 8]>>();
+        let mut output = self.temp_output_bufs[..channels]
+            .iter_mut()
+            .map(Vec::as_mut_slice)
+            .collect::<SmallVec<[&mut [f32]; 8]>>();
+        let process = resampler.process_into_buffer(&input, &mut output)?;
+        Ok((process.input_frames, process.output_frames))
     }
 
     fn ratio_for_target(&self, target_rate: u32) -> f64 {
@@ -414,15 +478,41 @@ impl ResamplerProcessor {
         }
     }
 
-    fn recreate_resampler(&mut self, backend: ResamplerBackend, target_rate: u32, new_ratio: f64) {
-        match create_resampler(
-            backend,
-            self.quality,
-            self.source_rate,
-            target_rate,
-            self.channels,
-            self.options,
-        ) {
+    fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
+        let Some(backend) = self.backend.as_ref() else {
+            self.switch_to_source_passthrough(target_rate, self.is_passthrough());
+            return;
+        };
+        let inputs = (
+            NonZeroUsize::new(self.channels),
+            NonZeroU32::new(self.source_rate),
+            NonZeroU32::new(target_rate),
+        );
+        let (Some(channels), Some(source_sample_rate), Some(target_sample_rate)) = inputs else {
+            debug!(
+                channels = self.channels,
+                source_rate = self.source_rate,
+                target_rate,
+                "Failed to create resampler: invalid numeric settings"
+            );
+            return;
+        };
+        let settings = ResamplerSettings::builder()
+            .channels(channels)
+            .mode(ResamplerMode::FixedRatio {
+                source_sample_rate,
+                target_sample_rate,
+            })
+            .quality(self.quality)
+            .options(self.options)
+            .pcm_pool(self.pool.clone())
+            .build();
+        let config = ResamplerConfig::builder()
+            .backend(backend)
+            .settings(settings)
+            .build();
+
+        match create_resampler(&config) {
             Ok(resampler) => {
                 self.resampler = Some(resampler);
                 self.current_ratio = new_ratio;
@@ -434,25 +524,6 @@ impl ResamplerProcessor {
             Err(e) => {
                 debug!(err = %e, "Failed to create resampler, staying in current mode");
             }
-        }
-    }
-
-    fn switch_to_source_passthrough(&mut self, target_rate: u32, currently_pt: bool) {
-        if !currently_pt {
-            self.resampler = None;
-        }
-        if !self.missing_backend_logged {
-            debug!(
-                source_rate = self.source_rate,
-                target_rate, "No resampler backend compiled; leaving PCM in source-rate domain"
-            );
-            self.missing_backend_logged = true;
-        }
-        self.current_ratio = 1.0;
-        self.output_spec.sample_rate =
-            NonZeroU32::new(self.source_rate).unwrap_or(self.output_spec.sample_rate);
-        for buf in &mut self.input_buffer {
-            buf.clear();
         }
     }
 
@@ -505,6 +576,25 @@ impl ResamplerProcessor {
         }
     }
 
+    fn switch_to_source_passthrough(&mut self, target_rate: u32, currently_pt: bool) {
+        if !currently_pt {
+            self.resampler = None;
+        }
+        if !self.missing_backend_logged {
+            debug!(
+                source_rate = self.source_rate,
+                target_rate, "No resampler backend compiled; leaving PCM in source-rate domain"
+            );
+            self.missing_backend_logged = true;
+        }
+        self.current_ratio = 1.0;
+        self.output_spec.sample_rate =
+            NonZeroU32::new(self.source_rate).unwrap_or(self.output_spec.sample_rate);
+        for buf in &mut self.input_buffer {
+            buf.clear();
+        }
+    }
+
     fn target_rate(&self) -> u32 {
         let host_sr = self.host_sample_rate.load(Ordering::Relaxed);
         if host_sr == 0 {
@@ -530,13 +620,13 @@ impl ResamplerProcessor {
             return;
         }
 
-        let Some(backend) = ResamplerBackend::preferred() else {
+        if self.backend.is_none() {
             self.switch_to_source_passthrough(target_rate, currently_pt);
             return;
-        };
+        }
 
         if currently_pt || self.resampler.is_none() || ratio_changed {
-            self.recreate_resampler(backend, target_rate, new_ratio);
+            self.recreate_resampler(target_rate, new_ratio);
         }
     }
 }
@@ -651,7 +741,7 @@ mod tests {
     }
 
     fn params(host_sr: Arc<AtomicU32>, source_rate: u32, channels: usize) -> ResamplerParams {
-        ResamplerParams::new(host_sr, source_rate, channels)
+        ResamplerParams::new(host_sr, source_rate, channels, PcmPool::default().clone())
     }
 
     fn params_with_quality(
@@ -664,6 +754,7 @@ mod tests {
             .host_sample_rate(host_sr)
             .source_sample_rate(source_rate)
             .channels(channels)
+            .pool(PcmPool::default().clone())
             .quality(quality)
             .build()
     }

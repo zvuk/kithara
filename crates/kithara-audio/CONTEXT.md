@@ -111,11 +111,9 @@ today and by mobile surfaces (kithara-ffi) next:
   unconditional because region/stretch logic and cache keys use them even when a
   pass is absent. `analysis-waveform` gates only the `realfft` waveform
   analyzer. `analysis-beat` gates the beat analyzer/worker path and its
-  mono-resampler, which is built through `kithara-decode::create_resampler`;
-  beat analysis uses the rubato backend selected explicitly by that call.
-  `resample-fft` only compiles the decode-owned FFT backend variant for
-  explicit callers; playback quality and beat analysis do not auto-select it.
-  `beat-nn` is a detector backend layered on top of `analysis-beat`.
+  mono-resampler, which is built through `kithara-resampler` using an explicit
+  Rubato backend config. `beat-nn` is a detector backend layered on top of
+  `analysis-beat`.
 - **Runtime switch.** Consumers use `AnalyzerBuilder::is_empty()` as the runtime
   signal to skip scheduling. When `analysis-beat` is absent,
   `AnalyzerBuilder::with_beat()` is a compile-time no-op. Apple FFI device
@@ -200,7 +198,6 @@ format frame; each artifact only implements its body.
 <tr><td>Normal</td><td>64-tap sinc, linear</td><td>Standard playback</td></tr>
 <tr><td>Good</td><td>128-tap sinc, linear</td><td>Better quality</td></tr>
 <tr><td>High (default)</td><td>256-tap sinc, cubic</td><td>Recommended for music</td></tr>
-<tr><td>Maximum</td><td>FFT-based</td><td>Offline / high-end</td></tr>
 </table>
 
 ## Sample-rate Conversion
@@ -209,9 +206,9 @@ The resampler stage is fixed-ratio only: it converts decoder/source PCM to the
 current host/device sample rate and never carries playback speed. Speed and
 key-lock live in the time-stretch slot below.
 
-`AudioConfig.resampler_options` carries `kithara-decode::ResamplerOptions`
-through the stage decision into `ResamplerParams` and finally
-`create_resampler`. The defaults preserve the shipped playback values:
+`AudioConfig.resampler_options` carries `kithara-resampler::ResamplerOptions`
+through the stage decision into `ResamplerParams` and finally the configured
+`ResamplerBackend`. The defaults preserve the shipped playback values:
 4096-frame process blocks, 0.0001 host-rate ratio tolerance, and an 8.0 rubato
 max-ratio-adjustment window. These are implementation tunables, not hidden
 constants in the processing code.
@@ -222,11 +219,11 @@ Apple AudioToolbox, `AudioConfig.host_sample_rate` is threaded to
 the device domain, and the effect chain omits `ResamplerProcessor`
 structurally. Non-Apple backends in the same build keep the resampler stage.
 
-`resample-rubato` enables the staged `ResamplerProcessor` and rubato sinc SRC.
+`resample-rubato` enables the staged `ResamplerProcessor` and the Rubato backend.
 Default desktop and Android builds keep it. Apple fused FFI builds omit it.
 
 The staged resampler's output capacity remains a correctness invariant: the
-decode-owned backend reports `output_frames_for_input` in the ceil frame domain
+configured backend reports `output_frames_for_input` in the ceil frame domain
 and the audio stage sizes buffers from that contract. It is not a user-facing
 configuration knob.
 
