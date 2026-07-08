@@ -44,7 +44,7 @@ impl BeatAnalyzer {
     pub(crate) fn new(
         source_rate: u32,
         params: GridParams,
-        config: BeatAnalysisConfig,
+        config: &BeatAnalysisConfig,
         pcm_pool: &PcmPool,
     ) -> Self {
         let (feed, resampler) = if source_rate == config.target_rate {
@@ -145,7 +145,7 @@ struct WindowedBeats {
 }
 
 impl WindowedBeats {
-    fn new(config: BeatAnalysisConfig, pcm_pool: &PcmPool) -> Self {
+    fn new(config: &BeatAnalysisConfig, pcm_pool: &PcmPool) -> Self {
         let sample_rate = config.target_rate.max(1);
         let window_frames = frames_for_seconds(sample_rate, config.detector_window_seconds.max(1));
         let overlap_seconds = config
@@ -278,7 +278,7 @@ impl BeatPass {
         source_rate: u32,
         params: GridParams,
         detector: SharedBeatDetector,
-        config: BeatAnalysisConfig,
+        config: &BeatAnalysisConfig,
         pcm_pool: &PcmPool,
     ) -> Self {
         Self {
@@ -396,7 +396,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             Consts::SRC,
             GridParams::default(),
-            BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::default(),
             &pcm_pool(),
         );
         let mut detector = detector(|mono| {
@@ -429,7 +429,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             Consts::SRC,
             GridParams::default(),
-            BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::default(),
             &pcm_pool(),
         );
         let mut detector = detector(|mono| {
@@ -460,7 +460,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             Consts::SRC,
             GridParams::default(),
-            BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::default(),
             &pcm_pool(),
         );
         let mut detector = detector(|mono| {
@@ -480,7 +480,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             22_050,
             GridParams::default(),
-            BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::default(),
             &pcm_pool(),
         );
         let mut detector = detector(|mono| {
@@ -498,7 +498,7 @@ mod tests {
             .build();
         let pcm = stereo(4096, |_| 0.25);
         let mut analyzer =
-            BeatAnalyzer::new(Consts::SRC, GridParams::default(), config, &pcm_pool());
+            BeatAnalyzer::new(Consts::SRC, GridParams::default(), &config, &pcm_pool());
         let mut detector = detector(|mono| {
             assert_eq!(mono, vec![0.25_f32; 4096].as_slice());
             empty_raw()
@@ -523,7 +523,7 @@ mod tests {
             empty_raw()
         });
         let mut analyzer =
-            BeatAnalyzer::new(Consts::SRC, GridParams::default(), config, &pcm_pool());
+            BeatAnalyzer::new(Consts::SRC, GridParams::default(), &config, &pcm_pool());
 
         push_chunked(&mut analyzer, &pcm, 2048, &mut detector);
         analyzer.finalize(&mut detector).expect("mock detects");
@@ -547,7 +547,7 @@ mod tests {
             empty_raw()
         });
         let mut analyzer =
-            BeatAnalyzer::new(Consts::SRC, GridParams::default(), config, &pcm_pool());
+            BeatAnalyzer::new(Consts::SRC, GridParams::default(), &config, &pcm_pool());
 
         analyzer.push_interleaved(&pcm, 2, &mut detector);
         assert!(seen.lock().unwrap().is_empty());
@@ -578,7 +578,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             48_000,
             GridParams::default(),
-            BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::default(),
             &pcm_pool(),
         );
         let mut detector = detector(move |_| raw.clone());
@@ -604,7 +604,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             Consts::SRC,
             GridParams::default(),
-            BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::default(),
             &pcm_pool(),
         );
         let mut detector =

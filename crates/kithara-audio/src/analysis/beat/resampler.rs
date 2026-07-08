@@ -6,7 +6,7 @@ use std::{
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_resampler::{
     Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerSettings,
-    create_resampler, rubato::RubatoBackend,
+    create_resampler,
 };
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 use tracing::warn;
@@ -28,11 +28,12 @@ pub(in crate::analysis::beat) struct MonoResampleBuffer {
 impl MonoResampleBuffer {
     pub(in crate::analysis::beat) fn new(
         source_rate: u32,
-        config: BeatAnalysisConfig,
+        config: &BeatAnalysisConfig,
         pcm_pool: &PcmPool,
     ) -> Option<Self> {
         let source_sample_rate = NonZeroU32::new(source_rate)?;
         let target_sample_rate = NonZeroU32::new(config.target_rate)?;
+        let backend = config.resampler_backend.as_ref()?;
         let settings = ResamplerSettings::builder()
             .channels(NonZeroUsize::MIN)
             .mode(ResamplerMode::FixedRatio {
@@ -48,7 +49,7 @@ impl MonoResampleBuffer {
             .pcm_pool(pcm_pool.clone())
             .build();
         let resampler_config = ResamplerConfig::builder()
-            .backend(RubatoBackend::new())
+            .backend(backend)
             .settings(settings)
             .build();
         let resampler = create_resampler(&resampler_config)

@@ -27,7 +27,7 @@ mod enabled {
         }
     }
 
-    pub(crate) fn tag(config: BeatAnalysisConfig) -> Option<String> {
+    pub(crate) fn tag(config: &BeatAnalysisConfig) -> Option<String> {
         BeatDetectorKind::ALL.first().map(|kind| {
             format!(
                 "{kind}:{NN_MODEL_TAG}:{:?}:{:?}",
@@ -40,14 +40,14 @@ mod enabled {
 
 #[cfg(not(feature = "beat-nn"))]
 mod disabled {
-    use super::super::set::BeatAnalysisConfig;
+    use super::super::config::BeatAnalysisConfig;
 
     #[cfg(feature = "analysis-beat")]
     pub(crate) fn detector() -> Option<crate::analysis::beat::SharedBeatDetector> {
         None
     }
 
-    pub(crate) fn tag(_config: BeatAnalysisConfig) -> Option<String> {
+    pub(crate) fn tag(_config: &BeatAnalysisConfig) -> Option<String> {
         None
     }
 }

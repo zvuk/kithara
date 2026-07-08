@@ -41,7 +41,7 @@ pub(crate) async fn listen(
     let mut driver = AnalysisController::new(
         &cancel,
         Some(Arc::clone(&config.asset_store)),
-        config.beat_analysis,
+        &config.beat_analysis,
     );
 
     // Analyse whatever is already loaded; later tracks arrive as events.
@@ -109,10 +109,10 @@ impl AnalysisController {
     pub(crate) fn new(
         cancel: &CancelToken,
         store: Option<Arc<AssetStore>>,
-        beat_config: BeatAnalysisConfig,
+        beat_config: &BeatAnalysisConfig,
     ) -> Self {
         Self {
-            runner: TrackAnalysisRunner::new(cancel, WAVEFORM_MAX_BUCKETS, beat_config),
+            runner: TrackAnalysisRunner::new(cancel, WAVEFORM_MAX_BUCKETS, beat_config.clone()),
             cache: TrackAnalysisCache::new(store, analysis_fingerprint(beat_config)),
             current: None,
             displayed: None,
@@ -287,7 +287,7 @@ impl AnalysisController {
 
 /// Fingerprint of the active analysis configuration, stored inside each durable blob.
 /// A mismatch is a cache miss, so config changes re-analyse.
-fn analysis_fingerprint(beat_config: BeatAnalysisConfig) -> String {
+fn analysis_fingerprint(beat_config: &BeatAnalysisConfig) -> String {
     let beat = beat_config.cache_tag().unwrap_or_else(|| "off".to_string());
     format!("wave=native:max{WAVEFORM_MAX_BUCKETS};beat={beat}")
 }
@@ -417,7 +417,7 @@ mod tests {
         value: Option<TrackAnalysis>,
     ) -> (AnalysisController, watch::Sender<Option<TrackAnalysis>>) {
         let cancel = CancelToken::root();
-        let mut controller = AnalysisController::new(&cancel, None, BeatAnalysisConfig::default());
+        let mut controller = AnalysisController::new(&cancel, None, &BeatAnalysisConfig::default());
         let (tx, rx) = watch::channel(value);
         controller.current = Some(Run {
             track_id,

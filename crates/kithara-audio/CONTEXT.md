@@ -83,8 +83,9 @@ today and by mobile surfaces (kithara-ffi) next:
   offsets the window-relative events, and only keeps raw event times for final
   grid cleanup. Beat PCM scratch buffers (the detector window and mono
   resampler blocks) come from the `PcmPool` owned by `AnalyzerBuilder`
-  (`with_pcm_pool` lets consumers inject their app-wide pool); `BeatAnalysisConfig`
-  remains only the numeric beat-analysis tunables.
+  (`with_pcm_pool` lets consumers inject their app-wide pool). `BeatAnalysisConfig`
+  carries both numeric beat-analysis tunables and the standalone resampler backend;
+  the default backend is Rubato only when `analysis-beat` compiles it.
 - **`analyze_reader`** — the synchronous decode loop over any `PcmReader`:
   cancel-aware, `Pending`-tolerant, and callback-based
   (`analyze_reader(..., emit) -> ()`). It emits staged `TrackAnalysis` values
@@ -111,9 +112,9 @@ today and by mobile surfaces (kithara-ffi) next:
   unconditional because region/stretch logic and cache keys use them even when a
   pass is absent. `analysis-waveform` gates only the `realfft` waveform
   analyzer. `analysis-beat` gates the beat analyzer/worker path and its
-  mono-resampler, which is built through `kithara-resampler` using an explicit
-  Rubato backend config. `beat-nn` is a detector backend layered on top of
-  `analysis-beat`.
+  mono-resampler, which is built through `kithara-resampler` from
+  `BeatAnalysisConfig`'s backend. `beat-nn` is a detector backend layered on top
+  of `analysis-beat`.
 - **Runtime switch.** Consumers use `AnalyzerBuilder::is_empty()` as the runtime
   signal to skip scheduling. When `analysis-beat` is absent,
   `AnalyzerBuilder::with_beat()` is a compile-time no-op. Apple FFI device

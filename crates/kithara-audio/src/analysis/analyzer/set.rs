@@ -1,61 +1,8 @@
-use bon::Builder;
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmSpec};
-use kithara_resampler::ResamplerQuality;
 use num_traits::cast::AsPrimitive;
 
-use super::track_analysis::TrackAnalysis;
-
-struct Consts;
-
-impl Consts {
-    const DEFAULT_BEAT_BLOCK_FRAMES: usize = 1024;
-    const DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS: u32 = 2;
-    const DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS: u32 = 30;
-    const DEFAULT_BEAT_RESAMPLER_QUALITY: ResamplerQuality = ResamplerQuality::High;
-    const DEFAULT_BEAT_TARGET_RATE: u32 = 22_050;
-}
-
-/// Beat-analysis tunables used by [`AnalyzerBuilder`].
-#[derive(Clone, Copy, Debug, PartialEq, Builder)]
-#[builder(state_mod(vis = "pub"))]
-#[non_exhaustive]
-pub struct BeatAnalysisConfig {
-    /// Mono resampler input block size in frames.
-    #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
-    pub block_frames: usize,
-    /// Detector input sample rate in Hz.
-    #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]
-    pub target_rate: u32,
-    /// Quality used by the rubato sinc beat-resampler backend.
-    #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
-    pub resampler_quality: ResamplerQuality,
-    /// Maximum NN detector window length in seconds.
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
-    pub detector_window_seconds: u32,
-    /// Seconds carried from the end of one detector window into the next.
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
-    pub detector_overlap_seconds: u32,
-}
-
-impl BeatAnalysisConfig {
-    #[must_use]
-    pub fn cache_tag(self) -> Option<String> {
-        super::nn::tag(self)
-    }
-}
-
-impl Default for BeatAnalysisConfig {
-    fn default() -> Self {
-        Self {
-            block_frames: Consts::DEFAULT_BEAT_BLOCK_FRAMES,
-            target_rate: Consts::DEFAULT_BEAT_TARGET_RATE,
-            resampler_quality: Consts::DEFAULT_BEAT_RESAMPLER_QUALITY,
-            detector_window_seconds: Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS,
-            detector_overlap_seconds: Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS,
-        }
-    }
-}
+use super::{config::BeatAnalysisConfig, track_analysis::TrackAnalysis};
 
 #[derive(Default)]
 pub(crate) struct TrackAnalyzers {
@@ -125,14 +72,14 @@ impl AnalyzerBuilder {
     #[must_use]
     pub fn with_beat(self) -> Self {
         let mut builder = self;
-        beat::with_default(&mut builder.beat, builder.beat_config);
+        beat::with_default(&mut builder.beat, builder.beat_config.clone());
         builder
     }
 
     #[must_use]
     pub fn with_beat_config(self, config: BeatAnalysisConfig) -> Self {
         let mut builder = self;
-        builder.beat_config = config;
+        builder.beat_config = config.clone();
         beat::set_resampler(&mut builder.beat, config);
         builder
     }
@@ -144,7 +91,12 @@ impl AnalyzerBuilder {
         params: crate::analysis::beat::GridParams,
     ) -> Self {
         let mut builder = self;
-        beat::with_detector(&mut builder.beat, detector, params, builder.beat_config);
+        beat::with_detector(
+            &mut builder.beat,
+            detector,
+            params,
+            builder.beat_config.clone(),
+        );
         builder
     }
 
@@ -196,7 +148,7 @@ mod beat {
                 spec.sample_rate.get(),
                 config.params.clone(),
                 Arc::clone(&config.detector),
-                config.resampler,
+                &config.resampler,
                 pcm_pool,
             )
         })
