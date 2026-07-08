@@ -56,7 +56,11 @@ async fn audio_file_mp3_decodes_with_duration(
         )
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .maybe_hint(hint.map(str::to_owned))
         .build();
     let mut audio = Audio::<Stream<File>>::new(config)

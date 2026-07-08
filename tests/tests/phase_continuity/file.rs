@@ -1,7 +1,4 @@
-use std::{
-    io::Write,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use std::{io::Write, num::NonZeroUsize};
 
 use kithara::{
     assets::{StorageBackend, StoreOptions},
@@ -75,7 +72,11 @@ async fn run_case(
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     // Park on ring underrun: the offline scan needs no wall-clock pacing.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .maybe_hint(format_ext(format).map(str::to_owned))
         .block_on_underrun(true)
         .build();
@@ -178,7 +179,11 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
 
     let file_config = FileConfig::for_src(FileSrc::Local(fixture_path)).build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .maybe_hint(format_ext(format).map(str::to_owned))
         .build();
     let mut audio = Audio::<Stream<File>>::new(audio_config)
@@ -242,8 +247,14 @@ async fn local_apple_fused_run_case() {
 
     let file_config = FileConfig::for_src(FileSrc::Local(fixture_path)).build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .decoder_backend(DecoderBackend::Apple)
-        .host_sample_rate(NonZeroU32::new(APPLE_FUSED_HOST_RATE).expect("nonzero host rate"))
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Apple)
+                .build(),
+        )
+        .host_sample_rate(
+            std::num::NonZeroU32::new(APPLE_FUSED_HOST_RATE).expect("nonzero host rate"),
+        )
         .maybe_hint(Some("m4a".to_owned()))
         .build();
     let mut audio = Audio::<Stream<File>>::new(audio_config)
@@ -375,7 +386,11 @@ async fn decode_pcm_seconds(
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     // Park on ring underrun instead of spinning on Pending.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .maybe_hint(format_ext(format).map(str::to_owned))
         .block_on_underrun(true)
         .build();
@@ -681,7 +696,11 @@ async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_ra
         .build();
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .decoder_backend(DecoderBackend::Symphonia)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+        )
         .maybe_hint(format_ext(format).map(str::to_owned))
         .build();
 
@@ -946,7 +965,11 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     // Park on ring underrun: covers both the cold and seeked handles.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .maybe_hint(Some("aac".to_owned()))
         .block_on_underrun(true)
         .build();

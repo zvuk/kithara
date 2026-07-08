@@ -78,7 +78,11 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
         .expect("valid master URL")
         .downloader(downloader.clone())
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let source = TrackSource::Config(Box::new(cfg));
 

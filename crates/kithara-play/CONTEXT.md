@@ -21,7 +21,9 @@ all write this one handle; there is no second rate atomic and no manual mirror.
 
 `prepare_config` always passes the shared controls into every track (`stretch =
 Some(..)`). With a compiled-in backend the effect chain runs a source-domain
-`TimeStretchProcessor` before the fixed-ratio resampler:
+`TimeStretchProcessor`; fixed-ratio sample-rate conversion is handled by Apple
+codec-embedded decode when that placement is selected, otherwise by the
+standalone playback resampler stage:
 
 - **key-lock off**: the stretch slot applies `set_ratio(1/speed)` and
   `set_pitch(speed)` — changing speed shifts pitch (vinyl-style).
@@ -173,10 +175,18 @@ notification updates the session host sample rate and propagates it to every
 loaded resource. When the numeric rate changes, resources enter the existing
 decoder recreate path with `RecreateCause::RouteChange`; the same machinery
 preserves playback position and gapless state. Equal-rate notifications only
-refresh the host state and do not recreate. On Apple fused builds the recreated
-decoder receives the current host rate through `DecoderConfig.resampler` as a
-codec-embedded resampler plan; all non-fused builds continue to use the
-fixed-ratio resampler stage.
+refresh the host state and do not recreate. The recreated decoder receives the
+current host rate through `DecoderConfig.resampler`: Apple fused builds use the
+codec-embedded placement, while non-fused builds use the standalone decoder
+adapter placement with the selected backend.
+
+`ResourceConfig.decoder` is the only resource-level owner of decoder
+construction settings. Its `AudioDecoderConfig.resampler` threads the selected
+backend handle and implementation tunables into `AudioConfig`, then into
+`DecoderConfig.resampler`. The portable default backend order is owned by
+`kithara-resampler`; callers that want a platform backend such as Apple
+AudioConverter inject it through `ResourceConfig.decoder.resampler`, not
+through separate resource-level resampler fields.
 
 ## Feature Flags
 
@@ -187,9 +197,10 @@ fixed-ratio resampler stage.
 <tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM bindings via <code>firewheel/wasm-bindgen</code></td></tr>
 <tr><td><code>symphonia</code></td><td>yes</td><td>Software decode forwarding to <code>kithara-audio</code> and <code>kithara-decode</code></td></tr>
 <tr><td><code>fdk-aac</code></td><td>no</td><td>FDK-AAC decode forwarding to <code>kithara-audio</code> and <code>kithara-decode</code></td></tr>
-<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode via <code>kithara-audio/apple</code></td></tr>
-<tr><td><code>apple-fused-src</code></td><td>no</td><td>Apple AudioToolbox fused decode+SRC; forwards host rate to decode and omits the staged resampler for Apple decoders</td></tr>
-<tr><td><code>resample-rubato</code></td><td>yes</td><td>Fixed-ratio rubato resampler backend for non-fused playback and beat analysis</td></tr>
+<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode via <code>kithara-audio/apple</code> and <code>kithara-decode/apple</code>; does not imply Rubato</td></tr>
+<tr><td><code>apple-fused-src</code></td><td>no</td><td>Apple AudioToolbox fused decode+SRC through decoder-embedded resampler placement</td></tr>
+<tr><td><code>resample-rubato</code></td><td>yes</td><td>Default fixed-ratio Rubato backend for playback decode adapters and beat analysis in default builds</td></tr>
+<tr><td><code>resample-readhead</code></td><td>no</td><td>Moving-read-head resampler backend forwarding for explicit config selection without Rubato</td></tr>
 <tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass forwarding to <code>kithara-audio</code>; absent from Apple FFI device sets</td></tr>
 <tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer forwarding to <code>kithara-audio</code></td></tr>
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to network-reaching deps</td></tr>

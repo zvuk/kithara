@@ -79,9 +79,12 @@ impl BeatAnalyzer {
         self.resampler.take().map_or(Ok(()), |resampler| {
             let windows = &mut self.windows;
             let mut failure = None;
-            resampler.finish(|samples| {
+            let flushed = resampler.finish(|samples| {
                 capture_failure(&mut failure, || windows.push_slice(samples, detector));
             });
+            if !flushed {
+                return Err(BeatDetectError::Buffer);
+            }
             failure.map_or(Ok(()), Err)
         })?;
 
@@ -114,10 +117,14 @@ impl BeatAnalyzer {
                 if let Some(resampler) = &mut self.resampler {
                     let windows = &mut self.windows;
                     let mut failure = None;
-                    resampler.push(mono, |samples| {
+                    let pushed = resampler.push(mono, |samples| {
                         capture_failure(&mut failure, || windows.push_slice(samples, detector));
                     });
-                    self.failure = failure;
+                    self.failure = if pushed {
+                        failure
+                    } else {
+                        Some(BeatDetectError::Buffer)
+                    };
                 }
             }
             MonoFeed::Broken => {}
@@ -153,7 +160,10 @@ impl WindowedBeats {
             .min(config.detector_window_seconds.saturating_sub(1));
         let overlap_frames = frames_for_seconds(sample_rate, overlap_seconds);
         let ready_frames = window_frames.saturating_add(overlap_frames);
-        let buffer = pcm_pool.get_with(|buf| reserve_capacity(buf, ready_frames));
+        let mut buffer = pcm_pool.get();
+        if buffer.ensure_len(ready_frames).is_ok() {
+            buffer.clear();
+        }
         Self {
             buffer,
             hop_frames: window_frames.saturating_sub(overlap_frames).max(1),
@@ -229,7 +239,7 @@ impl WindowedBeats {
         samples: impl Iterator<Item = f32>,
         detector: &mut dyn BeatDetector,
     ) -> Result<(), BeatDetectError> {
-        self.buffer.extend(samples);
+        append_iter(&mut self.buffer, samples)?;
         self.detect_ready_windows(detector)
     }
 
@@ -238,7 +248,7 @@ impl WindowedBeats {
         samples: &[f32],
         detector: &mut dyn BeatDetector,
     ) -> Result<(), BeatDetectError> {
-        self.buffer.extend_from_slice(samples);
+        append_slice(&mut self.buffer, samples)?;
         self.detect_ready_windows(detector)
     }
 }
@@ -256,10 +266,25 @@ fn frames_for_seconds(sample_rate: u32, seconds: u32) -> usize {
     usize::try_from(u64::from(sample_rate) * u64::from(seconds)).unwrap_or(usize::MAX)
 }
 
-fn reserve_capacity(buf: &mut Vec<f32>, capacity: usize) {
-    if buf.capacity() < capacity {
-        buf.reserve(capacity - buf.capacity());
+fn append_iter(
+    dst: &mut PcmBuf,
+    samples: impl Iterator<Item = f32>,
+) -> Result<(), BeatDetectError> {
+    for sample in samples {
+        let old_len = dst.len();
+        dst.ensure_len(old_len.saturating_add(1))
+            .map_err(|_| BeatDetectError::Buffer)?;
+        dst[old_len] = sample;
     }
+    Ok(())
+}
+
+fn append_slice(dst: &mut PcmBuf, src: &[f32]) -> Result<(), BeatDetectError> {
+    let old_len = dst.len();
+    dst.ensure_len(old_len.saturating_add(src.len()))
+        .map_err(|_| BeatDetectError::Buffer)?;
+    dst[old_len..old_len + src.len()].copy_from_slice(src);
+    Ok(())
 }
 
 fn normalize_times(values: &mut Vec<f32>) {

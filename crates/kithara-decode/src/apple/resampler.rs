@@ -8,8 +8,8 @@ use std::{
 };
 
 use kithara_resampler::{
-    Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerError, ResamplerMode,
-    ResamplerProcess,
+    Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerError,
+    ResamplerMode, ResamplerProcess, ResamplerSettings,
 };
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
@@ -29,6 +29,56 @@ use buffer::PlanarAudioBufferList;
 use input::{AppleResamplerInputState, apple_resampler_input_callback};
 
 const BACKEND_APPLE: &str = "apple-audio-converter";
+
+/// Standalone Apple `AudioConverter` PCM resampler backend.
+#[derive(Clone, Copy, Debug, Default)]
+#[non_exhaustive]
+pub struct AppleAudioConverterBackend {
+    _private: (),
+}
+
+impl AppleAudioConverterBackend {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { _private: () }
+    }
+}
+
+impl ResamplerBackend for AppleAudioConverterBackend {
+    fn build(
+        &self,
+        settings: &ResamplerSettings,
+    ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
+        let ResamplerMode::FixedRatio {
+            source_sample_rate,
+            target_sample_rate,
+        } = settings.mode
+        else {
+            return Err(ResamplerBuildError::UnsupportedMode {
+                backend: self.name(),
+                mode: settings.mode.label(),
+            });
+        };
+
+        let resampler = AppleResampler::new(
+            source_sample_rate.get(),
+            target_sample_rate.get(),
+            settings.channels.get(),
+            settings.options.chunk_size,
+        )?;
+        Ok(Box::new(resampler))
+    }
+
+    fn capabilities(&self) -> ResamplerCapabilities {
+        ResamplerCapabilities::FIXED_RATIO
+            | ResamplerCapabilities::REPORTS_LATENCY
+            | ResamplerCapabilities::STANDALONE
+    }
+
+    fn name(&self) -> &'static str {
+        BACKEND_APPLE
+    }
+}
 
 mod constants {
     use std::mem::size_of;
@@ -335,7 +385,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
-    use super::AppleResampler;
+    use super::AppleAudioConverterBackend;
 
     mod test_consts {
         pub(super) const CHUNK_FRAMES: usize = 1024;
@@ -505,29 +555,17 @@ mod tests {
         frames: usize,
     ) -> Box<dyn Resampler> {
         match backend {
-            TestBackend::Apple => Box::new(
-                AppleResampler::new(source_rate, target_rate, channels, frames)
-                    .unwrap_or_else(|err| panic!("AppleResampler::new failed: {err}")),
-            ),
-            TestBackend::Rubato => {
-                let settings = ResamplerSettings::builder()
-                    .channels(
-                        std::num::NonZeroUsize::new(channels)
-                            .unwrap_or_else(|| panic!("test channels")),
-                    )
-                    .mode(ResamplerMode::FixedRatio {
-                        source_sample_rate: std::num::NonZeroU32::new(source_rate)
-                            .unwrap_or_else(|| panic!("test source rate")),
-                        target_sample_rate: std::num::NonZeroU32::new(target_rate)
-                            .unwrap_or_else(|| panic!("test target rate")),
-                    })
-                    .quality(ResamplerQuality::High)
-                    .options(ResamplerOptions::builder().chunk_size(frames).build())
-                    .pcm_pool(PcmPool::new(
-                        4,
-                        frames.saturating_mul(channels).saturating_mul(4),
-                    ))
+            TestBackend::Apple => {
+                let settings = test_settings(source_rate, target_rate, channels, frames);
+                let config = ResamplerConfig::builder()
+                    .backend(AppleAudioConverterBackend::new())
+                    .settings(settings)
                     .build();
+                create_resampler(&config)
+                    .unwrap_or_else(|err| panic!("create_resampler({backend:?}) failed: {err}"))
+            }
+            TestBackend::Rubato => {
+                let settings = test_settings(source_rate, target_rate, channels, frames);
                 let config = ResamplerConfig::builder()
                     .backend(RubatoBackend::new())
                     .settings(settings)
@@ -536,6 +574,31 @@ mod tests {
                     .unwrap_or_else(|err| panic!("create_resampler({backend:?}) failed: {err}"))
             }
         }
+    }
+
+    fn test_settings(
+        source_rate: u32,
+        target_rate: u32,
+        channels: usize,
+        frames: usize,
+    ) -> ResamplerSettings {
+        ResamplerSettings::builder()
+            .channels(
+                std::num::NonZeroUsize::new(channels).unwrap_or_else(|| panic!("test channels")),
+            )
+            .mode(ResamplerMode::FixedRatio {
+                source_sample_rate: std::num::NonZeroU32::new(source_rate)
+                    .unwrap_or_else(|| panic!("test source rate")),
+                target_sample_rate: std::num::NonZeroU32::new(target_rate)
+                    .unwrap_or_else(|| panic!("test target rate")),
+            })
+            .quality(ResamplerQuality::High)
+            .options(ResamplerOptions::builder().chunk_size(frames).build())
+            .pcm_pool(PcmPool::new(
+                4,
+                frames.saturating_mul(channels).saturating_mul(4),
+            ))
+            .build()
     }
 
     fn planar_signal(channels: usize, frames: usize, sample_rate: u32) -> Vec<Vec<f32>> {

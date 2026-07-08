@@ -28,7 +28,11 @@ async fn open_test_mp3(
         .build();
     let mut config = AudioConfig::<File>::for_stream(file_config)
         .hint(String::from("mp3"))
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     if let Some(bus) = events {
         config.bus = Some(bus);

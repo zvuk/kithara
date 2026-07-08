@@ -1,5 +1,4 @@
 use std::{
-    iter,
     num::{NonZeroU32, NonZeroUsize},
     sync::{
         Arc,
@@ -11,57 +10,16 @@ use bon::Builder;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
-#[cfg(feature = "resample-rubato")]
-use kithara_resampler::rubato::RubatoBackend;
 use kithara_resampler::{
-    Resampler, ResamplerBackend, ResamplerConfig, ResamplerError, ResamplerMode, ResamplerOptions,
-    ResamplerQuality, ResamplerSettings, create_resampler,
+    Resampler, ResamplerBackendConfig, ResamplerConfig, ResamplerError, ResamplerMode,
+    ResamplerOptions, ResamplerQuality, ResamplerSettings, create_resampler,
 };
 use smallvec::SmallVec;
 use tracing::{debug, info, trace};
 
 use crate::traits::AudioEffect;
 
-pub struct ResamplerBackendConfig {
-    backend: Option<Box<dyn ResamplerBackend>>,
-}
-
-impl ResamplerBackendConfig {
-    #[must_use]
-    pub fn new<B>(backend: B) -> Self
-    where
-        B: ResamplerBackend + 'static,
-    {
-        Self {
-            backend: Some(Box::new(backend)),
-        }
-    }
-
-    fn as_ref(&self) -> Option<&dyn ResamplerBackend> {
-        self.backend.as_deref()
-    }
-
-    fn is_none(&self) -> bool {
-        self.backend.is_none()
-    }
-
-    #[must_use]
-    pub const fn none() -> Self {
-        Self { backend: None }
-    }
-}
-
-impl Default for ResamplerBackendConfig {
-    #[cfg(feature = "resample-rubato")]
-    fn default() -> Self {
-        Self::new(RubatoBackend::new())
-    }
-
-    #[cfg(not(feature = "resample-rubato"))]
-    fn default() -> Self {
-        Self::none()
-    }
-}
+type PcmScratch = SmallVec<[PcmBuf; 8]>;
 
 /// Configuration parameters for the resampler effect.
 ///
@@ -71,6 +29,7 @@ impl Default for ResamplerBackendConfig {
 #[non_exhaustive]
 pub struct ResamplerParams {
     /// Resampler backend factory selected by the caller.
+    #[builder(default)]
     pub backend: ResamplerBackendConfig,
     /// Shared atomic for dynamic host sample rate tracking.
     pub host_sample_rate: Arc<AtomicU32>,
@@ -123,11 +82,11 @@ pub struct ResamplerProcessor {
     backend: ResamplerBackendConfig,
     quality: ResamplerQuality,
     /// Accumulated input buffer (planar format).
-    input_buffer: SmallVec<[Vec<f32>; 8]>,
-    temp_deinterleave: SmallVec<[Vec<f32>; 8]>,
-    temp_input_slice: SmallVec<[Vec<f32>; 8]>,
-    temp_output_all: SmallVec<[Vec<f32>; 8]>,
-    temp_output_bufs: SmallVec<[Vec<f32>; 8]>,
+    input_buffer: PcmScratch,
+    temp_deinterleave: PcmScratch,
+    temp_input_slice: PcmScratch,
+    temp_output_all: PcmScratch,
+    temp_output_bufs: PcmScratch,
     current_ratio: f64,
     options: ResamplerOptions,
     source_rate: u32,
@@ -147,6 +106,12 @@ impl ResamplerProcessor {
         // or host_sr (only used when != 0). The MIN fallback can never fire.
         let nz_target = NonZeroU32::new(target_rate).unwrap_or(NonZeroU32::MIN);
         let output_spec = PcmSpec::new(u16::try_from(channels).unwrap_or(u16::MAX), nz_target);
+        let pool = params.pool;
+        let input_buffer = PcmScratch::new();
+        let temp_deinterleave = PcmScratch::new();
+        let temp_input_slice = PcmScratch::new();
+        let temp_output_all = PcmScratch::new();
+        let temp_output_bufs = PcmScratch::new();
         let mut processor = Self {
             channels,
             output_spec,
@@ -154,15 +119,15 @@ impl ResamplerProcessor {
             current_ratio: 1.0,
             options,
             host_sample_rate: params.host_sample_rate,
-            input_buffer: smallvec_new_vecs(channels),
+            input_buffer,
             backend: params.backend,
-            pool: params.pool,
+            pool,
             quality: params.quality,
             resampler: None,
-            temp_deinterleave: smallvec_new_vecs(channels),
-            temp_input_slice: smallvec_new_vecs(channels),
-            temp_output_all: smallvec_new_vecs(channels),
-            temp_output_bufs: smallvec_new_vecs(channels),
+            temp_deinterleave,
+            temp_input_slice,
+            temp_output_all,
+            temp_output_bufs,
             last_input_meta: None,
             missing_backend_logged: false,
         };
@@ -186,34 +151,42 @@ impl ResamplerProcessor {
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn append_to_buffer(&mut self, interleaved: &[f32]) {
+    fn append_to_buffer(&mut self, interleaved: &[f32]) -> bool {
         if interleaved.is_empty() {
-            return;
+            return true;
         }
 
         let Some(num_channels) = NonZeroUsize::new(self.channels) else {
-            return;
+            return true;
         };
         let frames = interleaved.len() / num_channels.get();
 
-        if self.temp_deinterleave.len() < self.channels {
-            self.temp_deinterleave.resize_with(self.channels, Vec::new);
-        }
+        ensure_channel_count(&mut self.input_buffer, &self.pool, self.channels);
+        ensure_channel_count(&mut self.temp_deinterleave, &self.pool, self.channels);
 
         for buf in &mut self.temp_deinterleave[..self.channels] {
-            buf.resize(frames, 0.0);
+            if !ensure_len(buf, frames) {
+                return false;
+            }
         }
 
-        deinterleave_variable(
-            interleaved,
-            num_channels,
-            &mut self.temp_deinterleave[..self.channels],
-            0..frames,
-        );
+        let mut output = self.temp_deinterleave[..self.channels]
+            .iter_mut()
+            .map(|buf| &mut buf[..])
+            .collect::<SmallVec<[&mut [f32]; 8]>>();
+
+        deinterleave_variable(interleaved, num_channels, &mut output, 0..frames);
+        drop(output);
 
         for ch in 0..self.channels {
-            self.input_buffer[ch].extend_from_slice(&self.temp_deinterleave[ch][..frames]);
+            if !append_slice(
+                &mut self.input_buffer[ch],
+                &self.temp_deinterleave[ch][..frames],
+            ) {
+                return false;
+            }
         }
+        true
     }
 
     /// Assemble the final `PcmChunk` from a successful flush `process_block`.
@@ -236,7 +209,9 @@ impl ResamplerProcessor {
             buf.clear();
         }
         for (ch, buf) in self.temp_output_bufs.iter().enumerate() {
-            self.temp_output_all[ch].extend_from_slice(&buf[..frames_to_use]);
+            if !append_slice(&mut self.temp_output_all[ch], &buf[..frames_to_use]) {
+                return None;
+            }
         }
 
         let interleaved = self.interleave(&self.temp_output_all);
@@ -282,7 +257,9 @@ impl ResamplerProcessor {
                     }
                     for ch in 0..channels {
                         let src = &self.temp_output_bufs[ch][..out_len];
-                        self.temp_output_all[ch].extend_from_slice(src);
+                        if !append_slice(&mut self.temp_output_all[ch], src) {
+                            return false;
+                        }
                     }
 
                     if consumed > 0 {
@@ -305,12 +282,8 @@ impl ResamplerProcessor {
     }
 
     fn ensure_temp_buffers(&mut self, channels: usize) {
-        if self.temp_input_slice.len() < channels {
-            self.temp_input_slice.resize_with(channels, Vec::new);
-        }
-        if self.temp_output_bufs.len() < channels {
-            self.temp_output_bufs.resize_with(channels, Vec::new);
-        }
+        ensure_channel_count(&mut self.temp_input_slice, &self.pool, channels);
+        ensure_channel_count(&mut self.temp_output_bufs, &self.pool, channels);
     }
 
     /// Turn the accumulated planar output into an interleaved `PcmChunk`.
@@ -335,7 +308,8 @@ impl ResamplerProcessor {
     pub fn flush_buffer(&mut self) -> Option<PcmChunk> {
         self.resampler.as_ref()?;
 
-        if self.input_buffer[0].is_empty() {
+        let first_input = self.input_buffer.first()?;
+        if first_input.is_empty() {
             return None;
         }
 
@@ -343,7 +317,9 @@ impl ResamplerProcessor {
         let channels = self.channels;
         let buffered = self.input_buffer[0].len();
 
-        self.pad_input_for_flush(input_frames, buffered);
+        if !self.pad_input_for_flush(input_frames, buffered) {
+            return None;
+        }
 
         self.ensure_temp_buffers(channels);
 
@@ -369,7 +345,7 @@ impl ResamplerProcessor {
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn interleave(&self, planar: &[Vec<f32>]) -> PcmBuf {
+    fn interleave(&self, planar: &[PcmBuf]) -> PcmBuf {
         if planar.is_empty() || planar[0].is_empty() {
             return self.pool.get();
         }
@@ -386,7 +362,11 @@ impl ResamplerProcessor {
         let Some(num_channels) = NonZeroUsize::new(self.channels) else {
             return self.pool.get();
         };
-        interleave_variable(planar, 0..frames, &mut result[..], num_channels);
+        let input = planar
+            .iter()
+            .map(|buf| &buf[..])
+            .collect::<SmallVec<[&[f32]; 8]>>();
+        interleave_variable(&input, 0..frames, &mut result[..], num_channels);
 
         result
     }
@@ -396,12 +376,17 @@ impl ResamplerProcessor {
     }
 
     /// Pad input buffer with zeros so a final block can be processed.
-    fn pad_input_for_flush(&mut self, input_frames: usize, buffered: usize) {
+    fn pad_input_for_flush(&mut self, input_frames: usize, buffered: usize) -> bool {
         let padding_needed = input_frames.saturating_sub(buffered);
-        self.input_buffer
-            .iter_mut()
-            .for_each(|buf| buf.extend(iter::repeat_n(0.0, padding_needed)));
+        for buf in &mut self.input_buffer {
+            let old_len = buf.len();
+            if !ensure_len(buf, old_len.saturating_add(padding_needed)) {
+                return false;
+            }
+            buf[old_len..].fill(0.0);
+        }
         debug!(buffered, padding_needed, "Flushing resampler buffer");
+        true
     }
 
     /// Reserve steady-state capacity for every per-chunk scratch buffer up
@@ -431,11 +416,17 @@ impl ResamplerProcessor {
         let blocks = chunk.div_ceil(in_next).saturating_add(1);
         let out_all_cap = out_max.saturating_mul(blocks);
 
-        reserve_channel_scratch(&mut self.input_buffer, channels, in_buf_cap);
-        reserve_channel_scratch(&mut self.temp_deinterleave, channels, chunk.max(in_max));
-        reserve_channel_scratch(&mut self.temp_input_slice, channels, in_max);
-        reserve_channel_scratch(&mut self.temp_output_bufs, channels, out_max);
-        reserve_channel_scratch(&mut self.temp_output_all, channels, out_all_cap);
+        let pool = self.pool.clone();
+        reserve_channel_scratch(&mut self.input_buffer, &pool, channels, in_buf_cap);
+        reserve_channel_scratch(
+            &mut self.temp_deinterleave,
+            &pool,
+            channels,
+            chunk.max(in_max),
+        );
+        reserve_channel_scratch(&mut self.temp_input_slice, &pool, channels, in_max);
+        reserve_channel_scratch(&mut self.temp_output_bufs, &pool, channels, out_max);
+        reserve_channel_scratch(&mut self.temp_output_all, &pool, channels, out_all_cap);
     }
 
     fn process_block(
@@ -448,20 +439,32 @@ impl ResamplerProcessor {
 
         for ch in 0..channels {
             self.temp_input_slice[ch].clear();
-            self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
+            if !copy_slice(
+                &mut self.temp_input_slice[ch],
+                &self.input_buffer[ch][..input_frames],
+            ) {
+                return Err(ResamplerError::InvalidBuffer {
+                    detail: "PCM pool budget exhausted preparing resampler input",
+                });
+            }
         }
 
         for ch in 0..channels {
-            self.temp_output_bufs[ch].resize(output_frames, 0.0);
+            if !ensure_len(&mut self.temp_output_bufs[ch], output_frames) {
+                return Err(ResamplerError::InvalidBuffer {
+                    detail: "PCM pool budget exhausted preparing resampler output",
+                });
+            }
+            self.temp_output_bufs[ch].fill(0.0);
         }
 
         let input = self.temp_input_slice[..channels]
             .iter()
-            .map(Vec::as_slice)
+            .map(|buf| &buf[..])
             .collect::<SmallVec<[&[f32]; 8]>>();
         let mut output = self.temp_output_bufs[..channels]
             .iter_mut()
-            .map(Vec::as_mut_slice)
+            .map(|buf| &mut buf[..])
             .collect::<SmallVec<[&mut [f32]; 8]>>();
         let process = resampler.process_into_buffer(&input, &mut output)?;
         Ok((process.input_frames, process.output_frames))
@@ -529,7 +532,9 @@ impl ResamplerProcessor {
         self.resampler.as_ref()?;
 
         self.last_input_meta = Some(chunk.meta);
-        self.append_to_buffer(&chunk.samples);
+        if !self.append_to_buffer(&chunk.samples) {
+            return None;
+        }
 
         let input_frames = self.resampler.as_ref()?.input_frames_next();
         let channels = self.channels;
@@ -551,9 +556,7 @@ impl ResamplerProcessor {
 
     /// Clear and resize the per-channel output accumulator used by `resample`.
     fn reset_output_accumulator(&mut self, channels: usize) {
-        if self.temp_output_all.len() < channels {
-            self.temp_output_all.resize_with(channels, Vec::new);
-        }
+        ensure_channel_count(&mut self.temp_output_all, &self.pool, channels);
         for buf in &mut self.temp_output_all {
             buf.clear();
         }
@@ -628,23 +631,41 @@ impl ResamplerProcessor {
     }
 }
 
-/// Create a `SmallVec` of empty Vecs for each channel.
-#[cfg_attr(feature = "perf", hotpath::measure)]
-fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
-    (0..channels).map(|_| Vec::new()).collect()
+fn append_slice(dst: &mut PcmBuf, src: &[f32]) -> bool {
+    let old_len = dst.len();
+    if !ensure_len(dst, old_len.saturating_add(src.len())) {
+        return false;
+    }
+    dst[old_len..old_len + src.len()].copy_from_slice(src);
+    true
 }
 
-/// Reserve `cap` floats of capacity on each per-channel scratch Vec,
-/// growing the outer `SmallVec` to `channels` first. Pure capacity - the
-/// lengths and contents are untouched, so resampler output stays bit-exact.
-fn reserve_channel_scratch(bufs: &mut SmallVec<[Vec<f32>; 8]>, channels: usize, cap: usize) {
-    if bufs.len() < channels {
-        bufs.resize_with(channels, Vec::new);
+fn copy_slice(dst: &mut PcmBuf, src: &[f32]) -> bool {
+    if !ensure_len(dst, src.len()) {
+        return false;
     }
-    bufs.iter_mut()
-        .take(channels)
-        .filter(|buf| buf.capacity() < cap)
-        .for_each(|buf| buf.reserve(cap.saturating_sub(buf.len())));
+    dst[..src.len()].copy_from_slice(src);
+    true
+}
+
+fn ensure_channel_count(bufs: &mut PcmScratch, pool: &PcmPool, channels: usize) {
+    if bufs.len() < channels {
+        bufs.resize_with(channels, || pool.get());
+    }
+}
+
+fn ensure_len(buf: &mut PcmBuf, len: usize) -> bool {
+    buf.ensure_len(len).is_ok()
+}
+
+fn reserve_channel_scratch(bufs: &mut PcmScratch, pool: &PcmPool, channels: usize, cap: usize) {
+    ensure_channel_count(bufs, pool, channels);
+    bufs.iter_mut().take(channels).for_each(|buf| {
+        let len = buf.len();
+        if buf.ensure_len(cap).is_ok() {
+            buf.truncate(len);
+        }
+    });
 }
 
 impl ResamplerProcessor {
@@ -661,11 +682,11 @@ impl ResamplerProcessor {
     fn handle_channel_change(&mut self, chunk_channels: usize, chunk_rate: u32) {
         self.channels = chunk_channels;
         self.source_rate = chunk_rate;
-        self.input_buffer = smallvec_new_vecs(chunk_channels);
-        self.temp_input_slice = smallvec_new_vecs(chunk_channels);
-        self.temp_output_bufs = smallvec_new_vecs(chunk_channels);
-        self.temp_output_all = smallvec_new_vecs(chunk_channels);
-        self.temp_deinterleave = smallvec_new_vecs(chunk_channels);
+        self.input_buffer = PcmScratch::new();
+        self.temp_input_slice = PcmScratch::new();
+        self.temp_output_bufs = PcmScratch::new();
+        self.temp_output_all = PcmScratch::new();
+        self.temp_deinterleave = PcmScratch::new();
         let channels_u16 = u16::try_from(chunk_channels).unwrap_or(u16::MAX);
         self.output_spec.channels = channels_u16;
         self.resampler = None;
@@ -880,7 +901,7 @@ mod tests {
         assert!(result.is_some());
 
         AudioEffect::reset(&mut processor);
-        assert!(processor.input_buffer[0].is_empty());
+        assert!(processor.input_buffer.iter().all(|buf| buf.is_empty()));
     }
 
     #[kithara::test]

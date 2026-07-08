@@ -49,7 +49,7 @@ fn build_track_source(
     match build_source(url, &ctx.config) {
         TrackSource::Config(mut cfg) => {
             cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder_backend = backend;
+            cfg.decoder.backend = backend;
             cfg.initial_abr_mode = abr;
             TrackSource::Config(cfg)
         }

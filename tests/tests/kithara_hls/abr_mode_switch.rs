@@ -1689,7 +1689,11 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .events(bus)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -1900,7 +1904,11 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .events(bus)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await

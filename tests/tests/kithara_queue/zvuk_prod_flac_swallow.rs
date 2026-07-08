@@ -88,7 +88,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         panic!("expected an HLS config source for {PROD_TRACK}");
     };
     cfg.store = StoreOptions::new(temp.path());
-    cfg.decoder_backend = backend;
+    cfg.decoder.backend = backend;
     cfg.initial_abr_mode = AbrMode::Auto(None);
     cfg.name = Some("t0".to_string());
 

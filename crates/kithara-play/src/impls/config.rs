@@ -9,10 +9,10 @@ use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::{AssetStore, FlushHub, StoreOptions};
 use kithara_audio::{
-    AudioConfig, AudioWorkerHandle, EngineLoad, ResamplerQuality, StretchControls,
+    AudioConfig, AudioDecoderConfig, AudioWorkerHandle, EngineLoad, StretchControls,
 };
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{DecodeError, DecoderBackend};
+use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::{HlsConfig, KeyOptions, SizeProbeMethod};
@@ -95,12 +95,9 @@ pub struct ResourceConfig {
     /// Initial ABR mode passed to the HLS stream.
     #[builder(default)]
     pub initial_abr_mode: AbrMode,
-    /// Selects the decoder backend explicitly.
+    /// Decoder construction settings, including decoder-side resampling.
     #[builder(default)]
-    pub decoder_backend: DecoderBackend,
-    /// How leading/trailing PCM is trimmed after decode.
-    #[builder(default)]
-    pub gapless_mode: kithara_decode::GaplessMode,
+    pub decoder: AudioDecoderConfig,
     /// Encryption key handling configuration.
     #[builder(default)]
     pub keys: KeyOptions,
@@ -150,9 +147,6 @@ pub struct ResourceConfig {
     pub stretch: Option<Arc<StretchControls>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     pub worker: Option<AudioWorkerHandle>,
-    /// Resampling quality preset.
-    #[builder(default)]
-    pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
     pub src: ResourceSrc,
     /// Method used by HLS size estimation to probe segment lengths.
@@ -227,14 +221,12 @@ impl ResourceConfig {
             .maybe_byte_pool(byte_pool)
             .maybe_pcm_pool(self.pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
-            .resampler_quality(self.resampler_quality)
             .preload_chunks(self.preload_chunks)
-            .decoder_backend(self.decoder_backend)
+            .decoder(self.decoder)
             .maybe_playback_rate(self.playback_rate)
             .maybe_stretch(self.stretch)
             .maybe_engine_load(self.engine_load)
             .maybe_worker(self.worker)
-            .gapless_mode(self.gapless_mode)
             .build()
     }
 
@@ -271,14 +263,12 @@ impl ResourceConfig {
             .maybe_byte_pool(byte_pool)
             .maybe_pcm_pool(self.pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
-            .resampler_quality(self.resampler_quality)
             .preload_chunks(self.preload_chunks)
-            .decoder_backend(self.decoder_backend)
+            .decoder(self.decoder)
             .maybe_playback_rate(self.playback_rate)
             .maybe_stretch(self.stretch)
             .maybe_engine_load(self.engine_load)
             .maybe_worker(self.worker)
-            .gapless_mode(self.gapless_mode)
             .build())
     }
 
@@ -338,6 +328,7 @@ impl ResourceConfig {
 mod tests {
     use std::path::Path;
 
+    use kithara_audio::{DecoderResamplerSettings, ResamplerBackendConfig, ResamplerOptions};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -412,6 +403,42 @@ mod tests {
             .build();
         let audio_config = config.build_hls_config().unwrap();
         assert!(audio_config.stream.bus.is_some());
+    }
+
+    #[kithara::test]
+    fn config_resampler_options_propagate_to_file_config() {
+        let decoder = AudioDecoderConfig::builder()
+            .resampler(
+                DecoderResamplerSettings::builder()
+                    .options(ResamplerOptions::builder().chunk_size(2_048).build())
+                    .build(),
+            )
+            .build();
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
+            .unwrap()
+            .decoder(decoder)
+            .build();
+        let audio_config = config.build_file_config();
+
+        assert_eq!(audio_config.decoder.resampler.options.chunk_size, 2_048);
+    }
+
+    #[kithara::test]
+    fn config_explicit_resampler_backend_propagates_to_hls_config() {
+        let decoder = AudioDecoderConfig::builder()
+            .resampler(
+                DecoderResamplerSettings::builder()
+                    .backend(ResamplerBackendConfig::none())
+                    .build(),
+            )
+            .build();
+        let config = ResourceConfig::for_src("https://example.com/live.m3u8")
+            .unwrap()
+            .decoder(decoder)
+            .build();
+        let audio_config = config.build_hls_config().unwrap();
+
+        assert!(audio_config.decoder.resampler.backend.is_none());
     }
 
     #[kithara::test]

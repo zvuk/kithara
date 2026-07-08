@@ -7,6 +7,7 @@ use rubato::{
     SincInterpolationType, WindowFunction,
     audioadapter_buffers::direct::{SequentialSliceOfSlices, SequentialSliceOfVecs},
 };
+use smallvec::SmallVec;
 
 use super::{RubatoAlgorithm, RubatoConfig};
 use crate::{ResamplerOptions, ResamplerProcess, ResamplerQuality};
@@ -45,12 +46,12 @@ impl RubatoEngine {
         inner: Box<dyn RubatoResamplerTrait<f32>>,
         channels: NonZeroUsize,
         pcm_pool: PcmPool,
-    ) -> Self {
+    ) -> Result<Self, ResamplerConstructionError> {
         let output_frames = inner.output_frames_max();
-        Self {
+        Ok(Self {
             inner,
-            output_scratch: PooledScratch::new(pcm_pool, channels, output_frames),
-        }
+            output_scratch: PooledScratch::new(pcm_pool, channels, output_frames)?,
+        })
     }
 
     pub(super) fn input_frames_max(&self) -> usize {
@@ -80,7 +81,7 @@ impl RubatoEngine {
                     channels.get(),
                     FixedAsync::Input,
                 )?;
-                Ok(Self::with_inner(Box::new(poly), channels, pcm_pool))
+                Self::with_inner(Box::new(poly), channels, pcm_pool)
             }
             ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
                 let sinc = Async::new_sinc(
@@ -91,7 +92,7 @@ impl RubatoEngine {
                     channels.get(),
                     FixedAsync::Input,
                 )?;
-                Ok(Self::with_inner(Box::new(sinc), channels, pcm_pool))
+                Self::with_inner(Box::new(sinc), channels, pcm_pool)
             }
         }
     }
@@ -111,7 +112,7 @@ impl RubatoEngine {
             channels.get(),
             FixedSync::Input,
         )?;
-        Ok(Self::with_inner(Box::new(fft), channels, pcm_pool))
+        Self::with_inner(Box::new(fft), channels, pcm_pool)
     }
 
     pub(super) fn output_delay(&self) -> usize {
@@ -181,21 +182,24 @@ impl RubatoEngine {
 
 struct PooledScratch {
     pool: PcmPool,
-    buffers: Vec<Vec<f32>>,
+    buffers: SmallVec<[Vec<f32>; 8]>,
 }
 
 impl PooledScratch {
-    fn new(pool: PcmPool, channels: NonZeroUsize, frames: usize) -> Self {
-        let buffers = (0..channels.get())
-            .map(|_| {
-                pool.get_with(|buffer| {
-                    buffer.clear();
-                    buffer.resize(frames, 0.0);
-                })
-                .into_inner()
-            })
-            .collect();
-        Self { pool, buffers }
+    fn new(
+        pool: PcmPool,
+        channels: NonZeroUsize,
+        frames: usize,
+    ) -> Result<Self, ResamplerConstructionError> {
+        let mut buffers = SmallVec::new();
+        for _ in 0..channels.get() {
+            let mut buffer = pool.get();
+            buffer
+                .ensure_len(frames)
+                .map_err(|_| ResamplerConstructionError::InvalidChunkSize(frames))?;
+            buffers.push(buffer.into_inner());
+        }
+        Ok(Self { pool, buffers })
     }
 
     fn buffers(&self) -> &[Vec<f32>] {

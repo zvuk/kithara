@@ -87,12 +87,12 @@ symphonia = [
     "kithara-audio/symphonia",
     "kithara-decode/symphonia",
     "kithara-queue?/symphonia",
-    "resample-rubato",
 ]
 # libfdk-aac override for HE-AAC v1/v2 streams. Symphonia ships an
 # LC-only AAC decoder; without this feature, HE-AAC v2 (parametric
 # stereo + SBR) streams fail in the software pipeline.
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac", "kithara-queue?/fdk-aac"]
+resample-readhead = ["kithara-audio/resample-readhead", "kithara-decode/resample-readhead", "kithara-play/resample-readhead"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato", "kithara-play/resample-rubato"]
 analysis-beat = ["kithara-audio/analysis-beat", "kithara-play/analysis-beat"]
 analysis-waveform = ["kithara-audio/analysis-waveform", "kithara-play/analysis-waveform"]
@@ -161,7 +161,6 @@ apple = [
     "kithara-decode/apple",
     "kithara-play/apple",
     "kithara-queue?/apple",
-    "resample-rubato",
 ]
 apple-fused-src = [
     "kithara-audio/apple-fused-src",

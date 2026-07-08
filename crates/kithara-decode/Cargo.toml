@@ -21,6 +21,8 @@ ignored = ["hotpath"]
 default = ["symphonia", "fdk-aac", "resample-rubato", "client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 apple = ["dep:core-foundation", "dep:core-foundation-sys", "dep:symphonia-core"]
+# Select Apple codec-embedded resampling as the default decoder placement.
+apple-codec-embedded-resampler = ["apple"]
 # In-tree fdk-aac adapter needs symphonia-core macros (`codec_profile!`,
 # `support_audio_codec!`) which expand to `symphonia_core::*` paths.
 android = []
@@ -32,6 +34,7 @@ symphonia = ["dep:symphonia"]
 fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]
 probe = []
 mock = []
+resample-readhead = ["kithara-resampler/resample-readhead"]
 resample-rubato = ["kithara-resampler/resample-rubato"]
 # HTTP backend forwarding (kithara-net reached via kithara-stream).
 client-reqwest = ["kithara-stream/client-reqwest"]
@@ -75,6 +78,14 @@ ndk-context = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
 wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "apple_resampler"
+harness = false
+required-features = ["apple"]
 
 [lints]
 workspace = true

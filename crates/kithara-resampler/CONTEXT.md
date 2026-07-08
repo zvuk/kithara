@@ -5,13 +5,19 @@ is the overview.
 
 ## Ownership
 
-`kithara-resampler` owns standalone sample-rate resampling:
+`kithara-resampler` owns the platform-neutral standalone sample-rate
+resampling contract:
 
 - `Resampler` defines the standalone PCM processing contract.
-- `ResamplerBackend` is the trait implemented by built-in and external backend
-  factories. `ResamplerConfig<B>` carries a backend factory value directly.
+- `ResamplerBackend` is the trait implemented by built-in, platform, and
+  external backend factories. `ResamplerConfig<B>` carries a backend factory
+  value directly.
 - `ResamplerCapabilities` reports fixed-ratio, variable-ratio, glide,
   standalone, latency-reporting, and real-time properties.
+- `ResamplerBackendConfig` is the shared backend handle used by playback and
+  analysis config. Its portable default order is Rubato, then ReadHead, then
+  none; platform backends such as Apple AudioConverter are injected explicitly
+  by the crate that exposes them.
 - `ResamplerSettings`, `ResamplerConfig`, and `ResamplerOptions` carry
   construction settings through BON builders.
 - `create_resampler` constructs exactly the requested standalone backend or
@@ -52,22 +58,36 @@ The returned `ResamplerProcess` reports accepted input frames and produced
 output frames. Callers size output using the backend's frame-capacity methods.
 
 Variable ratio and glide controls are advertised through
-`ResamplerCapabilities`. Fixed-ratio analysis config never asks for DJ
-pitch/glide modes.
+`ResamplerCapabilities`. Callers that receive a boxed `Resampler` use
+`Resampler::control_mut()` to access the optional `ResamplerControl` surface;
+fixed-ratio backends return `None`. Fixed-ratio analysis config never asks for
+DJ pitch/glide modes.
 
 `ResamplerQuality` adjusts implementation quality inside a selected backend. It
 does not select a backend. Rubato-specific algorithm choices, including FFT, are
 `rubato::RubatoConfig` fields, not separate backend families or cargo features.
 External backends can ignore quality or map it into their own config.
 
-## Planned Built-In Backend Families
+`ResamplerBackendConfig::default()` is a user-facing config default, not a
+runtime fallback chain. Once construction receives a backend handle, it builds
+exactly that backend or returns a typed error.
+
+## Built-In Backend Families
 
 - `Rubato`: fixed-ratio backend moved from the old decode-owned
   implementation. `rubato::RubatoConfig` selects async poly/sinc or FFT.
-- `AppleAudioConverter`: standalone PCM-to-PCM `AudioConverter` backend on
-  macOS/iOS. Codec-embedded Apple decode remains in `kithara-decode`.
 - `ReadHead`: Rust port of the moving read-head renderer with fixed-ratio
-  support first and variable-ratio/glide controls as first-class capabilities.
+  support, variable-ratio controls, and ratio glide. The scalar path is the
+  portable baseline; Apple Accelerate acceleration is an implementation detail
+  for a future Apple-specific support module.
+
+## Platform Backend Families
+
+- `AppleAudioConverter`: standalone PCM-to-PCM `AudioConverter` backend on
+  macOS/iOS. It implements this crate's `ResamplerBackend` trait, but its FFI
+  implementation lives in `kithara-decode/src/apple/**` because the current
+  repository unsafe policy sanctions Apple FFI only there. Codec-embedded Apple
+  decode also remains in `kithara-decode`.
 
 No Android placeholder exists until there is a real Android PCM resampler
 backend.
@@ -97,6 +117,7 @@ resampler is codec-embedded or adapter-based.
 <table>
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
 <tr><td><code>resample-rubato</code></td><td>no</td><td>Rubato fixed-ratio backend; algorithm selection lives in <code>RubatoConfig</code></td></tr>
+<tr><td><code>resample-readhead</code></td><td>no</td><td>Scalar moving-read-head backend with fixed-ratio, variable-ratio, and glide capability</td></tr>
 </table>
 
 ## Module Layout
@@ -109,4 +130,6 @@ resampler is codec-embedded or adapter-based.
 - `src/factory.rs` - standalone backend construction.
 - `src/mode.rs` - fixed-ratio and variable-ratio mode types.
 - `src/placement.rs` - placement vocabulary shared with decode planning.
+- `src/read_head/` - scalar moving-read-head backend.
+- `src/rubato/` - Rubato backend.
 - `src/traits.rs` - public processing traits and status types.

@@ -112,7 +112,11 @@ fn resource_config(
         .store(store)
         .maybe_hint(hint.map(str::to_owned))
         .maybe_worker(worker)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build()
 }
 
@@ -174,7 +178,11 @@ async fn warm_hls_worker(
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .media_info(wav_info)
         .worker(worker)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -227,7 +235,11 @@ async fn warm_hls_worker_without_seek(
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .media_info(wav_info)
         .worker(worker)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -302,7 +314,11 @@ async fn open_packaged_hls_audio(
 ) -> Audio<Stream<Hls>> {
     let config =
         AudioConfig::<Hls>::for_stream(HlsConfig::for_url(url.clone()).store(store).build())
-            .decoder_backend(backend)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
             .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -1388,7 +1404,11 @@ async fn live_remote_resource_decodes_with_duration(
         .expect("valid URL")
         .store(store)
         .downloader(downloader)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
 
     let mut resource = Resource::new(config)
@@ -1505,7 +1525,11 @@ async fn player_mp3_duration_matches_app_flow(
     let mut config = ResourceConfig::for_src(url)
         .unwrap()
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     config = player.prepare_config(config);
 
@@ -1594,7 +1618,11 @@ async fn local_resource_decodes_with_duration(
     let config = ResourceConfig::for_src(url.as_str())
         .expect("valid URL")
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
 
     let mut resource = Resource::new(config)

@@ -229,7 +229,11 @@ async fn build_resource(
         .downloader(downloader.clone())
         .name(format!("{iter_label}|{url}"))
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .initial_abr_mode(abr)
         .build();
     let mut resource = Resource::new(cfg)

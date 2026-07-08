@@ -35,9 +35,8 @@ use tracing::{debug, info, trace, warn};
 use crate::{
     effects::timestretch::StretchControls,
     pipeline::{
-        config::{AudioConfig, create_effects, expected_output_spec},
+        config::{AudioConfig, AudioDecoderConfig, create_effects},
         fetch::{EpochValidator, Fetch, FetchKind},
-        fused_src,
         source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
@@ -158,7 +157,7 @@ pub struct Audio<S> {
 
     /// Shared playback-rate state for compatibility with direct `Audio`
     /// callers. Runtime speed changes route into `stretch` when present; the
-    /// fixed-ratio resampler never reads this value.
+    /// decoder resampler plan never reads this value.
     playback_rate: Arc<AtomicF32>,
 
     /// Wake handle for blocking PCM reads.
@@ -920,29 +919,36 @@ impl<S> Audio<S> {
 /// the decoder `backend` plus the host's `pcm_pool` / `byte_pool`. All
 /// required — the host's configured pools must reach the decoder, never a
 /// silent process-global fallback.
+#[derive(Clone)]
 struct DecoderDeps {
     byte_pool: BytePool,
-    backend: kithara_decode::DecoderBackend,
+    decoder: AudioDecoderConfig,
     pcm_pool: PcmPool,
-    decoder_resampler_rate: Option<Arc<AtomicU32>>,
+    host_sample_rate: Arc<AtomicU32>,
 }
 
 impl DecoderDeps {
     fn new(
-        backend: kithara_decode::DecoderBackend,
+        decoder: AudioDecoderConfig,
         pcm_pool: PcmPool,
         byte_pool: BytePool,
         host_sample_rate: &Arc<AtomicU32>,
     ) -> Self {
         Self {
             byte_pool,
-            backend,
+            decoder,
             pcm_pool,
-            decoder_resampler_rate: fused_src::decoder_resampler_target_rate(
-                backend,
-                host_sample_rate,
-            ),
+            host_sample_rate: Arc::clone(host_sample_rate),
         }
+    }
+
+    fn recreates_on_host_rate_change(&self) -> bool {
+        self.decoder.recreates_on_host_rate_change()
+    }
+
+    fn resampler_config(&self) -> Result<Option<DecoderResamplerConfig>, DecodeError> {
+        let target_sample_rate = NonZeroU32::new(self.host_sample_rate.load(Ordering::Acquire));
+        self.decoder.build_resampler_config(target_sample_rate)
     }
 }
 
@@ -975,14 +981,6 @@ struct RegisteredStreamSource {
     track_id: TrackId,
     trash_tx: crate::runtime::Outlet<PcmChunk>,
     worker: AudioWorkerHandle,
-}
-
-fn current_decoder_resampler_config(
-    rate: Option<&Arc<AtomicU32>>,
-) -> Option<DecoderResamplerConfig> {
-    rate.and_then(|rate| {
-        NonZeroU32::new(rate.load(Ordering::Acquire)).map(DecoderResamplerConfig::codec_embedded)
-    })
 }
 
 /// Provides async constructor that creates Stream internally.
@@ -1019,17 +1017,13 @@ where
             playback_rate: config_playback_rate,
             stretch: config_stretch,
             engine_load: config_engine_load,
-            decoder_backend,
+            decoder,
             preload_chunks,
             block_on_underrun,
-            resampler_options,
-            resampler_quality,
-            resampler_backend,
             stream: stream_config,
             bus: config_bus,
             effects: custom_effects,
             worker: config_worker,
-            gapless_mode: config_gapless_mode,
             cancel: config_cancel,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
@@ -1063,12 +1057,8 @@ where
         // bounded), then we disarm before the RT worker is registered so the
         // decode loop the worker drives reads non-blocking via `probe_read`.
         shared_stream.set_blocking(true);
-        let deps = DecoderDeps::new(
-            decoder_backend,
-            pool.clone(),
-            byte_pool.clone(),
-            &host_sample_rate,
-        );
+        let config_gapless_mode = decoder.gapless_mode;
+        let deps = DecoderDeps::new(decoder, pool.clone(), byte_pool.clone(), &host_sample_rate);
         let decoder = Self::create_initial_decoder(
             shared_stream.clone(),
             initial_media_info.clone(),
@@ -1087,20 +1077,11 @@ where
         let epoch = Arc::new(AtomicU64::new(0));
         let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
 
-        let output_spec = expected_output_spec(initial_spec, &host_sample_rate);
-        let effects = create_effects(
-            initial_spec,
-            &host_sample_rate,
-            config_stretch.as_ref(),
-            fused_src::resampler_stage(decoder_backend, resampler_quality, resampler_options),
-            resampler_backend,
-            pool,
-            custom_effects,
-        );
+        let effects = create_effects(initial_spec, config_stretch.as_ref(), pool, custom_effects);
 
-        Self::log_pipeline_ready(initial_spec, output_spec, &host_sample_rate);
+        Self::log_pipeline_ready(initial_spec, initial_spec, &host_sample_rate);
 
-        let interleaved = Self::alloc_interleaved_scratch(pool, output_spec);
+        let interleaved = Self::alloc_interleaved_scratch(pool, initial_spec);
 
         let abr_handle = shared_stream.abr_handle();
         let peer_wake = shared_stream.peer_wake();
@@ -1127,7 +1108,7 @@ where
             initial_media_info,
             pcm_buffer_chunks,
             preload_chunks,
-            recreate_on_host_rate_change: deps.decoder_resampler_rate.is_some(),
+            recreate_on_host_rate_change: deps.recreates_on_host_rate_change(),
             runtime_handle,
             shared_stream,
             worker: config_worker,
@@ -1152,7 +1133,7 @@ where
             pcm_rx: data_rx,
             _epoch: epoch,
             validator: EpochValidator::default(),
-            spec: output_spec,
+            spec: initial_spec,
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
@@ -1260,24 +1241,20 @@ where
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
     ) -> crate::pipeline::source::DecoderFactory<T> {
-        let decoder_backend = deps.backend;
+        let factory_deps = deps.clone();
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);
-        let factory_pool = deps.pcm_pool.clone();
-        let factory_byte_pool = deps.byte_pool.clone();
-        let factory_decoder_resampler_rate = deps.decoder_resampler_rate.clone();
         Arc::new(move |stream, info, base_offset| {
             let byte_len = stream
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
             factory_byte_len.store(byte_len, Ordering::Release);
-            let resampler =
-                current_decoder_resampler_config(factory_decoder_resampler_rate.as_ref());
+            let resampler = factory_deps.resampler_config()?;
             let config = DecoderConfig::builder()
-                .backend(decoder_backend)
+                .backend(factory_deps.decoder.backend)
                 .byte_len_handle(Arc::clone(&factory_byte_len))
-                .pcm_pool(factory_pool.clone())
-                .byte_pool(factory_byte_pool.clone())
+                .pcm_pool(factory_deps.pcm_pool.clone())
+                .byte_pool(factory_deps.byte_pool.clone())
                 .epoch(factory_epoch.load(Ordering::Acquire))
                 .maybe_byte_map(stream.byte_map())
                 .maybe_hooks(stream.take_reader_event_sink())
@@ -1319,17 +1296,16 @@ where
     ) -> Result<Box<dyn Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
+        let resampler = deps.resampler_config()?;
         let decoder_config = DecoderConfig::builder()
-            .backend(deps.backend)
+            .backend(deps.decoder.backend)
             .byte_len_handle(byte_len_handle)
             .pcm_pool(deps.pcm_pool.clone())
             .byte_pool(deps.byte_pool.clone())
             .maybe_byte_map(shared_stream.byte_map())
             .maybe_hooks(shared_stream.take_reader_event_sink())
             .maybe_hint(hint.clone())
-            .maybe_resampler(current_decoder_resampler_config(
-                deps.decoder_resampler_rate.as_ref(),
-            ))
+            .maybe_resampler(resampler)
             .build();
         let hint_for_decoder = hint;
         let initial_media_info_for_decoder = initial_media_info;

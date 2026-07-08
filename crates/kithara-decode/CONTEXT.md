@@ -178,10 +178,11 @@ When `symphonia` is disabled (`default-features = false` + only `apple` / `andro
 
 ## Resampler integration
 
-`kithara-resampler` owns standalone resampler traits, config, and Rubato
-backends. `kithara-decode` imports that crate for decoder integration and keeps
-only decoder-owned placement decisions. `DecoderConfig.resampler` carries an
-optional `DecoderResamplerConfig`; codec-embedded Apple conversion is spelled as
+`kithara-resampler` owns standalone resampler traits, config, and backend
+families such as Rubato and ReadHead. `kithara-decode` imports that crate for
+decoder integration and keeps only decoder-owned placement decisions.
+`DecoderConfig.resampler` carries an optional `DecoderResamplerConfig`;
+codec-embedded Apple conversion is spelled as
 `DecoderResamplerConfig::codec_embedded(target_rate)`, not as a bare sample-rate
 field.
 
@@ -189,13 +190,15 @@ There are two decoder-side placements:
 
 - `DecoderEmbedded` lets a backend that already owns a converter emit target-rate
   PCM directly. Apple uses the codec-embedded `AudioConverter` path in
-  `AppleCodec`; the standalone Apple PCM-to-PCM adapter under
-  `src/apple/resampler*` is a test-only parity harness for that backend boundary,
-  not a production resampler backend.
+  `AppleCodec`.
 - `Standalone` builds the selected `kithara-resampler::ResamplerBackend` and
   wraps the chosen decoder in `src/resampled.rs`. This works with any decoder
   backend that compiles in the current target; invalid backend/config pairs fail
   at construction instead of trying another backend.
+  ReadHead and Rubato use this generic adapter route from `kithara-resampler`.
+  On macOS/iOS, `AppleAudioConverterBackend` exposes the standalone
+  PCM-to-PCM `AudioConverter` adapter under `src/apple/resampler*` through the
+  same trait while keeping Apple FFI inside the sanctioned Apple decode path.
 
 `AppleCodec::SRC_OUTPUT_MARGIN_FRAMES = 1` is not configuration. It is the
 ceil-domain slack used by fused decode+SRC when carrying the ideal output length

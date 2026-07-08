@@ -1,6 +1,13 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    sync::Arc,
+};
 
 use kithara_bufpool::PcmPool;
+#[cfg(feature = "resample-readhead")]
+use kithara_resampler::ResamplerOptions;
+#[cfg(feature = "resample-readhead")]
+use kithara_resampler::read_head::ReadHeadBackend;
 use kithara_resampler::{
     Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode,
     ResamplerPlacement, ResamplerProcess, ResamplerSettings,
@@ -137,7 +144,7 @@ fn standalone_decoder_adapter_wraps_configured_backend() {
     let config = DecoderResamplerConfig::builder()
         .target_sample_rate(target_rate)
         .placement(ResamplerPlacement::Standalone)
-        .backend(Box::new(AdapterProbeBackend) as Box<dyn ResamplerBackend>)
+        .backend(Arc::new(AdapterProbeBackend) as Arc<dyn ResamplerBackend>)
         .build();
 
     let pool = PcmPool::default();
@@ -151,4 +158,40 @@ fn standalone_decoder_adapter_wraps_configured_backend() {
     assert_eq!(decoder.spec(), PcmSpec::new(2, target_rate));
     assert_eq!(output.spec(), PcmSpec::new(2, target_rate));
     assert_eq!(&*output.samples, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+}
+
+#[cfg(feature = "resample-readhead")]
+#[test]
+fn standalone_decoder_adapter_accepts_read_head_backend() {
+    let sample_rate = NonZeroU32::new(44_100).expect("test rate");
+    let spec = PcmSpec::new(1, sample_rate);
+    let meta = PcmMeta {
+        spec,
+        frames: 4,
+        ..PcmMeta::default()
+    };
+    let samples = PcmPool::default().attach(vec![0.0, 0.25, -0.5, 0.75]);
+    let decoder = Box::new(OneChunkSourceDecoder {
+        chunk: Some(PcmChunk::new(meta, samples)),
+        spec,
+    });
+    let config = DecoderResamplerConfig::builder()
+        .target_sample_rate(sample_rate)
+        .placement(ResamplerPlacement::Standalone)
+        .backend(Arc::new(ReadHeadBackend::new()) as Arc<dyn ResamplerBackend>)
+        .options(ResamplerOptions::builder().chunk_size(4).build())
+        .build();
+
+    let pool = PcmPool::default();
+    let mut decoder = wrap(decoder, Some(config), &pool)
+        .unwrap_or_else(|err| panic!("standalone adapter should build: {err}"));
+    let output: PcmChunk = decoder
+        .next_chunk()
+        .unwrap_or_else(|err| panic!("next chunk should decode: {err}"))
+        .try_into()
+        .unwrap_or_else(|_| panic!("adapter should output a chunk"));
+
+    assert_eq!(decoder.spec(), spec);
+    assert_eq!(output.spec(), spec);
+    assert_eq!(&*output.samples, &[0.0, 0.25, -0.5, 0.75]);
 }

@@ -63,14 +63,15 @@ tls-native = [
 ]
 backend-web-audio = ["dep:firewheel-web-audio", "symphonia"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
-apple = ["kithara-audio/apple", "resample-rubato"]
+apple = ["kithara-audio/apple", "kithara-decode/apple"]
 apple-fused-src = ["kithara-audio/apple-fused-src", "kithara-decode/apple"]
 # Software decoder pass-through. Required when not opting into a hardware
 # backend, since `kithara-decode`'s `DecoderBackend` enum needs at least
 # one variant available. `backend-web-audio` pulls it in transitively:
 # wasm has no hardware decoder (apple/android are native-only).
-symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia", "resample-rubato"]
+symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
+resample-readhead = ["kithara-audio/resample-readhead", "kithara-decode/resample-readhead"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
 analysis-beat = ["kithara-audio/analysis-beat"]
 analysis-waveform = ["kithara-audio/analysis-waveform"]

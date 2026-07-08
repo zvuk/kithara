@@ -89,6 +89,51 @@ impl std::fmt::Display for DecoderBackend {
     }
 }
 
+impl DecoderBackend {
+    #[must_use]
+    pub fn default_resampler_placement(&self) -> ResamplerPlacement {
+        (*self).into()
+    }
+
+    #[must_use]
+    pub fn supports_decoder_embedded_resampler(&self) -> bool {
+        #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+        {
+            matches!(self, Self::Apple)
+        }
+        #[cfg(not(all(feature = "apple", any(target_os = "macos", target_os = "ios"))))]
+        {
+            false
+        }
+    }
+}
+
+impl From<DecoderBackend> for ResamplerPlacement {
+    fn from(backend: DecoderBackend) -> Self {
+        default_resampler_placement_for_backend(backend)
+    }
+}
+
+#[cfg(all(
+    feature = "apple-codec-embedded-resampler",
+    any(target_os = "macos", target_os = "ios")
+))]
+fn default_resampler_placement_for_backend(backend: DecoderBackend) -> ResamplerPlacement {
+    if matches!(backend, DecoderBackend::Apple) {
+        ResamplerPlacement::DecoderEmbedded
+    } else {
+        ResamplerPlacement::Standalone
+    }
+}
+
+#[cfg(not(all(
+    feature = "apple-codec-embedded-resampler",
+    any(target_os = "macos", target_os = "ios")
+)))]
+fn default_resampler_placement_for_backend(_: DecoderBackend) -> ResamplerPlacement {
+    ResamplerPlacement::Standalone
+}
+
 /// Decoder-side resampler placement selected by the caller.
 ///
 /// This describes conversion that is part of decoder construction, not the
@@ -97,7 +142,7 @@ impl std::fmt::Display for DecoderBackend {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct DecoderResamplerConfig {
-    pub backend: Option<Box<dyn ResamplerBackend>>,
+    pub backend: Option<Arc<dyn ResamplerBackend>>,
     #[builder(default)]
     pub options: ResamplerOptions,
     #[builder(default = ResamplerPlacement::DecoderEmbedded)]
@@ -116,6 +161,60 @@ impl DecoderResamplerConfig {
             options: ResamplerOptions::default(),
             placement: ResamplerPlacement::DecoderEmbedded,
             quality: ResamplerQuality::default(),
+        }
+    }
+
+    #[must_use]
+    pub fn standalone(
+        target_sample_rate: NonZeroU32,
+        backend: Arc<dyn ResamplerBackend>,
+        quality: ResamplerQuality,
+        options: ResamplerOptions,
+    ) -> Self {
+        Self {
+            target_sample_rate,
+            backend: Some(backend),
+            options,
+            placement: ResamplerPlacement::Standalone,
+            quality,
+        }
+    }
+
+    /// Build the decoder resampler config selected by the audio decoder config.
+    ///
+    /// `standalone_backend == None` means fixed-ratio decoder resampling is
+    /// disabled for standalone placement. Decoder-embedded placement is valid
+    /// only for decoder backends that can perform conversion in the codec path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::InvalidData`] when the requested placement is not
+    /// supported by the selected decoder backend.
+    pub fn for_decoder_backend(
+        decoder_backend: DecoderBackend,
+        target_sample_rate: NonZeroU32,
+        placement: ResamplerPlacement,
+        standalone_backend: Option<Arc<dyn ResamplerBackend>>,
+        quality: ResamplerQuality,
+        options: ResamplerOptions,
+    ) -> DecodeResult<Option<Self>> {
+        match placement {
+            ResamplerPlacement::DecoderEmbedded => {
+                if !decoder_backend.supports_decoder_embedded_resampler() {
+                    return Err(DecodeError::InvalidData {
+                        detail: "decoder backend does not support decoder-embedded resampling",
+                    });
+                }
+                let mut config = Self::codec_embedded(target_sample_rate);
+                config.options = options;
+                config.quality = quality;
+                Ok(Some(config))
+            }
+            ResamplerPlacement::Standalone => Ok(standalone_backend
+                .map(|backend| Self::standalone(target_sample_rate, backend, quality, options))),
+            _ => Err(DecodeError::InvalidData {
+                detail: "unsupported decoder resampler placement",
+            }),
         }
     }
 
@@ -289,6 +388,7 @@ impl DecoderFactory {
         config: DecoderConfig,
     ) -> DecodeResult<Box<dyn Decoder>> {
         let (codec, mut container) = resolve_codec_container(hint)?;
+        validate_resampler_placement(config.backend, config.resampler.as_ref())?;
         if container.is_none() {
             container = sniff_container_from_source(&mut source);
         }
@@ -329,6 +429,38 @@ impl DecoderFactory {
             }
             _ => InputRequirement::Incremental,
         }
+    }
+}
+
+fn validate_resampler_placement(
+    backend: DecoderBackend,
+    resampler: Option<&DecoderResamplerConfig>,
+) -> DecodeResult<()> {
+    let Some(resampler) = resampler else {
+        return Ok(());
+    };
+    match resampler.placement {
+        ResamplerPlacement::DecoderEmbedded => {
+            if backend.supports_decoder_embedded_resampler() {
+                Ok(())
+            } else {
+                Err(DecodeError::InvalidData {
+                    detail: "decoder backend does not support decoder-embedded resampling",
+                })
+            }
+        }
+        ResamplerPlacement::Standalone => {
+            if resampler.backend.is_some() {
+                Ok(())
+            } else {
+                Err(DecodeError::InvalidData {
+                    detail: "standalone decoder resampling requires a backend",
+                })
+            }
+        }
+        _ => Err(DecodeError::InvalidData {
+            detail: "unsupported decoder resampler placement",
+        }),
     }
 }
 

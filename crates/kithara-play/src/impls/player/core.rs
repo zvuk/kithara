@@ -403,12 +403,14 @@ impl PlayerImpl {
         // compiled in, the stretch slot owns speed and key-lock live. Without
         // one, PCM speed is pinned and the controls remain state only.
         let stretch = Some(Arc::clone(&self.core.config.timestretch));
+        let mut decoder = config.decoder.clone();
+        decoder.gapless_mode = self.core.config.gapless_mode;
         crate::impls::config::ResourceConfig {
             bus,
             cancel,
             worker: Some(self.core.engine.worker().clone()),
             host_sample_rate: std::num::NonZeroU32::new(self.core.engine.master_sample_rate()),
-            gapless_mode: self.core.config.gapless_mode,
+            decoder,
             stretch,
             engine_load: Some(Arc::clone(&self.core.engine_load)),
             ..config
@@ -644,7 +646,7 @@ mod tests {
 
         config = player.prepare_config(config);
 
-        assert_eq!(config.gapless_mode, GaplessMode::Disabled);
+        assert_eq!(config.decoder.gapless_mode, GaplessMode::Disabled);
         assert!(
             config.cancel.is_some(),
             "prepare_config must inject a per-track cancel child"

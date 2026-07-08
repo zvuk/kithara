@@ -15,7 +15,7 @@
 Sample-rate resampler contracts and backend adapters for Kithara.
 
 This crate owns the resampler backend trait, capabilities, construction config,
-error types, and standalone PCM-to-PCM backend implementations.
+error types, and portable standalone PCM-to-PCM backend implementations.
 Decoder placement and playback graph routing stay in `kithara-decode` and
 `kithara-audio`; those crates import this crate instead of owning backend
 implementations.
@@ -26,10 +26,17 @@ directly. Backends do not choose another backend when a requested mode is
 unavailable. Hot paths use caller-owned buffers or scratch from an injected
 `kithara-bufpool::PcmPool`; library code must not create a hidden default pool.
 
-The current built-in backend is exposed by one crate feature:
+The current built-in backends are exposed by explicit crate features:
 
 - `resample-rubato` enables the Rubato backend; its algorithm is selected by
   `rubato::RubatoConfig`, not by separate Kithara feature flags.
+- `resample-readhead` enables the scalar moving-read-head backend ported from
+  the LSQ-era renderer design. It supports fixed ratio, variable ratio, and
+  ratio glide through `read_head::ReadHeadConfig`.
+
+`ResamplerBackendConfig` is the shared config handle for playback and analysis.
+Its portable default order is Rubato, then ReadHead, then no backend; platform
+backends are injected explicitly by the crate that exposes them.
 
 See [CONTEXT.md](CONTEXT.md) for the backend contract, allocation contract, and
 decoder integration rules.

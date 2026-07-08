@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use crate::{ResamplerCapabilities, ResamplerError, ResamplerMode};
+use crate::{RatioGlide, ResamplerCapabilities, ResamplerError, ResamplerMode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -24,6 +24,11 @@ pub trait Resampler: Send + 'static {
     fn capabilities(&self) -> ResamplerCapabilities;
 
     fn channels(&self) -> NonZeroUsize;
+
+    /// Return optional real-time controls advertised by this backend.
+    fn control_mut(&mut self) -> Option<&mut dyn ResamplerControl> {
+        None
+    }
 
     /// Drain backend-owned tail frames into caller-owned planar output buffers.
     ///
@@ -79,4 +84,24 @@ pub trait Resampler: Send + 'static {
     ) -> Result<ResamplerProcess, ResamplerError>;
 
     fn reset(&mut self);
+}
+
+/// Optional real-time controls for variable-ratio resamplers.
+pub trait ResamplerControl: Resampler {
+    /// Glide from the current ratio to the target over a fixed output-frame
+    /// duration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResamplerError`] when the backend does not support glide or
+    /// the target ratio is outside its configured range.
+    fn glide_ratio(&mut self, glide: RatioGlide) -> Result<(), ResamplerError>;
+
+    /// Set the source-read-head ratio used for subsequent output frames.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResamplerError`] when the backend does not support the ratio
+    /// or the ratio is outside its configured range.
+    fn set_ratio(&mut self, ratio: f64) -> Result<(), ResamplerError>;
 }

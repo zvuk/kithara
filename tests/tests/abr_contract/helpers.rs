@@ -279,7 +279,11 @@ pub(crate) mod params {
         // autonomously and fill the channel while the test thread waits via
         // `wait_for_probe`.
         let config = AudioConfig::<Hls>::for_stream(hls_config)
-            .decoder_backend(backend)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
             .pcm_buffer_chunks(300)
             .build();
         let mut audio = Audio::<Stream<Hls>>::new(config)

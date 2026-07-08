@@ -466,7 +466,11 @@ async fn stress_seek_audio_hls(
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .media_info(fixture.media_info())
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .block_on_underrun(true)
         .build();
     let recorder = install_recorder();

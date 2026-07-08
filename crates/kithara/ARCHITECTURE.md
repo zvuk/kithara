@@ -28,14 +28,15 @@ sits in the audio path.
 <tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>, <code>kithara-drm</code>)</td></tr>
 <tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder (<code>kithara-audio/symphonia</code>, <code>kithara-decode/symphonia</code>) plus queue decode forwarding when <code>queue</code> is enabled</td></tr>
 <tr><td><code>fdk-aac</code></td><td>no</td><td>FDK-AAC decoder override across decode/audio and queue when <code>queue</code> is enabled</td></tr>
-<tr><td><code>resample-rubato</code></td><td>yes</td><td>Fixed-ratio rubato resampler backend for non-fused playback and beat analysis</td></tr>
-<tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass and rubato mono-resampler in <code>kithara-audio</code>; absent from the Apple FFI device set. NN-only beat fallback is future work.</td></tr>
+<tr><td><code>resample-rubato</code></td><td>yes</td><td>Default fixed-ratio Rubato backend for playback decode adapters and beat analysis in default builds</td></tr>
+<tr><td><code>resample-readhead</code></td><td>no</td><td>Moving-read-head resampler backend for explicit playback/decode config selection without Rubato</td></tr>
+<tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass in <code>kithara-audio</code>; the mono resampler backend comes from <code>BeatAnalysisConfig</code>. Apple FFI device sets omit this feature.</td></tr>
 <tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-audio</code>; waveform/blob types remain unconditional</td></tr>
 <tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Signalsmith time-stretch backend through <code>kithara-audio</code> / <code>kithara-stretch</code></td></tr>
 <tr><td><code>stretch-bungee</code></td><td>no</td><td>Bungee time-stretch backend through <code>kithara-audio</code> / <code>kithara-stretch</code></td></tr>
 <tr><td><code>beat-nn</code></td><td>no</td><td>NN beat/downbeat detector through <code>kithara-audio</code> / <code>kithara-beat</code></td></tr>
-<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder (<code>kithara-audio/apple</code>, <code>kithara-decode/apple</code>, <code>kithara-play/apple</code>) plus queue forwarding when <code>queue</code> is enabled</td></tr>
-<tr><td><code>apple-fused-src</code></td><td>no</td><td>Apple AudioToolbox fused decode+SRC: decoder emits host-rate PCM and <code>kithara-audio</code> structurally omits <code>ResamplerProcessor</code> for Apple decoders</td></tr>
+<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder (<code>kithara-audio/apple</code>, <code>kithara-decode/apple</code>, <code>kithara-play/apple</code>) plus queue forwarding when <code>queue</code> is enabled; does not imply Rubato</td></tr>
+<tr><td><code>apple-fused-src</code></td><td>no</td><td>Apple AudioToolbox fused decode+SRC through decoder-embedded resampler placement</td></tr>
 <tr><td><code>apple-net</code></td><td>no</td><td>Apple HTTP backend forwarding (<code>kithara-net?/client-apple</code>, <code>kithara-stream/client-apple</code>)</td></tr>
 <tr><td><code>android</code></td><td>no</td><td>Android <code>MediaCodec</code> hardware decoder (<code>kithara-audio/android</code>, <code>kithara-decode/android</code>) plus <code>kithara-net?/client-wreq</code></td></tr>
 <tr><td><code>client-reqwest</code> / <code>client-wreq</code></td><td>reqwest yes</td><td>HTTP backend selection forwarded to all public facade crates that can reach the network</td></tr>

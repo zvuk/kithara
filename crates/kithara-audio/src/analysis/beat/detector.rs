@@ -16,6 +16,8 @@ pub(crate) struct RawBeats {
 /// Failure of a beat detector backend.
 #[derive(Debug, Error)]
 pub(crate) enum BeatDetectError {
+    #[error("beat analysis buffer budget exhausted")]
+    Buffer,
     /// Only the `beat-nn` factory constructs this; gated with it.
     #[cfg(feature = "beat-nn")]
     #[error("beat detector init failed: {reason}")]

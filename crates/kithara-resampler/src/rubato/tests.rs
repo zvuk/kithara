@@ -51,6 +51,30 @@ fn rubato_resamples_borrowed_planar_slices() {
 }
 
 #[test]
+fn rubato_factory_output_has_no_ratio_control_surface() {
+    let channels = NonZeroUsize::new(1).unwrap_or_else(|| panic!("test channels"));
+    let settings = ResamplerSettings::builder()
+        .channels(channels)
+        .mode(ResamplerMode::FixedRatio {
+            source_sample_rate: NonZeroU32::new(48_000)
+                .unwrap_or_else(|| panic!("test source rate")),
+            target_sample_rate: NonZeroU32::new(44_100)
+                .unwrap_or_else(|| panic!("test target rate")),
+        })
+        .options(ResamplerOptions::builder().chunk_size(256).build())
+        .pcm_pool(PcmPool::new(4, 4_096))
+        .build();
+    let config = ResamplerConfig::builder()
+        .backend(RubatoBackend::new())
+        .settings(settings)
+        .build();
+    let mut resampler =
+        create_resampler(&config).unwrap_or_else(|err| panic!("rubato build failed: {err}"));
+
+    assert!(resampler.control_mut().is_none());
+}
+
+#[test]
 fn rubato_fft_is_selected_by_backend_config() {
     let channels = NonZeroUsize::new(1).unwrap_or_else(|| panic!("test channels"));
     let settings = ResamplerSettings::builder()

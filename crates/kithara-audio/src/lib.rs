@@ -35,13 +35,15 @@ pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     timestretch::StretchControls,
 };
-pub use kithara_resampler::{ResamplerOptions, ResamplerQuality};
+pub use kithara_resampler::{
+    ResamplerBackendConfig, ResamplerOptions, ResamplerPlacement, ResamplerQuality,
+};
 pub use pipeline::{
-    config::AudioConfig,
+    config::{AudioConfig, AudioDecoderConfig, DecoderResamplerSettings},
     fetch::{EpochValidator, Fetch},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
-pub use resampler::{ResamplerBackendConfig, ResamplerParams, ResamplerProcessor};
+pub use resampler::{ResamplerParams, ResamplerProcessor};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
     SeekOutcome,

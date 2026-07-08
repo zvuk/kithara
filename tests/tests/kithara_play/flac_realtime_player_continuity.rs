@@ -134,7 +134,11 @@ async fn run_case(
         .downloader(downloader)
         .name("t0".to_string())
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .initial_abr_mode(initial_mode)
         .build();
 

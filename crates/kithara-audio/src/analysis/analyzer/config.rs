@@ -1,9 +1,7 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use bon::Builder;
-#[cfg(feature = "analysis-beat")]
-use kithara_resampler::rubato::RubatoBackend;
-use kithara_resampler::{ResamplerBackend, ResamplerQuality};
+use kithara_resampler::{ResamplerBackendConfig, ResamplerQuality};
 
 struct Consts;
 
@@ -15,42 +13,7 @@ impl Consts {
     const DEFAULT_BEAT_TARGET_RATE: u32 = 22_050;
 }
 
-#[derive(Clone)]
-pub struct BeatResamplerBackend {
-    backend: Option<Arc<dyn ResamplerBackend>>,
-}
-
-impl BeatResamplerBackend {
-    #[must_use]
-    pub fn new<B>(backend: B) -> Self
-    where
-        B: ResamplerBackend + 'static,
-    {
-        Self {
-            backend: Some(Arc::new(backend)),
-        }
-    }
-
-    pub(crate) fn as_ref(&self) -> Option<&dyn ResamplerBackend> {
-        self.backend.as_deref()
-    }
-
-    fn name(&self) -> Option<&'static str> {
-        self.as_ref().map(ResamplerBackend::name)
-    }
-}
-
-impl Default for BeatResamplerBackend {
-    fn default() -> Self {
-        default_beat_resampler_backend()
-    }
-}
-
-impl fmt::Debug for BeatResamplerBackend {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.name().fmt(f)
-    }
-}
+pub type BeatResamplerBackend = ResamplerBackendConfig;
 
 /// Beat-analysis tunables used by [`super::AnalyzerBuilder`].
 #[derive(Clone, Builder)]
@@ -67,7 +30,7 @@ pub struct BeatAnalysisConfig {
     #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
     pub resampler_quality: ResamplerQuality,
     /// Standalone mono resampler backend used before detector windows.
-    #[builder(default)]
+    #[builder(default = default_beat_resampler_backend())]
     pub resampler_backend: BeatResamplerBackend,
     /// Maximum NN detector window length in seconds.
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
@@ -107,7 +70,7 @@ impl Default for BeatAnalysisConfig {
             block_frames: Consts::DEFAULT_BEAT_BLOCK_FRAMES,
             target_rate: Consts::DEFAULT_BEAT_TARGET_RATE,
             resampler_quality: Consts::DEFAULT_BEAT_RESAMPLER_QUALITY,
-            resampler_backend: BeatResamplerBackend::default(),
+            resampler_backend: default_beat_resampler_backend(),
             detector_window_seconds: Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS,
             detector_overlap_seconds: Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS,
         }
@@ -116,10 +79,34 @@ impl Default for BeatAnalysisConfig {
 
 #[cfg(feature = "analysis-beat")]
 fn default_beat_resampler_backend() -> BeatResamplerBackend {
-    BeatResamplerBackend::new(RubatoBackend::new())
+    BeatResamplerBackend::default()
 }
 
 #[cfg(not(feature = "analysis-beat"))]
 fn default_beat_resampler_backend() -> BeatResamplerBackend {
-    BeatResamplerBackend { backend: None }
+    BeatResamplerBackend::none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BeatAnalysisConfig;
+
+    #[test]
+    fn default_beat_config_uses_compiled_backend_order() {
+        let expected = if cfg!(all(feature = "analysis-beat", feature = "resample-rubato")) {
+            Some("rubato")
+        } else if cfg!(all(
+            feature = "analysis-beat",
+            feature = "resample-readhead"
+        )) {
+            Some("read-head")
+        } else {
+            None
+        };
+
+        assert_eq!(
+            BeatAnalysisConfig::default().resampler_backend_name(),
+            expected
+        );
+    }
 }

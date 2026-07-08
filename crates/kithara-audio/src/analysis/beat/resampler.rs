@@ -1,7 +1,4 @@
-use std::{
-    iter,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_resampler::{
@@ -63,10 +60,8 @@ impl MonoResampleBuffer {
 
         let delay = resampler.output_delay();
         let ratio = f64::from(config.target_rate) / f64::from(source_rate);
-        let input_block =
-            pcm_pool.get_with(|buf| reserve_capacity(buf, resampler.input_frames_max()));
-        let output_block =
-            pcm_pool.get_with(|buf| reserve_capacity(buf, resampler.output_frames_max()));
+        let input_block = pooled_buffer(pcm_pool, resampler.input_frames_max())?;
+        let output_block = pooled_buffer(pcm_pool, resampler.output_frames_max())?;
 
         Some(Self {
             resampler,
@@ -103,25 +98,33 @@ impl MonoResampleBuffer {
             .unwrap_or(usize::MAX)
     }
 
-    pub(in crate::analysis::beat) fn finish<F: FnMut(&[f32])>(mut self, mut emit: F) {
+    pub(in crate::analysis::beat) fn finish<F: FnMut(&[f32])>(mut self, mut emit: F) -> bool {
         let expected = self.expected_output_frames();
         while self.emitted < expected {
             let needed = self.resampler.input_frames_next();
             let pad = needed.saturating_sub(self.pending.len());
-            self.pending.extend(iter::repeat_n(0.0_f32, pad));
+            if !extend_zeros(&mut self.pending, pad) {
+                return false;
+            }
             if !self.process_block() {
-                break;
+                return false;
             }
             self.emit_ready(&mut emit);
         }
+        true
     }
 
     fn process_block(&mut self) -> bool {
         let needed = self.resampler.input_frames_next();
         let out_next = self.resampler.output_frames_next();
         self.input_block.clear();
-        self.input_block.extend_from_slice(&self.pending[..needed]);
-        self.output_block.resize(out_next, 0.0);
+        if !copy_slice(&mut self.input_block, &self.pending[..needed]) {
+            return false;
+        }
+        if !ensure_len(&mut self.output_block, out_next) {
+            return false;
+        }
+        self.output_block.fill(0.0);
 
         let written = {
             let input_ref: &[f32] = &self.input_block;
@@ -138,7 +141,9 @@ impl MonoResampleBuffer {
                 let out = &self.output_block[..written];
                 let skip = self.skip.min(out.len());
                 self.skip -= skip;
-                self.ready.extend_from_slice(&out[skip..]);
+                if !append_slice(&mut self.ready, &out[skip..]) {
+                    return false;
+                }
                 true
             }
             Err(e) => {
@@ -152,22 +157,67 @@ impl MonoResampleBuffer {
         &mut self,
         mono: impl Iterator<Item = f32>,
         mut emit: F,
-    ) {
+    ) -> bool {
         let before = self.pending.len();
-        self.pending.extend(mono);
+        if !append_iter(&mut self.pending, mono) {
+            return false;
+        }
         self.total_in += (self.pending.len() - before).to_u64().unwrap_or(0);
 
         while self.pending.len() >= self.resampler.input_frames_next() {
             if !self.process_block() {
-                return;
+                return false;
             }
             self.emit_ready(&mut emit);
         }
+        true
     }
 }
 
-fn reserve_capacity(buf: &mut Vec<f32>, capacity: usize) {
-    if buf.capacity() < capacity {
-        buf.reserve(capacity - buf.capacity());
+fn append_iter(dst: &mut PcmBuf, samples: impl Iterator<Item = f32>) -> bool {
+    for sample in samples {
+        let old_len = dst.len();
+        if !ensure_len(dst, old_len.saturating_add(1)) {
+            return false;
+        }
+        dst[old_len] = sample;
     }
+    true
+}
+
+fn append_slice(dst: &mut PcmBuf, src: &[f32]) -> bool {
+    let old_len = dst.len();
+    if !ensure_len(dst, old_len.saturating_add(src.len())) {
+        return false;
+    }
+    dst[old_len..old_len + src.len()].copy_from_slice(src);
+    true
+}
+
+fn copy_slice(dst: &mut PcmBuf, src: &[f32]) -> bool {
+    if !ensure_len(dst, src.len()) {
+        return false;
+    }
+    dst[..src.len()].copy_from_slice(src);
+    true
+}
+
+fn ensure_len(buf: &mut PcmBuf, len: usize) -> bool {
+    buf.ensure_len(len).is_ok()
+}
+
+fn extend_zeros(dst: &mut PcmBuf, count: usize) -> bool {
+    let old_len = dst.len();
+    if !ensure_len(dst, old_len.saturating_add(count)) {
+        return false;
+    }
+    dst[old_len..].fill(0.0);
+    true
+}
+
+fn pooled_buffer(pool: &PcmPool, capacity: usize) -> Option<PcmBuf> {
+    let mut buffer = pool.get();
+    buffer.ensure_len(capacity).ok()?;
+    buffer.clear();
+    Some(buffer)
 }

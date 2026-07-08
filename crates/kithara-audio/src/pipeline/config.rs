@@ -1,16 +1,15 @@
 use std::{
     num::{NonZeroU32, NonZeroUsize},
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
+    sync::Arc,
 };
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{DecoderBackend, GaplessMode, PcmSpec};
+use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode, PcmSpec};
 use kithara_events::EventBus;
-use kithara_resampler::{ResamplerOptions, ResamplerQuality};
+use kithara_resampler::{
+    ResamplerBackendConfig, ResamplerOptions, ResamplerPlacement, ResamplerQuality,
+};
 use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
 
@@ -21,18 +20,71 @@ use portable_atomic::AtomicF32;
 use crate::effects::timestretch::TimeStretchProcessor;
 use crate::{
     effects::timestretch::StretchControls,
-    resampler::ResamplerBackendConfig,
     traits::AudioEffect,
     worker::{EngineLoad, handle},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum ResamplerStage {
-    Present {
-        quality: ResamplerQuality,
-        options: ResamplerOptions,
-    },
-    Absent,
+#[derive(Clone, Debug, Default, Builder)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct DecoderResamplerSettings {
+    #[builder(default)]
+    pub backend: ResamplerBackendConfig,
+    #[builder(default)]
+    pub options: ResamplerOptions,
+    pub placement: Option<ResamplerPlacement>,
+    #[builder(default)]
+    pub quality: ResamplerQuality,
+}
+
+impl DecoderResamplerSettings {
+    fn placement_for(&self, backend: DecoderBackend) -> ResamplerPlacement {
+        self.placement
+            .unwrap_or_else(|| backend.default_resampler_placement())
+    }
+
+    fn recreates_decoder_on_route_change(&self, backend: DecoderBackend) -> bool {
+        matches!(
+            self.placement_for(backend),
+            ResamplerPlacement::DecoderEmbedded
+        )
+    }
+}
+
+#[derive(Clone, Debug, Default, Builder)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct AudioDecoderConfig {
+    #[builder(default)]
+    pub backend: DecoderBackend,
+    #[builder(default)]
+    pub gapless_mode: GaplessMode,
+    #[builder(default)]
+    pub resampler: DecoderResamplerSettings,
+}
+
+impl AudioDecoderConfig {
+    pub(crate) fn build_resampler_config(
+        &self,
+        target_sample_rate: Option<NonZeroU32>,
+    ) -> Result<Option<DecoderResamplerConfig>, kithara_decode::DecodeError> {
+        let Some(target_sample_rate) = target_sample_rate else {
+            return Ok(None);
+        };
+        DecoderResamplerConfig::for_decoder_backend(
+            self.backend,
+            target_sample_rate,
+            self.resampler.placement_for(self.backend),
+            self.resampler.backend.backend(),
+            self.resampler.quality,
+            self.resampler.options,
+        )
+    }
+
+    pub(crate) fn recreates_on_host_rate_change(&self) -> bool {
+        self.resampler
+            .recreates_decoder_on_route_change(self.backend)
+    }
 }
 
 /// Configuration for audio pipeline with stream config.
@@ -45,12 +97,9 @@ pub(crate) enum ResamplerStage {
 pub struct AudioConfig<T: StreamType> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
     pub stream: T::Config,
-    /// Decoder backend selection. See [`DecoderBackend`].
+    /// Decoder construction settings, including decoder-side resampling.
     #[builder(default)]
-    pub decoder_backend: DecoderBackend,
-    /// How leading/trailing PCM is trimmed after the decode.
-    #[builder(default)]
-    pub gapless_mode: GaplessMode,
+    pub decoder: AudioDecoderConfig,
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = NonZeroUsize::new(3).expect("3 is non-zero"))]
     pub preload_chunks: NonZeroUsize,
@@ -77,23 +126,14 @@ pub struct AudioConfig<T: StreamType> {
     /// [`StretchControls`] when a stretch backend is compiled in.
     pub playback_rate: Option<Arc<AtomicF32>>,
     /// Live playback-speed controls (plus key-lock + backend when a stretch
-    /// backend is compiled in). `Some` inserts a `TimeStretchProcessor` before
-    /// the fixed-ratio resampler on native stretch builds. Without a compiled
+    /// backend is compiled in). `Some` inserts a `TimeStretchProcessor` in the
+    /// source domain on native stretch builds. Without a compiled
     /// backend, including wasm, no speed DSP is inserted and playback remains
     /// at unity.
     pub stretch: Option<Arc<StretchControls>>,
     /// Optional shared audio worker handle.
     pub worker: Option<handle::AudioWorkerHandle>,
-    /// Resampling quality preset.
-    #[builder(default)]
-    pub resampler_quality: ResamplerQuality,
-    /// Resampler implementation tunables.
-    #[builder(default)]
-    pub resampler_options: ResamplerOptions,
-    /// Resampler backend factory selected for the playback stage.
-    #[builder(default)]
-    pub resampler_backend: ResamplerBackendConfig,
-    /// Additional effects to append after resampler in the processing chain.
+    /// Additional effects to append after decoder-domain processing.
     #[builder(default)]
     pub effects: Vec<Box<dyn AudioEffect>>,
     /// Make a producer-ring underrun block (engine-aware park) instead of
@@ -133,45 +173,17 @@ impl<T: StreamType> AudioConfig<T> {
     }
 }
 
-/// Compute expected output spec after effects (primarily resampling).
-pub(crate) fn expected_output_spec(
-    initial_spec: PcmSpec,
-    host_sample_rate: &Arc<AtomicU32>,
-) -> PcmSpec {
-    let host_sr = host_sample_rate.load(Ordering::Relaxed);
-    if host_sr == 0 || host_sr == initial_spec.sample_rate.get() {
-        initial_spec
-    } else if let Some(nz_host) = NonZeroU32::new(host_sr) {
-        PcmSpec::new(initial_spec.channels, nz_host)
-    } else {
-        initial_spec
-    }
-}
-
-/// Build `[..pre, Resampler?, ..custom]`. When `stretch` is `Some`, native
-/// stretch builds add a `TimeStretchProcessor` pre-slot. The fused Apple path
-/// passes an absent-stage value so the resampler stage is never constructed.
+/// Build `[Stretch?, ..custom]`. Fixed-ratio sample-rate conversion belongs to
+/// the decoder plan.
 pub(crate) fn create_effects(
     initial_spec: PcmSpec,
-    host_sample_rate: &Arc<AtomicU32>,
     stretch: Option<&Arc<StretchControls>>,
-    resampler_stage: ResamplerStage,
-    resampler_backend: ResamplerBackendConfig,
     pool: &PcmPool,
     custom_effects: Vec<Box<dyn AudioEffect>>,
 ) -> Vec<Box<dyn AudioEffect>> {
     let mut chain: Vec<Box<dyn AudioEffect>> = Vec::new();
 
     append_stretch_slot(stretch, &mut chain, initial_spec, pool);
-
-    crate::pipeline::resampler_stage::append(
-        &mut chain,
-        resampler_stage,
-        resampler_backend,
-        initial_spec,
-        host_sample_rate,
-        pool,
-    );
     chain.extend(custom_effects);
     chain
 }
@@ -198,7 +210,7 @@ fn append_stretch_slot(
 }
 
 /// No stretch backend compiled in: speed DSP is absent and playback is pinned
-/// to unity. The fixed-ratio resampler never consumes speed.
+/// to unity.
 #[cfg(not(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
@@ -248,89 +260,28 @@ mod tests {
         PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
     }
 
-    fn present_stage() -> ResamplerStage {
-        ResamplerStage::Present {
-            quality: ResamplerQuality::default(),
-            options: ResamplerOptions::default(),
-        }
-    }
-
     fn pool() -> PcmPool {
         PcmPool::default().clone()
     }
 
     /// Without a compiled-in stretch backend, `stretch` does not add a speed
-    /// slot: playback remains at unity and the resampler stays fixed-ratio.
+    /// slot: playback remains at unity.
     #[cfg(not(all(
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     )))]
     #[kithara::test]
-    fn create_effects_stretch_without_backends_is_resampler_first() {
-        let host_sr = Arc::new(AtomicU32::new(44100));
+    fn create_effects_stretch_without_backends_keeps_chain_empty() {
         let controls = StretchControls::new(1.5);
         let pool = pool();
-        let effects = create_effects(
-            spec(),
-            &host_sr,
-            Some(&controls),
-            present_stage(),
-            ResamplerBackendConfig::default(),
-            &pool,
-            Vec::new(),
-        );
-        // [Resampler] only — no stretch backend exists in this build.
-        assert_eq!(effects.len(), 1);
+        let effects = create_effects(spec(), Some(&controls), &pool, Vec::new());
+        assert!(effects.is_empty());
     }
 
     #[kithara::test]
     fn create_effects_includes_custom_effects() {
-        let host_sr = Arc::new(AtomicU32::new(44100));
         let pool = pool();
-        let effects = create_effects(
-            spec(),
-            &host_sr,
-            None,
-            present_stage(),
-            ResamplerBackendConfig::default(),
-            &pool,
-            vec![Box::new(PassthroughEffect)],
-        );
-        // [Resampler, custom] -- resampler-first, no pre slot.
-        assert_eq!(effects.len(), 2);
-    }
-
-    #[cfg(feature = "apple-fused-src")]
-    #[kithara::test]
-    fn create_effects_fused_omits_resampler_stage() {
-        let host_sr = Arc::new(AtomicU32::new(48000));
-        let pool = pool();
-        let effects = create_effects(
-            spec(),
-            &host_sr,
-            None,
-            ResamplerStage::Absent,
-            ResamplerBackendConfig::default(),
-            &pool,
-            Vec::new(),
-        );
-        assert!(effects.is_empty());
-    }
-
-    #[cfg(feature = "apple-fused-src")]
-    #[kithara::test]
-    fn create_effects_fused_keeps_custom_effects_without_resampler() {
-        let host_sr = Arc::new(AtomicU32::new(48000));
-        let pool = pool();
-        let effects = create_effects(
-            spec(),
-            &host_sr,
-            None,
-            ResamplerStage::Absent,
-            ResamplerBackendConfig::default(),
-            &pool,
-            vec![Box::new(PassthroughEffect)],
-        );
+        let effects = create_effects(spec(), None, &pool, vec![Box::new(PassthroughEffect)]);
         assert_eq!(effects.len(), 1);
     }
 
@@ -340,20 +291,15 @@ mod tests {
     ))]
     #[kithara::test]
     fn create_effects_tempo_mode_prepends_stretch_slot() {
-        let host_sr = Arc::new(AtomicU32::new(44100));
         let controls = StretchControls::new(1.0);
         let pool = pool();
         let effects = create_effects(
             spec(),
-            &host_sr,
             Some(&controls),
-            present_stage(),
-            ResamplerBackendConfig::default(),
             &pool,
             vec![Box::new(PassthroughEffect)],
         );
-        // [TimeStretch, Resampler, custom] -- speed is owned by the pre slot.
-        assert_eq!(effects.len(), 3);
+        assert_eq!(effects.len(), 2);
     }
 
     /// Key-lock off in tempo mode is still handled by the stretch slot.
@@ -365,19 +311,10 @@ mod tests {
     fn create_effects_tempo_vinyl_uses_stretch_slot() {
         use kithara_decode::{PcmChunk, PcmMeta};
 
-        let host_sr = Arc::new(AtomicU32::new(44100));
         let controls = StretchControls::new(1.5);
         controls.set_keylock(false);
         let pool = pool();
-        let mut effects = create_effects(
-            spec(),
-            &host_sr,
-            Some(&controls),
-            present_stage(),
-            ResamplerBackendConfig::default(),
-            &pool,
-            Vec::new(),
-        );
+        let mut effects = create_effects(spec(), Some(&controls), &pool, Vec::new());
         // Drive one chunk through the stretch slot (index 0).
         let frames = 1024usize;
         let samples = vec![0.0_f32; frames * 2];

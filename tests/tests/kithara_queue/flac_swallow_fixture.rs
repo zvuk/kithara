@@ -138,7 +138,11 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
         .downloader(downloader)
         .name("t0".to_string())
         .store(StoreOptions::new(temp.path()))
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .initial_abr_mode(AbrMode::manual(TOP_VARIANT))
         .build();
 

@@ -172,7 +172,11 @@ async fn run_one_attempt(
         .downloader(downloader.clone())
         .store(store)
         .initial_abr_mode(AbrMode::Auto(None))
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
 

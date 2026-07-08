@@ -1,4 +1,8 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+    sync::Arc,
+};
 
 use bon::Builder;
 use kithara_bufpool::PcmPool;
@@ -43,6 +47,75 @@ impl Default for ResamplerOptions {
             chunk_size: 4_096,
         }
     }
+}
+
+#[derive(Clone)]
+pub struct ResamplerBackendConfig {
+    backend: Option<Arc<dyn ResamplerBackend>>,
+}
+
+impl ResamplerBackendConfig {
+    #[must_use]
+    pub fn new<B>(backend: B) -> Self
+    where
+        B: ResamplerBackend + 'static,
+    {
+        Self {
+            backend: Some(Arc::new(backend)),
+        }
+    }
+
+    #[must_use]
+    pub fn as_ref(&self) -> Option<&dyn ResamplerBackend> {
+        self.backend.as_deref()
+    }
+
+    #[must_use]
+    pub fn backend(&self) -> Option<Arc<dyn ResamplerBackend>> {
+        self.backend.clone()
+    }
+
+    #[must_use]
+    pub fn is_none(&self) -> bool {
+        self.backend.is_none()
+    }
+
+    #[must_use]
+    pub fn name(&self) -> Option<&'static str> {
+        self.as_ref().map(ResamplerBackend::name)
+    }
+
+    #[must_use]
+    pub const fn none() -> Self {
+        Self { backend: None }
+    }
+}
+
+impl Default for ResamplerBackendConfig {
+    fn default() -> Self {
+        default_backend_config()
+    }
+}
+
+impl fmt::Debug for ResamplerBackendConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.name().fmt(f)
+    }
+}
+
+#[cfg(feature = "resample-rubato")]
+fn default_backend_config() -> ResamplerBackendConfig {
+    ResamplerBackendConfig::new(crate::rubato::RubatoBackend::new())
+}
+
+#[cfg(all(not(feature = "resample-rubato"), feature = "resample-readhead"))]
+fn default_backend_config() -> ResamplerBackendConfig {
+    ResamplerBackendConfig::new(crate::read_head::ReadHeadBackend::new())
+}
+
+#[cfg(not(any(feature = "resample-rubato", feature = "resample-readhead")))]
+fn default_backend_config() -> ResamplerBackendConfig {
+    ResamplerBackendConfig::none()
 }
 
 #[derive(Clone, Debug, Builder)]
@@ -195,8 +268,8 @@ mod tests {
     use kithara_bufpool::PcmPool;
 
     use crate::{
-        Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerConfig,
-        ResamplerMode, ResamplerOptions, ResamplerSettings,
+        Resampler, ResamplerBackend, ResamplerBackendConfig, ResamplerBuildError,
+        ResamplerCapabilities, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerSettings,
     };
 
     struct TestBackend {
@@ -256,6 +329,19 @@ mod tests {
         assert_eq!(options.chunk_size, 1_024);
         assert_eq!(options.passthrough_tolerance, 0.0001);
         assert_eq!(options.max_ratio_adjustment, 8.0);
+    }
+
+    #[test]
+    fn default_backend_config_uses_compiled_portable_backend_order() {
+        let expected = if cfg!(feature = "resample-rubato") {
+            Some("rubato")
+        } else if cfg!(feature = "resample-readhead") {
+            Some("read-head")
+        } else {
+            None
+        };
+
+        assert_eq!(ResamplerBackendConfig::default().name(), expected);
     }
 
     #[test]

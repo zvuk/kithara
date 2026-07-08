@@ -1,4 +1,7 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    sync::Arc,
+};
 
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_resampler::{
@@ -33,11 +36,14 @@ pub(crate) fn wrap(
             detail: "unsupported decoder resampler placement",
         });
     }
+    if decoder.spec().sample_rate == config.target_sample_rate {
+        return Ok(decoder);
+    }
     Ok(Box::new(ResampledDecoder::new(decoder, config, pool)?))
 }
 
 struct ResampledDecoder {
-    backend: Box<dyn ResamplerBackend>,
+    backend: Arc<dyn ResamplerBackend>,
     decoder: Box<dyn Decoder>,
     eof_flushed: bool,
     input: SmallVec<[PcmBuf; 8]>,

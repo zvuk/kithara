@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings};
 
 pub trait ResamplerBackend: Send + Sync {
@@ -18,6 +20,26 @@ pub trait ResamplerBackend: Send + Sync {
 }
 
 impl<T> ResamplerBackend for Box<T>
+where
+    T: ResamplerBackend + ?Sized,
+{
+    fn build(
+        &self,
+        settings: &ResamplerSettings,
+    ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
+        self.as_ref().build(settings)
+    }
+
+    fn capabilities(&self) -> ResamplerCapabilities {
+        self.as_ref().capabilities()
+    }
+
+    fn name(&self) -> &'static str {
+        self.as_ref().name()
+    }
+}
+
+impl<T> ResamplerBackend for Arc<T>
 where
     T: ResamplerBackend + ?Sized,
 {

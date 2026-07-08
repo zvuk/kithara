@@ -4550,6 +4550,7 @@ dependencies = [
  "bon",
  "core-foundation 0.10.1",
  "core-foundation-sys",
+ "criterion",
  "derive_more",
  "fdk-aac",
  "hotpath",
@@ -4943,10 +4944,12 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
+ "criterion",
  "kithara-bufpool",
  "kithara-workspace-hack",
  "num-traits",
  "rubato",
+ "smallvec",
  "thiserror 2.0.18",
  "tracing",
 ]

@@ -115,7 +115,11 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         .expect("valid silvercomet URL")
         .downloader(downloader.clone())
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let source = TrackSource::Config(Box::new(cfg));
 

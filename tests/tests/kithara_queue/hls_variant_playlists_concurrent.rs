@@ -234,7 +234,11 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
         .downloader(downloader.clone())
         .store(store)
         .initial_abr_mode(AbrMode::Auto(None))
-        .decoder_backend(decoder)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(decoder)
+                .build(),
+        )
         .build();
 
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));

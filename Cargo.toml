@@ -387,8 +387,8 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.symphonia-format-isomp4]
 opt-level = 2
-# `kithara-audio` monomorphises rubato's sinc resampler in `ResamplerProcessor`
-# and `kithara-decode` drives the per-frame demux/decode loop — both are as
+# Playback decode adapters monomorphise Rubato's sinc resampler when enabled,
+# and `kithara-decode` drives the per-frame demux/decode loop; both are as
 # debug-slow as the upstream codecs above when left at opt-0 (~100s of ms per
 # chunk). Harmless under real-time playback (decode overlaps the real download),
 # but under `flash` the decode sits on the critical path (the virtual clock

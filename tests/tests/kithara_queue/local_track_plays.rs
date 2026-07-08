@@ -274,7 +274,11 @@ async fn local_track_plays_end_to_end(
         .expect("valid fixture URL")
         .downloader(downloader.clone())
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .initial_abr_mode(abr)
         .build();
     let source = TrackSource::Config(Box::new(cfg));
@@ -480,7 +484,11 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
                 .expect("valid fixture URL")
                 .downloader(downloader.clone())
                 .store(store.clone())
-                .decoder_backend(backend)
+                .decoder(
+                    kithara::audio::AudioDecoderConfig::builder()
+                        .backend(backend)
+                        .build(),
+                )
                 .initial_abr_mode(AbrMode::Auto(None))
                 .build();
             queue.append(TrackSource::Config(Box::new(cfg)))

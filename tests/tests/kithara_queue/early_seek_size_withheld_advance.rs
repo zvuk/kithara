@@ -97,7 +97,11 @@ async fn build_hls_resource(
         .expect("valid master URL")
         .downloader(downloader.clone())
         .store(store.clone())
-        .decoder_backend(DecoderBackend::Symphonia)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+        )
         .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
         .build();
     Resource::new(cfg).await.expect("create HLS resource")

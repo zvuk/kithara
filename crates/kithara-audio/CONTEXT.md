@@ -77,15 +77,18 @@ today and by mobile surfaces (kithara-ffi) next:
   implementation-affecting beat tunables. The defaults preserve the current
   detector contract: 1024-frame mono resampler blocks, 22 050 Hz detector input,
   30-second detector windows with 2 seconds of overlap, and
-  `ResamplerQuality::High` for the rubato sinc backend. The analyzer never
+  `ResamplerQuality::High` for the configured mono resampler backend. The analyzer never
   stores whole-track PCM for beat detection; it downmixes/resamples into a
   bounded detector window, runs the detector as each window becomes ready,
   offsets the window-relative events, and only keeps raw event times for final
   grid cleanup. Beat PCM scratch buffers (the detector window and mono
   resampler blocks) come from the `PcmPool` owned by `AnalyzerBuilder`
-  (`with_pcm_pool` lets consumers inject their app-wide pool). `BeatAnalysisConfig`
-  carries both numeric beat-analysis tunables and the standalone resampler backend;
-  the default backend is Rubato only when `analysis-beat` compiles it.
+  (`with_pcm_pool` lets consumers inject their app-wide pool).
+  `BeatAnalysisConfig` carries both numeric beat-analysis tunables and a
+  standalone resampler backend handle. When beat analysis is compiled in, that
+  handle uses the portable `kithara-resampler` default backend order (Rubato,
+  then ReadHead, then none). Callers may inject any compiled
+  `ResamplerBackend`, including platform backends exposed by decode.
 - **`analyze_reader`** — the synchronous decode loop over any `PcmReader`:
   cancel-aware, `Pending`-tolerant, and callback-based
   (`analyze_reader(..., emit) -> ()`). It emits staged `TrackAnalysis` values
@@ -111,16 +114,15 @@ today and by mobile surfaces (kithara-ffi) next:
   types (`Waveform`, `BeatGrid`, `Bucket`, `GridSegment`, `AnalysisParams`) are
   unconditional because region/stretch logic and cache keys use them even when a
   pass is absent. `analysis-waveform` gates only the `realfft` waveform
-  analyzer. `analysis-beat` gates the beat analyzer/worker path and its
-  mono-resampler, which is built through `kithara-resampler` from
+  analyzer. `analysis-beat` gates the beat analyzer/worker path. Its
+  mono-resampler is built through `kithara-resampler` from
   `BeatAnalysisConfig`'s backend. `beat-nn` is a detector backend layered on top
   of `analysis-beat`.
 - **Runtime switch.** Consumers use `AnalyzerBuilder::is_empty()` as the runtime
   signal to skip scheduling. When `analysis-beat` is absent,
   `AnalyzerBuilder::with_beat()` is a compile-time no-op. Apple FFI device
-  builds intentionally omit `analysis-beat` so rubato is fully evicted there;
-  the NN beat fallback for that set is future work, not a hidden runtime
-  fallback.
+  builds intentionally omit `analysis-beat`; NN-only beat fallback for that set
+  is future work, not a hidden runtime fallback.
 
 ## Waveform
 
@@ -203,50 +205,65 @@ format frame; each artifact only implements its body.
 
 ## Sample-rate Conversion
 
-The resampler stage is fixed-ratio only: it converts decoder/source PCM to the
-current host/device sample rate and never carries playback speed. Speed and
-key-lock live in the time-stretch slot below.
+Sample-rate conversion for playback is decoder-owned. `AudioConfig.decoder`
+carries `AudioDecoderConfig`, including `DecoderResamplerSettings`; the audio
+pipeline combines that with `AudioConfig.host_sample_rate` and threads the
+result into `DecoderConfig.resampler`. The effect chain is for time-domain
+processing such as stretch and custom effects, not fixed-ratio sample-rate
+conversion. Speed and key-lock live in the time-stretch slot below and never
+change the sample-rate-conversion ratio.
 
-`AudioConfig.resampler_backend` selects the playback resampler backend, and
-`AudioConfig.resampler_options` carries `kithara-resampler::ResamplerOptions`
-through the stage decision into `ResamplerParams` and finally that backend. The
-defaults preserve the shipped playback values: Rubato backend on builds that
-compile `resample-rubato`, 4096-frame process blocks, 0.0001 host-rate ratio
-tolerance, and an 8.0 rubato max-ratio-adjustment window. These are
-implementation tunables, not hidden constants in the processing code.
+`DecoderResamplerSettings.backend` carries the selected
+`kithara-resampler::ResamplerBackendConfig`, while
+`DecoderResamplerSettings.options` carries
+`kithara-resampler::ResamplerOptions` into the selected backend. The backend
+handle is owned by `kithara-resampler`, not by `kithara-audio`; its portable
+default order is Rubato, then ReadHead, then none. On Apple targets, callers
+that want standalone Apple PCM resampling inject
+`kithara_decode::AppleAudioConverterBackend` explicitly through the same
+decoder config surface. The defaults preserve the shipped desktop playback
+values: Rubato backend on default builds, 4096-frame process blocks, 0.0001
+host-rate ratio tolerance, and an 8.0 max-ratio-adjustment window. These are
+implementation tunables, not hidden constants in the processing code. Quality
+and backend family remain separate decisions.
 
 `apple-fused-src` is the Apple device path. When the selected decoder backend is
 Apple AudioToolbox, `AudioConfig.host_sample_rate` is threaded to
-`DecoderConfig.resampler` as a codec-embedded decoder resampler config, the
-Apple converter emits PCM directly in the device domain, and the effect chain
-omits `ResamplerProcessor` structurally. Non-Apple backends in the same build
-keep the resampler stage.
+`DecoderConfig.resampler` as a codec-embedded decoder resampler config and the
+Apple converter emits PCM directly in the device domain. Non-Apple backends in
+the same build use `DecoderResamplerConfig::Standalone` with the selected
+backend, so the decoder object still exposes target-rate PCM without adding a
+playback effect stage.
 
-`resample-rubato` enables the staged `ResamplerProcessor` and the Rubato backend.
-Default desktop and Android builds keep it. Apple fused FFI builds omit it.
+`resample-rubato` enables the portable default playback backend.
+`resample-readhead` forwards the ReadHead backend for explicit config selection
+and as the portable default when Rubato is not compiled. Default desktop and
+Android builds keep Rubato. Apple fused FFI builds omit Rubato unless another
+feature explicitly pulls it back in.
 
-The staged resampler's output capacity remains a correctness invariant: the
+The decoder resampler's output capacity remains a correctness invariant: the
 configured backend reports `output_frames_for_input` in the ceil frame domain
-and the audio stage sizes buffers from that contract. It is not a user-facing
-configuration knob.
+and the decoder adapter sizes buffers from that contract. It is not a
+user-facing configuration knob.
 
-Route changes that actually change the host sample rate store the new rate,
-then drive the existing decoder recreate state machine with
-`RecreateCause::RouteChange`. The recreate path preserves playback position and
-gapless state; equal-rate notifications do not recreate.
+Route changes that actually change the host sample rate store the new rate.
+Apple codec-embedded playback drives the existing decoder recreate state
+machine with `RecreateCause::RouteChange`; the standalone playback stage
+observes the same atomic host rate and rebuilds only its resampler instance.
+Equal-rate notifications do not recreate either path.
 
 ## Time-Stretch (speed and key-lock)
 
-Playback speed lives in the pre-resampler `TimeStretchProcessor` slot. The
-resampler stage is strictly fixed-ratio: it converts source rate to host rate
+Playback speed lives in the source-domain `TimeStretchProcessor` slot. The
+resampler plan is strictly fixed-ratio: it converts source rate to host rate
 only and never carries playback speed.
 
 The whole stretch DSP exists only when a backend is compiled in
 (`stretch-signalsmith` / `stretch-bungee`, native targets). `create_effects`
 builds one of two chains:
 
-- **fixed-rate** (`stretch = None`): no stretch slot; the resampler converts
-  source rate to host rate only.
+- **fixed-rate** (`stretch = None`): no stretch slot; decoder output remains in
+  the planned rate domain.
 - **speed mode** (`stretch = Some`): when a backend is compiled in, a
   `TimeStretchProcessor` runs before the resampler and reads live
   `StretchControls` (`speed` + `region_plan` + gated `keylock`/`backend`) each

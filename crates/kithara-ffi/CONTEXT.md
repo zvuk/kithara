@@ -14,10 +14,8 @@ Detailed contracts and invariants for the kithara-ffi crate; the README is the o
 `xtask apple` builds device frameworks with
 `uniffi,apple,dev,stretch-signalsmith`. The crate-local `apple` feature forwards
 `kithara/apple-fused-src`, so Apple AudioToolbox decodes directly to the host
-rate and the audio chain omits `ResamplerProcessor`. That set intentionally does
-not enable `resample-rubato`, `analysis-beat`, `analysis-waveform`, or
-Rubato-backed beat analysis; NN-only beat fallback for Apple device builds is
-future work.
+rate through decoder-embedded resampler placement. That set intentionally does
+not enable `resample-rubato`, `analysis-beat`, or `analysis-waveform`.
 
 `xtask android` builds release JNI libraries with
 `uniffi,android,stretch-signalsmith`. The facade `android` feature keeps the

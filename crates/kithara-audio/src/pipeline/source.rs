@@ -290,8 +290,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     eof_drain_inputs_exhausted: Vec<bool>,
     eof_drain_active: bool,
     /// Host/device sample rate last observed by the decoder recreate owner.
-    /// A change requests a normal decoder recreate; the resampler stage also
-    /// reads this value and remains active until the fused path takes over.
+    /// A change requests a normal decoder recreate when decoder output is
+    /// planned in the host-rate domain.
     host_sample_rate: Arc<AtomicU32>,
     recreate_on_host_rate_change: bool,
     decoder_host_sample_rate: u32,
@@ -4318,18 +4318,8 @@ mod splice_continuity_tests {
         let initial_spec = initial_decoder.spec();
         let host_sample_rate = Arc::new(AtomicU32::new(Consts::SAMPLE_RATE));
         let pcm_pool = PcmPool::default().clone();
-        let effects = crate::pipeline::config::create_effects(
-            initial_spec,
-            &host_sample_rate,
-            None,
-            crate::pipeline::config::ResamplerStage::Present {
-                quality: crate::ResamplerQuality::default(),
-                options: crate::ResamplerOptions::default(),
-            },
-            crate::ResamplerBackendConfig::default(),
-            &pcm_pool,
-            Vec::new(),
-        );
+        let effects =
+            crate::pipeline::config::create_effects(initial_spec, None, &pcm_pool, Vec::new());
         let factory_byte_len = Arc::new(AtomicU64::new(0));
         let decoder_factory: DecoderFactory<SpliceStream> =
             Arc::new(move |stream, info, base_offset| {

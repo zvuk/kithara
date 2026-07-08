@@ -151,7 +151,11 @@ impl SimHarness {
                 .expect("valid track URL")
                 .downloader(downloader.clone())
                 .store(store.clone())
-                .decoder_backend(spec.backend)
+                .decoder(
+                    kithara::audio::AudioDecoderConfig::builder()
+                        .backend(spec.backend)
+                        .build(),
+                )
                 .initial_abr_mode(spec.abr_mode)
                 .build();
             let id = queue.append(TrackSource::Config(Box::new(cfg)));
