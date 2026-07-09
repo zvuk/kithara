@@ -17,8 +17,8 @@ resampling contract:
 - Backend choice is encoded by the caller's `B: ResamplerBackend` type.
   Playback, analysis, and decoder configs thread that type through their own
   builders; this crate does not expose a cfg-selected default backend handle.
-  Platform backend contracts such as Apple AudioConverter live here and receive
-  platform factories from the crate that owns the concrete OS handle.
+  Platform backend contracts such as Apple AudioConverter live here and use
+  `kithara-apple` for shared Apple ABI and safe AudioToolbox wrappers.
 - `ResamplerSettings`, `ResamplerConfig`, and `ResamplerOptions` carry
   construction settings through BON builders.
 - `create_resampler` constructs exactly the requested standalone backend or
@@ -79,8 +79,8 @@ default backend in this crate.
   implementation. `rubato::RubatoConfig` selects async poly/sinc or FFT.
 - `Glide`: Rust port of the cursor-based glide renderer with fixed-ratio
   support, variable-ratio controls, and ratio glide. The scalar path is the
-  portable baseline; Apple Accelerate acceleration is an implementation detail
-  for a future Apple-specific support module.
+  portable baseline. On macOS/iOS, the optional `apple-accelerate` feature uses
+  `kithara-apple::accelerate` for copy, interpolation, and biquad filtering.
 
 ## Platform Backend Families
 
@@ -88,12 +88,10 @@ default backend in this crate.
   macOS/iOS. `apple::AppleAudioConverterBackend` and
   `apple::AppleAudioConverterConfig` live in this crate and accept an
   `AudioConverterFactory`. The current concrete AudioToolbox factory,
-  `apple::AudioToolboxConverterFactory`, and the standalone PCM-to-PCM
-  `AudioConverter` FFI live under `crates/kithara-resampler/src/apple/**`.
-  This module is the only `kithara-resampler` owner of Apple unsafe code and
-  carries the module-local unsafe allowance. The lint-policy carve-out is
-  scoped to that path only; the crate root still denies unsafe code everywhere
-  else. Codec-embedded Apple decode remains in `kithara-decode`.
+  `apple::AudioToolboxConverterFactory`, uses `kithara-apple` wrappers instead
+  of declaring local AudioToolbox FFI. This crate root denies unsafe code;
+  unavoidable Apple unsafe lives in `kithara-apple`. Codec-embedded Apple decode
+  remains in `kithara-decode` but uses the same shared Apple ABI crate.
 
 No Android placeholder exists until there is a real Android PCM resampler
 backend.
@@ -124,18 +122,20 @@ resampler is codec-embedded or adapter-based.
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
 <tr><td><code>resample-rubato</code></td><td>no</td><td>Rubato fixed-ratio backend; algorithm selection lives in <code>RubatoConfig</code></td></tr>
 <tr><td><code>resample-glide</code></td><td>no</td><td>Glide backend with fixed-ratio, variable-ratio, and glide capability</td></tr>
+<tr><td><code>apple-accelerate</code></td><td>no</td><td>Apple-target Glide acceleration through <code>kithara-apple::accelerate</code>; ignored on non-Apple targets</td></tr>
 </table>
 
 ## Module Layout
 
-- `src/apple/` - Apple AudioConverter backend contract, config, and FFI.
+- `src/apple/` - Apple AudioConverter backend contract, config, and wrapper use;
+  shared FFI lives in `kithara-apple`.
 - `src/backend.rs` - backend factory trait.
 - `src/capabilities.rs` - `bitflags` capability set.
 - `src/config.rs` - `ResamplerConfig`, `ResamplerOptions`, quality, and glide
   config.
 - `src/error.rs` - construction and processing errors.
 - `src/factory.rs` - standalone backend construction.
-- `src/glide/` - scalar Glide backend.
+- `src/glide/` - Glide backend plus optional Apple Accelerate engine.
 - `src/mono.rs` - pooled mono streaming adapter used by beat analysis.
 - `src/mode.rs` - fixed-ratio and variable-ratio mode types.
 - `src/rubato/` - Rubato backend.

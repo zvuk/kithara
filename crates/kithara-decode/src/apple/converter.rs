@@ -1,50 +1,22 @@
-#![allow(unsafe_code)]
-
-use std::{ffi::c_void, mem::size_of, ptr};
-
+use kithara_apple::audio_toolbox::{
+    AUDIO_CONVERTER_PRIME_INFO, AudioConverter, AudioConverterPacketInput, AudioConverterPrimeInfo,
+};
 use tracing::debug;
 
-use super::{
-    consts::Consts,
-    ffi::{
-        AudioBufferList, AudioConverterGetProperty, AudioConverterPrimeInfo, AudioConverterRef,
-        AudioStreamPacketDescription, OSStatus, UInt32,
-    },
-};
 use crate::GaplessInfo;
+
+pub(crate) type ConverterInputState = AudioConverterPacketInput;
 
 /// Query `kAudioConverterPrimeInfo` from a live converter.
 ///
 /// Returns `None` when the converter is null or when the property is
 /// not yet populated (AAC reports priming only after at least one
-/// `AudioConverterFillComplexBuffer` call has consumed an input packet —
+/// `audio_converter_fill_complex_buffer` call has consumed an input packet —
 /// see `refresh_after_first_chunk` callsites).
 pub(crate) fn prime_info_from_converter(
-    converter: AudioConverterRef,
+    converter: &AudioConverter,
 ) -> Option<AudioConverterPrimeInfo> {
-    if converter.is_null() {
-        return None;
-    }
-    let mut info = AudioConverterPrimeInfo::default();
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "size_of result fits in u32"
-    )]
-    let mut size = size_of::<AudioConverterPrimeInfo>() as UInt32;
-    // SAFETY: `converter` is a valid handle (caller-checked); `info` is a
-    let status = unsafe {
-        AudioConverterGetProperty(
-            converter,
-            Consts::kAudioConverterPrimeInfo,
-            &mut size,
-            &mut info as *mut _ as *mut c_void,
-        )
-    };
-    if status == Consts::noErr {
-        Some(info)
-    } else {
-        None
-    }
+    converter.get_property(AUDIO_CONVERTER_PRIME_INFO)
 }
 
 /// Map raw `AudioConverterPrimeInfo` into our `GaplessInfo` contract.
@@ -94,87 +66,4 @@ pub(crate) fn log_gapless_prime_info(
             "Apple PrimeInfo not available"
         ),
     }
-}
-
-/// Zero-alloc input state fed into `AudioConverterFillComplexBuffer`.
-///
-/// All fields point at memory owned by the `PacketReader`'s internal
-/// buffer — they stay valid until the next `read_next_packet` call, which
-/// is always issued by `AppleDecoder` *after* the converter has finished
-/// consuming the current packet.
-#[derive(Default)]
-pub(crate) struct ConverterInputState {
-    pub(crate) packet_ptr: *const u8,
-    pub(crate) packet_desc: AudioStreamPacketDescription,
-    pub(crate) packet_len: UInt32,
-    pub(crate) has_packet: bool,
-    pub(crate) reached_eof: bool,
-}
-
-impl ConverterInputState {
-    pub(crate) fn clear(&mut self) {
-        self.packet_ptr = ptr::null();
-        self.packet_len = 0;
-        self.has_packet = false;
-        self.reached_eof = false;
-    }
-
-    pub(crate) fn finish(&mut self) {
-        self.packet_ptr = ptr::null();
-        self.packet_len = 0;
-        self.has_packet = false;
-        self.reached_eof = true;
-    }
-
-    pub(crate) fn set(&mut self, data: &[u8], description: AudioStreamPacketDescription) {
-        #[expect(clippy::cast_possible_truncation, reason = "packet size fits in u32")]
-        let len = data.len() as UInt32;
-        self.packet_ptr = data.as_ptr();
-        self.packet_len = len;
-        self.packet_desc = AudioStreamPacketDescription {
-            mStartOffset: 0,
-            mVariableFramesInPacket: description.mVariableFramesInPacket,
-            mDataByteSize: len,
-        };
-        self.has_packet = true;
-        self.reached_eof = false;
-    }
-}
-
-/// `AudioConverter` input data callback.
-pub(crate) extern "C" fn converter_input_callback(
-    _converter: AudioConverterRef,
-    io_num_packets: *mut UInt32,
-    io_data: *mut AudioBufferList,
-    out_packet_desc: *mut *mut AudioStreamPacketDescription,
-    user_data: *mut c_void,
-) -> OSStatus {
-    // SAFETY: `user_data` was set to a valid `ConverterInputState` pointer
-    let state = unsafe { &mut *(user_data as *mut ConverterInputState) };
-
-    if !state.has_packet {
-        // SAFETY: `io_num_packets` is a valid out-param provided by AudioConverter.
-        unsafe {
-            *io_num_packets = 0;
-        }
-        return if state.reached_eof {
-            Consts::noErr
-        } else {
-            Consts::kAudioConverterErr_NoDataNow
-        };
-    }
-
-    // SAFETY: `io_data`, `io_num_packets` are valid pointers supplied by
-    unsafe {
-        (*io_data).mBuffers[0].mDataByteSize = state.packet_len;
-        (*io_data).mBuffers[0].mData = state.packet_ptr as *mut c_void;
-        *io_num_packets = 1;
-
-        if !out_packet_desc.is_null() {
-            *out_packet_desc = &mut state.packet_desc;
-        }
-    }
-
-    state.has_packet = false;
-    Consts::noErr
 }

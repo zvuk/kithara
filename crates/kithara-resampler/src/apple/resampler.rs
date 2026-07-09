@@ -1,24 +1,15 @@
-use std::{
-    ffi::c_void,
-    mem::size_of,
-    num::{NonZeroU32, NonZeroUsize},
-    ptr,
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
+use kithara_apple::audio_toolbox::{
+    AUDIO_CONVERTER_ERR_NO_DATA_NOW, AUDIO_FORMAT_LINEAR_PCM, AudioConverter,
+    AudioStreamBasicDescription, BITS_PER_F32_SAMPLE, BYTES_PER_F32_SAMPLE, FLOAT32_PLANAR_FLAGS,
+    NO_ERR, OSStatus, OwnedAudioBufferList, os_status_to_string,
+};
 use kithara_bufpool::PcmPool;
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
 
-use super::{
-    AudioConverterFactory,
-    buffer::PlanarAudioBufferList,
-    consts::Consts,
-    ffi::{
-        AudioConverterRef, AudioStreamBasicDescription, audio_converter_dispose,
-        audio_converter_fill_complex_buffer, audio_converter_new, audio_converter_reset,
-    },
-    input::{AppleResamplerInputState, apple_resampler_input_callback},
-};
+use super::{AudioConverterFactory, input::AppleResamplerInputState};
 use crate::{
     Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerError, ResamplerMode,
     ResamplerProcess, ResamplerSettings,
@@ -69,33 +60,14 @@ impl AudioConverterFactory for AudioToolboxConverterFactory {
     }
 }
 
-pub(super) mod constants {
-    use std::mem::size_of;
-
-    use crate::apple::{
-        consts::Consts,
-        ffi::{AudioBuffer, AudioBufferList, AudioFormatFlags},
-    };
-
-    pub(in crate::apple) const AUDIO_BUFFER_LIST_HEADER_BYTES: usize =
-        size_of::<AudioBufferList>() - size_of::<AudioBuffer>();
-    pub(in crate::apple) const AUDIO_FORMAT_FLAG_IS_NON_INTERLEAVED: AudioFormatFlags = 1 << 5;
-    pub(in crate::apple) const AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PLANAR: AudioFormatFlags =
-        Consts::AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PACKED | AUDIO_FORMAT_FLAG_IS_NON_INTERLEAVED;
-}
-
 pub struct AppleResampler {
-    converter: AudioConverterRef,
+    converter: AudioConverter,
     input_state: Box<AppleResamplerInputState>,
-    output_list: PlanarAudioBufferList,
+    output_list: OwnedAudioBufferList,
     mode: ResamplerMode,
     channels: NonZeroUsize,
     chunk_size: usize,
 }
-
-// SAFETY: `AudioConverterRef` is an opaque CoreAudio handle used through
-// mutable `AppleResampler` methods only; the resampler is never shared.
-unsafe impl Send for AppleResampler {}
 
 impl AppleResampler {
     /// Build a standalone `CoreAudio` PCM-to-PCM sample-rate converter.
@@ -103,7 +75,7 @@ impl AppleResampler {
     /// # Errors
     ///
     /// Returns [`ResamplerBuildError`] if the fixed shape is invalid or
-    /// `AudioConverterNew` rejects the planar PCM ASBD pair.
+    /// `audio_converter_new` rejects the planar PCM ASBD pair.
     pub(crate) fn new(
         source_rate: u32,
         target_rate: u32,
@@ -129,12 +101,8 @@ impl AppleResampler {
 
         let source_format = planar_f32_asbd(source_sample_rate, channels)?;
         let target_format = planar_f32_asbd(target_sample_rate, channels)?;
-        let mut converter = ptr::null_mut();
-        // SAFETY: source/target ASBDs are valid stack values; `converter` is a writable out-param.
-        let status = unsafe { audio_converter_new(&source_format, &target_format, &mut converter) };
-        if status != Consts::NO_ERR {
-            return Err(apple_build_status("AudioConverterNew", status));
-        }
+        let converter = AudioConverter::new(&source_format, &target_format)
+            .map_err(|err| apple_build_status("AudioConverterNew", err_status(&err)))?;
 
         let input_state = Box::new(
             AppleResamplerInputState::new(channels.get(), chunk_size, pcm_pool).map_err(|err| {
@@ -144,7 +112,8 @@ impl AppleResampler {
                 }
             })?,
         );
-        let output_list = PlanarAudioBufferList::new(channels.get())?;
+        let output_list = OwnedAudioBufferList::new(channels.get())
+            .map_err(|err| apple_build_config_owned(err.to_string()))?;
         Ok(Self {
             converter,
             input_state,
@@ -167,26 +136,19 @@ impl AppleResampler {
             return Ok(ResamplerProcess::new(0, 0));
         }
 
-        self.output_list.set_output(output, output_frames)?;
+        self.output_list
+            .set_planar_f32_output(output, output_frames)
+            .map_err(|err| apple_buffer_owned(err.to_string()))?;
         let mut output_packets = frames_to_u32(output_frames)?;
-        let input_ptr =
-            ptr::from_mut::<AppleResamplerInputState>(self.input_state.as_mut()).cast::<c_void>();
 
-        // SAFETY: `self.converter` is live; `input_ptr` points to boxed state
-        // kept alive for the full synchronous call; `output_list` points to
-        // caller-owned output buffers sized above.
-        let status = unsafe {
-            audio_converter_fill_complex_buffer(
-                self.converter,
-                apple_resampler_input_callback,
-                input_ptr,
-                &mut output_packets,
-                self.output_list.as_mut_ptr(),
-                ptr::null_mut(),
-            )
-        };
+        let status = self.converter.fill_complex_buffer(
+            self.input_state.as_mut(),
+            self.channels.get(),
+            &mut output_packets,
+            &mut self.output_list,
+        );
 
-        if status != Consts::NO_ERR && status != Consts::AUDIO_CONVERTER_ERR_NO_DATA_NOW {
+        if status != NO_ERR && status != AUDIO_CONVERTER_ERR_NO_DATA_NOW {
             return Err(apple_error_status(
                 "AudioConverterFillComplexBuffer",
                 status,
@@ -207,15 +169,6 @@ impl AppleResampler {
             return 1.0;
         };
         f64::from(target_sample_rate.get()) / f64::from(source_sample_rate.get())
-    }
-}
-
-impl Drop for AppleResampler {
-    fn drop(&mut self) {
-        if !self.converter.is_null() {
-            // SAFETY: `converter` was returned by `AudioConverterNew`.
-            let _ = unsafe { audio_converter_dispose(self.converter) };
-        }
     }
 }
 
@@ -289,12 +242,11 @@ impl Resampler for AppleResampler {
     }
 
     fn reset(&mut self) {
-        // SAFETY: `converter` is a live handle owned by this resampler.
-        let status = unsafe { audio_converter_reset(self.converter) };
-        if status != Consts::NO_ERR {
+        let status = self.converter.reset();
+        if status != NO_ERR {
             warn!(
                 status,
-                "AppleResampler: AudioConverterReset returned non-zero"
+                "AppleResampler: audio_converter_reset returned non-zero"
             );
         }
         self.input_state.clear();
@@ -309,13 +261,13 @@ fn planar_f32_asbd(
         .map_err(|_| apple_build_config("channel count exceeds CoreAudio limit"))?;
     Ok(AudioStreamBasicDescription {
         sample_rate: f64::from(sample_rate.get()),
-        format_id: Consts::AUDIO_FORMAT_LINEAR_PCM,
-        format_flags: constants::AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PLANAR,
-        bytes_per_packet: Consts::BYTES_PER_F32_SAMPLE,
+        format_id: AUDIO_FORMAT_LINEAR_PCM,
+        format_flags: FLOAT32_PLANAR_FLAGS,
+        bytes_per_packet: BYTES_PER_F32_SAMPLE,
         frames_per_packet: 1,
-        bytes_per_frame: Consts::BYTES_PER_F32_SAMPLE,
+        bytes_per_frame: BYTES_PER_F32_SAMPLE,
         channels_per_frame: channels,
-        bits_per_channel: Consts::BITS_PER_F32_SAMPLE,
+        bits_per_channel: BITS_PER_F32_SAMPLE,
         ..Default::default()
     })
 }
@@ -338,24 +290,24 @@ fn frames_to_u32(frames: usize) -> Result<u32, ResamplerError> {
     u32::try_from(frames).map_err(|_| apple_buffer("frame count exceeds CoreAudio limit"))
 }
 
-pub(super) fn channel_byte_len(frames: usize) -> Result<u32, ResamplerError> {
-    let bytes = frames
-        .checked_mul(size_of::<f32>())
-        .ok_or_else(|| apple_buffer("channel byte size overflow"))?;
-    u32::try_from(bytes).map_err(|_| apple_buffer("channel byte size exceeds CoreAudio limit"))
-}
-
 pub(super) fn apple_build_config(detail: &'static str) -> ResamplerBuildError {
     ResamplerBuildError::BackendBuild {
-        backend: BACKEND_APPLE,
         detail: detail.into(),
+        backend: BACKEND_APPLE,
     }
 }
 
-fn apple_build_status(op: &'static str, status: i32) -> ResamplerBuildError {
+fn apple_build_config_owned(detail: String) -> ResamplerBuildError {
     ResamplerBuildError::BackendBuild {
+        detail,
         backend: BACKEND_APPLE,
-        detail: format!("{op}: {}", super::consts::os_status_to_string(status)),
+    }
+}
+
+fn apple_build_status(op: &'static str, status: OSStatus) -> ResamplerBuildError {
+    ResamplerBuildError::BackendBuild {
+        detail: format!("{op}: {}", os_status_to_string(status)),
+        backend: BACKEND_APPLE,
     }
 }
 
@@ -363,10 +315,24 @@ fn apple_buffer(detail: &'static str) -> ResamplerError {
     ResamplerError::InvalidBuffer { detail }
 }
 
-fn apple_error_status(op: &'static str, status: i32) -> ResamplerError {
+fn apple_buffer_owned(detail: String) -> ResamplerError {
+    ResamplerError::Backend {
+        detail,
+        op: "apple audio buffer",
+    }
+}
+
+fn apple_error_status(op: &'static str, status: OSStatus) -> ResamplerError {
     ResamplerError::Backend {
         op,
-        detail: super::consts::os_status_to_string(status),
+        detail: os_status_to_string(status),
+    }
+}
+
+fn err_status(err: &kithara_apple::audio_toolbox::AudioToolboxError) -> OSStatus {
+    match err {
+        kithara_apple::audio_toolbox::AudioToolboxError::Status { status, .. } => *status,
+        kithara_apple::audio_toolbox::AudioToolboxError::Config { .. } => -50,
     }
 }
 

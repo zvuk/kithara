@@ -4,7 +4,7 @@ use kithara_bufpool::{PcmBuf, PcmPool};
 use num_traits::cast::ToPrimitive;
 use smallvec::SmallVec;
 
-use super::{GlideConfig, interpolator};
+use super::{GlideConfig, engine::GlideEngine};
 use crate::{
     RatioGlide, Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerControl,
     ResamplerError, ResamplerMode, ResamplerOptions, ResamplerProcess, ResamplerSettings,
@@ -15,6 +15,7 @@ pub struct GlideResampler {
     config: GlideConfig,
     current_ratio: f64,
     glide: GlideState,
+    engine: GlideEngine,
     input_frames: usize,
     mode: ResamplerMode,
     options: ResamplerOptions,
@@ -32,8 +33,16 @@ impl GlideResampler {
         validate_ratio_bounds(backend, settings.options, ratio)?;
         let glide = initial_glide(backend, settings.mode, settings.options, ratio)?;
         let previous = previous_buffers(&settings.pcm_pool, settings.channels, backend)?;
+        let engine = GlideEngine::new(
+            &settings.pcm_pool,
+            settings.channels,
+            settings.options.chunk_size,
+            settings.options.max_ratio_adjustment,
+            backend,
+        )?;
         Ok(Self {
             config,
+            engine,
             glide,
             previous,
             channels: settings.channels,
@@ -43,17 +52,6 @@ impl GlideResampler {
             options: settings.options,
             cursor: 0.0,
         })
-    }
-
-    fn advance_glide(&mut self) {
-        if self.glide.remaining == 0 {
-            return;
-        }
-        self.current_ratio += self.glide.step;
-        self.glide.remaining = self.glide.remaining.saturating_sub(1);
-        if self.glide.remaining == 0 {
-            self.current_ratio = self.glide.target;
-        }
     }
 
     fn can_passthrough(&self) -> bool {
@@ -91,25 +89,35 @@ impl GlideResampler {
         output: &mut [&mut [f32]],
         input_frames: usize,
         output_capacity: usize,
-    ) -> usize {
+    ) -> Result<usize, ResamplerError> {
+        let position_capacity = self.engine.position_capacity().min(output_capacity);
+        let positions = self.engine.positions_mut(position_capacity)?;
         let mut produced = 0;
-        while produced < output_capacity && can_sample(self.cursor, input_frames) {
-            let ratio = self.current_ratio;
-            for channel in 0..self.channels.get() {
-                output[channel][produced] = interpolator::interpolate(
-                    input[channel],
-                    self.previous[channel][0],
-                    self.cursor,
-                    ratio,
-                    self.config.interpolation,
-                    self.config.anti_alias,
-                );
-            }
-            self.cursor += ratio;
-            self.advance_glide();
+        let mut cursor = self.cursor;
+        let mut current_ratio = self.current_ratio;
+        let mut glide = self.glide;
+        let filter_ratio = current_ratio;
+
+        while produced < position_capacity && can_sample(cursor, input_frames) {
+            positions[produced] = (cursor + 1.0).to_f32().unwrap_or(0.0);
+            cursor += current_ratio;
+            advance_glide_values(&mut current_ratio, &mut glide);
             produced += 1;
         }
-        produced
+
+        self.cursor = cursor;
+        self.current_ratio = current_ratio;
+        self.glide = glide;
+        self.engine.render(
+            input,
+            &self.previous,
+            output,
+            produced,
+            self.config,
+            filter_ratio,
+            self.mode,
+        )?;
+        Ok(produced)
     }
 
     fn render_passthrough(&self, input: &[&[f32]], output: &mut [&mut [f32]], frames: usize) {
@@ -191,7 +199,7 @@ impl Resampler for GlideResampler {
             self.render_passthrough(input, output, frames);
             frames
         } else {
-            self.render_interpolated(input, output, input_frames, output_capacity)
+            self.render_interpolated(input, output, input_frames, output_capacity)?
         };
         let consumed = self.consume_frames(input, input_frames, produced);
         Ok(ResamplerProcess::new(consumed, produced))
@@ -203,6 +211,7 @@ impl Resampler for GlideResampler {
         for previous in &mut self.previous {
             previous[0] = 0.0;
         }
+        self.engine.reset();
         self.cursor = 0.0;
     }
 }
@@ -233,6 +242,17 @@ struct GlideState {
     remaining: u32,
     step: f64,
     target: f64,
+}
+
+fn advance_glide_values(current_ratio: &mut f64, glide: &mut GlideState) {
+    if glide.remaining == 0 {
+        return;
+    }
+    *current_ratio += glide.step;
+    glide.remaining = glide.remaining.saturating_sub(1);
+    if glide.remaining == 0 {
+        *current_ratio = glide.target;
+    }
 }
 
 fn can_sample(cursor: f64, input_frames: usize) -> bool {

@@ -1,7 +1,6 @@
 mod backend;
 mod config;
-mod filter;
-mod interpolator;
+mod engine;
 mod resampler;
 
 #[cfg(test)]

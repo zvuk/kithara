@@ -37,13 +37,12 @@ The current built-in backends are exposed by explicit crate features:
 Backend choice is part of the Rust type at the call site. Playback, analysis,
 and decoder integration carry `B: ResamplerBackend` through their own configs
 instead of asking this crate for a default backend handle. Platform backend
-contracts such as Apple AudioConverter live here and receive concrete platform
-factories from the crate that owns the OS handle.
+contracts such as Apple AudioConverter live here and use concrete platform
+factories, while shared Apple ABI and safe AudioToolbox wrappers come from
+`kithara-apple`.
 
-The Apple backend module is this crate's only unsafe owner. Its AudioToolbox
-FFI files live under `src/apple/`, keep the unsafe allowance module-local, and
-are covered by the same lint-policy carve-out as the existing Apple/Android FFI
-binding modules in other crates.
+The crate root denies unsafe code. The Apple backend uses `kithara-apple`
+wrappers instead of declaring local AudioToolbox or Accelerate bindings.
 
 See [CONTEXT.md](CONTEXT.md) for the backend contract, allocation contract, and
 decoder integration rules.

@@ -199,9 +199,10 @@ There are two decoder-side placements:
   On macOS/iOS, `kithara_resampler::apple::AppleAudioConverterBackend` exposes
   the standalone PCM-to-PCM `AudioConverter` backend and receives
   `kithara_resampler::apple::AudioToolboxConverterFactory` as its concrete
-  factory. The backend, config, standalone `AudioConverter` FFI, and unsafe
-  owner path all stay in `kithara-resampler`; `kithara-decode` owns only the
-  codec-embedded Apple decode path.
+  factory. The backend and config stay in `kithara-resampler`; shared
+  AudioToolbox FFI, `AudioConverter`, `AudioFile`, `AudioBufferList`, and POD
+  byte-copy wrappers stay in `kithara-apple`. `kithara-decode` owns codec
+  planning, gapless policy, and the codec-embedded Apple decode path.
 
 `AppleCodec::SRC_OUTPUT_MARGIN_FRAMES = 1` is not configuration. It is the
 ceil-domain slack used by fused decode+SRC when carrying the ideal output length
@@ -220,7 +221,7 @@ contract, not a tunable, so it stays named and local to the Apple codec owner.
 - `src/mock.rs` — mock support for tests and the `mock` feature.
 - `src/fmp4/`, `src/mp4/` — fMP4/MP4 container helpers.
 - `src/symphonia/` (feature `symphonia`) — Symphonia `Decoder` implementation; probe and direct paths; `ReadSeekAdapter`.
-- `src/apple/` (feature `apple`, macOS / iOS) — Apple `AudioToolbox` backend over `AudioFile` / `AudioConverter` FFI.
+- `src/apple/` (feature `apple`, macOS / iOS) — Apple backend over shared `kithara-apple` `AudioFile` / `AudioConverter` wrappers.
 - `src/android/` (feature `android`, Android) — `MediaExtractor` / `MediaCodec` backend over JNI.
 - `src/gapless/` — `GaplessInfo`, `GaplessMode`, `GaplessTrimmer`, `SilenceTrimParams`, the encoder-side `probe_codec_gapless`, MP4 `udta`/`iTunSMPB` / MPEG-audio Xing/LAME tag parsers, and the trailing fade/silence trim heuristics.
 - `src/pcm_time.rs` — timeline math (`duration_for_frames`, `frames_for_duration`, PTS helpers) shared across backends.

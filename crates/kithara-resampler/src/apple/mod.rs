@@ -1,9 +1,4 @@
-#![allow(unsafe_code)]
-
 mod backend;
-mod buffer;
-mod consts;
-mod ffi;
 mod input;
 mod resampler;
 
