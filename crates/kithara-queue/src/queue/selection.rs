@@ -2,7 +2,7 @@ use std::sync::{Arc, PoisonError};
 
 use kithara_events::{QueueEvent, TrackId, TrackStatus};
 use kithara_platform::tokio::task;
-use kithara_play::SelectTransition;
+use kithara_play::{Resource, SelectTransition};
 use tracing::{debug, warn};
 
 use super::{
@@ -10,6 +10,7 @@ use super::{
     types::{PendingSelect, SelectPhase, Transition},
 };
 use crate::{
+    attempts::LoadClass,
     error::QueueError,
     navigation::RepeatMode,
     track::{TrackEntry, TrackSource},
@@ -94,15 +95,15 @@ impl Queue {
         }
         let tracks = self.lock_tracks();
         indices.into_iter().find_map(|idx| {
-            let entry = tracks.get(idx)?;
-            if matches!(entry.status, TrackStatus::Cancelled) {
+            let record = tracks.get(idx)?;
+            if matches!(record.status, TrackStatus::Cancelled) {
                 debug!(
-                    id = entry.id.as_u64(),
+                    id = record.id.as_u64(),
                     "advance_to_next: skipping cancelled track"
                 );
                 None
             } else {
-                Some(entry.clone())
+                Some(record.entry())
             }
         })
     }
@@ -193,30 +194,48 @@ impl Queue {
             }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
                 self.override_pending_select(PendingSelect { id, transition });
+                self.promote_pending_load(id);
                 Ok(())
             }
             TrackStatus::Cancelled | TrackStatus::Consumed | TrackStatus::Failed(_) => {
                 if let Some(result) = self.try_replant_test_resource(id, index, transition) {
                     return result;
                 }
-                let source = self
-                    .sources
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .get(&id)
-                    .cloned()
-                    .ok_or(QueueError::NotReady(id))?;
+                let source = self.tracks.source(id).ok_or(QueueError::NotReady(id))?;
                 self.override_pending_select(PendingSelect { id, transition });
                 self.set_status(id, TrackStatus::Pending);
-                self.spawn_apply_after_load(id, source);
+                self.spawn_apply_after_load(id, source, LoadClass::Interactive);
                 Ok(())
             }
             _ => Err(QueueError::NotReady(id)),
         }
     }
 
-    pub(super) fn spawn_apply_after_load(&self, id: TrackId, source: TrackSource) {
-        let handle = self.loader.spawn_load(id, source);
+    pub(super) fn spawn_apply_after_load(
+        &self,
+        id: TrackId,
+        source: TrackSource,
+        class: LoadClass,
+    ) {
+        let handle = self.loader.spawn_load(id, source, class);
+        self.watch_apply(id, handle);
+    }
+
+    fn promote_pending_load(&self, id: TrackId) {
+        if let Some(source) = self.tracks.source(id) {
+            let handle = self.loader.promote_load(id, source);
+            self.watch_apply(id, handle);
+        }
+    }
+
+    fn watch_apply(
+        &self,
+        id: TrackId,
+        handle: Option<task::JoinHandle<Result<Resource, QueueError>>>,
+    ) {
+        let Some(handle) = handle else {
+            return;
+        };
         let player = Arc::clone(&self.player);
         let tracks = Arc::clone(&self.tracks);
         let pending_select = Arc::clone(&self.pending_select);
@@ -233,11 +252,9 @@ impl Queue {
                 }
             };
 
-            // Serialise the apply against a concurrent `select` (see
-            // `select_apply`): the cancelled re-check below and the
-            // `select_item` must be atomic w.r.t. a superseding select that
-            // marks this track `Cancelled`. The whole block is synchronous —
-            // the guard is never held across an `.await`.
+            // Held across the whole synchronous block (never across .await):
+            // the Cancelled re-check and select_item must be atomic w.r.t. a
+            // superseding select.
             let _apply = select_apply.lock().unwrap_or_else(PoisonError::into_inner);
 
             let was_cancelled = tracks

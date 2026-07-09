@@ -146,11 +146,6 @@ impl RawHttp {
         accept_partial: bool,
     ) -> Result<Response, NetError> {
         let req = Self::apply_headers(req, headers);
-        let req = if let Some(total) = self.options.total_timeout {
-            req.timeout(total)
-        } else {
-            req
-        };
         let resp = self.send_idle_bounded(req).await?;
         let status = resp.status();
 
@@ -394,11 +389,6 @@ impl Net for RawHttp {
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
         let req = self.head_request(url.clone());
         let req = Self::apply_headers(req, headers);
-        let req = if let Some(total) = self.options.total_timeout {
-            req.timeout(total)
-        } else {
-            req
-        };
         let resp = self.send_idle_bounded(req).await?;
 
         let status = resp.status();

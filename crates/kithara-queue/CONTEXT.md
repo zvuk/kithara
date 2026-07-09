@@ -93,10 +93,9 @@ gated.
 ## Loading Lifecycle
 
 Each `append` allocates a monotonic [`TrackId`] and a queue entry with
-status `Pending`, then spawns a background task:
+status `Pending`, then spawns a background load attempt:
 
-1. Acquire a semaphore permit (up to
-   `QueueConfig::max_concurrent_loads`).
+1. Acquire a permit in the attempt's lane (see "Load Lanes" below).
 2. Publish `TrackStatusChanged { Loading }`.
 3. Build the `ResourceConfig` (either from `TrackSource::Uri` templates
    or the caller-supplied `Config`) and call `Resource::new`.
@@ -114,6 +113,24 @@ status `Pending`, then spawns a background task:
 After `select_item` succeeds the engine has consumed `items[index]`, so
 the Queue immediately transitions the entry to `TrackStatus::Consumed`.
 Re-selecting a `Consumed` track respawns the load.
+
+## Load Lanes
+
+The loader runs two isolated permit lanes so a prefetch parked on a dead
+host cannot starve a selection: **Prefetch** (append-time, capped by
+`QueueConfig::max_concurrent_loads`) and **Interactive** (`select`, one
+permit). Max in-flight is `max_concurrent_loads + 1`.
+
+Each `TrackRecord` owns its track's status, source, and at most one live
+attempt (`AttemptGuard`), all under the one `Tracks` lock. The guard
+cancels the attempt's per-track `CancelToken` on drop, so removing the
+record (`remove` / `clear`) or flipping the status to `Cancelled` aborts
+the load with no separate call. `select` on a track still waiting for a
+prefetch permit promotes it into the interactive lane (the parked
+attempt is replaced and abandons on wake via a generation check); an
+attempt already downloading is left alone. A cancelled attempt returns
+`QueueError::Cancelled` and leaves `TrackStatus` to the superseding
+path. Byte-level dedupe of same-URL downloads is the `AssetStore`'s job.
 
 The production append/insert path does not start initial playback on its own:
 the caller drives the first `select` / `play` explicitly so playback order is

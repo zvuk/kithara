@@ -52,6 +52,8 @@ mod kithara_file {
     mod file_source;
     mod html_error_cleanup;
     #[cfg(not(target_arch = "wasm32"))]
+    mod resume_stall_budget;
+    #[cfg(not(target_arch = "wasm32"))]
     mod shared_download;
     #[cfg(not(target_arch = "wasm32"))]
     mod waveform_shared_download;

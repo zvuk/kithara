@@ -777,7 +777,6 @@ async fn test_net_builder_creates_functional_client() {
 async fn test_net_builder_with_custom_options() {
     let opts = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(100))
-        .total_timeout(Duration::from_millis(100))
         .retry_policy(RetryPolicy::new(
             2,
             Duration::from_millis(50),

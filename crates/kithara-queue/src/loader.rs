@@ -2,34 +2,30 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_events::{DownloaderEvent, Event, EventBus, TrackId, TrackStatus};
 use kithara_platform::{
-    tokio,
+    CancelToken, tokio,
     tokio::{
         sync::Semaphore,
         task::{JoinHandle, spawn},
     },
 };
 use kithara_play::{PlayerImpl, Resource, ResourceConfig};
-use tracing::{debug, warn};
 
 use crate::{
+    attempts::{LoadClass, Ticket},
     error::QueueError,
     track::{TrackSource, Tracks},
 };
 
-/// Async track loader: parallelism-capped `ResourceConfig` -> `Resource`.
-///
-/// Owns the semaphore that limits concurrent `Resource::new` invocations and
-/// subscribes to the per-resource [`EventBus`](kithara_events::EventBus) to
-/// surface `LoadSlow` as [`QueueEvent::TrackStatusChanged`] with
-/// [`TrackStatus::Slow`]. On failure emits `Failed(reason)`; successful
-/// resources are returned to [`Queue`](crate::Queue) for `replace_item` +
-/// `Loaded` emission.
+/// Async track loader: `ResourceConfig` -> `Resource`, run in two
+/// isolated permit lanes with one abortable attempt per track.
 pub(crate) struct Loader {
     player: Arc<PlayerImpl>,
-    semaphore: Arc<Semaphore>,
-    /// Same `Arc<Tracks>` as `Queue::tracks`. All status transitions go
-    /// through [`Tracks::set_status`] so polled and event-stream views
-    /// never drift.
+    /// Background prefetch lane (`max_concurrent_loads` permits).
+    prefetch_lane: Arc<Semaphore>,
+    /// User-selection lane: one dedicated permit, isolated from prefetch.
+    interactive_lane: Arc<Semaphore>,
+    /// Same `Arc<Tracks>` as `Queue::tracks`: owns per-track status and the live attempt,
+    /// so both change under one lock.
     tracks: Arc<Tracks>,
 }
 
@@ -42,7 +38,8 @@ impl Loader {
         Self {
             player,
             tracks,
-            semaphore: Arc::new(Semaphore::new(max_concurrent_loads.get())),
+            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
+            interactive_lane: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -65,15 +62,9 @@ impl Loader {
         Ok(self.player.prepare_config(config))
     }
 
-    /// Load a [`Resource`] for the given track. Caller is responsible for
-    /// applying it via `PlayerImpl::replace_item` and emitting
-    /// [`TrackStatus::Loaded`].
-    pub(crate) async fn load(
-        &self,
-        id: TrackId,
-        source: TrackSource,
-    ) -> Result<Resource, QueueError> {
-        let config = self.build_config(source)?;
+    /// Load a [`Resource`] from a prepared config. Caller is responsible
+    /// for applying it via `PlayerImpl::replace_item` and emitting [`TrackStatus::Loaded`].
+    async fn load(&self, id: TrackId, config: ResourceConfig) -> Result<Resource, QueueError> {
         let slow_watcher =
             Self::watch_for_slow_status(id, config.bus.clone(), Arc::clone(&self.tracks));
         let resource_fut = async {
@@ -89,35 +80,105 @@ impl Loader {
         }
     }
 
-    /// Spawn an async load. Acquires a semaphore permit for the duration of
-    /// the load. Emits `Loading` on start, `Failed(reason)` on error. On
-    /// success, the [`Resource`] is returned through the `JoinHandle`.
+    /// Spawn a fresh async load in the given lane. `None` when a live
+    /// attempt already exists - one track never occupies two permits.
     pub(crate) fn spawn_load(
         self: &Arc<Self>,
         id: TrackId,
         source: TrackSource,
+        class: LoadClass,
+    ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
+        let (config, cancel) = match self.attempt_config(id, source) {
+            Ok(pair) => pair,
+            Err(err) => return Some(self.spawn_config_failure(id, err)),
+        };
+        let ticket = self.tracks.begin_attempt(id, cancel.clone())?;
+        Some(self.spawn_attempt(ticket, config, cancel, class))
+    }
+
+    /// Move a track's pending load into the interactive lane.
+    pub(crate) fn promote_load(
+        self: &Arc<Self>,
+        id: TrackId,
+        source: TrackSource,
+    ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
+        let (config, cancel) = match self.attempt_config(id, source) {
+            Ok(pair) => pair,
+            Err(err) => return Some(self.spawn_config_failure(id, err)),
+        };
+        let ticket = self.tracks.promote_attempt(id, cancel.clone())?;
+        Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
+    }
+
+    fn attempt_config(
+        &self,
+        id: TrackId,
+        source: TrackSource,
+    ) -> Result<(ResourceConfig, CancelToken), QueueError> {
+        let config = self.build_config(source)?;
+        let Some(cancel) = config.cancel.clone() else {
+            return Err(QueueError::Resource(format!(
+                "track {id:?}: resource config missing per-track cancel"
+            )));
+        };
+        Ok((config, cancel))
+    }
+
+    fn spawn_attempt(
+        self: &Arc<Self>,
+        ticket: Ticket,
+        config: ResourceConfig,
+        cancel: CancelToken,
+        class: LoadClass,
     ) -> JoinHandle<Result<Resource, QueueError>> {
         let this = Arc::clone(self);
         spawn(async move {
-            let permit = Arc::clone(&this.semaphore)
-                .acquire_owned()
-                .await
-                .map_err(|e| QueueError::Resource(format!("semaphore closed: {e}")))?;
+            let id = ticket.id;
+            let lane = match class {
+                LoadClass::Interactive => &this.interactive_lane,
+                LoadClass::Prefetch => &this.prefetch_lane,
+            };
+            let permit = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    this.tracks.finish_attempt(&ticket, None);
+                    return Err(QueueError::Cancelled(id));
+                }
+                permit = Arc::clone(lane).acquire_owned() => permit
+                    .map_err(|e| QueueError::Resource(format!("semaphore closed: {e}")))?,
+            };
+            if !this.tracks.mark_loading(&ticket) {
+                drop(permit);
+                return Err(QueueError::Cancelled(id));
+            }
 
-            this.tracks.set_status(id, TrackStatus::Loading);
-
-            let result = this.load(id, source).await;
+            let result = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => Err(QueueError::Cancelled(id)),
+                result = this.load(id, config) => result,
+            };
             drop(permit);
 
-            match &result {
-                Ok(_) => debug!(id = id.as_u64(), "track load ok"),
-                Err(e) => {
-                    warn!(id = id.as_u64(), error = %e, "track load failed");
-                    this.tracks
-                        .set_status(id, TrackStatus::Failed(format!("{e}")));
-                }
-            }
+            let failure = match &result {
+                Ok(_) | Err(QueueError::Cancelled(_)) => None,
+                Err(e) => Some(format!("{e}")),
+            };
+            this.tracks.finish_attempt(&ticket, failure);
             result
+        })
+    }
+
+    /// Wrap a synchronous config failure (e.g. invalid URI) in a resolved
+    /// handle so callers keep one completion path. No lane, no permit.
+    fn spawn_config_failure(
+        &self,
+        id: TrackId,
+        err: QueueError,
+    ) -> JoinHandle<Result<Resource, QueueError>> {
+        let tracks = Arc::clone(&self.tracks);
+        spawn(async move {
+            tracks.set_status(id, TrackStatus::Failed(format!("{err}")));
+            Err(err)
         })
     }
 
@@ -156,7 +217,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::track::TrackEntry;
+    use crate::track::TrackRecord;
 
     /// Builder for test [`Loader`] fixtures. Defaults cover most tests;
     /// override via setters when a specific concurrency cap matters.
@@ -230,20 +291,8 @@ mod tests {
         assert!(matches!(err, QueueError::InvalidUrl(_)));
     }
 
-    #[kithara::test(tokio)]
-    async fn load_invalid_uri_returns_invalid_url_error() {
-        let loader = LoaderFixtureSpec::default().build().loader;
-        let Err(err) = loader
-            .load(TrackId(0), TrackSource::Uri("not-a-url".into()))
-            .await
-        else {
-            panic!("should reject relative path");
-        };
-        assert!(matches!(err, QueueError::InvalidUrl(_)));
-    }
-
     #[kithara::test(tokio, multi_thread)]
-    async fn semaphore_caps_concurrent_loads() {
+    async fn prefetch_lane_caps_concurrent_loads() {
         let cap = NonZeroUsize::new(2).expect("BUG: 2 > 0 is mathematically guaranteed");
         let loader = LoaderFixtureSpec::default().with_cap(cap).build().loader;
 
@@ -252,7 +301,7 @@ mod tests {
 
         let mut handles = Vec::new();
         for _ in 0..6 {
-            let sem = Arc::clone(&loader.semaphore);
+            let sem = Arc::clone(&loader.prefetch_lane);
             let in_flight = Arc::clone(&in_flight);
             let max_seen = Arc::clone(&max_seen);
             handles.push(spawn(async move {
@@ -279,27 +328,33 @@ mod tests {
     #[kithara::test(tokio, multi_thread)]
     async fn spawn_load_bad_url_emits_failed_status() {
         let fx = LoaderFixtureSpec::default().build();
-        fx.tracks.lock().push(TrackEntry {
-            id: TrackId(42),
-            url: None,
-            name: String::new(),
-            status: TrackStatus::Pending,
-        });
+        fx.tracks.lock().push(TrackRecord::new(
+            TrackId(42),
+            String::new(),
+            TrackSource::Uri("not-a-url".into()),
+        ));
         let mut rx = fx.bus.subscribe();
         let loader = fx.loader;
 
-        let handle = loader.spawn_load(TrackId(42), TrackSource::Uri("not-a-url".into()));
+        let handle = loader
+            .spawn_load(
+                TrackId(42),
+                TrackSource::Uri("not-a-url".into()),
+                LoadClass::Prefetch,
+            )
+            .expect("config failure still yields a completion handle");
         let result = handle.await.expect("BUG: spawned task panicked");
         assert!(matches!(result, Err(QueueError::InvalidUrl(_))));
 
-        let mut saw_loading = false;
+        // Invalid config fails synchronously without ever loading: the
+        // track goes straight to Failed, no fictional Loading first.
         let mut saw_failed = false;
         for _ in 0..8 {
             match time::timeout(Duration::from_millis(200), rx.recv()).await {
                 Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged {
                     id: TrackId(42),
                     status: TrackStatus::Loading,
-                }))) => saw_loading = true,
+                }))) => panic!("invalid config must not emit Loading"),
                 Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged {
                     id: TrackId(42),
                     status: TrackStatus::Failed(_),
@@ -308,7 +363,6 @@ mod tests {
                 Ok(Err(_)) | Err(_) => break,
             }
         }
-        assert!(saw_loading, "Loading status event missing");
         assert!(saw_failed, "Failed status event missing");
     }
 }

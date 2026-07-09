@@ -171,7 +171,6 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     const CANCEL_GUARD_SECS: u64 = 2;
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .total_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build();
     let dl = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),

@@ -338,13 +338,12 @@ impl Queue {
     }
 
     fn track_id_for_src(&self, src: &str) -> Option<TrackId> {
-        let sources = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
-        sources.iter().find_map(|(id, source)| {
-            let matches = match source {
+        self.lock_tracks().iter().find_map(|record| {
+            let matches = match &record.source {
                 TrackSource::Uri(uri) => uri == src,
                 TrackSource::Config(config) => config.src.to_string() == src,
             };
-            matches.then_some(*id)
+            matches.then_some(record.id)
         })
     }
 
