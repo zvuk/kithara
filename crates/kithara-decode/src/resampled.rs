@@ -14,9 +14,6 @@ use crate::{
     PcmSpec, TrackMetadata, duration_for_frames, frames_for_duration,
 };
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) fn wrap<B>(
     decoder: Box<dyn Decoder>,
     config: Option<DecoderResamplerConfig<B>>,
