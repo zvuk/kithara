@@ -2,18 +2,20 @@
 
 use std::{future::Future, sync::Arc};
 
-use block2::RcBlock;
+use kithara_apple::foundation::{
+    block::RcBlock,
+    ns::{
+        NSData, NSError, NSInteger, NSOperationQueue, NSUInteger, NSURLResponse, NSURLSession,
+        NSURLSessionConfiguration, NSURLSessionDataTask, NSURLSessionDelegate, NSURLSessionTask,
+    },
+    objc::{rc::Retained, runtime::ProtocolObject},
+};
 use kithara_bufpool::BytePool;
 use kithara_platform::{
     CancelToken,
     sync::{Mutex, OnceLock},
     time::Duration,
     tokio::sync::oneshot,
-};
-use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_foundation::{
-    NSData, NSError, NSInteger, NSOperationQueue, NSUInteger, NSURLResponse, NSURLSession,
-    NSURLSessionConfiguration, NSURLSessionDataTask, NSURLSessionDelegate, NSURLSessionTask,
 };
 
 use super::{
@@ -269,8 +271,8 @@ impl AppleTask {
 
 #[cfg(test)]
 mod tests {
+    use kithara_apple::foundation::ns::NSData;
     use kithara_bufpool::ByteBudget;
-    use objc2_foundation::NSData;
 
     use super::{super::response::copy_data, *};
 

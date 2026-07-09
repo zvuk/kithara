@@ -7,14 +7,13 @@ use std::{
 
 use bytes::Bytes;
 use futures::Stream;
+use kithara_apple::foundation::{ns::NSData, objc::rc::Retained};
 use kithara_bufpool::BytePool;
 use kithara_platform::{
     CancelToken, CancelWakerGuard,
     sync::Mutex,
     tokio::{select, sync::oneshot},
 };
-use objc2::rc::Retained;
-use objc2_foundation::NSData;
 
 use super::{
     delegate::AppleSessionDelegate,

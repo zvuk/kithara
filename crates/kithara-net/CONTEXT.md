@@ -12,7 +12,7 @@ active per target; the choice is invisible above the `Net` trait — `HttpClient
 |---|---|---|---|---|
 | `client-reqwest` (**default**) | `reqwest` | `tls-rustls` (default) / `tls-native` | native + wasm | Pure-Rust, portable. The only backend on wasm32. |
 | `client-wreq` | `wreq` | `BoringSSL` (fixed) | native only | Browser TLS/HTTP2 emulation (`ImpersonatePreset`) to defeat anti-bot WAF JA3 fingerprinting. |
-| `client-apple` | `NSURLSession` | Apple platform trust | macOS + iOS only | Native Apple backend for SDK size reduction. Objective-C FFI is isolated under `src/backend/apple/`. |
+| `client-apple` | `NSURLSession` | Apple platform trust | macOS + iOS only | Native Apple backend for SDK size reduction. Foundation bindings come from `kithara-apple/foundation`. |
 
 Rules:
 
@@ -78,6 +78,11 @@ Backend layout:
 - `backend/apple/stream.rs` owns body stream polling, cancel wake registration,
   and startup/data task guards.
 
+`kithara-net` does not declare Apple binding crates directly. `client-apple`
+enables `kithara-apple/foundation`, and the Apple backend imports Foundation /
+Objective-C types through that owner crate. HTTP behavior, retry, timeout,
+resumability, header normalization, and `NetError` mapping remain owned here.
+
 `client-apple` timeout note: keep timeout ownership aligned with
 `client-wreq`/`client-reqwest`. The Apple backend wraps data/header establishment
 in the Rust-side `inactivity_timeout`, and streaming body inactivity is still
@@ -119,15 +124,15 @@ HTTP code must not import backend crates directly.
 
 The crate root uses `#![deny(unsafe_code)]`; the only production unsafe exception
 for the Apple networking backend is the focused Objective-C bridge under
-`src/backend/apple/`, following the same unsafe-isolated Apple-module precedent
-as `kithara-decode`. Unsafe is limited to the files that cross Foundation /
-Objective-C boundaries: session setup, delegate class registration, completion
-blocks, challenge handling, Objective-C selectors skipped by generated bindings,
-and `NSData`/`NSHTTPURLResponse` casts.
+`src/backend/apple/`. Shared Foundation binding dependencies are owned by
+`kithara-apple/foundation`; unsafe left in `kithara-net` is limited to the leaf
+adapter glue that registers the delegate class, calls completion blocks, and
+handles Objective-C callbacks.
 
 The carve-out is intentionally leaf-scoped:
 
-- Safe Rust code calls `AppleNet` / `AppleSession`; it does not import objc2 types.
+- Safe Rust code calls `AppleNet` / `AppleSession`; it does not depend on
+  `block2`, `objc2`, or `objc2-foundation` directly.
 - `src/backend/apple/**` is listed in
   `.config/ast-grep/rust.no-lint-suppression.yml`; only files that actually use
   unsafe carry `#![allow(unsafe_code)]`.

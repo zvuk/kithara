@@ -4436,7 +4436,10 @@ dependencies = [
 name = "kithara-apple"
 version = "0.0.1-alpha4"
 dependencies = [
+ "block2 0.6.2",
  "kithara-workspace-hack",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
  "thiserror 2.0.18",
 ]
 
@@ -4840,13 +4843,13 @@ dependencies = [
  "async-trait",
  "axum",
  "bitflags 2.13.0",
- "block2 0.6.2",
  "bon",
  "bytes",
  "dashmap",
  "futures",
  "gloo-timers",
  "hotpath",
+ "kithara-apple",
  "kithara-bufpool",
  "kithara-net",
  "kithara-platform",
@@ -4855,8 +4858,6 @@ dependencies = [
  "kithara-workspace-hack",
  "memory-stats",
  "num-traits",
- "objc2 0.6.4",
- "objc2-foundation 0.3.2",
  "reqwest",
  "thiserror 2.0.18",
  "tower-layer",

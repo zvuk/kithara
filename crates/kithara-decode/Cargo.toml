@@ -20,7 +20,13 @@ ignored = ["hotpath"]
 # libfdk-aac (LGPL + patent constraints) keep `["symphonia"]` only.
 default = ["symphonia", "fdk-aac", "resample-rubato", "client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-apple = ["dep:core-foundation", "dep:core-foundation-sys", "dep:kithara-apple", "dep:symphonia-core"]
+apple = [
+    "dep:core-foundation",
+    "dep:core-foundation-sys",
+    "dep:kithara-apple",
+    "dep:symphonia-core",
+    "kithara-apple/audio-toolbox",
+]
 # Select Apple codec-embedded resampling as the default decoder placement.
 apple-codec-embedded-resampler = ["apple"]
 # In-tree fdk-aac adapter needs symphonia-core macros (`codec_profile!`,

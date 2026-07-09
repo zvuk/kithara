@@ -1,6 +1,6 @@
 # kithara-apple Context
 
-`kithara-apple` is the canonical owner for Apple C ABI used by Kithara.
+`kithara-apple` is the canonical owner for Apple framework ABI used by Kithara.
 
 ## Ownership
 
@@ -9,16 +9,27 @@
 - Safe RAII wrappers for `AudioConverter`, `AudioFile`, `AudioBufferList`, and
   POD byte copies live under `audio_toolbox`.
 - Accelerate bindings live in `accelerate`.
-- Codec decisions, gapless policy, stream read semantics, and resampler
-  algorithms must not move into this crate.
+- Foundation and Objective-C binding crates are exposed through `foundation`.
+  Consumers should depend on `kithara-apple` features rather than declaring
+  `block2`, `objc2`, or `objc2-foundation` directly.
+- Codec decisions, gapless policy, HTTP semantics, stream read semantics, and
+  resampler algorithms must not move into this crate.
+
+## Feature Surfaces
+
+- `audio-toolbox` exposes `audio_toolbox`.
+- `accelerate` exposes `accelerate`.
+- `foundation` exposes the Objective-C/Foundation binding surface needed by
+  Apple platform adapters such as the `NSURLSession` HTTP backend.
 
 ## Unsafe Boundary
 
-This crate is the canonical unsafe owner for shared Apple C ABI. Unsafe is
+This crate is the canonical unsafe owner for shared Apple framework ABI. Unsafe is
 confined to the modules that directly bridge Apple C APIs and is documented at
 the call site. Callers should not need local Apple FFI declarations for shared
-AudioToolbox or Accelerate operations, and downstream crates should keep their
-own unsafe policy strict.
+AudioToolbox, Accelerate, or Foundation binding dependencies, and downstream
+crates should keep their own unsafe policy strict except for leaf adapter glue
+that must implement Apple callback protocols.
 
 ## Accelerate
 

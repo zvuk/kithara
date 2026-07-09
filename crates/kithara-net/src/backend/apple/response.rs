@@ -3,10 +3,12 @@
 use std::ptr;
 
 use bytes::Bytes;
+use kithara_apple::foundation::{
+    ns::{NSData, NSError, NSHTTPURLResponse, NSInteger, NSString, NSURLResponse},
+    objc::{ClassType, runtime::NSObjectProtocol},
+};
 use kithara_bufpool::{BudgetExhausted, BytePool, PooledOwned};
 use kithara_platform::{sync::Mutex, tokio::sync::oneshot};
-use objc2::{ClassType, runtime::NSObjectProtocol};
-use objc2_foundation::{NSData, NSError, NSHTTPURLResponse, NSInteger, NSString, NSURLResponse};
 
 use crate::{error::NetError, types::Headers};
 

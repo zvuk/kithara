@@ -295,7 +295,9 @@ mod tests {
 
     #[test]
     fn biquad_low_pass_processes_requested_frames() {
-        let Some(mut filter) = BiquadFilter::low_pass(44_100.0, 12_000.0, 0.7071) else {
+        let Some(mut filter) =
+            BiquadFilter::low_pass(44_100.0, 12_000.0, std::f64::consts::FRAC_1_SQRT_2)
+        else {
             panic!("valid low pass filter");
         };
         let source = [0.0, 1.0, 0.0, -1.0, 0.0];

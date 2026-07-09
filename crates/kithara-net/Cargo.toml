@@ -17,7 +17,7 @@ default = ["client-reqwest", "tls-rustls"]
 # opt-ins. See CONTEXT.md "HTTP client backends".
 client-reqwest = ["dep:reqwest", "dep:tower-layer", "dep:tower-service"]
 client-wreq = ["dep:tower-layer", "dep:tower-service", "dep:wreq", "dep:wreq-util"]
-client-apple = ["dep:block2", "dep:dashmap", "dep:objc2", "dep:objc2-foundation"]
+client-apple = ["dep:dashmap", "dep:kithara-apple", "kithara-apple/foundation"]
 # TLS backend for the `client-reqwest` path. No effect on `client-wreq` (always
 # BoringSSL) or `client-apple` (URLSession owns TLS). `tls-rustls` is the
 # default; `tls-native` uses the platform TLS (Apple Secure Transport /
@@ -58,27 +58,7 @@ unimock = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-block2 = { workspace = true, optional = true }
-objc2 = { workspace = true, optional = true }
-objc2-foundation = { workspace = true, optional = true, features = [
-    "std",
-    "block2",
-    "NSData",
-    "NSDate",
-    "NSDictionary",
-    "NSError",
-    "NSOperation",
-    "NSObject",
-    "NSString",
-    "NSArray",
-    "NSURL",
-    "NSURLAuthenticationChallenge",
-    "NSURLCredential",
-    "NSURLProtectionSpace",
-    "NSURLRequest",
-    "NSURLResponse",
-    "NSURLSession",
-] }
+kithara-apple = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }

@@ -1,3 +1,18 @@
+use kithara_bufpool::PcmBuf;
+
+use super::GlideConfig;
+use crate::ResamplerMode;
+
+pub(in crate::glide) struct RenderRequest<'a, 'out, 'channel> {
+    pub(in crate::glide) input: &'a [&'a [f32]],
+    pub(in crate::glide) previous: &'a [PcmBuf],
+    pub(in crate::glide) output: &'out mut [&'channel mut [f32]],
+    pub(in crate::glide) produced: usize,
+    pub(in crate::glide) config: GlideConfig,
+    pub(in crate::glide) filter_ratio: f64,
+    pub(in crate::glide) mode: ResamplerMode,
+}
+
 #[cfg(all(
     feature = "apple-accelerate",
     any(target_os = "macos", target_os = "ios")
@@ -12,7 +27,7 @@ mod imp {
     use num_traits::cast::ToPrimitive;
     use smallvec::SmallVec;
 
-    use super::super::{GlideConfig, GlideInterpolation};
+    use super::{super::GlideInterpolation, RenderRequest};
     use crate::{ResamplerBuildError, ResamplerError, ResamplerMode};
 
     struct FilterParams {
@@ -22,7 +37,7 @@ mod imp {
 
     const FILTER_PARAMS: FilterParams = FilterParams {
         cutoff_to_nyquist: 0.9,
-        low_pass_q: 0.7071,
+        low_pass_q: std::f64::consts::FRAC_1_SQRT_2,
     };
 
     pub(in crate::glide) struct GlideEngine {
@@ -117,14 +132,17 @@ mod imp {
 
         pub(in crate::glide) fn render(
             &mut self,
-            input: &[&[f32]],
-            previous: &[PcmBuf],
-            output: &mut [&mut [f32]],
-            produced: usize,
-            config: GlideConfig,
-            filter_ratio: f64,
-            mode: ResamplerMode,
+            request: RenderRequest<'_, '_, '_>,
         ) -> Result<(), ResamplerError> {
+            let RenderRequest {
+                input,
+                previous,
+                output,
+                produced,
+                config,
+                filter_ratio,
+                mode,
+            } = request;
             let input_frames = input.first().map_or(0, |channel| channel.len());
             if input_frames > self.max_input_frames {
                 return Err(ResamplerError::Backend {
@@ -237,7 +255,7 @@ mod imp {
     use num_traits::cast::ToPrimitive;
     use smallvec::SmallVec;
 
-    use super::super::{GlideConfig, GlideInterpolation};
+    use super::{super::GlideInterpolation, RenderRequest};
     use crate::{ResamplerBuildError, ResamplerError, ResamplerMode};
 
     struct FilterParams {
@@ -247,7 +265,7 @@ mod imp {
 
     const FILTER_PARAMS: FilterParams = FilterParams {
         cutoff_to_nyquist: 0.9,
-        low_pass_q: 0.7071,
+        low_pass_q: std::f64::consts::FRAC_1_SQRT_2,
     };
 
     pub(in crate::glide) struct GlideEngine {
@@ -342,14 +360,17 @@ mod imp {
 
         pub(in crate::glide) fn render(
             &mut self,
-            input: &[&[f32]],
-            previous: &[PcmBuf],
-            output: &mut [&mut [f32]],
-            produced: usize,
-            config: GlideConfig,
-            filter_ratio: f64,
-            mode: ResamplerMode,
+            request: RenderRequest<'_, '_, '_>,
         ) -> Result<(), ResamplerError> {
+            let RenderRequest {
+                input,
+                previous,
+                output,
+                produced,
+                config,
+                filter_ratio,
+                mode,
+            } = request;
             let input_frames = input.first().map_or(0, |channel| channel.len());
             if input_frames > self.max_input_frames {
                 return Err(ResamplerError::Backend {

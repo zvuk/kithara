@@ -2,21 +2,23 @@
 
 use std::{ptr, sync::Arc};
 
-use block2::DynBlock;
 use dashmap::DashMap;
+use kithara_apple::foundation::{
+    block::DynBlock,
+    ns::{
+        NSData, NSError, NSURLAuthenticationChallenge, NSURLAuthenticationMethodServerTrust,
+        NSURLCredential, NSURLProtectionSpace, NSURLResponse, NSURLSession,
+        NSURLSessionAuthChallengeDisposition, NSURLSessionDataDelegate, NSURLSessionDataTask,
+        NSURLSessionDelegate, NSURLSessionResponseDisposition, NSURLSessionTask,
+        NSURLSessionTaskDelegate, NSURLSessionTaskMetrics,
+    },
+    objc::{
+        AnyThread, ClassType, DefinedClass, Encoding, RefEncode, define_class, msg_send,
+        rc::Retained,
+        runtime::{NSObject, NSObjectProtocol},
+    },
+};
 use kithara_platform::tokio::sync::oneshot;
-use objc2::{
-    AnyThread, ClassType, DefinedClass, Encoding, RefEncode, define_class, msg_send,
-    rc::Retained,
-    runtime::{NSObject, NSObjectProtocol},
-};
-use objc2_foundation::{
-    NSData, NSError, NSURLAuthenticationChallenge, NSURLAuthenticationMethodServerTrust,
-    NSURLCredential, NSURLProtectionSpace, NSURLResponse, NSURLSession,
-    NSURLSessionAuthChallengeDisposition, NSURLSessionDataDelegate, NSURLSessionDataTask,
-    NSURLSessionDelegate, NSURLSessionResponseDisposition, NSURLSessionTask,
-    NSURLSessionTaskDelegate, NSURLSessionTaskMetrics,
-};
 
 use super::{
     response::{StreamHead, error_from_nserror, http_parts},

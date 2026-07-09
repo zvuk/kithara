@@ -4,7 +4,10 @@ use kithara_bufpool::{PcmBuf, PcmPool};
 use num_traits::cast::ToPrimitive;
 use smallvec::SmallVec;
 
-use super::{GlideConfig, engine::GlideEngine};
+use super::{
+    GlideConfig,
+    engine::{GlideEngine, RenderRequest},
+};
 use crate::{
     RatioGlide, Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerControl,
     ResamplerError, ResamplerMode, ResamplerOptions, ResamplerProcess, ResamplerSettings,
@@ -108,15 +111,15 @@ impl GlideResampler {
         self.cursor = cursor;
         self.current_ratio = current_ratio;
         self.glide = glide;
-        self.engine.render(
+        self.engine.render(RenderRequest {
             input,
-            &self.previous,
             output,
             produced,
-            self.config,
             filter_ratio,
-            self.mode,
-        )?;
+            previous: &self.previous,
+            config: self.config,
+            mode: self.mode,
+        })?;
         Ok(produced)
     }
 
