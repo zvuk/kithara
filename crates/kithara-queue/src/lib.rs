@@ -2,6 +2,7 @@
 //!
 //! See `CONTEXT.md` for the public API contract and migration notes.
 
+mod attempts;
 mod config;
 mod error;
 mod loader;

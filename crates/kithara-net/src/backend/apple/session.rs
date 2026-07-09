@@ -7,7 +7,6 @@ use kithara_bufpool::BytePool;
 use kithara_platform::{
     CancelToken,
     sync::{Mutex, OnceLock},
-    time::Duration,
     tokio::sync::oneshot,
 };
 use objc2::{rc::Retained, runtime::ProtocolObject};
@@ -38,7 +37,6 @@ type DataStart = (
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SharedSessionKey {
-    total_timeout: Option<Duration>,
     is_insecure: bool,
     max_connections_per_host: usize,
 }
@@ -173,7 +171,6 @@ impl AppleSession {
 impl From<&NetOptions> for SharedSessionKey {
     fn from(options: &NetOptions) -> Self {
         Self {
-            total_timeout: options.total_timeout,
             max_connections_per_host: options.pool_max_idle_per_host,
             is_insecure: options.is_insecure,
         }
@@ -184,9 +181,6 @@ impl SharedSession {
     fn new(key: SharedSessionKey) -> Self {
         let delegate = AppleSessionDelegate::new(key.is_insecure);
         let configuration = NSURLSessionConfiguration::ephemeralSessionConfiguration();
-        if let Some(total_timeout) = key.total_timeout {
-            configuration.setTimeoutIntervalForResource(total_timeout.as_secs_f64());
-        }
         if let Ok(max_connections) = NSInteger::try_from(key.max_connections_per_host)
             && max_connections > 0
         {

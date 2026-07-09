@@ -1,11 +1,9 @@
-use std::sync::PoisonError;
-
 use kithara_events::{EventReceiver, TrackId};
 
 use super::Queue;
 use crate::{
     navigation::RepeatMode,
-    track::{TrackEntry, TrackSource},
+    track::{TrackEntry, TrackRecord, TrackSource},
 };
 
 impl Queue {
@@ -20,7 +18,7 @@ impl Queue {
     #[must_use]
     pub fn current(&self) -> Option<TrackEntry> {
         let idx = self.lock_navigation().current_index()?;
-        self.lock_tracks().get(idx).cloned()
+        self.lock_tracks().get(idx).map(TrackRecord::entry)
     }
 
     /// ABR handle of the currently playing adaptive item, if any.
@@ -93,23 +91,22 @@ impl Queue {
     /// Lookup a track entry by id.
     #[must_use]
     pub fn track(&self, id: TrackId) -> Option<TrackEntry> {
-        self.lock_tracks().iter().find(|e| e.id == id).cloned()
+        self.lock_tracks()
+            .iter()
+            .find(|r| r.id == id)
+            .map(TrackRecord::entry)
     }
 
     /// The original [`TrackSource`] for `id`, if still queued. Lets callers
     /// rebuild a resource by track identity rather than by queue position.
     #[must_use]
     pub fn track_source(&self, id: TrackId) -> Option<TrackSource> {
-        self.sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&id)
-            .cloned()
+        self.tracks.source(id)
     }
 
     /// Snapshot of all track entries, in queue order.
     #[must_use]
     pub fn tracks(&self) -> Vec<TrackEntry> {
-        self.lock_tracks().clone()
+        self.lock_tracks().iter().map(TrackRecord::entry).collect()
     }
 }
