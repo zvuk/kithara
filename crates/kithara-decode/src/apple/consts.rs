@@ -1,5 +1,3 @@
-#![allow(non_upper_case_globals)]
-
 use kithara_apple::audio_toolbox::{
     AUDIO_CONVERTER_ERR_NO_DATA_NOW, AUDIO_FILE_AAC_ADTS_TYPE, AUDIO_FILE_CAF_TYPE,
     AUDIO_FILE_FLAC_TYPE, AUDIO_FILE_M4A_TYPE, AUDIO_FILE_MP3_TYPE, AUDIO_FILE_WAVE_TYPE,
@@ -24,35 +22,32 @@ impl Consts {
     /// Same as [`Self::FLAC_STREAMINFO_LEN`] typed for the
     /// `METADATA_BLOCK_LENGTH` u8 byte in the Apple FLAC magic cookie.
     pub(crate) const FLAC_STREAMINFO_LEN_U8: u8 = 34;
-    pub(crate) const kAudioConverterErr_NoDataNow: OSStatus = AUDIO_CONVERTER_ERR_NO_DATA_NOW;
-    /// `'pmth'` — `AudioConverterPrimeMethod`: controls how the
-    /// converter handles codec-side priming/padding. Set to
-    /// [`Self::kConverterPrimeMethod_None`] so the decoder emits raw
+    pub(crate) const CONVERTER_ERR_NO_DATA_NOW: OSStatus = AUDIO_CONVERTER_ERR_NO_DATA_NOW;
     /// `'adts'` — raw AAC ADTS-framed bitstream file-type hint.
-    pub(crate) const kAudioFileAAC_ADTSType: u32 = AUDIO_FILE_AAC_ADTS_TYPE;
+    pub(crate) const FILE_AAC_ADTS_TYPE: u32 = AUDIO_FILE_AAC_ADTS_TYPE;
     /// `'caff'` — Core Audio Format file-type hint.
-    pub(crate) const kAudioFileCAFType: u32 = AUDIO_FILE_CAF_TYPE;
+    pub(crate) const FILE_CAF_TYPE: u32 = AUDIO_FILE_CAF_TYPE;
     /// `'flac'` — native FLAC bitstream file-type hint (macOS 10.13+ /
-    /// iOS 11+). Same four-cc as [`Self::kAudioFormatFLAC`].
-    pub(crate) const kAudioFileFLACType: u32 = AUDIO_FILE_FLAC_TYPE;
+    /// iOS 11+). Same four-cc as [`Self::FORMAT_FLAC`].
+    pub(crate) const FILE_FLAC_TYPE: u32 = AUDIO_FILE_FLAC_TYPE;
     /// `'m4af'` — M4A (ALAC / AAC) file-type hint.
-    pub(crate) const kAudioFileM4AType: u32 = AUDIO_FILE_M4A_TYPE;
+    pub(crate) const FILE_M4A_TYPE: u32 = AUDIO_FILE_M4A_TYPE;
     /// `'MPG3'` — MPEG-1/2 Layer 3 file-type hint.
-    pub(crate) const kAudioFileMP3Type: u32 = AUDIO_FILE_MP3_TYPE;
+    pub(crate) const FILE_MP3_TYPE: u32 = AUDIO_FILE_MP3_TYPE;
     /// `'WAVE'` — RIFF WAV file-type hint for `audio_file_open_with_callbacks`.
-    pub(crate) const kAudioFileWAVEType: u32 = AUDIO_FILE_WAVE_TYPE;
+    pub(crate) const FILE_WAVE_TYPE: u32 = AUDIO_FILE_WAVE_TYPE;
     /// `'alac'` — Apple Lossless Audio Codec input format ID.
-    pub(crate) const kAudioFormatAppleLossless: AudioFormatID = AUDIO_FORMAT_APPLE_LOSSLESS;
-    pub(crate) const kAudioFormatFLAC: AudioFormatID = AUDIO_FORMAT_FLAC;
-    pub(crate) const kAudioFormatFlagsNativeFloatPacked: AudioFormatFlags =
+    pub(crate) const FORMAT_APPLE_LOSSLESS: AudioFormatID = AUDIO_FORMAT_APPLE_LOSSLESS;
+    pub(crate) const FORMAT_FLAC: AudioFormatID = AUDIO_FORMAT_FLAC;
+    pub(crate) const FORMAT_FLAGS_NATIVE_FLOAT_PACKED: AudioFormatFlags =
         AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PACKED;
-    pub(crate) const kAudioFormatLinearPCM: AudioFormatID = AUDIO_FORMAT_LINEAR_PCM;
+    pub(crate) const FORMAT_LINEAR_PCM: AudioFormatID = AUDIO_FORMAT_LINEAR_PCM;
     /// `'aac '` — MPEG-4 AAC LC input format ID. Also used as a hint for
     /// HE-AAC v1/v2: the actual codec class is derived from the ESDS
     /// cookie via `kAudioFormatProperty_FormatList`.
-    pub(crate) const kAudioFormatMPEG4AAC: AudioFormatID = AUDIO_FORMAT_MPEG4_AAC;
+    pub(crate) const FORMAT_MPEG4_AAC: AudioFormatID = AUDIO_FORMAT_MPEG4_AAC;
     /// `'.mp3'` — MPEG-1/2 Layer 3 input format ID.
-    pub(crate) const kAudioFormatMPEGLayer3: AudioFormatID = AUDIO_FORMAT_MPEG_LAYER3;
+    pub(crate) const FORMAT_MPEG_LAYER3: AudioFormatID = AUDIO_FORMAT_MPEG_LAYER3;
     /// `'flst'` — `audio_format_get_property_raw` property that enumerates all
     /// `AudioFormatListItem`s an ESDS-wrapped cookie can decode to. For
     /// HE-AAC v1/v2 the ESDS encodes multiple compatible layers (LC
@@ -61,8 +56,8 @@ impl Consts {
     /// rate), so `items[0]` is the full output format (e.g. stereo
     /// 44.1 kHz for HE-AAC v2). Specifier = `AudioFormatInfo` struct
     /// containing a partial ASBD (`format_id` required) + ESDS cookie.
-    pub(crate) const kAudioFormatProperty_FormatList: u32 = AUDIO_FORMAT_PROPERTY_FORMAT_LIST;
-    pub(crate) const noErr: OSStatus = kithara_apple::audio_toolbox::NO_ERR;
+    pub(crate) const FORMAT_PROPERTY_FORMAT_LIST: u32 = AUDIO_FORMAT_PROPERTY_FORMAT_LIST;
+    pub(crate) const NO_ERR: OSStatus = kithara_apple::audio_toolbox::NO_ERR;
 }
 
 /// Decode a `FourCC`-style `OSStatus` into an ASCII tag when possible.
@@ -78,7 +73,7 @@ mod tests {
 
     #[kithara::test]
     fn test_os_status_to_string() {
-        assert_eq!(os_status_to_string(Consts::noErr), "noErr");
+        assert_eq!(os_status_to_string(Consts::NO_ERR), "noErr");
         assert!(os_status_to_string(0x7768_743f).contains("wht?"));
     }
 }

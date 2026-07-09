@@ -69,18 +69,18 @@ impl AppleAudioFileDemuxer {
     /// match arm here.
     fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
         Some(match (codec, container) {
-            (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::kAudioFileWAVEType,
-            (AudioCodec::Mp3, ContainerFormat::MpegAudio) => Consts::kAudioFileMP3Type,
-            (AudioCodec::Flac, ContainerFormat::Flac) => Consts::kAudioFileFLACType,
-            (AudioCodec::Alac, ContainerFormat::Mp4) => Consts::kAudioFileM4AType,
-            (AudioCodec::Alac, ContainerFormat::Caf) => Consts::kAudioFileCAFType,
+            (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::FILE_WAVE_TYPE,
+            (AudioCodec::Mp3, ContainerFormat::MpegAudio) => Consts::FILE_MP3_TYPE,
+            (AudioCodec::Flac, ContainerFormat::Flac) => Consts::FILE_FLAC_TYPE,
+            (AudioCodec::Alac, ContainerFormat::Mp4) => Consts::FILE_M4A_TYPE,
+            (AudioCodec::Alac, ContainerFormat::Caf) => Consts::FILE_CAF_TYPE,
             (AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2, ContainerFormat::Mp4) => {
-                Consts::kAudioFileM4AType
+                Consts::FILE_M4A_TYPE
             }
             (
                 AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
                 ContainerFormat::Adts,
-            ) => Consts::kAudioFileAAC_ADTSType,
+            ) => Consts::FILE_AAC_ADTS_TYPE,
             _ => return None,
         })
     }

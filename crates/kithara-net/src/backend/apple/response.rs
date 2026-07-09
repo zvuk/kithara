@@ -1,11 +1,7 @@
-#![allow(unsafe_code)]
-
-use std::ptr;
-
 use bytes::Bytes;
 use kithara_apple::foundation::{
-    ns::{NSData, NSError, NSHTTPURLResponse, NSInteger, NSString, NSURLResponse},
-    objc::{ClassType, runtime::NSObjectProtocol},
+    ns::{NSData, NSError, NSInteger, NSURLResponse},
+    urlsession::{self, DataCompletion, ResponseParts},
 };
 use kithara_bufpool::{BudgetExhausted, BytePool, PooledOwned};
 use kithara_platform::{sync::Mutex, tokio::sync::oneshot};
@@ -36,27 +32,19 @@ impl AsRef<[u8]> for PooledBytes {
 }
 
 pub(super) fn completion_result(
-    data: *mut NSData,
-    response: *mut NSURLResponse,
-    error: *mut NSError,
+    completion: DataCompletion<'_>,
     byte_pool: &BytePool,
 ) -> Result<AppleDataResponse, NetError> {
-    // SAFETY: NSURLSession provides these pointers for the duration of the
-    // completion callback; null is represented as None.
-    let error = unsafe { error.as_ref() };
-    if let Some(error) = error {
+    if let Some(error) = completion.error() {
         return Err(error_from_nserror(error));
     }
 
-    // SAFETY: NSURLSession provides these pointers for the duration of the
-    // completion callback; null is represented as None.
-    let data = unsafe { data.as_ref() };
-    // SAFETY: NSURLSession provides these pointers for the duration of the
-    // completion callback; null is represented as None.
-    let response = unsafe { response.as_ref() };
-    let body = data.map_or_else(|| Ok(Bytes::new()), |data| copy_data(data, byte_pool))?;
-    let (status, headers) = response
-        .and_then(http_parts)
+    let body = completion
+        .data()
+        .map_or_else(|| Ok(Bytes::new()), |data| copy_data(data, byte_pool))?;
+    let (status, headers) = completion
+        .response_parts()
+        .map(headers_from_response_parts)
         .unwrap_or_else(|| (None, Headers::new()));
     Ok(AppleDataResponse {
         body,
@@ -66,10 +54,7 @@ pub(super) fn completion_result(
 }
 
 pub(super) fn http_parts(response: &NSURLResponse) -> Option<(Option<u16>, Headers)> {
-    let http = http_response(response)?;
-    let code = http.statusCode();
-    let status = u16::try_from(code).ok();
-    Some((status, headers_from_response(http)))
+    urlsession::response_parts(response).map(headers_from_response_parts)
 }
 
 pub(super) fn copy_data(data: &NSData, byte_pool: &BytePool) -> Result<Bytes, NetError> {
@@ -81,11 +66,9 @@ pub(super) fn copy_data(data: &NSData, byte_pool: &BytePool) -> Result<Bytes, Ne
     let mut bytes = byte_pool.get();
     bytes.ensure_len(len).map_err(byte_budget_error)?;
     bytes.truncate(len);
-    // SAFETY: NSURLSession supplies immutable NSData for the duration of the
-    // callback. We copy it into a pooled Rust buffer before returning.
     bytes
         .as_mut_slice()
-        .copy_from_slice(unsafe { data.as_bytes_unchecked() });
+        .copy_from_slice(urlsession::data_bytes(data));
     Ok(Bytes::from_owner(PooledBytes { bytes }))
 }
 
@@ -117,38 +100,18 @@ pub(super) fn send_once<T>(slot: &Mutex<Option<oneshot::Sender<T>>>, value: T) {
     }
 }
 
-fn http_response(response: &NSURLResponse) -> Option<&NSHTTPURLResponse> {
-    if response.isKindOfClass(NSHTTPURLResponse::class()) {
-        let raw = ptr::from_ref(response).cast::<NSHTTPURLResponse>();
-        // SAFETY: The Objective-C object reported that it is an
-        // NSHTTPURLResponse, so this reference cast preserves the object type.
-        Some(unsafe { &*raw })
-    } else {
-        None
-    }
-}
-
-fn headers_from_response(response: &NSHTTPURLResponse) -> Headers {
-    let fields = response.allHeaderFields();
-    // SAFETY: Foundation documents HTTP header dictionaries as NSString keys
-    // and values. Non-string entries, if ever returned by a custom protocol,
-    // are outside NSURLSession's HTTP response contract.
-    let fields = unsafe { fields.cast_unchecked::<NSString, NSString>() };
-    let (keys, values) = fields.to_vecs();
-    let pairs: Vec<(String, String)> = keys
-        .into_iter()
-        .zip(values)
-        .map(|(key, value)| (key.to_string().to_ascii_lowercase(), value.to_string()))
-        .collect();
+fn headers_from_response_parts(parts: ResponseParts) -> (Option<u16>, Headers) {
+    let (status, pairs) = parts.into();
     let is_decoded = pairs
         .iter()
         .any(|(key, _)| key.as_str() == "content-encoding");
     let mut headers = Headers::new();
     for (key, value) in pairs {
+        let key = key.to_ascii_lowercase();
         if is_decoded && (key == "content-encoding" || key == "content-length") {
             continue;
         }
         headers.insert(key, value);
     }
-    headers
+    (status, headers)
 }

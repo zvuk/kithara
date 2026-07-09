@@ -102,7 +102,7 @@ impl AppleCodec {
         if let Some(cookie) = cookie.as_ref().filter(|c| !c.is_empty()) {
             let status =
                 converter.set_property_bytes(AUDIO_CONVERTER_DECOMPRESSION_MAGIC_COOKIE, cookie);
-            if status != Consts::noErr {
+            if status != Consts::NO_ERR {
                 tracing::warn!(
                     status,
                     err = %os_status_to_string(status),
@@ -240,8 +240,8 @@ impl AppleCodec {
             &mut buffer_list,
         );
 
-        if status != Consts::noErr
-            && status != Consts::kAudioConverterErr_NoDataNow
+        if status != Consts::NO_ERR
+            && status != Consts::CONVERTER_ERR_NO_DATA_NOW
             && output_packets == 0
         {
             return Err(DecodeError::BackendStatus {
@@ -305,7 +305,7 @@ impl FrameCodec for AppleCodec {
         };
         self.eof_drained = false;
         let status = self.input_state.set(frame_data, desc);
-        if status != Consts::noErr {
+        if status != Consts::NO_ERR {
             return Err(DecodeError::BackendStatus {
                 code: status,
                 op: "AudioConverter input packet",
@@ -340,7 +340,7 @@ impl FrameCodec for AppleCodec {
 
     fn flush(&mut self) -> DecodeResult<()> {
         let status = self.converter.reset();
-        if status != Consts::noErr {
+        if status != Consts::NO_ERR {
             return Err(DecodeError::BackendStatus {
                 code: status,
                 op: "AudioConverterReset",
@@ -397,7 +397,7 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
 
             let asbd = AudioStreamBasicDescription {
                 sample_rate: f64::from(track.sample_rate),
-                format_id: Consts::kAudioFormatFLAC,
+                format_id: Consts::FORMAT_FLAC,
                 frames_per_packet: max_block,
                 channels_per_frame: u32::from(track.channels),
                 ..Default::default()
@@ -419,7 +419,7 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
         AudioCodec::Mp3 => {
             let asbd = AudioStreamBasicDescription {
                 sample_rate: f64::from(track.sample_rate),
-                format_id: Consts::kAudioFormatMPEGLayer3,
+                format_id: Consts::FORMAT_MPEG_LAYER3,
                 frames_per_packet: 0,
                 channels_per_frame: u32::from(track.channels),
                 ..Default::default()
@@ -438,7 +438,7 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             }
             let asbd = AudioStreamBasicDescription {
                 sample_rate: f64::from(track.sample_rate),
-                format_id: Consts::kAudioFormatAppleLossless,
+                format_id: Consts::FORMAT_APPLE_LOSSLESS,
                 frames_per_packet: 0,
                 channels_per_frame: u32::from(track.channels),
                 ..Default::default()
@@ -488,7 +488,7 @@ fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
     if track.extra_data.is_empty() {
         let asbd = AudioStreamBasicDescription {
             sample_rate: f64::from(track.sample_rate),
-            format_id: Consts::kAudioFormatMPEG4AAC,
+            format_id: Consts::FORMAT_MPEG4_AAC,
             frames_per_packet: Consts::AAC_FRAMES_PER_PACKET,
             channels_per_frame: u32::from(track.channels),
             ..Default::default()
@@ -526,7 +526,7 @@ fn derive_aac_asbd_from_esds(
     let cookie_size = u32::try_from(esds.len())?;
     let format_info = AudioFormatInfo {
         asbd: AudioStreamBasicDescription {
-            format_id: Consts::kAudioFormatMPEG4AAC,
+            format_id: Consts::FORMAT_MPEG4_AAC,
             ..Default::default()
         },
         magic_cookie: esds.as_ptr().cast::<c_void>(),
@@ -534,14 +534,15 @@ fn derive_aac_asbd_from_esds(
     };
 
     let list_bytes =
-        audio_format_get_property_info(Consts::kAudioFormatProperty_FormatList, &format_info)
-            .map_err(|status| DecodeError::BackendStatus {
+        audio_format_get_property_info(Consts::FORMAT_PROPERTY_FORMAT_LIST, &format_info).map_err(
+            |status| DecodeError::BackendStatus {
                 code: status,
                 op: "AudioFormatGetPropertyInfo(FormatList)",
-            })?;
+            },
+        )?;
     if list_bytes == 0 {
         return Err(DecodeError::BackendStatus {
-            code: Consts::noErr,
+            code: Consts::NO_ERR,
             op: "AudioFormatGetPropertyInfo(FormatList)",
         });
     }
@@ -555,7 +556,7 @@ fn derive_aac_asbd_from_esds(
     }
     let mut items: Vec<AudioFormatListItem> = vec![AudioFormatListItem::default(); item_count];
     let io_size = audio_format_get_property(
-        Consts::kAudioFormatProperty_FormatList,
+        Consts::FORMAT_PROPERTY_FORMAT_LIST,
         &format_info,
         &mut items,
         list_bytes,
@@ -677,8 +678,8 @@ fn build_pcm_output_format(
     let sample_rate = resolve_output_sample_rate(source_rate, target_output_rate);
     AudioStreamBasicDescription {
         sample_rate: f64::from(sample_rate),
-        format_id: Consts::kAudioFormatLinearPCM,
-        format_flags: Consts::kAudioFormatFlagsNativeFloatPacked,
+        format_id: Consts::FORMAT_LINEAR_PCM,
+        format_flags: Consts::FORMAT_FLAGS_NATIVE_FLOAT_PACKED,
         bytes_per_packet: Consts::BYTES_PER_F32_SAMPLE * u32::from(channels),
         frames_per_packet: 1,
         bytes_per_frame: Consts::BYTES_PER_F32_SAMPLE * u32::from(channels),

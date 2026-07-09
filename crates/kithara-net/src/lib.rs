@@ -1,5 +1,4 @@
-// NOTE: deny instead of forbid to allow unsafe in platform-specific FFI modules (apple)
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 mod backend;
 #[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]

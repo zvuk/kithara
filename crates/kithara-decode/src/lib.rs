@@ -1,4 +1,4 @@
-// NOTE: deny instead of forbid to allow unsafe in platform-specific FFI modules (apple, android)
+// NOTE: deny instead of forbid to allow unsafe in Android FFI modules.
 #![deny(unsafe_code)]
 
 //! # Kithara Decode

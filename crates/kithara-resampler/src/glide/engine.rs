@@ -410,10 +410,14 @@ mod imp {
                 let positions = &self.positions[..produced];
                 match config.interpolation {
                     GlideInterpolation::Linear => {
-                        linear_interpolate(source, positions, &mut output[channel_idx][..produced]);
+                        interpolate::<LinearInterpolation>(
+                            source,
+                            positions,
+                            &mut output[channel_idx][..produced],
+                        );
                     }
                     GlideInterpolation::Quadratic => {
-                        quadratic_interpolate(
+                        interpolate::<QuadraticInterpolation>(
                             source,
                             positions,
                             &mut output[channel_idx][..produced],
@@ -481,20 +485,24 @@ mod imp {
             })
     }
 
-    fn linear_interpolate(source: &[f32], positions: &[f32], target: &mut [f32]) {
-        for (position, output) in positions.iter().zip(target.iter_mut()) {
-            let base = position.floor().to_usize().unwrap_or(usize::MAX);
-            let frac = position - base.to_f32().unwrap_or(0.0);
+    trait Interpolation {
+        fn sample(source: &[f32], base: usize, frac: f32) -> f32;
+    }
+
+    struct LinearInterpolation;
+
+    impl Interpolation for LinearInterpolation {
+        fn sample(source: &[f32], base: usize, frac: f32) -> f32 {
             let center = source.get(base).copied().unwrap_or(0.0);
             let right = source.get(base.saturating_add(1)).copied().unwrap_or(0.0);
-            *output = center.mul_add(1.0 - frac, right * frac);
+            center.mul_add(1.0 - frac, right * frac)
         }
     }
 
-    fn quadratic_interpolate(source: &[f32], positions: &[f32], target: &mut [f32]) {
-        for (position, output) in positions.iter().zip(target.iter_mut()) {
-            let base = position.floor().to_usize().unwrap_or(usize::MAX);
-            let frac = position - base.to_f32().unwrap_or(0.0);
+    struct QuadraticInterpolation;
+
+    impl Interpolation for QuadraticInterpolation {
+        fn sample(source: &[f32], base: usize, frac: f32) -> f32 {
             let left = if base == 0 {
                 source.first().copied().unwrap_or(0.0)
             } else {
@@ -504,7 +512,18 @@ mod imp {
             let right = source.get(base.saturating_add(1)).copied().unwrap_or(0.0);
             let slope = 0.5 * (right - left);
             let curve = 0.5 * (right - 2.0 * center + left);
-            *output = center + frac * slope + frac * frac * curve;
+            center + frac * slope + frac * frac * curve
+        }
+    }
+
+    fn interpolate<I>(source: &[f32], positions: &[f32], target: &mut [f32])
+    where
+        I: Interpolation,
+    {
+        for (position, output) in positions.iter().zip(target.iter_mut()) {
+            let base = position.floor().to_usize().unwrap_or(usize::MAX);
+            let frac = position - base.to_f32().unwrap_or(0.0);
+            *output = I::sample(source, base, frac);
         }
     }
 

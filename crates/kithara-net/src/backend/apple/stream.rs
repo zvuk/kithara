@@ -7,7 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::Stream;
-use kithara_apple::foundation::{ns::NSData, objc::rc::Retained};
+use kithara_apple::foundation::ns::NSData;
 use kithara_bufpool::BytePool;
 use kithara_platform::{
     CancelToken, CancelWakerGuard,
@@ -16,7 +16,7 @@ use kithara_platform::{
 };
 
 use super::{
-    delegate::AppleSessionDelegate,
+    delegate::AppleSessionEvents,
     response::{AppleDataResponse, HTTP_PARTIAL_CONTENT, StreamHead, copy_data},
     session::{AppleTask, TaskId},
 };
@@ -296,7 +296,7 @@ pub(super) async fn wait_for_data(
 
 pub(super) async fn wait_for_stream_head(
     started: StartedStream,
-    delegate: Retained<AppleSessionDelegate>,
+    events: Arc<AppleSessionEvents>,
     cancel: CancelToken,
 ) -> Result<AppleStreamResponse, NetError> {
     let StartedStream {
@@ -305,7 +305,7 @@ pub(super) async fn wait_for_stream_head(
         head_receiver,
         task_id,
     } = started;
-    let mut guard = StreamStartGuard::new(task, delegate.clone(), task_id);
+    let mut guard = StreamStartGuard::new(task, Arc::clone(&events), task_id);
 
     select! {
         biased;
@@ -374,15 +374,15 @@ impl Drop for DataTaskGuard {
 
 struct StreamStartGuard {
     task: AppleTask,
-    delegate: Retained<AppleSessionDelegate>,
+    events: Arc<AppleSessionEvents>,
     task_id: TaskId,
     active: bool,
 }
 
 impl StreamStartGuard {
-    fn new(task: AppleTask, delegate: Retained<AppleSessionDelegate>, task_id: TaskId) -> Self {
+    fn new(task: AppleTask, events: Arc<AppleSessionEvents>, task_id: TaskId) -> Self {
         Self {
-            delegate,
+            events,
             task,
             task_id,
             active: true,
@@ -392,7 +392,7 @@ impl StreamStartGuard {
     fn cancel(&mut self) {
         if self.active {
             self.task.cancel();
-            self.delegate.remove_stream(self.task_id);
+            self.events.remove_stream(self.task_id);
             self.active = false;
         }
     }
@@ -407,7 +407,7 @@ impl Drop for StreamStartGuard {
     fn drop(&mut self) {
         if self.active {
             self.task.cancel();
-            self.delegate.remove_stream(self.task_id);
+            self.events.remove_stream(self.task_id);
         }
     }
 }
