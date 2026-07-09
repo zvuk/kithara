@@ -213,34 +213,33 @@ processing such as stretch and custom effects, not fixed-ratio sample-rate
 conversion. Speed and key-lock live in the time-stretch slot below and never
 change the sample-rate-conversion ratio.
 
-`DecoderResamplerSettings.backend` carries the selected
-`kithara-resampler::ResamplerBackendConfig`, while
-`DecoderResamplerSettings.options` carries
-`kithara-resampler::ResamplerOptions` into the selected backend. The backend
-handle is owned by `kithara-resampler`, not by `kithara-audio`; its portable
-default order is Rubato, then Glide, then none. On Apple targets, callers
+`AudioDecoderConfig<B>` carries an optional `DecoderResamplerSettings<B>`.
+When present, `DecoderResamplerSettings.backend` is the concrete
+`B: kithara_resampler::ResamplerBackend`; when absent, the decoder emits source
+rate PCM. `DecoderResamplerSettings.options` carries
+`kithara-resampler::ResamplerOptions` into that backend. The backend
+implementation is owned by `kithara-resampler`, not by `kithara-audio`; this
+crate does not choose a portable default backend. On Apple targets, callers
 that want standalone Apple PCM resampling inject
 `kithara_resampler::apple::AppleAudioConverterBackend` configured with
-`kithara_decode::AudioToolboxConverterFactory` through the same decoder config
-surface. The defaults preserve the shipped desktop playback values: Rubato
-backend on default builds, 4096-frame process blocks, 0.0001 host-rate ratio
-tolerance, and an 8.0 max-ratio-adjustment window. These are implementation
-tunables, not hidden constants in the processing code. Quality and backend
-family remain separate decisions.
+`kithara_resampler::apple::AudioToolboxConverterFactory` through the same typed decoder
+config surface. The shipped playback preset in `kithara-play` uses Rubato on
+default builds, 4096-frame process blocks, 0.0001 host-rate ratio tolerance,
+and an 8.0 max-ratio-adjustment window. These are implementation tunables, not
+hidden constants in the processing code. Quality and backend family remain
+separate decisions.
 
 `apple-fused-src` is the Apple device path. When the selected decoder backend is
 Apple AudioToolbox, `AudioConfig.host_sample_rate` is threaded to
-`DecoderConfig.resampler` as a codec-embedded decoder resampler config and the
-Apple converter emits PCM directly in the device domain. Non-Apple backends in
-the same build use `DecoderResamplerConfig::Standalone` with the selected
-backend, so the decoder object still exposes target-rate PCM without adding a
-playback effect stage.
+`DecoderConfig.resampler` with a typed backend selected by the caller. The
+current adapter path wraps decoded PCM with the selected standalone backend so
+the decoder object exposes target-rate PCM without adding a playback effect
+stage. Codec-embedded Apple planning remains the Apple host-specific extension
+point.
 
-`resample-rubato` enables the portable default playback backend.
-`resample-glide` forwards the Glide backend for explicit config selection
-and as the portable default when Rubato is not compiled. Default desktop and
-Android builds keep Rubato. Apple fused FFI builds omit Rubato unless another
-feature explicitly pulls it back in.
+`resample-rubato` enables the Rubato backend type.
+`resample-glide` enables the Glide backend type. Selecting either backend is a
+typed config decision, not a runtime fallback chain.
 
 The decoder resampler's output capacity remains a correctness invariant: the
 configured backend reports `output_frames_for_input` in the ceil frame domain

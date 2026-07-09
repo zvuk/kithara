@@ -80,7 +80,7 @@ fn test_pcm_chunk_access_allocation_free() {
     permit_alloc(|| drop(chunk));
 }
 
-fn build_resampler(pool: &PcmPool, source_rate: u32, target_rate: u32) -> Box<dyn Resampler> {
+fn build_resampler(pool: &PcmPool, source_rate: u32, target_rate: u32) -> impl Resampler {
     let settings = ResamplerSettings::builder()
         .channels(NonZeroUsize::new(2).unwrap_or_else(|| panic!("test channels")))
         .mode(ResamplerMode::FixedRatio {
@@ -160,7 +160,7 @@ fn resampler_active_first_chunk_alloc_free() {
     });
 
     assert_no_alloc(|| {
-        let frames = process_planar(&mut *resampler, &input, &mut output);
+        let frames = process_planar(&mut resampler, &input, &mut output);
         assert!(frames > 0);
     });
 }
@@ -176,7 +176,7 @@ fn resampler_active_steady_state_alloc_free() {
         for _ in 0..16 {
             let warm = planar_block(&pool, 4_096);
             let mut warm_output = output_block(&pool, resampler.output_frames_next());
-            let _ = process_planar(&mut *resampler, &warm, &mut warm_output);
+            let _ = process_planar(&mut resampler, &warm, &mut warm_output);
         }
         let input = planar_block(&pool, 4_096);
         let output = output_block(&pool, resampler.output_frames_next());
@@ -184,7 +184,7 @@ fn resampler_active_steady_state_alloc_free() {
     });
 
     assert_no_alloc(|| {
-        let frames = process_planar(&mut *resampler, &input, &mut output);
+        let frames = process_planar(&mut resampler, &input, &mut output);
         assert!(frames > 0);
     });
 }
@@ -210,7 +210,7 @@ fn resampler_presize_keeps_output_bit_exact() {
                 *s = v;
             }
             let mut output = output_block(&pool, resampler.output_frames_next());
-            let frames = process_planar(&mut *resampler, &input, &mut output);
+            let frames = process_planar(&mut resampler, &input, &mut output);
             out.extend_from_slice(&output[0][..frames]);
             out.extend_from_slice(&output[1][..frames]);
         }
@@ -232,14 +232,14 @@ fn test_resampler_passthrough_allocation_free() {
         let mut resampler = build_resampler(&pool, 44_100, 44_100);
         let warmup = planar_block(&pool, 4_096);
         let mut warmup_output = output_block(&pool, resampler.output_frames_next());
-        let _ = process_planar(&mut *resampler, &warmup, &mut warmup_output);
+        let _ = process_planar(&mut resampler, &warmup, &mut warmup_output);
         let input = planar_block(&pool, 4_096);
         let output = output_block(&pool, resampler.output_frames_next());
         (resampler, input, output)
     });
 
     assert_no_alloc(|| {
-        let frames = process_planar(&mut *resampler, &input, &mut output);
+        let frames = process_planar(&mut resampler, &input, &mut output);
         assert!(frames > 0);
     });
 }

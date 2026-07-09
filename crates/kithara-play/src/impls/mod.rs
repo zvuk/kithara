@@ -3,6 +3,7 @@ pub mod config;
 pub(crate) mod crossfade;
 pub mod engine;
 pub(crate) mod master_eq_node;
+mod playback_resampler;
 pub mod player;
 pub mod player_node;
 pub mod player_notification;
@@ -17,6 +18,7 @@ pub mod source_type;
 
 pub use config::{ResourceConfig, ResourceSrc};
 pub use engine::{EngineConfig, EngineImpl};
+pub use playback_resampler::PlaybackResamplerBackend;
 pub use player::{PlayerConfig, PlayerImpl};
 pub use resource::Resource;
 pub use source_type::SourceType;

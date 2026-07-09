@@ -1457,6 +1457,15 @@ impl<T: StreamType> StreamAudioSource<T> {
             return false;
         }
         let host_rate = self.host_sample_rate.load(Ordering::Acquire);
+        if host_rate == 0 {
+            return false;
+        }
+        if self.decoder_host_sample_rate == 0
+            && self.session.decoder.spec().sample_rate.get() == host_rate
+        {
+            self.decoder_host_sample_rate = host_rate;
+            return false;
+        }
         if host_rate == self.decoder_host_sample_rate {
             return false;
         }
@@ -3798,6 +3807,39 @@ mod rebuilding_decoder_tests {
     }
 
     #[kithara::test(tokio)]
+    async fn first_matching_host_rate_latches_without_route_recreate() {
+        let control = Arc::new(TestControl::new(media_info(0)));
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let host_sample_rate = Arc::new(AtomicU32::new(0));
+        let mut source = route_signal_source(control, drops, Arc::clone(&host_sample_rate)).await;
+
+        host_sample_rate.store(Consts::SAMPLE_RATE, Ordering::Release);
+
+        assert!(!source.start_route_change_recreate_if_needed());
+        assert_eq!(source.decoder_host_sample_rate, Consts::SAMPLE_RATE);
+        assert!(matches!(source.state, CurrentFsm::Decoding(_)));
+    }
+
+    #[kithara::test(tokio)]
+    async fn first_mismatched_host_rate_still_starts_route_recreate() {
+        let control = Arc::new(TestControl::new(media_info(0)));
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let host_sample_rate = Arc::new(AtomicU32::new(0));
+        let mut source = route_signal_source(control, drops, Arc::clone(&host_sample_rate)).await;
+
+        host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
+
+        assert!(source.start_route_change_recreate_if_needed());
+        assert_eq!(source.decoder_host_sample_rate, Consts::ROUTE_SAMPLE_RATE);
+        match &source.state {
+            CurrentFsm::RecreatingDecoder(handle) => {
+                assert_eq!(handle.data().cause, RecreateCause::RouteChange);
+            }
+            _ => panic!("expected route-change recreate"),
+        }
+    }
+
+    #[kithara::test(tokio)]
     async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
         let control = Arc::new(TestControl::new(media_info(1)));
         let drops = Arc::new(Mutex::new(Vec::new()));
@@ -4290,7 +4332,7 @@ mod splice_continuity_tests {
         stream: &SharedStream<T>,
         backend: kithara_decode::DecoderBackend,
         byte_len: Arc<AtomicU64>,
-    ) -> DecoderConfig {
+    ) -> DecoderConfig<kithara_resampler::NoResamplerBackend> {
         byte_len.store(stream.len().unwrap_or(0), Ordering::Release);
         DecoderConfig::builder()
             .backend(backend)
@@ -4327,12 +4369,13 @@ mod splice_continuity_tests {
                     .len()
                     .map_or(0, |len| len.saturating_sub(base_offset));
                 factory_byte_len.store(byte_len, Ordering::Release);
-                let config = DecoderConfig::builder()
-                    .backend(backend)
-                    .byte_len_handle(Arc::clone(&factory_byte_len))
-                    .maybe_byte_map(stream.byte_map())
-                    .gapless(false)
-                    .build();
+                let config: DecoderConfig<kithara_resampler::NoResamplerBackend> =
+                    DecoderConfig::builder()
+                        .backend(backend)
+                        .byte_len_handle(Arc::clone(&factory_byte_len))
+                        .maybe_byte_map(stream.byte_map())
+                        .gapless(false)
+                        .build();
                 let input = OffsetReader::new(stream, base_offset);
                 let decoder = DecodeFactory::create_from_media_info(input, &info, config)?;
                 decoder.update_byte_len(byte_len);

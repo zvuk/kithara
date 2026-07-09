@@ -1,7 +1,5 @@
 use thiserror::Error;
 
-use crate::ResamplerPlacement;
-
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum ResamplerBuildError {
@@ -18,12 +16,6 @@ pub enum ResamplerBuildError {
     UnsupportedMode {
         backend: &'static str,
         mode: &'static str,
-    },
-
-    #[error("resampler backend {backend} does not support {placement} placement")]
-    UnsupportedPlacement {
-        backend: &'static str,
-        placement: ResamplerPlacement,
     },
 
     #[error("resampler backend {backend} construction failed: {detail}")]

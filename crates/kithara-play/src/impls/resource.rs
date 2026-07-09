@@ -1,7 +1,8 @@
 use std::{num::NonZeroU32, sync::Arc};
 
 use kithara_audio::{
-    Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome, ServiceClass,
+    Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
+    ServiceClass,
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
@@ -80,7 +81,10 @@ impl Resource {
     ///
     /// Returns an error if source type detection fails, or if the underlying
     /// audio stream cannot be created (network failure, invalid format, etc.).
-    pub async fn new(config: ResourceConfig) -> DecodeResult<Self> {
+    pub async fn new<B>(config: ResourceConfig<B>) -> DecodeResult<Self>
+    where
+        B: Default + ResamplerBackend,
+    {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
         // Capture the per-track cancel before `build_*_config` consumes `config`
@@ -157,12 +161,13 @@ impl Resource {
     /// Generic over any [`StreamType`] whose config carries an optional
     /// `kithara_events::EventBus`. Callers wanting fine-grained control
     /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
-    pub(crate) async fn from_stream_audio<T>(
-        config: AudioConfig<T>,
+    pub(crate) async fn from_stream_audio<T, B>(
+        config: AudioConfig<T, B>,
         src: Arc<str>,
     ) -> DecodeResult<Self>
     where
         T: StreamType<Events = EventBus> + 'static,
+        B: ResamplerBackend,
         Audio<Stream<T>>: PcmReader + 'static,
     {
         let audio = Audio::<Stream<T>>::new(config).await?;

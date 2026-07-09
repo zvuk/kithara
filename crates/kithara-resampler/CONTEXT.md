@@ -14,10 +14,11 @@ resampling contract:
   value directly.
 - `ResamplerCapabilities` reports fixed-ratio, variable-ratio, glide,
   standalone, latency-reporting, and real-time properties.
-- `ResamplerBackendConfig` is the shared backend handle used by playback and
-  analysis config. Its portable default order is Rubato, then Glide, then
-  none. Platform backend contracts such as Apple AudioConverter live here and
-  receive platform factories from the crate that owns the concrete OS handle.
+- Backend choice is encoded by the caller's `B: ResamplerBackend` type.
+  Playback, analysis, and decoder configs thread that type through their own
+  builders; this crate does not expose a cfg-selected default backend handle.
+  Platform backend contracts such as Apple AudioConverter live here and receive
+  platform factories from the crate that owns the concrete OS handle.
 - `ResamplerSettings`, `ResamplerConfig`, and `ResamplerOptions` carry
   construction settings through BON builders.
 - `create_resampler` constructs exactly the requested standalone backend or
@@ -58,7 +59,7 @@ The returned `ResamplerProcess` reports accepted input frames and produced
 output frames. Callers size output using the backend's frame-capacity methods.
 
 Variable ratio and glide controls are advertised through
-`ResamplerCapabilities`. Callers that receive a boxed `Resampler` use
+`ResamplerCapabilities`. Callers that hold a concrete resampler use
 `Resampler::control_mut()` to access the optional `ResamplerControl` surface;
 fixed-ratio backends return `None`. Fixed-ratio analysis config never asks for
 DJ pitch/glide modes.
@@ -68,9 +69,9 @@ does not select a backend. Rubato-specific algorithm choices, including FFT, are
 `rubato::RubatoConfig` fields, not separate backend families or cargo features.
 External backends can ignore quality or map it into their own config.
 
-`ResamplerBackendConfig::default()` is a user-facing config default, not a
-runtime fallback chain. Once construction receives a backend handle, it builds
-exactly that backend or returns a typed error.
+Once construction receives a backend value, it builds exactly that backend or
+returns a typed error. There is no runtime fallback chain and no portable
+default backend in this crate.
 
 ## Built-In Backend Families
 
@@ -86,11 +87,13 @@ exactly that backend or returns a typed error.
 - `AppleAudioConverter`: standalone PCM-to-PCM `AudioConverter` backend on
   macOS/iOS. `apple::AppleAudioConverterBackend` and
   `apple::AppleAudioConverterConfig` live in this crate and accept an
-  `AudioConverterFactory`. The current concrete AudioToolbox factory is
-  `kithara_decode::AudioToolboxConverterFactory`; its FFI implementation stays
-  in `kithara-decode/src/apple/**` because the current repository unsafe policy
-  sanctions Apple FFI only there. Codec-embedded Apple decode also remains in
-  `kithara-decode`.
+  `AudioConverterFactory`. The current concrete AudioToolbox factory,
+  `apple::AudioToolboxConverterFactory`, and the standalone PCM-to-PCM
+  `AudioConverter` FFI live under `crates/kithara-resampler/src/apple/**`.
+  This module is the only `kithara-resampler` owner of Apple unsafe code and
+  carries the module-local unsafe allowance. The lint-policy carve-out is
+  scoped to that path only; the crate root still denies unsafe code everywhere
+  else. Codec-embedded Apple decode remains in `kithara-decode`.
 
 No Android placeholder exists until there is a real Android PCM resampler
 backend.
@@ -125,7 +128,7 @@ resampler is codec-embedded or adapter-based.
 
 ## Module Layout
 
-- `src/apple.rs` - Apple AudioConverter backend contract and config.
+- `src/apple/` - Apple AudioConverter backend contract, config, and FFI.
 - `src/backend.rs` - backend factory trait.
 - `src/capabilities.rs` - `bitflags` capability set.
 - `src/config.rs` - `ResamplerConfig`, `ResamplerOptions`, quality, and glide
@@ -135,6 +138,5 @@ resampler is codec-embedded or adapter-based.
 - `src/glide/` - scalar Glide backend.
 - `src/mono.rs` - pooled mono streaming adapter used by beat analysis.
 - `src/mode.rs` - fixed-ratio and variable-ratio mode types.
-- `src/placement.rs` - placement vocabulary shared with decode planning.
 - `src/rubato/` - Rubato backend.
 - `src/traits.rs` - public processing traits and status types.

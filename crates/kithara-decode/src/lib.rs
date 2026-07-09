@@ -41,8 +41,6 @@ mod android;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple;
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-pub use apple::resampler::AudioToolboxConverterFactory;
 pub use codec::CodecPriming;
 pub use error::{DecodeError, DecodeResult, ErrorClass};
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory, DecoderResamplerConfig};

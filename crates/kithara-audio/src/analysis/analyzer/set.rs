@@ -1,17 +1,24 @@
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_resampler::ResamplerBackend;
 use num_traits::cast::AsPrimitive;
 
 use super::{config::BeatAnalysisConfig, track_analysis::TrackAnalysis};
 
 #[derive(Default)]
-pub(crate) struct TrackAnalyzers {
-    beat: beat::Slot,
+pub(crate) struct TrackAnalyzers<B>
+where
+    B: ResamplerBackend,
+{
+    beat: beat::Slot<B>,
     waveform: waveform::Slot,
     source_frames: u64,
 }
 
-impl TrackAnalyzers {
+impl<B> TrackAnalyzers<B>
+where
+    B: ResamplerBackend,
+{
     pub(crate) fn finish_staged<F: FnMut(TrackAnalysis)>(self, mut emit: F) {
         let source_frames = self.source_frames;
         let waveform = waveform::finish(self.waveform);
@@ -48,15 +55,21 @@ impl TrackAnalyzers {
 }
 
 #[derive(Default)]
-pub struct AnalyzerBuilder {
-    beat: beat::Config,
-    beat_config: BeatAnalysisConfig,
+pub struct AnalyzerBuilder<B>
+where
+    B: ResamplerBackend,
+{
+    beat: beat::Config<B>,
+    beat_config: Option<BeatAnalysisConfig<B>>,
     pcm_pool: PcmPool,
     waveform: waveform::Config,
 }
 
-impl AnalyzerBuilder {
-    pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers {
+impl<B> AnalyzerBuilder<B>
+where
+    B: ResamplerBackend,
+{
+    pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers<B> {
         TrackAnalyzers {
             beat: beat::build(&self.beat, spec, &self.pcm_pool),
             waveform: waveform::build(&self.waveform, spec),
@@ -70,16 +83,21 @@ impl AnalyzerBuilder {
     }
 
     #[must_use]
-    pub fn with_beat(self) -> Self {
+    pub fn with_beat(self) -> Self
+    where
+        B: Default,
+    {
         let mut builder = self;
-        beat::with_default(&mut builder.beat, builder.beat_config.clone());
+        let beat_config = builder.beat_config.clone().unwrap_or_default();
+        beat::with_default(&mut builder.beat, beat_config.clone());
+        builder.beat_config = Some(beat_config);
         builder
     }
 
     #[must_use]
-    pub fn with_beat_config(self, config: BeatAnalysisConfig) -> Self {
+    pub fn with_beat_config(self, config: BeatAnalysisConfig<B>) -> Self {
         let mut builder = self;
-        builder.beat_config = config.clone();
+        builder.beat_config = Some(config.clone());
         beat::set_resampler(&mut builder.beat, config);
         builder
     }
@@ -89,14 +107,14 @@ impl AnalyzerBuilder {
         self,
         detector: crate::analysis::beat::SharedBeatDetector,
         params: crate::analysis::beat::GridParams,
-    ) -> Self {
+    ) -> Self
+    where
+        B: Default,
+    {
         let mut builder = self;
-        beat::with_detector(
-            &mut builder.beat,
-            detector,
-            params,
-            builder.beat_config.clone(),
-        );
+        let beat_config = builder.beat_config.clone().unwrap_or_default();
+        beat::with_detector(&mut builder.beat, detector, params, beat_config.clone());
+        builder.beat_config = Some(beat_config);
         builder
     }
 
@@ -123,6 +141,7 @@ mod beat {
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmSpec};
+    use kithara_resampler::ResamplerBackend;
 
     use super::super::{nn, track_analysis::Analyzer};
     use crate::{
@@ -133,16 +152,22 @@ mod beat {
         waveform::BeatGrid,
     };
 
-    pub(super) struct BeatConfig {
+    pub(super) struct BeatConfig<B>
+    where
+        B: ResamplerBackend,
+    {
         detector: SharedBeatDetector,
         params: GridParams,
-        resampler: BeatAnalysisConfig,
+        resampler: BeatAnalysisConfig<B>,
     }
 
-    pub(super) type Config = Option<BeatConfig>;
-    pub(super) type Slot = Option<BeatPass>;
+    pub(super) type Config<B> = Option<BeatConfig<B>>;
+    pub(super) type Slot<B> = Option<BeatPass<B>>;
 
-    pub(super) fn build(config: &Config, spec: PcmSpec, pcm_pool: &PcmPool) -> Slot {
+    pub(super) fn build<B>(config: &Config<B>, spec: PcmSpec, pcm_pool: &PcmPool) -> Slot<B>
+    where
+        B: ResamplerBackend,
+    {
         config.as_ref().map(|config| {
             BeatPass::new(
                 spec.sample_rate.get(),
@@ -154,25 +179,40 @@ mod beat {
         })
     }
 
-    pub(super) fn config_is_empty(config: &Config) -> bool {
+    pub(super) fn config_is_empty<B>(config: &Config<B>) -> bool
+    where
+        B: ResamplerBackend,
+    {
         config.is_none()
     }
 
-    pub(super) fn finish(slot: Slot) -> Option<BeatGrid> {
+    pub(super) fn finish<B>(slot: Slot<B>) -> Option<BeatGrid>
+    where
+        B: ResamplerBackend,
+    {
         slot.and_then(Analyzer::finish)
     }
 
-    pub(super) fn is_empty(slot: &Slot) -> bool {
+    pub(super) fn is_empty<B>(slot: &Slot<B>) -> bool
+    where
+        B: ResamplerBackend,
+    {
         slot.is_none()
     }
 
-    pub(super) fn push(slot: &mut Slot, chunk: &PcmChunk) {
+    pub(super) fn push<B>(slot: &mut Slot<B>, chunk: &PcmChunk)
+    where
+        B: ResamplerBackend,
+    {
         if let Some(a) = slot {
             a.push(chunk);
         }
     }
 
-    pub(super) fn with_default(config: &mut Config, resampler: BeatAnalysisConfig) {
+    pub(super) fn with_default<B>(config: &mut Config<B>, resampler: BeatAnalysisConfig<B>)
+    where
+        B: ResamplerBackend,
+    {
         *config = nn::detector().map(|detector| BeatConfig {
             detector,
             params: GridParams::default(),
@@ -180,19 +220,24 @@ mod beat {
         });
     }
 
-    pub(super) fn set_resampler(config: &mut Config, resampler: BeatAnalysisConfig) {
+    pub(super) fn set_resampler<B>(config: &mut Config<B>, resampler: BeatAnalysisConfig<B>)
+    where
+        B: ResamplerBackend,
+    {
         if let Some(config) = config {
             config.resampler = resampler;
         }
     }
 
     #[cfg(test)]
-    pub(super) fn with_detector(
-        config: &mut Config,
+    pub(super) fn with_detector<B>(
+        config: &mut Config<B>,
         detector: SharedBeatDetector,
         params: GridParams,
-        resampler: BeatAnalysisConfig,
-    ) {
+        resampler: BeatAnalysisConfig<B>,
+    ) where
+        B: ResamplerBackend,
+    {
         *config = Some(BeatConfig {
             detector,
             params,
@@ -205,36 +250,63 @@ mod beat {
 mod beat {
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmSpec};
+    use kithara_resampler::ResamplerBackend;
 
     use crate::waveform::BeatGrid;
 
     #[derive(Default)]
-    pub(super) struct Config;
+    pub(super) struct Config<B>(std::marker::PhantomData<B>);
 
     #[derive(Default)]
-    pub(super) struct Slot;
+    pub(super) struct Slot<B>(std::marker::PhantomData<B>);
 
-    pub(super) fn build(_config: &Config, _spec: PcmSpec, _pcm_pool: &PcmPool) -> Slot {
-        Slot
+    pub(super) fn build<B>(_config: &Config<B>, _spec: PcmSpec, _pcm_pool: &PcmPool) -> Slot<B>
+    where
+        B: ResamplerBackend,
+    {
+        Slot(std::marker::PhantomData)
     }
 
-    pub(super) fn config_is_empty(_config: &Config) -> bool {
+    pub(super) fn config_is_empty<B>(_config: &Config<B>) -> bool
+    where
+        B: ResamplerBackend,
+    {
         true
     }
 
-    pub(super) fn finish(_slot: Slot) -> Option<BeatGrid> {
+    pub(super) fn finish<B>(_slot: Slot<B>) -> Option<BeatGrid>
+    where
+        B: ResamplerBackend,
+    {
         None
     }
 
-    pub(super) fn is_empty(_slot: &Slot) -> bool {
+    pub(super) fn is_empty<B>(_slot: &Slot<B>) -> bool
+    where
+        B: ResamplerBackend,
+    {
         true
     }
 
-    pub(super) fn push(_slot: &mut Slot, _chunk: &PcmChunk) {}
+    pub(super) fn push<B>(_slot: &mut Slot<B>, _chunk: &PcmChunk)
+    where
+        B: ResamplerBackend,
+    {
+    }
 
-    pub(super) fn with_default(_config: &mut Config, _resampler: super::BeatAnalysisConfig) {}
+    pub(super) fn with_default<B>(_config: &mut Config<B>, _resampler: super::BeatAnalysisConfig<B>)
+    where
+        B: ResamplerBackend,
+    {
+    }
 
-    pub(super) fn set_resampler(_config: &mut Config, _resampler: super::BeatAnalysisConfig) {}
+    pub(super) fn set_resampler<B>(
+        _config: &mut Config<B>,
+        _resampler: super::BeatAnalysisConfig<B>,
+    ) where
+        B: ResamplerBackend,
+    {
+    }
 }
 
 #[cfg(feature = "analysis-waveform")]
@@ -306,6 +378,7 @@ mod tests {
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
     use kithara_platform::sync::Mutex;
+    use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
     use unimock::{MockFn, Unimock, matching};
 
     use super::{super::track_analysis::TrackAnalysis, AnalyzerBuilder, TrackAnalyzers};
@@ -328,7 +401,9 @@ mod tests {
         )
     }
 
-    fn collect(analyzers: TrackAnalyzers) -> Vec<TrackAnalysis> {
+    fn collect<B: kithara_resampler::ResamplerBackend>(
+        analyzers: TrackAnalyzers<B>,
+    ) -> Vec<TrackAnalysis> {
         let mut out = Vec::new();
         analyzers.finish_staged(|a| out.push(a));
         out
@@ -353,7 +428,9 @@ mod tests {
             channels: 2,
             sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
         };
-        let mut analyzers = AnalyzerBuilder::default().with_waveform(8).build(spec);
+        let mut analyzers = AnalyzerBuilder::<NoResamplerBackend>::default()
+            .with_waveform(8)
+            .build(spec);
         analyzers.push(&chunk(64, 2));
 
         let stages = collect(analyzers);
@@ -368,7 +445,7 @@ mod tests {
             channels: 2,
             sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
         };
-        let mut analyzers = AnalyzerBuilder::default()
+        let mut analyzers = AnalyzerBuilder::<RubatoBackend>::default()
             .with_waveform(8)
             .with_beat_detector(beat_detector(), GridParams::default())
             .build(spec);

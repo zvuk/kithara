@@ -9,3 +9,4 @@ mod tests;
 
 pub use backend::GlideBackend;
 pub use config::{GlideConfig, GlideInterpolation};
+pub use resampler::GlideResampler;

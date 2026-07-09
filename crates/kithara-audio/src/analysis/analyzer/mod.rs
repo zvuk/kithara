@@ -5,7 +5,7 @@ mod track_analysis;
 #[cfg(feature = "analysis-waveform")]
 mod waveform_pass;
 
-pub use config::{BeatAnalysisConfig, BeatResamplerBackend};
+pub use config::BeatAnalysisConfig;
 pub use set::AnalyzerBuilder;
 pub(crate) use set::TrackAnalyzers;
 #[cfg(feature = "analysis-beat")]

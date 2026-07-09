@@ -34,8 +34,12 @@ pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     timestretch::StretchControls,
 };
+#[cfg(feature = "resample-glide")]
+pub use kithara_resampler::glide::{GlideBackend, GlideConfig, GlideInterpolation};
+#[cfg(feature = "resample-rubato")]
+pub use kithara_resampler::rubato::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
 pub use kithara_resampler::{
-    ResamplerBackendConfig, ResamplerOptions, ResamplerPlacement, ResamplerQuality,
+    NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality,
 };
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, DecoderResamplerSettings},

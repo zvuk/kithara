@@ -6,7 +6,7 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_resampler::{ResamplerBackend, ResamplerOptions, ResamplerPlacement, ResamplerQuality};
+use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::{
     AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes,
 };
@@ -89,156 +89,72 @@ impl std::fmt::Display for DecoderBackend {
     }
 }
 
-impl DecoderBackend {
-    #[must_use]
-    pub fn default_resampler_placement(&self) -> ResamplerPlacement {
-        (*self).into()
-    }
-
-    #[must_use]
-    pub fn supports_decoder_embedded_resampler(&self) -> bool {
-        #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-        {
-            matches!(self, Self::Apple)
-        }
-        #[cfg(not(all(feature = "apple", any(target_os = "macos", target_os = "ios"))))]
-        {
-            false
-        }
-    }
-}
-
-impl From<DecoderBackend> for ResamplerPlacement {
-    fn from(backend: DecoderBackend) -> Self {
-        default_resampler_placement_for_backend(backend)
-    }
-}
-
-#[cfg(all(
-    feature = "apple-codec-embedded-resampler",
-    any(target_os = "macos", target_os = "ios")
-))]
-fn default_resampler_placement_for_backend(backend: DecoderBackend) -> ResamplerPlacement {
-    if matches!(backend, DecoderBackend::Apple) {
-        ResamplerPlacement::DecoderEmbedded
-    } else {
-        ResamplerPlacement::Standalone
-    }
-}
-
-#[cfg(not(all(
-    feature = "apple-codec-embedded-resampler",
-    any(target_os = "macos", target_os = "ios")
-)))]
-fn default_resampler_placement_for_backend(_: DecoderBackend) -> ResamplerPlacement {
-    ResamplerPlacement::Standalone
-}
-
-/// Decoder-side resampler placement selected by the caller.
+/// Decoder-side resampler selected by the caller.
 ///
 /// This describes conversion that is part of decoder construction, not the
-/// playback graph's standalone resampler stage.
-#[derive(Builder)]
+/// playback graph's effects chain. Backend choice is encoded by `B`.
+#[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct DecoderResamplerConfig {
-    pub backend: Option<Arc<dyn ResamplerBackend>>,
+pub struct DecoderResamplerConfig<B = NoResamplerBackend> {
+    pub backend: B,
     #[builder(default)]
     pub options: ResamplerOptions,
-    #[builder(default = ResamplerPlacement::DecoderEmbedded)]
-    pub placement: ResamplerPlacement,
     #[builder(default)]
     pub quality: ResamplerQuality,
     pub target_sample_rate: NonZeroU32,
 }
 
-impl DecoderResamplerConfig {
+impl<B> DecoderResamplerConfig<B>
+where
+    B: ResamplerBackend,
+{
     #[must_use]
-    pub fn codec_embedded(target_sample_rate: NonZeroU32) -> Self {
-        Self {
-            target_sample_rate,
-            backend: None,
-            options: ResamplerOptions::default(),
-            placement: ResamplerPlacement::DecoderEmbedded,
-            quality: ResamplerQuality::default(),
-        }
-    }
-
-    #[must_use]
-    pub fn standalone(
+    pub fn new(
         target_sample_rate: NonZeroU32,
-        backend: Arc<dyn ResamplerBackend>,
+        backend: B,
         quality: ResamplerQuality,
         options: ResamplerOptions,
     ) -> Self {
         Self {
-            target_sample_rate,
-            backend: Some(backend),
+            backend,
             options,
-            placement: ResamplerPlacement::Standalone,
             quality,
+            target_sample_rate,
         }
     }
 
     /// Build the decoder resampler config selected by the audio decoder config.
     ///
-    /// `standalone_backend == None` means fixed-ratio decoder resampling is
-    /// disabled for standalone placement. Decoder-embedded placement is valid
-    /// only for decoder backends that can perform conversion in the codec path.
-    ///
     /// # Errors
     ///
-    /// Returns [`DecodeError::InvalidData`] when the requested placement is not
-    /// supported by the selected decoder backend.
+    /// Currently this constructor is infallible; it returns a `Result` so the
+    /// typed Apple codec-integrated plan can add pair validation without
+    /// widening call sites again.
     pub fn for_decoder_backend(
-        decoder_backend: DecoderBackend,
+        _decoder_backend: DecoderBackend,
         target_sample_rate: NonZeroU32,
-        placement: ResamplerPlacement,
-        standalone_backend: Option<Arc<dyn ResamplerBackend>>,
+        backend: B,
         quality: ResamplerQuality,
         options: ResamplerOptions,
     ) -> DecodeResult<Option<Self>> {
-        match placement {
-            ResamplerPlacement::DecoderEmbedded => {
-                if !decoder_backend.supports_decoder_embedded_resampler() {
-                    return Err(DecodeError::InvalidData {
-                        detail: "decoder backend does not support decoder-embedded resampling",
-                    });
-                }
-                let mut config = Self::codec_embedded(target_sample_rate);
-                config.options = options;
-                config.quality = quality;
-                Ok(Some(config))
-            }
-            ResamplerPlacement::Standalone => Ok(standalone_backend
-                .map(|backend| Self::standalone(target_sample_rate, backend, quality, options))),
-            _ => Err(DecodeError::InvalidData {
-                detail: "unsupported decoder resampler placement",
-            }),
-        }
-    }
-
-    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-    fn codec_embedded_rate(&self) -> DecodeResult<Option<u32>> {
-        match self.placement {
-            ResamplerPlacement::DecoderEmbedded => Ok(Some(self.target_sample_rate.get())),
-            ResamplerPlacement::Standalone => Ok(None),
-            _ => Err(DecodeError::InvalidData {
-                detail: "unsupported decoder resampler placement",
-            }),
-        }
+        Ok(Some(Self::new(
+            target_sample_rate,
+            backend,
+            quality,
+            options,
+        )))
     }
 }
 
-impl std::fmt::Debug for DecoderResamplerConfig {
+impl<B> std::fmt::Debug for DecoderResamplerConfig<B>
+where
+    B: ResamplerBackend,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DecoderResamplerConfig")
-            .field(
-                "backend",
-                &self.backend.as_ref().map(ResamplerBackend::name),
-            )
+            .field("backend", &self.backend.name())
             .field("options", &self.options)
-            .field("placement", &self.placement)
             .field("quality", &self.quality)
             .field("target_sample_rate", &self.target_sample_rate)
             .finish()
@@ -259,7 +175,7 @@ impl std::fmt::Debug for DecoderResamplerConfig {
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct DecoderConfig {
+pub struct DecoderConfig<B = NoResamplerBackend> {
     /// Which decoder backend to use. See [`DecoderBackend`].
     #[builder(default)]
     pub backend: DecoderBackend,
@@ -280,7 +196,7 @@ pub struct DecoderConfig {
     pub pcm_pool: Option<PcmPool>,
     /// Optional decoder-side resampler plan. `None` means the decoder emits
     /// at the source rate.
-    pub resampler: Option<DecoderResamplerConfig>,
+    pub resampler: Option<DecoderResamplerConfig<B>>,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
@@ -307,13 +223,14 @@ pub struct DecoderFactory;
 
 impl DecoderFactory {
     /// Create a decoder with the single selected backend.
-    pub(crate) fn create<R>(
+    pub(crate) fn create<R, B>(
         source: R,
         hint: &ProbeHint,
-        config: DecoderConfig,
+        config: DecoderConfig<B>,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
+        B: ResamplerBackend,
     {
         let source: BoxedSource = Box::new(source);
         Self::dispatch_backend(source, hint, config)
@@ -327,13 +244,14 @@ impl DecoderFactory {
     ///
     /// Returns error if codec cannot be determined or decoder creation fails.
     /// No fallback — a failure is terminal.
-    pub fn create_from_media_info<R>(
+    pub fn create_from_media_info<R, B>(
         source: R,
         media_info: &MediaInfo,
-        config: DecoderConfig,
+        config: DecoderConfig<B>,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
+        B: ResamplerBackend,
     {
         tracing::debug!(?media_info, "create_from_media_info called");
 
@@ -354,13 +272,14 @@ impl DecoderFactory {
     /// Returns `DecodeError::ProbeFailed` when the hint is missing or too
     /// weak to pick a codec, and `DecodeError::*` for backend failures.
     /// No fallback — callers must supply a usable hint.
-    pub fn create_with_probe<R>(
+    pub fn create_with_probe<R, B>(
         source: R,
         hint: Option<&str>,
-        config: DecoderConfig,
+        config: DecoderConfig<B>,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
+        B: ResamplerBackend,
     {
         let mut source = source;
         let mut probe_hint = ProbeHint {
@@ -382,13 +301,15 @@ impl DecoderFactory {
         Self::create(source, &probe_hint, config)
     }
 
-    pub(super) fn dispatch_backend(
+    pub(super) fn dispatch_backend<B>(
         mut source: BoxedSource,
         hint: &ProbeHint,
-        config: DecoderConfig,
-    ) -> DecodeResult<Box<dyn Decoder>> {
+        config: DecoderConfig<B>,
+    ) -> DecodeResult<Box<dyn Decoder>>
+    where
+        B: ResamplerBackend,
+    {
         let (codec, mut container) = resolve_codec_container(hint)?;
-        validate_resampler_placement(config.backend, config.resampler.as_ref())?;
         if container.is_none() {
             container = sniff_container_from_source(&mut source);
         }
@@ -432,45 +353,16 @@ impl DecoderFactory {
     }
 }
 
-fn validate_resampler_placement(
-    backend: DecoderBackend,
-    resampler: Option<&DecoderResamplerConfig>,
-) -> DecodeResult<()> {
-    let Some(resampler) = resampler else {
-        return Ok(());
-    };
-    match resampler.placement {
-        ResamplerPlacement::DecoderEmbedded => {
-            if backend.supports_decoder_embedded_resampler() {
-                Ok(())
-            } else {
-                Err(DecodeError::InvalidData {
-                    detail: "decoder backend does not support decoder-embedded resampling",
-                })
-            }
-        }
-        ResamplerPlacement::Standalone => {
-            if resampler.backend.is_some() {
-                Ok(())
-            } else {
-                Err(DecodeError::InvalidData {
-                    detail: "standalone decoder resampling requires a backend",
-                })
-            }
-        }
-        _ => Err(DecodeError::InvalidData {
-            detail: "unsupported decoder resampler placement",
-        }),
-    }
-}
-
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-fn create_apple(
+fn create_apple<B>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::apple::AppleCodec;
 
     if should_use_segment_aware(codec, container, &config)
@@ -482,7 +374,7 @@ fn create_apple(
                 "fmp4_segment: dispatching to segment-aware Apple HW codec path"
             );
             let gapless = config.gapless;
-            let target_output_rate = decoder_embedded_target_output_rate(&config)?;
+            let target_output_rate = decoder_embedded_target_output_rate(&config);
             return build_fmp4_segment_decoder(source, layout, config, |track| {
                 let output_track = track_with_output_domain_gapless(track, target_output_rate)?;
                 AppleCodec::open_with_config(&output_track, gapless, target_output_rate)
@@ -521,12 +413,15 @@ fn apple_standalone_supports(codec: AudioCodec, container: Option<ContainerForma
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-fn build_apple_standalone_decoder(
+fn build_apple_standalone_decoder<B>(
     mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::{
         apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
         composed::{ComposedDecoder, DecoderRuntime},
@@ -556,7 +451,7 @@ fn build_apple_standalone_decoder(
         startup_probe.duration,
     )?;
     demuxer.set_gapless(probed_gapless);
-    let target_output_rate = decoder_embedded_target_output_rate(&config)?;
+    let target_output_rate = decoder_embedded_target_output_rate(&config);
     let output_track = track_with_output_domain_gapless(demuxer.track_info(), target_output_rate)?;
     if output_track.gapless.is_some() {
         demuxer.set_gapless(output_track.gapless);
@@ -582,13 +477,11 @@ fn build_apple_standalone_decoder(
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-fn decoder_embedded_target_output_rate(config: &DecoderConfig) -> DecodeResult<Option<u32>> {
-    config
-        .resampler
-        .as_ref()
-        .map(DecoderResamplerConfig::codec_embedded_rate)
-        .transpose()
-        .map(Option::flatten)
+fn decoder_embedded_target_output_rate<B>(_config: &DecoderConfig<B>) -> Option<u32>
+where
+    B: ResamplerBackend,
+{
+    None
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -649,12 +542,15 @@ fn round_scaled_frames(count: u64, source_rate: u32, output_rate: u32) -> Decode
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]
-fn create_android(
+fn create_android<B>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::android::AndroidCodec;
 
     if should_use_segment_aware(codec, container, &config)
@@ -707,12 +603,15 @@ fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFor
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]
-fn build_android_standalone_decoder(
+fn build_android_standalone_decoder<B>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::{
         android::{AndroidCodec, AndroidMediaExtractorDemuxer},
         composed::{ComposedDecoder, DecoderRuntime},
@@ -750,12 +649,15 @@ fn build_android_standalone_decoder(
 }
 
 #[cfg(feature = "symphonia")]
-fn create_symphonia(
+fn create_symphonia<B>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -765,12 +667,15 @@ fn create_symphonia(
 }
 
 #[cfg(feature = "symphonia")]
-fn create_file_symphonia_universal(
+fn create_file_symphonia_universal<B>(
     mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::{
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
@@ -836,7 +741,7 @@ fn create_file_symphonia_universal(
 fn should_use_segment_aware(
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: &DecoderConfig,
+    config: &DecoderConfig<impl ResamplerBackend>,
 ) -> bool {
     segment_aware_container(codec, container) && config.byte_map.is_some()
 }
@@ -850,12 +755,15 @@ fn segment_aware_container(codec: AudioCodec, container: Option<ContainerFormat>
 }
 
 #[cfg(feature = "symphonia")]
-fn create_fmp4_segment_symphonia(
+fn create_fmp4_segment_symphonia<B>(
     source: BoxedSource,
     codec: AudioCodec,
     layout: Arc<dyn ByteMap>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig};
 
     tracing::debug!(
@@ -880,15 +788,16 @@ fn create_fmp4_segment_symphonia(
 /// [`Fmp4SegmentDemuxer`] open + pool-resolution + [`ComposedDecoder`]
 /// boilerplate so apple/android/symphonia call-sites collapse into a
 /// single closure that opens the codec from `TrackInfo`.
-fn build_fmp4_segment_decoder<C, F>(
+fn build_fmp4_segment_decoder<C, F, B>(
     source: BoxedSource,
     layout: Arc<dyn ByteMap>,
-    config: DecoderConfig,
+    config: DecoderConfig<B>,
     open_codec: F,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     C: crate::codec::FrameCodec + 'static,
     F: FnOnce(&crate::demuxer::TrackInfo) -> DecodeResult<C>,
+    B: ResamplerBackend,
 {
     use crate::{
         composed::{ComposedDecoder, DecoderRuntime},
@@ -922,15 +831,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decoder_resampler_config_defaults_to_decoder_embedded() {
+    fn decoder_resampler_config_keeps_typed_backend() {
         let target_sample_rate = NonZeroU32::new(48_000).expect("test rate");
-        let config = DecoderResamplerConfig::builder()
-            .target_sample_rate(target_sample_rate)
-            .build();
+        let config: DecoderResamplerConfig<kithara_resampler::rubato::RubatoBackend> =
+            DecoderResamplerConfig::builder()
+                .target_sample_rate(target_sample_rate)
+                .backend(kithara_resampler::rubato::RubatoBackend::default())
+                .build();
 
-        assert_eq!(config.placement, ResamplerPlacement::DecoderEmbedded);
         assert_eq!(config.target_sample_rate, target_sample_rate);
-        assert!(config.backend.is_none());
+        assert_eq!(
+            config.backend.name(),
+            kithara_resampler::rubato::RubatoBackend::default().name()
+        );
     }
 }
 
@@ -1087,7 +1000,7 @@ mod apple_factory_tests {
         let source = Cursor::new(blob);
         let byte_map: Arc<dyn ByteMap> = Arc::new(segmented);
         let media_info = MediaInfo::new(Some(AudioCodec::AacLc), None);
-        let config = DecoderConfig {
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend> = DecoderConfig {
             backend: DecoderBackend::Apple,
             byte_map: Some(byte_map),
             ..DecoderConfig::default()

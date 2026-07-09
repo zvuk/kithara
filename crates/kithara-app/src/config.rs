@@ -5,6 +5,7 @@ use kithara::{
     assets::{AssetStore, AssetStoreBuilder, BytePool, EvictConfig, FlushHub, StoreOptions},
     audio::analysis::BeatAnalysisConfig,
     hls::SizeProbeMethod,
+    prelude::PlaybackResamplerBackend,
     stream::dl::Downloader,
 };
 use kithara_drm::KeyProcessorRegistry;
@@ -65,7 +66,7 @@ pub struct AppConfig {
     pub eq_band_count: usize,
     /// Source beat-analysis tunables.
     #[builder(default)]
-    pub beat_analysis: BeatAnalysisConfig,
+    pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
 }
 
 fn default_tracks() -> Vec<String> {

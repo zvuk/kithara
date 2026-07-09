@@ -3,7 +3,7 @@ use std::{num::NonZeroU32, sync::Arc};
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::PcmChunk;
 use kithara_platform::sync::Mutex;
-use kithara_resampler::{MonoStream, MonoStreamConfig, ResamplerOptions};
+use kithara_resampler::{MonoStream, MonoStreamConfig, ResamplerBackend, ResamplerOptions};
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
 
@@ -24,11 +24,14 @@ pub(crate) type SharedBeatDetector = Arc<Mutex<Box<dyn BeatDetector>>>;
 /// mono and incrementally resamples it to the detector's 22 050 Hz input
 /// rate. `finalize` flushes the resampler tail, runs the detector, and
 /// builds the cleaned [`BeatGrid`] in source frames.
-pub(crate) struct BeatAnalyzer {
+pub(crate) struct BeatAnalyzer<B>
+where
+    B: ResamplerBackend,
+{
     failure: Option<BeatDetectError>,
     params: GridParams,
     feed: MonoFeed,
-    resampler: Option<MonoStream>,
+    resampler: Option<MonoStream<B>>,
     windows: WindowedBeats,
     source_rate: u32,
 }
@@ -39,12 +42,15 @@ enum MonoFeed {
     Broken,
 }
 
-impl BeatAnalyzer {
+impl<B> BeatAnalyzer<B>
+where
+    B: ResamplerBackend,
+{
     #[must_use]
     pub(crate) fn new(
         source_rate: u32,
         params: GridParams,
-        config: &BeatAnalysisConfig,
+        config: &BeatAnalysisConfig<B>,
         pcm_pool: &PcmPool,
     ) -> Self {
         let (feed, resampler) = if source_rate == config.target_rate {
@@ -135,12 +141,15 @@ impl BeatAnalyzer {
     }
 }
 
-fn build_mono_stream(
+fn build_mono_stream<B>(
     source_rate: u32,
-    config: &BeatAnalysisConfig,
+    config: &BeatAnalysisConfig<B>,
     pcm_pool: &PcmPool,
-) -> Option<MonoStream> {
-    let backend = config.resampler_backend.backend()?;
+) -> Option<MonoStream<B>>
+where
+    B: ResamplerBackend,
+{
+    let backend = config.resampler_backend.clone();
     let source_sample_rate = NonZeroU32::new(source_rate)?;
     let target_sample_rate = NonZeroU32::new(config.target_rate)?;
     let stream_config = MonoStreamConfig::builder()
@@ -185,7 +194,10 @@ struct WindowedBeats {
 }
 
 impl WindowedBeats {
-    fn new(config: &BeatAnalysisConfig, pcm_pool: &PcmPool) -> Self {
+    fn new<B>(config: &BeatAnalysisConfig<B>, pcm_pool: &PcmPool) -> Self
+    where
+        B: ResamplerBackend,
+    {
         let sample_rate = config.target_rate.max(1);
         let window_frames = frames_for_seconds(sample_rate, config.detector_window_seconds.max(1));
         let overlap_seconds = config
@@ -326,17 +338,23 @@ fn normalize_times(values: &mut Vec<f32>) {
     values.dedup_by(|a, b| *a == *b);
 }
 
-pub(crate) struct BeatPass {
-    analyzer: BeatAnalyzer,
+pub(crate) struct BeatPass<B>
+where
+    B: ResamplerBackend,
+{
+    analyzer: BeatAnalyzer<B>,
     detector: SharedBeatDetector,
 }
 
-impl BeatPass {
+impl<B> BeatPass<B>
+where
+    B: ResamplerBackend,
+{
     pub(crate) fn new(
         source_rate: u32,
         params: GridParams,
         detector: SharedBeatDetector,
-        config: &BeatAnalysisConfig,
+        config: &BeatAnalysisConfig<B>,
         pcm_pool: &PcmPool,
     ) -> Self {
         Self {
@@ -346,7 +364,10 @@ impl BeatPass {
     }
 }
 
-impl Analyzer for BeatPass {
+impl<B> Analyzer for BeatPass<B>
+where
+    B: ResamplerBackend,
+{
     type Output = Option<BeatGrid>;
 
     fn finish(self) -> Option<BeatGrid> {
@@ -373,6 +394,7 @@ mod tests {
     use std::sync::Arc;
 
     use kithara_bufpool::PcmPool;
+    use kithara_resampler::{ResamplerBackend, rubato::RubatoBackend};
     use kithara_test_utils::kithara;
     use num_traits::cast::AsPrimitive;
     use unimock::{MockFn, Unimock, matching};
@@ -422,12 +444,14 @@ mod tests {
         out
     }
 
-    fn push_chunked(
-        analyzer: &mut BeatAnalyzer,
+    fn push_chunked<B>(
+        analyzer: &mut BeatAnalyzer<B>,
         pcm: &[f32],
         frames_per_chunk: usize,
         detector: &mut dyn BeatDetector,
-    ) {
+    ) where
+        B: ResamplerBackend,
+    {
         for chunk in pcm.chunks(frames_per_chunk * 2) {
             analyzer.push_interleaved(chunk, 2, detector);
         }
@@ -454,7 +478,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             Consts::SRC,
             GridParams::default(),
-            &BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
             &pcm_pool(),
         );
         let mut detector = detector(|mono| {
@@ -487,7 +511,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             Consts::SRC,
             GridParams::default(),
-            &BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
             &pcm_pool(),
         );
         let mut detector = detector(|mono| {
@@ -518,7 +542,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             Consts::SRC,
             GridParams::default(),
-            &BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
             &pcm_pool(),
         );
         let mut detector = detector(|mono| {
@@ -538,7 +562,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             22_050,
             GridParams::default(),
-            &BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
             &pcm_pool(),
         );
         let mut detector = detector(|mono| {
@@ -552,6 +576,7 @@ mod tests {
     #[kithara::test]
     fn custom_detector_rate_controls_passthrough_domain() {
         let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
             .build();
         let pcm = stereo(4096, |_| 0.25);
@@ -568,6 +593,7 @@ mod tests {
     #[kithara::test]
     fn detector_input_is_bounded_by_configured_window() {
         let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
             .detector_window_seconds(1)
             .detector_overlap_seconds(0)
@@ -586,13 +612,14 @@ mod tests {
         push_chunked(&mut analyzer, &pcm, 2048, &mut detector);
         analyzer.finalize(&mut detector).expect("mock detects");
 
-        let seen = seen.lock().unwrap();
+        let seen = seen.lock().unwrap().clone();
         assert_eq!(seen.as_slice(), &[44_100, 44_100, 44_100]);
     }
 
     #[kithara::test]
     fn exact_window_waits_for_final_flush_when_overlap_is_configured() {
         let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
             .detector_window_seconds(2)
             .detector_overlap_seconds(1)
@@ -611,7 +638,7 @@ mod tests {
         assert!(seen.lock().unwrap().is_empty());
         analyzer.finalize(&mut detector).expect("mock detects");
 
-        let seen = seen.lock().unwrap();
+        let seen = seen.lock().unwrap().clone();
         assert_eq!(seen.as_slice(), &[2 * 44_100]);
     }
 
@@ -636,7 +663,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             48_000,
             GridParams::default(),
-            &BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
             &pcm_pool(),
         );
         let mut detector = detector(move |_| raw.clone());
@@ -662,7 +689,7 @@ mod tests {
         let mut analyzer = BeatAnalyzer::new(
             Consts::SRC,
             GridParams::default(),
-            &BeatAnalysisConfig::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
             &pcm_pool(),
         );
         let mut detector =

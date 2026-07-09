@@ -143,8 +143,8 @@ pub mod prelude {
     #[cfg(feature = "hls")]
     pub use kithara_hls::{Hls, HlsConfig};
     pub use kithara_play::{
-        AudioWorkerHandle, EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource,
-        ResourceConfig, ResourceSrc, ServiceClass, SourceType,
+        AudioWorkerHandle, EngineConfig, EngineImpl, PlaybackResamplerBackend, PlayerConfig,
+        PlayerImpl, Resource, ResourceConfig, ResourceSrc, ServiceClass, SourceType,
     };
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
 }

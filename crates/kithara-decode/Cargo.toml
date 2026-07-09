@@ -82,10 +82,5 @@ wasm-bindgen-test = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
 
-[[bench]]
-name = "apple_resampler"
-harness = false
-required-features = ["apple"]
-
 [lints]
 workspace = true

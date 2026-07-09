@@ -7,9 +7,7 @@ use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode, PcmSpec};
 use kithara_events::EventBus;
-use kithara_resampler::{
-    ResamplerBackendConfig, ResamplerOptions, ResamplerPlacement, ResamplerQuality,
-};
+use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
 
@@ -24,66 +22,76 @@ use crate::{
     worker::{EngineLoad, handle},
 };
 
-#[derive(Clone, Debug, Default, Builder)]
+#[derive(Clone, Debug, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct DecoderResamplerSettings {
-    #[builder(default)]
-    pub backend: ResamplerBackendConfig,
+pub struct DecoderResamplerSettings<B = NoResamplerBackend> {
+    pub backend: B,
     #[builder(default)]
     pub options: ResamplerOptions,
-    pub placement: Option<ResamplerPlacement>,
     #[builder(default)]
     pub quality: ResamplerQuality,
 }
 
-impl DecoderResamplerSettings {
-    fn placement_for(&self, backend: DecoderBackend) -> ResamplerPlacement {
-        self.placement
-            .unwrap_or_else(|| backend.default_resampler_placement())
-    }
-
-    fn recreates_decoder_on_route_change(&self, backend: DecoderBackend) -> bool {
-        matches!(
-            self.placement_for(backend),
-            ResamplerPlacement::DecoderEmbedded
-        )
+impl<B> Default for DecoderResamplerSettings<B>
+where
+    B: Default,
+{
+    fn default() -> Self {
+        Self {
+            backend: B::default(),
+            options: ResamplerOptions::default(),
+            quality: ResamplerQuality::default(),
+        }
     }
 }
 
-#[derive(Clone, Debug, Default, Builder)]
+#[derive(Clone, Debug, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct AudioDecoderConfig {
+pub struct AudioDecoderConfig<B = NoResamplerBackend> {
     #[builder(default)]
     pub backend: DecoderBackend,
     #[builder(default)]
     pub gapless_mode: GaplessMode,
-    #[builder(default)]
-    pub resampler: DecoderResamplerSettings,
+    pub resampler: Option<DecoderResamplerSettings<B>>,
 }
 
-impl AudioDecoderConfig {
+impl<B> AudioDecoderConfig<B>
+where
+    B: ResamplerBackend,
+{
     pub(crate) fn build_resampler_config(
         &self,
         target_sample_rate: Option<NonZeroU32>,
-    ) -> Result<Option<DecoderResamplerConfig>, kithara_decode::DecodeError> {
+    ) -> Result<Option<DecoderResamplerConfig<B>>, kithara_decode::DecodeError> {
         let Some(target_sample_rate) = target_sample_rate else {
+            return Ok(None);
+        };
+        let Some(resampler) = self.resampler.as_ref() else {
             return Ok(None);
         };
         DecoderResamplerConfig::for_decoder_backend(
             self.backend,
             target_sample_rate,
-            self.resampler.placement_for(self.backend),
-            self.resampler.backend.backend(),
-            self.resampler.quality,
-            self.resampler.options,
+            resampler.backend.clone(),
+            resampler.quality,
+            resampler.options,
         )
     }
 
     pub(crate) fn recreates_on_host_rate_change(&self) -> bool {
-        self.resampler
-            .recreates_decoder_on_route_change(self.backend)
+        self.resampler.is_some()
+    }
+}
+
+impl<B> Default for AudioDecoderConfig<B> {
+    fn default() -> Self {
+        Self {
+            backend: DecoderBackend::default(),
+            gapless_mode: GaplessMode::default(),
+            resampler: None,
+        }
     }
 }
 
@@ -94,12 +102,12 @@ impl AudioDecoderConfig {
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct AudioConfig<T: StreamType> {
+pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
     pub stream: T::Config,
     /// Decoder construction settings, including decoder-side resampling.
     #[builder(default)]
-    pub decoder: AudioDecoderConfig,
+    pub decoder: AudioDecoderConfig<B>,
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = NonZeroUsize::new(3).expect("3 is non-zero"))]
     pub preload_chunks: NonZeroUsize,
@@ -160,7 +168,11 @@ const fn default_pcm_buffer_chunks() -> usize {
     32
 }
 
-impl<T: StreamType> AudioConfig<T> {
+impl<T, B> AudioConfig<T, B>
+where
+    T: StreamType,
+    B: ResamplerBackend,
+{
     /// Create config with stream config and default audio settings.
     pub fn new(stream: T::Config) -> Self {
         Self::for_stream(stream).build()
@@ -168,7 +180,9 @@ impl<T: StreamType> AudioConfig<T> {
 
     /// Chainable counterpart to [`AudioConfig::new`]: returns a builder
     /// with `stream` set so callers can attach further setters.
-    pub fn for_stream(stream: T::Config) -> AudioConfigBuilder<T, audio_config_builder::SetStream> {
+    pub fn for_stream(
+        stream: T::Config,
+    ) -> AudioConfigBuilder<T, B, audio_config_builder::SetStream> {
         Self::builder().stream(stream)
     }
 }
@@ -250,9 +264,11 @@ mod tests {
     fn audio_config_with_effect_adds_to_chain() {
         let effects: Vec<Box<dyn AudioEffect>> =
             vec![Box::new(PassthroughEffect), Box::new(PassthroughEffect)];
-        let config = AudioConfig::<kithara_file::File>::for_stream(FileConfig::default())
-            .effects(effects)
-            .build();
+        let config = AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(
+            FileConfig::default(),
+        )
+        .effects(effects)
+        .build();
         assert_eq!(config.effects.len(), 2);
     }
 

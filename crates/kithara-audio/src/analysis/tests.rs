@@ -170,6 +170,9 @@ mod run {
     use kithara_platform::CancelToken;
     #[cfg(feature = "analysis-beat")]
     use kithara_platform::sync::Mutex;
+    #[cfg(feature = "analysis-beat")]
+    use kithara_resampler::rubato::RubatoBackend;
+    use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
     use kithara_test_utils::kithara;
     #[cfg(feature = "analysis-beat")]
     use unimock::{MockFn, Unimock, matching};
@@ -193,15 +196,18 @@ mod run {
     const BUCKETS: usize = 64;
 
     #[cfg(feature = "analysis-waveform")]
-    fn waveform_only() -> AnalyzerBuilder {
-        AnalyzerBuilder::default().with_waveform(BUCKETS)
+    fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend> {
+        AnalyzerBuilder::<NoResamplerBackend>::default().with_waveform(BUCKETS)
     }
 
-    fn stages(
+    fn stages<B>(
         reader: &mut dyn PcmReader,
-        builder: &AnalyzerBuilder,
+        builder: &AnalyzerBuilder<B>,
         cancel: &CancelToken,
-    ) -> Vec<TrackAnalysis> {
+    ) -> Vec<TrackAnalysis>
+    where
+        B: ResamplerBackend,
+    {
         let mut out = Vec::new();
         analyze_reader(reader, builder, cancel, |a| out.push(a));
         out
@@ -268,8 +274,8 @@ mod run {
         );
         let detector: SharedBeatDetector =
             Arc::new(Mutex::new(Box::new(mock) as Box<dyn BeatDetector>));
-        let builder =
-            AnalyzerBuilder::default().with_beat_detector(detector, GridParams::default());
+        let builder = AnalyzerBuilder::<RubatoBackend>::default()
+            .with_beat_detector(detector, GridParams::default());
 
         let mut reader = FakeReader::chunked(&sine(17 * usize::try_from(SR).unwrap()), 3);
         let out = stages(&mut reader, &builder, &CancelToken::root());
@@ -303,6 +309,7 @@ mod run {
 #[cfg(all(not(target_arch = "wasm32"), feature = "analysis-waveform"))]
 mod worker {
     use kithara_platform::CancelToken;
+    use kithara_resampler::NoResamplerBackend;
     use kithara_test_utils::kithara;
 
     use super::{
@@ -310,8 +317,8 @@ mod worker {
         FakeReader, sine,
     };
 
-    fn waveform_only() -> AnalyzerBuilder {
-        AnalyzerBuilder::default().with_waveform(16)
+    fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend> {
+        AnalyzerBuilder::<NoResamplerBackend>::default().with_waveform(16)
     }
 
     #[kithara::test(tokio)]

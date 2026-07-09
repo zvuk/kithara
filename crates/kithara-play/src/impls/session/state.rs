@@ -916,7 +916,10 @@ fn set_session_ducking<B: AudioBackend>(state: &mut SessionState<B>, mode: Sessi
 mod tests {
     use std::{
         num::NonZeroU32,
-        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        sync::{
+            Mutex, MutexGuard,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
     };
 
     use firewheel::{StreamInfo, processor::FirewheelProcessor};
@@ -930,6 +933,19 @@ mod tests {
         start_count: AtomicUsize,
     }
 
+    struct RouteLossFixture {
+        lock: Mutex<()>,
+        probe: RouteLossProbe,
+    }
+
+    impl std::ops::Deref for RouteLossFixture {
+        type Target = RouteLossProbe;
+
+        fn deref(&self) -> &Self::Target {
+            &self.probe
+        }
+    }
+
     impl RouteLossProbe {
         fn reset(&self) {
             self.start_count.store(0, Ordering::SeqCst);
@@ -938,11 +954,21 @@ mod tests {
         }
     }
 
-    static ROUTE_LOSS: RouteLossProbe = RouteLossProbe {
-        fail_next_poll: AtomicBool::new(false),
-        fail_next_start: AtomicBool::new(false),
-        start_count: AtomicUsize::new(0),
+    static ROUTE_LOSS: RouteLossFixture = RouteLossFixture {
+        lock: Mutex::new(()),
+        probe: RouteLossProbe {
+            fail_next_poll: AtomicBool::new(false),
+            fail_next_start: AtomicBool::new(false),
+            start_count: AtomicUsize::new(0),
+        },
     };
+
+    fn lock_route_loss_probe() -> MutexGuard<'static, ()> {
+        match ROUTE_LOSS.lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
 
     struct RouteLossBackend {
         _processor: Option<FirewheelProcessor<Self>>,
@@ -1043,6 +1069,7 @@ mod tests {
 
     #[kithara::test]
     fn explicit_audio_route_invalidation_restarts_stream_without_backend_error() {
+        let _route_loss_guard = lock_route_loss_probe();
         ROUTE_LOSS.reset();
 
         let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
@@ -1107,6 +1134,7 @@ mod tests {
 
     #[kithara::test]
     fn unexpected_stream_stop_restarts_stream_without_dropping_player_graph_or_future_slots() {
+        let _route_loss_guard = lock_route_loss_probe();
         ROUTE_LOSS.reset();
 
         let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
@@ -1171,6 +1199,7 @@ mod tests {
 
     #[kithara::test]
     fn failed_stream_restart_is_retried_on_next_tick() {
+        let _route_loss_guard = lock_route_loss_probe();
         ROUTE_LOSS.reset();
 
         let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);

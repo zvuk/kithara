@@ -7,6 +7,8 @@ use crate::{
 const BACKEND_APPLE: &str = "apple-audio-converter";
 
 pub trait AudioConverterFactory: Send + Sync + 'static {
+    type Resampler: Resampler;
+
     /// Build a standalone PCM-to-PCM converter for the requested settings.
     ///
     /// # Errors
@@ -16,7 +18,7 @@ pub trait AudioConverterFactory: Send + Sync + 'static {
     fn build_resampler(
         &self,
         settings: &ResamplerSettings,
-    ) -> Result<Box<dyn Resampler>, ResamplerBuildError>;
+    ) -> Result<Self::Resampler, ResamplerBuildError>;
 }
 
 #[derive(Clone, Debug)]
@@ -55,12 +57,11 @@ impl<F> AppleAudioConverterBackend<F> {
 
 impl<F> ResamplerBackend for AppleAudioConverterBackend<F>
 where
-    F: AudioConverterFactory,
+    F: AudioConverterFactory + Clone,
 {
-    fn build(
-        &self,
-        settings: &ResamplerSettings,
-    ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
+    type Resampler = F::Resampler;
+
+    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
         settings.validate(self)?;
         self.config.factory.build_resampler(settings)
     }

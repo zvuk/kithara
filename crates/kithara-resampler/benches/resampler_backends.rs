@@ -2,6 +2,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_bufpool::PcmPool;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use kithara_resampler::apple::{AppleAudioConverterBackend, AudioToolboxConverterFactory};
 #[cfg(feature = "resample-glide")]
 use kithara_resampler::glide::GlideBackend;
 #[cfg(feature = "resample-rubato")]
@@ -81,6 +83,16 @@ fn bench_compiled_backends<M>(
         channels,
         block,
     );
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    bench_backend(
+        group,
+        "apple-audio-converter",
+        AppleAudioConverterBackend::new(AudioToolboxConverterFactory::new()),
+        source_rate,
+        target_rate,
+        channels,
+        block,
+    );
 }
 
 fn bench_backend<M, B>(
@@ -105,7 +117,7 @@ fn bench_backend<M, B>(
     group.bench_with_input(id, &block, |b, _| {
         b.iter(|| {
             resampler.reset();
-            let process = process_once(&mut *resampler, channels, &input, &mut output);
+            let process = process_once(&mut resampler, channels, &input, &mut output);
             std::hint::black_box(process);
         });
     });
@@ -117,7 +129,7 @@ fn build_resampler<B>(
     target_rate: u32,
     channels: usize,
     block: usize,
-) -> Box<dyn Resampler>
+) -> B::Resampler
 where
     B: ResamplerBackend,
 {
@@ -167,7 +179,7 @@ fn output_buffers(channels: usize, frames: usize) -> Vec<Vec<f32>> {
 }
 
 fn process_once(
-    resampler: &mut dyn Resampler,
+    resampler: &mut impl Resampler,
     channels: usize,
     input: &[Vec<f32>],
     output: &mut [Vec<f32>],

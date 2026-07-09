@@ -136,7 +136,7 @@ mod hls_timeline {
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let decoder_config = DecoderConfig::builder()
+        let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .hint("wav".to_string())
             .maybe_byte_map(stream.byte_map())
             .build();

@@ -7,7 +7,7 @@ use kithara::{
         analysis::{AnalysisWorker, AnalyzerBuilder, BeatAnalysisConfig},
     },
     bufpool::PcmPool,
-    prelude::{Resource, ResourceConfig},
+    prelude::{PlaybackResamplerBackend, Resource, ResourceConfig},
 };
 use kithara_platform::{
     CancelToken,
@@ -18,12 +18,16 @@ use kithara_platform::{
 };
 use tracing::warn;
 
+type AppAnalysisWorker = AnalysisWorker<PlaybackResamplerBackend>;
+type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
+type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
+
 /// App-side handle over the shared [`AnalysisWorker`]: opens the resource
 /// off the player runtime, hands the opened reader to the worker thread,
 /// and keeps at most one run in flight. Dropping it cancels the run and
 /// stops the worker.
 pub struct TrackAnalysisRunner {
-    worker: Arc<AnalysisWorker>,
+    worker: Arc<AppAnalysisWorker>,
     current: Option<RunHandle>,
     /// Whether any analyzer is compiled in; without one a decode pass would
     /// produce nothing, so the driver skips analysis entirely.
@@ -43,7 +47,7 @@ impl TrackAnalysisRunner {
     /// and every run scope live under it. `buckets` caps the waveform output;
     /// the native window count is the real resolution.
     #[must_use]
-    pub fn new(master: &CancelToken, _buckets: usize, beat_config: BeatAnalysisConfig) -> Self {
+    pub fn new(master: &CancelToken, _buckets: usize, beat_config: AppBeatAnalysisConfig) -> Self {
         let builder = AnalyzerBuilder::default()
             .with_pcm_pool(PcmPool::default())
             .with_beat_config(beat_config);
@@ -62,7 +66,7 @@ impl TrackAnalysisRunner {
     /// Cancel any prior run and queue `config` for analysis.
     /// Staged results arrive on the returned receiver,
     /// which closes when the run ends; nothing arrives on failure/cancel.
-    pub fn analyze(&mut self, config: ResourceConfig) -> watch::Receiver<Option<TrackAnalysis>> {
+    pub fn analyze(&mut self, config: AppResourceConfig) -> watch::Receiver<Option<TrackAnalysis>> {
         self.clear();
 
         let run = self.worker.child_token();
@@ -102,8 +106,8 @@ impl Drop for TrackAnalysisRunner {
 /// Open `config` and run it through the shared worker, forwarding every
 /// staged update to `tx`.
 async fn run_analysis(
-    worker: Arc<AnalysisWorker>,
-    config: ResourceConfig,
+    worker: Arc<AppAnalysisWorker>,
+    config: AppResourceConfig,
     cancel: CancelToken,
     tx: watch::Sender<Option<TrackAnalysis>>,
 ) {
@@ -125,7 +129,7 @@ async fn run_analysis(
 /// shutdown tear the standalone audio worker down top-down) and unwrap the
 /// reader for the analysis worker.
 async fn open_reader(
-    mut config: ResourceConfig,
+    mut config: AppResourceConfig,
     cancel: &CancelToken,
 ) -> Option<Box<dyn PcmReader>> {
     if cancel.is_cancelled() {

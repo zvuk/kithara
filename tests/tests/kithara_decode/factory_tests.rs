@@ -12,7 +12,7 @@ const TEST_MP3_BYTES: &[u8] =
 
 #[kithara::test]
 fn decoder_config_default_uses_symphonia_backend() {
-    let config = DecoderConfig::default();
+    let config: DecoderConfig = DecoderConfig::default();
     assert_eq!(config.backend, DecoderBackend::Symphonia);
     assert!(config.byte_len_handle.is_none());
 }
@@ -21,7 +21,7 @@ fn decoder_config_default_uses_symphonia_backend() {
 #[kithara::test]
 fn decoder_config_custom_apple_backend_preserves_fields() {
     let handle = Arc::new(AtomicU64::new(1000));
-    let mut config = DecoderConfig::default();
+    let mut config: DecoderConfig = DecoderConfig::default();
     config.backend = DecoderBackend::Apple;
     config.byte_len_handle = Some(Arc::clone(&handle));
     config.hint = Some("mp3".to_string());

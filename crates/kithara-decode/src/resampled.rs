@@ -1,12 +1,9 @@
-use std::{
-    num::{NonZeroU32, NonZeroUsize},
-    sync::Arc,
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_resampler::{
-    Resampler, ResamplerBackend, ResamplerConfig, ResamplerMode, ResamplerPlacement,
-    ResamplerProcess, ResamplerSettings, create_resampler,
+    Resampler, ResamplerBackend, ResamplerConfig, ResamplerMode, ResamplerProcess,
+    ResamplerSettings, create_resampler,
 };
 use kithara_stream::AudioCodec;
 use smallvec::SmallVec;
@@ -20,60 +17,62 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-pub(crate) fn wrap(
+pub(crate) fn wrap<B>(
     decoder: Box<dyn Decoder>,
-    config: Option<DecoderResamplerConfig>,
+    config: Option<DecoderResamplerConfig<B>>,
     pool: &PcmPool,
-) -> DecodeResult<Box<dyn Decoder>> {
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     let Some(config) = config else {
         return Ok(decoder);
     };
-    if config.placement == ResamplerPlacement::DecoderEmbedded {
-        return Ok(decoder);
-    }
-    if config.placement != ResamplerPlacement::Standalone {
-        return Err(DecodeError::InvalidData {
-            detail: "unsupported decoder resampler placement",
-        });
-    }
     if decoder.spec().sample_rate == config.target_sample_rate {
         return Ok(decoder);
     }
     Ok(Box::new(ResampledDecoder::new(decoder, config, pool)?))
 }
 
-struct ResampledDecoder {
-    backend: Arc<dyn ResamplerBackend>,
+struct ResampledDecoder<B>
+where
+    B: ResamplerBackend,
+{
+    backend: B,
     decoder: Box<dyn Decoder>,
+    emitted_frames: u64,
     eof_flushed: bool,
     input: SmallVec<[PcmBuf; 8]>,
     last_input_meta: Option<PcmMeta>,
     options: kithara_resampler::ResamplerOptions,
     output: SmallVec<[PcmBuf; 8]>,
     output_frame_offset: u64,
+    output_skip_frames: usize,
     pending_meta: Option<PcmMeta>,
     pool: PcmPool,
     quality: kithara_resampler::ResamplerQuality,
-    resampler: Box<dyn Resampler>,
+    resampler: B::Resampler,
     scratch: SmallVec<[PcmBuf; 8]>,
+    source_frames_seen: u64,
     source_spec: PcmSpec,
     target_sample_rate: NonZeroU32,
     target_spec: PcmSpec,
 }
 
-impl ResampledDecoder {
+impl<B> ResampledDecoder<B>
+where
+    B: ResamplerBackend,
+{
     fn new(
         decoder: Box<dyn Decoder>,
-        mut config: DecoderResamplerConfig,
+        config: DecoderResamplerConfig<B>,
         pool: &PcmPool,
     ) -> DecodeResult<Self> {
-        let backend = config.backend.take().ok_or(DecodeError::InvalidData {
-            detail: "standalone decoder resampler requires a backend",
-        })?;
+        let backend = config.backend;
         let source_spec = decoder.spec();
         let target_spec = PcmSpec::new(source_spec.channels, config.target_sample_rate);
         let resampler = build_resampler(
-            backend.as_ref(),
+            backend.clone(),
             source_spec,
             config.target_sample_rate,
             config.quality,
@@ -83,17 +82,20 @@ impl ResampledDecoder {
         Ok(Self {
             backend,
             decoder,
+            emitted_frames: 0,
             eof_flushed: false,
             input: channel_buffers(pool, source_spec.channels),
             last_input_meta: None,
             options: config.options,
             output: channel_buffers(pool, source_spec.channels),
             output_frame_offset: 0,
+            output_skip_frames: resampler.output_delay(),
             pending_meta: None,
             pool: pool.clone(),
             quality: config.quality,
             resampler,
             scratch: channel_buffers(pool, source_spec.channels),
+            source_frames_seen: 0,
             source_spec,
             target_sample_rate: config.target_sample_rate,
             target_spec,
@@ -116,6 +118,9 @@ impl ResampledDecoder {
         self.last_input_meta = Some(chunk.meta);
         let channels = self.channels();
         let frames = chunk.frames();
+        self.source_frames_seen = self
+            .source_frames_seen
+            .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
         let base_len = self.input[0].len();
         for channel in self.input.iter_mut().take(channels) {
             let old_len = channel.len();
@@ -182,6 +187,9 @@ impl ResampledDecoder {
         self.output_frame_offset = self
             .output_frame_offset
             .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
+        self.emitted_frames = self
+            .emitted_frames
+            .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
         meta.end_timestamp =
             duration_for_frames(self.target_sample_rate.get(), self.output_frame_offset);
         let channels = self.channels();
@@ -190,24 +198,32 @@ impl ResampledDecoder {
     }
 
     fn flush_residual(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        if self.input[0].is_empty() {
+        if self.input[0].is_empty() && self.ready_output_frames() >= self.expected_output_frames() {
             return Ok(None);
         }
         if self.pending_meta.is_none() {
             self.pending_meta = self.last_input_meta;
         }
         let channels = self.channels();
-        let buffered = self.input[0].len();
-        let input_frames = self.resampler.input_frames_next();
-        for buffer in self.input.iter_mut().take(channels) {
-            buffer.ensure_len(input_frames)?;
+        while self.ready_output_frames() < self.expected_output_frames() {
+            let input_frames = self.resampler.input_frames_next();
+            let buffered = self.input[0].len();
+            for buffer in self.input.iter_mut().take(channels) {
+                buffer.ensure_len(input_frames)?;
+                buffer[buffered..input_frames].fill(0.0);
+            }
+            let ready_before = self.ready_output_frames();
+            let process = self.process_block(input_frames)?;
+            if process.input_frames > input_frames {
+                return Err(DecodeError::InvalidData {
+                    detail: "decoder resampler consumed more frames than supplied",
+                });
+            }
+            if process.input_frames == 0 && self.ready_output_frames() == ready_before {
+                break;
+            }
+            self.drop_consumed(process.input_frames);
         }
-        let process = self.process_block(input_frames)?;
-        let usable = self.output_frames_for_buffered(buffered, process.output_frames);
-        for buffer in self.output.iter_mut().take(channels) {
-            buffer.truncate(usable);
-        }
-        Self::clear_planar(&mut self.input, channels);
         self.finish_output()
     }
 
@@ -224,15 +240,18 @@ impl ResampledDecoder {
         Ok(samples)
     }
 
-    fn output_frames_for_buffered(&self, input_frames: usize, produced: usize) -> usize {
+    fn expected_output_frames(&self) -> u64 {
         let source_rate = self.source_spec.sample_rate.get();
-        let input_frames = u64::try_from(input_frames).map_or(u128::MAX, u128::from);
-        let expected = input_frames
+        let expected = u128::from(self.source_frames_seen)
             .saturating_mul(u128::from(self.target_sample_rate.get()))
-            .saturating_add(u128::from(source_rate.saturating_sub(1)))
+            .saturating_add(u128::from(source_rate / 2))
             / u128::from(source_rate);
-        let expected = usize::try_from(expected).unwrap_or(usize::MAX);
-        expected.min(produced)
+        u64::try_from(expected).unwrap_or(u64::MAX)
+    }
+
+    fn ready_output_frames(&self) -> u64 {
+        self.emitted_frames
+            .saturating_add(u64::try_from(self.output[0].len()).unwrap_or(u64::MAX))
     }
 
     fn process_block(&mut self, input_frames: usize) -> DecodeResult<ResamplerProcess> {
@@ -259,11 +278,20 @@ impl ResampledDecoder {
                 detail: "decoder resampler produced more frames than requested",
             });
         }
+        let skip = self.output_skip_frames.min(process.output_frames);
+        self.output_skip_frames -= skip;
+        let available = process.output_frames.saturating_sub(skip);
+        let remaining = self
+            .expected_output_frames()
+            .saturating_sub(self.ready_output_frames());
+        let usable = usize::try_from(remaining)
+            .unwrap_or(usize::MAX)
+            .min(available);
         for channel in 0..channels {
             let old_len = self.output[channel].len();
-            self.output[channel].ensure_len(old_len.saturating_add(process.output_frames))?;
-            let dst = &mut self.output[channel][old_len..old_len + process.output_frames];
-            let src = &self.scratch[channel][..process.output_frames];
+            self.output[channel].ensure_len(old_len.saturating_add(usable))?;
+            let dst = &mut self.output[channel][old_len..old_len + usable];
+            let src = &self.scratch[channel][skip..skip + usable];
             dst.copy_from_slice(src);
         }
         Ok(process)
@@ -272,7 +300,7 @@ impl ResampledDecoder {
     fn rebuild_for_source_spec(&mut self, source_spec: PcmSpec) -> DecodeResult<()> {
         let target_spec = PcmSpec::new(source_spec.channels, self.target_sample_rate);
         let resampler = build_resampler(
-            self.backend.as_ref(),
+            self.backend.clone(),
             source_spec,
             self.target_sample_rate,
             self.quality,
@@ -283,8 +311,11 @@ impl ResampledDecoder {
         self.target_spec = target_spec;
         self.input = channel_buffers(&self.pool, source_spec.channels);
         self.output = channel_buffers(&self.pool, source_spec.channels);
+        self.output_skip_frames = resampler.output_delay();
         self.scratch = channel_buffers(&self.pool, source_spec.channels);
         self.resampler = resampler;
+        self.emitted_frames = 0;
+        self.source_frames_seen = 0;
         Ok(())
     }
 
@@ -294,7 +325,10 @@ impl ResampledDecoder {
         Self::clear_planar(&mut self.output, channels);
         self.pending_meta = None;
         self.last_input_meta = None;
+        self.emitted_frames = 0;
         self.eof_flushed = false;
+        self.output_skip_frames = self.resampler.output_delay();
+        self.source_frames_seen = 0;
         self.resampler.reset();
     }
 
@@ -308,7 +342,10 @@ impl ResampledDecoder {
     }
 }
 
-impl Decoder for ResampledDecoder {
+impl<B> Decoder for ResampledDecoder<B>
+where
+    B: ResamplerBackend,
+{
     fn default_priming_frames(&self, codec: AudioCodec) -> u64 {
         let source = self.decoder.default_priming_frames(codec);
         round_scaled_frames_lossy(
@@ -410,14 +447,17 @@ impl Decoder for ResampledDecoder {
     }
 }
 
-fn build_resampler(
-    backend: &dyn ResamplerBackend,
+fn build_resampler<B>(
+    backend: B,
     source_spec: PcmSpec,
     target_sample_rate: NonZeroU32,
     quality: kithara_resampler::ResamplerQuality,
     options: kithara_resampler::ResamplerOptions,
     pool: PcmPool,
-) -> DecodeResult<Box<dyn Resampler>> {
+) -> DecodeResult<B::Resampler>
+where
+    B: ResamplerBackend,
+{
     let channels =
         NonZeroUsize::new(usize::from(source_spec.channels)).ok_or(DecodeError::InvalidData {
             detail: "decoder resampler requires at least one channel",
@@ -429,7 +469,6 @@ fn build_resampler(
             source_sample_rate: source_spec.sample_rate,
         })
         .options(options)
-        .placement(ResamplerPlacement::Standalone)
         .quality(quality)
         .pcm_pool(pool)
         .build();

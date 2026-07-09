@@ -1,19 +1,20 @@
 use std::{ffi::c_void, ptr};
 
 use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
-use kithara_resampler::ResamplerError;
 use smallvec::SmallVec;
 
-use super::{buffer::audio_buffer_ptr, channel_byte_len};
-use crate::apple::{
-    consts::Consts,
-    ffi::{
-        AudioBuffer, AudioBufferList, AudioConverterRef, AudioStreamPacketDescription, OSStatus,
-        UInt32,
+use super::{buffer::audio_buffer_ptr, resampler::channel_byte_len};
+use crate::{
+    ResamplerError,
+    apple::{
+        consts::Consts,
+        ffi::{
+            AudioBuffer, AudioBufferList, AudioConverterRef, AudioStreamPacketDescription, OsStatus,
+        },
     },
 };
 
-const PARAM_ERR: OSStatus = -50;
+const PARAM_ERR: OsStatus = -50;
 
 pub(super) struct AppleResamplerInputState {
     staged: SmallVec<[PcmBuf; 8]>,
@@ -97,11 +98,11 @@ impl AppleResamplerInputState {
 
 pub(super) extern "C" fn apple_resampler_input_callback(
     _converter: AudioConverterRef,
-    io_num_packets: *mut UInt32,
+    io_num_packets: *mut u32,
     io_data: *mut AudioBufferList,
     out_packet_desc: *mut *mut AudioStreamPacketDescription,
     user_data: *mut c_void,
-) -> OSStatus {
+) -> OsStatus {
     if io_num_packets.is_null() || io_data.is_null() || user_data.is_null() {
         return PARAM_ERR;
     }
@@ -121,20 +122,20 @@ pub(super) extern "C" fn apple_resampler_input_callback(
             }
         }
         return if state.eos {
-            Consts::noErr
+            Consts::NO_ERR
         } else {
-            Consts::kAudioConverterErr_NoDataNow
+            Consts::AUDIO_CONVERTER_ERR_NO_DATA_NOW
         };
     }
 
     let frames = remaining.min(requested);
-    let Ok(frame_count) = UInt32::try_from(frames) else {
+    let Ok(frame_count) = u32::try_from(frames) else {
         return PARAM_ERR;
     };
     let Ok(byte_len) = channel_byte_len(frames) else {
         return PARAM_ERR;
     };
-    let Ok(channel_count) = UInt32::try_from(state.channels) else {
+    let Ok(channel_count) = u32::try_from(state.channels) else {
         return PARAM_ERR;
     };
 
@@ -142,13 +143,13 @@ pub(super) extern "C" fn apple_resampler_input_callback(
     // converter's non-interleaved input ASBD; CoreAudio sizes it for the
     // channel count declared at converter construction.
     unsafe {
-        (*io_data).mNumberBuffers = channel_count;
+        (*io_data).number_buffers = channel_count;
         for (channel_idx, channel) in state.staged.iter().enumerate().take(state.channels) {
             let data = channel.as_ptr().add(state.offset).cast::<c_void>();
             audio_buffer_ptr(io_data, channel_idx).write(AudioBuffer {
-                mNumberChannels: 1,
-                mDataByteSize: byte_len,
-                mData: data.cast_mut(),
+                number_channels: 1,
+                data_byte_size: byte_len,
+                data: data.cast_mut(),
             });
         }
         *io_num_packets = frame_count;
@@ -159,7 +160,7 @@ pub(super) extern "C" fn apple_resampler_input_callback(
 
     state.offset = state.offset.saturating_add(frames);
     state.consumed = state.consumed.saturating_add(frames);
-    Consts::noErr
+    Consts::NO_ERR
 }
 
 fn validate_input(

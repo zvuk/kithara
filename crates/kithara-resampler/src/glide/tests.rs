@@ -32,7 +32,7 @@ fn fixed_mode(source: u32, target: u32) -> ResamplerMode {
     }
 }
 
-fn build_glide(source: u32, target: u32) -> Box<dyn Resampler> {
+fn build_glide(source: u32, target: u32) -> GlideResampler {
     let config = ResamplerConfig::builder()
         .backend(GlideBackend::new())
         .settings(settings(fixed_mode(source, target)))

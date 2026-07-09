@@ -1,7 +1,6 @@
 use std::{
     fmt,
     num::{NonZeroU32, NonZeroUsize},
-    sync::Arc,
 };
 
 use bon::Builder;
@@ -16,8 +15,8 @@ use crate::{
 #[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct MonoStreamConfig {
-    pub backend: Arc<dyn ResamplerBackend>,
+pub struct MonoStreamConfig<B> {
+    pub backend: B,
     #[builder(default)]
     pub options: ResamplerOptions,
     pub pcm_pool: PcmPool,
@@ -27,7 +26,10 @@ pub struct MonoStreamConfig {
     pub target_sample_rate: NonZeroU32,
 }
 
-impl fmt::Debug for MonoStreamConfig {
+impl<B> fmt::Debug for MonoStreamConfig<B>
+where
+    B: ResamplerBackend,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MonoStreamConfig")
             .field("backend", &self.backend.name())
@@ -40,26 +42,32 @@ impl fmt::Debug for MonoStreamConfig {
     }
 }
 
-pub struct MonoStream {
+pub struct MonoStream<B>
+where
+    B: ResamplerBackend,
+{
     emitted: usize,
     input_block: PcmBuf,
     output_block: PcmBuf,
     pending: PcmBuf,
     ratio: f64,
     ready: PcmBuf,
-    resampler: Box<dyn Resampler>,
+    resampler: B::Resampler,
     skip: usize,
     total_in: u64,
 }
 
-impl MonoStream {
+impl<B> MonoStream<B>
+where
+    B: ResamplerBackend,
+{
     /// Build a pooled mono streaming adapter over a standalone backend.
     ///
     /// # Errors
     ///
     /// Returns [`ResamplerBuildError`] when backend construction fails or the
     /// injected pool cannot provide the configured scratch buffers.
-    pub fn new(config: MonoStreamConfig) -> Result<Self, ResamplerBuildError> {
+    pub fn new(config: MonoStreamConfig<B>) -> Result<Self, ResamplerBuildError> {
         let backend = config.backend;
         let backend_name = backend.name();
         let settings = ResamplerSettings::builder()

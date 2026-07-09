@@ -64,6 +64,7 @@ ignores:
   # `#[deny(unsafe_code)]` ratchet at crate root keeps non-FFI code
   # honest; these directories own the carve-out.
   - "**/kithara-net/src/backend/apple/**"
+  - "**/kithara-resampler/src/apple/**"
   - "**/kithara-decode/src/apple/**"
   - "**/kithara-decode/src/android/**"
   # Crate root file holds two lint allows that quiet `unimock`-generated

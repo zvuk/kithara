@@ -1,7 +1,5 @@
 use super::{GlideConfig, resampler::GlideResampler};
-use crate::{
-    Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings,
-};
+use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings};
 
 const BACKEND_GLIDE: &str = "glide";
 
@@ -28,13 +26,11 @@ impl GlideBackend {
 }
 
 impl ResamplerBackend for GlideBackend {
-    fn build(
-        &self,
-        settings: &ResamplerSettings,
-    ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
+    type Resampler = GlideResampler;
+
+    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
         settings.validate(self)?;
-        let resampler = GlideResampler::new(self.name(), self.config, settings)?;
-        Ok(Box::new(resampler))
+        GlideResampler::new(self.name(), self.config, settings)
     }
 
     fn capabilities(&self) -> ResamplerCapabilities {

@@ -4,7 +4,7 @@ use kithara::{
     assets::AssetStore,
     audio::analysis::BeatAnalysisConfig,
     events::{Event, EventReceiver, TrackId},
-    prelude::ResourceConfig,
+    prelude::{PlaybackResamplerBackend, ResourceConfig},
 };
 use kithara_platform::{
     CancelToken,
@@ -23,6 +23,9 @@ use crate::{
     wave_cache::{AnalysisKey, TrackAnalysisCache, source_key},
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
+
+type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
+type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 
 /// Upper bound on waveform buckets (native = one per FFT window); only caps very
 /// long tracks to bound the cached blob.
@@ -109,7 +112,7 @@ impl AnalysisController {
     pub(crate) fn new(
         cancel: &CancelToken,
         store: Option<Arc<AssetStore>>,
-        beat_config: &BeatAnalysisConfig,
+        beat_config: &AppBeatAnalysisConfig,
     ) -> Self {
         Self {
             runner: TrackAnalysisRunner::new(cancel, WAVEFORM_MAX_BUCKETS, beat_config.clone()),
@@ -287,7 +290,7 @@ impl AnalysisController {
 
 /// Fingerprint of the active analysis configuration, stored inside each durable blob.
 /// A mismatch is a cache miss, so config changes re-analyse.
-fn analysis_fingerprint(beat_config: &BeatAnalysisConfig) -> String {
+fn analysis_fingerprint(beat_config: &AppBeatAnalysisConfig) -> String {
     let beat = beat_config.cache_tag().unwrap_or_else(|| "off".to_string());
     format!("wave=native:max{WAVEFORM_MAX_BUCKETS};beat={beat}")
 }
@@ -359,7 +362,10 @@ fn publish_if_current(state: &Mutex<UiState>, track_id: TrackId, analysis: Track
 
 /// Build an analysis resource from a track's source, reusing the shared
 /// stores so the analysis and the player share one download.
-fn resource_config_from_source(source: TrackSource, config: &AppConfig) -> Option<ResourceConfig> {
+fn resource_config_from_source(
+    source: TrackSource,
+    config: &AppConfig,
+) -> Option<AppResourceConfig> {
     match source {
         TrackSource::Config(cfg) => Some(*cfg),
         TrackSource::Uri(url) => build_resource_config(&url, config),
@@ -372,6 +378,7 @@ mod tests {
     use ::kithara::{
         audio::{Waveform, analysis::BeatAnalysisConfig},
         events::TrackId,
+        prelude::PlaybackResamplerBackend,
     };
     use kithara_platform::{CancelToken, sync::Mutex, tokio::sync::watch};
     use kithara_queue::{Queue, QueueConfig};
@@ -417,7 +424,11 @@ mod tests {
         value: Option<TrackAnalysis>,
     ) -> (AnalysisController, watch::Sender<Option<TrackAnalysis>>) {
         let cancel = CancelToken::root();
-        let mut controller = AnalysisController::new(&cancel, None, &BeatAnalysisConfig::default());
+        let mut controller = AnalysisController::new(
+            &cancel,
+            None,
+            &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
+        );
         let (tx, rx) = watch::channel(value);
         controller.current = Some(Run {
             track_id,

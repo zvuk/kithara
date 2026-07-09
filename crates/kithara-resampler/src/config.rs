@@ -1,15 +1,9 @@
-use std::{
-    fmt,
-    num::{NonZeroU32, NonZeroUsize},
-    sync::Arc,
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_bufpool::PcmPool;
 
-use crate::{
-    ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode, ResamplerPlacement,
-};
+use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ResamplerQuality {
@@ -25,6 +19,26 @@ pub enum ResamplerQuality {
 pub struct RatioGlide {
     pub frames: NonZeroU32,
     pub target_ratio: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct Unit<B>(pub B);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct Decode<B>(pub B);
+
+#[derive(Clone, Debug, PartialEq, Builder)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct Resample<S> {
+    pub target_sample_rate: NonZeroU32,
+    #[builder(default)]
+    pub options: ResamplerOptions,
+    #[builder(default)]
+    pub quality: ResamplerQuality,
+    pub scope: S,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Builder)]
@@ -49,75 +63,6 @@ impl Default for ResamplerOptions {
     }
 }
 
-#[derive(Clone)]
-pub struct ResamplerBackendConfig {
-    backend: Option<Arc<dyn ResamplerBackend>>,
-}
-
-impl ResamplerBackendConfig {
-    #[must_use]
-    pub fn new<B>(backend: B) -> Self
-    where
-        B: ResamplerBackend + 'static,
-    {
-        Self {
-            backend: Some(Arc::new(backend)),
-        }
-    }
-
-    #[must_use]
-    pub fn as_ref(&self) -> Option<&dyn ResamplerBackend> {
-        self.backend.as_deref()
-    }
-
-    #[must_use]
-    pub fn backend(&self) -> Option<Arc<dyn ResamplerBackend>> {
-        self.backend.clone()
-    }
-
-    #[must_use]
-    pub fn is_none(&self) -> bool {
-        self.backend.is_none()
-    }
-
-    #[must_use]
-    pub fn name(&self) -> Option<&'static str> {
-        self.as_ref().map(ResamplerBackend::name)
-    }
-
-    #[must_use]
-    pub const fn none() -> Self {
-        Self { backend: None }
-    }
-}
-
-impl Default for ResamplerBackendConfig {
-    fn default() -> Self {
-        default_backend_config()
-    }
-}
-
-impl fmt::Debug for ResamplerBackendConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.name().fmt(f)
-    }
-}
-
-#[cfg(feature = "resample-rubato")]
-fn default_backend_config() -> ResamplerBackendConfig {
-    ResamplerBackendConfig::new(crate::rubato::RubatoBackend::new())
-}
-
-#[cfg(all(not(feature = "resample-rubato"), feature = "resample-glide"))]
-fn default_backend_config() -> ResamplerBackendConfig {
-    ResamplerBackendConfig::new(crate::glide::GlideBackend::new())
-}
-
-#[cfg(not(any(feature = "resample-rubato", feature = "resample-glide")))]
-fn default_backend_config() -> ResamplerBackendConfig {
-    ResamplerBackendConfig::none()
-}
-
 #[derive(Clone, Debug, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -127,8 +72,6 @@ pub struct ResamplerSettings {
     pub mode: ResamplerMode,
     #[builder(default)]
     pub options: ResamplerOptions,
-    #[builder(default = ResamplerPlacement::Standalone)]
-    pub placement: ResamplerPlacement,
     #[builder(default)]
     pub quality: ResamplerQuality,
 }
@@ -179,16 +122,6 @@ pub(crate) fn validate_settings(
 ) -> Result<(), ResamplerBuildError> {
     validate_options(settings.options)?;
     validate_mode(backend, capabilities, settings.mode)?;
-
-    if settings.placement == ResamplerPlacement::Standalone
-        && !capabilities.contains(ResamplerCapabilities::STANDALONE)
-    {
-        return Err(ResamplerBuildError::UnsupportedPlacement {
-            backend,
-            placement: settings.placement,
-        });
-    }
-
     Ok(())
 }
 
@@ -268,10 +201,11 @@ mod tests {
     use kithara_bufpool::PcmPool;
 
     use crate::{
-        Resampler, ResamplerBackend, ResamplerBackendConfig, ResamplerBuildError,
-        ResamplerCapabilities, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerSettings,
+        ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerConfig,
+        ResamplerMode, ResamplerOptions, ResamplerSettings, backend::NoResampler,
     };
 
+    #[derive(Clone)]
     struct TestBackend {
         capabilities: ResamplerCapabilities,
     }
@@ -286,10 +220,12 @@ mod tests {
     }
 
     impl ResamplerBackend for TestBackend {
+        type Resampler = NoResampler;
+
         fn build(
             &self,
             _settings: &ResamplerSettings,
-        ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
+        ) -> Result<Self::Resampler, ResamplerBuildError> {
             Err(ResamplerBuildError::BackendBuild {
                 backend: self.name(),
                 detail: "test backend has no processor".into(),
@@ -332,16 +268,13 @@ mod tests {
     }
 
     #[test]
-    fn default_backend_config_uses_compiled_portable_backend_order() {
-        let expected = if cfg!(feature = "resample-rubato") {
-            Some("rubato")
-        } else if cfg!(feature = "resample-glide") {
-            Some("glide")
-        } else {
-            None
-        };
+    fn resample_scope_keeps_backend_in_the_type() {
+        let resample = crate::Resample::builder()
+            .target_sample_rate(sample_rate(48_000))
+            .scope(crate::Unit(TestBackend::fixed()))
+            .build();
 
-        assert_eq!(ResamplerBackendConfig::default().name(), expected);
+        assert_eq!(resample.scope.0.name(), "test");
     }
 
     #[test]

@@ -8,7 +8,7 @@ use crate::{
     ResamplerMode, ResamplerProcess, ResamplerSettings,
 };
 
-pub(super) struct RubatoResampler {
+pub struct RubatoResampler {
     channels: NonZeroUsize,
     mode: ResamplerMode,
     config: RubatoConfig,

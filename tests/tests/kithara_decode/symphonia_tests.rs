@@ -18,7 +18,9 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
     let decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
-        DecoderConfig::builder().hint("wav".into()).build(),
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .hint("wav".into())
+            .build(),
     );
     assert!(decoder.is_ok(), "decoder creation should succeed");
 

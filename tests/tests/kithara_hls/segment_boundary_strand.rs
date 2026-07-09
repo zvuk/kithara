@@ -170,7 +170,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     let decode = spawn_blocking(move || -> (Vec<(u64, Vec<f32>)>, usize) {
         let byte_len = stream.len().unwrap_or(0);
         let byte_map = stream.byte_map();
-        let decoder_config = DecoderConfig::builder()
+        let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .backend(DecoderBackend::Symphonia)
             .byte_len_handle(Arc::new(std::sync::atomic::AtomicU64::new(byte_len)))
             .maybe_byte_map(byte_map)

@@ -5,10 +5,11 @@ use std::{
     ptr::{self, NonNull},
 };
 
-use kithara_resampler::{ResamplerBuildError, ResamplerError};
-
-use super::{apple_build_config, channel_byte_len, constants};
-use crate::apple::ffi::{AudioBuffer, AudioBufferList};
+use super::{
+    ffi::{AudioBuffer, AudioBufferList},
+    resampler::{apple_build_config, channel_byte_len, constants},
+};
+use crate::{ResamplerBuildError, ResamplerError};
 
 pub(super) struct PlanarAudioBufferList {
     layout: Layout,
@@ -31,7 +32,7 @@ impl PlanarAudioBufferList {
         };
         // SAFETY: `list.ptr` owns enough initialized storage for the header.
         unsafe {
-            (*list.ptr.as_ptr()).mNumberBuffers = u32::try_from(channels)
+            (*list.ptr.as_ptr()).number_buffers = u32::try_from(channels)
                 .map_err(|_| apple_build_config("channel count exceeds CoreAudio limit"))?;
         }
         list.clear_buffers();
@@ -60,9 +61,9 @@ impl PlanarAudioBufferList {
             // one AudioBuffer slot per channel.
             unsafe {
                 self.buffer_ptr(channel).write(AudioBuffer {
-                    mNumberChannels: 1,
-                    mDataByteSize: 0,
-                    mData: ptr::null_mut(),
+                    number_channels: 1,
+                    data_byte_size: 0,
+                    data: ptr::null_mut(),
                 });
             }
         }
@@ -79,9 +80,9 @@ impl PlanarAudioBufferList {
             // `output_frames` samples by caller validation.
             unsafe {
                 self.buffer_ptr(channel_idx).write(AudioBuffer {
-                    mNumberChannels: 1,
-                    mDataByteSize: bytes,
-                    mData: channel.as_mut_ptr().cast::<c_void>(),
+                    number_channels: 1,
+                    data_byte_size: bytes,
+                    data: channel.as_mut_ptr().cast::<c_void>(),
                 });
             }
         }

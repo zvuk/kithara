@@ -1,4 +1,8 @@
-use kithara::{hls::KeyOptions, net::Headers, prelude::ResourceConfig};
+use kithara::{
+    hls::KeyOptions,
+    net::Headers,
+    prelude::{PlaybackResamplerBackend, ResourceConfig},
+};
 use kithara_queue::TrackSource;
 use url::Url;
 
@@ -29,7 +33,10 @@ pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
 /// downloader, flush hub, and DRM routing injected (same as
 /// [`build_source`]). `None` when `url` is not a valid source.
 #[must_use]
-pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<ResourceConfig> {
+pub(crate) fn build_resource_config(
+    url: &str,
+    config: &AppConfig,
+) -> Option<ResourceConfig<PlaybackResamplerBackend>> {
     let builder = match ResourceConfig::for_src(url) {
         Ok(builder) => builder,
         Err(e) => {

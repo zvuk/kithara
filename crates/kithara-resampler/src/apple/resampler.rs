@@ -1,5 +1,3 @@
-#![allow(unsafe_code)]
-
 use std::{
     ffi::c_void,
     mem::size_of,
@@ -8,26 +6,23 @@ use std::{
 };
 
 use kithara_bufpool::PcmPool;
-use kithara_resampler::{
-    Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerError, ResamplerMode,
-    ResamplerProcess, ResamplerSettings, apple::AudioConverterFactory,
-};
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
 
 use super::{
+    AudioConverterFactory,
+    buffer::PlanarAudioBufferList,
     consts::Consts,
     ffi::{
-        AudioConverterDispose, AudioConverterFillComplexBuffer, AudioConverterNew,
-        AudioConverterRef, AudioConverterReset, AudioStreamBasicDescription, UInt32,
+        AudioConverterRef, AudioStreamBasicDescription, audio_converter_dispose,
+        audio_converter_fill_complex_buffer, audio_converter_new, audio_converter_reset,
     },
+    input::{AppleResamplerInputState, apple_resampler_input_callback},
 };
-
-mod buffer;
-mod input;
-
-use buffer::PlanarAudioBufferList;
-use input::{AppleResamplerInputState, apple_resampler_input_callback};
+use crate::{
+    Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerError, ResamplerMode,
+    ResamplerProcess, ResamplerSettings,
+};
 
 const BACKEND_APPLE: &str = "apple-audio-converter";
 
@@ -46,10 +41,12 @@ impl AudioToolboxConverterFactory {
 }
 
 impl AudioConverterFactory for AudioToolboxConverterFactory {
+    type Resampler = AppleResampler;
+
     fn build_resampler(
         &self,
         settings: &ResamplerSettings,
-    ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
+    ) -> Result<Self::Resampler, ResamplerBuildError> {
         let ResamplerMode::FixedRatio {
             source_sample_rate,
             target_sample_rate,
@@ -68,11 +65,11 @@ impl AudioConverterFactory for AudioToolboxConverterFactory {
             settings.options.chunk_size,
             &settings.pcm_pool,
         )?;
-        Ok(Box::new(resampler))
+        Ok(resampler)
     }
 }
 
-mod constants {
+pub(super) mod constants {
     use std::mem::size_of;
 
     use crate::apple::{
@@ -80,14 +77,14 @@ mod constants {
         ffi::{AudioBuffer, AudioBufferList, AudioFormatFlags},
     };
 
-    pub(super) const AUDIO_BUFFER_LIST_HEADER_BYTES: usize =
+    pub(in crate::apple) const AUDIO_BUFFER_LIST_HEADER_BYTES: usize =
         size_of::<AudioBufferList>() - size_of::<AudioBuffer>();
-    pub(super) const AUDIO_FORMAT_FLAG_IS_NON_INTERLEAVED: AudioFormatFlags = 1 << 5;
-    pub(super) const AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PLANAR: AudioFormatFlags =
-        Consts::kAudioFormatFlagsNativeFloatPacked | AUDIO_FORMAT_FLAG_IS_NON_INTERLEAVED;
+    pub(in crate::apple) const AUDIO_FORMAT_FLAG_IS_NON_INTERLEAVED: AudioFormatFlags = 1 << 5;
+    pub(in crate::apple) const AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PLANAR: AudioFormatFlags =
+        Consts::AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PACKED | AUDIO_FORMAT_FLAG_IS_NON_INTERLEAVED;
 }
 
-pub(crate) struct AppleResampler {
+pub struct AppleResampler {
     converter: AudioConverterRef,
     input_state: Box<AppleResamplerInputState>,
     output_list: PlanarAudioBufferList,
@@ -134,8 +131,8 @@ impl AppleResampler {
         let target_format = planar_f32_asbd(target_sample_rate, channels)?;
         let mut converter = ptr::null_mut();
         // SAFETY: source/target ASBDs are valid stack values; `converter` is a writable out-param.
-        let status = unsafe { AudioConverterNew(&source_format, &target_format, &mut converter) };
-        if status != Consts::noErr {
+        let status = unsafe { audio_converter_new(&source_format, &target_format, &mut converter) };
+        if status != Consts::NO_ERR {
             return Err(apple_build_status("AudioConverterNew", status));
         }
 
@@ -179,7 +176,7 @@ impl AppleResampler {
         // kept alive for the full synchronous call; `output_list` points to
         // caller-owned output buffers sized above.
         let status = unsafe {
-            AudioConverterFillComplexBuffer(
+            audio_converter_fill_complex_buffer(
                 self.converter,
                 apple_resampler_input_callback,
                 input_ptr,
@@ -189,7 +186,7 @@ impl AppleResampler {
             )
         };
 
-        if status != Consts::noErr && status != Consts::kAudioConverterErr_NoDataNow {
+        if status != Consts::NO_ERR && status != Consts::AUDIO_CONVERTER_ERR_NO_DATA_NOW {
             return Err(apple_error_status(
                 "AudioConverterFillComplexBuffer",
                 status,
@@ -217,7 +214,7 @@ impl Drop for AppleResampler {
     fn drop(&mut self) {
         if !self.converter.is_null() {
             // SAFETY: `converter` was returned by `AudioConverterNew`.
-            let _ = unsafe { AudioConverterDispose(self.converter) };
+            let _ = unsafe { audio_converter_dispose(self.converter) };
         }
     }
 }
@@ -293,8 +290,8 @@ impl Resampler for AppleResampler {
 
     fn reset(&mut self) {
         // SAFETY: `converter` is a live handle owned by this resampler.
-        let status = unsafe { AudioConverterReset(self.converter) };
-        if status != Consts::noErr {
+        let status = unsafe { audio_converter_reset(self.converter) };
+        if status != Consts::NO_ERR {
             warn!(
                 status,
                 "AppleResampler: AudioConverterReset returned non-zero"
@@ -311,14 +308,14 @@ fn planar_f32_asbd(
     let channels = u32::try_from(channels.get())
         .map_err(|_| apple_build_config("channel count exceeds CoreAudio limit"))?;
     Ok(AudioStreamBasicDescription {
-        mSampleRate: f64::from(sample_rate.get()),
-        mFormatID: Consts::kAudioFormatLinearPCM,
-        mFormatFlags: constants::AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PLANAR,
-        mBytesPerPacket: Consts::BYTES_PER_F32_SAMPLE,
-        mFramesPerPacket: 1,
-        mBytesPerFrame: Consts::BYTES_PER_F32_SAMPLE,
-        mChannelsPerFrame: channels,
-        mBitsPerChannel: Consts::BITS_PER_F32_SAMPLE,
+        sample_rate: f64::from(sample_rate.get()),
+        format_id: Consts::AUDIO_FORMAT_LINEAR_PCM,
+        format_flags: constants::AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PLANAR,
+        bytes_per_packet: Consts::BYTES_PER_F32_SAMPLE,
+        frames_per_packet: 1,
+        bytes_per_frame: Consts::BYTES_PER_F32_SAMPLE,
+        channels_per_frame: channels,
+        bits_per_channel: Consts::BITS_PER_F32_SAMPLE,
         ..Default::default()
     })
 }
@@ -337,18 +334,18 @@ fn validate_output(output: &[&mut [f32]], channels: usize) -> Result<usize, Resa
     Ok(frames)
 }
 
-fn frames_to_u32(frames: usize) -> Result<UInt32, ResamplerError> {
-    UInt32::try_from(frames).map_err(|_| apple_buffer("frame count exceeds CoreAudio limit"))
+fn frames_to_u32(frames: usize) -> Result<u32, ResamplerError> {
+    u32::try_from(frames).map_err(|_| apple_buffer("frame count exceeds CoreAudio limit"))
 }
 
-fn channel_byte_len(frames: usize) -> Result<UInt32, ResamplerError> {
+pub(super) fn channel_byte_len(frames: usize) -> Result<u32, ResamplerError> {
     let bytes = frames
         .checked_mul(size_of::<f32>())
         .ok_or_else(|| apple_buffer("channel byte size overflow"))?;
-    UInt32::try_from(bytes).map_err(|_| apple_buffer("channel byte size exceeds CoreAudio limit"))
+    u32::try_from(bytes).map_err(|_| apple_buffer("channel byte size exceeds CoreAudio limit"))
 }
 
-fn apple_build_config(detail: &'static str) -> ResamplerBuildError {
+pub(super) fn apple_build_config(detail: &'static str) -> ResamplerBuildError {
     ResamplerBuildError::BackendBuild {
         backend: BACKEND_APPLE,
         detail: detail.into(),
@@ -378,15 +375,16 @@ mod tests {
     use std::f32::consts::TAU;
 
     use kithara_bufpool::PcmPool;
-    use kithara_resampler::{
-        Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
-        ResamplerSettings, apple::AppleAudioConverterBackend, create_resampler,
-        rubato::RubatoBackend,
-    };
-    use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
     use super::AudioToolboxConverterFactory;
+    use crate::{
+        Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
+        ResamplerSettings,
+        apple::AppleAudioConverterBackend,
+        create_resampler,
+        rubato::{RubatoBackend, RubatoResampler},
+    };
 
     mod test_consts {
         pub(super) const CHUNK_FRAMES: usize = 1024;
@@ -409,43 +407,33 @@ mod tests {
         Rubato,
     }
 
-    #[kithara::test]
+    #[test]
     fn resampler_apple_rubato_length_contract_44100_to_48000_stereo() {
         assert_length_contract(44_100, 48_000, 2);
     }
 
-    #[kithara::test]
+    #[test]
     fn resampler_apple_rubato_length_contract_48000_to_44100_mono() {
         assert_length_contract(48_000, 44_100, 1);
     }
 
-    #[kithara::test]
+    #[test]
     fn resampler_apple_tail_flush_drain_eventually_empty() {
         let input = planar_signal(2, test_consts::CHUNK_FRAMES, 44_100);
         let rendered = render(TestBackend::Apple, &input, 44_100, 48_000);
         let input_energy = energy(&input);
         let output_energy = energy(&rendered.output);
 
-        println!(
-            "resampler parity tail: frames={} drain_calls={} input_energy={:.6} output_energy={:.6}",
-            rendered.frames, rendered.drain_calls, input_energy, output_energy
-        );
         assert!(rendered.drain_calls <= test_consts::DRAIN_LIMIT);
         assert!(output_energy > input_energy * 0.5);
     }
 
-    #[kithara::test]
+    #[test]
     fn resampler_apple_passthrough_near_identity() {
         let input = planar_signal(2, test_consts::CHUNK_FRAMES, 48_000);
         let rendered = render(TestBackend::Apple, &input, 48_000, 48_000);
         let rms = rms_diff(&input, &rendered.output);
 
-        println!(
-            "resampler parity passthrough: frames={} rms={:.9} tolerance={:.9}",
-            rendered.frames,
-            rms,
-            test_consts::PASSTHROUGH_RMS_TOLERANCE
-        );
         assert_len_close(
             "apple passthrough",
             rendered.frames,
@@ -454,7 +442,7 @@ mod tests {
         assert!(rms <= test_consts::PASSTHROUGH_RMS_TOLERANCE);
     }
 
-    #[kithara::test]
+    #[test]
     fn resampler_apple_rubato_shape_energy_close() {
         let input = planar_signal(2, test_consts::CHUNK_FRAMES, 44_100);
         let apple = render(TestBackend::Apple, &input, 44_100, 48_000);
@@ -463,15 +451,6 @@ mod tests {
         let rubato_energy = energy(&rubato.output);
         let energy_delta = normalized_delta(apple_energy, rubato_energy);
 
-        println!(
-            "resampler parity shape: apple_frames={} rubato_frames={} apple_energy={:.6} rubato_energy={:.6} normalized_energy_delta={:.6} tolerance={:.6}",
-            apple.frames,
-            rubato.frames,
-            apple_energy,
-            rubato_energy,
-            energy_delta,
-            test_consts::SHAPE_ENERGY_DELTA_TOLERANCE
-        );
         assert_len_close("apple/rubato shape", apple.frames, rubato.frames);
         assert!(energy_delta <= test_consts::SHAPE_ENERGY_DELTA_TOLERANCE);
     }
@@ -482,17 +461,6 @@ mod tests {
         let apple = render(TestBackend::Apple, &input, source_rate, target_rate);
         let rubato = render(TestBackend::Rubato, &input, source_rate, target_rate);
 
-        println!(
-            "resampler parity length: source_rate={} target_rate={} channels={} expected={} apple_frames={} rubato_frames={} apple_contract={} rubato_contract={}",
-            source_rate,
-            target_rate,
-            channels,
-            expected,
-            apple.frames,
-            rubato.frames,
-            apple.contract_frames,
-            rubato.contract_frames
-        );
         assert_eq!(apple.contract_frames, expected);
         assert_eq!(rubato.contract_frames, expected);
         assert_len_close("apple length", apple.frames, expected);
@@ -508,8 +476,31 @@ mod tests {
     ) -> Rendered {
         let channels = input.len();
         let frames = frame_count(input);
-        let mut resampler =
-            create_test_resampler(backend, source_rate, target_rate, channels, frames);
+        match backend {
+            TestBackend::Apple => {
+                let mut resampler =
+                    create_apple_resampler(source_rate, target_rate, channels, frames);
+                render_resampler(backend, &mut resampler, input, false)
+            }
+            TestBackend::Rubato => {
+                let mut resampler =
+                    create_rubato_resampler(source_rate, target_rate, channels, frames);
+                render_resampler(backend, &mut resampler, input, true)
+            }
+        }
+    }
+
+    fn render_resampler<R>(
+        backend: TestBackend,
+        resampler: &mut R,
+        input: &[Vec<f32>],
+        pump_rubato_tail: bool,
+    ) -> Rendered
+    where
+        R: Resampler,
+    {
+        let channels = input.len();
+        let frames = frame_count(input);
         let contract_frames = resampler.output_frames_for_input(frames);
         let mut output = vec![vec![0.0; contract_frames.max(1)]; channels];
         let input_refs = planar_refs(input);
@@ -535,8 +526,8 @@ mod tests {
             append_planar(&mut output, &drain, produced);
         }
 
-        if backend == TestBackend::Rubato {
-            zero_pump_rubato_tail(resampler.as_mut(), &mut output, contract_frames);
+        if pump_rubato_tail {
+            zero_pump_rubato_tail(resampler, &mut output, contract_frames);
         }
 
         let frames = frame_count(&output);
@@ -548,35 +539,36 @@ mod tests {
         }
     }
 
-    fn create_test_resampler(
-        backend: TestBackend,
+    fn create_apple_resampler(
         source_rate: u32,
         target_rate: u32,
         channels: usize,
         frames: usize,
-    ) -> Box<dyn Resampler> {
-        match backend {
-            TestBackend::Apple => {
-                let settings = test_settings(source_rate, target_rate, channels, frames);
-                let config = ResamplerConfig::builder()
-                    .backend(AppleAudioConverterBackend::new(
-                        AudioToolboxConverterFactory::new(),
-                    ))
-                    .settings(settings)
-                    .build();
-                create_resampler(&config)
-                    .unwrap_or_else(|err| panic!("create_resampler({backend:?}) failed: {err}"))
-            }
-            TestBackend::Rubato => {
-                let settings = test_settings(source_rate, target_rate, channels, frames);
-                let config = ResamplerConfig::builder()
-                    .backend(RubatoBackend::new())
-                    .settings(settings)
-                    .build();
-                create_resampler(&config)
-                    .unwrap_or_else(|err| panic!("create_resampler({backend:?}) failed: {err}"))
-            }
-        }
+    ) -> super::AppleResampler {
+        let settings = test_settings(source_rate, target_rate, channels, frames);
+        let config = ResamplerConfig::builder()
+            .backend(AppleAudioConverterBackend::new(
+                AudioToolboxConverterFactory::new(),
+            ))
+            .settings(settings)
+            .build();
+        create_resampler(&config)
+            .unwrap_or_else(|err| panic!("create_resampler(Apple) failed: {err}"))
+    }
+
+    fn create_rubato_resampler(
+        source_rate: u32,
+        target_rate: u32,
+        channels: usize,
+        frames: usize,
+    ) -> RubatoResampler {
+        let settings = test_settings(source_rate, target_rate, channels, frames);
+        let config = ResamplerConfig::builder()
+            .backend(RubatoBackend::new())
+            .settings(settings)
+            .build();
+        create_resampler(&config)
+            .unwrap_or_else(|err| panic!("create_resampler(Rubato) failed: {err}"))
     }
 
     fn test_settings(
@@ -627,11 +619,10 @@ mod tests {
             .collect()
     }
 
-    fn zero_pump_rubato_tail(
-        resampler: &mut dyn Resampler,
-        output: &mut [Vec<f32>],
-        contract_frames: usize,
-    ) {
+    fn zero_pump_rubato_tail<R>(resampler: &mut R, output: &mut [Vec<f32>], contract_frames: usize)
+    where
+        R: Resampler,
+    {
         let channels = output.len();
         let input_frames = resampler.input_frames_next();
         let zero_input = vec![vec![0.0; input_frames]; channels];

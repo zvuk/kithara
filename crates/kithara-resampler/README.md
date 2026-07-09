@@ -34,10 +34,16 @@ The current built-in backends are exposed by explicit crate features:
   renderer design. It supports fixed ratio, variable ratio, and ratio glide
   through `glide::GlideConfig`.
 
-`ResamplerBackendConfig` is the shared config handle for playback and analysis.
-Its portable default order is Rubato, then Glide, then no backend; platform
-backend contracts such as Apple AudioConverter live here and receive concrete
-platform factories from the crate that owns the OS handle.
+Backend choice is part of the Rust type at the call site. Playback, analysis,
+and decoder integration carry `B: ResamplerBackend` through their own configs
+instead of asking this crate for a default backend handle. Platform backend
+contracts such as Apple AudioConverter live here and receive concrete platform
+factories from the crate that owns the OS handle.
+
+The Apple backend module is this crate's only unsafe owner. Its AudioToolbox
+FFI files live under `src/apple/`, keep the unsafe allowance module-local, and
+are covered by the same lint-policy carve-out as the existing Apple/Android FFI
+binding modules in other crates.
 
 See [CONTEXT.md](CONTEXT.md) for the backend contract, allocation contract, and
 decoder integration rules.

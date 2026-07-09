@@ -2,6 +2,7 @@
 
 //! Sample-rate resampler contracts and backend adapters.
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple;
 mod backend;
 mod capabilities;
@@ -12,20 +13,18 @@ mod factory;
 pub mod glide;
 mod mode;
 mod mono;
-mod placement;
 #[cfg(feature = "resample-rubato")]
 pub mod rubato;
 mod traits;
 
-pub use backend::ResamplerBackend;
+pub use backend::{NoResamplerBackend, ResamplerBackend};
 pub use capabilities::ResamplerCapabilities;
 pub use config::{
-    RatioGlide, ResamplerBackendConfig, ResamplerConfig, ResamplerOptions, ResamplerQuality,
-    ResamplerSettings,
+    Decode, RatioGlide, Resample, ResamplerConfig, ResamplerOptions, ResamplerQuality,
+    ResamplerSettings, Unit,
 };
 pub use error::{ResamplerBuildError, ResamplerError};
 pub use factory::create_resampler;
 pub use mode::ResamplerMode;
 pub use mono::{MonoStream, MonoStreamConfig};
-pub use placement::ResamplerPlacement;
 pub use traits::{Resampler, ResamplerControl, ResamplerProcess};

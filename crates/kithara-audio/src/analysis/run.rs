@@ -1,4 +1,5 @@
 use kithara_platform::{CancelToken, thread::paced_backoff, time::Duration};
+use kithara_resampler::ResamplerBackend;
 use tracing::{debug, warn};
 
 use super::analyzer::{AnalyzerBuilder, TrackAnalysis, TrackAnalyzers};
@@ -13,13 +14,15 @@ const PENDING_BACKOFF: Duration = Duration::from_millis(5);
 /// Decode `reader` to EOF feeding the analyzer set, then finalize in stages
 /// to `emit` (waveform first, then waveform+beat). Nothing is emitted on
 /// cancel, decode error, or empty input.
-pub fn analyze_reader<F: FnMut(TrackAnalysis)>(
+pub fn analyze_reader<B, F: FnMut(TrackAnalysis)>(
     reader: &mut dyn PcmReader,
-    builder: &AnalyzerBuilder,
+    builder: &AnalyzerBuilder<B>,
     cancel: &CancelToken,
     emit: F,
-) {
-    let mut analyzers: Option<TrackAnalyzers> = None;
+) where
+    B: ResamplerBackend,
+{
+    let mut analyzers: Option<TrackAnalyzers<B>> = None;
     loop {
         if cancel.is_cancelled() {
             debug!("analysis cancelled");

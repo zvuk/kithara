@@ -14,7 +14,6 @@ pub(crate) mod consts;
 pub(crate) mod converter;
 pub(crate) mod ffi;
 pub(crate) mod flac;
-pub(crate) mod resampler;
 
 pub(crate) use audio_file_demuxer::{AppleAudioFileDemuxer, SourceOpenMode};
 pub(crate) use codec::AppleCodec;

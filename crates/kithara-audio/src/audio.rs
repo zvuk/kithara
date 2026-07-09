@@ -24,6 +24,7 @@ use kithara_platform::{
     time::Duration,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
 };
+use kithara_resampler::ResamplerBackend;
 use kithara_stream::{
     ChunkPosition, DeferredWake, MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream,
     StreamType, WorkerWake,
@@ -920,16 +921,19 @@ impl<S> Audio<S> {
 /// required — the host's configured pools must reach the decoder, never a
 /// silent process-global fallback.
 #[derive(Clone)]
-struct DecoderDeps {
+struct DecoderDeps<B> {
     byte_pool: BytePool,
-    decoder: AudioDecoderConfig,
+    decoder: AudioDecoderConfig<B>,
     pcm_pool: PcmPool,
     host_sample_rate: Arc<AtomicU32>,
 }
 
-impl DecoderDeps {
+impl<B> DecoderDeps<B>
+where
+    B: ResamplerBackend,
+{
     fn new(
-        decoder: AudioDecoderConfig,
+        decoder: AudioDecoderConfig<B>,
         pcm_pool: PcmPool,
         byte_pool: BytePool,
         host_sample_rate: &Arc<AtomicU32>,
@@ -946,7 +950,7 @@ impl DecoderDeps {
         self.decoder.recreates_on_host_rate_change()
     }
 
-    fn resampler_config(&self) -> Result<Option<DecoderResamplerConfig>, DecodeError> {
+    fn resampler_config(&self) -> Result<Option<DecoderResamplerConfig<B>>, DecodeError> {
         let target_sample_rate = NonZeroU32::new(self.host_sample_rate.load(Ordering::Acquire));
         self.decoder.build_resampler_config(target_sample_rate)
     }
@@ -1006,7 +1010,10 @@ where
     /// let audio = Audio::new(config).await?;
     /// sink.append(audio);
     /// ```
-    pub async fn new(config: AudioConfig<T>) -> Result<Self, DecodeError> {
+    pub async fn new<B>(config: AudioConfig<T, B>) -> Result<Self, DecodeError>
+    where
+        B: ResamplerBackend,
+    {
         let AudioConfig {
             byte_pool,
             hint,
@@ -1236,11 +1243,14 @@ where
         }
     }
 
-    fn create_decoder_factory(
-        deps: &DecoderDeps,
+    fn create_decoder_factory<B>(
+        deps: &DecoderDeps<B>,
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
-    ) -> crate::pipeline::source::DecoderFactory<T> {
+    ) -> crate::pipeline::source::DecoderFactory<T>
+    where
+        B: ResamplerBackend,
+    {
         let factory_deps = deps.clone();
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);
@@ -1288,12 +1298,15 @@ where
     /// build; construction never calls `clear_variant_fence`), not a rebuild
     /// trigger; a concurrent user seek is applied by the post-construction
     /// seek path. See the crate `CONTEXT.md` "Construction reads".
-    async fn create_initial_decoder(
+    async fn create_initial_decoder<B>(
         shared_stream: SharedStream<T>,
         initial_media_info: Option<MediaInfo>,
         hint: Option<String>,
-        deps: &DecoderDeps,
-    ) -> Result<Box<dyn Decoder>, DecodeError> {
+        deps: &DecoderDeps<B>,
+    ) -> Result<Box<dyn Decoder>, DecodeError>
+    where
+        B: ResamplerBackend,
+    {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
         let resampler = deps.resampler_config()?;

@@ -31,6 +31,7 @@ pub use events::{
     DjEvent, EngineEvent, InterruptionKind, ItemEvent, PlayerEvent, RouteChangeReason, SessionEvent,
 };
 pub use impls::{
+    PlaybackResamplerBackend,
     config::{ResourceConfig, ResourceSrc},
     engine::{EngineConfig, EngineImpl},
     player::{PlayerConfig, PlayerImpl, SelectTransition},

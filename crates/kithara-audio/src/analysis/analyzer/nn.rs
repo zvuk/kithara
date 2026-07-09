@@ -8,6 +8,7 @@ mod enabled {
     use std::sync::Arc;
 
     use kithara_platform::sync::Mutex;
+    use kithara_resampler::ResamplerBackend;
     use tracing::warn;
 
     use crate::analysis::{
@@ -27,7 +28,10 @@ mod enabled {
         }
     }
 
-    pub(crate) fn tag(config: &BeatAnalysisConfig) -> Option<String> {
+    pub(crate) fn tag<B>(config: &BeatAnalysisConfig<B>) -> Option<String>
+    where
+        B: ResamplerBackend,
+    {
         BeatDetectorKind::ALL.first().map(|kind| {
             format!(
                 "{kind}:{NN_MODEL_TAG}:{:?}:{:?}",
@@ -40,6 +44,8 @@ mod enabled {
 
 #[cfg(not(feature = "beat-nn"))]
 mod disabled {
+    use kithara_resampler::ResamplerBackend;
+
     use super::super::config::BeatAnalysisConfig;
 
     #[cfg(feature = "analysis-beat")]
@@ -47,7 +53,10 @@ mod disabled {
         None
     }
 
-    pub(crate) fn tag(_config: &BeatAnalysisConfig) -> Option<String> {
+    pub(crate) fn tag<B>(_config: &BeatAnalysisConfig<B>) -> Option<String>
+    where
+        B: ResamplerBackend,
+    {
         None
     }
 }

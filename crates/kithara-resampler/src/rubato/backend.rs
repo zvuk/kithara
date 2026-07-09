@@ -1,7 +1,5 @@
 use super::{RubatoAlgorithm, RubatoConfig, resampler::RubatoResampler};
-use crate::{
-    Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings,
-};
+use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings};
 
 const BACKEND_RUBATO: &str = "rubato";
 
@@ -27,13 +25,11 @@ impl RubatoBackend {
 }
 
 impl ResamplerBackend for RubatoBackend {
-    fn build(
-        &self,
-        settings: &ResamplerSettings,
-    ) -> Result<Box<dyn Resampler>, ResamplerBuildError> {
+    type Resampler = RubatoResampler;
+
+    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
         settings.validate(self)?;
-        let resampler = RubatoResampler::new(self.name(), self.config, settings)?;
-        Ok(Box::new(resampler))
+        RubatoResampler::new(self.name(), self.config, settings)
     }
 
     fn capabilities(&self) -> ResamplerCapabilities {

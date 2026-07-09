@@ -4,8 +4,8 @@ use kithara_bufpool::PcmPool;
 
 use super::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
 use crate::{
-    ResamplerBackend, ResamplerCapabilities, ResamplerConfig, ResamplerMode, ResamplerOptions,
-    ResamplerSettings, create_resampler,
+    Resampler, ResamplerBackend, ResamplerCapabilities, ResamplerConfig, ResamplerMode,
+    ResamplerOptions, ResamplerSettings, create_resampler,
 };
 
 #[test]

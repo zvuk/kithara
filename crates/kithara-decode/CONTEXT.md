@@ -198,9 +198,10 @@ There are two decoder-side placements:
   Glide and Rubato use this generic adapter route from `kithara-resampler`.
   On macOS/iOS, `kithara_resampler::apple::AppleAudioConverterBackend` exposes
   the standalone PCM-to-PCM `AudioConverter` backend and receives
-  `kithara_decode::AudioToolboxConverterFactory` as its concrete factory. The
-  backend/config owner stays in `kithara-resampler`; only the unsafe
-  AudioToolbox factory bridge stays under the sanctioned Apple decode path.
+  `kithara_resampler::apple::AudioToolboxConverterFactory` as its concrete
+  factory. The backend, config, standalone `AudioConverter` FFI, and unsafe
+  owner path all stay in `kithara-resampler`; `kithara-decode` owns only the
+  codec-embedded Apple decode path.
 
 `AppleCodec::SRC_OUTPUT_MARGIN_FRAMES = 1` is not configuration. It is the
 ceil-domain slack used by fused decode+SRC when carrying the ideal output length

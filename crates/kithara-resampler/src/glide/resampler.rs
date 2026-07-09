@@ -10,7 +10,7 @@ use crate::{
     ResamplerError, ResamplerMode, ResamplerOptions, ResamplerProcess, ResamplerSettings,
 };
 
-pub(super) struct GlideResampler {
+pub struct GlideResampler {
     channels: NonZeroUsize,
     config: GlideConfig,
     current_ratio: f64,

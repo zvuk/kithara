@@ -9,7 +9,8 @@ use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::{AssetStore, FlushHub, StoreOptions};
 use kithara_audio::{
-    AudioConfig, AudioDecoderConfig, AudioWorkerHandle, EngineLoad, StretchControls,
+    AudioConfig, AudioDecoderConfig, AudioWorkerHandle, EngineLoad, ResamplerBackend,
+    StretchControls,
 };
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::DecodeError;
@@ -21,6 +22,8 @@ use kithara_platform::{CancelScope, CancelToken};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
 use url::Url;
+
+use super::playback_resampler::PlaybackResamplerBackend;
 
 fn derive_remote_file_hint(url: &Url) -> Option<String> {
     url.path_segments()
@@ -83,6 +86,19 @@ impl fmt::Display for ResourceSrc {
 /// Default number of preload chunks.
 const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
+fn default_resource_decoder_config<B>() -> AudioDecoderConfig<B>
+where
+    B: Default,
+{
+    AudioDecoderConfig::builder()
+        .resampler(
+            kithara_audio::DecoderResamplerSettings::builder()
+                .backend(B::default())
+                .build(),
+        )
+        .build()
+}
+
 /// Unified configuration for creating an [`Item`](crate::impls::item::Item).
 ///
 /// Wraps source, audio options, and protocol-specific settings into a single
@@ -91,13 +107,13 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 #[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct ResourceConfig {
+pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Initial ABR mode passed to the HLS stream.
     #[builder(default)]
     pub initial_abr_mode: AbrMode,
     /// Decoder construction settings, including decoder-side resampling.
-    #[builder(default)]
-    pub decoder: AudioDecoderConfig,
+    #[builder(default = default_resource_decoder_config())]
+    pub decoder: AudioDecoderConfig<B>,
     /// Encryption key handling configuration.
     #[builder(default)]
     pub keys: KeyOptions,
@@ -166,7 +182,7 @@ pub struct ResourceConfig {
     pub preferred_peak_bitrate_for_expensive_networks: f64,
 }
 
-impl ResourceConfig {
+impl ResourceConfig<PlaybackResamplerBackend> {
     /// Terminal constructor — parses input and returns a fully-built config.
     ///
     /// # Errors
@@ -177,8 +193,30 @@ impl ResourceConfig {
         Self::for_src(input).map(ResourceConfigBuilder::build)
     }
 
+    /// Chainable counterpart to [`Self::new`]: parses input and returns a
+    /// builder with `src` already populated so call-sites can add options
+    /// before `.build()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::InvalidData` if input is not a valid URL or
+    /// absolute path. See [`Self::parse_src`].
+    pub fn for_src<S: AsRef<str>>(
+        input: S,
+    ) -> Result<
+        ResourceConfigBuilder<PlaybackResamplerBackend, resource_config_builder::SetSrc>,
+        DecodeError,
+    > {
+        Self::parse_src(input).map(|src| Self::builder().src(src))
+    }
+}
+
+impl<B> ResourceConfig<B>
+where
+    B: Default + ResamplerBackend,
+{
     /// Build an `AudioConfig<File>` from this resource configuration.
-    pub(crate) fn build_file_config(self) -> AudioConfig<kithara_file::File> {
+    pub(crate) fn build_file_config(self) -> AudioConfig<kithara_file::File, B> {
         let byte_pool = self.byte_pool.clone();
         let (file_src, derived_hint) = match self.src {
             ResourceSrc::Url(ref url) => {
@@ -215,7 +253,7 @@ impl ResourceConfig {
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .build();
-        AudioConfig::<kithara_file::File>::for_stream(file_config)
+        AudioConfig::<kithara_file::File, B>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint.or(derived_hint))
             .maybe_byte_pool(byte_pool)
@@ -231,7 +269,7 @@ impl ResourceConfig {
     }
 
     /// Build an `AudioConfig<Hls>` from this resource configuration.
-    pub(crate) fn build_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls>, DecodeError> {
+    pub(crate) fn build_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls, B>, DecodeError> {
         let byte_pool = self.byte_pool.clone();
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),
@@ -257,7 +295,7 @@ impl ResourceConfig {
             .maybe_cancel(self.cancel.clone())
             .size_probe_method(self.size_probe_method)
             .build();
-        Ok(AudioConfig::<kithara_hls::Hls>::for_stream(hls_config)
+        Ok(AudioConfig::<kithara_hls::Hls, B>::for_stream(hls_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint)
             .maybe_byte_pool(byte_pool)
@@ -270,20 +308,6 @@ impl ResourceConfig {
             .maybe_engine_load(self.engine_load)
             .maybe_worker(self.worker)
             .build())
-    }
-
-    /// Chainable counterpart to [`Self::new`]: parses input and returns a
-    /// builder with `src` already populated so call-sites can add options
-    /// before `.build()`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DecodeError::InvalidData` if input is not a valid URL or
-    /// absolute path. See [`Self::parse_src`].
-    pub fn for_src<S: AsRef<str>>(
-        input: S,
-    ) -> Result<ResourceConfigBuilder<resource_config_builder::SetSrc>, DecodeError> {
-        Self::parse_src(input).map(|src| Self::builder().src(src))
     }
 
     /// Parse a URL string or local file path into a [`ResourceSrc`].
@@ -328,7 +352,7 @@ impl ResourceConfig {
 mod tests {
     use std::path::Path;
 
-    use kithara_audio::{DecoderResamplerSettings, ResamplerBackendConfig, ResamplerOptions};
+    use kithara_audio::{DecoderResamplerSettings, ResamplerBackend, ResamplerOptions};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -410,6 +434,7 @@ mod tests {
         let decoder = AudioDecoderConfig::builder()
             .resampler(
                 DecoderResamplerSettings::builder()
+                    .backend(PlaybackResamplerBackend::default())
                     .options(ResamplerOptions::builder().chunk_size(2_048).build())
                     .build(),
             )
@@ -420,7 +445,16 @@ mod tests {
             .build();
         let audio_config = config.build_file_config();
 
-        assert_eq!(audio_config.decoder.resampler.options.chunk_size, 2_048);
+        assert_eq!(
+            audio_config
+                .decoder
+                .resampler
+                .as_ref()
+                .expect("resampler config")
+                .options
+                .chunk_size,
+            2_048
+        );
     }
 
     #[kithara::test]
@@ -428,7 +462,7 @@ mod tests {
         let decoder = AudioDecoderConfig::builder()
             .resampler(
                 DecoderResamplerSettings::builder()
-                    .backend(ResamplerBackendConfig::none())
+                    .backend(PlaybackResamplerBackend::default())
                     .build(),
             )
             .build();
@@ -438,7 +472,16 @@ mod tests {
             .build();
         let audio_config = config.build_hls_config().unwrap();
 
-        assert!(audio_config.decoder.resampler.backend.is_none());
+        assert_eq!(
+            audio_config
+                .decoder
+                .resampler
+                .as_ref()
+                .expect("resampler config")
+                .backend
+                .name(),
+            PlaybackResamplerBackend::default().name()
+        );
     }
 
     #[kithara::test]
