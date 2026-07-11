@@ -1394,7 +1394,6 @@ async fn live_remote_resource_decodes_with_duration(
     let store = store_options(&temp_dir, true);
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_secs(25))
-        .total_timeout(Duration::from_secs(25))
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::builder()

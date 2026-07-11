@@ -171,15 +171,6 @@ pub struct NetOptions {
     /// Shared byte buffer pool used by backends that must copy platform-owned
     /// response buffers before handing bytes to Rust consumers.
     pub byte_pool: Option<BytePool>,
-    /// Hard cap on total request lifetime. Maps to
-    /// [`reqwest::RequestBuilder::timeout`]. `None` lets streaming
-    /// downloads run indefinitely as long as `inactivity_timeout` is
-    /// satisfied — required for the player to honour "wait for the
-    /// segment, regardless of connection speed". Default `Some(2 min)`
-    /// keeps a safety net against pathological cases (server stuck in
-    /// mid-body without ever closing) while not racing realistic
-    /// slow-network seeks.
-    pub total_timeout: Option<Duration>,
     #[builder(default)]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
@@ -205,9 +196,7 @@ pub struct NetOptions {
 
 impl Default for NetOptions {
     fn default() -> Self {
-        Self::builder()
-            .total_timeout(Duration::from_secs(120))
-            .build()
+        Self::builder().build()
     }
 }
 
@@ -216,7 +205,6 @@ impl FromWithParams<Self, Option<BytePool>> for NetOptions {
         Self::builder()
             .compression(options.compression)
             .inactivity_timeout(options.inactivity_timeout)
-            .maybe_total_timeout(options.total_timeout)
             .retry_policy(options.retry_policy)
             .is_insecure(options.is_insecure)
             .pool_max_idle_per_host(options.pool_max_idle_per_host)

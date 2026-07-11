@@ -12,7 +12,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        time::{Duration, sleep, timeout},
+        time::{Duration, Instant, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::TryRecvError,
     },
@@ -40,9 +40,9 @@ pub(crate) const SEEK_TARGET_TOLERANCE_S: f64 = 1.5;
 pub(crate) const NATURAL_EOF_WINDOW_S: f64 = 3.0;
 /// Tick interval driving the loop polling helpers.
 const POLL_INTERVAL: Duration = Duration::from_millis(40);
-const OFFLINE_SAMPLE_RATE: u64 = 44_100;
 const RENDER_BLOCK_FRAMES: usize = 512;
-const RENDER_YIELD_INTERVAL_BLOCKS: usize = 16;
+const RENDER_BATCH_BLOCKS: usize = 16;
+const RENDER_STALL_BUDGET: Duration = Duration::from_secs(3);
 
 /// Periodic queue tick driver, run as a spawned task. `#[kithara::flash(true)]`
 /// makes the body flash-ACTIVE under an ambient (flash) test, so its
@@ -667,7 +667,7 @@ impl SimHarness {
         let mut pre_pos = self.position();
         let pre_track = self.current_track_id();
         let duration = self.duration();
-        let started = kithara::platform::time::Instant::now();
+        let started = Instant::now();
 
         // Allow up to 2x the requested wall clock so we accept some
         // jitter, but anything beyond that with no progress is a hang.
@@ -813,18 +813,19 @@ impl SimHarness {
     }
 
     async fn do_render_for(&mut self, at_least: Duration) {
+        let started = Instant::now();
         let mut pre_pos = self.position();
         let pre_track = self.current_track_id();
         let duration = self.duration();
-        let media_budget = at_least * 2;
-        let render_budget_blocks =
-            render_blocks_for(media_budget).max(render_blocks_for(Duration::from_secs(3)));
-        let stagnation_blocks = render_blocks_for(Duration::from_secs(3));
+        let target = at_least.as_secs_f64();
         let mut last_pos = pre_pos;
-        let mut no_progress_blocks: usize = 0;
+        let mut last_progress_at = started;
+        let mut last_progress_block: usize = 0;
+        let mut progress_events: usize = 0;
+        let mut rendered_blocks: usize = 0;
         let mut rx = self.queue.subscribe();
 
-        for block_idx in 0..render_budget_blocks {
+        while started.elapsed() < ACTION_BUDGET {
             if let Some(id) = pre_track
                 && let Some(entry) = self.queue.track(id)
                 && let TrackStatus::Failed(err) = &entry.status
@@ -839,55 +840,83 @@ impl SimHarness {
             if cur + 1.0 < pre_pos {
                 pre_pos = cur;
                 last_pos = cur;
-                no_progress_blocks = 0;
+                last_progress_at = Instant::now();
             }
             if cur > last_pos + 0.05 {
                 last_pos = cur;
-                no_progress_blocks = 0;
+                last_progress_at = Instant::now();
+                last_progress_block = rendered_blocks;
             }
             if self.is_playing() {
-                if cur - pre_pos >= at_least.as_secs_f64() * 0.9 {
+                if cur - pre_pos >= target * 0.9 {
                     return;
                 }
                 if duration > 0.0 && (duration - cur).abs() < 0.5 {
                     return;
                 }
-                if no_progress_blocks >= stagnation_blocks
-                    && self.position() < pre_pos + 0.1
+                if last_progress_at.elapsed() >= RENDER_STALL_BUDGET
                     && (duration <= 0.0 || (duration - cur).abs() >= NATURAL_EOF_WINDOW_S)
                 {
                     panic!(
                         "[RenderFor({}ms)] SILENT HANG: position stuck at {cur:.3}s for \
-                         3s+ worth of rendered audio blocks \
-                         (pre={pre_pos:.3}s, target_advance={target:.3}s, dur={duration:.3}s)",
+                         {stall:?} \
+                         (pre={pre_pos:.3}s, target_advance={target:.3}s, dur={duration:.3}s, \
+                         wall={wall:?}, rendered_blocks={rendered_blocks}, \
+                         last_progress_block={last_progress_block}, progress_events={progress_events}, \
+                         playing={playing}, player_status={player_status:?}, track_status={track_status:?}, \
+                         engine_load={engine_load:?})",
                         at_least.as_millis(),
-                        target = at_least.as_secs_f64()
+                        stall = RENDER_STALL_BUDGET,
+                        wall = started.elapsed(),
+                        playing = self.is_playing(),
+                        player_status = self.queue.status(),
+                        track_status = pre_track
+                            .and_then(|id| self.queue.track(id))
+                            .map(|entry| entry.status),
+                        engine_load = self.queue.engine_load(),
                     );
                 }
             }
 
-            let _ = self.session.render(RENDER_BLOCK_FRAMES);
-            let _ = self.queue.tick();
-            if drain_playback_progress(&mut rx) {
-                no_progress_blocks = 0;
-            } else {
-                no_progress_blocks = no_progress_blocks.saturating_add(1);
+            for _ in 0..RENDER_BATCH_BLOCKS {
+                let _ = self.session.render(RENDER_BLOCK_FRAMES);
             }
-            if block_idx % RENDER_YIELD_INTERVAL_BLOCKS == 0 {
+            rendered_blocks = rendered_blocks.saturating_add(RENDER_BATCH_BLOCKS);
+            let _ = self.queue.tick();
+            let post_render = self.position();
+            let saw_progress = drain_playback_progress(&mut rx);
+            if saw_progress || post_render > last_pos + 0.05 {
+                last_pos = last_pos.max(post_render);
+                last_progress_at = Instant::now();
+                last_progress_block = rendered_blocks;
+                progress_events = progress_events.saturating_add(1);
                 tokio::task::yield_now().await;
+            } else {
+                sleep(POLL_INTERVAL).await;
             }
         }
 
         let post = self.position();
         let advance = post - pre_pos;
-        let target = at_least.as_secs_f64();
         let reached_eof = duration > 0.0 && (duration - post).abs() < 0.5;
         if !reached_eof && advance < target * 0.5 {
             panic!(
-                "[RenderFor({}ms)] PARTIAL HANG: only advanced {advance:.3}s in {budget:?} \
-                 (target={target:.3}s, pre={pre_pos:.3}s, post={post:.3}s, dur={duration:.3}s)",
+                "[RenderFor({}ms)] PARTIAL HANG: only advanced {advance:.3}s in {wall_budget:?} \
+                 (target={target:.3}s, pre={pre_pos:.3}s, post={post:.3}s, dur={duration:.3}s, \
+                 wall={wall:?}, last_progress={last_pos:.3}s@block#{last_progress_block}, \
+                 blocks_since_progress={blocks_since_progress}, progress_events={progress_events}, \
+                 playing={playing}, player_status={player_status:?}, track_status={track_status:?}, \
+                 engine_load={engine_load:?})",
                 at_least.as_millis(),
-                budget = media_budget
+                wall_budget = ACTION_BUDGET,
+                wall = started.elapsed(),
+                blocks_since_progress = rendered_blocks.saturating_sub(last_progress_block),
+                playing = self.is_playing(),
+                player_status = self.queue.status(),
+                track_status = pre_track
+                    .and_then(|id| self.queue.track(id))
+                    .map(|entry| entry.status),
+                engine_load = self.queue.engine_load(),
             );
         }
 
@@ -910,19 +939,6 @@ impl SimHarness {
             }
         }
     }
-}
-
-fn render_blocks_for(duration: Duration) -> usize {
-    const NANOS_PER_SEC: u128 = 1_000_000_000;
-
-    let whole = u128::from(duration.as_secs()) * u128::from(OFFLINE_SAMPLE_RATE);
-    let fractional =
-        u128::from(duration.subsec_nanos()) * u128::from(OFFLINE_SAMPLE_RATE) / NANOS_PER_SEC;
-    let total_frames = whole.saturating_add(fractional);
-    let Ok(frames) = usize::try_from(total_frames) else {
-        panic!("render duration {duration:?} exceeds usize frame budget");
-    };
-    frames.saturating_add(RENDER_BLOCK_FRAMES - 1) / RENDER_BLOCK_FRAMES
 }
 
 fn drain_playback_progress(rx: &mut EventReceiver) -> bool {

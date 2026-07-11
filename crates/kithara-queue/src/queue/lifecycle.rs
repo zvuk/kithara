@@ -1,14 +1,18 @@
+#[cfg(any(test, feature = "probe"))]
 use std::sync::PoisonError;
 
-use kithara_events::{QueueEvent, TrackId, TrackStatus};
+#[cfg(any(test, feature = "probe"))]
+use kithara_events::TrackStatus;
+use kithara_events::{QueueEvent, TrackId};
 
 use super::{
     Queue,
     types::{Placement, Transition, extract_track_name},
 };
 use crate::{
+    attempts::LoadClass,
     error::QueueError,
-    track::{TrackEntry, TrackSource},
+    track::{TrackRecord, TrackSource},
 };
 
 impl Queue {
@@ -29,18 +33,15 @@ impl Queue {
         self.insert_entry(id, source.into(), Placement::Append)
     }
 
-    /// Remove all tracks from the queue.
+    /// Remove all tracks from the queue. Dropping the records aborts
+    /// their in-flight loads.
     pub fn clear(&self) {
         let ids: Vec<TrackId> = {
             let mut guard = self.lock_tracks_mut();
-            let ids = guard.iter().map(|e| e.id).collect();
+            let ids = guard.iter().map(|r| r.id).collect();
             guard.clear();
             ids
         };
-        self.sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
         self.player.remove_all_items();
         for id in ids {
             self.bus.publish(QueueEvent::TrackRemoved { id });
@@ -85,7 +86,7 @@ impl Queue {
 
     /// Shared insertion path for [`Self::append`] and [`Self::insert`].
     ///
-    /// Builds the [`TrackEntry`] with `id`, places it per `placement`,
+    /// Builds the [`TrackRecord`] with `id`, places it per `placement`,
     /// then mirrors the track into the player, bus, and background
     /// loader. Position resolution — including fallible `after_id`
     /// lookup — happens in the caller, so this helper is infallible.
@@ -95,33 +96,24 @@ impl Queue {
         source: TrackSource,
         placement: Placement,
     ) -> TrackId {
-        let entry = TrackEntry {
-            id,
-            name: extract_track_name(&source),
-            url: source.uri().map(str::to_string),
-            status: TrackStatus::Pending,
-        };
+        let record = TrackRecord::new(id, extract_track_name(&source), source.clone());
 
         let index = {
             let mut guard = self.lock_tracks_mut();
             match placement {
                 Placement::Append => {
-                    guard.push(entry);
+                    guard.push(record);
                     guard.len() - 1
                 }
                 Placement::At(pos) => {
-                    guard.insert(pos, entry);
+                    guard.insert(pos, record);
                     pos
                 }
             }
         };
-        self.sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, source.clone());
         self.player.reserve_slots(self.len());
         self.bus.publish(QueueEvent::TrackAdded { id, index });
-        self.spawn_apply_after_load(id, source);
+        self.spawn_apply_after_load(id, source, LoadClass::Prefetch);
         id
     }
 
@@ -170,21 +162,12 @@ impl Queue {
     pub fn register_for_test(&self) -> TrackId {
         let id = TrackId::allocate();
         let url = format!("test://memory/{}", id.as_u64());
-        let entry = TrackEntry {
-            id,
-            name: format!("test-{}", id.as_u64()),
-            url: Some(url.clone()),
-            status: TrackStatus::Pending,
-        };
+        let record = TrackRecord::new(id, format!("test-{}", id.as_u64()), TrackSource::Uri(url));
         let index = {
             let mut guard = self.lock_tracks_mut();
-            guard.push(entry);
+            guard.push(record);
             guard.len() - 1
         };
-        self.sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, TrackSource::Uri(url));
         self.player.reserve_slots(self.len());
         if self.should_autoplay {
             let _ = self.autoplay_target.arm_if_disarmed(id);
@@ -227,10 +210,6 @@ impl Queue {
             guard.remove(pos);
             pos
         };
-        self.sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&id);
         let _ = self.player.remove_at(index);
         self.bus.publish(QueueEvent::TrackRemoved { id });
 

@@ -13,6 +13,7 @@ mod flac_swallow_fixture;
 mod hls_seek_cancels_stale_fetches;
 mod hls_seek_near_end_stress;
 mod hls_variant_playlists_concurrent;
+mod loader_lanes;
 mod loader_starvation;
 mod local_track_plays;
 mod rapid_scrub_decode_failure;

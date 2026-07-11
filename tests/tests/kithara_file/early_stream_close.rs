@@ -98,7 +98,6 @@ async fn file_stream_closes_early_seek_still_works() {
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::builder()
                 .inactivity_timeout(Duration::from_secs(1))
-                .total_timeout(Duration::from_secs(1))
                 .build(),
             CancelToken::never(),
         ))
