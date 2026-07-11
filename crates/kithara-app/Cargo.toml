@@ -32,6 +32,9 @@ analysis-waveform = ["kithara/analysis-waveform"]
 # modules without pulling in iced/ratatui. Used by integration tests
 # (`tests/tests/kithara_queue/real_playlist.rs`).
 lib-only = []
+# Production Apple decode shape: embedded AudioConverter SRC inside the Apple
+# codec. Opt-in so the default desktop build keeps the Rubato adapter path.
+apple-fused-src = ["kithara/apple-fused-src"]
 # Native-only C++ time-stretch backends. Signalsmith is the default; bungee
 # stays opt-in (need a C++ toolchain).
 stretch-signalsmith = ["kithara/stretch-signalsmith"]
@@ -40,7 +43,7 @@ stretch-bungee = ["kithara/stretch-bungee"]
 stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["file", "hls"] }
+kithara = { workspace = true, default-features = false, features = ["file", "hls", "resample-rubato"] }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
