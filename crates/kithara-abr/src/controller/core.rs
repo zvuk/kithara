@@ -1,7 +1,7 @@
 use std::{
     num::NonZeroU64,
     sync::{
-        Arc, Weak,
+        Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -11,7 +11,7 @@ use dashmap::DashMap;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
     CancelToken,
-    sync::{Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 use kithara_test_utils::kithara;

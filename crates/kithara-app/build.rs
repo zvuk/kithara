@@ -266,7 +266,8 @@ fn emit_registry(code: &mut String, providers: &[DrmProvider], env_map: &HashMap
     code.push_str(
         "#[must_use]\n\
          pub fn build_baked_drm_registry() -> ::kithara_drm::KeyProcessorRegistry {\n\
-         use ::std::{collections::HashMap, sync::Arc};\n\
+         use ::std::collections::HashMap;\n\
+         use ::kithara_platform::sync::Arc;\n\
          use ::kithara_drm::{KeyProcessorRegistry, KeyProcessorRule, KeyRequest, KeyRequestFactory, KeyProcessor, UniqueBinaryCipher};\n\
          use ::bytes::Bytes;\n\
          use ::rand::prelude::*;\n\

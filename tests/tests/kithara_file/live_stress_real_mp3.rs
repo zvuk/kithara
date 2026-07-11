@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    num::NonZeroUsize,
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 
 use kithara::{
     assets::{StorageBackend, StoreOptions},
@@ -12,6 +7,7 @@ use kithara::{
     events::{DownloaderEvent, Event, FileEvent},
     file::{File, FileConfig},
     platform::{
+        sync::Arc,
         thread,
         time::Duration,
         tokio::task::{spawn, spawn_blocking},

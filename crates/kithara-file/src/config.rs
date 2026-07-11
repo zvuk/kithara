@@ -1,10 +1,10 @@
-use std::{fmt, path::PathBuf, sync::Arc};
+use std::{fmt, path::PathBuf};
 
 use bon::Builder;
 use kithara_assets::{AssetStore, BytePool, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
 use url::Url;
 

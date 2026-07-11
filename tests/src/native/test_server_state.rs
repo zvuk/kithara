@@ -1,12 +1,15 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc, RwLock,
+        RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
-use kithara::platform::{sync::Notify, tokio::sync::watch};
+use kithara::platform::{
+    sync::{Arc, Notify},
+    tokio::sync::watch,
+};
 use moka::sync::Cache;
 use uuid::Uuid;
 

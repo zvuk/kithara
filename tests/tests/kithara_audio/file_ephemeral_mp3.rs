@@ -1,14 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig},
-    platform::{time::Duration, tokio::task::spawn_blocking},
+    platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{Content, Delivery, FixtureBehavior, TestServerHelper};

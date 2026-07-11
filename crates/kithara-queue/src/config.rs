@@ -1,7 +1,7 @@
-use std::{fmt, num::NonZeroUsize, sync::Arc};
+use std::{fmt, num::NonZeroUsize};
 
 use bon::Builder;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.

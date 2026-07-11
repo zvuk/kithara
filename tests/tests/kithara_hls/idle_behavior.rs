@@ -1,10 +1,7 @@
 use std::{
     fs,
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use kithara::{
@@ -12,7 +9,7 @@ use kithara::{
     audio::{Audio, AudioConfig},
     events::{Event, EventBus},
     hls::{AbrMode, Hls, HlsConfig},
-    platform::time::Duration,
+    platform::{sync::Arc, time::Duration},
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};

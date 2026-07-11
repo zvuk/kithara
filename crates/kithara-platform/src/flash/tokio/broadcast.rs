@@ -2,23 +2,21 @@ use std::{
     future::Future,
     panic::Location,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll, Waker},
 };
 
 use parking_lot::Mutex;
 
 use crate::{
+    backend::tokio::sync::broadcast as inner,
     flash::{
         diag::PrimKind,
         flash_ambient,
         ids::{Backend, trace_native_from_ambient},
         system,
     },
-    native::tokio::sync::broadcast as inner,
+    sync::Arc,
 };
 
 /// Receive errors, mirroring `tokio::broadcast::error` variant-for-variant so

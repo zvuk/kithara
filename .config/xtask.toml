@@ -15,6 +15,7 @@ workspace_exclude = ["kithara-fuzz"]
 default_lane = "workspace"
 default_backend = "wreq"
 feature_arg = "--features"
+loom_lane = "loom"
 # Features applied to every test lane, including `--flash=off`.
 features = ["no-block"]
 
@@ -53,6 +54,21 @@ prefix_args = [
   "--cargo-profile",
   "test-release",
 ]
+
+[test.lanes.loom]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "--workspace",
+  "--exclude",
+  "kithara-fuzz",
+  "--cargo-profile",
+  "test-release",
+]
+default_features = ["kithara/loom"]
+default_flash = false
+suffix_args = ["-E", "test(/(^|::)loom_model_/)"]
 
 [test.lanes.doc]
 program = "cargo"

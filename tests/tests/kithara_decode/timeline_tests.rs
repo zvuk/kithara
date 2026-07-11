@@ -77,13 +77,11 @@ fn test_progressive_file_seek_resets_frame_offset() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod hls_timeline {
-    use std::sync::Arc;
-
     use kithara::{
         assets::StoreOptions,
         decode::{DecoderConfig, DecoderFactory},
         hls::{AbrMode, Hls, HlsConfig},
-        platform::{CancelToken, time::Duration, tokio},
+        platform::{CancelToken, sync::Arc, time::Duration, tokio},
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     };
     use kithara_integration_tests::{

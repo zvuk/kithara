@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
+use kithara::platform::sync::Arc;
 
 use crate::{
     signal_spec::{SignalKind, parse_signal_request},

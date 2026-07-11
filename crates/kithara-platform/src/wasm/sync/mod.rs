@@ -7,7 +7,7 @@ pub(crate) mod mutex;
 pub(crate) mod notify;
 pub(crate) mod rwlock;
 
-pub use std::sync::OnceLock;
+pub use std::sync::{Arc, OnceLock, Weak, atomic};
 
 pub use condvar::Condvar;
 pub use mutex::{Mutex, MutexGuard, NotAvailable};

@@ -7,7 +7,7 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::num::NonZeroU32;
 
 use kithara::{
     self,
@@ -15,7 +15,7 @@ use kithara::{
     bufpool::PcmPool,
     decode::{PcmSpec, TrackMetadata},
     events::EventBus,
-    platform::time::Duration,
+    platform::{sync::Arc, time::Duration},
     play::{
         Resource,
         impls::player_resource::{PlayerResource, ReadOutcome as BlockReadOutcome},

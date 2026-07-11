@@ -1,6 +1,7 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use arc_swap::ArcSwapOption;
+use kithara_platform::sync::Arc;
 use portable_atomic::AtomicF32;
 #[cfg(all(
     not(target_arch = "wasm32"),

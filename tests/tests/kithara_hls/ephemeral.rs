@@ -1,8 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::platform::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::tokio::task::spawn_blocking;
 #[cfg(not(target_arch = "wasm32"))]

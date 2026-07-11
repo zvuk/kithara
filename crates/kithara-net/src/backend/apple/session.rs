@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc};
+use std::future::Future;
 
 use kithara_apple::foundation::{
     ns::{
@@ -11,7 +11,7 @@ use kithara_apple::foundation::{
 use kithara_bufpool::BytePool;
 use kithara_platform::{
     CancelToken,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
     tokio::sync::oneshot,
 };

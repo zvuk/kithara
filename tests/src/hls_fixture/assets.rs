@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::StorageBackend;
 use kithara::{
     assets::{AssetScope, AssetStore, AssetStoreBuilder},
     hls::{KeyStore, PlaylistCache},
     net::{HttpClient, NetOptions},
-    platform::CancelToken,
+    platform::{CancelToken, sync::Arc},
     stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle},
 };
 

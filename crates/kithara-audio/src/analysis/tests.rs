@@ -1,9 +1,9 @@
-use std::{collections::VecDeque, num::NonZeroU32, sync::Arc};
+use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{DecodeError, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "analysis-waveform")]
@@ -164,10 +164,9 @@ impl PcmReader for FakeReader {
 }
 
 mod run {
-    #[cfg(feature = "analysis-beat")]
-    use std::sync::Arc;
-
     use kithara_platform::CancelToken;
+    #[cfg(feature = "analysis-beat")]
+    use kithara_platform::sync::Arc;
     #[cfg(feature = "analysis-beat")]
     use kithara_platform::sync::Mutex;
     #[cfg(feature = "analysis-beat")]

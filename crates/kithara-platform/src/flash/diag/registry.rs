@@ -1,12 +1,11 @@
-use std::{
-    collections::BTreeMap,
-    fmt::Write as _,
-    panic::Location,
-    sync::{Arc, LazyLock, Weak},
-};
+use std::{collections::BTreeMap, fmt::Write as _, panic::Location, sync::LazyLock};
 
 use super::thread::ThreadDesc;
-use crate::{flash::ids::ThreadKey, native::sync::Mutex};
+use crate::{
+    flash::ids::ThreadKey,
+    sync::{Arc, Weak},
+    system::lock::Mutex,
+};
 
 /// What kind of synchronization primitive a [`PrimEntry`] describes. Lock kinds
 /// (`Mutex`/`RwLock`) carry holder/waiter state; the engine-backed kinds (added

@@ -1,10 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    ops::Range,
-    path::Path,
-    sync::{Arc, atomic::Ordering},
-};
+use std::{ops::Range, path::Path, sync::atomic::Ordering};
+
+use kithara_platform::sync::Arc;
 
 use crate::{
     StorageResult,

@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     num::NonZeroU16,
     sync::{
-        Arc, RwLock,
+        RwLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -26,6 +26,7 @@ use kithara::{
     },
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, sleep},
     },
 };

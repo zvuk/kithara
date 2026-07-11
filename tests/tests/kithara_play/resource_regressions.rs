@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{io::Read, num::NonZeroUsize, sync::Arc};
+use std::{io::Read, num::NonZeroUsize};
 
 use kithara::{
     assets::{StorageBackend, StoreOptions},
@@ -12,6 +12,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
     },
     play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig},

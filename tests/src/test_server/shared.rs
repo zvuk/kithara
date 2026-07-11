@@ -1,9 +1,6 @@
-use std::{
-    sync::{Arc, OnceLock},
-    thread,
-};
+use std::{sync::OnceLock, thread};
 
-use kithara::platform::tokio::runtime::Builder as RuntimeBuilder;
+use kithara::platform::{sync::Arc, tokio::runtime::Builder as RuntimeBuilder};
 use url::Url;
 
 use crate::{native::http_server::router_base_url_on_runtime, test_server_state::TestServerState};

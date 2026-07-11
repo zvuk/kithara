@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use kithara_platform::sync::Arc;
 use num_traits::cast::ToPrimitive;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 pub use kithara::audio::analysis::TrackAnalysis;
 use kithara::{
     audio::{
@@ -11,6 +9,7 @@ use kithara::{
 };
 use kithara_platform::{
     CancelToken,
+    sync::Arc,
     tokio::{
         sync::watch,
         task::{self, JoinHandle},

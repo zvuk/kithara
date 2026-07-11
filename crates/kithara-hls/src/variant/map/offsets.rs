@@ -1,10 +1,7 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_test_utils::kithara;
 
 use crate::segment::Segment;

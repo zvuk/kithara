@@ -1,5 +1,6 @@
 use std::{
     fs,
+    fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -56,6 +57,11 @@ pub(crate) struct FixtureCache {
     dir: Option<PathBuf>,
 }
 
+#[must_use = "the cache entry lock must be held while producing the entry"]
+pub(crate) struct FixtureCacheLock {
+    _file: Option<fs::File>,
+}
+
 impl FixtureCache {
     pub(crate) fn from_env() -> Self {
         let dir = std::env::var_os(CACHE_ENV).map_or_else(default_cache_dir, PathBuf::from);
@@ -70,10 +76,32 @@ impl FixtureCache {
         dir.join(format!("{}.bin", cache_key(domain, spec)))
     }
 
+    fn lock_path(dir: &Path, domain: &str, spec: &[u8]) -> PathBuf {
+        dir.join(format!("{}.lock", cache_key(domain, spec)))
+    }
+
     pub(crate) fn get(&self, domain: &str, spec: &[u8]) -> Option<Vec<u8>> {
         let dir = self.dir.as_ref()?;
         let bytes = fs::read(Self::entry_path(dir, domain, spec)).ok()?;
         if bytes.is_empty() { None } else { Some(bytes) }
+    }
+
+    /// Serialize one cache miss across nextest processes. Callers must re-check
+    /// the entry after acquiring the lock before producing it.
+    pub(crate) fn lock_entry(&self, domain: &str, spec: &[u8]) -> FixtureCacheLock {
+        let file = self.dir.as_ref().and_then(|dir| {
+            fs::create_dir_all(dir).ok()?;
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(Self::lock_path(dir, domain, spec))
+                .ok()?;
+            file.lock().ok()?;
+            Some(file)
+        });
+        FixtureCacheLock { _file: file }
     }
 
     pub(crate) fn store(&self, domain: &str, spec: &[u8], payload: &[u8]) {
@@ -167,6 +195,29 @@ mod tests {
             store.get("signal", b"spec").as_deref(),
             Some(b"hello-bytes".as_slice())
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn entry_lock_is_exclusive_and_released_on_drop() {
+        let dir = std::env::temp_dir().join(format!("fixcache-lock-{}", uuid::Uuid::new_v4()));
+        let store = FixtureCache::from_dir(Some(dir.clone()));
+        let held = store.lock_entry("signal", b"spec");
+        let contender = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(FixtureCache::lock_path(&dir, "signal", b"spec"))
+            .expect("open cache lock contender");
+
+        assert!(
+            matches!(contender.try_lock(), Err(fs::TryLockError::WouldBlock)),
+            "entry lock must exclude a second producer"
+        );
+        drop(held);
+        contender
+            .try_lock()
+            .expect("entry lock must release with its file handle");
+        drop(contender);
         let _ = fs::remove_dir_all(&dir);
     }
 

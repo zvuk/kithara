@@ -1,5 +1,4 @@
-pub use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError};
-
+pub use crate::system::errors::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError};
 use crate::time::Instant;
 
 /// Create a new unbounded channel.

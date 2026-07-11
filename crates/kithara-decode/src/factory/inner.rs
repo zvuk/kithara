@@ -1,11 +1,12 @@
 use std::{
     io::{Read, Seek},
     num::NonZeroU32,
-    sync::{Arc, atomic::AtomicU64},
+    sync::atomic::AtomicU64,
 };
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
+use kithara_platform::sync::Arc;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::{
     AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes,
@@ -852,10 +853,10 @@ mod tests {
 /// bytes must resolve the shared container hint before backend dispatch.
 #[cfg(all(test, feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple_factory_tests {
-    use std::{io::Cursor, num::NonZeroU32, sync::Arc};
+    use std::{io::Cursor, num::NonZeroU32};
 
     use kithara_bufpool::PcmBuf;
-    use kithara_platform::time::Duration;
+    use kithara_platform::{sync::Arc, time::Duration};
     use kithara_stream::{AudioCodec, ByteMap, MediaInfo};
     use kithara_test_utils::kithara;
 

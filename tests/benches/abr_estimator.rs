@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{hint::black_box, sync::Arc};
+use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kithara::{
@@ -8,7 +8,7 @@ use kithara::{
         Abr, AbrController, AbrSettings, AbrState, BandwidthSource, Estimator, ThroughputEstimator,
     },
     events::{VariantDuration, VariantIndex, VariantInfo},
-    platform::{CancelToken, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
 };
 use kithara_integration_tests::auto;
 

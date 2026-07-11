@@ -1,10 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::sync::Arc;
-
 use kithara::{
     events::{Event, EventReceiver, PlayerEvent},
-    platform::sync::Mutex,
+    platform::sync::{Arc, Mutex},
     play::{PlayerConfig, PlayerImpl, SessionDispatcher},
 };
 use kithara_integration_tests::offline::OfflineSession;

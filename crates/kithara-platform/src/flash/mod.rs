@@ -1,7 +1,5 @@
-//! Flash control surface + quiescence-driven virtual-clock engine. Compiled
-//! only under `all(not(wasm32), feature = "flash")` (gated in `lib.rs`), so
-//! the tree itself carries no cfg; the inert OFF/wasm forms live in
-//! `crate::common::flash_inert`. See CONTEXT.md "Virtual time (`flash`)".
+//! Flash control surface and quiescence-driven virtual clock.
+//! Off-feature and wasm builds expose its inert twin.
 
 mod api;
 /// The single flash thread-local (`ThreadCtx`: mode + credit + poll depth +
@@ -27,7 +25,7 @@ pub mod tokio;
 pub use api::*;
 pub(crate) use ctx::{flash_ambient, flash_enabled};
 
-pub use crate::native::{env, logging, maybe_send};
+pub use crate::backend::{env, logging, maybe_send};
 
 #[cfg(test)]
 mod tests;

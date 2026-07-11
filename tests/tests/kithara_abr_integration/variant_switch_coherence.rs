@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use kithara::{
     self,
@@ -14,6 +11,7 @@ use kithara::{
     },
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, Duration as StdDuration, Instant},
         tokio,
     },

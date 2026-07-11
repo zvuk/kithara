@@ -7,12 +7,13 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::num::NonZeroU32;
 
 use kithara::{
     self,
     decode::PcmSpec,
     events::{Event, EventBus, EventReceiver},
+    platform::sync::Arc,
     play::{
         PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource, SeekOutcome,
         SessionDispatcher,

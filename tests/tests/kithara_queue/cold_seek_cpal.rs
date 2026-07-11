@@ -1,14 +1,14 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     decode::DecoderBackend,
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken, time,
+        CancelToken,
+        sync::Arc,
+        time,
         time::{Duration, Instant, timeout},
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},

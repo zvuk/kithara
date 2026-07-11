@@ -1,7 +1,8 @@
-use std::{num::NonZero, sync::Arc};
+use std::num::NonZero;
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_platform::sync::Arc;
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 

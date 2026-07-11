@@ -13,6 +13,8 @@ categories = ["multimedia::audio", "cryptography"]
 ignored = ["kithara-workspace-hack"]
 
 [dependencies]
+kithara-platform = { workspace = true }
+
 aes = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }

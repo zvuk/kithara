@@ -1,7 +1,8 @@
-use std::sync::Arc;
-
 use kithara_decode::PcmChunk;
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use kithara_stream::SeekObserve;
 
 use super::{

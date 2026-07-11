@@ -137,10 +137,9 @@ where
 
 #[cfg(feature = "analysis-beat")]
 mod beat {
-    use std::sync::Arc;
-
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmSpec};
+    use kithara_platform::sync::Arc;
     use kithara_resampler::ResamplerBackend;
 
     use super::super::{nn, track_analysis::Analyzer};
@@ -373,11 +372,11 @@ mod waveform {
 
 #[cfg(all(test, feature = "analysis-beat", feature = "analysis-waveform"))]
 mod tests {
-    use std::{num::NonZeroU32, sync::Arc};
+    use std::num::NonZeroU32;
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
-    use kithara_platform::sync::Mutex;
+    use kithara_platform::sync::{Arc, Mutex};
     use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
     use unimock::{MockFn, Unimock, matching};
 

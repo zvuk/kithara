@@ -4,13 +4,12 @@
 use std::{
     fs,
     io::{self, Read, Seek, SeekFrom},
-    sync::Arc,
 };
 
 use kithara::{
     assets::StoreOptions,
     file::{File, FileConfig},
-    platform::{time::Duration, tokio::task::spawn_blocking},
+    platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, Stream},
 };
 use kithara_integration_tests::{

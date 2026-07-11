@@ -7,14 +7,14 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::num::NonZeroU32;
 
 use firewheel::dsp::fade::FadeCurve;
 use kithara::{
     self,
     bufpool::PcmPool,
     decode::PcmSpec,
-    platform::sync::Mutex,
+    platform::sync::{Arc, Mutex},
     play::{
         Resource,
         impls::{

@@ -37,7 +37,7 @@ selenium = []
 # Deterministic virtual-clock test mode. Routes the platform's blocking waits
 # (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
 # waits collapse to virtual time. Off by default; enabling it compiles every
-# path-dep against the virtual `kithara_platform::time::Instant`. Used by the
+# path-dep against the virtual `kithara::platform::time::Instant`. Used by the
 # phase-continuity equivalence proof.
 flash = ["kithara/flash", "kithara-test-utils/flash"]
 # Run integration tests with the native Apple HTTP backend (`NSURLSession`).
@@ -168,6 +168,10 @@ workspace = true
 [[test]]
 name = "red_env_guard_leak_thread"
 path = "tests/red_env_guard_leak_thread.rs"
+
+[[test]]
+name = "loom"
+path = "tests/loom.rs"
 
 [[test]]
 name = "suite_light"

@@ -1,6 +1,7 @@
 pub use core::time::Duration;
 
-pub use web_time::{Instant, SystemTime};
+pub(crate) use web_time::Instant;
+pub use web_time::SystemTime;
 
 /// Error returned when an async operation exceeds its deadline.
 #[derive(Debug)]

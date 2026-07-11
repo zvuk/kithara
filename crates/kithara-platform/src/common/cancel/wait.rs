@@ -2,11 +2,11 @@ use std::{
     fmt,
     future::Future,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
 use super::node::{Node, Slot};
+use crate::sync::Arc;
 
 /// Future returned by [`CancelToken::cancelled`](super::CancelToken::cancelled).
 /// Resolves once the token's subtree is cancelled. `Unpin`; cancel-safe (drop

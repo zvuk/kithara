@@ -17,6 +17,8 @@ validation scope.
   code path must be load-bearing.
 - Flash-sensitive changes should verify the relevant runtime surface. If
   `flash=off` is required because the test is real-time or live I/O, say so.
+- Loom models run through `just test --loom=on`; add `--flash=on` only when the
+  modeled contract also requires Flash virtual-time behavior.
 
 ## Harness Shape
 

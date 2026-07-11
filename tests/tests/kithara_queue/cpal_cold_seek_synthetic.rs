@@ -1,13 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     decode::DecoderBackend,
     events::{AudioEvent, Event},
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration, tokio},
+    platform::{CancelToken, sync::Arc, time::Duration, tokio},
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},

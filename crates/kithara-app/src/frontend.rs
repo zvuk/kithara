@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
 use kithara::play::StretchControls;
+use kithara_platform::sync::Arc;
 use kithara_queue::Queue;
 
 use crate::config::AppConfig;

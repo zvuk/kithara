@@ -1,7 +1,7 @@
 use std::sync::PoisonError;
 
 use kithara_events::{Event, PlayerEvent, QueueEvent, TrackId, TrackStatus};
-use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+use kithara_platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError};
 use tracing::debug;
 
 use super::{
@@ -98,7 +98,7 @@ impl Queue {
         self.advance_loaded_successor(entry.id, Transition::Crossfade);
     }
 
-    fn handle_item_did_fail(&self, src: &std::sync::Arc<str>) {
+    fn handle_item_did_fail(&self, src: &Arc<str>) {
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position);
         let dur = snap.map_or(0.0, |s| s.duration);
@@ -131,7 +131,7 @@ impl Queue {
     /// pre-PR-#64 callers and acts as a defensive fallback when the
     /// player has not yet wired the src through; it falls back to the
     /// pos/dur tolerance heuristic to filter spurious events.
-    fn handle_item_did_play_to_end(&self, src: &std::sync::Arc<str>) {
+    fn handle_item_did_play_to_end(&self, src: &Arc<str>) {
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position);
         let dur = snap.map_or(0.0, |s| s.duration);
@@ -371,9 +371,8 @@ impl Queue {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use kithara_events::TrackId;
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;

@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
 use delegate::delegate;
 use kithara_assets::EvictionSubscription;
 use kithara_events::EventBus;
-use kithara_platform::{CancelScope, time::Duration};
+use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite,

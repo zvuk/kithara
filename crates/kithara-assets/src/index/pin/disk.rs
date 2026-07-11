@@ -6,14 +6,14 @@ use std::{
     num::NonZeroU32,
     path::PathBuf,
     sync::{
-        Arc, OnceLock,
+        OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
 
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{PinsIndex, PinsInner};

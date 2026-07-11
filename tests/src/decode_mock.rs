@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Arc, Mutex as StdMutex, MutexGuard,
+        Mutex as StdMutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -12,7 +12,7 @@ use kithara::{
         DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DecoderTrackInfo, PcmChunk,
         PcmMeta, PcmSpec, mock::DecoderMock,
     },
-    platform::time::Duration,
+    platform::{sync::Arc, time::Duration},
 };
 use unimock::{MockFn, Unimock, matching};
 

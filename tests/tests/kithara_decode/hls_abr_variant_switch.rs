@@ -1,14 +1,14 @@
 use std::{
     error::Error,
     io::{Read as _, Seek as _, SeekFrom},
-    sync::{Arc, Mutex as StdMutex},
+    sync::Mutex as StdMutex,
 };
 
 use kithara::{
     assets::StoreOptions,
     events::{AbrEvent, Event, EventBus, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{CancelToken, time::Duration, tokio, tokio::task::spawn_blocking},
+    platform::{CancelToken, sync::Arc, time::Duration, tokio, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{

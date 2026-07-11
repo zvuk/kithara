@@ -3,12 +3,12 @@
 //! receives every `ResourceKey` evicted under its `asset_root`; keys
 //! under a different `asset_root` are not delivered to it; dropping the
 //! returned guard deregisters, so no further keys arrive.
-use std::{num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
 
 use kithara_assets::{
     AcquisitionResult, AssetStore, AssetStoreBuilder, ResourceKey, StorageBackend, WriteSide,
 };
-use kithara_platform::{time::Duration, tokio::sync::mpsc};
+use kithara_platform::{sync::Arc, time::Duration, tokio::sync::mpsc};
 use kithara_test_utils::kithara;
 
 const ROOT_A: &str = "asset_root_a";

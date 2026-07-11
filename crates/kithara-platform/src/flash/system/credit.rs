@@ -2,12 +2,12 @@ use std::{marker::PhantomData, mem, panic::Location, sync::atomic::Ordering};
 
 use super::{Core, FLASH, FlashInner, SyncHolder};
 use crate::{
+    backend::thread::current,
     common::thread_id::ACTIVE_NAMED_THREADS,
     flash::{
         ctx::{self, Credit},
         ids::ThreadKey,
     },
-    native::thread::current,
 };
 
 /// `ThreadKey` of the calling OS thread — the key under which it appears in the
@@ -37,16 +37,8 @@ fn in_async_poll() -> bool {
     ctx::poll_depth() > 0
 }
 
-/// Mark the current OS thread a DEDICATED virtual-time pacer: a `spawn_named`
-/// thread (audio worker, offline render thread, flush hub) that loops on
-/// wrapped waits and does real work between them. ONLY dedicated threads are
-/// counted in the sync `active` pacer count — the clock must not advance
-/// while one is mid-work, so its inter-wait running time pins the clock.
-/// Every OTHER thread (a tokio runtime worker, the main/test thread, a raw
-/// `thread::spawn`) is NOT a pacer: its wrapped waits register a wakeup but
-/// stay OUT of `active` (entering it leaks — such a thread parks on the
-/// runtime or exits without the counted bracket, so nothing balances the
-/// credit). Called once by the `spawn_named` bracket.
+/// Mark the current thread as a dedicated virtual-time pacer.
+/// Dedicated threads hold active credit while working between wrapped waits.
 pub(crate) fn mark_dedicated() {
     ctx::set_dedicated(true);
     // The pacer's `active` slot is taken EAGERLY by [`pre_count_dedicated`] on the
@@ -89,6 +81,17 @@ pub(crate) struct DedicatedSlot {
 }
 
 impl DedicatedSlot {
+    /// Claim an unnamed platform thread's reservation.
+    pub(crate) fn claim_thread(self) -> Participant {
+        debug_assert!(!self.named, "claim_thread on a named slot");
+        mem::forget(self);
+        mark_dedicated();
+        Participant {
+            named: false,
+            _not_send: PhantomData,
+        }
+    }
+
     /// Claim the reservation on a `spawn_named` child: mark this thread a
     /// dedicated pacer holding the reserved slot as `Running`. The returned
     /// [`Participant`] owes the exit settle (and the named-count decrement).
@@ -121,8 +124,8 @@ impl DedicatedSlot {
         }
     }
 
-    /// Reserve for an ambient `spawn_blocking` closure: the `active` slot
-    /// only (the named-thread count is not this path's resource).
+    /// Reserve an unnamed platform thread or ambient blocking closure: the
+    /// `active` slot only (the named-thread count is not this path's resource).
     pub(crate) fn reserve() -> Self {
         FLASH.pre_count_dedicated();
         Self { named: false }

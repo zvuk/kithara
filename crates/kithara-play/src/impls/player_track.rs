@@ -1,4 +1,6 @@
-use std::{num::NonZeroU32, ops::Range, sync::Arc};
+use std::{num::NonZeroU32, ops::Range};
+
+use kithara_platform::sync::Arc;
 
 #[rustfmt::skip]
 use firewheel::dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON;

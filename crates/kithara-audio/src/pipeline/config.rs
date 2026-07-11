@@ -1,12 +1,10 @@
-use std::{
-    num::{NonZeroU32, NonZeroUsize},
-    sync::Arc,
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode, PcmSpec};
 use kithara_events::EventBus;
+use kithara_platform::sync::Arc;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;

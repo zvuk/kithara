@@ -2,7 +2,6 @@ use std::{
     fmt,
     num::{NonZeroU32, NonZeroUsize},
     path::PathBuf,
-    sync::Arc,
 };
 
 use bon::Builder;
@@ -18,7 +17,7 @@ use kithara_events::EventBus;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::{HlsConfig, KeyOptions, SizeProbeMethod};
 use kithara_net::{Headers, HttpClient, NetOptions};
-use kithara_platform::{CancelScope, CancelToken};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
 use url::Url;

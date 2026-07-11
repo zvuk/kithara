@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc, OnceLock,
+    OnceLock,
     atomic::{AtomicU8, Ordering},
 };
 
@@ -9,7 +9,10 @@ use kithara_assets::{
 };
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::{CancelToken, sync::Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 use kithara_stream::{MediaInfo, WorkerWake};
 use url::Url;
 

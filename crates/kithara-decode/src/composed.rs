@@ -1,10 +1,7 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{AudioCodec, BoxedEventSink, ReaderChunkSignal, ReaderSeekSignal};
 use kithara_test_utils::kithara;
 
@@ -635,13 +632,10 @@ mod test_stub_codec {
 #[cfg(test)]
 mod test_counting_codec {
 
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    };
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     use kithara_bufpool::PcmBuf;
-    use kithara_platform::time::Duration;
+    use kithara_platform::{sync::Arc, time::Duration};
 
     use crate::{codec::FrameCodec, error::DecodeResult, types::PcmSpec};
 
@@ -689,13 +683,10 @@ mod test_counting_codec {
 #[cfg(test)]
 mod test_eof_drain_codec {
 
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    };
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     use kithara_bufpool::PcmBuf;
-    use kithara_platform::time::Duration;
+    use kithara_platform::{sync::Arc, time::Duration};
 
     use crate::{codec::FrameCodec, error::DecodeResult, types::PcmSpec};
 
@@ -754,12 +745,9 @@ mod test_eof_drain_codec {
 #[cfg(test)]
 mod seek_trim_tests {
 
-    use std::{
-        num::NonZeroU32,
-        sync::{Arc, atomic::Ordering},
-    };
+    use std::{num::NonZeroU32, sync::atomic::Ordering};
 
-    use kithara_platform::time::Duration;
+    use kithara_platform::{sync::Arc, time::Duration};
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
@@ -1121,12 +1109,9 @@ mod seek_trim_tests {
 #[cfg(test)]
 mod eof_drain_tests {
 
-    use std::{
-        num::NonZeroU32,
-        sync::{Arc, atomic::Ordering},
-    };
+    use std::{num::NonZeroU32, sync::atomic::Ordering};
 
-    use kithara_platform::time::Duration;
+    use kithara_platform::{sync::Arc, time::Duration};
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
@@ -1234,11 +1219,9 @@ mod eof_drain_tests {
 #[cfg(test)]
 mod hook_tests {
 
-    use std::{
-        num::NonZeroU32,
-        sync::{Arc, Mutex},
-    };
+    use std::{num::NonZeroU32, sync::Mutex};
 
+    use kithara_platform::sync::Arc;
     use kithara_stream::{
         BoxedEventSink, PendingReason, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal,
     };

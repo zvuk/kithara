@@ -6,8 +6,8 @@ use std::{
 use pin_project_lite::pin_project;
 
 pub use crate::{
+    backend::time::{Duration, SystemTime, TimeoutError},
     flash::Instant,
-    native::time::{Duration, SystemTime, TimeoutError},
 };
 
 /// `sleep` under `flash` (native): real-vs-virtual is decided by the per-
@@ -21,7 +21,7 @@ pub async fn sleep(duration: Duration) {
     if crate::flash::flash_enabled() {
         crate::flash::FlashSleep::new(duration).await;
     } else {
-        crate::native::time::sleep(duration).await;
+        crate::backend::time::sleep(duration).await;
     }
 }
 
@@ -43,7 +43,7 @@ where
         }
         .await
     } else {
-        crate::native::time::timeout(duration, future).await
+        crate::backend::time::timeout(duration, future).await
     }
 }
 

@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, sync::Arc};
+use std::num::NonZeroU32;
 
 use kithara_audio::{
     Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
@@ -6,7 +6,7 @@ use kithara_audio::{
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
-use kithara_platform::{CancelToken, time::Duration};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_stream::{Stream, StreamType};
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};

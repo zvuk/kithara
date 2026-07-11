@@ -3,7 +3,7 @@
 use std::{
     num::NonZeroUsize,
     sync::{
-        Arc, Weak,
+        Weak,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -13,7 +13,7 @@ use dashmap::DashSet;
 use kithara_platform::thread;
 use kithara_platform::{
     CancelToken,
-    sync::{Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::Duration,
 };
 

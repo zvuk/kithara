@@ -1,10 +1,13 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use serde::Serialize;
+
 /// Priority class for worker scheduling.
 ///
 /// Nodes with higher service class are served first when the scheduler
 /// selects which node to process next.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ServiceClass {
     /// Not playing, not needed soon. Lowest priority.
     #[default]

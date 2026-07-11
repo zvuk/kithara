@@ -1,10 +1,13 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use base64::{
     Engine as _,
     engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
-use kithara::stream::{AudioCodec, ContainerFormat};
+use kithara::{
+    platform::sync::Arc,
+    stream::{AudioCodec, ContainerFormat},
+};
 use thiserror::Error;
 
 use crate::{

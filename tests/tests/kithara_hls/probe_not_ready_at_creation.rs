@@ -38,7 +38,7 @@
 //! 44-byte WAV init into the withheld body) reads not-ready data — exactly the
 //! race the load flake hits non-deterministically.
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{StorageBackend, StoreOptions},
@@ -47,6 +47,7 @@ use kithara::{
     net::{NetOptions, RetryPolicy},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, Instant},
         tokio,
     },

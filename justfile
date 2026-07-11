@@ -141,7 +141,7 @@ doc:
 # wall clock — the regression baseline.
 # `--net-backend=apple` opts the integration crate into `kithara/apple-net`;
 # the default backend is the target's normal test backend (`wreq` on Apple
-# hosts). Recipe-level `--flash=*` / `--net-backend=*` tokens are stripped
+# hosts). Recipe-level `--flash=*` / `--loom=*` / `--net-backend=*` tokens are stripped
 # before reaching nextest; every other arg passes through unchanged.
 #
 #   just test                          # whole workspace, flash ON, target default backend
@@ -150,12 +150,26 @@ doc:
 #   just test --lane=e2e               # real-network + cpal hardware end-to-end tests
 #   just test --lane=selenium          # Selenium WebDriver tests
 #   just test --flash=off              # real wall clock (regression baseline)
+#   just test --loom=on                # only #[kithara::test(loom)] models
+#   just test --loom=on --flash=on     # Loom primitives decorated by Flash
 #   just test --flash=true --net-backend=apple
 #   just test -p kithara-hls           # one package, flash ON
 #   just test --profile ci             # CI nextest profile
 #   just test EXPR                     # nextest filter expression
 test *ARGS:
     cargo xtask test {{ARGS}}
+
+# Save periodic Loom execution checkpoints while reproducing a failure.
+loom-checkpoint FILE *ARGS:
+    LOOM_CHECKPOINT_FILE="{{FILE}}" just test --loom=on {{ARGS}}
+
+# Advance an existing checkpoint to the exact failing permutation.
+loom-isolate FILE *ARGS:
+    LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="{{FILE}}" just test --loom=on {{ARGS}}
+
+# Replay the isolated permutation with scheduler switches and source locations.
+loom-debug FILE *ARGS:
+    LOOM_LOG=trace LOOM_LOCATION=1 LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="{{FILE}}" just test --loom=on --no-capture {{ARGS}}
 
 # Dual-run wave gate for the platform refactor: flash ON, then flash OFF.
 # OFF lane builds in its own target dir so the feature flip does not

@@ -1,12 +1,86 @@
 use crate::flash::ids::ThreadKey;
 pub use crate::{
-    common::thread_id::active_named_thread_count,
-    native::thread::{
+    backend::thread::{
         Duration, JoinHandle, Thread, ThreadId, assert_main_thread, assert_not_main_thread,
         available_parallelism, current, current_thread_id, is_main_thread, is_worker_thread, park,
-        spawn,
     },
+    common::thread_id::active_named_thread_count,
 };
+
+pub(crate) enum GateBackend {
+    Engine,
+    Native,
+}
+
+impl Default for GateBackend {
+    fn default() -> Self {
+        if crate::flash::flash_ambient() {
+            Self::Engine
+        } else {
+            Self::Native
+        }
+    }
+}
+
+impl GateBackend {
+    #[inline]
+    pub(crate) fn park_timeout(&self, duration: Duration) {
+        match self {
+            Self::Engine => {
+                let key = ThreadKey::of(current().id());
+                crate::flash::system::park_timed_unparkable(duration, key);
+            }
+            Self::Native => crate::backend::thread::park_timeout(duration),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn unpark(&self, thread_id: u64, thread: Option<&Thread>) {
+        match self {
+            Self::Engine => {
+                let key = ThreadKey::from(thread_id);
+                crate::flash::system::unpark(key);
+            }
+            Self::Native => {
+                if let Some(thread) = thread {
+                    crate::backend::thread::unpark(thread);
+                }
+            }
+        }
+    }
+}
+
+#[inline]
+pub(crate) fn gate_instant(backend: &GateBackend) -> crate::flash::Instant {
+    match backend {
+        GateBackend::Engine => crate::flash::Instant::now_virtual(),
+        GateBackend::Native => crate::flash::Instant::now_real(),
+    }
+}
+
+fn propagated<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let ambient = crate::flash::ambient_snapshot();
+    let active = crate::flash::flash_enabled();
+    let slot = ambient.then(crate::flash::system::credit::DedicatedSlot::reserve);
+    move || {
+        let _ambient = crate::flash::set_ambient_for_spawn(ambient);
+        let _flash = crate::flash::enter_dynamic(active);
+        let _participant = slot.map(|slot| slot.claim_thread());
+        f()
+    }
+}
+
+pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    crate::backend::thread::spawn(propagated(f))
+}
 
 /// Under `flash`, a cooperative yield must relinquish the quiescence engine:
 /// a busy-poll loop spinning on `std::thread::yield_now` keeps the thread counted
@@ -21,7 +95,7 @@ pub fn yield_now() {
     if crate::flash::flash_enabled() {
         crate::flash::system::yield_until_advance();
     } else {
-        crate::native::thread::yield_now();
+        crate::backend::thread::yield_now();
     }
 }
 
@@ -91,7 +165,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    crate::native::thread::spawn_named_uncounted(name, counted(f))
+    crate::backend::thread::spawn_named_uncounted(name, counted(f))
 }
 
 /// Under `flash`, a sleep registers a pure timed waiter on the quiescence
@@ -107,7 +181,7 @@ pub fn sleep(duration: Duration) {
     if crate::flash::flash_enabled() {
         crate::flash::system::sleep_timed(duration);
     } else {
-        crate::native::thread::sleep(duration);
+        crate::backend::thread::sleep(duration);
     }
 }
 
@@ -127,7 +201,7 @@ pub fn paced_backoff(duration: Duration) {
     if crate::flash::flash_enabled() {
         crate::flash::system::yield_until_advance();
     } else {
-        crate::native::thread::sleep(duration);
+        crate::backend::thread::sleep(duration);
     }
 }
 
@@ -144,7 +218,7 @@ pub fn park_timeout(duration: Duration) {
         crate::flash::system::park_timed_unparkable(duration, ThreadKey::of(current().id()));
     } else {
         // Real-time scope: a true wall-clock park, invisible to the engine.
-        crate::native::thread::park_timeout(duration);
+        crate::backend::thread::park_timeout(duration);
     }
 }
 
@@ -173,5 +247,5 @@ pub fn unpark(t: &Thread) {
     if crate::flash::flash_enabled() {
         crate::flash::system::unpark(ThreadKey::of(t.id()));
     }
-    crate::native::thread::unpark(t);
+    crate::backend::thread::unpark(t);
 }

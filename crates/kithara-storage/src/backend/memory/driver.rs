@@ -1,10 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use arc_swap::ArcSwapOption;
 use kithara_bufpool::{BytePool, PooledOwned};
-use kithara_platform::{CancelToken, sync::Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 use rangemap::RangeSet;
 
 use crate::{

@@ -1,9 +1,4 @@
-use std::{
-    collections::VecDeque,
-    fmt,
-    num::NonZeroU32,
-    sync::{Arc, atomic::Ordering},
-};
+use std::{collections::VecDeque, fmt, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::{
     StreamInfo,
@@ -11,7 +6,7 @@ use firewheel::{
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{
@@ -856,14 +851,17 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        Arc as TestArc, Mutex,
+        Mutex,
         atomic::{AtomicU32, Ordering as AtomicOrdering},
     };
 
     use kithara_audio::PcmReader;
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
-    use kithara_platform::{sync::Mutex as PlatformMutex, time::Duration};
+    use kithara_platform::{
+        sync::{Arc as TestArc, Mutex as PlatformMutex},
+        time::Duration,
+    };
     use kithara_test_utils::kithara;
     use ringbuf::{
         HeapProd, HeapRb,

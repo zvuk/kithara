@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use kithara::{
     abr::AbrMode,
@@ -7,6 +5,7 @@ use kithara::{
     play::StretchControls,
 };
 use kithara_platform::{
+    sync::Arc,
     time::Duration,
     tokio,
     tokio::{sync::broadcast::error::TryRecvError, task},

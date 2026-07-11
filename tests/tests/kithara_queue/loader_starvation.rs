@@ -9,7 +9,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
 
 use kithara::{
     assets::StoreOptions,
@@ -17,6 +17,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, sleep},
         tokio,
     },

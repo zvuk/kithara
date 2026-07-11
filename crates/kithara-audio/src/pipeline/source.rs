@@ -4,10 +4,7 @@ use std::{
     mem,
     ops::Range,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
 use arc_swap::ArcSwap;
@@ -19,7 +16,7 @@ use kithara_decode::{
 };
 use kithara_events::{AudioEvent, AudioFormat, DeferredBus, SeekLifecycleStage, SegmentLocation};
 use kithara_platform::{
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::Duration,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking_on},
 };
@@ -2532,9 +2529,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         &mut self,
         rebuild: &RebuildState,
     ) -> TrackStep<PcmChunk> {
+        let carried_seek = match &rebuild.recreate.next {
+            RecreateNext::Seek(request) | RecreateNext::ApplySeek(request) => Some(*request),
+            RecreateNext::Decode => None,
+        };
         if let Some(request) = rebuild
             .superseded_seek
             .or_else(|| self.seek_request_from_observer(rebuild.started_seek_epoch))
+            .or(carried_seek)
         {
             return self.transition_to_seek_request(request);
         }
@@ -3145,14 +3147,17 @@ fn resolve_recreate_offset<T: StreamType>(
 
 #[cfg(test)]
 mod rebuilding_decoder_tests {
-    use std::{num::NonZeroU32, ops::Range, sync::Arc};
+    use std::{num::NonZeroU32, ops::Range};
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{
         DecodeResult, DecoderChunkOutcome, DecoderSeekOutcome, PcmMeta, PcmSpec,
         frames_for_duration,
     };
-    use kithara_platform::{sync::Mutex, tokio::runtime::Handle as RuntimeHandle};
+    use kithara_platform::{
+        sync::{Arc, Mutex},
+        tokio::runtime::Handle as RuntimeHandle,
+    };
     use kithara_storage::WaitOutcome;
     use kithara_stream::{
         Activity, AudioCodec, ChunkPosition, ContainerFormat, PlayheadRead, PlayheadState,
@@ -3901,6 +3906,50 @@ mod rebuilding_decoder_tests {
     }
 
     #[kithara::test(tokio)]
+    async fn rebuilding_decoder_variant_fence_preserves_inflight_seek() {
+        let control = Arc::new(TestControl::new(media_info(1)));
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let mut source = test_source(Arc::clone(&control), Arc::clone(&drops)).await;
+        let target = Duration::from_secs(3);
+        let request = SeekRequest {
+            seek: SeekContext {
+                epoch: source.seek.begin(target),
+                target,
+            },
+            emit_request: false,
+        };
+        enter_rebuilding(
+            &mut source,
+            7,
+            RecreateState {
+                cause: RecreateCause::VariantSwitch,
+                next: RecreateNext::Seek(request),
+                ..recreate_state(1)
+            },
+        );
+        control.raise_variant_fence(2, media_info(2));
+        push_completion_with_drops(&source, 7, 2, Arc::clone(&drops));
+
+        assert!(matches!(source.step_track(), TrackStep::StateChanged));
+        match &source.state {
+            CurrentFsm::SeekRequested(handle) => assert_eq!(*handle.data(), request),
+            _ => panic!("expected in-flight seek after variant supersession"),
+        }
+        assert_eq!(
+            source
+                .session
+                .media_info
+                .as_ref()
+                .and_then(|i| i.variant_index),
+            Some(0)
+        );
+        assert!(drops.lock().is_empty());
+
+        source.flush_deferred();
+        assert_eq!(drops.lock().as_slice(), &[2]);
+    }
+
+    #[kithara::test(tokio)]
     async fn stale_rebuild_completion_retires_decoder_shell_side() {
         let control = Arc::new(TestControl::new(media_info(1)));
         let drops = Arc::new(Mutex::new(Vec::new()));
@@ -3977,15 +4026,15 @@ mod splice_continuity_tests {
         num::NonZeroUsize,
         ops::Range,
         path::Path,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        },
+        sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     };
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{DecoderConfig, DecoderFactory as DecodeFactory};
-    use kithara_platform::{sync::Mutex, tokio::runtime::Handle as RuntimeHandle};
+    use kithara_platform::{
+        sync::{Arc, Mutex},
+        tokio::runtime::Handle as RuntimeHandle,
+    };
     use kithara_storage::WaitOutcome;
     use kithara_stream::{
         Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
@@ -4607,9 +4656,8 @@ mod splice_continuity_tests {
 
 #[cfg(test)]
 mod playing_flag_tests {
-    use std::sync::Arc;
-
     use crossbeam_queue::ArrayQueue;
+    use kithara_platform::sync::Arc;
     use kithara_stream::MediaInfo;
     use kithara_test_utils::kithara;
 

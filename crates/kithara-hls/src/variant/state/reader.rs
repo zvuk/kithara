@@ -1,8 +1,6 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use kithara_platform::sync::Arc;
 use kithara_stream::SeekObserve;
 
 /// Reader-side runtime state for one variant: the shared byte cursor and the

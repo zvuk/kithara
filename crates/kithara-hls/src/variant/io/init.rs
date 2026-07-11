@@ -1,8 +1,9 @@
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
 #[cfg(test)]
 use kithara_assets::ResourceKey;
 use kithara_drm::DecryptContext;
+use kithara_platform::sync::Arc;
 use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
 
 use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};

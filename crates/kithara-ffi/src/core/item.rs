@@ -1,9 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use kithara_events::TrackId;
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]

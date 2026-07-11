@@ -1,7 +1,7 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use kithara_platform::{
-    sync::{ThreadGate, WaitGate},
+    sync::{Arc, ThreadGate, WaitGate},
     time::Duration,
 };
 use kithara_stream::{DeferredWake, WorkerWake};

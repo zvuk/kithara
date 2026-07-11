@@ -1,11 +1,58 @@
+use std::sync::atomic::Ordering;
 pub use std::time::Duration;
 
 pub use crate::common::thread_id::active_named_thread_count;
-use crate::common::thread_id::{counted, thread_id_hash};
+use crate::common::thread_id::{ACTIVE_NAMED_THREADS, thread_id_hash};
 
 pub type Thread = std::thread::Thread;
 
 pub type ThreadId = std::thread::ThreadId;
+
+fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
+    move || {
+        let result = f();
+        ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
+        result
+    }
+}
+
+#[derive(Default)]
+pub(crate) enum GateBackend {
+    #[default]
+    System,
+}
+
+impl GateBackend {
+    #[inline]
+    pub(crate) fn park_timeout(&self, duration: Duration) {
+        match self {
+            Self::System => park_timeout(duration),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn unpark(&self, _thread_id: u64, thread: Option<&Thread>) {
+        match self {
+            Self::System => {
+                if let Some(thread) = thread {
+                    unpark(thread);
+                }
+            }
+        }
+    }
+}
+
+#[inline]
+pub(crate) fn gate_instant(backend: &GateBackend) -> crate::time::Instant {
+    match backend {
+        GateBackend::System => crate::time::Instant::now(),
+    }
+}
 
 #[inline]
 pub fn yield_now() {
@@ -57,7 +104,7 @@ where
 
 /// Spawn a new named thread WITHOUT the named-thread counter bracket: the
 /// single `thread::Builder` site shared by [`spawn_named`] (which wraps `f`
-/// in `counted`) and callers that own their own counting bracket — for those,
+/// in `counted`) and callers that own their own counting bracket - for those,
 /// delegating to [`spawn_named`] would double-count.
 ///
 /// # Panics

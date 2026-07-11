@@ -211,11 +211,9 @@ fn content_length(stream: &ByteStream) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    };
+    use std::sync::atomic::{AtomicU64, Ordering};
 
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;

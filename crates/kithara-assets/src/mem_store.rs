@@ -3,11 +3,11 @@
 use std::{
     io::{Error as IoError, ErrorKind},
     path::Path,
-    sync::{Arc, Weak},
+    sync::Weak,
 };
 
 use dashmap::DashMap;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{
     AvailabilityObserver, MemOptions, MemResource, Resource, ResourceStatus, StorageResource,
 };

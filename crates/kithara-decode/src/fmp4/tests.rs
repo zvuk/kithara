@@ -2,13 +2,13 @@ use std::{
     io::{Cursor, Seek, SeekFrom},
     ops::Range,
     sync::{
-        Arc, Mutex,
+        Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
 
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::ByteMap;
 use kithara_test_utils::kithara;
 

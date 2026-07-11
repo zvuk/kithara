@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use dashmap::DashMap;
 use kithara_apple::foundation::{
     ns::{NSData, NSError, NSURLResponse, NSURLSessionTaskMetrics},
@@ -7,7 +5,7 @@ use kithara_apple::foundation::{
         self, AuthenticationChallenge, AuthenticationChallengeDisposition, TaskId, UrlSessionEvents,
     },
 };
-use kithara_platform::tokio::sync::oneshot;
+use kithara_platform::{sync::Arc, tokio::sync::oneshot};
 
 use super::{
     response::{StreamHead, error_from_nserror, http_parts},

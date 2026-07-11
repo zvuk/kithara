@@ -1,9 +1,9 @@
-use std::{num::NonZeroU16, sync::Arc};
+use std::num::NonZeroU16;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
-use kithara_platform::{CancelToken, time::timeout};
+use kithara_platform::{CancelToken, sync::Arc, time::timeout};
 use url::Url;
 
 mod kithara {
@@ -466,10 +466,7 @@ mod tests {
 
     use std::{
         net::SocketAddr,
-        sync::{
-            Arc,
-            atomic::{AtomicU32, Ordering},
-        },
+        sync::atomic::{AtomicU32, Ordering},
     };
 
     use axum::{
@@ -478,6 +475,7 @@ mod tests {
         routing::{get, post},
     };
     use kithara_platform::{
+        sync::Arc,
         time::Duration,
         tokio::{net::TcpListener, task::spawn},
     };

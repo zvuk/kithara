@@ -155,8 +155,7 @@ impl SharedPlayerState {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;

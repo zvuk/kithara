@@ -1,12 +1,9 @@
-use std::{
-    io::{ErrorKind, Read, Seek, SeekFrom},
-    sync::Arc,
-};
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
 
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{CancelToken, thread, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{

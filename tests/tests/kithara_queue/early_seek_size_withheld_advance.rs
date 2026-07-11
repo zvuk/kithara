@@ -17,14 +17,12 @@
 //! Auto-advance is observed as a `Queue::current_index()` change against a
 //! multi-track queue.
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDispatcher},
     queue::{Queue, QueueConfig, Transition},
     stream::dl::{Downloader, DownloaderConfig},

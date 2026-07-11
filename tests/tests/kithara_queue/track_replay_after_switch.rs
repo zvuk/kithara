@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{fmt::Write, sync::Arc};
+use std::fmt::Write;
 
 use kithara::{
     assets::StoreOptions,
@@ -9,6 +9,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{self, Duration, sleep},
         tokio,
     },

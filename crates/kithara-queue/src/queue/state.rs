@@ -1,10 +1,10 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Mutex, PoisonError},
 };
 
 use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_platform::{CancelScope, CancelToken};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 use kithara_play::{PlayerConfig, PlayerImpl};
 
 use super::types::{

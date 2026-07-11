@@ -2,10 +2,7 @@
 use std::sync::OnceLock;
 use std::{
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use bon::Builder;
@@ -13,7 +10,9 @@ use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
 use kithara_platform::{
-    CancelScope, CancelToken, sync::Mutex, tokio::runtime::Handle as RuntimeHandle,
+    CancelScope, CancelToken,
+    sync::{Arc, Mutex},
+    tokio::runtime::Handle as RuntimeHandle,
 };
 use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};

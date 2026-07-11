@@ -4,9 +4,16 @@
 //! carries no cfg.
 
 pub mod env;
+#[cfg(not(feature = "loom"))]
+#[path = "support/errors.rs"]
+pub(crate) mod errors;
+#[path = "support/logging.rs"]
 pub mod logging;
+#[path = "support/maybe_send.rs"]
 pub mod maybe_send;
-pub mod sync;
-pub mod thread;
+pub(crate) mod ownership;
+#[cfg(feature = "loom")]
+#[path = "support/poison.rs"]
+pub(crate) mod poison;
 pub mod time;
 pub mod tokio;

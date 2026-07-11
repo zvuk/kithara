@@ -1,4 +1,6 @@
-use std::{ptr, sync::Arc};
+use std::ptr;
+
+use kithara_platform::sync::Arc;
 
 use super::{
     block::{DynBlock, RcBlock},

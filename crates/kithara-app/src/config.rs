@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use bon::Builder;
 use kithara::{
@@ -9,7 +9,7 @@ use kithara::{
     stream::dl::Downloader,
 };
 use kithara_drm::KeyProcessorRegistry;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 
 use crate::{baked, theme::Palette};
 

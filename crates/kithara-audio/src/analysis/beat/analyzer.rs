@@ -1,8 +1,8 @@
-use std::{num::NonZeroU32, sync::Arc};
+use std::num::NonZeroU32;
 
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::PcmChunk;
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_resampler::{MonoStream, MonoStreamConfig, ResamplerBackend, ResamplerOptions};
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
@@ -391,9 +391,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use kithara_bufpool::PcmPool;
+    use kithara_platform::sync::Arc;
     use kithara_resampler::{ResamplerBackend, rubato::RubatoBackend};
     use kithara_test_utils::kithara;
     use num_traits::cast::AsPrimitive;

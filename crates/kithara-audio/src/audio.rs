@@ -2,10 +2,7 @@ use std::{
     io::{Error as IoError, Seek, SeekFrom},
     marker::PhantomData,
     num::{NonZeroU32, NonZeroUsize},
-    sync::{
-        Arc,
-        atomic::{AtomicU32, AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
 use delegate::delegate;
@@ -20,6 +17,7 @@ use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, Segm
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
     CancelScope, CancelToken,
+    sync::Arc,
     thread::park_timeout,
     time::Duration,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
@@ -1688,12 +1686,10 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
 mod tests {
     use std::{
         marker::PhantomData,
-        sync::{
-            Arc,
-            atomic::{AtomicU32, AtomicU64},
-        },
+        sync::atomic::{AtomicU32, AtomicU64},
     };
 
+    use kithara_platform::sync::Arc;
     use kithara_stream::{PlayheadState, SeekState};
     use kithara_test_utils::kithara;
 

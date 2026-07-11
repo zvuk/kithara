@@ -1,5 +1,7 @@
 use std::ptr;
 
+use num_traits::cast::ToPrimitive;
+
 use super::ffi::{cblas_scopy, vDSP_vclr, vDSP_vramp};
 
 pub fn copy_f32(source: &[f32], target: &mut [f32]) -> usize {
@@ -7,9 +9,12 @@ pub fn copy_f32(source: &[f32], target: &mut [f32]) -> usize {
     if frames == 0 {
         return 0;
     }
-    for offset in (0..frames).step_by(i32::MAX as usize) {
-        let len = frames.saturating_sub(offset).min(i32::MAX as usize);
-        let Ok(len_i32) = i32::try_from(len) else {
+    let Some(chunk_frames) = i32::MAX.to_usize() else {
+        return 0;
+    };
+    for offset in (0..frames).step_by(chunk_frames) {
+        let len = frames.saturating_sub(offset).min(chunk_frames);
+        let Some(len_i32) = len.to_i32() else {
             break;
         };
         // SAFETY: offset and len are bounded by source and target lengths.

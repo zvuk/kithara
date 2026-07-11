@@ -1,5 +1,6 @@
 use std::{future::Future, panic::Location};
 
+pub use crate::backend::tokio::task::{JoinError, JoinHandle};
 // Under `flash` (native) [`spawn`] wraps the future in the quiescence
 // poll-wrapper and `yield_now` participates in quiescence UNDER AMBIENT (a
 // flash(true) test's busy-poll `loop { yield_now().await }` must let the virtual
@@ -12,10 +13,9 @@ use std::{future::Future, panic::Location};
 // Off the sim path the real `tokio` spawn/yield are used unchanged. See
 // `crate::flash`.
 pub use crate::flash::yield_now;
-pub use crate::native::tokio::task::{JoinError, JoinHandle};
 use crate::{
+    backend::tokio::{backend, runtime::Handle, task as native_task},
     flash::system::credit,
-    native::tokio::{backend, runtime::Handle, task as native_task},
 };
 
 /// Spawn an async task. Under `flash` (native) the future is wrapped in the

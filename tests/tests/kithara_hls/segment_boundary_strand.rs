@@ -30,14 +30,13 @@
 //! across the boundary (phase +1 per frame, the same metric
 //! `stress_chunk_integrity` asserts).
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, Instant},
         tokio,
         tokio::task::spawn_blocking,

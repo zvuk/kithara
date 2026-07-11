@@ -6,8 +6,8 @@ impl<T: Sync> MaybeSync for T {}
 
 /// Trait alias for `Future + MaybeSend`.
 ///
-/// On native: `Future + Send` — allows `tokio::spawn`.
-/// On WASM: just `Future` — no `Send` requirement.
+/// On native: `Future + Send` - allows `tokio::spawn`.
+/// On WASM: just `Future` - no `Send` requirement.
 ///
 /// Use in return-position impl trait in trait methods:
 /// ```ignore
@@ -28,6 +28,3 @@ impl<T: Future + Send> MaybeSendFuture for T {}
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub use crate::common::maybe_send::WasmSend;
-
-// SAFETY: delegates to T's Send impl — no additional invariants.
-unsafe impl<T: Send> Send for WasmSend<T> {}

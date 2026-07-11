@@ -1,6 +1,7 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use super::mpsc::{Shared, drop_sender, error::SendError, push_unbounded};
+use crate::sync::Arc;
 
 /// Unbounded sender (clone for multi-producer); `send` never blocks.
 pub struct UnboundedSender<T> {

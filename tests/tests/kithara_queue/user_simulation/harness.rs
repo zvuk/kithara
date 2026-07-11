@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
 use kithara::{
     abr::AbrHandle,
@@ -11,6 +11,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::TryRecvError,

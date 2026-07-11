@@ -1,9 +1,9 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use bytes::Bytes;
 use kithara_drm::{DrmError, KeyProcessResult, KeyProcessor};
 use kithara_platform::{
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
 

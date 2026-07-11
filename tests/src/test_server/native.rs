@@ -1,7 +1,8 @@
-use std::{env, sync::Arc};
+use std::env;
 
 use axum::{Router, routing::get};
 use kithara::platform::{
+    sync::Arc,
     time::{Duration, sleep},
     tokio::task::{spawn, spawn_blocking},
 };

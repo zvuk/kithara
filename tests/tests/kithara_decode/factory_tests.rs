@@ -1,10 +1,11 @@
 use std::io::Cursor;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::atomic::AtomicU64;
 
 use kithara::{
     self,
     decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory},
+    platform::sync::Arc,
 };
 
 const TEST_MP3_BYTES: &[u8] =

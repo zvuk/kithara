@@ -26,7 +26,7 @@ impl Condvar {
     }
 
     /// In-place [`wait`](Self::wait): atomically release the guard's mutex and
-    /// park, re-acquiring on wake — without consuming the guard. The by-value
+    /// park, re-acquiring on wake - without consuming the guard. The by-value
     /// `wait` delegates here (so this is exercised in production), and the flash
     /// facade calls it directly to keep its own holder bookkeeping across the
     /// wait without moving the guard (its `Drop` forbids the move).

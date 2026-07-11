@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::io;
 
 use axum::{
     Router,
@@ -10,7 +10,10 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::stream;
-use kithara::platform::time::{Duration, sleep};
+use kithara::platform::{
+    sync::Arc,
+    time::{Duration, sleep},
+};
 
 use crate::{
     routes::range::build_range_response,

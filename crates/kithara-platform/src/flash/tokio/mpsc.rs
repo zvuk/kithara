@@ -3,7 +3,6 @@ use std::{
     future::Future,
     panic::Location,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll, Waker},
 };
 
@@ -11,13 +10,16 @@ use error::{SendError, TryRecvError, TrySendError};
 use parking_lot::Mutex;
 
 pub use super::unbounded::UnboundedSender;
-use crate::flash::{
-    diag::PrimKind,
-    flash_ambient,
-    ids::{CvId, trace_native_from_ambient},
-    system,
+pub use crate::backend::tokio::sync::mpsc::error;
+use crate::{
+    flash::{
+        diag::PrimKind,
+        flash_ambient,
+        ids::{CvId, trace_native_from_ambient},
+        system,
+    },
+    sync::Arc,
 };
-pub use crate::native::tokio::sync::mpsc::error;
 
 pub(super) struct Inner<T> {
     /// Real-wake slot for the single receiver (off the flash path), mirroring

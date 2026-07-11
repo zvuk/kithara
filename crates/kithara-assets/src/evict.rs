@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, fmt, path::Path, sync::Arc};
+use std::{collections::HashSet, fmt, path::Path};
 
 use dashmap::DashSet;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 
 use crate::{
     AssetResourceState,

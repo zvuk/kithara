@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use bytes::Bytes;
 use kithara::{
     drm::{DecryptContext, KeyRequest, KeyRequestFactory, aes128_cbc_process_chunk},
     hls::{HlsError, HlsResult, KeyProcessorRegistry, KeyProcessorRule},
-    platform::time::Duration,
+    platform::{sync::Arc, time::Duration},
 };
 use kithara_integration_tests::{hls_fixture::*, hls_server::*};
 use url::Url;

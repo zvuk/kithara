@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::collections::VecDeque;
 
 use kithara::{
     assets::AssetStore,
@@ -8,7 +8,7 @@ use kithara::{
 };
 use kithara_platform::{
     CancelToken,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     tokio::{
         self,
         sync::{broadcast::error::RecvError, watch},

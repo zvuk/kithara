@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll, Waker},
 };
 
@@ -11,7 +10,7 @@ use kithara_apple::foundation::ns::NSData;
 use kithara_bufpool::BytePool;
 use kithara_platform::{
     CancelToken, CancelWakerGuard,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     tokio::{select, sync::oneshot},
 };
 

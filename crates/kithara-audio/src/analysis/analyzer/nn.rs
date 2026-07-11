@@ -5,9 +5,7 @@ pub(crate) use enabled::*;
 
 #[cfg(feature = "beat-nn")]
 mod enabled {
-    use std::sync::Arc;
-
-    use kithara_platform::sync::Mutex;
+    use kithara_platform::sync::{Arc, Mutex};
     use kithara_resampler::ResamplerBackend;
     use tracing::warn;
 

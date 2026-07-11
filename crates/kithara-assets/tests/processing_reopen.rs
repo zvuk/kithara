@@ -1,9 +1,6 @@
 use std::{
     num::NonZeroUsize,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use aes::Aes128;
@@ -16,7 +13,7 @@ use kithara_assets::{
     StorageBackend, WriteSide,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;

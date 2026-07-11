@@ -10,7 +10,7 @@ use crate::common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig};
 pub struct TestArgs {
     /// Arguments for the configured test command. Recipe-level flags accepted anywhere:
     /// `--lane=<configured-name>`, `--flash=true|false|on|off`, `--no-flash`,
-    /// and `--net-backend=<configured-name>`.
+    /// `--loom=true|false|on|off`, `--no-loom`, and `--net-backend=<configured-name>`.
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
 }
@@ -19,6 +19,7 @@ pub struct TestArgs {
 struct TestRequest {
     flash: Option<bool>,
     lane: Option<String>,
+    loom: Option<bool>,
     net_backend: Option<String>,
     passthrough: Vec<String>,
 }
@@ -27,6 +28,7 @@ impl TestRequest {
     fn parse(args: &[String]) -> Result<Self> {
         let mut request = Self {
             lane: None,
+            loom: None,
             net_backend: None,
             passthrough: Vec::new(),
             flash: None,
@@ -40,7 +42,15 @@ impl TestRequest {
                     let value = iter
                         .next()
                         .ok_or_else(|| anyhow::anyhow!("--flash requires a value"))?;
-                    request.flash = Some(parse_flash(value)?);
+                    request.flash = Some(parse_toggle("flash", value)?);
+                }
+                "--loom=off" | "--loom=false" | "--no-loom" => request.loom = Some(false),
+                "--loom=on" | "--loom=true" => request.loom = Some(true),
+                "--loom" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("--loom requires a value"))?;
+                    request.loom = Some(parse_toggle("loom", value)?);
                 }
                 "--lane" => {
                     let value = iter
@@ -56,7 +66,11 @@ impl TestRequest {
                 }
                 _ if arg.starts_with("--flash=") => {
                     let value = arg.trim_start_matches("--flash=");
-                    request.flash = Some(parse_flash(value)?);
+                    request.flash = Some(parse_toggle("flash", value)?);
+                }
+                _ if arg.starts_with("--loom=") => {
+                    let value = arg.trim_start_matches("--loom=");
+                    request.loom = Some(parse_toggle("loom", value)?);
                 }
                 _ if arg.starts_with("--lane=") => {
                     let value = arg.trim_start_matches("--lane=");
@@ -143,6 +157,12 @@ fn validate_config(config: &TestCommandConfig) -> Result<()> {
             config.default_lane
         );
     }
+    if !config.loom_lane.is_empty() && !config.lanes.contains_key(&config.loom_lane) {
+        bail!(
+            "test.loom_lane `{}` is not defined in test.lanes",
+            config.loom_lane
+        );
+    }
     if !config.net_backends.contains_key(&config.default_backend) {
         bail!(
             "test.default_backend `{}` is not defined in test.net_backends",
@@ -162,7 +182,29 @@ fn select_lane<'a>(
     config: &'a TestCommandConfig,
     request: &'a TestRequest,
 ) -> Result<(&'a str, &'a TestLaneConfig)> {
-    let lane_name = request.lane.as_deref().unwrap_or(&config.default_lane);
+    let explicit_lane = request.lane.as_deref();
+    let lane_name = match request.loom {
+        Some(true) => {
+            if config.loom_lane.is_empty() {
+                bail!("--loom=on requires test.loom_lane in .config/xtask.toml");
+            }
+            if let Some(explicit_lane) = explicit_lane
+                && explicit_lane != config.loom_lane
+            {
+                bail!(
+                    "--loom=on selects lane `{}` and conflicts with --lane={explicit_lane}",
+                    config.loom_lane
+                );
+            }
+            config.loom_lane.as_str()
+        }
+        Some(false)
+            if explicit_lane == Some(config.loom_lane.as_str()) && !config.loom_lane.is_empty() =>
+        {
+            bail!("--loom=off conflicts with --lane={}", config.loom_lane);
+        }
+        Some(false) | None => explicit_lane.unwrap_or(&config.default_lane),
+    };
     let Some(lane) = config.lanes.get(lane_name) else {
         let valid = config
             .lanes
@@ -252,11 +294,11 @@ fn passthrough_position(lane: &TestLaneConfig) -> Result<PassthroughPosition> {
     }
 }
 
-fn parse_flash(value: &str) -> Result<bool> {
+fn parse_toggle(name: &str, value: &str) -> Result<bool> {
     match value {
         "on" | "true" => Ok(true),
         "off" | "false" => Ok(false),
-        _ => bail!("unsupported flash mode: {value}"),
+        _ => bail!("unsupported {name} mode: {value}"),
     }
 }
 
@@ -293,6 +335,21 @@ mod tests {
                 passthrough: String::new(),
             },
         );
+        lanes.insert(
+            "loom".to_owned(),
+            TestLaneConfig {
+                program: "cargo".to_owned(),
+                prefix_args: vec![
+                    "nextest".to_owned(),
+                    "run".to_owned(),
+                    "--workspace".to_owned(),
+                ],
+                suffix_args: vec!["-E".to_owned(), "test(loom_model_)".to_owned()],
+                default_features: vec!["demo/loom".to_owned()],
+                default_flash: Some(false),
+                passthrough: String::new(),
+            },
+        );
         let mut net_backends = BTreeMap::new();
         net_backends.insert(
             "http".to_owned(),
@@ -322,6 +379,7 @@ mod tests {
                     features: vec!["virtual-time".to_owned()],
                     default: true,
                 },
+                loom_lane: "loom".to_owned(),
             },
             lint_exclude: LintExcludeConfig::default(),
             workspace_scan: WorkspaceScan::default(),
@@ -364,5 +422,38 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--profile", "perf"]));
         assert!(args.contains(&"--workspace".to_owned()));
         assert_eq!(args.last().map(String::as_str), Some("--locked"));
+    }
+
+    #[test]
+    fn loom_flag_selects_model_lane_and_composes_with_flash() {
+        let project = synthetic_project();
+        let request = TestRequest::parse(&["--loom=on".to_owned(), "--flash=on".to_owned()])
+            .expect("parse request");
+
+        let (name, lane) = select_lane(&project.test, &request).expect("select loom lane");
+        assert_eq!(name, "loom");
+        let features = features_for(&project.test, lane, &request).expect("loom features");
+        assert_eq!(
+            features,
+            BTreeSet::from([
+                "base-feature".to_owned(),
+                "demo/loom".to_owned(),
+                "virtual-time".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn loom_flag_rejects_an_explicit_non_model_lane() {
+        let project = synthetic_project();
+        let request = TestRequest::parse(&["--loom=on".to_owned(), "--lane=workspace".to_owned()])
+            .expect("parse request");
+
+        let error = select_lane(&project.test, &request).expect_err("lane conflict");
+        assert!(
+            error
+                .to_string()
+                .contains("conflicts with --lane=workspace")
+        );
     }
 }

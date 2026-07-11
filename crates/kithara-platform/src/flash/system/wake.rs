@@ -1,13 +1,13 @@
 use std::{
     panic::Location,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     task::Waker,
 };
 
-use crate::native::sync::{Condvar, Mutex, MutexGuard};
+use crate::{
+    backend::sync::{Condvar, Mutex, MutexGuard},
+    sync::Arc,
+};
 
 /// One waiter's wake handle: a flag + condvar so the parked OS thread blocks
 /// off-lock and wakes when the engine (clock jump), an `unpark`, or a
@@ -50,7 +50,7 @@ fn wait_set(cv: &Condvar, mut woken: MutexGuard<'_, bool>) {
 }
 
 /// How a parked waiter is woken once the engine (or a signal) selects it.
-/// Sync OS-thread waits store a `Token` (a `native::sync` flag+condvar the blocked
+/// Sync OS-thread waits store a `Token` (a `backend::sync` flag+condvar the blocked
 /// thread sits on); async-task waits store the task's `Waker`. `try_advance` /
 /// `signal_condvar` collect these and fire them AFTER releasing the engine
 /// `core` lock.

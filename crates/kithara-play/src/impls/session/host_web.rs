@@ -1,11 +1,11 @@
 use std::{
     cell::RefCell,
     num::NonZeroU32,
-    sync::{Arc, LazyLock, atomic::Ordering},
+    sync::{LazyLock, atomic::Ordering},
 };
 
 use firewheel::FirewheelCtx;
-use kithara_platform::sync::{Mutex, mpsc};
+use kithara_platform::sync::{Arc, Mutex, mpsc};
 use tracing::warn;
 
 use super::{

@@ -291,6 +291,7 @@ iced_aw = { version = "0.14.1", default-features = false, features = ["tabs", "t
 jni = "0.22"
 js-sys = "0.3"
 libfuzzer-sys = "0.4"
+loom = { version = "0.7.2", features = ["checkpoint"] }
 lru = "0.18"
 memory-stats = "1.2"
 mmap-io = { version = "1.0", default-features = false }

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path, sync::Arc};
+use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path};
 
 use kithara::{
     self,
@@ -7,7 +7,7 @@ use kithara::{
         DiskAssetStore, EvictConfig, ProcessCtx, ReadSide, ResourceProcessor, StorageBackend,
         WriteSide,
     },
-    platform::{CancelToken, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
 };
 use kithara_integration_tests::{asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt};
 use tempfile::tempdir;

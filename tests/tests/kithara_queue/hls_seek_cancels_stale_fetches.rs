@@ -1,10 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use kithara::{
     assets::StoreOptions,
@@ -13,6 +10,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{self, Duration, Instant, sleep},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},

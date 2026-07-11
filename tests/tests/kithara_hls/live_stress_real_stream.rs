@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    num::NonZeroUsize,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
@@ -19,6 +15,7 @@ use kithara::{
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
     hls::{Hls, HlsConfig},
     platform::{
+        sync::Arc,
         time::Duration,
         tokio,
         tokio::{sync::broadcast::error::RecvError, task::spawn},

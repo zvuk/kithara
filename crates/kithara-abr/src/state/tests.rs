@@ -1,10 +1,9 @@
-use std::sync::Arc;
-
 use kithara_events::{
     AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantIndex, VariantInfo,
 };
 use kithara_platform::{
     CancelToken,
+    sync::Arc,
     time::{Duration, Duration as StdDuration, Instant},
 };
 use kithara_test_utils::kithara;

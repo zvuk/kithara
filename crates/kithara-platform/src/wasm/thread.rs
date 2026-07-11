@@ -1,11 +1,11 @@
-use std::sync::OnceLock;
+use std::sync::{OnceLock, atomic::Ordering};
 pub use std::time::Duration;
 
 use wasm_bindgen::JsCast;
 use wasm_safe_thread::Builder as WasmThreadBuilder;
 
 pub use crate::common::thread_id::active_named_thread_count;
-use crate::common::thread_id::{counted, thread_id_hash};
+use crate::common::thread_id::{ACTIVE_NAMED_THREADS, thread_id_hash};
 
 /// Process-wide cell for the wasm-bindgen JS shim filename (without `.js`)
 /// that spawned Workers import for `initSync`. The consumer crate sets this
@@ -47,6 +47,52 @@ pub fn keep_worker_alive() {
 pub type Thread = wasm_safe_thread::Thread;
 
 pub type ThreadId = wasm_safe_thread::ThreadId;
+
+fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
+    move || {
+        let result = f();
+        ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
+        result
+    }
+}
+
+#[derive(Default)]
+pub(crate) enum GateBackend {
+    #[default]
+    Wasm,
+}
+
+impl GateBackend {
+    #[inline]
+    pub(crate) fn park_timeout(&self, duration: Duration) {
+        match self {
+            Self::Wasm => park_timeout(duration),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn unpark(&self, _thread_id: u64, thread: Option<&Thread>) {
+        match self {
+            Self::Wasm => {
+                if let Some(thread) = thread {
+                    unpark(thread);
+                }
+            }
+        }
+    }
+}
+
+#[inline]
+pub(crate) fn gate_instant(backend: &GateBackend) -> crate::time::Instant {
+    match backend {
+        GateBackend::Wasm => crate::time::Instant::now(),
+    }
+}
 
 #[inline]
 pub fn yield_now() {}
@@ -135,7 +181,7 @@ pub fn sleep(duration: Duration) {
 
 /// Back off a synchronous poll loop whose data is produced by another thread.
 /// On wasm there is no quiescence engine, so this is a real `sleep(duration)`
-/// throttle — parity with [`crate::native::thread::paced_backoff`].
+/// throttle - parity with [`crate::backend::thread::paced_backoff`].
 #[inline]
 pub fn paced_backoff(duration: Duration) {
     sleep(duration);

@@ -6,11 +6,14 @@ use std::{
     num::NonZeroUsize,
     ops::Range,
     path::Path,
-    sync::{Arc, Weak},
+    sync::Weak,
 };
 
 use dashmap::DashMap;
-use kithara_platform::{CancelToken, sync::Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
 use crate::{

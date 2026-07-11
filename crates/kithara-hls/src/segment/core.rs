@@ -1,8 +1,8 @@
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::StreamResult;
 use url::Url;
 

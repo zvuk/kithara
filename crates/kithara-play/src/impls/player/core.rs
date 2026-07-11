@@ -1,9 +1,6 @@
 use std::{
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use bon::Builder;
@@ -16,7 +13,9 @@ use kithara_bufpool::PcmPool;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{
-    CancelScope, CancelToken, sync::Mutex, tokio::runtime::Handle as RuntimeHandle,
+    CancelScope, CancelToken,
+    sync::{Arc, Mutex},
+    tokio::runtime::Handle as RuntimeHandle,
 };
 use portable_atomic::AtomicF32;
 use tracing::debug;

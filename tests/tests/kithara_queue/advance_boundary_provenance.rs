@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
 use kithara::{
     assets::StoreOptions,
@@ -8,6 +8,7 @@ use kithara::{
     events::{AbrEvent, Event, EventReceiver},
     hls::AbrMode,
     platform::{
+        sync::Arc,
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },

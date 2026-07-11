@@ -7,10 +7,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
 use bytes::Bytes;
@@ -18,7 +15,7 @@ use kithara::{
     assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader, analysis::BeatAnalysisConfig},
     file::{File, FileConfig, FileSrc},
-    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     prelude::ResourceConfig,
     stream::Stream,
 };

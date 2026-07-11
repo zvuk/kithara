@@ -1,9 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{
-    num::{NonZeroU32, NonZeroUsize},
-    sync::Arc,
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 #[cfg(all(
     feature = "apple-fused-src",
@@ -18,7 +15,10 @@ use kithara::{
         PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
     },
     events::EventBus,
-    platform::time::{self, Duration, Instant},
+    platform::{
+        sync::Arc,
+        time::{self, Duration, Instant},
+    },
     play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig},
     stream::AudioCodec,
 };

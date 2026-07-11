@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::{
     Router,
     body::Body,
@@ -8,7 +6,10 @@ use axum::{
     response::IntoResponse,
     routing::{any, get},
 };
-use kithara::platform::time::{Duration, sleep};
+use kithara::platform::{
+    sync::Arc,
+    time::{Duration, sleep},
+};
 
 use crate::{
     fixture_protocol::{HlsRouteKind, HttpErrorRule},

@@ -1,7 +1,6 @@
-use std::sync::Arc;
-
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_platform::sync::Arc;
 use kithara_stretch::{StretchBackend, StretchKind, StretchOptions, build_backend};
 use tracing::warn;
 

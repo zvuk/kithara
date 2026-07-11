@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Seek, SeekFrom},
-    sync::{Arc, Mutex as StdMutex},
+    sync::Mutex as StdMutex,
 };
 
 use kithara::{
@@ -9,6 +9,7 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
+        sync::Arc,
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },

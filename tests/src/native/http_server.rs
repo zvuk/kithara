@@ -1,7 +1,8 @@
-use std::{io, sync::Arc};
+use std::io;
 
 use axum::Router;
 use kithara::platform::{
+    sync::Arc,
     time::{Duration, sleep as tokio_sleep},
     tokio::{
         net::TcpListener,

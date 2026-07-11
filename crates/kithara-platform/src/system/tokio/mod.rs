@@ -1,6 +1,6 @@
 //! Mirror of the tokio surface the workspace is allowed to touch.
 //! Enumerated on purpose: a glob re-export is how unvetted primitives
-//! leak in unnoticed (see design doc §2). `time`/`fs`/`process` and the root
+//! leak in unnoticed. `time`/`fs`/`process` and the root
 //! `spawn`/`spawn_blocking` are intentionally ABSENT. `net` and minimal async IO
 //! extension traits are feature-gated for native test/server socket plumbing.
 //! `task_local!` is native-only (no task-scope surface in the wasm subset).

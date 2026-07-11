@@ -1,10 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
 
+use kithara_platform::sync::Arc;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use url::Url;

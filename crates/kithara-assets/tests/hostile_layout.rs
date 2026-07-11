@@ -1,10 +1,8 @@
 //! A custom [`AssetLayout`] that returns an unsafe `rel_path` must be rejected
 //! by store-side validation with a typed error, never silently rewritten.
 
-use std::sync::Arc;
-
 use kithara_assets::{AssetLayout, AssetStoreBuilder, AssetsError, StorageBackend};
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 use url::Url;

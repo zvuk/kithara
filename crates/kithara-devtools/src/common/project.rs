@@ -128,6 +128,7 @@ pub struct TestCommandConfig {
     pub default_lane: String,
     pub feature_arg: String,
     pub flash: TestFlashConfig,
+    pub loom_lane: String,
 }
 
 #[derive(Debug, Deserialize)]

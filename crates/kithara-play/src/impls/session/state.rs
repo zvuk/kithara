@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use kithara_platform::sync::Arc;
 
 #[rustfmt::skip]
 use firewheel::nodes::volume_pan::VolumePanNode;

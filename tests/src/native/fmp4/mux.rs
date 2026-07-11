@@ -1,6 +1,6 @@
-use std::{borrow::Cow, sync::Arc};
+use std::borrow::Cow;
 
-use kithara::stream::AudioCodec;
+use kithara::{platform::sync::Arc, stream::AudioCodec};
 use kithara_encode::{EncodedAccessUnit, EncodedTrack};
 use thiserror::Error;
 

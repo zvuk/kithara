@@ -383,12 +383,10 @@ fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
 mod tests {
     use std::{
         io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
-        sync::{
-            Arc,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-        },
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
+    use kithara_platform::sync::Arc;
     use kithara_stream::{
         AudioCodec, ContainerFormat, NotReadyCause, PendingReason, SourcePhase, StreamPending,
     };

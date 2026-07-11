@@ -2,11 +2,14 @@
 
 use std::{
     fmt::{self, Debug},
-    sync::{Arc, atomic::AtomicBool},
+    sync::atomic::AtomicBool,
 };
 
 use arc_swap::ArcSwap;
-use kithara_platform::{CancelToken, sync::CondvarGate};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, CondvarGate},
+};
 use rangemap::RangeSet;
 
 use crate::{

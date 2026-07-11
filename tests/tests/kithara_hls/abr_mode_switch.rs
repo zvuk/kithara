@@ -1,9 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use kithara::{
@@ -16,7 +13,7 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
-        sync::Mutex,
+        sync::{Arc, Mutex},
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },
