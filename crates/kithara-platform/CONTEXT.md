@@ -255,8 +255,9 @@ divergence.
 
 ## Blocking Detection (`no_block`)
 
-Poll-scoped async blocking detection, feature `no-block` (test lanes only;
-the inert twin `common/no_block_inert.rs` keeps prod builds byte-identical).
+Poll-scoped async blocking detection, feature `no-block` (test lanes only; enabled
+by `just test --no-block=on`, off for normal runs, and kept ON by `just gate` lane
+1; the inert twin `common/no_block_inert.rs` keeps prod builds byte-identical).
 Real tree: `src/no_block/` — cfg-free inside, selected in `lib.rs` like
 `flash`/`flash_inert`.
 
@@ -272,7 +273,10 @@ spawn chokepoints — native and flash `tokio::task::spawn`/`spawn_on`):
    deliberately NOT intercepted (short locks in async are legal; long waits
    are level 2's job).
 2. **Budget** — wall/CPU timing of each poll on the REAL clock (`std::time`,
-   never the virtualized platform clock). Blanket default 3000 ms (measured:
+   never the virtualized platform clock; thread-CPU is sampled through a
+   per-thread bounded snapshot with 1 ms max age, so each poll can include up to
+   1 ms of pre-poll CPU in its window and `KITHARA_NO_BLOCK=off` skips timing
+   entirely). Blanket default 3000 ms (measured:
    legitimate IO-bound polls reach 1.05 s; `KITHARA_NO_BLOCK_BUDGET_MS`
    overrides); the strict 25 ms tier is opt-in via
    `#[kithara::no_block(budget_ms = N)]`. Over-budget reports classify

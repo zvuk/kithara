@@ -42,6 +42,10 @@ pub(super) fn mode() -> Mode {
     })
 }
 
+pub(super) fn is_off() -> bool {
+    mode() == Mode::Off
+}
+
 pub(super) fn blanket_budget() -> Duration {
     #[cfg(test)]
     {

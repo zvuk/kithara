@@ -116,6 +116,34 @@ fn blanket_spin_over_budget_panics() {
 }
 
 #[test]
+fn off_mode_skips_blocking_checks_and_budget() {
+    force_mode(Mode::Off);
+
+    let caught_off = std::panic::catch_unwind(|| {
+        let fut = watch_budget("off_task", 10, async {
+            crate::thread::sleep(Duration::from_millis(1));
+        });
+        let _ = poll_once(fut);
+    });
+    assert!(
+        caught_off.is_ok(),
+        "off mode must skip forbid and budget checks: {caught_off:?}"
+    );
+
+    force_mode(Mode::Panic);
+    let caught_panic = std::panic::catch_unwind(|| {
+        let fut = watch_budget("panic_task", 10, async {
+            crate::thread::sleep(Duration::from_millis(1));
+        });
+        let _ = poll_once(fut);
+    });
+    let err = caught_panic.expect_err("sleep in panic mode must hit forbid");
+    let msg = err.downcast_ref::<String>().expect("panic payload");
+    assert!(msg.contains("thread::sleep"), "got: {msg}");
+    assert!(msg.contains("panic_task"), "got: {msg}");
+}
+
+#[test]
 fn budget_ignores_paused_time() {
     force_mode(Mode::Panic);
 
@@ -229,4 +257,27 @@ fn sleep_outside_poll_is_untouched() {
     force_mode(Mode::Panic);
 
     crate::thread::sleep(Duration::from_millis(1));
+}
+
+#[test]
+fn snapshot_rate_limits_thread_cpu_reads() {
+    force_mode(Mode::Panic);
+
+    clock::force_snapshot_refresh_count(0);
+
+    let t0 = Instant::now();
+    let _first = clock::snapshot(t0);
+    let _second = clock::snapshot(t0);
+    assert_eq!(
+        clock::snapshot_refresh_count(),
+        1,
+        "same instant should refresh once"
+    );
+
+    let _third = clock::snapshot(t0 + Duration::from_millis(2));
+    assert_eq!(
+        clock::snapshot_refresh_count(),
+        2,
+        "2ms later should force a second refresh"
+    );
 }
