@@ -52,7 +52,7 @@ tempfile = { workspace = true }
 [dev-dependencies]
 kithara-assets = { path = "." }
 kithara-drm = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 aes = { workspace = true }
 cbc = { workspace = true }

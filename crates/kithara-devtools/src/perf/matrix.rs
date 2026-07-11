@@ -13,7 +13,7 @@ use crate::{
         junit::parse_junit,
         lanes::{Lane, RepeatMeta, RunPaths, sanitize},
     },
-    test::nextest_lane_command,
+    test::{LaneToggles, nextest_lane_command},
 };
 
 pub(crate) struct MatrixParams {
@@ -55,8 +55,15 @@ pub(crate) fn run(params: &MatrixParams, project: &ProjectConfig) -> Result<()> 
                 .with_context(|| format!("create {}", rep_dir.display()))?;
             let mut extra = vec!["--profile".to_owned(), project.perf.nextest_profile.clone()];
             extra.extend(params.extra.iter().cloned());
-            let (features, mut cmd) =
-                nextest_lane_command(project, lane.flash, &lane.backend, &extra)?;
+            let (features, mut cmd) = nextest_lane_command(
+                project,
+                LaneToggles {
+                    flash: lane.flash,
+                    no_block: false,
+                },
+                &lane.backend,
+                &extra,
+            )?;
             cmd.env("CARGO_TARGET_DIR", &target_dir);
             let started_unix = SystemTime::now()
                 .duration_since(UNIX_EPOCH)

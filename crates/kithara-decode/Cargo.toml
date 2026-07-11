@@ -84,7 +84,7 @@ ndk-context = { workspace = true }
 
 [dev-dependencies]
 kithara-storage = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

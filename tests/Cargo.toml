@@ -40,6 +40,8 @@ selenium = []
 # path-dep against the virtual `kithara::platform::time::Instant`. Used by the
 # phase-continuity equivalence proof.
 flash = ["kithara/flash", "kithara-test-utils/flash"]
+# Poll-blocking detector; enabled by `just test --no-block=on`.
+no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 # Run integration tests with the native Apple HTTP backend (`NSURLSession`).
 # This is separate from `apple`, which only brings Apple decode/audio variants
 # into scope for tests.
@@ -49,7 +51,7 @@ apple-fused-src = ["kithara/apple-fused-src"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }

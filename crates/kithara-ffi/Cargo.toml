@@ -180,7 +180,7 @@ tracing-android = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara = { workspace = true, features = ["probe"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 futures = { workspace = true }
 tempfile = { workspace = true }

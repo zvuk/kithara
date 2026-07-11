@@ -134,14 +134,16 @@ doc:
 #   * Android       → Android MediaCodec + Symphonia software
 #   * Linux / other → Symphonia only
 #
-# The flash virtual clock and no-block poll detection are ENABLED by default
-# (`--features flash,no-block`): tests run on a deterministic engine-driven
-# clock that collapses artificial waits, so the suite is fast and reproducible.
-# Opt out with `--flash=off` (`--no-flash` / `--flash=false`) to run on the real
-# wall clock — the regression baseline.
+# The flash virtual clock is ON by default. no-block poll detection is OFF by
+# default and must be enabled explicitly with `--no-block=on` to target
+# potential async blocking violations.
+# Opt out of flash with `--flash=off` (`--no-flash` / `--flash=false`) to run on the
+# real wall clock regression baseline.
+# `just gate` keeps both the default production-shaped baseline (flash OFF) and the
+# no-block-enabled lane (flash ON + no-block ON).
 # `--net-backend=apple` opts the integration crate into `kithara/apple-net`;
 # the default backend is the target's normal test backend (`wreq` on Apple
-# hosts). Recipe-level `--flash=*` / `--loom=*` / `--net-backend=*` tokens are stripped
+# hosts). Recipe-level `--flash=*` / `--loom=*` / `--no-block=*` / `--net-backend=*` tokens are stripped
 # before reaching nextest; every other arg passes through unchanged.
 #
 #   just test                          # whole workspace, flash ON, target default backend
@@ -177,10 +179,10 @@ loom-debug FILE *ARGS:
 gate *ARGS:
     #!/usr/bin/env bash
     set -eo pipefail
-    echo "=== gate: flash ON ==="
-    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features flash,no-block {{ARGS}}
+    echo "=== gate: flash ON + no-block ON ==="
+    cargo xtask test --flash=on --no-block=on {{ARGS}}
     echo "=== gate: flash OFF ==="
-    CARGO_TARGET_DIR=target-flash-off cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features no-block {{ARGS}}
+    CARGO_TARGET_DIR=target-flash-off cargo xtask test --flash=off {{ARGS}}
 
 # RealtimeSanitizer: compile the player RT path under `-Zsanitizer=realtime`
 # and run the offline-render tests, which enter the

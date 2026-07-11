@@ -10,7 +10,8 @@ use crate::common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig};
 pub struct TestArgs {
     /// Arguments for the configured test command. Recipe-level flags accepted anywhere:
     /// `--lane=<configured-name>`, `--flash=true|false|on|off`, `--no-flash`,
-    /// `--loom=true|false|on|off`, `--no-loom`, and `--net-backend=<configured-name>`.
+    /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`, and
+    /// `--net-backend=<configured-name>`.
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
 }
@@ -18,6 +19,7 @@ pub struct TestArgs {
 #[derive(Debug)]
 struct TestRequest {
     flash: Option<bool>,
+    no_block: Option<bool>,
     lane: Option<String>,
     loom: Option<bool>,
     net_backend: Option<String>,
@@ -28,6 +30,7 @@ impl TestRequest {
     fn parse(args: &[String]) -> Result<Self> {
         let mut request = Self {
             lane: None,
+            no_block: None,
             loom: None,
             net_backend: None,
             passthrough: Vec::new(),
@@ -43,6 +46,14 @@ impl TestRequest {
                         .next()
                         .ok_or_else(|| anyhow::anyhow!("--flash requires a value"))?;
                     request.flash = Some(parse_toggle("flash", value)?);
+                }
+                "--no-block=off" | "--no-block=false" => request.no_block = Some(false),
+                "--no-block=on" | "--no-block=true" => request.no_block = Some(true),
+                "--no-block" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("--no-block requires a value"))?;
+                    request.no_block = Some(parse_toggle("no-block", value)?);
                 }
                 "--loom=off" | "--loom=false" | "--no-loom" => request.loom = Some(false),
                 "--loom=on" | "--loom=true" => request.loom = Some(true),
@@ -67,6 +78,10 @@ impl TestRequest {
                 _ if arg.starts_with("--flash=") => {
                     let value = arg.trim_start_matches("--flash=");
                     request.flash = Some(parse_toggle("flash", value)?);
+                }
+                _ if arg.starts_with("--no-block=") => {
+                    let value = arg.trim_start_matches("--no-block=");
+                    request.no_block = Some(parse_toggle("no-block", value)?);
                 }
                 _ if arg.starts_with("--loom=") => {
                     let value = arg.trim_start_matches("--loom=");
@@ -97,14 +112,17 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
     let passthrough = passthrough_position(lane)?;
     let mut cmd = match passthrough {
         PassthroughPosition::BeforeSuffix if lane_name == test.default_lane => {
-            let flash = request
-                .flash
-                .unwrap_or_else(|| lane.default_flash.unwrap_or(test.flash.default));
+            let toggles = LaneToggles {
+                flash: request
+                    .flash
+                    .unwrap_or_else(|| lane.default_flash.unwrap_or(test.flash.default)),
+                no_block: request.no_block.unwrap_or(test.no_block.default),
+            };
             let backend = request
                 .net_backend
                 .as_deref()
                 .unwrap_or(&test.default_backend);
-            let (_, cmd) = nextest_lane_command(&project, flash, backend, &request.passthrough)?;
+            let (_, cmd) = nextest_lane_command(&project, toggles, backend, &request.passthrough)?;
             cmd
         }
         passthrough => {
@@ -217,6 +235,12 @@ fn select_lane<'a>(
     Ok((lane_name, lane))
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct LaneToggles {
+    pub(crate) flash: bool,
+    pub(crate) no_block: bool,
+}
+
 fn features_for(
     config: &TestCommandConfig,
     lane: &TestLaneConfig,
@@ -225,24 +249,28 @@ fn features_for(
     let flash = request
         .flash
         .unwrap_or_else(|| lane.default_flash.unwrap_or(config.flash.default));
+    let no_block = request.no_block.unwrap_or(config.no_block.default);
     let backend_name = request
         .net_backend
         .clone()
         .unwrap_or_else(|| config.default_backend.clone());
-    lane_features(config, lane, flash, &backend_name)
+    lane_features(config, lane, LaneToggles { flash, no_block }, &backend_name)
 }
 
 pub(crate) fn lane_features(
     config: &TestCommandConfig,
     lane: &TestLaneConfig,
-    flash: bool,
+    toggles: LaneToggles,
     backend_name: &str,
 ) -> Result<BTreeSet<String>> {
     let mut features = BTreeSet::new();
     features.extend(config.features.iter().cloned());
     features.extend(lane.default_features.iter().cloned());
-    if flash {
+    if toggles.flash {
         features.extend(config.flash.features.iter().cloned());
+    }
+    if toggles.no_block {
+        features.extend(config.no_block.features.iter().cloned());
     }
     let Some(backend) = config.net_backends.get(backend_name) else {
         let valid = config
@@ -259,7 +287,7 @@ pub(crate) fn lane_features(
 
 pub(crate) fn nextest_lane_command(
     project: &ProjectConfig,
-    flash: bool,
+    toggles: LaneToggles,
     backend: &str,
     extra: &[String],
 ) -> Result<(Vec<String>, Command)> {
@@ -269,7 +297,7 @@ pub(crate) fn nextest_lane_command(
     let Some(lane) = test.lanes.get(lane_name) else {
         bail!("test.default_lane `{lane_name}` is not defined in test.lanes");
     };
-    let features = lane_features(test, lane, flash, backend)?;
+    let features = lane_features(test, lane, toggles, backend)?;
     let mut cmd = Command::new(&lane.program);
     cmd.args(&lane.prefix_args);
     if !features.is_empty() {
@@ -309,7 +337,7 @@ mod tests {
     use super::*;
     use crate::common::project::{
         HealthConfig, LintExcludeConfig, OrphansConfig, PerfConfig, ProjectIdentity, QualityConfig,
-        TestFlashConfig, TestNetBackendConfig, WorkspaceScan,
+        TestFlashConfig, TestNetBackendConfig, TestNoBlockConfig, WorkspaceScan,
     };
 
     fn args_of(cmd: &Command) -> Vec<String> {
@@ -379,6 +407,10 @@ mod tests {
                     features: vec!["virtual-time".to_owned()],
                     default: true,
                 },
+                no_block: TestNoBlockConfig {
+                    features: vec!["nb-detect".to_owned()],
+                    default: false,
+                },
                 loom_lane: "loom".to_owned(),
             },
             lint_exclude: LintExcludeConfig::default(),
@@ -396,13 +428,99 @@ mod tests {
         let test = &project.test;
         let lane = &test.lanes[&test.default_lane];
 
-        let feats = lane_features(test, lane, true, "native").expect("features");
+        let feats = lane_features(
+            test,
+            lane,
+            LaneToggles {
+                flash: true,
+                no_block: false,
+            },
+            "native",
+        )
+        .expect("features");
         assert!(feats.contains("base-feature"));
         assert!(feats.contains("virtual-time"));
         assert!(feats.contains("demo/native-net"));
+        assert!(!feats.contains("nb-detect"));
 
-        let feats = lane_features(test, lane, false, "http").expect("features");
+        let feats = lane_features(
+            test,
+            lane,
+            LaneToggles {
+                flash: false,
+                no_block: false,
+            },
+            "http",
+        )
+        .expect("features");
         assert_eq!(feats, BTreeSet::from(["base-feature".to_owned()]));
+    }
+
+    #[test]
+    fn features_default_request_omits_no_block() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes[&test.default_lane];
+        let request = TestRequest::parse(&[]).expect("parse request");
+
+        let feats = features_for(test, lane, &request).expect("features");
+        assert!(!feats.contains("nb-detect"));
+    }
+
+    #[test]
+    fn no_block_on_adds_features_and_composes_with_flash_and_backend() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes[&test.default_lane];
+        let request = TestRequest::parse(&[
+            "--flash=on".to_owned(),
+            "--no-block=on".to_owned(),
+            "--net-backend=native".to_owned(),
+        ])
+        .expect("parse request");
+
+        let feats = features_for(test, lane, &request).expect("features");
+        assert!(feats.contains("base-feature"));
+        assert!(feats.contains("virtual-time"));
+        assert!(feats.contains("demo/native-net"));
+        assert!(feats.contains("nb-detect"));
+    }
+
+    #[test]
+    fn no_block_off_keeps_no_block_features_out() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes[&test.default_lane];
+        let request = TestRequest::parse(&[
+            "--flash=on".to_owned(),
+            "--no-block=off".to_owned(),
+            "--net-backend=native".to_owned(),
+        ])
+        .expect("parse request");
+
+        let feats = features_for(test, lane, &request).expect("features");
+        assert!(!feats.contains("nb-detect"));
+        assert!(feats.contains("virtual-time"));
+    }
+
+    #[test]
+    fn no_block_bogus_mode_is_a_typed_error() {
+        let error = TestRequest::parse(&["--no-block".to_owned(), "bogus".to_owned()])
+            .expect_err("parse invalid no-block");
+
+        assert!(error.to_string().contains("no-block"));
+    }
+
+    #[test]
+    fn no_block_space_form_parses_to_on() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes[&test.default_lane];
+        let request =
+            TestRequest::parse(&["--no-block".to_owned(), "on".to_owned()]).expect("parse request");
+
+        let feats = features_for(test, lane, &request).expect("features");
+        assert!(feats.contains("nb-detect"));
     }
 
     #[test]
@@ -410,8 +528,16 @@ mod tests {
         let project = synthetic_project();
         let extra = vec!["--profile".to_owned(), "perf".to_owned()];
 
-        let (features, cmd) =
-            nextest_lane_command(&project, true, "http", &extra).expect("nextest command");
+        let (features, cmd) = nextest_lane_command(
+            &project,
+            LaneToggles {
+                flash: true,
+                no_block: false,
+            },
+            "http",
+            &extra,
+        )
+        .expect("nextest command");
 
         assert_eq!(
             features,
@@ -439,6 +565,25 @@ mod tests {
                 "base-feature".to_owned(),
                 "demo/loom".to_owned(),
                 "virtual-time".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn loom_flag_with_no_block_on_composes_features() {
+        let project = synthetic_project();
+        let request = TestRequest::parse(&["--loom=on".to_owned(), "--no-block=on".to_owned()])
+            .expect("parse request");
+
+        let (name, lane) = select_lane(&project.test, &request).expect("select loom lane");
+        assert_eq!(name, "loom");
+        let features = features_for(&project.test, lane, &request).expect("loom features");
+        assert_eq!(
+            features,
+            BTreeSet::from([
+                "base-feature".to_owned(),
+                "demo/loom".to_owned(),
+                "nb-detect".to_owned(),
             ])
         );
     }

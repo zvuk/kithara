@@ -10,6 +10,14 @@ validation scope.
 - If a probe is reported, name the package, filter, lane, and why it is enough
   for that local question.
 
+### Axes
+
+- `flash` is the default axis and defaults ON.
+- `no-block` is off by default; enable with `--no-block=on` for poll-blocking
+  detector coverage.
+- `just gate` keeps two explicit lanes: flash ON + no-block ON, and flash OFF.
+- Tests that verify detector behavior are gated behind the `no-block` feature.
+
 ## Regression Tests
 
 - A regression test must fail on the broken surface and pass after the fix.

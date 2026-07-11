@@ -128,6 +128,7 @@ pub struct TestCommandConfig {
     pub default_lane: String,
     pub feature_arg: String,
     pub flash: TestFlashConfig,
+    pub no_block: TestNoBlockConfig,
     pub loom_lane: String,
 }
 
@@ -145,6 +146,13 @@ impl Default for TestFlashConfig {
             default: true,
         }
     }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestNoBlockConfig {
+    pub features: Vec<String>,
+    pub default: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]

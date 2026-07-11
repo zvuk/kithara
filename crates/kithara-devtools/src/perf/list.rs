@@ -7,7 +7,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::{common::project::ProjectConfig, test::lane_features};
+use crate::{
+    common::project::ProjectConfig,
+    test::{LaneToggles, lane_features},
+};
 
 #[derive(Debug)]
 pub(crate) struct SuiteBin {
@@ -60,7 +63,15 @@ pub(crate) fn nextest_list(
         bail!("default lane prefix args carry no `run` verb; cannot derive list command");
     };
     args[run_pos] = "list".to_owned();
-    let features = lane_features(test, lane, flash, backend)?;
+    let features = lane_features(
+        test,
+        lane,
+        LaneToggles {
+            flash,
+            no_block: false,
+        },
+        backend,
+    )?;
     let mut cmd = Command::new(&lane.program);
     cmd.args(&args);
     if !features.is_empty() {
