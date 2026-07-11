@@ -79,6 +79,11 @@ program = "cargo"
 prefix_args = ["test", "--doc", "--workspace", "--exclude", "kithara-fuzz"]
 default_flash = false
 
+# Resampler-backend axis: each e2e lane pins one SRC shape. `e2e` is the
+# desktop shape (Rubato adapter for both decoders), `e2e-fused` the production
+# Apple shape (embedded AudioConverter SRC in the Apple codec; Symphonia stays
+# on Rubato; inert off Apple), `e2e-glide` the Glide backend (no Rubato in the
+# graph, otherwise the compile-time alias picks Rubato).
 [test.lanes.e2e]
 program = "cargo"
 prefix_args = [
@@ -93,7 +98,41 @@ prefix_args = [
   "--run-ignored",
   "all",
 ]
-default_features = ["e2e"]
+default_features = ["e2e", "kithara/resample-rubato"]
+default_flash = false
+
+[test.lanes.e2e-fused]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "suite_e2e",
+  "--run-ignored",
+  "all",
+]
+default_features = ["e2e", "kithara/resample-rubato", "apple-fused-src"]
+default_flash = false
+
+[test.lanes.e2e-glide]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "suite_e2e",
+  "--run-ignored",
+  "all",
+]
+default_features = ["e2e", "kithara/resample-glide"]
 default_flash = false
 
 [test.lanes.selenium]

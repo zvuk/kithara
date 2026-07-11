@@ -234,6 +234,19 @@ test-all:
     just test
     just test --lane=doc
 
+# Resampler-backend e2e matrix: every SRC backend (Rubato, Apple fused,
+# Glide) against the real silvercomet streams. The 48 kHz MP3 exercises
+# fixed-ratio SRC on any 44.1 kHz device; HLS/DRM cover the AAC and AES
+# paths. Narrow with a custom filter:
+#   just e2e-resamplers                                        # silvercomet track set
+#   just e2e-resamplers "-E \"'test(silvercomet_mp3)'\""       # one track, 3 backends
+# (the nextest filter needs the doubled quoting: `just test` re-renders args
+# through a second shell)
+e2e-resamplers ARGS="-E \"'test(track_plays_end_to_end_silvercomet)'\" --test-threads=4":
+    just test --lane=e2e {{ARGS}}
+    just test --lane=e2e-fused {{ARGS}}
+    just test --lane=e2e-glide {{ARGS}}
+
 # Run all linters scoped to a crate / path / workspace. With
 # `--autofix`, run each tool's autofix first (where available), then
 # re-validate.

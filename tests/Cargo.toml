@@ -29,7 +29,9 @@ test = false
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
 # End-to-end tests that require real networks and real audio hardware.
-# Gated off by default so `just test` never compiles `suite_e2e`.
+# Gated off by default so `just test` never compiles `suite_e2e`. Real devices
+# run at arbitrary sample rates, so every e2e lane in .config/xtask.toml pairs
+# this with a fixed-ratio SRC backend (rubato / glide / apple fused).
 e2e = []
 # Selenium-driven WebDriver tests. Gated off by default so `just test`
 # doesn't try to spin up trunk + chromedriver. Run via `just test-selenium`.
