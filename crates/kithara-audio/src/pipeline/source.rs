@@ -16,7 +16,7 @@ use kithara_decode::{
 };
 use kithara_events::{
     AudioEvent, AudioFormat, DecoderChangeCause, DecoderEvent, DeferredBus, Event, FrameDomain,
-    SeekLifecycleStage, SegmentLocation,
+    SeekLifecycleStage, SegmentLocation, TrackFailureKind,
 };
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -589,6 +589,12 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// mid-seek windows is deliberate, because the listener is still
     /// attached to this track.
     fn update_state(&mut self, new: CurrentFsm) {
+        if let CurrentFsm::Failed(handle) = &new {
+            self.emit_event(AudioEvent::TrackFailed {
+                failure: map_track_failure_kind(handle.data()),
+                seek_epoch: self.seek_obs.epoch(),
+            });
+        }
         self.activity.set_playing(playing_for_state(&new));
         self.state = new;
     }
@@ -3192,6 +3198,16 @@ fn emit_failure_log(failure: &TrackFailure) {
     }
 }
 
+fn map_track_failure_kind(failure: &TrackFailure) -> TrackFailureKind {
+    match failure {
+        TrackFailure::Decode(_) => TrackFailureKind::Decode,
+        TrackFailure::RecreateFailed { offset } => {
+            TrackFailureKind::RecreateFailed { offset: *offset }
+        }
+        TrackFailure::SourceCancelled => TrackFailureKind::SourceCancelled,
+    }
+}
+
 fn recreate_resumes_decode_head(recreate: &RecreateState) -> bool {
     recreate.cause == RecreateCause::FormatBoundary && matches!(recreate.next, RecreateNext::Decode)
 }
@@ -3981,6 +3997,13 @@ mod rebuilding_decoder_tests {
             Ok(Event::Decoder(DecoderEvent::DecodeError {
                 detail: "fixture decode failure",
                 ..
+            }))
+        ));
+        assert!(matches!(
+            events.try_recv().map(|env| env.event),
+            Ok(Event::Audio(AudioEvent::TrackFailed {
+                failure: TrackFailureKind::Decode,
+                seek_epoch: 0,
             }))
         ));
     }

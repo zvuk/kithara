@@ -5,6 +5,7 @@ use std::sync::{
 
 use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide};
 use kithara_drm::DecryptContext;
+use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate},
@@ -41,6 +42,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             .build(),
     );
     PlanCtx {
+        bus: EventBus::new(8),
         prefetch_budget,
         master_cancel: cancel,
         scope: backend.scope("test"),

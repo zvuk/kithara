@@ -78,6 +78,7 @@ impl SegmentLocation {
 
 /// Events from the audio pipeline.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum AudioEvent {
     /// Audio format detected.
     FormatDetected { spec: AudioFormat },
@@ -113,6 +114,33 @@ pub enum AudioEvent {
         base_offset: u64,
         variant: Option<u32>,
     },
+    /// Terminal track failure surfaced by the audio FSM.
+    TrackFailed {
+        failure: TrackFailureKind,
+        seek_epoch: SeekEpoch,
+    },
+    /// Consumer crossed from playable output into starvation.
+    UnderrunStarted {
+        position_ms: u64,
+        seek_epoch: SeekEpoch,
+    },
+    /// Consumer recovered from starvation and resumed playback.
+    UnderrunEnded {
+        position_ms: u64,
+        seek_epoch: SeekEpoch,
+    },
+    /// Low-rate worker-side view of decoded/buffered progress.
+    BufferHealth {
+        buffered_ms: u64,
+        decoded_frontier_ms: u64,
+        seek_epoch: SeekEpoch,
+    },
+    /// Low-rate worker-side engine cost snapshot.
+    EngineLoad {
+        load: f32,
+        ms_per_chunk: f32,
+        realtime_factor: f32,
+    },
     /// Host-rate adaptation selected or reconfigured for playback.
     PlaybackResamplerConfigured {
         backend: PlaybackResamplerKind,
@@ -130,4 +158,12 @@ pub enum PlaybackResamplerKind {
     Rubato,
     Glide,
     None,
+}
+
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum TrackFailureKind {
+    Decode,
+    RecreateFailed { offset: u64 },
+    SourceCancelled,
 }

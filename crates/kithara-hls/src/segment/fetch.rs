@@ -8,6 +8,7 @@ use std::{
 };
 
 use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSide};
+use kithara_events::{EventBus, HlsError as EventHlsError, HlsEvent};
 use kithara_net::{NetError, Retryability};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
@@ -220,6 +221,7 @@ pub(crate) struct FetchSlot {
     /// readable (the decrypt gate opens here for DRM segments), not on its
     /// 10 ms poll.
     pub(crate) signal: SizeSignal,
+    pub(crate) bus: EventBus,
 }
 
 impl From<FetchSlot> for OnCompleteFn {
@@ -278,6 +280,7 @@ impl FetchSlot {
             handle,
             writer,
             reader,
+            bus,
             ..
         } = self;
         let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
@@ -307,6 +310,9 @@ impl FetchSlot {
                     err = %e,
                     "terminal fetch failure — slot parked Failed, will not re-dispatch"
                 );
+                bus.publish(HlsEvent::Error {
+                    error: EventHlsError::Other("segment fetch failed".to_string()),
+                });
                 handle.into_failed();
             } else {
                 handle.into_missing();

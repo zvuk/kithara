@@ -30,6 +30,12 @@ struct DeferredEvent<E> {
 }
 
 impl<E: Into<Event>> DeferredBus<E> {
+    /// The underlying scoped bus this ring flushes into.
+    #[must_use]
+    pub fn bus(&self) -> &EventBus {
+        &self.bus
+    }
+
     /// Build a deferred sink over `bus` with a fixed ring of `capacity`
     /// slots. `capacity` is clamped to at least one.
     #[must_use]

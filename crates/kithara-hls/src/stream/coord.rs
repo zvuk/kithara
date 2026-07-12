@@ -8,7 +8,7 @@ use std::{
 use delegate::delegate;
 use kithara_abr::AbrHandle;
 use kithara_assets::{AssetScope, ResourceKey};
-use kithara_events::AbrReason;
+use kithara_events::{AbrReason, DeferredBus, HlsEvent};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate, WaitGate},
@@ -44,6 +44,7 @@ pub(crate) struct HlsCoordEnv {
     pub(crate) scope: AssetScope,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
+    pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
     /// Unified reader-wake handle: the shared readiness gate paired with the
     /// late-bound audio-worker wake. Every transition that can flip a blocked
     /// reader's `wait_range` predicate (segment write/commit/fail, fence
@@ -109,6 +110,7 @@ pub(crate) struct HlsCoord {
     /// [`SizeSignal::fire`] it) and signalled by the coord on fence/seek
     /// transitions ([`SizeSignal::fire_ready_only`]). See [`HlsCoordEnv::signal`].
     signal: SizeSignal,
+    pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
 }
 
 impl HlsCoord {
@@ -151,6 +153,7 @@ impl HlsCoord {
             cancel: env.cancel,
             scope: env.scope,
             headers: env.headers,
+            emit: env.emit,
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
             fence_target: AtomicUsize::new(0),
@@ -205,6 +208,10 @@ impl HlsCoord {
     pub(crate) fn clear_variant_fence(&self) {
         let current_gen = self.variant_generation.load(Ordering::Acquire);
         self.fence_at.swap(current_gen, Ordering::AcqRel);
+        self.emit.enqueue(HlsEvent::VariantSwitchAcked {
+            variant: self.variant_index(),
+            generation: current_gen,
+        });
         // The fence gate opened: wake a reader parked in `wait_range(_, None)`
         // (it short-circuited on `variant_change_pending`) so it re-probes.
         self.signal.fire_ready_only();
@@ -297,6 +304,11 @@ impl HlsCoord {
             v_new.set_position(target_byte);
             self.fence_target.store(new_v, Ordering::Release);
             self.variant_generation.fetch_add(1, Ordering::Release);
+            self.emit.enqueue(HlsEvent::VariantSwitchFenced {
+                from_variant: current_before,
+                to_variant: new_v,
+                cross_codec: is_cross_codec,
+            });
             self.abr.apply_decision(&decision, Instant::now());
             v_new.rebuild_with_decoder_probe(ctx, target_seg);
         }
@@ -852,9 +864,171 @@ impl ByteMap for HlsCoord {
 
 #[cfg(test)]
 mod tests {
-    use kithara_stream::{PlayheadWrite, SeekControl};
+    use std::sync::OnceLock;
+
+    use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
+    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_events::{AbrMode, Event, EventBus, VariantIndex};
+    use kithara_platform::sync::{Arc, ThreadGate};
+    use kithara_stream::{AudioCodec, ContainerFormat, PlayheadWrite, SeekControl};
 
     use super::*;
+    use crate::{
+        config::SizeProbeMethod,
+        playlist::{PlaylistState, SegmentState, VariantState},
+        segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
+        variant::{PlanCtx, VariantParts},
+    };
+
+    struct TestAbrPeer {
+        state: Arc<AbrState>,
+        variants: Vec<kithara_events::VariantInfo>,
+    }
+
+    impl Abr for TestAbrPeer {
+        fn state(&self) -> Option<Arc<AbrState>> {
+            Some(Arc::clone(&self.state))
+        }
+
+        fn variants(&self) -> Vec<kithara_events::VariantInfo> {
+            self.variants.clone()
+        }
+    }
+
+    fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx) {
+        let bus = EventBus::new(8);
+        let cancel = CancelToken::never();
+        let store = Arc::new(
+            AssetStoreBuilder::default()
+                .backend(StorageBackend::Memory)
+                .cancel(cancel.clone())
+                .build(),
+        );
+        let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
+        let ctx = PlanCtx {
+            bus: bus.clone(),
+            prefetch_budget: 1,
+            master_cancel: cancel.clone(),
+            scope: store.scope("coord-test"),
+            seek_epoch: 0,
+            look_ahead_bytes: None,
+            look_ahead_segments: None,
+            headers: None,
+            size_probe_method: SizeProbeMethod::Head,
+            signal: signal.clone(),
+        };
+        let playlist = Arc::new(PlaylistState::new(vec![
+            VariantState {
+                codec: Some(AudioCodec::AacLc),
+                container: Some(ContainerFormat::Fmp4),
+                init_url: None,
+                segments: vec![SegmentState {
+                    url: "https://example.com/v0-seg0.m4s".parse().expect("url"),
+                    duration: Duration::from_secs(2),
+                    byte_range_len: Some(100),
+                    index: crate::ids::SegmentIndex::try_new(0, 1).expect("idx"),
+                }],
+            },
+            VariantState {
+                codec: Some(AudioCodec::Mp3),
+                container: Some(ContainerFormat::MpegAudio),
+                init_url: None,
+                segments: vec![SegmentState {
+                    url: "https://example.com/v1-seg0.m4s".parse().expect("url"),
+                    duration: Duration::from_secs(2),
+                    byte_range_len: Some(100),
+                    index: crate::ids::SegmentIndex::try_new(0, 1).expect("idx"),
+                }],
+            },
+        ]));
+        let variants = Arc::new(vec![
+            VariantParts {
+                init: None,
+                segments: vec![Segment::Media(MediaSegment {
+                    url: "https://example.com/v0-seg0.m4s".parse().expect("url"),
+                    resource_id: ctx
+                        .scope
+                        .key_for(&"https://example.com/v0-seg0.m4s".parse().expect("url")),
+                    state: SegmentSlotState::missing(),
+                    size: SegmentSize::seed(100),
+                    content: SegmentContent::Plain,
+                    decode_time: Duration::ZERO,
+                    duration: Duration::from_secs(2),
+                })],
+                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+                codec: playlist.variant_codec(0),
+                container: playlist.variant_container(0),
+            }
+            .into_variant(0, &ctx),
+            VariantParts {
+                init: None,
+                segments: vec![Segment::Media(MediaSegment {
+                    url: "https://example.com/v1-seg0.m4s".parse().expect("url"),
+                    resource_id: ctx
+                        .scope
+                        .key_for(&"https://example.com/v1-seg0.m4s".parse().expect("url")),
+                    state: SegmentSlotState::missing(),
+                    size: SegmentSize::seed(100),
+                    content: SegmentContent::Plain,
+                    decode_time: Duration::ZERO,
+                    duration: Duration::from_secs(2),
+                })],
+                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+                codec: playlist.variant_codec(1),
+                container: playlist.variant_container(1),
+            }
+            .into_variant(1, &ctx),
+        ]);
+        let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+        let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
+            state: Arc::clone(&abr_state),
+            variants: vec![
+                kithara_events::VariantInfo {
+                    variant_index: VariantIndex::new(0),
+                    bandwidth_bps: Some(128_000),
+                    codecs: Some("mp4a.40.2".into()),
+                    container: Some("fmp4".into()),
+                    duration: kithara_events::VariantDuration::Segmented(vec![
+                        Duration::from_secs(2),
+                    ]),
+                    name: None,
+                },
+                kithara_events::VariantInfo {
+                    variant_index: VariantIndex::new(1),
+                    bandwidth_bps: Some(96_000),
+                    codecs: Some("mp3".into()),
+                    container: Some("mpeg-audio".into()),
+                    duration: kithara_events::VariantDuration::Segmented(vec![
+                        Duration::from_secs(2),
+                    ]),
+                    name: None,
+                },
+            ],
+        });
+        let controller = Arc::new(AbrController::new(
+            AbrSettings::default(),
+            CancelToken::never(),
+        ));
+        let handle = controller.register(&peer);
+        handle
+            .set_mode(AbrMode::Manual(VariantIndex::new(1)))
+            .expect("manual target in range");
+        let coord = Arc::new(HlsCoord::new(
+            HlsCoordEnv {
+                scope: ctx.scope.clone(),
+                cancel,
+                headers: None,
+                emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
+                signal,
+            },
+            Arc::new(PlayheadState::new()),
+            Arc::new(SeekState::new()),
+            handle,
+            variants,
+            playlist,
+        ));
+        (coord, bus, ctx)
+    }
 
     #[kithara::test]
     fn variant_switch_target_uses_active_seek_target() {
@@ -914,6 +1088,32 @@ mod tests {
         assert!(variant_switch_uses_byte_continuity(
             true,
             Some(ContainerFormat::Wav)
+        ));
+    }
+
+    #[kithara::test(tokio)]
+    async fn variant_switch_fence_and_ack_publish_events() {
+        let (coord, bus, ctx) = switch_coord();
+        let mut events = bus.subscribe();
+
+        assert!(coord.commit_variant_switch_at_segment(&ctx, 0));
+        coord.clear_variant_fence();
+        coord.emit.flush();
+
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(Event::Hls(HlsEvent::VariantSwitchFenced {
+                from_variant: 0,
+                to_variant: 1,
+                cross_codec: true,
+            }))
+        ));
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(Event::Hls(HlsEvent::VariantSwitchAcked {
+                variant: 1,
+                generation: 1,
+            }))
         ));
     }
 }

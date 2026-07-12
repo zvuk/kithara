@@ -41,6 +41,7 @@ pub use app::AppEvent;
 #[cfg(feature = "audio")]
 pub use audio::{
     AudioEvent, AudioFormat, PlaybackResamplerKind, SeekLifecycleStage, SegmentLocation,
+    TrackFailureKind,
 };
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 pub use bus_event::BusEvent;

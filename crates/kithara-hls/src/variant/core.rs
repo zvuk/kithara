@@ -5,6 +5,7 @@ use std::{
 };
 
 use kithara_drm::DecryptContext;
+use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{
     CancelToken,
@@ -32,6 +33,7 @@ use crate::{
 pub(super) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
 
 pub(crate) struct PlanCtx {
+    pub(crate) bus: EventBus,
     pub(crate) scope: kithara_assets::AssetScope,
     pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
@@ -109,6 +111,7 @@ pub(super) struct VariantProfile {
     /// resource-wide auth (e.g. zvuk `X-Auth-Token`) so segment GETs
     /// reach the same authenticated endpoint as the playlist load.
     pub(super) headers: Option<Headers>,
+    pub(super) bus: EventBus,
 }
 
 pub(super) struct VariantFlow {
@@ -224,12 +227,12 @@ impl VariantSeek {
 /// Media payload + shared-dep snapshot that owns bare variant assembly.
 /// Production builds this from parsed playlist metadata; tests build it
 /// inline from synthesised fixtures.
-pub(super) struct VariantParts {
-    pub(super) seek_obs: Arc<dyn SeekObserve>,
-    pub(super) codec: Option<AudioCodec>,
-    pub(super) container: Option<ContainerFormat>,
-    pub(super) init: Option<Segment>,
-    pub(super) segments: Vec<Segment>,
+pub(crate) struct VariantParts {
+    pub(crate) seek_obs: Arc<dyn SeekObserve>,
+    pub(crate) codec: Option<AudioCodec>,
+    pub(crate) container: Option<ContainerFormat>,
+    pub(crate) init: Option<Segment>,
+    pub(crate) segments: Vec<Segment>,
 }
 
 /// In-memory init prefix size: 0 when the variant carries no separately
@@ -324,7 +327,7 @@ impl FromWithParams<&Arc<PlaylistState>, VariantParams<'_>> for Arc<HlsVariant> 
 impl VariantParts {
     /// Bare assembly used by unit tests inside this module.
     #[must_use]
-    pub(super) fn into_variant(self, variant: usize, ctx: &PlanCtx) -> Arc<HlsVariant> {
+    pub(crate) fn into_variant(self, variant: usize, ctx: &PlanCtx) -> Arc<HlsVariant> {
         let Self {
             init,
             codec,
@@ -346,6 +349,7 @@ impl VariantParts {
                 codec,
                 container,
                 headers: ctx.headers.clone(),
+                bus: ctx.bus.clone(),
             },
             seek: VariantSeek::new(HlsVariant::NO_SEEK_TAIL),
             segments: VariantSegments::new(ctx.scope.clone(), init, segments),
@@ -355,6 +359,10 @@ impl VariantParts {
 
 impl HlsVariant {
     pub(super) const NO_SEEK_TAIL: u32 = u32::MAX;
+
+    pub(crate) fn event_bus(&self) -> EventBus {
+        self.profile.bus.clone()
+    }
 
     /// Builds per-segment metadata. `#EXT-X-BYTERANGE` supplies an exact
     /// media-segment length when present; all other playlists get a non-exact

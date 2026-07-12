@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use delegate::delegate;
 use kithara_assets::EvictionSubscription;
-use kithara_events::EventBus;
+use kithara_events::{DeferredBus, HlsEvent};
 use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -28,11 +28,11 @@ use crate::{peer::HlsPeer, reader::HlsReaderEventSink};
 pub struct HlsSource {
     coord: Arc<HlsCoord>,
     stream_scope: CancelScope,
-    /// Event bus the track was created against. Forwarded to
+    /// Deferred HLS event sink shared with the reader hooks and fence-ack path.
     /// [`HlsReaderEventSink`] in [`Source::take_reader_event_sink`] so
     /// the decoder's per-seek / per-chunk signals reach test subscribers
     /// as `HlsEvent::ReaderSeek` / `HlsEvent::ReadProgress`.
-    bus: EventBus,
+    emit: Arc<DeferredBus<HlsEvent>>,
     hls_peer: Option<Arc<HlsPeer>>,
     /// Eviction-subscription guard. Dropping it deregisters this stream's
     /// eviction routing entry from the store (shared or private).
@@ -46,11 +46,15 @@ pub struct HlsSource {
 }
 
 impl HlsSource {
-    pub(crate) fn new(coord: Arc<HlsCoord>, bus: EventBus, stream_scope: CancelScope) -> Self {
+    pub(crate) fn new(
+        coord: Arc<HlsCoord>,
+        emit: Arc<DeferredBus<HlsEvent>>,
+        stream_scope: CancelScope,
+    ) -> Self {
         Self {
             coord,
             stream_scope,
-            bus,
+            emit,
             hls_peer: None,
             peer_handle: None,
             peer_wake: None,
@@ -126,7 +130,7 @@ impl Source for HlsSource {
 
     fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {
         let sink = HlsReaderEventSink::new(
-            self.bus.clone(),
+            Arc::clone(&self.emit),
             Arc::clone(&self.coord),
             self.coord.seek_epoch_handle(),
         );

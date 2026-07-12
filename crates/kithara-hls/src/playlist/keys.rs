@@ -6,6 +6,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara_assets::{AssetScope, ReadSide};
 use kithara_drm::{DecryptContext, KeyProcessorRegistry};
+use kithara_events::{EventBus, HlsError as EventHlsError, HlsEvent};
 use kithara_net::Headers;
 use kithara_platform::sync::Arc;
 use kithara_stream::dl::{FetchCmd, PeerHandle};
@@ -37,6 +38,7 @@ pub struct KeyStore {
     byte_pool: kithara_bufpool::BytePool,
     /// Cache-first + downloader pipeline for HLS-AES / DRM key bodies.
     key_peer: KeyPeer,
+    bus: EventBus,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
     base_headers: Option<Headers>,
     key_registry: Option<KeyProcessorRegistry>,
@@ -53,6 +55,7 @@ impl KeyStore {
     pub fn new(
         downloader: PeerHandle,
         scope: AssetScope,
+        bus: EventBus,
         base_headers: Option<Headers>,
         key_registry: Option<KeyProcessorRegistry>,
         byte_pool: kithara_bufpool::BytePool,
@@ -60,6 +63,7 @@ impl KeyStore {
         Self {
             key_peer: KeyPeer::new(downloader, scope.clone(), byte_pool.clone()),
             scope,
+            bus,
             base_headers,
             key_registry,
             byte_pool,
@@ -114,7 +118,7 @@ impl KeyStore {
                 .decrypted_keys
                 .get(url)
                 .map(|r| r.value().clone())
-                .ok_or_else(|| HlsError::KeyProcessing(format!("DRM key not prefetched: {url}")));
+                .ok_or_else(|| HlsError::KeyProcessing(format!("key not prefetched: {url}")));
         }
 
         let cache_key = self.scope.key_for(url);
@@ -191,16 +195,19 @@ impl KeyStore {
         let cmd = FetchCmd::get(fetch_url).maybe_headers(headers).build();
         let resp = self.key_peer.execute(cmd).await.map_err(|e| {
             tracing::warn!(%url, error = %e, "drm key: network fetch failed");
-            HlsError::from(e)
+            self.publish_decryption_error("key fetch failed");
+            HlsError::KeyProcessing(format!("key fetch failed: {url}"))
         })?;
         let raw_key = resp.body.collect().await.map_err(|e| {
             tracing::warn!(%url, error = %e, "drm key: body collect failed");
-            HlsError::from(e)
+            self.publish_decryption_error("key body read failed");
+            HlsError::KeyProcessing(format!("key body read failed: {url}"))
         })?;
 
         let decrypted = (request.processor)(raw_key).map_err(|e| {
             tracing::warn!(%url, error = %e, "drm key: registry processor (decrypt) failed");
-            HlsError::KeyProcessing(format!("registry processor: {e}"))
+            self.publish_decryption_error("key processor failed");
+            HlsError::KeyProcessing(format!("key processor failed: {url}"))
         })?;
         tracing::info!(
             %url,
@@ -377,6 +384,7 @@ impl KeyStore {
     pub fn with_options(
         downloader: PeerHandle,
         scope: AssetScope,
+        bus: EventBus,
         base_headers: Option<Headers>,
         options: crate::config::KeyOptions,
         byte_pool: kithara_bufpool::BytePool,
@@ -384,9 +392,114 @@ impl KeyStore {
         Self::new(
             downloader,
             scope,
+            bus,
             base_headers,
             options.key_registry,
             byte_pool,
         )
+    }
+
+    fn publish_decryption_error(&self, detail: &str) {
+        self.bus.publish(HlsEvent::Error {
+            error: EventHlsError::Decryption(detail.to_string()),
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, convert::Infallible};
+
+    use axum::{Router, body::Body, routing::get};
+    use bytes::Bytes;
+    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_drm::{
+        DrmError, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule, KeyRequest,
+        KeyRequestFactory,
+    };
+    use kithara_events::{Event, EventBus};
+    use kithara_net::{HttpClient, NetOptions};
+    use kithara_platform::{
+        CancelToken,
+        sync::Arc,
+        tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
+    };
+    use kithara_stream::dl::{Downloader, DownloaderConfig, Peer};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    struct MockPeer;
+
+    impl kithara_abr::Abr for MockPeer {}
+    impl Peer for MockPeer {}
+
+    fn const_factory(processor: KeyProcessor) -> KeyRequestFactory {
+        Arc::new(move || KeyRequest::new(HashMap::new(), Arc::clone(&processor)))
+    }
+
+    async fn spawn_key_server() -> Url {
+        let app = Router::new().route(
+            "/key.bin",
+            get(|| async { Result::<_, Infallible>::Ok(Body::from(Bytes::from_static(b"abcd"))) }),
+        );
+        let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        tokio_spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        Url::parse(&format!("http://{addr}/key.bin")).expect("url")
+    }
+
+    #[kithara::test(tokio)]
+    async fn key_resolution_failure_publishes_hls_error() {
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let cancel = CancelToken::never();
+        let store = Arc::new(
+            AssetStoreBuilder::default()
+                .backend(StorageBackend::Memory)
+                .cancel(cancel.clone())
+                .build(),
+        );
+        let downloader = Downloader::new(
+            DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), cancel)).build(),
+        );
+        let handle = downloader
+            .register(Arc::new(MockPeer))
+            .with_bus(bus.clone());
+        let mut registry = KeyProcessorRegistry::new();
+        registry.add(KeyProcessorRule::new(
+            ["127.0.0.1"],
+            const_factory(Arc::new(|_bytes| {
+                Err(DrmError::KeyProcessing("fixture processor failed".into()))
+            })),
+        ));
+        let store = KeyStore::new(
+            handle,
+            store.scope("key-test"),
+            bus.clone(),
+            None,
+            Some(registry),
+            kithara_bufpool::BytePool::default(),
+        );
+        let url = spawn_key_server().await;
+
+        let err = store
+            .get_raw_key(&url, None)
+            .await
+            .expect_err("processor fails");
+        assert!(
+            matches!(err, HlsError::KeyProcessing(detail) if detail.contains("key processor failed"))
+        );
+        let hls_error = std::iter::from_fn(|| events.try_recv().ok())
+            .map(|envelope| envelope.event)
+            .find(|event| matches!(event, Event::Hls(HlsEvent::Error { .. })));
+        assert!(matches!(
+            hls_error,
+            Some(Event::Hls(HlsEvent::Error {
+                error: EventHlsError::Decryption(detail),
+            })) if detail == "key processor failed"
+        ));
     }
 }

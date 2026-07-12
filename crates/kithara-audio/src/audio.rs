@@ -29,8 +29,8 @@ use kithara_platform::{
 };
 use kithara_resampler::ResamplerBackend;
 use kithara_stream::{
-    ChunkPosition, DeferredWake, MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream,
-    StreamType, WorkerWake,
+    ChunkPosition, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite, SeekControl, SeekObserve,
+    Stream, StreamType, WorkerWake,
 };
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
@@ -403,6 +403,10 @@ pub struct Audio<S> {
     /// a new seek epoch always emits.
     last_progress_emit: Option<(u64, u64)>,
 
+    /// One-bit consumer underrun latch. `true` after the first Playing->starved
+    /// edge, cleared on the first recovered chunk.
+    underrun_active: bool,
+
     /// Off-core reader→peer wake for segmented sources. `Audio::seek`
     /// can notify it after publishing the seek target; non-segmented
     /// sources keep `None`.
@@ -598,6 +602,28 @@ impl<S> Audio<S> {
         });
     }
 
+    fn emit_underrun_started(&mut self) {
+        if self.underrun_active || self.consumer_phase != ConsumerPhase::Playing {
+            return;
+        }
+        self.underrun_active = true;
+        self.emit_audio_event(AudioEvent::UnderrunStarted {
+            position_ms: clamp_u128_to_u64_millis(self.position().as_millis()),
+            seek_epoch: self.validator.epoch,
+        });
+    }
+
+    fn emit_underrun_ended(&mut self) {
+        if !self.underrun_active {
+            return;
+        }
+        self.underrun_active = false;
+        self.emit_audio_event(AudioEvent::UnderrunEnded {
+            position_ms: clamp_u128_to_u64_millis(self.position().as_millis()),
+            seek_epoch: self.validator.epoch,
+        });
+    }
+
     fn emit_post_seek_output_commit(&mut self, meta: Option<PcmMeta>) {
         let Some(seek_epoch) = self.seek_obs.pending_epoch() else {
             return;
@@ -627,11 +653,13 @@ impl<S> Audio<S> {
     /// Returns `true` if a chunk was received, `false` on EOF or no data.
     pub(crate) fn fill_buffer(&mut self) -> bool {
         let Some(chunk) = self.recv_valid_chunk() else {
+            self.emit_underrun_started();
             return false;
         };
         self.spec = chunk.spec();
         self.current_chunk = Some(chunk);
         self.current_chunk_consumed_frames = 0;
+        self.emit_underrun_ended();
 
         if matches!(
             self.consumer_phase,
@@ -701,11 +729,13 @@ impl<S> Audio<S> {
 
         match fetch.kind {
             FetchKind::NaturalEof => {
+                self.underrun_active = false;
                 self.consumer_phase = ConsumerPhase::AtEof;
                 self.discard_chunk(fetch.into_inner());
                 FetchOutcome::Return(None)
             }
             FetchKind::Failure => {
+                self.underrun_active = false;
                 self.consumer_phase = ConsumerPhase::Failed;
                 self.discard_chunk(fetch.into_inner());
                 FetchOutcome::Return(None)
@@ -931,6 +961,7 @@ impl<S> Audio<S> {
                 RecvOutcome::Empty => return None,
                 RecvOutcome::Closed => {
                     hang_reset!();
+                    self.underrun_active = false;
                     return self.close_channel_and_mark_eof();
                 }
             }
@@ -957,6 +988,7 @@ impl<S> Audio<S> {
                 self.spec = chunk.spec();
                 self.current_chunk = Some(chunk);
                 self.current_chunk_consumed_frames = 0;
+                self.underrun_active = false;
                 self.consumer_phase = ConsumerPhase::Playing;
             }
             FetchKind::NaturalEof => {
@@ -1425,6 +1457,7 @@ where
             pcm_pool: pool.clone(),
             preloaded: false,
             last_progress_emit: None,
+            underrun_active: false,
             track_id: Some(track_id),
             worker: Some(worker),
             is_standalone_worker,
@@ -1459,6 +1492,7 @@ where
         // `shared_stream` itself is moved into the source below. `SharedStream`
         // is `Arc`-backed, so the clone shares the same inner stream/coord.
         let wake_stream = shared_stream.clone();
+        let playhead = shared_stream.playhead_write();
         let preload_gate = Arc::new(PreloadGate::default());
         let reader_wake = Arc::new(ThreadWake::default());
         let (data_tx, data_rx) =
@@ -1486,7 +1520,7 @@ where
             runtime_handle,
             Arc::clone(&worker_wake),
         )
-        .with_emit(emit);
+        .with_emit(Arc::clone(&emit));
 
         let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
         let track_id = worker.register_track(TrackRegistration {
@@ -1495,6 +1529,8 @@ where
             outlet: data_tx,
             preload_gate: preload_gate.clone(),
             preload_chunks: preload_chunks.get(),
+            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadRead>,
+            emit: Arc::clone(&emit),
             service_class: Arc::clone(&service_class),
             engine_load,
         });
@@ -2004,6 +2040,7 @@ mod tests {
             preloaded: false,
             block_on_underrun: false,
             last_progress_emit: None,
+            underrun_active: false,
             track_id: None,
             worker: None,
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
@@ -2139,6 +2176,7 @@ mod tests {
             preloaded: true,
             block_on_underrun: false,
             last_progress_emit: None,
+            underrun_active: false,
             track_id: None,
             worker: None,
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
@@ -2238,6 +2276,45 @@ mod tests {
             events.try_recv().is_err(),
             "flush drains queued audio events"
         );
+    }
+
+    #[kithara::test]
+    fn underrun_edges_emit_once_per_starvation_window_and_end_on_recovery() {
+        let (mut audio, mut tx, mut events) = audio_with_channel_and_events();
+        audio.consumer_phase = ConsumerPhase::Playing;
+        audio.playhead.set_position(Duration::from_millis(321));
+
+        assert!(!audio.fill_buffer());
+        assert!(!audio.fill_buffer());
+        tx.flush_wake_signals();
+
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(Event::Audio(AudioEvent::UnderrunStarted {
+                position_ms: 321,
+                seek_epoch: 0,
+            }))
+        ));
+        assert!(
+            events.try_recv().is_err(),
+            "starvation window must not duplicate UnderrunStarted"
+        );
+
+        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .expect("recovery chunk reaches ring");
+        assert!(audio.fill_buffer());
+        tx.flush_wake_signals();
+
+        let ended = std::iter::from_fn(|| events.try_recv().ok())
+            .map(|envelope| envelope.event)
+            .find(|event| !matches!(event, Event::Audio(AudioEvent::OutputAvailable)));
+        assert!(matches!(
+            ended,
+            Some(Event::Audio(AudioEvent::UnderrunEnded {
+                position_ms: 321,
+                seek_epoch: 0,
+            }))
+        ));
     }
 
     #[kithara::test]

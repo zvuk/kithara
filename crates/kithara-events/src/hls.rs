@@ -88,6 +88,14 @@ pub enum HlsEvent {
     },
     /// HLS-specific error (non-network).
     Error { error: HlsError },
+    /// Decoder-recreate variant switch raised a read fence.
+    VariantSwitchFenced {
+        from_variant: usize,
+        to_variant: usize,
+        cross_codec: bool,
+    },
+    /// Decoder acknowledged a fenced variant generation.
+    VariantSwitchAcked { variant: usize, generation: u64 },
     /// Stream ended (reader hit EOF).
     EndOfStream,
 }

@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_decode::PcmChunk;
+use kithara_events::{DeferredBus, Event};
 use kithara_platform::{CancelToken, sync::Arc};
+use kithara_stream::PlayheadRead;
 
 use super::{
     AudioWorkerSource, EngineLoad, PreloadGate,
@@ -26,6 +28,8 @@ pub(crate) struct TrackRegistration {
     /// pooled buffer is freed/recycled on the worker thread rather than on
     /// the audio thread. See `crates/kithara-audio/CONTEXT.md`.
     pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
+    pub(crate) playhead: Arc<dyn PlayheadRead>,
+    pub(crate) emit: Arc<DeferredBus<Event>>,
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
     pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
     pub(crate) preload_chunks: usize,
@@ -124,6 +128,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use kithara_decode::PcmChunk;
+    use kithara_events::EventBus;
     use kithara_platform::{
         sync::Arc,
         thread::sleep as thread_sleep,
@@ -253,6 +258,8 @@ mod tests {
             preload_chunks,
             source: Box::new(source),
             preload_gate: Arc::clone(&preload_gate),
+            playhead: Arc::new(kithara_stream::PlayheadState::new()) as Arc<dyn PlayheadRead>,
+            emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::Audible)),
             engine_load: None,
         };
