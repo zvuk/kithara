@@ -3,15 +3,12 @@ use std::{collections::VecDeque, num::NonZeroU32};
 use kithara_bufpool::PcmPool;
 use kithara_decode::{DecodeError, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "analysis-waveform")]
 use crate::traits::PendingReason;
-use crate::{
-    renderer::PreloadGate,
-    traits::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
-};
+use crate::traits::{ChunkOutcome, PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
 
 const SR: u32 = 44_100;
 const CH: u16 = 2;
@@ -116,7 +113,7 @@ fn pending() -> ChunkOutcome {
     }
 }
 
-impl PcmReader for FakeReader {
+impl PcmSession for FakeReader {
     fn duration(&self) -> Option<Duration> {
         None
     }
@@ -128,17 +125,15 @@ impl PcmReader for FakeReader {
     fn metadata(&self) -> &TrackMetadata {
         &self.metadata
     }
+}
 
+impl PcmRead for FakeReader {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         self.outcomes.pop_front().unwrap_or_else(|| Ok(eof()))
     }
 
     fn position(&self) -> Duration {
         Duration::ZERO
-    }
-
-    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
-        None
     }
 
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
@@ -152,14 +147,14 @@ impl PcmReader for FakeReader {
         unreachable!("analysis uses next_chunk")
     }
 
-    fn seek(&mut self, _position: Duration) -> Result<SeekOutcome, DecodeError> {
-        unreachable!("analysis never seeks")
-    }
-
-    fn set_host_sample_rate(&self, _sample_rate: NonZeroU32) {}
-
     fn spec(&self) -> PcmSpec {
         spec()
+    }
+}
+
+impl PcmControl for FakeReader {
+    fn seek(&mut self, _position: Duration) -> Result<SeekOutcome, DecodeError> {
+        unreachable!("analysis never seeks")
     }
 }
 

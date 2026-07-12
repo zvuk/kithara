@@ -50,8 +50,8 @@ pub use renderer::{
     AudioWorkerHandle, AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass,
 };
 pub use traits::{
-    AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
-    SeekOutcome,
+    AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,
+    PcmSession, PendingReason, ReadOutcome, SeekOutcome,
 };
 #[cfg(feature = "analysis-waveform")]
 pub use waveform::WaveformAnalyzer;

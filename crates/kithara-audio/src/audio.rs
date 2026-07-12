@@ -45,7 +45,8 @@ use crate::{
     },
     runtime::{AtomicServiceClass, WakeSignal},
     traits::{
-        AudioEffect, ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome,
+        AudioEffect, ChunkOutcome, DecodeError, PcmControl, PcmRead, PcmSession, PendingReason,
+        ReadOutcome, SeekOutcome,
     },
 };
 
@@ -1503,19 +1504,7 @@ impl<S> Drop for Audio<S> {
     }
 }
 
-impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
-    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.abr_handle.clone()
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        Self::metadata(self)
-    }
-
+impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         self.preloaded = true;
         let Some(chunk) = self
@@ -1550,18 +1539,6 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
 
         self.playhead.advance(&ChunkPosition::from(&chunk.meta));
         Ok(ChunkOutcome::Chunk(chunk))
-    }
-
-    fn preload(&mut self) -> Result<(), DecodeError> {
-        Self::preload(self)
-    }
-
-    fn preload_epoch(&self) -> u64 {
-        self.seek_obs.epoch()
-    }
-
-    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
-        Some(self.preload_gate.clone())
     }
 
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
@@ -1631,8 +1608,58 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
         result
     }
 
+    fn spec(&self) -> PcmSpec {
+        Self::spec(self)
+    }
+
+    delegate! {
+        to self.playhead {
+            fn position(&self) -> Duration;
+        }
+    }
+
+    delegate! {
+        to self.playhead {
+            fn decoded_frontier(&self) -> Duration;
+        }
+    }
+}
+
+impl<S: kithara_platform::maybe_send::MaybeSend> PcmSession for Audio<S> {
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.abr_handle.clone()
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        Self::metadata(self)
+    }
+
+    fn preload_epoch(&self) -> u64 {
+        self.seek_obs.epoch()
+    }
+
+    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
+        Some(self.preload_gate.clone())
+    }
+
+    delegate! {
+        to self.playhead {
+            fn duration(&self) -> Option<Duration>;
+        }
+    }
+}
+
+impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Self::seek(self, position)
+    }
+
+    fn preload(&mut self) -> Result<(), DecodeError> {
+        Self::preload(self)
     }
 
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
@@ -1655,27 +1682,6 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
         self.service_class.store(class);
         if let Some(worker) = &self.worker {
             worker.wake();
-        }
-    }
-    fn spec(&self) -> PcmSpec {
-        Self::spec(self)
-    }
-
-    delegate! {
-        to self.playhead {
-            fn duration(&self) -> Option<Duration>;
-        }
-    }
-
-    delegate! {
-        to self.playhead {
-            fn position(&self) -> Duration;
-        }
-    }
-
-    delegate! {
-        to self.playhead {
-            fn decoded_frontier(&self) -> Duration;
         }
     }
 }

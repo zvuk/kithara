@@ -13,7 +13,7 @@ use axum::{Router, body::Body, extract::State, http::header, response::Response,
 use bytes::Bytes;
 use kithara::{
     assets::{AssetStoreBuilder, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader, analysis::BeatAnalysisConfig},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead, analysis::BeatAnalysisConfig},
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     prelude::ResourceConfig,

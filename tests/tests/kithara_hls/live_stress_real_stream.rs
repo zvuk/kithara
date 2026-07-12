@@ -10,7 +10,7 @@ use kithara::platform::time;
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
     assets::{StorageBackend, StoreOptions},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::{DecoderBackend, PcmChunk},
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
     hls::{Hls, HlsConfig},
@@ -281,7 +281,7 @@ fn warmup_until_variant_switch(
 #[cfg(not(target_arch = "wasm32"))]
 fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
     loop {
-        match PcmReader::next_chunk(audio) {
+        match PcmRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -295,7 +295,7 @@ fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
 #[kithara::flash(true)]
 async fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
     loop {
-        match PcmReader::next_chunk(audio) {
+        match PcmRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}

@@ -855,7 +855,7 @@ mod tests {
         atomic::{AtomicU32, Ordering as AtomicOrdering},
     };
 
-    use kithara_audio::PcmReader;
+    use kithara_audio::{PcmControl, PcmRead, PcmSession};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::{
@@ -928,7 +928,7 @@ mod tests {
         }
     }
 
-    impl PcmReader for SampleRateTrackingReader {
+    impl PcmSession for SampleRateTrackingReader {
         fn duration(&self) -> Option<Duration> {
             Some(self.duration)
         }
@@ -940,7 +940,9 @@ mod tests {
         fn metadata(&self) -> &TrackMetadata {
             &self.meta
         }
+    }
 
+    impl PcmRead for SampleRateTrackingReader {
         fn position(&self) -> Duration {
             Duration::ZERO
         }
@@ -965,6 +967,12 @@ mod tests {
             })
         }
 
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    impl PcmControl for SampleRateTrackingReader {
         fn seek(
             &mut self,
             position: Duration,
@@ -980,10 +988,6 @@ mod tests {
                 .fetch_add(1, AtomicOrdering::Relaxed);
             self.recorded_host_rate
                 .store(sample_rate.get(), AtomicOrdering::Relaxed);
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
         }
     }
 
@@ -1224,7 +1228,7 @@ mod tests {
             bus: EventBus,
         }
 
-        impl PcmReader for SeekTrackingReader {
+        impl PcmRead for SeekTrackingReader {
             fn read(
                 &mut self,
                 _buf: &mut [f32],
@@ -1246,6 +1250,30 @@ mod tests {
                 })
             }
 
+            fn spec(&self) -> PcmSpec {
+                self.spec
+            }
+
+            fn position(&self) -> Duration {
+                Duration::ZERO
+            }
+        }
+
+        impl PcmSession for SeekTrackingReader {
+            fn duration(&self) -> Option<Duration> {
+                None
+            }
+
+            fn metadata(&self) -> &TrackMetadata {
+                &self.metadata
+            }
+
+            fn event_bus(&self) -> &EventBus {
+                &self.bus
+            }
+        }
+
+        impl PcmControl for SeekTrackingReader {
             fn seek(
                 &mut self,
                 position: Duration,
@@ -1260,26 +1288,6 @@ mod tests {
                     target: position,
                     landed_at: position,
                 })
-            }
-
-            fn spec(&self) -> PcmSpec {
-                self.spec
-            }
-
-            fn position(&self) -> Duration {
-                Duration::ZERO
-            }
-
-            fn duration(&self) -> Option<Duration> {
-                None
-            }
-
-            fn metadata(&self) -> &TrackMetadata {
-                &self.metadata
-            }
-
-            fn event_bus(&self) -> &EventBus {
-                &self.bus
             }
         }
 

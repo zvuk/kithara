@@ -43,7 +43,7 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{StorageBackend, StoreOptions},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
@@ -136,7 +136,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         let deadline = kithara::platform::time::Instant::now() + Consts::DRAIN_BUDGET;
         let mut chunks = 0usize;
         while chunks < Consts::MIN_CHUNKS && kithara::platform::time::Instant::now() < deadline {
-            match PcmReader::next_chunk(&mut audio) {
+            match PcmRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => break,

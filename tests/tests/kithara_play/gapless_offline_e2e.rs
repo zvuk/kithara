@@ -9,7 +9,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara::decode::DecoderBackend;
 use kithara::{
     assets::StoreOptions,
-    audio::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
+    audio::{ChunkOutcome, PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome},
     decode::{
         DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
         PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
@@ -1180,7 +1180,7 @@ impl SyntheticPcmReader {
     }
 }
 
-impl PcmReader for SyntheticPcmReader {
+impl PcmSession for SyntheticPcmReader {
     fn duration(&self) -> Option<Duration> {
         Some(duration_for_test_frames(self.duration_frames))
     }
@@ -1192,7 +1192,9 @@ impl PcmReader for SyntheticPcmReader {
     fn metadata(&self) -> &TrackMetadata {
         &self.metadata
     }
+}
 
+impl PcmRead for SyntheticPcmReader {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         Ok(ChunkOutcome::Eof {
             position: self.position(),
@@ -1216,6 +1218,12 @@ impl PcmReader for SyntheticPcmReader {
         Ok(self.read_outcome(frames))
     }
 
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
+impl PcmControl for SyntheticPcmReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let frames = frames_for_test_duration(position);
         if frames >= self.frames.len() {
@@ -1231,10 +1239,6 @@ impl PcmReader for SyntheticPcmReader {
                 landed_at: self.position(),
             })
         }
-    }
-
-    fn spec(&self) -> PcmSpec {
-        self.spec
     }
 }
 

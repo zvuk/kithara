@@ -9,7 +9,7 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    audio::{PcmReader, PendingReason, ReadOutcome, SeekOutcome},
+    audio::{PcmControl, PcmRead, PcmSession, PendingReason, ReadOutcome, SeekOutcome},
     decode::{DecodeError, PcmSpec, TrackMetadata},
     events::EventBus,
     platform::time::Duration,
@@ -79,7 +79,7 @@ impl TestPcmReader {
     }
 }
 
-impl PcmReader for TestPcmReader {
+impl PcmSession for TestPcmReader {
     fn duration(&self) -> Option<Duration> {
         Some(self.frames_to_duration(self.total_frames))
     }
@@ -91,7 +91,9 @@ impl PcmReader for TestPcmReader {
     fn metadata(&self) -> &TrackMetadata {
         &self.metadata
     }
+}
 
+impl PcmRead for TestPcmReader {
     fn position(&self) -> Duration {
         self.frames_to_duration(self.position_frames)
     }
@@ -171,6 +173,12 @@ impl PcmReader for TestPcmReader {
         })
     }
 
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
+impl PcmControl for TestPcmReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let target = position;
         let frame = (position.as_secs_f64() * f64::from(self.spec.sample_rate.get())) as u64;
@@ -182,9 +190,5 @@ impl PcmReader for TestPcmReader {
             return Ok(SeekOutcome::PastEof { target, duration });
         }
         Ok(SeekOutcome::Landed { target, landed_at })
-    }
-
-    fn spec(&self) -> PcmSpec {
-        self.spec
     }
 }
