@@ -16,6 +16,8 @@ mod hls_variant_playlists_concurrent;
 mod loader_lanes;
 mod loader_starvation;
 mod local_track_plays;
+mod packaged_drm_seek;
+mod playlist_stall_fails_load;
 mod rapid_scrub_decode_failure;
 mod real_playlist;
 mod select_after_eof;

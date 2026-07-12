@@ -9,7 +9,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use futures::stream;
+use futures::{StreamExt, stream};
 use kithara::platform::{
     sync::Arc,
     time::{Duration, sleep},
@@ -70,11 +70,35 @@ fn serve_content(behavior: &FixtureBehavior, headers: &HeaderMap) -> Response {
             Delivery::EarlyClose { after_bytes } => {
                 early_close_response(bytes, headers, *after_bytes, *content_type)
             }
+            Delivery::StallAfter { after_bytes } => {
+                stall_response(bytes, *after_bytes, *content_type)
+            }
             Delivery::Throttle { chunk, delay_ms } => {
                 throttle_response(bytes, *chunk, *delay_ms, *content_type)
             }
         },
     }
+}
+
+fn stall_response(
+    bytes: &[u8],
+    after_bytes: usize,
+    content_type: Option<&'static str>,
+) -> Response {
+    // Advertise the full length, deliver only a prefix, then keep the
+    // connection open forever — the client must abort on its own inactivity
+    // budget, never on a server-side close.
+    let total = bytes.len();
+    let prefix = Bytes::copy_from_slice(&bytes[..after_bytes.min(total)]);
+    let body =
+        Body::from_stream(stream::iter(vec![Ok::<_, io::Error>(prefix)]).chain(stream::pending()));
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, total.to_string());
+    if let Some(ct) = content_type {
+        builder = builder.header(header::CONTENT_TYPE, ct);
+    }
+    builder.body(body).expect("stall response")
 }
 
 fn throttle_response(
