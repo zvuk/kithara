@@ -61,6 +61,55 @@ flowchart LR
     ST --> DF --> Node --> AW --> Ring --> A
 ```
 
+## Refactor Transition Contract (2026-07)
+
+This section is the transition contract for refactoring waves W0-W11. Once the
+refactor is complete, these boundaries become the regular owner contracts and
+this transition section is folded into the corresponding subsystem sections.
+
+State has one domain owner:
+
+- `RingConsumer` owns `pcm_rx`, `validator`, `current_chunk`, and `trash_tx`;
+  `begin_seek_epoch` keeps seek drain and stale-chunk handling inside its RT
+  no-free boundary.
+- `SeekEngine` owns `resume_target` and is the only writer of the producer
+  decode epoch, through `commit_decode_epoch`.
+- `ResumeCursor` owns `decode_head` and resolves recreate resume positions from
+  the current epoch, committed position, and `resume_target`.
+- `DecodeCore` owns the complete `DecoderSession` and replaces it atomically;
+  it also owns gapless processing, time-domain effects, and EOF drain.
+- `FormatPolicy` makes pure `detect` and `handle_variant_change` decisions and
+  returns `RecreateState` without starting recreation itself.
+- `ReadinessGate` is the only owner of byte-range calculations used by both
+  gate and wait paths. Those paths must use the same range and source phase.
+- `RebuildPort` owns the two-phase recreation submission boundary: preparation
+  produces a pending job, and the coordinator submits it outside the RT step.
+- `RetiredDecoders` owns `retire` and off-RT `drain`; decoder destruction does
+  not occur in the RT region.
+- `RouteChange` detects real host-rate changes. It enters the same
+  `RecreateState` machine as `FormatBoundary` and `VariantSwitch`; it is not a
+  separate lightweight recreation path.
+- `StreamHandle` and `SharedStream` own byte-space and fence ground truth.
+  Other owners do not clone byte-range policy.
+- `StreamAudioSource` remains a thin coordinator. It dispatches work and is the
+  sole track-state mutator through `update_state`; it contains no domain logic.
+
+Sub-owners never accept `&mut StreamAudioSource`. They receive disjoint
+`SeekApplyCtx`, `DecodeCtx`, `ReadinessCtx`, `RebuildCtx`, or `StepCtx`
+borrows, or return `DecodeAction`, `SeekTransition`, or `RecreateState` for the
+coordinator to apply through `update_state`.
+
+The target surface changes are contractual: `worker/` becomes `renderer/`;
+`PcmReader` splits into `PcmRead`, `PcmSession`, and `PcmControl`, with
+`PcmReader` retained as the umbrella trait; all 13 open-field structures gain
+private fields with builders or accessors; `analyze_reader` becomes
+crate-private and `AnalysisEngine` is the only public analysis entry point;
+`AUDIO_WORKER_ID` is removed.
+
+`runtime::Node::rt_policy()` defaults to RT, while `AnalysisNode` declares
+`Heavy`. The `rtsan` forbid-blocking region applies to RT nodes instead of the
+generic `produce_pass` path.
+
 ## Track analysis (shared worker)
 
 `analysis/` owns the reusable per-track analysis engine consumed by the demo app
@@ -247,10 +296,14 @@ and the decoder adapter sizes buffers from that contract. It is not a
 user-facing configuration knob.
 
 Route changes that actually change the host sample rate store the new rate.
-Apple codec-embedded playback drives the existing decoder recreate state
-machine with `RecreateCause::RouteChange`; the standalone playback stage
-observes the same atomic host rate and rebuilds only its resampler instance.
-Equal-rate notifications do not recreate either path.
+For every backend, `kithara-audio` has exactly one route-change trigger,
+`start_route_change_recreate_if_needed`, which drives the full decoder recreate
+state machine with `RecreateCause::RouteChange`, the same machine used by
+`FormatBoundary` and `VariantSwitch`. For a standalone resampler backend, the
+decode factory may reuse the codec decoder and install a fresh
+`ResampledDecoder` layer; that is a decode-factory outcome, not a separate
+lightweight path in `kithara-audio`. Equal-rate notifications recreate
+nothing.
 
 ## Time-Stretch (speed and key-lock)
 
