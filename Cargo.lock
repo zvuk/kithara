@@ -2728,6 +2728,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "fieldwork"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16b5ff57d22899405076c15dd38c2735eb8ff261a37fd0d1b0e841f3fd298433"
+dependencies = [
+ "fieldwork-derive",
+]
+
+[[package]]
+name = "fieldwork-derive"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9aca8417ff665ef605a5d6f8f7670df33f74f3226003a1021582940878730b3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "filedescriptor"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4986,6 +5006,7 @@ dependencies = [
  "bitflags 2.13.0",
  "bon",
  "criterion",
+ "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
  "kithara-workspace-hack",
