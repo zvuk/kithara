@@ -211,6 +211,13 @@ contract, not a tunable, so it stays named and local to the Apple codec owner.
 
 ## WebCodecs host worker
 
+WebCodecs capability is an immutable init-time snapshot. The browser main
+thread probes the five compile-time codec configurations once through
+`AudioDecoder.isConfigSupported()` and publishes the completed table through a
+`OnceLock`. Until publication, `WebCodecsCodec::supports` returns `false`, so
+the synchronous factory uses the correct Symphonia path. Tracks are never
+re-probed and the snapshot is not mutable shared state.
+
 The browser `AudioDecoder` is owned only by its dedicated host worker. The
 decode thread holds the command sender and output receiver, so JavaScript values
 never cross the Rust thread boundary. Every command and output belongs to a

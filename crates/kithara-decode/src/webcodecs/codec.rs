@@ -85,14 +85,7 @@ impl WebCodecsCodec {
 
     #[must_use]
     pub(crate) fn supports(codec: AudioCodec) -> bool {
-        matches!(
-            codec,
-            AudioCodec::AacLc
-                | AudioCodec::AacHe
-                | AudioCodec::AacHeV2
-                | AudioCodec::Mp3
-                | AudioCodec::Flac
-        )
+        codec_string(codec).is_some() && super::probe::supported(codec)
     }
 
     fn poll_output(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
@@ -257,20 +250,32 @@ impl WebCodecsCodec {
 }
 
 fn codec_config(track: &TrackInfo) -> DecodeResult<CodecConfig> {
-    let (codec_string, description) = match track.codec {
-        AudioCodec::AacLc => ("mp4a.40.2", Some(track.extra_data.clone())),
-        AudioCodec::AacHe => ("mp4a.40.5", Some(track.extra_data.clone())),
-        AudioCodec::AacHeV2 => ("mp4a.40.29", Some(track.extra_data.clone())),
-        AudioCodec::Mp3 => ("mp3", None),
-        AudioCodec::Flac => ("flac", Some(flac_description(&track.extra_data)?)),
+    let description = match track.codec {
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
+            Some(track.extra_data.clone())
+        }
+        AudioCodec::Mp3 => None,
+        AudioCodec::Flac => Some(flac_description(&track.extra_data)?),
         codec => return Err(DecodeError::UnsupportedCodec { codec }),
     };
     Ok(CodecConfig {
-        codec_string,
+        codec_string: codec_string(track.codec)
+            .ok_or(DecodeError::UnsupportedCodec { codec: track.codec })?,
         description,
         sample_rate: track.sample_rate,
         channels: track.channels,
     })
+}
+
+pub(super) const fn codec_string(codec: AudioCodec) -> Option<&'static str> {
+    match codec {
+        AudioCodec::AacLc => Some("mp4a.40.2"),
+        AudioCodec::AacHe => Some("mp4a.40.5"),
+        AudioCodec::AacHeV2 => Some("mp4a.40.29"),
+        AudioCodec::Mp3 => Some("mp3"),
+        AudioCodec::Flac => Some("flac"),
+        _ => None,
+    }
 }
 
 fn flac_description(streaminfo: &[u8]) -> DecodeResult<Vec<u8>> {

@@ -56,3 +56,5 @@ pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };
 pub use types::{DecoderTrackInfo, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+#[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
+pub use webcodecs::probe::spawn_webcodecs_probe;

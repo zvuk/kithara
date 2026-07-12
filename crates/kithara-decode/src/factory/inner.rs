@@ -36,10 +36,10 @@ use crate::{
 /// matching `target_os`). Picking `DecoderBackend::Apple` on Linux is
 /// therefore a compile error, not a runtime `BackendUnavailable`.
 ///
-/// Default = [`DecoderBackend::Symphonia`]: the software path is
-/// cross-platform and capability-complete (gapless seek, full
-/// `StreamContext` propagation). Hardware backends (`Apple`/`Android`)
-/// are opt-in — there is no runtime fallback.
+/// Default = [`DecoderBackend::WebCodecs`] on wasm32 when its feature is
+/// enabled. Elsewhere the default is [`DecoderBackend::Symphonia`], unless a
+/// device build enables only its platform backend. There is no runtime backend
+/// fallback.
 ///
 /// Exactly one backend feature is expected per build: device builds
 /// (`apple` / `android`) compile with `--no-default-features` so
@@ -72,11 +72,12 @@ pub enum DecoderBackend {
     Android,
     /// Browser `AudioDecoder` (wasm32, requires the `webcodecs` feature).
     #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
+    #[cfg_attr(all(target_arch = "wasm32", feature = "webcodecs"), default)]
     WebCodecs,
     /// Symphonia software decoder (cross-platform, requires the
     /// `symphonia` feature).
     #[cfg(feature = "symphonia")]
-    #[default]
+    #[cfg_attr(not(all(target_arch = "wasm32", feature = "webcodecs")), default)]
     Symphonia,
 }
 
