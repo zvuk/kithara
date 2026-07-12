@@ -111,7 +111,10 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     // branch below reports it. `time::timeout` is only a safety deadline here.
     let mut confirmed = false;
     while !tick_handle.is_finished() {
-        match time::timeout(Duration::from_secs(60), events.recv()).await {
+        match time::timeout(Duration::from_secs(60), events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                 let pos_secs = position_ms as f64 / 1000.0;
                 if pos_secs > seek_target + 0.5 {

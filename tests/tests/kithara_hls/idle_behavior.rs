@@ -169,7 +169,10 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     // virtual clock advances to the deadline whenever nothing is runnable.
     const SETTLE_WINDOW: Duration = Duration::from_secs(3);
     loop {
-        match time::timeout(SETTLE_WINDOW, rx.recv()).await {
+        match time::timeout(SETTLE_WINDOW, rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             // A downloader event arrived inside the window: still active,
             // keep waiting. Lagged is also "events are flowing".
             Ok(Ok(Event::Downloader(_)))

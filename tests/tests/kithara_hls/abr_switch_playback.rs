@@ -228,7 +228,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         };
         progress_probe.drain(&mut progress_rx);
         loop {
-            match hls_rx.try_recv() {
+            match hls_rx.try_recv().map(|env| env.event) {
                 Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
                     switch_count += 1;
                     switch_seen = true;
@@ -949,7 +949,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
         let mut max_stall = 0u128;
         let mut eof = false;
         while post < post_target {
-            while let Ok(ev) = hls_rx.try_recv() {
+            while let Ok(ev) = hls_rx.try_recv().map(|env| env.event) {
                 if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
                     applied.push(to.get());
                 }
@@ -971,7 +971,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
                 max_stall = stalled;
             }
         }
-        while let Ok(ev) = hls_rx.try_recv() {
+        while let Ok(ev) = hls_rx.try_recv().map(|env| env.event) {
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
                 applied.push(to.get());
             }

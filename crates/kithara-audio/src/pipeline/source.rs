@@ -281,7 +281,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// flushes via [`flush_deferred`](AudioWorkerSource::flush_deferred) and on
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
-    emit: Option<DeferredBus<AudioEvent>>,
+    emit: Option<Arc<DeferredBus<AudioEvent>>>,
     /// Incremental end-of-stream effect drain. Allocated at source construction;
     /// true EOF only flips booleans and pulls one tail chunk per pass.
     eof_drain_inputs_exhausted: Vec<bool>,
@@ -489,7 +489,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    pub(crate) fn with_emit(mut self, emit: DeferredBus<AudioEvent>) -> Self {
+    pub(crate) fn with_emit(mut self, emit: Arc<DeferredBus<AudioEvent>>) -> Self {
         self.emit = Some(emit);
         self
     }

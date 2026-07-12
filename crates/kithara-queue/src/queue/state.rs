@@ -237,7 +237,7 @@ impl Drop for Queue {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use kithara_events::{Event, EventReceiver, QueueEvent};
+    use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
     use kithara_platform::time::{Duration, Instant, timeout};
     use kithara_test_utils::kithara;
 
@@ -262,7 +262,10 @@ pub(super) mod tests {
                 return false;
             }
             match timeout(remaining, rx.recv()).await {
-                Ok(Ok(Event::Queue(ev))) if matches(&ev) => return true,
+                Ok(Ok(Envelope {
+                    event: Event::Queue(ev),
+                    ..
+                })) if matches(&ev) => return true,
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => return false,
             }

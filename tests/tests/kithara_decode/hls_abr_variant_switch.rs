@@ -71,7 +71,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
     let variant_switches_clone = variant_switches.clone();
 
     tokio::task::spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
+        while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
             match ev {
                 Event::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
                     info!("Variant switch detected: {} -> {}", from, to);
@@ -248,7 +248,7 @@ async fn test_abr_variant_switch_with_seek_backward(
     let variant_switches_clone = variant_switches.clone();
 
     tokio::task::spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
+        while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
             if let Event::Abr(AbrEvent::VariantApplied { from, to, .. }) = ev {
                 println!("Variant switch: {} -> {}", from, to);
                 variant_switches_clone.lock().unwrap().push((from, to));

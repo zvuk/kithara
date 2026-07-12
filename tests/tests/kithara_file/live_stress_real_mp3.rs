@@ -133,7 +133,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.events();
     let events_task = spawn(async move {
-        while let Ok(event) = events.recv().await {
+        while let Ok(event) = events.recv().await.map(|env| env.event) {
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
             match event {
                 Event::File(FileEvent::ReadProgress { .. }) => {

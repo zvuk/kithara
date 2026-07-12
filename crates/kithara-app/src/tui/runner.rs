@@ -1,7 +1,7 @@
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use kithara::{
     abr::AbrMode,
-    events::{AppEvent, Event},
+    events::{AppEvent, Envelope, Event},
     play::StretchControls,
 };
 use kithara_platform::{
@@ -111,7 +111,7 @@ fn run_ui_loop(controller: &Arc<StateController>, palette: &tui::TuiPalette) -> 
     'ui: loop {
         loop {
             match event_rx.try_recv() {
-                Ok(event) => {
+                Ok(Envelope { event, .. }) => {
                     if let Event::Queue(QueueEvent::CrossfadeStarted { duration_seconds }) = &event
                     {
                         crossfade_clock = Some(CrossfadeClock::new(*duration_seconds));

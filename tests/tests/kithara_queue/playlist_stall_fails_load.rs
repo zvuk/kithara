@@ -33,7 +33,10 @@ async fn wait_for_failed(
     }
     let start = Instant::now();
     while start.elapsed() < deadline {
-        match timeout(Duration::from_millis(500), rx.recv()).await {
+        match timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {

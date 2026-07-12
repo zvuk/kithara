@@ -210,7 +210,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     // clock so the render cadence (and scheduler) advance between events.
     let _ = time::timeout(Consts::LOAD_DEADLINE, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
                     pre_seek_enqueued.insert(request_id);
                 }
@@ -230,7 +230,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     // Drain any events still buffered after steady playback so the pre-seek
     // enqueued baseline is complete before the seek fires.
     loop {
-        match rx.try_recv() {
+        match rx.try_recv().map(|env| env.event) {
             Ok(Event::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
                 pre_seek_enqueued.insert(request_id);
             }
@@ -449,16 +449,16 @@ async fn observe_post_seek(
     let _ = time::timeout(Consts::POST_SEEK_OBSERVATION, async {
         loop {
             match rx.recv().await {
-                Ok(ev) => match &ev {
+                Ok(env) => match &env.event {
                     Event::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
                         if obs.reader_seek.is_none() {
                             target_segment = *segment_index;
-                            obs.reader_seek = Some(ev.clone());
+                            obs.reader_seek = Some(env.event.clone());
                         }
                     }
                     Event::Hls(HlsEvent::SegmentReadStart { .. }) => {
                         if obs.reader_seek.is_some() && obs.first_segment_read_start.is_none() {
-                            obs.first_segment_read_start = Some(ev.clone());
+                            obs.first_segment_read_start = Some(env.event.clone());
                         }
                     }
                     Event::Downloader(DownloaderEvent::RequestEnqueued {

@@ -119,7 +119,7 @@ async fn wait_for_terminal(
     timeout(deadline, async {
         loop {
             let ev = match rx.recv().await {
-                Ok(ev) => ev,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             };

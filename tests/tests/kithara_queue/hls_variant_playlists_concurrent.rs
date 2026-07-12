@@ -117,7 +117,7 @@ async fn observe_until_loaded(
 
     timeout(Consts::LOAD_DEADLINE, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Downloader(DownloaderEvent::RequestEnqueued {
                     request_id, url, ..
                 })) => {

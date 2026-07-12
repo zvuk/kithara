@@ -107,7 +107,8 @@ async fn abr_auto_switch_during_playback(
         use kithara::platform::tokio::sync::broadcast::error::RecvError;
         loop {
             match events_rx.recv().await {
-                Ok(ev) => {
+                Ok(env) => {
+                    let ev = env.event;
                     let ev_str = format!("{ev:?}");
                     if ev_str.contains("VariantApplied") {
                         switches_bg.fetch_add(1, Ordering::Relaxed);

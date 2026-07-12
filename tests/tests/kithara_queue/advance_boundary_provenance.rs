@@ -1547,7 +1547,7 @@ fn drain_variant_applied_events(
     record: bool,
 ) {
     loop {
-        match events.try_recv() {
+        match events.try_recv().map(|env| env.event) {
             Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
                 let target = to.get();
                 if record && (target == 1 || committed_variant.is_none()) {

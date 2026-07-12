@@ -1,6 +1,6 @@
 use std::sync::PoisonError;
 
-use kithara_events::{Event, PlayerEvent, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{Envelope, Event, PlayerEvent, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError};
 use tracing::debug;
 
@@ -68,7 +68,7 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner);
         loop {
             match rx.try_recv() {
-                Ok(ev) => self.process_player_event(&ev),
+                Ok(Envelope { event: ev, .. }) => self.process_player_event(&ev),
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
                 Err(TryRecvError::Lagged(_)) => continue,
             }

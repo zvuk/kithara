@@ -72,7 +72,7 @@ fn drain_player_events(player: &PlayerImpl, rx: &mut EventReceiver) -> Vec<Playe
     player.process_notifications();
     let mut events = Vec::new();
     loop {
-        match rx.try_recv() {
+        match rx.try_recv().map(|env| env.event) {
             Ok(Event::Player(event)) => events.push(event),
             Ok(_) => continue,
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
@@ -186,7 +186,7 @@ async fn player_advance_emits_event() {
     player.insert(make_resource(2.0), None, None);
     let mut rx = player.subscribe();
     player.advance_to_next_item();
-    let event = rx.try_recv();
+    let event = rx.try_recv().map(|env| env.event);
     assert!(matches!(
         event,
         Ok(Event::Player(PlayerEvent::CurrentItemChanged))
@@ -528,7 +528,7 @@ fn commit_next_advances_index_and_publishes_event() {
 
     let mut saw_changed = false;
     for _ in 0..8 {
-        match rx.try_recv() {
+        match rx.try_recv().map(|env| env.event) {
             Ok(Event::Player(PlayerEvent::CurrentItemChanged)) => saw_changed = true,
             Ok(_) => continue,
             Err(_) => break,

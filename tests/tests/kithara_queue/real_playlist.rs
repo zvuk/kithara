@@ -115,7 +115,7 @@ async fn wait_for_status(
     let res = timeout(deadline, async {
         loop {
             let ev = match rx.recv().await {
-                Ok(ev) => ev,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             };
@@ -555,7 +555,7 @@ where
     use kithara::platform::tokio::sync::broadcast::error::RecvError;
     let res = timeout(deadline, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Queue(ev)) if pred(&ev) => return Some(ev),
                 Ok(_) => continue,
                 Err(RecvError::Lagged(_)) => continue,

@@ -110,7 +110,7 @@ async fn wait_for_loaded(
     timeout(deadline, async {
         loop {
             let ev = match rx.recv().await {
-                Ok(ev) => ev,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             };
@@ -285,7 +285,10 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
             };
         }
         let recv_budget = remaining.min(Duration::from_millis(200));
-        match timeout(recv_budget, obs.rx.recv()).await {
+        match timeout(recv_budget, obs.rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(ev)) => {
                 if let Event::Player(PlayerEvent::ItemDidFail { src, .. }) = &ev
                     && src.as_ref() == target_src

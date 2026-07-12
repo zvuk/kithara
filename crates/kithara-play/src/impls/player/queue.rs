@@ -395,7 +395,7 @@ pub(crate) fn player_event_from_notification(
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::Event;
+    use kithara_events::{Envelope, Event};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
@@ -458,7 +458,10 @@ mod tests {
 
         assert!(matches!(
             rx.try_recv(),
-            Ok(Event::Player(PlayerEvent::CurrentItemChanged))
+            Ok(Envelope {
+                event: Event::Player(PlayerEvent::CurrentItemChanged),
+                ..
+            })
         ));
         assert_eq!(player.duration_seconds(), Some(162.0));
     }

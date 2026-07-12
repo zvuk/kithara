@@ -1,5 +1,5 @@
 use kithara::abr::AbrMode;
-use kithara_events::{AbrEvent, AudioEvent, DownloaderEvent, Event, FileEvent, HlsEvent};
+use kithara_events::{AbrEvent, AudioEvent, DownloaderEvent, Envelope, Event, FileEvent, HlsEvent};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -206,7 +206,7 @@ impl ItemEventBridge {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
-                            Ok(event) => Self::dispatch(
+                            Ok(Envelope { event, .. }) => Self::dispatch(
                                 &observer,
                                 &event,
                                 &mut duration_seconds,

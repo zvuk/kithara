@@ -43,7 +43,9 @@ async fn await_seek_request_epoch(events: &mut EventReceiver, budget: Duration) 
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
-        }))) = time::timeout(remaining, events.recv()).await
+        }))) = time::timeout(remaining, events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
         {
             return seek_epoch;
         }
@@ -274,7 +276,9 @@ async fn test_audio_playback_progress_uses_output_commit() {
             total_ms,
             seek_epoch,
             ..
-        }))) = time::timeout(Duration::from_millis(40), events.recv()).await
+        }))) = time::timeout(Duration::from_millis(40), events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
         {
             assert!(position_ms > 0);
             assert!(total_ms.is_some());
@@ -305,7 +309,9 @@ async fn test_seek_emits_matching_playback_progress() {
     let mut matched_epoch = None;
     while Instant::now() < deadline {
         if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
-            time::timeout(Duration::from_millis(40), events.recv()).await
+            time::timeout(Duration::from_millis(40), events.recv())
+                .await
+                .map(|r| r.map(|env| env.event))
             && seek_epoch == expected_epoch
         {
             matched_epoch = Some(seek_epoch);
@@ -328,7 +334,7 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     let expected_epoch = await_seek_request_epoch(&mut events, Duration::from_secs(1)).await;
 
     let mut saw_seek_complete_before_read = false;
-    while let Ok(event) = events.try_recv() {
+    while let Ok(event) = events.try_recv().map(|env| env.event) {
         if matches!(event, Event::Audio(AudioEvent::SeekComplete { .. })) {
             saw_seek_complete_before_read = true;
             break;
@@ -350,7 +356,10 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     let mut saw_seek_complete = false;
     let mut saw_output_committed = false;
     while Instant::now() < deadline {
-        match time::timeout(Duration::from_millis(40), events.recv()).await {
+        match time::timeout(Duration::from_millis(40), events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
                 stage: SeekLifecycleStage::OutputCommitted,
                 seek_epoch,

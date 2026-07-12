@@ -45,7 +45,10 @@ async fn wait_for_status(
     }
     let start = Instant::now();
     while start.elapsed() < deadline {
-        match timeout(Duration::from_millis(500), rx.recv()).await {
+        match timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
@@ -141,7 +144,7 @@ async fn wait_for_post_seek_progress(
         let mut landed: Option<f64> = None;
         let mut last: Option<f64> = None;
         loop {
-            let pos = match rx.recv().await {
+            let pos = match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     position_ms as f64 / 1000.0
                 }

@@ -59,7 +59,7 @@ async fn test_basic_hls_playback(
 
     let _events_handle = spawn(async move {
         let mut event_count = 0;
-        while let Ok(ev) = events_rx.recv().await {
+        while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
             event_count += 1;
             if event_count <= 3 {
                 info!("Event {}: {:?}", event_count, ev);

@@ -1,5 +1,5 @@
 use kithara::play::{PlayerEvent, TimeControlStatus};
-use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{Envelope, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -291,7 +291,7 @@ impl EventBridge {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
-                            Ok(ev) => Self::dispatch(
+                            Ok(Envelope { event: ev, .. }) => Self::dispatch(
                                 &observer,
                                 &queue,
                                 &items,

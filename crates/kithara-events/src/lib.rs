@@ -3,8 +3,11 @@
 //! Unified event bus for the kithara audio pipeline.
 
 mod bus;
+mod bus_event;
 mod deferred;
 mod event;
+mod ids;
+mod meta;
 mod receiver;
 mod scope;
 mod seek;
@@ -36,6 +39,7 @@ pub use app::AppEvent;
 #[cfg(feature = "audio")]
 pub use audio::{AudioEvent, AudioFormat, SeekLifecycleStage, SegmentLocation};
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
+pub use bus_event::BusEvent;
 pub use deferred::DeferredBus;
 #[cfg(feature = "downloader")]
 pub use downloader::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
@@ -44,14 +48,16 @@ pub use event::Event;
 pub use file::{FileError, FileEvent};
 #[cfg(feature = "hls")]
 pub use hls::{HlsError, HlsEvent};
+pub use ids::{SlotId, TrackId};
+pub use meta::{Envelope, EventMeta, ScopeLabel};
 #[cfg(feature = "player")]
 pub use play::{
     BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, MediaTime, PlayerEvent,
     PlayerStatus, PortDescription, PortType, RouteChangeReason, RouteDescription, SessionEvent,
-    SlotId, TimeControlStatus, TimeRange, WaitingReason,
+    TimeControlStatus, TimeRange, WaitingReason,
 };
 #[cfg(feature = "queue")]
-pub use queue::{QueueEvent, TrackId, TrackStatus};
+pub use queue::{QueueEvent, TrackStatus};
 pub use receiver::EventReceiver;
 pub use scope::BusScope;
 pub use seek::SeekEpoch;

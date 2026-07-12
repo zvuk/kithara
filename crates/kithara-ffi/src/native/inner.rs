@@ -6,6 +6,7 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetLayout, BytePool},
     audio::generate_log_spaced_bands,
+    events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry, KeyProcessorRule},
     net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
@@ -588,7 +589,10 @@ fn build_source_for_item(
     inner: &NativeInner,
     item: &Arc<AudioPlayerItem>,
 ) -> Result<TrackSource, FfiError> {
-    let scoped = inner.queue.bus().scoped();
+    let scoped = inner.queue.bus().scoped_labeled(ScopeLabel {
+        track: Some(item.track_id()),
+        ..ScopeLabel::default()
+    });
     let abr_mode = item.abr_mode().map(|mode| match mode {
         FfiAbrMode::Auto => AbrMode::Auto(None),
         FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),

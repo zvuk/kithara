@@ -61,7 +61,7 @@ pub(crate) struct PlaybackProgressProbe {
 
 impl PlaybackProgressProbe {
     pub(crate) fn drain(&mut self, rx: &mut EventReceiver) {
-        while let Ok(event) = rx.try_recv() {
+        while let Ok(event) = rx.try_recv().map(|env| env.event) {
             if let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event {
                 let now = Instant::now();
                 if let Some(last) = self.last_event_at {

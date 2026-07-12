@@ -89,11 +89,11 @@ const AUDIO_EVENT_CAPACITY: usize = 64;
 
 struct ReaderOutputWake {
     thread: Arc<ThreadWake>,
-    emit: DeferredBus<AudioEvent>,
+    emit: Arc<DeferredBus<AudioEvent>>,
 }
 
 impl ReaderOutputWake {
-    fn new(thread: Arc<ThreadWake>, emit: DeferredBus<AudioEvent>) -> Self {
+    fn new(thread: Arc<ThreadWake>, emit: Arc<DeferredBus<AudioEvent>>) -> Self {
         Self { thread, emit }
     }
 }
@@ -170,6 +170,10 @@ pub struct Audio<S> {
 
     /// Unified event bus.
     bus: EventBus,
+
+    /// Lock-free event handoff for audio-thread telemetry and lifecycle
+    /// events. The scheduler shell flushes it via the wake-signal cadence.
+    emit: Arc<DeferredBus<AudioEvent>>,
 
     /// PCM chunk receiver.
     pcm_rx: crate::runtime::Inlet<Fetch<PcmChunk>>,
@@ -259,16 +263,14 @@ struct ConsumerHangCtx {
 impl<S> Audio<S> {
     fn create_channels(
         pcm_buffer_chunks: usize,
-        bus: &EventBus,
         reader_wake: &Arc<ThreadWake>,
+        emit: Arc<DeferredBus<AudioEvent>>,
     ) -> (
         crate::runtime::Outlet<Fetch<PcmChunk>>,
         crate::runtime::Inlet<Fetch<PcmChunk>>,
     ) {
-        let wake: Arc<dyn WakeSignal> = Arc::new(ReaderOutputWake::new(
-            Arc::clone(reader_wake),
-            Self::create_emit(bus),
-        ));
+        let wake: Arc<dyn WakeSignal> =
+            Arc::new(ReaderOutputWake::new(Arc::clone(reader_wake), emit));
         crate::runtime::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
     }
 
@@ -277,8 +279,8 @@ impl<S> Audio<S> {
     /// `kevent` the forbid-blocking core must not make). Capacity covers a pass's
     /// worth of lifecycle events with margin — flushed every pass, so under
     /// normal lifecycle it never fills.
-    fn create_emit(bus: &EventBus) -> DeferredBus<AudioEvent> {
-        DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY)
+    fn create_emit(bus: &EventBus) -> Arc<DeferredBus<AudioEvent>> {
+        Arc::new(DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY))
     }
 
     /// Minimum playback-position advance (ms) between `PlaybackProgress`
@@ -359,7 +361,7 @@ impl<S> Audio<S> {
     }
 
     fn emit_audio_event(&self, event: AudioEvent) {
-        self.bus.publish(event);
+        self.emit.enqueue(event);
     }
 
     fn emit_playback_progress(&mut self) {
@@ -783,7 +785,9 @@ impl<S> Audio<S> {
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let epoch = self.seek.begin(position);
         self.seek.mark_pending(epoch);
-        self.emit_audio_event(AudioEvent::SeekLifecycle {
+        // seek() runs on the control thread, not the audio callback: publish
+        // directly so SeekRequest is visible before any producer wake flush.
+        self.bus.publish(AudioEvent::SeekLifecycle {
             seek_epoch: epoch,
             stage: SeekLifecycleStage::SeekRequest,
             location: SegmentLocation::default(),
@@ -960,7 +964,7 @@ struct StreamSourceRegistration<'a, T: StreamType> {
     decoder: Box<dyn Decoder>,
     decoder_factory: crate::pipeline::source::DecoderFactory<T>,
     effects: Vec<Box<dyn AudioEffect>>,
-    emit: DeferredBus<AudioEvent>,
+    emit: Arc<DeferredBus<AudioEvent>>,
     engine_load: Option<Arc<EngineLoad>>,
     epoch: Arc<AtomicU64>,
     gapless_mode: GaplessMode,
@@ -1090,6 +1094,7 @@ where
 
         let abr_handle = shared_stream.abr_handle();
         let peer_wake = shared_stream.peer_wake();
+        let emit = Self::create_emit(&bus);
         let RegisteredStreamSource {
             data_rx,
             is_standalone_worker,
@@ -1105,7 +1110,7 @@ where
             decoder,
             decoder_factory: Self::create_decoder_factory(&deps, &epoch, &byte_len_handle),
             effects,
-            emit: Self::create_emit(&bus),
+            emit: Arc::clone(&emit),
             engine_load: config_engine_load,
             epoch: Arc::clone(&epoch),
             gapless_mode: config_gapless_mode,
@@ -1125,6 +1130,7 @@ where
             seek_obs,
             metadata,
             bus,
+            emit,
             host_sample_rate,
             playback_rate,
             preload_gate,
@@ -1183,7 +1189,8 @@ where
         let wake_stream = shared_stream.clone();
         let preload_gate = Arc::new(PreloadGate::default());
         let reader_wake = Arc::new(ThreadWake::default());
-        let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, bus, &reader_wake);
+        let (data_tx, data_rx) =
+            Self::create_channels(pcm_buffer_chunks, &reader_wake, Arc::clone(&emit));
         let (trash_tx, trash_inlet) = Self::create_trash_channel(pcm_buffer_chunks);
         let (worker, is_standalone_worker) = worker.map_or_else(
             || (AudioWorkerHandle::with_cancel(cancel.child()), true),
@@ -1700,6 +1707,8 @@ mod tests {
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
         let playhead = Arc::new(PlayheadState::new());
         let seek = Arc::new(SeekState::new());
+        let bus = EventBus::default();
+        let emit = Audio::<()>::create_emit(&bus);
 
         Audio {
             pcm_rx,
@@ -1715,7 +1724,8 @@ mod tests {
             seek: Arc::clone(&seek) as Arc<dyn SeekControl>,
             seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
             metadata: TrackMetadata::default(),
-            bus: EventBus::default(),
+            bus,
+            emit,
             cancel: None,
             interleaved: None,
             pcm_pool: PcmPool::default().clone(),
@@ -1768,7 +1778,8 @@ mod tests {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
         let reader_wake = Arc::new(ThreadWake::default());
-        let (mut tx, mut rx) = Audio::<()>::create_channels(2, &bus, &reader_wake);
+        let emit = Audio::<()>::create_emit(&bus);
+        let (mut tx, mut rx) = Audio::<()>::create_channels(2, &reader_wake, emit);
 
         tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
             .expect("first push reaches ring");
@@ -1778,7 +1789,7 @@ mod tests {
         );
         tx.flush_wake_signals();
         assert!(matches!(
-            events.try_recv(),
+            events.try_recv().map(|envelope| envelope.event),
             Ok(kithara_events::Event::Audio(AudioEvent::OutputAvailable))
         ));
 
@@ -1797,7 +1808,7 @@ mod tests {
             .expect("third push reaches empty ring");
         tx.flush_wake_signals();
         assert!(matches!(
-            events.try_recv(),
+            events.try_recv().map(|envelope| envelope.event),
             Ok(kithara_events::Event::Audio(AudioEvent::OutputAvailable))
         ));
     }
@@ -1816,7 +1827,20 @@ mod tests {
     }
 
     fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
-        let (data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(4, None);
+        let (audio, data_tx, _events) = audio_with_channel_and_events();
+        (audio, data_tx)
+    }
+
+    fn audio_with_channel_and_events() -> (
+        Audio<()>,
+        crate::runtime::Outlet<Fetch<PcmChunk>>,
+        kithara_events::EventReceiver,
+    ) {
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let reader_wake = Arc::new(ThreadWake::default());
+        let emit = Audio::<()>::create_emit(&bus);
+        let (data_tx, pcm_rx) = Audio::<()>::create_channels(4, &reader_wake, Arc::clone(&emit));
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
         let playhead = Arc::new(PlayheadState::new());
         let seek = Arc::new(SeekState::new());
@@ -1835,7 +1859,8 @@ mod tests {
             seek: Arc::clone(&seek) as Arc<dyn SeekControl>,
             seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
             metadata: TrackMetadata::default(),
-            bus: EventBus::default(),
+            bus,
+            emit,
             cancel: None,
             interleaved: None,
             pcm_pool: PcmPool::default().clone(),
@@ -1854,7 +1879,8 @@ mod tests {
             peer_wake: None,
             _marker: PhantomData,
         };
-        (audio, data_tx)
+        assert!(events.try_recv().is_err(), "fresh subscriber starts empty");
+        (audio, data_tx, events)
     }
 
     fn make_chunk(samples: &[f32]) -> PcmChunk {
@@ -1886,6 +1912,121 @@ mod tests {
     fn consumer_phase_starts_buffering() {
         let audio = empty_audio();
         assert_eq!(audio.consumer_phase, ConsumerPhase::Buffering);
+    }
+
+    #[kithara::test]
+    fn audio_events_stay_deferred_until_wake_flush_and_preserve_enqueue_order() {
+        let (mut audio, tx, mut events) = audio_with_channel_and_events();
+
+        let seek = audio
+            .seek(Duration::from_millis(250))
+            .expect("seek request enqueues");
+        assert!(matches!(seek, SeekOutcome::Landed { .. }));
+
+        assert!(
+            matches!(
+                events.try_recv().map(|envelope| envelope.event),
+                Ok(kithara_events::Event::Audio(AudioEvent::SeekLifecycle {
+                    seek_epoch: 1,
+                    stage: SeekLifecycleStage::SeekRequest,
+                    location,
+                })) if location == SegmentLocation::default()
+            ),
+            "SeekRequest publishes synchronously from the control-thread seek()"
+        );
+
+        let meta = PcmMeta {
+            variant_index: Some(7),
+            segment_index: Some(11),
+            ..PcmMeta::default()
+        };
+        audio.playhead.set_position(Duration::from_millis(250));
+        audio.emit_post_seek_output_commit(Some(meta));
+
+        assert!(
+            events.try_recv().is_err(),
+            "audio-thread enqueue must stay invisible before shell flush"
+        );
+
+        tx.flush_wake_signals();
+
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(kithara_events::Event::Audio(AudioEvent::SeekLifecycle {
+                seek_epoch: 1,
+                stage: SeekLifecycleStage::OutputCommitted,
+                location,
+            })) if location == SegmentLocation::new(Some(7), Some(11), None, None)
+        ));
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(kithara_events::Event::Audio(AudioEvent::SeekComplete {
+                seek_epoch: 1,
+                position,
+            })) if position == Duration::from_millis(250)
+        ));
+        assert!(
+            events.try_recv().is_err(),
+            "flush drains queued audio events"
+        );
+    }
+
+    #[kithara::test]
+    fn playback_progress_remains_throttled_until_min_delta_or_epoch_change() {
+        let (mut audio, tx, mut events) = audio_with_channel_and_events();
+
+        audio.playhead.set_duration(Some(Duration::from_secs(5)));
+        audio
+            .playhead
+            .set_decoded_frontier(Duration::from_millis(900));
+
+        audio.playhead.set_position(Duration::from_millis(100));
+        audio.emit_playback_progress();
+        audio.playhead.set_position(Duration::from_millis(150));
+        audio.emit_playback_progress();
+
+        tx.flush_wake_signals();
+
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(kithara_events::Event::Audio(AudioEvent::PlaybackProgress {
+                position_ms: 100,
+                total_ms: Some(5_000),
+                buffered_ms: Some(900),
+                seek_epoch: 0,
+            }))
+        ));
+        assert!(
+            events.try_recv().is_err(),
+            "sub-min-delta progress remains coalesced before the next flush"
+        );
+
+        audio.playhead.set_position(Duration::from_millis(210));
+        audio.emit_playback_progress();
+        tx.flush_wake_signals();
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(kithara_events::Event::Audio(AudioEvent::PlaybackProgress {
+                position_ms: 210,
+                total_ms: Some(5_000),
+                buffered_ms: Some(900),
+                seek_epoch: 0,
+            }))
+        ));
+
+        audio.validator.epoch = 1;
+        audio.playhead.set_position(Duration::from_millis(220));
+        audio.emit_playback_progress();
+        tx.flush_wake_signals();
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(kithara_events::Event::Audio(AudioEvent::PlaybackProgress {
+                position_ms: 220,
+                total_ms: Some(5_000),
+                buffered_ms: Some(900),
+                seek_epoch: 1,
+            }))
+        ));
     }
 
     #[kithara::test]

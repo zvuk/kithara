@@ -8,6 +8,6 @@ fn test_event_bus_publish_subscribe() {
     let mut rx = bus.subscribe();
     bus.publish(HlsEvent::EndOfStream);
 
-    let event = rx.try_recv().ok();
+    let event = rx.try_recv().map(|env| env.event).ok();
     assert!(matches!(event, Some(Event::Hls(HlsEvent::EndOfStream))));
 }

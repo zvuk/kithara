@@ -239,7 +239,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
         let _ = harness.render(BLOCK_FRAMES);
 
         loop {
-            match rx.try_recv() {
+            match rx.try_recv().map(|env| env.event) {
                 Ok(Event::Player(PlayerEvent::PrefetchRequested)) => prefetch_seen = true,
                 Ok(Event::Player(PlayerEvent::HandoverRequested)) => handover_seen = true,
                 Ok(Event::Player(PlayerEvent::ItemDidPlayToEnd { .. })) => item_end_seen = true,
@@ -432,7 +432,7 @@ async fn queue_pauses_player_when_last_track_ends() {
         let _ = queue.tick();
         let _ = harness.render(BLOCK_FRAMES);
         loop {
-            match rx.try_recv() {
+            match rx.try_recv().map(|env| env.event) {
                 Ok(Event::Queue(QueueEvent::QueueEnded)) => saw_queue_ended = true,
                 Ok(_) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,

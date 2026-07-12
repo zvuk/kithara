@@ -6,6 +6,7 @@ use crate::AbrEvent;
 use crate::AppEvent;
 #[cfg(feature = "audio")]
 use crate::AudioEvent;
+use crate::BusEvent;
 #[cfg(feature = "downloader")]
 use crate::DownloaderEvent;
 #[cfg(feature = "file")]
@@ -24,6 +25,8 @@ use crate::{DjEvent, EngineEvent, ItemEvent, PlayerEvent, SessionEvent};
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum Event {
+    /// Bus-level synthetic event.
+    Bus(BusEvent),
     /// Unified downloader event (soft-timeout, progress, completion,
     /// error). Published by the downloader layer on the peer's bus.
     #[cfg(feature = "downloader")]
@@ -61,6 +64,12 @@ pub enum Event {
     /// ABR controller event.
     #[cfg(feature = "abr")]
     Abr(AbrEvent),
+}
+
+impl From<BusEvent> for Event {
+    fn from(e: BusEvent) -> Self {
+        Self::Bus(e)
+    }
 }
 
 #[cfg(feature = "downloader")]

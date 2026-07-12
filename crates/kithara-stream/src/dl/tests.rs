@@ -13,7 +13,7 @@ use axum::{
 use bytes::Bytes;
 use futures::stream::iter as stream_iter;
 use kithara_abr::Abr;
-use kithara_events::{DownloaderEvent, Event, EventBus};
+use kithara_events::{DownloaderEvent, Envelope, Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
@@ -658,7 +658,10 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let mut seen_slow = false;
     while Instant::now() < deadline {
         match time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
-            Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow { .. }))) => {
+            Ok(Ok(Envelope {
+                event: Event::Downloader(DownloaderEvent::LoadSlow { .. }),
+                ..
+            })) => {
                 seen_slow = true;
                 break;
             }
@@ -700,7 +703,10 @@ async fn soft_timeout_covers_response_body() {
     let mut seen_slow = false;
     while Instant::now() < deadline {
         match time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
-            Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow { .. }))) => {
+            Ok(Ok(Envelope {
+                event: Event::Downloader(DownloaderEvent::LoadSlow { .. }),
+                ..
+            })) => {
                 seen_slow = true;
                 break;
             }

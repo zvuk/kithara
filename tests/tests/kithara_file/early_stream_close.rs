@@ -56,7 +56,10 @@ async fn wait_for_download_terminal(rx: &mut EventReceiver, within: Duration) ->
         if remaining.is_zero() {
             return false;
         }
-        match time::timeout(remaining, rx.recv()).await {
+        match time::timeout(remaining, rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Downloader(DownloaderEvent::RequestCompleted { .. }))) => return true,
             Ok(Ok(Event::Downloader(DownloaderEvent::RequestFailed { .. }))) => return true,
             Ok(Ok(Event::File(FileEvent::Error { .. }))) => return true,

@@ -47,7 +47,7 @@ impl OfflinePlayerHarness {
         let mut events = Vec::new();
         let mut rx = self.events.lock();
         loop {
-            match rx.try_recv() {
+            match rx.try_recv().map(|env| env.event) {
                 Ok(Event::Player(event)) => events.push(event),
                 Ok(_) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,

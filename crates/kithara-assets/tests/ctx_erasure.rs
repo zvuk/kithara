@@ -73,9 +73,8 @@ impl ChunkSink for EvolvingXorSink {
 fn reference_transform(seed: u8, input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(input.len());
     for (idx, chunk) in input.chunks(CHUNK_SIZE).enumerate() {
-        let idx_mod = match u8::try_from(idx % 256) {
-            Ok(value) => value,
-            Err(_) => unreachable!("idx % 256 always fits in u8"),
+        let Ok(idx_mod) = u8::try_from(idx % 256) else {
+            unreachable!("idx % 256 always fits in u8")
         };
         let key = seed.wrapping_add(idx_mod);
         out.extend(chunk.iter().map(|&b| b ^ key));

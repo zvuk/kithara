@@ -111,7 +111,7 @@ fn engine_set_master_volume_emits_event() {
     let engine = make_engine();
     let mut rx = engine.subscribe();
     engine.set_master_volume(0.75);
-    let event = rx.try_recv().unwrap();
+    let event = rx.try_recv().map(|env| env.event).unwrap();
     assert!(
         matches!(event, kithara::events::Event::Engine(EngineEvent::MasterVolumeChanged { volume }) if (volume - 0.75).abs() < f32::EPSILON)
     );

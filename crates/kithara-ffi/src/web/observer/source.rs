@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use js_sys::{Object, Reflect};
-use kithara_events::{Event, EventReceiver, QueueEvent};
+use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
 use kithara_platform::{
     time::{Duration, sleep},
     tokio::{sync::broadcast, task::spawn as task_spawn},
@@ -69,7 +69,7 @@ async fn run(mut rx: EventReceiver) {
     };
     loop {
         match rx.recv().await {
-            Ok(event) => {
+            Ok(Envelope { event, .. }) => {
                 mirror_current_track(&event);
                 if let Some(ffi) = to_ffi(&event) {
                     let _ = channel.post_message(&encode(&ffi));

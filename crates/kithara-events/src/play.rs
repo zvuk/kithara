@@ -5,6 +5,8 @@ use std::{cmp, hash, ops};
 use kithara_platform::{sync::Arc, time::Duration};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
+use crate::SlotId;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PlayerStatus {
@@ -39,21 +41,6 @@ pub enum ItemStatus {
     Unknown,
     ReadyToPlay,
     Failed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SlotId(u64);
-
-impl SlotId {
-    #[must_use]
-    pub fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    #[must_use]
-    pub fn value(self) -> u64 {
-        self.0
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

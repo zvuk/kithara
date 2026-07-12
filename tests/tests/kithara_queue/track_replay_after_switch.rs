@@ -184,7 +184,7 @@ async fn wait_for_current_track(
     deadline: Duration,
 ) {
     let wait = async {
-        while let Ok(ev) = rx.recv().await {
+        while let Ok(ev) = rx.recv().await.map(|env| env.event) {
             if let Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) = ev
                 && id == expected
             {
