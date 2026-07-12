@@ -24,7 +24,7 @@ mod traits;
 mod waveform;
 
 pub use audio::Audio;
-pub use blob::BlobError;
+pub use blob::frame::BlobError;
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")

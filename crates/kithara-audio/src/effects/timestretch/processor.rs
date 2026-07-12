@@ -4,7 +4,7 @@ use kithara_platform::sync::Arc;
 use kithara_stretch::{StretchBackend, StretchKind, StretchOptions, build_backend};
 use tracing::warn;
 
-use super::controls::StretchControls;
+use super::StretchControls;
 use crate::{
     region::{ActiveRegion, RegionPlan},
     traits::AudioEffect,
