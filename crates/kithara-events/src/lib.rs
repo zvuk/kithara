@@ -54,7 +54,7 @@ pub use deferred::DeferredBus;
 pub use downloader::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
 pub use event::Event;
 #[cfg(feature = "file")]
-pub use file::{FileError, FileEvent};
+pub use file::{FileError, FileEvent, TotalBytesSource};
 #[cfg(feature = "hls")]
 pub use hls::{HlsError, HlsEvent};
 pub use ids::{SlotId, TrackId};

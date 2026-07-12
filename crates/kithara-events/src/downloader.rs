@@ -125,6 +125,43 @@ pub enum DownloaderEvent {
         /// don't repeat the math.
         bandwidth_bps: u64,
     },
+    RequestRetrying {
+        request_id: RequestId,
+        // WHY: telemetry mirror of the sanctioned kithara-net RetryPolicy,
+        // not retry control flow — the event makes retries observable.
+        // xtask-lint-ignore: retry_fallback
+        attempt: u32,
+        // xtask-lint-ignore: retry_fallback
+        max_retries: u32,
+        error: NetError,
+        backoff: Duration,
+    },
+    BodyStalled {
+        request_id: RequestId,
+        consumed: u64,
+        expected: Option<u64>,
+        stall: Duration,
+    },
+    BodyResumed {
+        request_id: RequestId,
+        resume_number: u32,
+        from_offset: u64,
+        honoured_range: bool,
+    },
+    RetryExhausted {
+        request_id: RequestId,
+        // WHY: telemetry mirror of the RetryPolicy budget (see RequestRetrying).
+        // xtask-lint-ignore: retry_fallback
+        max_retries: u32,
+        consumed: u64,
+        error: NetError,
+    },
+    FirstByte {
+        request_id: RequestId,
+        ttfb: Duration,
+        status: u16,
+        partial: bool,
+    },
     /// HTTP fetch ended with a network-level error.
     RequestFailed {
         request_id: RequestId,

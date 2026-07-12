@@ -132,7 +132,7 @@ pub trait NetExt: Net + Sized {
         policy: RetryPolicy,
         cancel: CancelToken,
     ) -> RetryNet<Self, DefaultRetryPolicy> {
-        RetryNet::new(self, DefaultRetryPolicy::new(policy), cancel)
+        RetryNet::new(self, DefaultRetryPolicy::new(policy), cancel, None)
     }
 
     /// Add timeout layer

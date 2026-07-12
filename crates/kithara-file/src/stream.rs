@@ -4,7 +4,7 @@ use kithara_assets::{
     AcquisitionResult, AssetLayout, AssetReader, AssetStore, AssetStoreBuilder, AssetWriter,
     AssetsError, BytePool, EvictConfig, ReadSide, ResourceKey, StoreOptions, WriteSide,
 };
-use kithara_events::EventBus;
+use kithara_events::{EventBus, FileError, FileEvent};
 use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{
     CancelScope, CancelToken,
@@ -76,6 +76,14 @@ fn cached_source(
     let coord = completed_coord(reader.len());
     let cached_codec = sniff_codec(&reader);
     FileSource::local(reader, coord, bus, backend, key, cancel, cached_codec)
+}
+
+fn publish_open_error(bus: Option<&EventBus>, error: &SourceError) {
+    if let Some(bus) = bus {
+        bus.publish(FileEvent::Error {
+            error: FileError::Io(error.to_string()),
+        });
+    }
 }
 
 fn remote_asset_root(url: &url::Url, name: Option<&str>, layout: &Arc<dyn AssetLayout>) -> String {
@@ -180,12 +188,14 @@ impl File {
                 .maybe_pool(config.pool.clone())
                 .build(),
         );
-        let reader = store
-            .open_resource(&key, None)
-            .map_err(SourceError::Assets)?;
         let bus = config
             .bus
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
+        let reader = store.open_resource(&key, None).map_err(|error| {
+            let source_error = SourceError::Assets(error);
+            publish_open_error(Some(&bus), &source_error);
+            source_error
+        })?;
 
         Ok(cached_source(reader, bus, store, key, cancel.child()))
     }
@@ -219,12 +229,15 @@ impl File {
         let asset_root = remote_asset_root(&url, name.as_deref(), backend.layout());
 
         let key = backend.scope(asset_root.as_str()).key_for(&url);
+        let publish_bus = bus.clone();
+        let file_state = FileStreamState::create(&backend, key, bus, event_channel_capacity)
+            .inspect_err(|error| publish_open_error(publish_bus.as_ref(), error))?;
         let FileStreamState {
             backend,
             acq,
             bus,
             key,
-        } = FileStreamState::create(&backend, key, bus, event_channel_capacity)?;
+        } = file_state;
 
         // `Ready` means the file is already committed in the cache — no
         // download. `Pending` hands the single non-Clone commit owner to the

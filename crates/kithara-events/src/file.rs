@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use crate::{AudioCodecKind, ContainerKind};
+
 /// Errors specific to the file stream layer (non-network, non-downloader).
 ///
 /// Network errors are reported by [`crate::DownloaderEvent::RequestFailed`]
@@ -33,10 +35,26 @@ impl std::fmt::Display for FileError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FileEvent {
+    Opened {
+        codec: Option<AudioCodecKind>,
+        container: Option<ContainerKind>,
+        total_bytes: Option<u64>,
+        cached: bool,
+    },
+    TotalBytesResolved {
+        total_bytes: u64,
+        source: TotalBytesSource,
+    },
+    CacheComplete {
+        total_bytes: u64,
+    },
     /// Reader progressed through the stream — bytes consumed by the
     /// reader, not bytes written to disk and not bytes played by the
     /// sink. Sink-truth lives in `AudioEvent::PlaybackProgress`.
-    ReadProgress { position: u64, total: Option<u64> },
+    ReadProgress {
+        position: u64,
+        total: Option<u64>,
+    },
     /// Reader byte cursor jumped (driven by the decoder calling
     /// `Seek::seek` after a user-facing seek).
     ReaderSeek {
@@ -45,7 +63,16 @@ pub enum FileEvent {
         seek_epoch: crate::SeekEpoch,
     },
     /// Non-network error specific to the file stream.
-    Error { error: FileError },
+    Error {
+        error: FileError,
+    },
     /// Reader reached EOF.
     EndOfStream,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TotalBytesSource {
+    CommittedLen,
+    ContentLength,
 }

@@ -2,7 +2,11 @@ use std::num::NonZeroU16;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_platform::{CancelToken, sync::Arc, time::timeout};
+use kithara_platform::{
+    CancelToken,
+    sync::Arc,
+    time::{Instant, timeout},
+};
 use url::Url;
 
 use super::{
@@ -14,6 +18,7 @@ use crate::{
     ByteStream,
     error::{NetError, NetResult},
     metrics::ConnectionMetrics,
+    observe::Observer,
     resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::{Net, NetExt},
@@ -57,6 +62,7 @@ impl RawAppleNet {
         headers: Option<Headers>,
         accept_partial: bool,
     ) -> Result<AppleDataResponse, NetError> {
+        let started = Instant::now();
         let response = {
             let request = AppleRequest::new(&url, method, range, headers, body)?;
             timeout(
@@ -66,6 +72,13 @@ impl RawAppleNet {
         }
         .await
         .map_err(|_| NetError::Timeout)??;
+        if let Some(observer) = self.options.observer.as_ref() {
+            observer.0.first_byte(
+                started.elapsed(),
+                response.status,
+                response.status == HTTP_PARTIAL_CONTENT,
+            );
+        }
         check_status(url, response.status, &response.body, accept_partial)?;
         Ok(response)
     }
@@ -78,6 +91,7 @@ impl RawAppleNet {
         headers: Option<Headers>,
         accept_partial: bool,
     ) -> Result<ByteStream, NetError> {
+        let started = Instant::now();
         let response = {
             let request = AppleRequest::new(&url, Method::Get, range, headers, None)?;
             timeout(
@@ -87,6 +101,13 @@ impl RawAppleNet {
         }
         .await
         .map_err(|_| NetError::Timeout)??;
+        if let Some(observer) = self.options.observer.as_ref() {
+            observer.0.first_byte(
+                started.elapsed(),
+                response.status,
+                response.status == HTTP_PARTIAL_CONTENT,
+            );
+        }
         if let Err(error) = check_status(url, response.status, &Bytes::new(), accept_partial) {
             response.cancel();
             return Err(error);
@@ -123,6 +144,7 @@ impl RawAppleNet {
             self.options.inactivity_timeout,
             self.options.retry_policy.clone(),
             self.cancel.clone(),
+            self.options.observer.clone(),
         );
         ByteStream::with_partial(out_headers, body, partial)
     }
@@ -130,6 +152,8 @@ impl RawAppleNet {
 
 #[derive(Clone)]
 pub struct AppleNet {
+    cancel: CancelToken,
+    session: AppleSession,
     net: Arc<RetryNet<RawAppleNet, DefaultRetryPolicy>>,
     connection_metrics: ConnectionMetrics,
     options: NetOptions,
@@ -139,13 +163,21 @@ impl AppleNet {
     #[must_use]
     pub fn new(options: NetOptions, cancel: CancelToken) -> Self {
         let connection_metrics = ConnectionMetrics::default();
+        let session = AppleSession::new(&options, connection_metrics.clone());
         let raw = RawAppleNet {
-            session: AppleSession::new(&options, connection_metrics.clone()),
+            session: session.clone(),
             cancel: cancel.clone(),
             options: options.clone(),
         };
-        let net = Arc::new(raw.with_retry(options.retry_policy.clone(), cancel));
+        let net = Arc::new(RetryNet::new(
+            raw,
+            DefaultRetryPolicy::new(options.retry_policy.clone()),
+            cancel.clone(),
+            options.observer.clone(),
+        ));
         Self {
+            cancel,
+            session,
             net,
             connection_metrics,
             options,
@@ -186,6 +218,40 @@ impl AppleNet {
     #[must_use]
     pub fn options(&self) -> &NetOptions {
         &self.options
+    }
+
+    #[must_use]
+    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
+        let options = NetOptions::builder()
+            .compression(self.options.compression)
+            .inactivity_timeout(self.options.inactivity_timeout)
+            .impersonate(self.options.impersonate)
+            .maybe_byte_pool(self.options.byte_pool.clone())
+            .retry_policy(self.options.retry_policy.clone())
+            .is_insecure(self.options.is_insecure)
+            .body_queue_capacity(self.options.body_queue_capacity)
+            .body_queue_resume_at(self.options.body_queue_resume_at)
+            .pool_max_idle_per_host(self.options.pool_max_idle_per_host)
+            .maybe_observer(observer)
+            .build();
+        let raw = RawAppleNet {
+            session: self.session.clone(),
+            cancel: self.cancel.clone(),
+            options: options.clone(),
+        };
+        let net = Arc::new(RetryNet::new(
+            raw,
+            DefaultRetryPolicy::new(options.retry_policy.clone()),
+            self.cancel.clone(),
+            options.observer.clone(),
+        ));
+        Self {
+            cancel: self.cancel.clone(),
+            session: self.session.clone(),
+            net,
+            connection_metrics: self.connection_metrics.clone(),
+            options,
+        }
     }
 
     /// # Errors

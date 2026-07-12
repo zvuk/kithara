@@ -6,7 +6,7 @@ use futures::{StreamExt, TryStreamExt};
 use kithara_platform::{
     CancelToken,
     sync::Arc,
-    time::{Duration, timeout},
+    time::{Duration, Instant, timeout},
 };
 use url::Url;
 
@@ -20,9 +20,10 @@ use crate::{
     },
     error::{NetError, NetResult},
     metrics::ConnectionMetrics,
+    observe::Observer,
     resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
-    traits::{Net, NetExt},
+    traits::Net,
     types::{Headers, NetOptions, RangeSpec},
 };
 
@@ -169,8 +170,16 @@ impl RawHttp {
         accept_partial: bool,
     ) -> Result<Response, NetError> {
         let req = Self::apply_headers(req, headers);
+        let started = Instant::now();
         let resp = self.send_idle_bounded(req).await?;
         let status = resp.status();
+        if let Some(observer) = self.options.observer.as_ref() {
+            observer.0.first_byte(
+                started.elapsed(),
+                status.as_u16(),
+                status == StatusCode::PARTIAL_CONTENT,
+            );
+        }
 
         let ok = status.is_success() || (accept_partial && status == StatusCode::PARTIAL_CONTENT);
         if !ok {
@@ -235,6 +244,7 @@ impl RawHttp {
             self.options.inactivity_timeout,
             self.options.retry_policy.clone(),
             self.cancel.clone(),
+            self.options.observer.clone(),
         );
         crate::ByteStream::with_partial(out_headers, body, partial)
     }
@@ -248,6 +258,8 @@ impl RawHttp {
 /// errors (HTTP 4xx, cancellation) propagate immediately.
 #[derive(Clone)]
 pub struct HttpClient {
+    cancel: CancelToken,
+    inner: Client,
     net: Arc<RetryNet<RawHttp, DefaultRetryPolicy>>,
     connection_metrics: ConnectionMetrics,
     options: NetOptions,
@@ -271,12 +283,19 @@ impl HttpClient {
         let inner = build_client(&options, &connection_metrics)
             .expect("BUG: HTTP client builder with our defaults cannot fail");
         let raw = RawHttp {
-            inner,
+            inner: inner.clone(),
             options: options.clone(),
             cancel: cancel.clone(),
         };
-        let net = Arc::new(raw.with_retry(options.retry_policy.clone(), cancel));
+        let net = Arc::new(RetryNet::new(
+            raw,
+            DefaultRetryPolicy::new(options.retry_policy.clone()),
+            cancel.clone(),
+            options.observer.clone(),
+        ));
         Self {
+            cancel,
+            inner,
             net,
             connection_metrics,
             options,
@@ -317,6 +336,40 @@ impl HttpClient {
     #[must_use]
     pub fn options(&self) -> &NetOptions {
         &self.options
+    }
+
+    #[must_use]
+    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
+        let options = NetOptions::builder()
+            .compression(self.options.compression)
+            .inactivity_timeout(self.options.inactivity_timeout)
+            .impersonate(self.options.impersonate)
+            .maybe_byte_pool(self.options.byte_pool.clone())
+            .retry_policy(self.options.retry_policy.clone())
+            .is_insecure(self.options.is_insecure)
+            .body_queue_capacity(self.options.body_queue_capacity)
+            .body_queue_resume_at(self.options.body_queue_resume_at)
+            .pool_max_idle_per_host(self.options.pool_max_idle_per_host)
+            .maybe_observer(observer)
+            .build();
+        let raw = RawHttp {
+            inner: self.inner.clone(),
+            options: options.clone(),
+            cancel: self.cancel.clone(),
+        };
+        let net = Arc::new(RetryNet::new(
+            raw,
+            DefaultRetryPolicy::new(options.retry_policy.clone()),
+            self.cancel.clone(),
+            options.observer.clone(),
+        ));
+        Self {
+            cancel: self.cancel.clone(),
+            inner: self.inner.clone(),
+            net,
+            connection_metrics: self.connection_metrics.clone(),
+            options,
+        }
     }
 
     /// # Errors

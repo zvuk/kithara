@@ -3,11 +3,13 @@ use std::num::NonZeroUsize;
 use kithara_assets::{
     AcquisitionResult, AssetReader, AssetStoreBuilder, StorageBackend, WriteSide,
 };
-use kithara_events::EventBus;
+use kithara_events::{
+    AudioCodecKind, ContainerKind, Envelope, Event, EventBus, FileEvent, TotalBytesSource,
+};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NotReadyCause, PendingReason, PlayheadState, ReadOutcome, SeekState, Source,
+    AudioCodec, NotReadyCause, PendingReason, PlayheadState, ReadOutcome, SeekState, Source,
     SourceError as StreamSourceError, SourcePhase, StreamError,
 };
 use kithara_test_utils::kithara;
@@ -33,7 +35,50 @@ fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> Fil
             .build(),
     );
     let key = backend.scope("test").key("test-source");
-    FileSource::local(reader, coord, bus, backend, key, CancelToken::never(), None)
+    FileSource::local(
+        reader,
+        coord,
+        bus,
+        backend,
+        key,
+        CancelToken::never(),
+        Some(AudioCodec::Mp3),
+    )
+}
+
+#[kithara::test]
+fn file_source_local_open_publishes_opened_and_size() {
+    let reader = create_committed_resource(b"ID3metadata");
+    let coord = make_coord();
+    let bus = EventBus::new(16);
+    let mut rx = bus.subscribe();
+
+    let _source = make_source(reader, coord, bus);
+
+    let opened = rx.try_recv().expect("opened event");
+    assert!(matches!(
+        opened,
+        Envelope {
+            event: Event::File(FileEvent::Opened {
+                codec: Some(AudioCodecKind::Mp3),
+                container: Some(ContainerKind::MpegAudio),
+                total_bytes: Some(11),
+                cached: true,
+            }),
+            ..
+        }
+    ));
+    let total = rx.try_recv().expect("size event");
+    assert!(matches!(
+        total,
+        Envelope {
+            event: Event::File(FileEvent::TotalBytesResolved {
+                total_bytes: 11,
+                source: TotalBytesSource::CommittedLen,
+            }),
+            ..
+        }
+    ));
 }
 
 #[kithara::test]
