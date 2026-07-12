@@ -139,6 +139,7 @@ fn main() -> AppResult {
     let timestretch = StretchControls::new(1.0);
     let player_config = PlayerConfig::builder()
         .cancel(shutdown.child())
+        .byte_pool(region.byte_pool())
         .crossfade_duration(config.crossfade_seconds)
         .eq_layout(generate_log_spaced_bands(config.eq_band_count))
         .pcm_pool(region.pcm_pool())

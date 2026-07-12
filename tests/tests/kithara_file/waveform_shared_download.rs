@@ -97,6 +97,8 @@ async fn waveform_and_player_share_one_get() {
             .asset_store(Arc::clone(&store))
             .build(),
     )
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(PcmPool::default())
     .block_on_underrun(true)
     .build();
 

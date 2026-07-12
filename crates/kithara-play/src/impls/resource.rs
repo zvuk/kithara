@@ -92,7 +92,7 @@ impl Resource {
         let cancel = config.cancel.clone();
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio_config = config.build_file_config();
+                let audio_config = config.build_file_config()?;
                 Self::from_stream_audio(audio_config, src).await?
             }
             SourceType::HlsStream(_) => {

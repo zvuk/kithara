@@ -984,12 +984,16 @@ async fn run_crossfade_flac_case(
 
 fn crossfade_player_config() -> PlayerConfig {
     PlayerConfig::builder()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .crossfade_duration(CROSSFADE_SECS)
         .build()
 }
 
 fn crossfade_eq_player_config() -> PlayerConfig {
     PlayerConfig::builder()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .crossfade_duration(CROSSFADE_SECS)
         .eq_layout(generate_log_spaced_bands(10))
         .build()
@@ -997,6 +1001,8 @@ fn crossfade_eq_player_config() -> PlayerConfig {
 
 fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> PlayerConfig {
     PlayerConfig::builder()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .crossfade_duration(CROSSFADE_SECS)
         .eq_layout(generate_log_spaced_bands(10))
         .timestretch(Arc::clone(timestretch))
@@ -1014,7 +1020,11 @@ async fn setup_queue_with_sample_rate(
     render_sample_rate: u32,
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .crossfade_duration(0.0)
+            .build(),
         render_sample_rate,
     );
     let queue = Queue::new(with_autoplay(
@@ -1053,7 +1063,11 @@ async fn setup_multivariant_flac_queue(
     temp_dir: &TestTempDir,
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
@@ -1177,7 +1191,11 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
 
 async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(

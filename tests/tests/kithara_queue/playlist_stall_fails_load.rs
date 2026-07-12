@@ -88,6 +88,8 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
 
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));

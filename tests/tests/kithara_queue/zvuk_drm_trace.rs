@@ -78,7 +78,12 @@ async fn shared_ctx() -> &'static Ctx {
             BytePool::default(),
             PcmPool::default(),
         );
-        let player = Arc::new(PlayerImpl::new(PlayerConfig::builder().build()));
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder()
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .build(),
+        ));
         let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
         let q = Arc::clone(&queue);

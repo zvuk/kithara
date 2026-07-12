@@ -18,8 +18,15 @@ fn stress_seeks_preserve_timeline_integrity() {
     let wav_data = create_test_wav(SAMPLE_COUNT, SawWav::DEFAULT.sample_rate, 2);
     let cursor = Cursor::new(wav_data);
 
-    let mut decoder =
-        DecoderFactory::create_with_probe(cursor, Some("wav"), DecoderConfig::default()).unwrap();
+    let mut decoder = DecoderFactory::create_with_probe(
+        cursor,
+        Some("wav"),
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .unwrap();
 
     let total_duration = decoder.duration().unwrap_or(Duration::from_secs(10));
     let total_secs = total_duration.as_secs_f64();

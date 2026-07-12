@@ -204,6 +204,7 @@ impl NativeInner {
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
             .cancel(cancel.child())
+            .byte_pool(region.byte_pool())
             .pcm_pool(region.pcm_pool())
             .build();
         let player = Arc::new(PlayerImpl::new(player_config));

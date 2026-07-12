@@ -37,6 +37,8 @@ struct Session {
 fn build_session(cache_path: &Path) -> Session {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));

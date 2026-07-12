@@ -213,6 +213,7 @@ impl Loader {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use kithara_bufpool::Region;
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::time::Duration;
     use kithara_play::PlayerConfig;
@@ -256,7 +257,13 @@ mod tests {
 
     impl LoaderFixtureSpec {
         fn build(self) -> LoaderFixture {
-            let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+            let region = Region::default();
+            let player = Arc::new(PlayerImpl::new(
+                PlayerConfig::builder()
+                    .byte_pool(region.byte_pool())
+                    .pcm_pool(region.pcm_pool())
+                    .build(),
+            ));
             let bus = player.bus().clone();
             let tracks = Arc::new(Tracks::new(bus.clone()));
             let loader = Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks)));

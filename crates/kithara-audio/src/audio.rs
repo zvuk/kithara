@@ -1018,7 +1018,7 @@ where
             host_sample_rate: config_host_sr,
             media_info: user_media_info,
             pcm_buffer_chunks,
-            pcm_pool: mut pool,
+            pcm_pool: pool,
             playback_rate: config_playback_rate,
             stretch: config_stretch,
             engine_load: config_engine_load,
@@ -1039,7 +1039,6 @@ where
         })?;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
-        let byte_pool = byte_pool.unwrap_or_else(|| BytePool::default().clone());
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let initial_byte_len = stream.len().unwrap_or(0);
@@ -1054,9 +1053,8 @@ where
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
 
-        let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
         let warm_channels = warm_channels_from_media_info(initial_media_info.as_ref());
-        Self::warm_pcm_pool(pool, warm_channels, pcm_buffer_chunks);
+        Self::warm_pcm_pool(&pool, warm_channels, pcm_buffer_chunks);
         // The single up-front build reads through the blocking off-RT
         // `Stream::read` adapter (waits for residual init lateness, cancel-
         // bounded), then we disarm before the RT worker is registered so the
@@ -1082,11 +1080,11 @@ where
         let epoch = Arc::new(AtomicU64::new(0));
         let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
 
-        let effects = create_effects(initial_spec, config_stretch.as_ref(), pool, custom_effects);
+        let effects = create_effects(initial_spec, config_stretch.as_ref(), &pool, custom_effects);
 
         Self::log_pipeline_ready(initial_spec, initial_spec, &host_sample_rate);
 
-        let interleaved = Self::alloc_interleaved_scratch(pool, initial_spec);
+        let interleaved = Self::alloc_interleaved_scratch(&pool, initial_spec);
 
         let abr_handle = shared_stream.abr_handle();
         let peer_wake = shared_stream.peer_wake();

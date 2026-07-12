@@ -4960,6 +4960,7 @@ dependencies = [
  "bon",
  "delegate",
  "kithara-abr",
+ "kithara-bufpool",
  "kithara-events",
  "kithara-platform",
  "kithara-play",

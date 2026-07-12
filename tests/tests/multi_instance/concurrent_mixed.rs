@@ -49,6 +49,8 @@ async fn spawn_file_instance(
         .store(StoreOptions::new(temp_path))
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint(("mp3").to_string())
         .build();
     let mut audio = Audio::<Stream<File>>::new(config)
@@ -91,6 +93,8 @@ async fn spawn_hls_instance(
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
 

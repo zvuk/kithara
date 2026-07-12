@@ -253,6 +253,8 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(fixture.media_info())
         .block_on_underrun(true)
         .build();

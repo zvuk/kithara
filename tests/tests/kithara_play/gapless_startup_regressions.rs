@@ -46,7 +46,11 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 ) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().gapless_mode(gapless_mode).build(),
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .gapless_mode(gapless_mode)
+            .build(),
         GAPLESS_SAMPLE_RATE,
     );
     let resource =

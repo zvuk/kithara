@@ -145,6 +145,8 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
 
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));

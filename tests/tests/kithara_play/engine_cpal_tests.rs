@@ -12,7 +12,9 @@ enum Backend {
 }
 
 fn engine_config(backend: Backend) -> EngineConfig {
-    let mut config = EngineConfig::default();
+    let mut config = EngineConfig::builder()
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .build();
     if matches!(backend, Backend::Offline) {
         config.session = Some(OfflineSession::arc_auto());
     }

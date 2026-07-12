@@ -118,6 +118,8 @@ fn build_queue_with_tick(
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -152,6 +154,8 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, StoreOptions) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));

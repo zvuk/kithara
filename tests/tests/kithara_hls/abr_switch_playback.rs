@@ -79,6 +79,8 @@ async fn open_packaged_hls_audio(
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .maybe_events(bus)
         .build();
 
@@ -135,6 +137,8 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -307,6 +311,8 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
                 .download_batch_size(1)
                 .build(),
         )
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .block_on_underrun(true)
         .build();
         let mut warm_audio = Audio::<Stream<Hls>>::new(warm_config)
@@ -426,6 +432,8 @@ async fn stream_continues_after_seek(
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -521,6 +529,8 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -583,6 +593,8 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Symphonia)
@@ -659,6 +671,8 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
         .store(StoreOptions::new(temp_dir.path()))
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint(("mp3").to_string())
         .block_on_underrun(true)
         .build();
@@ -751,9 +765,14 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .initial_abr_mode(auto(0))
         .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
-        .await
-        .expect("audio creation");
+    let mut audio = Audio::<Stream<Hls>>::new(
+        AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .await
+    .expect("audio creation");
     let _ = audio.preload();
 
     async fn next_chunk(audio: &mut Audio<Stream<Hls>>) -> Option<PcmChunk> {
@@ -887,6 +906,8 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     // pass the hang budget, and the `KITHARA_HANG_TIMEOUT_SECS=5` watchdog fires
     // — the flash-correct enforcement of the "no >5 s stall" contract.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus.clone())
         .block_on_underrun(true)
         .build();

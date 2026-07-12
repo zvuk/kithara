@@ -123,6 +123,8 @@ fn build_queue_with_tick_cf(
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .crossfade_duration(crossfade_seconds)
             .build(),

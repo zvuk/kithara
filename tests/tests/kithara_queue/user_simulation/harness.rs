@@ -124,6 +124,8 @@ impl SimHarness {
         let session = Arc::new(OfflineSession::new());
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
                 .build(),
         ));

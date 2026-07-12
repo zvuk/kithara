@@ -4084,7 +4084,7 @@ mod splice_continuity_tests {
         sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     };
 
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::{DecoderConfig, DecoderFactory as DecodeFactory};
     use kithara_platform::{
         sync::{Arc, Mutex},
@@ -4440,6 +4440,8 @@ mod splice_continuity_tests {
         byte_len.store(stream.len().unwrap_or(0), Ordering::Release);
         DecoderConfig::builder()
             .backend(backend)
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .byte_len_handle(byte_len)
             .maybe_byte_map(stream.byte_map())
             .gapless(false)
@@ -4476,6 +4478,8 @@ mod splice_continuity_tests {
                 let config: DecoderConfig<kithara_resampler::NoResamplerBackend> =
                     DecoderConfig::builder()
                         .backend(backend)
+                        .byte_pool(BytePool::default())
+                        .pcm_pool(PcmPool::default())
                         .byte_len_handle(Arc::clone(&factory_byte_len))
                         .maybe_byte_map(stream.byte_map())
                         .gapless(false)

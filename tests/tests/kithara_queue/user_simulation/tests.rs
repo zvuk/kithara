@@ -422,6 +422,8 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
         .build();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -694,6 +696,8 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -966,6 +970,8 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -1028,6 +1034,8 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -1276,6 +1284,8 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
     let session = Arc::new(OfflineSession::new_manual());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
     ));
