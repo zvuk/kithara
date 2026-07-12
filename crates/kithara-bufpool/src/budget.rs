@@ -83,13 +83,25 @@ impl RegionBudget {
         }
     }
 
-    pub(crate) fn track_byte_delta(&self, before: usize, after: usize) {
+    pub(crate) fn track_byte_delta(&self, before: usize, after: usize) -> bool {
         if after > before {
-            self.inner
-                .allocated_bytes
-                .fetch_add(after - before, Ordering::Relaxed);
+            let additional = after - before;
+            let mut current = self.inner.allocated_bytes.load(Ordering::Relaxed);
+            loop {
+                let new = current.saturating_add(additional);
+                match self.inner.allocated_bytes.compare_exchange_weak(
+                    current,
+                    new,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => return new > self.inner.max_bytes,
+                    Err(actual) => current = actual,
+                }
+            }
         } else if before > after {
             self.release(before - after);
         }
+        false
     }
 }

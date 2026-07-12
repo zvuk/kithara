@@ -13,6 +13,8 @@ use crate::{ByteBudget, budget::RegionBudget, growth::BudgetExhausted};
 pub struct PoolStats {
     /// No reusable buffer found — fresh allocation.
     pub alloc_misses: u64,
+    /// Post-initialization growth events that exceeded the byte budget.
+    pub budget_overshoots: u64,
     /// Buffer retrieved from home shard (best case).
     pub home_hits: u64,
     /// Buffer dropped on return (shard full or reuse rejected).
@@ -46,6 +48,7 @@ where
     T: Reuse,
 {
     stat_alloc_misses: AtomicU64,
+    stat_budget_overshoots: AtomicU64,
     stat_home_hits: AtomicU64,
     stat_put_drops: AtomicU64,
     stat_steal_hits: AtomicU64,
@@ -115,6 +118,7 @@ where
         PoolStats {
             alloc_misses: self.stat_alloc_misses.load(Ordering::Relaxed),
             allocated_bytes: self.budget.allocated_bytes(),
+            budget_overshoots: self.stat_budget_overshoots.load(Ordering::Relaxed),
             home_hits: self.stat_home_hits.load(Ordering::Relaxed),
             put_drops: self.stat_put_drops.load(Ordering::Relaxed),
             steal_hits: self.stat_steal_hits.load(Ordering::Relaxed),
@@ -126,7 +130,9 @@ where
     /// When shrinking (before > after), uses saturating subtraction
     /// to prevent underflow from untracked external growth.
     fn track_byte_delta(&self, before: usize, after: usize) {
-        self.budget.track_byte_delta(before, after);
+        if self.budget.track_byte_delta(before, after) {
+            self.stat_budget_overshoots.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Try to steal a buffer from nearby shards via lock-free `pop`.
@@ -274,6 +280,7 @@ where
             budget,
             shards: array::from_fn(|_| PoolShard::new(buffers_per_shard, trim_capacity)),
             stat_alloc_misses: AtomicU64::new(0),
+            stat_budget_overshoots: AtomicU64::new(0),
             stat_home_hits: AtomicU64::new(0),
             stat_put_drops: AtomicU64::new(0),
             stat_steal_hits: AtomicU64::new(0),

@@ -95,13 +95,16 @@ where
         self.0.allocated_bytes()
     }
 
-    /// Wrap an externally-owned value into a [`PooledOwned`] guard.
+    /// Wrap a value into a [`PooledOwned`] guard without charging budget.
     ///
     /// The returned guard automatically returns the value to this pool on drop,
     /// just like a value obtained via [`get()`](SharedPool::get).
     ///
-    /// Useful for attaching pool-recycling to values that were extracted via
-    /// [`PooledOwned::into_inner()`] or created outside the pool.
+    /// The budget charge travels with a buffer from its first growth until a
+    /// rejected return, so `attach` is only for values whose capacity this
+    /// pool already accounts for — [`PooledOwned::into_inner()`] round-trips.
+    /// Importing genuinely external memory needs a charging API, which does
+    /// not exist until a production consumer appears.
     pub fn attach(&self, value: T) -> PooledOwned<SHARDS, T> {
         let shard_idx = Pool::<SHARDS, T>::shard_index();
         PooledOwned::wrap(Arc::clone(&self.0), value, shard_idx)

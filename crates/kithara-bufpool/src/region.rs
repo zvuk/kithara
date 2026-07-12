@@ -40,6 +40,8 @@ impl Default for RegionConfig {
 pub struct RegionStats {
     /// Current bytes tracked across both pools.
     pub allocated_bytes: usize,
+    /// Post-initialization growth events that exceeded the shared budget.
+    pub budget_overshoots: u64,
     /// Total home and steal hits for the byte pool.
     pub byte_pool_hits: u64,
     /// Fresh allocations by the byte pool.
@@ -101,6 +103,7 @@ impl Region {
         let pcm = self.inner.pcm_pool.stats();
         RegionStats {
             allocated_bytes: self.inner.budget.allocated_bytes(),
+            budget_overshoots: byte.budget_overshoots + pcm.budget_overshoots,
             byte_pool_hits: byte.home_hits + byte.steal_hits,
             byte_pool_misses: byte.alloc_misses,
             max_bytes: self.inner.budget.max_bytes(),
