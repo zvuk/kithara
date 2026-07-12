@@ -24,44 +24,30 @@ use crate::{
 /// (whose internals are private), produced by mapping the inner ring's errors.
 pub mod error {
     /// Failure of an awaited `recv`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
     pub enum RecvError {
         /// All senders dropped and the ring is drained.
+        #[display("channel closed")]
         Closed,
         /// This receiver fell behind; `n` messages were skipped. Recoverable.
+        #[display("channel lagged by {_0}")]
         Lagged(u64),
-    }
-
-    impl std::fmt::Display for RecvError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::Closed => f.write_str("channel closed"),
-                Self::Lagged(n) => write!(f, "channel lagged by {n}"),
-            }
-        }
     }
 
     impl std::error::Error for RecvError {}
 
     /// Failure of a non-blocking `try_recv`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
     pub enum TryRecvError {
         /// No message is currently buffered for this receiver.
+        #[display("channel empty")]
         Empty,
         /// All senders dropped and the ring is drained.
+        #[display("channel closed")]
         Closed,
         /// This receiver fell behind; `n` messages were skipped. Recoverable.
+        #[display("channel lagged by {_0}")]
         Lagged(u64),
-    }
-
-    impl std::fmt::Display for TryRecvError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::Empty => f.write_str("channel empty"),
-                Self::Closed => f.write_str("channel closed"),
-                Self::Lagged(n) => write!(f, "channel lagged by {n}"),
-            }
-        }
     }
 
     impl std::error::Error for TryRecvError {}

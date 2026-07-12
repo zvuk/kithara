@@ -4,25 +4,18 @@
 ///
 /// Network errors are reported by [`crate::DownloaderEvent::RequestFailed`]
 /// with a typed [`kithara_net::NetError`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, derive_more::Display, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FileError {
     /// Local I/O / storage failure (mmap, write, eviction).
+    #[display("io: {_0}")]
     Io(String),
     /// Decoder-side complaint surfaced through the file stream.
+    #[display("decode: {_0}")]
     Decode(String),
     /// Anything else not covered above.
+    #[display("other: {_0}")]
     Other(String),
-}
-
-impl std::fmt::Display for FileError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(msg) => write!(f, "io: {msg}"),
-            Self::Decode(msg) => write!(f, "decode: {msg}"),
-            Self::Other(msg) => write!(f, "other: {msg}"),
-        }
-    }
 }
 
 /// Events emitted by file streams.

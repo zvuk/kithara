@@ -32,6 +32,7 @@ tokio-rt-multi-thread = ["tokio/rt-multi-thread"]
 
 [dependencies]
 delegate = { workspace = true }
+derive_more = { workspace = true }
 futures = { workspace = true }
 loom = { workspace = true, optional = true }
 tracing = { workspace = true }

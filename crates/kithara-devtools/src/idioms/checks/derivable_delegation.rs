@@ -54,6 +54,17 @@ fn check_impl(
     inherent_min_methods: usize,
     out: &mut Vec<Violation>,
 ) {
+    // `delegate!` cannot expand inside an `#[async_trait]` impl (E0195
+    // lifetime mismatch against the desugared signatures), so such impls
+    // have no macro collapse path and must not be flagged.
+    if impl_block.attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|seg| seg.ident == "async_trait")
+    }) {
+        return;
+    }
     let min_methods = if impl_block.trait_.is_some() {
         trait_min_methods
     } else {
@@ -97,7 +108,15 @@ fn check_impl(
 }
 
 fn forwarding_field(method: &syn::ImplItemFn) -> Option<String> {
-    let [Stmt::Expr(Expr::MethodCall(call), None)] = method.block.stmts.as_slice() else {
+    let [Stmt::Expr(expr, None)] = method.block.stmts.as_slice() else {
+        return None;
+    };
+    let expr = match expr {
+        Expr::MethodCall(_) if method.sig.asyncness.is_none() => expr,
+        Expr::Await(await_expr) if method.sig.asyncness.is_some() => &await_expr.base,
+        _ => return None,
+    };
+    let Expr::MethodCall(call) = expr else {
         return None;
     };
     if call.method != method.sig.ident || call.turbofish.is_some() {
@@ -202,10 +221,30 @@ mod tests {
     }
 
     #[test]
-    fn await_is_rejected() {
+    fn async_trait_attribute_impl_is_skipped() {
+        assert_eq!(
+            count(
+                "#[async_trait::async_trait] impl Net for Client { async fn get(&self, r: Req) { self.net.get(r).await } async fn head(&self, r: Req) { self.net.head(r).await } }"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn async_trait_impl_is_flagged() {
         assert_eq!(
             count(
                 "impl Read for Wrapper { async fn read(&self, b: Buf) { self.inner.read(b).await } async fn close(&self) { self.inner.close().await } }"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn transformed_async_argument_is_rejected() {
+        assert_eq!(
+            count(
+                "impl Read for Wrapper { async fn read(&self, b: Buf) { self.inner.read(b.into()).await } async fn close(&self) { self.inner.close().await } }"
             ),
             0
         );

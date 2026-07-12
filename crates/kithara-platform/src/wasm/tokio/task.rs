@@ -101,7 +101,8 @@ impl<T> Future for JoinHandle<T> {
 }
 
 /// Error returned when a spawned task fails.
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display)]
+#[display("task failed to execute to completion")]
 pub struct JoinError {
     cancelled: bool,
 }
@@ -111,12 +112,6 @@ impl JoinError {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.cancelled
-    }
-}
-
-impl std::fmt::Display for JoinError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("task failed to execute to completion")
     }
 }
 

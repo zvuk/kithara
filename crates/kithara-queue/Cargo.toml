@@ -36,6 +36,7 @@ kithara-play = { workspace = true, default-features = false }
 
 bon = { workspace = true }
 delegate = { workspace = true }
+derive_more = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

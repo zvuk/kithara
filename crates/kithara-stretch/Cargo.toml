@@ -16,6 +16,7 @@ stretch-bungee = ["dep:bon", "dep:bungee-rs", "dep:kithara-bufpool"]
 
 [dependencies]
 bon = { workspace = true, optional = true }
+derive_more = { workspace = true }
 num-traits = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

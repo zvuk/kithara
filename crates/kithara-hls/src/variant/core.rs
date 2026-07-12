@@ -1,6 +1,5 @@
 use std::{
     collections::VecDeque,
-    ops::Deref,
     sync::atomic::{AtomicU32, AtomicU64},
 };
 
@@ -151,6 +150,7 @@ pub(super) struct VariantSeek {
     pub(super) size_demand: Mutex<SizeDemandState>,
 }
 
+#[derive(derive_more::Deref)]
 pub(super) struct VariantSegments {
     /// Per-track asset store. The single source-of-truth clone: each vended
     /// [`ResourceHandle`] gets a cheap clone of it, and the fetch path
@@ -166,15 +166,8 @@ pub(super) struct VariantSegments {
     pub(super) init: Option<Segment>,
     /// Media entry table — the fetch path and descriptor builders index it
     /// for `url` / `content` / `decode_time`.
+    #[deref]
     entries: Vec<Segment>,
-}
-
-impl Deref for VariantSegments {
-    type Target = [Segment];
-
-    fn deref(&self) -> &Self::Target {
-        &self.entries
-    }
 }
 
 impl VariantSegments {

@@ -2,7 +2,6 @@
 
 use std::{
     error::Error as StdError,
-    fmt,
     future::Future,
     io::{self, Error as IoError, ErrorKind, Read, Seek, SeekFrom},
     num::NonZeroUsize,
@@ -33,10 +32,11 @@ use crate::{
 /// retry) are **not** errors and are carried in
 /// [`StreamReadOutcome::Pending`] with a typed [`PendingReason`]. Only
 /// genuine source failures end up here.
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display)]
 #[non_exhaustive]
 pub enum StreamReadError {
     /// Anything surfaced by the underlying [`Source`] as a real error.
+    #[display("source error: {_0}")]
     Source(IoError),
 }
 
@@ -72,32 +72,15 @@ pub enum StreamReadOutcome {
 /// through their own error chain. Decoders downcast to recover the
 /// structured info and classify the failure as caller-side (the seek
 /// target is invalid for this stream, not a decoder state corruption).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, derive_more::Display)]
+#[display("seek past EOF: new_pos={new_pos} len={len} current_pos={current_pos}")]
 pub struct StreamSeekPastEof {
     pub current_pos: u64,
     pub len: u64,
     pub new_pos: u64,
 }
 
-impl fmt::Display for StreamSeekPastEof {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "seek past EOF: new_pos={} len={} current_pos={}",
-            self.new_pos, self.len, self.current_pos
-        )
-    }
-}
-
 impl StdError for StreamSeekPastEof {}
-
-impl fmt::Display for StreamReadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Source(e) => write!(f, "source error: {e}"),
-        }
-    }
-}
 
 impl StdError for StreamReadError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
@@ -120,7 +103,10 @@ impl StdError for StreamReadError {
 /// at the wrap site, so callers downcasting from `io::Error` recover
 /// both *what* stalled and *why* without having to instrument their
 /// own decoder.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, derive_more::Display)]
+#[display(
+    "{reason}: pos={pos} want={want} len={len:?} phase={phase:?} epoch={epoch} flushing={flushing} variant_fence={variant_fence}"
+)]
 pub struct StreamPending {
     pub len: Option<u64>,
     pub reason: PendingReason,
@@ -132,23 +118,6 @@ pub struct StreamPending {
     pub want: usize,
 }
 
-impl fmt::Display for StreamPending {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}: pos={} want={} len={:?} phase={:?} epoch={} flushing={} variant_fence={}",
-            self.reason,
-            self.pos,
-            self.want,
-            self.len,
-            self.phase,
-            self.epoch,
-            self.flushing,
-            self.variant_fence,
-        )
-    }
-}
-
 impl StdError for StreamPending {}
 
 /// Non-retriable cross-variant boundary signal — the typed payload of
@@ -156,14 +125,9 @@ impl StdError for StreamPending {}
 /// underlying source fenced on a variant change. Decoders that go
 /// through `std::io::Read` (Symphonia chain walker) downcast on this
 /// type to recover the precise classification without string-matching.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, derive_more::Display)]
+#[display("variant change: decoder recreation required")]
 pub struct VariantChangeError;
-
-impl fmt::Display for VariantChangeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("variant change: decoder recreation required")
-    }
-}
 
 impl StdError for VariantChangeError {}
 

@@ -1,12 +1,7 @@
 /// All senders dropped; the watched value will never change again.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
+#[display("watch channel closed")]
 pub struct RecvError;
-
-impl std::fmt::Display for RecvError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("watch channel closed")
-    }
-}
 
 impl std::error::Error for RecvError {}
 

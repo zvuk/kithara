@@ -63,6 +63,7 @@ bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
 crossterm = { workspace = true, optional = true }
+derive_more = { workspace = true }
 iced = { workspace = true, optional = true }
 num-traits = { workspace = true }
 obfstr = { workspace = true }

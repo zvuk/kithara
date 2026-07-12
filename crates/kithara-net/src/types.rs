@@ -38,8 +38,9 @@ pub enum ImpersonatePreset {
     Chrome,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, derive_more::From, PartialEq, Eq)]
 pub struct Headers {
+    #[from]
     inner: HashMap<String, String>,
 }
 
@@ -65,12 +66,6 @@ impl Headers {
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
-    }
-}
-
-impl From<HashMap<String, String>> for Headers {
-    fn from(map: HashMap<String, String>) -> Self {
-        Self { inner: map }
     }
 }
 

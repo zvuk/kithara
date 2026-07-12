@@ -22,7 +22,8 @@ pub enum SeekLifecycleStage {
 /// `kithara-events → kithara-decode → kithara-stream → kithara-events`
 /// cycle once `kithara-stream` starts publishing downloader events via
 /// this bus.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, derive_more::Display, PartialEq, Eq)]
+#[display("{sample_rate} Hz, {channels} channels")]
 #[non_exhaustive]
 pub struct AudioFormat {
     pub channels: u16,
@@ -36,12 +37,6 @@ impl AudioFormat {
             channels,
             sample_rate,
         }
-    }
-}
-
-impl std::fmt::Display for AudioFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} Hz, {} channels", self.sample_rate, self.channels)
     }
 }
 

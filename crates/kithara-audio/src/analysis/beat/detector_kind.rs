@@ -1,7 +1,6 @@
-use std::fmt;
-
 /// Beat detector selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
+#[display("{self:?}")]
 pub(crate) enum BeatDetectorKind {
     /// `kithara-beat` NN (`beat_this` port). Feature `beat-nn`.
     #[cfg(feature = "beat-nn")]
@@ -24,11 +23,5 @@ impl BeatDetectorKind {
 impl Default for BeatDetectorKind {
     fn default() -> Self {
         Self::first()
-    }
-}
-
-impl fmt::Display for BeatDetectorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
     }
 }

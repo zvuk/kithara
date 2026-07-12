@@ -16,6 +16,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 kithara-platform = { workspace = true }
 
 crossbeam-queue = { workspace = true }
+derive_more = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
