@@ -32,6 +32,8 @@ mod resampled;
 mod symphonia;
 mod traits;
 mod types;
+#[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
+mod webcodecs;
 
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;

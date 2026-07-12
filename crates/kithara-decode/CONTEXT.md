@@ -209,6 +209,41 @@ ceil-domain slack used by fused decode+SRC when carrying the ideal output length
 into gapless trailing-trim compensation. Changing it changes the correctness
 contract, not a tunable, so it stays named and local to the Apple codec owner.
 
+## WebCodecs host worker
+
+The browser `AudioDecoder` is owned only by its dedicated host worker. The
+decode thread holds the command sender and output receiver, so JavaScript values
+never cross the Rust thread boundary. Every command and output belongs to a
+generation; reset advances the current generation, resets the decoder, and the
+host discards work from older generations before it can reach consumers.
+
+WebCodecs output callbacks require a live worker event loop. The worker entry
+keeps the worker alive, spawns the async command loop, and then returns so the
+browser can continue pumping decoder callbacks.
+
+| `AudioCodec` | WebCodecs codec string |
+| --- | --- |
+| AAC LC | `mp4a.40.2` |
+| HE-AAC v1 | `mp4a.40.5` |
+| HE-AAC v2 | `mp4a.40.29` |
+| MP3 | `mp3` |
+| FLAC | `flac` |
+
+AAC `description` is the raw `AudioSpecificConfig` from `TrackInfo::extra_data`,
+not an `esds` box or cookie. MP3 has no description. FLAC description is the
+`fLaC` marker followed by a final STREAMINFO metadata-block header and the
+34-byte STREAMINFO payload carried by `TrackInfo`.
+
+The frame codec owns the current generation. A seek advances it, sends `Reset`,
+discards queued output, then sends `Configure` again because WebCodecs `reset()`
+returns `AudioDecoder` to the unconfigured state. Host commands and callbacks
+from older generations are discarded. The first empty frame sends `Flush`; each
+empty-frame call waits only for one bounded output. `drain_codec_eof` currently
+invokes this path only when decoder and demuxer rates differ. Equal-rate tail
+drain needs a later `ComposedDecoder` extension and is out of scope. WebCodecs
+AAC priming and algorithmic-delay characterization are also deferred; both
+remain at the `FrameCodec` defaults for now.
+
 ## Module layout
 
 - `src/traits.rs` — public `Decoder` trait plus typed outcomes (`DecoderChunkOutcome`, `DecoderSeekOutcome`, `InputReadOutcome`) and the `DecoderInput` source supertrait.
