@@ -3,7 +3,6 @@
 use std::{
     fs,
     io::{Read, Seek, SeekFrom},
-    sync::Arc,
 };
 
 use kithara::{
@@ -14,6 +13,7 @@ use kithara::{
     platform::{
         CancelToken,
         flash::real_io,
+        sync::Arc,
         time::{self, Duration, Instant},
         tokio::task::spawn_blocking,
     },

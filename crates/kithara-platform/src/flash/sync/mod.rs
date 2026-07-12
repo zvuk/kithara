@@ -9,11 +9,12 @@ pub(crate) mod mutex;
 pub(crate) mod notify;
 pub(crate) mod rwlock;
 
-pub use std::sync::OnceLock;
-
 pub use condvar::Condvar;
 pub use mutex::{Mutex, MutexGuard, NotAvailable};
 pub use notify::Notify;
 pub use rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-pub use crate::common::gate::{CondvarGate, ThreadGate, WaitGate};
+pub use crate::{
+    backend::sync::{Arc, OnceLock, Weak, atomic},
+    common::gate::{CondvarGate, ThreadGate, WaitGate},
+};

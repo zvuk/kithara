@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
@@ -7,6 +5,7 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
+        sync::Arc,
         time::Duration,
         tokio::task::{JoinHandle, spawn_blocking},
     },

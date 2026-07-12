@@ -1,15 +1,10 @@
-use std::{
-    collections::VecDeque,
-    future::poll_fn,
-    sync::{Arc, atomic::Ordering},
-    task::Poll,
-};
+use std::{collections::VecDeque, future::poll_fn, sync::atomic::Ordering, task::Poll};
 
 use kithara_abr::AbrPeerId;
 use kithara_events::{DownloaderEvent, EventBus, RequestId, RequestPriority};
 use kithara_platform::{
     CancelGroup, CancelToken,
-    sync::{Notify, RwLock},
+    sync::{Arc, Notify, RwLock},
     time::Instant,
     tokio,
     tokio::sync::mpsc,

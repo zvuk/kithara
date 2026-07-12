@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::future::join_all;
@@ -10,7 +7,7 @@ use kithara_events::{EventBus, RequestPriority};
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
     CancelGroup, CancelToken,
-    sync::RwLock,
+    sync::{Arc, RwLock},
     time::Instant,
     tokio::sync::{mpsc, oneshot},
 };

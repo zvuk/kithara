@@ -106,13 +106,16 @@ pub(in crate::flash) fn real_io_exit() {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc},
+        sync::{Mutex, MutexGuard, PoisonError, mpsc},
         thread,
         time::Instant as RealInstant,
     };
 
     use super::*;
-    use crate::flash::{Duration, system::credit};
+    use crate::{
+        flash::{Duration, system::credit},
+        sync::Arc,
+    };
 
     fn ms(n: u64) -> u64 {
         n * 1_000_000

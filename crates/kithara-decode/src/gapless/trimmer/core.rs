@@ -1,7 +1,10 @@
 use num_traits::AsPrimitive;
 use smallvec::SmallVec;
 
-use crate::{GaplessInfo, PcmChunk, duration_for_frames, gapless::heuristic::SilenceTrimParams};
+use crate::{
+    GaplessInfo, GaplessTailCompensation, PcmChunk, duration_for_frames,
+    gapless::heuristic::SilenceTrimParams,
+};
 
 /// Inline batch of chunks released by one `GaplessTrimmer` operation.
 pub type GaplessOutput = SmallVec<[PcmChunk; 2]>;
@@ -51,6 +54,8 @@ pub struct GaplessTrimmer {
     /// helpers below: `trailing_frames` does not always mean "frames
     /// to drop", sometimes it just means "minimum buffered tail".
     trailing_frames: u64,
+    tail_compensation: Option<GaplessTailCompensation>,
+    input_frames_seen: u64,
 }
 
 #[derive(Debug, Default)]
@@ -181,6 +186,8 @@ impl GaplessTrimmer {
                 fade_in: Some(FadeInState::for_sample_rate(sample_rate)),
             },
             trailing_frames: 0,
+            tail_compensation: None,
+            input_frames_seen: 0,
             tail_buffer: TailBuffer::new(),
             tail_buffered_frames: 0,
         }
@@ -192,14 +199,25 @@ impl GaplessTrimmer {
     }
 
     #[must_use]
+    pub fn with_tail_compensation(mut self, compensation: Option<GaplessTailCompensation>) -> Self {
+        self.tail_compensation = compensation;
+        self
+    }
+
+    pub fn set_tail_compensation(&mut self, compensation: Option<GaplessTailCompensation>) {
+        self.tail_compensation = compensation;
+    }
+
+    #[must_use]
     pub fn flush(&mut self) -> GaplessOutput {
         match &mut self.mode {
             GaplessMode::Disabled => GaplessOutput::new(),
             GaplessMode::Fixed { .. } => {
+                let trailing_frames = self.compensated_trailing_frames();
                 trim_tail_frames(
                     &mut self.tail_buffer,
                     &mut self.tail_buffered_frames,
-                    self.trailing_frames,
+                    trailing_frames,
                 );
                 drain_tail(&mut self.tail_buffer, &mut self.tail_buffered_frames)
             }
@@ -233,11 +251,16 @@ impl GaplessTrimmer {
                 state.fade_in = None;
             }
         }
+        self.tail_compensation = None;
+        self.input_frames_seen = 0;
         clear_tail_buffer(&mut self.tail_buffer, &mut self.tail_buffered_frames);
     }
 
     #[must_use]
     pub fn push(&mut self, chunk: PcmChunk) -> GaplessOutput {
+        if matches!(self.mode, GaplessMode::Fixed { .. }) {
+            self.input_frames_seen = self.input_frames_seen.saturating_add(chunk_frames(&chunk));
+        }
         match &mut self.mode {
             GaplessMode::Disabled => output_with(chunk),
             GaplessMode::Fixed {
@@ -278,12 +301,37 @@ impl GaplessTrimmer {
             mode: GaplessMode::Heuristic(Box::new(HeuristicState::new(params))),
             tail_buffer: TailBuffer::new(),
             tail_buffered_frames: 0,
+            tail_compensation: None,
+            input_frames_seen: 0,
         }
+    }
+
+    fn compensated_trailing_frames(&self) -> u64 {
+        let Some(compensation) = self.tail_compensation else {
+            return self.trailing_frames;
+        };
+        let deficit = compensation.deficit_frames(self.input_frames_seen);
+        if deficit > 1 {
+            debug_assert!(
+                deficit <= 1,
+                "gapless tail deficit exceeded one frame: deficit={deficit}, ideal={}, actual={}",
+                compensation.ideal_pre_trim_frames(),
+                self.input_frames_seen
+            );
+            tracing::warn!(
+                deficit,
+                ideal = compensation.ideal_pre_trim_frames(),
+                actual = self.input_frames_seen,
+                "gapless tail deficit exceeded one frame; bounding trailing trim compensation"
+            );
+        }
+        self.trailing_frames.saturating_sub(deficit.min(1))
     }
 }
 
 impl From<GaplessInfo> for GaplessTrimmer {
     fn from(info: GaplessInfo) -> Self {
+        // Factory/codec boundaries resolve GaplessInfo to this trimmer's input domain.
         let enabled = info.leading_frames > 0 || info.trailing_frames > 0;
         Self {
             mode: if enabled {
@@ -295,6 +343,8 @@ impl From<GaplessInfo> for GaplessTrimmer {
                 GaplessMode::Disabled
             },
             trailing_frames: info.trailing_frames,
+            tail_compensation: None,
+            input_frames_seen: 0,
             tail_buffer: TailBuffer::new(),
             tail_buffered_frames: 0,
         }

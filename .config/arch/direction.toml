@@ -5,8 +5,8 @@
 
 [[layer]]
 index = 0
-name = "leaves"
-crates = ["kithara-drm", "kithara-workspace-hack"]
+name = "foundation"
+crates = ["kithara-workspace-hack"]
 
 [[layer]]
 index = 1
@@ -16,7 +16,7 @@ crates = ["kithara-platform"]
 [[layer]]
 index = 2
 name = "infra"
-crates = ["kithara-bufpool", "kithara-events", "kithara-net"]
+crates = ["kithara-bufpool", "kithara-drm", "kithara-events", "kithara-net"]
 
 [[layer]]
 index = 3

@@ -1,9 +1,4 @@
-use std::{
-    collections::VecDeque,
-    fmt,
-    num::NonZeroU32,
-    sync::{Arc, atomic::Ordering},
-};
+use std::{collections::VecDeque, fmt, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::{
     StreamInfo,
@@ -11,7 +6,7 @@ use firewheel::{
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{
@@ -92,6 +87,11 @@ impl fmt::Debug for PlayerCmd {
 /// type alias so the `SmallVec` literal stays under the workspace
 /// `type_complexity` threshold.
 type ActiveTrackEntry = (usize, Index, bool);
+
+#[derive(Clone, Copy)]
+struct Handover {
+    offset: usize,
+}
 
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
@@ -442,10 +442,10 @@ impl PlayerNodeProcessor {
         }
     }
 
-    fn initial_handover_offset(read_outcome: &TrackReadOutcome) -> Option<usize> {
+    fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {
         match read_outcome {
-            TrackReadOutcome::Partial { frames, .. } => Some(*frames),
-            TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(0),
+            TrackReadOutcome::Partial { frames, .. } => Some(Handover { offset: *frames }),
+            TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(Handover { offset: 0 }),
             TrackReadOutcome::Full { .. } => None,
         }
     }
@@ -494,11 +494,31 @@ impl PlayerNodeProcessor {
             .ok();
     }
 
-    fn next_handover_offset(read_outcome: &TrackReadOutcome, offset: usize) -> Option<usize> {
+    fn next_handover(read_outcome: &TrackReadOutcome, offset: usize) -> Option<Handover> {
         match read_outcome {
             TrackReadOutcome::Full { .. } => None,
-            TrackReadOutcome::Partial { frames, .. } => Some(offset + *frames),
-            TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(offset),
+            TrackReadOutcome::Partial { frames, .. } => Some(Handover {
+                offset: offset.saturating_add(*frames),
+            }),
+            TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(Handover { offset }),
+        }
+    }
+
+    fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.tracks
+            .iter()
+            .filter_map(|(_, track)| track.resource().try_lock().ok())
+            .for_each(|resource| resource.set_host_sample_rate(sample_rate));
+    }
+
+    fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        let rate_changed = self.sample_rate != sample_rate;
+        self.sample_rate = sample_rate;
+        self.shared_state
+            .sample_rate
+            .store(sample_rate.get(), Ordering::Relaxed);
+        if rate_changed {
+            self.set_tracks_host_sample_rate(sample_rate);
         }
     }
 
@@ -599,14 +619,15 @@ impl PlayerNodeProcessor {
                     leading_outcome_pos_dur = Some(snapshot);
                 }
 
-                let mut handover_offset = Self::initial_handover_offset(&read_outcome);
+                let mut handover = Self::initial_handover(&read_outcome);
 
                 for (next_idx, (_, next_handle, next_is_leading)) in
                     active_tracks.iter().enumerate()
                 {
-                    let Some(offset) = handover_offset else {
+                    let Some(handoff) = handover else {
                         break;
                     };
+                    let offset = handoff.offset;
                     if next_idx == track_idx || skip_tracks[next_idx] || !*next_is_leading {
                         continue;
                     }
@@ -631,11 +652,11 @@ impl PlayerNodeProcessor {
                         leading_outcome_pos_dur = Some(snapshot);
                     }
 
-                    handover_offset = Self::next_handover_offset(&read_outcome, offset);
+                    handover = Self::next_handover(&read_outcome, offset);
                 }
 
-                if let Some(offset) = handover_offset
-                    && offset < frames
+                if let Some(handoff) = handover
+                    && handoff.offset < frames
                 {
                     for (next_arena_idx, (next_handle, next_state)) in
                         arena_tracks.iter().enumerate()
@@ -653,7 +674,7 @@ impl PlayerNodeProcessor {
                         let _ = next_track.read(
                             &mut read_bufs,
                             &mut mix_bufs,
-                            offset..frames,
+                            handoff.offset..frames,
                             &self.shared_state.notification_tx,
                         );
                         break;
@@ -785,10 +806,7 @@ fn eviction_priority(state: TrackState) -> u8 {
 impl AudioNodeProcessor for PlayerNodeProcessor {
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         let new_sr = stream_info.sample_rate;
-        self.sample_rate = new_sr;
-        self.shared_state
-            .sample_rate
-            .store(new_sr.get(), Ordering::Relaxed);
+        self.update_host_sample_rate(new_sr);
 
         let max_frames: usize = stream_info.max_block_frames.get().as_();
         for buf in &mut self.scratch_bufs {
@@ -797,11 +815,6 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
                 buf.reserve(max_frames - cap);
             }
         }
-
-        self.tracks
-            .iter()
-            .filter_map(|(_, track)| track.resource().try_lock().ok())
-            .for_each(|resource| resource.set_host_sample_rate(new_sr));
     }
 
     #[kithara::rtsan_forbid_blocking]
@@ -838,14 +851,17 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        Arc as TestArc, Mutex,
+        Mutex,
         atomic::{AtomicU32, Ordering as AtomicOrdering},
     };
 
     use kithara_audio::PcmReader;
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
-    use kithara_platform::{sync::Mutex as PlatformMutex, time::Duration};
+    use kithara_platform::{
+        sync::{Arc as TestArc, Mutex as PlatformMutex},
+        time::Duration,
+    };
     use kithara_test_utils::kithara;
     use ringbuf::{
         HeapProd, HeapRb,
@@ -879,6 +895,7 @@ mod tests {
         duration: Duration,
         bus: EventBus,
         spec: PcmSpec,
+        recorded_host_rate_calls: TestArc<AtomicU32>,
         recorded_host_rate: TestArc<AtomicU32>,
         meta: TrackMetadata,
     }
@@ -889,15 +906,25 @@ mod tests {
         }
 
         fn with_duration(spec: PcmSpec, duration: Duration) -> (Self, TestArc<AtomicU32>) {
+            let (reader, recorded, _calls) = Self::with_duration_and_counter(spec, duration);
+            (reader, recorded)
+        }
+
+        fn with_duration_and_counter(
+            spec: PcmSpec,
+            duration: Duration,
+        ) -> (Self, TestArc<AtomicU32>, TestArc<AtomicU32>) {
             let recorded = TestArc::new(AtomicU32::new(0));
+            let calls = TestArc::new(AtomicU32::new(0));
             let reader = Self {
                 spec,
                 duration,
                 meta: TrackMetadata::default(),
                 bus: EventBus::default(),
+                recorded_host_rate_calls: TestArc::clone(&calls),
                 recorded_host_rate: TestArc::clone(&recorded),
             };
-            (reader, recorded)
+            (reader, recorded, calls)
         }
     }
 
@@ -949,6 +976,8 @@ mod tests {
         }
 
         fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
+            self.recorded_host_rate_calls
+                .fetch_add(1, AtomicOrdering::Relaxed);
             self.recorded_host_rate
                 .store(sample_rate.get(), AtomicOrdering::Relaxed);
         }
@@ -996,6 +1025,45 @@ mod tests {
         processor.drain_commands();
 
         assert_eq!(recorded.load(AtomicOrdering::Relaxed), host_rate);
+    }
+
+    #[kithara::test(tokio)]
+    async fn host_sample_rate_update_propagates_only_on_actual_route_change() {
+        let (reader, recorded, calls) = SampleRateTrackingReader::with_duration_and_counter(
+            PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
+            Duration::from_secs(60),
+        );
+        let resource = Resource::from_reader(reader, None);
+        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from("track.mp3"),
+            &PcmPool::default(),
+        )));
+        let (mut processor, mut tx) = make_processor();
+
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: player_resource,
+            item_id: None,
+            src: Arc::from("track.mp3"),
+        })
+        .ok();
+        processor.drain_commands();
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
+
+        processor.update_host_sample_rate(NonZeroU32::new(44_100).expect("test rate"));
+        assert_eq!(
+            calls.load(AtomicOrdering::Relaxed),
+            1,
+            "equal-rate stream refresh must not trigger resource route updates"
+        );
+
+        processor.update_host_sample_rate(NonZeroU32::new(48_000).expect("test rate"));
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 2);
+        assert_eq!(recorded.load(AtomicOrdering::Relaxed), 48_000);
+        assert_eq!(
+            processor.shared_state.sample_rate.load(Ordering::Relaxed),
+            48_000
+        );
     }
 
     #[kithara::test]

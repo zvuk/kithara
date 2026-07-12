@@ -1,8 +1,8 @@
-use std::{num::NonZeroU32, ops::Range, sync::Arc};
+use std::{num::NonZeroU32, ops::Range};
 
 use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use tracing::warn;
 
 #[rustfmt::skip]
@@ -38,7 +38,7 @@ pub enum ReadOutcome {
     /// The payload is the number of written frames. This outcome is reserved
     /// for natural EOF inside the requested block; the next read must return
     /// [`ReadOutcome::Eof`].
-    Partial(usize),
+    Partial { frames: usize },
     /// The resource was already drained and nothing was written.
     Eof,
     /// The underlying decoder/source reported a non-recoverable error
@@ -202,7 +202,9 @@ impl PlayerResource {
                     frames: frames_to_write,
                 }
             } else if eof_reached {
-                ReadOutcome::Partial(frames_to_write)
+                ReadOutcome::Partial {
+                    frames: frames_to_write,
+                }
             } else {
                 for ch in output.iter_mut() {
                     ch[frames_to_write..frames_to_read].fill(0.0);
@@ -245,7 +247,7 @@ impl PlayerResource {
         self.resource.set_host_sample_rate(sample_rate);
     }
 
-    /// Set the playback rate for pitch-shifted speed control.
+    /// Set the playback rate for the active stretch controls.
     pub(crate) fn set_playback_rate(&self, rate: f32) {
         self.resource.set_playback_rate(rate);
     }

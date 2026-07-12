@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
+use kithara_platform::sync::Arc;
 use url::Url;
 
 use crate::{error::AssetsResult, key::ResourceKey, layout::AssetLayout, unified::AssetStore};

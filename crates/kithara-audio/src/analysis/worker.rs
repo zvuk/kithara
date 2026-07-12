@@ -1,4 +1,5 @@
 use kithara_platform::{CancelToken, sync::mpsc, thread, tokio::sync::watch};
+use kithara_resampler::ResamplerBackend;
 use tracing::warn;
 
 use super::{
@@ -14,9 +15,13 @@ use crate::traits::PcmReader;
 /// the same scope that owns this worker, so preemption and shutdown stay
 /// inside one cancel hierarchy. The caller keeps at most one job in
 /// flight and cancels the previous token before queueing the next.
-pub struct AnalysisWorker {
+pub struct AnalysisWorker<B>
+where
+    B: ResamplerBackend,
+{
     cancel: CancelToken,
     jobs: mpsc::Sender<Job>,
+    _backend: std::marker::PhantomData<B>,
 }
 
 struct Job {
@@ -25,18 +30,25 @@ struct Job {
     tx: watch::Sender<Option<TrackAnalysis>>,
 }
 
-impl AnalysisWorker {
+impl<B> AnalysisWorker<B>
+where
+    B: ResamplerBackend,
+{
     /// `parent` must be a child of the consumer-crate master cancel; the
     /// worker thread stops on parent cancel or drop.
     #[must_use]
-    pub fn new(parent: &CancelToken, builder: AnalyzerBuilder) -> Self {
+    pub fn new(parent: &CancelToken, builder: AnalyzerBuilder<B>) -> Self {
         let cancel = parent.child();
         let thread_cancel = cancel.clone();
         let (jobs, rx) = mpsc::channel();
         thread::spawn_named("kithara-analysis", move || {
             run_jobs(&rx, &builder, &thread_cancel);
         });
-        Self { cancel, jobs }
+        Self {
+            cancel,
+            jobs,
+            _backend: std::marker::PhantomData,
+        }
     }
 
     /// Queue one opened track. On success the result arrives on the
@@ -61,13 +73,19 @@ impl AnalysisWorker {
     }
 }
 
-impl Drop for AnalysisWorker {
+impl<B> Drop for AnalysisWorker<B>
+where
+    B: ResamplerBackend,
+{
     fn drop(&mut self) {
         self.cancel.cancel();
     }
 }
 
-fn run_jobs(jobs: &mpsc::Receiver<Job>, builder: &AnalyzerBuilder, cancel: &CancelToken) {
+fn run_jobs<B>(jobs: &mpsc::Receiver<Job>, builder: &AnalyzerBuilder<B>, cancel: &CancelToken)
+where
+    B: ResamplerBackend,
+{
     while let Ok(mut job) = jobs.recv() {
         if cancel.is_cancelled() {
             break;

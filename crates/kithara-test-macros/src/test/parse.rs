@@ -17,6 +17,7 @@ pub(crate) struct TestArgs {
     /// these (case-insensitive), the test prints a warning instead of failing.
     pub(crate) soft_fail_patterns: Vec<String>,
     pub(crate) is_browser: bool,
+    pub(crate) is_loom: bool,
     pub(crate) is_multi_thread: bool,
     pub(crate) is_native_only: bool,
     pub(crate) is_selenium: bool,
@@ -43,12 +44,28 @@ impl TestArgs {
         Self::check_exclusive(self.is_browser, "browser", self.is_wasm_only, "wasm")?;
         Self::check_exclusive(self.is_selenium, "selenium", self.is_wasm_only, "wasm")?;
         Self::check_exclusive(self.is_selenium, "selenium", self.is_browser, "browser")?;
+        Self::check_exclusive(self.is_loom, "loom", self.is_wasm_only, "wasm")?;
+        Self::check_exclusive(self.is_loom, "loom", self.is_browser, "browser")?;
+        Self::check_exclusive(self.is_loom, "loom", self.is_selenium, "selenium")?;
+        Self::check_exclusive(self.is_loom, "loom", self.is_multi_thread, "multi_thread")?;
+        Self::check_exclusive(self.is_loom, "loom", self.is_tokio, "tokio")?;
+
+        if self.is_loom && !self.soft_fail_patterns.is_empty() {
+            return Err(Error::new(
+                Span::call_site(),
+                "`loom` and `soft_fail` are mutually exclusive",
+            ));
+        }
 
         if self.is_selenium {
             self.is_native_only = true;
             self.is_tokio = true;
             self.is_serial = true;
             self.is_multi_thread = true;
+        }
+
+        if self.is_loom {
+            self.is_native_only = true;
         }
 
         if self.is_multi_thread && !self.is_tokio {
@@ -89,6 +106,7 @@ impl Parse for TestArgs {
                 "wasm" => args.is_wasm_only = true,
                 "native" => args.is_native_only = true,
                 "browser" => args.is_browser = true,
+                "loom" => args.is_loom = true,
                 "serial" => args.is_serial = true,
                 "selenium" => args.is_selenium = true,
                 "multi_thread" => args.is_multi_thread = true,
@@ -143,5 +161,34 @@ impl Parse for TestArgs {
 
         args.validate()?;
         Ok(args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TestArgs;
+
+    #[test]
+    fn loom_implies_native() -> syn::Result<()> {
+        let args = syn::parse_str::<TestArgs>("loom")?;
+        assert!(args.is_loom);
+        assert!(args.is_native_only);
+        Ok(())
+    }
+
+    #[test]
+    fn loom_rejects_non_native_execution_modes() {
+        for input in [
+            "loom, wasm",
+            "loom, browser",
+            "loom, tokio",
+            "loom, multi_thread, tokio",
+            "loom, soft_fail(\"timeout\")",
+        ] {
+            assert!(
+                syn::parse_str::<TestArgs>(input).is_err(),
+                "accepted {input}"
+            );
+        }
     }
 }

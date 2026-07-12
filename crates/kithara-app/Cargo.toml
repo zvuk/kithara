@@ -10,7 +10,7 @@ name = "kithara"
 path = "src/main.rs"
 
 [features]
-default = ["tui", "gui", "beat-nn", "stretch-signalsmith"]
+default = ["tui", "gui", "analysis-waveform", "beat-nn", "stretch-signalsmith"]
 tui = ["dep:ratatui", "dep:crossterm"]
 # HTTP backend forwarding to every kithara-net-reaching production dep
 # (kithara facade + kithara-queue). NOT in `default`: the backend is selected
@@ -26,10 +26,15 @@ tls-native = ["kithara/tls-native", "kithara-queue/tls-native"]
 gui = ["dep:iced"]
 # NN beat/downbeat detection.
 beat-nn = ["kithara/beat-nn"]
+# Waveform analysis for the deck overview.
+analysis-waveform = ["kithara/analysis-waveform"]
 # Build kithara-app as a plain library — exposes `config`/`sources`/`drm`
 # modules without pulling in iced/ratatui. Used by integration tests
 # (`tests/tests/kithara_queue/real_playlist.rs`).
 lib-only = []
+# Production Apple decode shape: embedded AudioConverter SRC inside the Apple
+# codec. Opt-in so the default desktop build keeps the Rubato adapter path.
+apple-fused-src = ["kithara/apple-fused-src"]
 # Native-only C++ time-stretch backends. Signalsmith is the default; bungee
 # stays opt-in (need a C++ toolchain).
 stretch-signalsmith = ["kithara/stretch-signalsmith"]
@@ -38,7 +43,7 @@ stretch-bungee = ["kithara/stretch-bungee"]
 stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["file", "hls"] }
+kithara = { workspace = true, default-features = false, features = ["file", "hls", "resample-rubato"] }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
@@ -85,7 +90,7 @@ serde_yml = { workspace = true }
 
 [dev-dependencies]
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 futures = { workspace = true }
 tempfile = { workspace = true }

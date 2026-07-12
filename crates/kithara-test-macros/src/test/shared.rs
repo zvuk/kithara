@@ -76,6 +76,17 @@ pub(crate) fn make_tracing_init(args: &TestArgs) -> TokenStream2 {
     }
 }
 
+pub(crate) fn wrap_with_model(body: &TokenStream2, args: &TestArgs) -> TokenStream2 {
+    if !args.is_loom {
+        return body.clone();
+    }
+    quote! {
+        {
+            ::kithara_test_utils::kithara_platform::__private::model(move || { #body })
+        }
+    }
+}
+
 /// Selenium tests no longer auto-inject `#[ignore]` — the suite runs only
 /// when the wasm-target test driver picks them up (`just test-selenium`),
 /// so plain `cargo test` already skips them by virtue of platform gating.

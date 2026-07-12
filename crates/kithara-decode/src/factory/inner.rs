@@ -1,10 +1,13 @@
 use std::{
     io::{Read, Seek},
-    sync::{Arc, atomic::AtomicU64},
+    num::NonZeroU32,
+    sync::atomic::AtomicU64,
 };
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
+use kithara_platform::sync::Arc;
+use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::{
     AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes,
 };
@@ -13,6 +16,8 @@ use super::probe::{
     ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
     resolve_codec_container, sniff_container_from_source,
 };
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use crate::GaplessInfo;
 use crate::{
     Decoder, InputRequirement,
     error::{DecodeError, DecodeResult},
@@ -85,6 +90,78 @@ impl std::fmt::Display for DecoderBackend {
     }
 }
 
+/// Decoder-side resampler selected by the caller.
+///
+/// This describes conversion that is part of decoder construction, not the
+/// playback graph's effects chain. Backend choice is encoded by `B`.
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct DecoderResamplerConfig<B = NoResamplerBackend> {
+    pub backend: B,
+    #[builder(default)]
+    pub options: ResamplerOptions,
+    #[builder(default)]
+    pub quality: ResamplerQuality,
+    pub target_sample_rate: NonZeroU32,
+}
+
+impl<B> DecoderResamplerConfig<B>
+where
+    B: ResamplerBackend,
+{
+    #[must_use]
+    pub fn new(
+        target_sample_rate: NonZeroU32,
+        backend: B,
+        quality: ResamplerQuality,
+        options: ResamplerOptions,
+    ) -> Self {
+        Self {
+            backend,
+            options,
+            quality,
+            target_sample_rate,
+        }
+    }
+
+    /// Build the decoder resampler config selected by the audio decoder config.
+    ///
+    /// # Errors
+    ///
+    /// Currently this constructor is infallible; it returns a `Result` so the
+    /// typed Apple codec-integrated plan can add pair validation without
+    /// widening call sites again.
+    pub fn for_decoder_backend(
+        _decoder_backend: DecoderBackend,
+        target_sample_rate: NonZeroU32,
+        backend: B,
+        quality: ResamplerQuality,
+        options: ResamplerOptions,
+    ) -> DecodeResult<Option<Self>> {
+        Ok(Some(Self::new(
+            target_sample_rate,
+            backend,
+            quality,
+            options,
+        )))
+    }
+}
+
+impl<B> std::fmt::Debug for DecoderResamplerConfig<B>
+where
+    B: ResamplerBackend,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecoderResamplerConfig")
+            .field("backend", &self.backend.name())
+            .field("options", &self.options)
+            .field("quality", &self.quality)
+            .field("target_sample_rate", &self.target_sample_rate)
+            .finish()
+    }
+}
+
 /// Configuration for `DecoderFactory`.
 ///
 /// `pcm_pool` / `byte_pool` are intentionally `Option<_>` — the
@@ -99,7 +176,7 @@ impl std::fmt::Display for DecoderBackend {
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct DecoderConfig {
+pub struct DecoderConfig<B = NoResamplerBackend> {
     /// Which decoder backend to use. See [`DecoderBackend`].
     #[builder(default)]
     pub backend: DecoderBackend,
@@ -118,6 +195,9 @@ pub struct DecoderConfig {
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
     pub pcm_pool: Option<PcmPool>,
+    /// Optional decoder-side resampler plan. `None` means the decoder emits
+    /// at the source rate.
+    pub resampler: Option<DecoderResamplerConfig<B>>,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
@@ -144,13 +224,14 @@ pub struct DecoderFactory;
 
 impl DecoderFactory {
     /// Create a decoder with the single selected backend.
-    pub(crate) fn create<R>(
+    pub(crate) fn create<R, B>(
         source: R,
         hint: &ProbeHint,
-        config: DecoderConfig,
+        config: DecoderConfig<B>,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
+        B: ResamplerBackend,
     {
         let source: BoxedSource = Box::new(source);
         Self::dispatch_backend(source, hint, config)
@@ -164,13 +245,14 @@ impl DecoderFactory {
     ///
     /// Returns error if codec cannot be determined or decoder creation fails.
     /// No fallback — a failure is terminal.
-    pub fn create_from_media_info<R>(
+    pub fn create_from_media_info<R, B>(
         source: R,
         media_info: &MediaInfo,
-        config: DecoderConfig,
+        config: DecoderConfig<B>,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
+        B: ResamplerBackend,
     {
         tracing::debug!(?media_info, "create_from_media_info called");
 
@@ -191,13 +273,14 @@ impl DecoderFactory {
     /// Returns `DecodeError::ProbeFailed` when the hint is missing or too
     /// weak to pick a codec, and `DecodeError::*` for backend failures.
     /// No fallback — callers must supply a usable hint.
-    pub fn create_with_probe<R>(
+    pub fn create_with_probe<R, B>(
         source: R,
         hint: Option<&str>,
-        config: DecoderConfig,
+        config: DecoderConfig<B>,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
+        B: ResamplerBackend,
     {
         let mut source = source;
         let mut probe_hint = ProbeHint {
@@ -219,11 +302,14 @@ impl DecoderFactory {
         Self::create(source, &probe_hint, config)
     }
 
-    pub(super) fn dispatch_backend(
+    pub(super) fn dispatch_backend<B>(
         mut source: BoxedSource,
         hint: &ProbeHint,
-        config: DecoderConfig,
-    ) -> DecodeResult<Box<dyn Decoder>> {
+        config: DecoderConfig<B>,
+    ) -> DecodeResult<Box<dyn Decoder>>
+    where
+        B: ResamplerBackend,
+    {
         let (codec, mut container) = resolve_codec_container(hint)?;
         if container.is_none() {
             container = sniff_container_from_source(&mut source);
@@ -269,12 +355,15 @@ impl DecoderFactory {
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-fn create_apple(
+fn create_apple<B>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::apple::AppleCodec;
 
     if should_use_segment_aware(codec, container, &config)
@@ -286,8 +375,10 @@ fn create_apple(
                 "fmp4_segment: dispatching to segment-aware Apple HW codec path"
             );
             let gapless = config.gapless;
+            let target_output_rate = decoder_embedded_target_output_rate(&config);
             return build_fmp4_segment_decoder(source, layout, config, |track| {
-                AppleCodec::open_with_config(track, gapless)
+                let output_track = track_with_output_domain_gapless(track, target_output_rate)?;
+                AppleCodec::open_with_config(&output_track, gapless, target_output_rate)
             });
         }
         #[cfg(feature = "symphonia")]
@@ -323,12 +414,15 @@ fn apple_standalone_supports(codec: AudioCodec, container: Option<ContainerForma
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-fn build_apple_standalone_decoder(
+fn build_apple_standalone_decoder<B>(
     mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::{
         apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
         composed::{ComposedDecoder, DecoderRuntime},
@@ -357,34 +451,107 @@ fn build_apple_standalone_decoder(
         open_mode,
         startup_probe.duration,
     )?;
-    if probed_gapless.is_some() {
-        demuxer.set_gapless(probed_gapless);
+    demuxer.set_gapless(probed_gapless);
+    let target_output_rate = decoder_embedded_target_output_rate(&config);
+    let output_track = track_with_output_domain_gapless(demuxer.track_info(), target_output_rate)?;
+    if output_track.gapless.is_some() {
+        demuxer.set_gapless(output_track.gapless);
     }
-    let codec_impl = AppleCodec::open_with_config(demuxer.track_info(), config.gapless)?;
+    let codec_impl =
+        AppleCodec::open_with_config(&output_track, config.gapless, target_output_rate)?;
     let pool = config
         .pcm_pool
         .clone()
         .unwrap_or_else(|| PcmPool::default().clone());
+    let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         DecoderRuntime {
-            pool,
+            pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    Ok(Box::new(decoder))
+    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+fn decoder_embedded_target_output_rate<B>(_config: &DecoderConfig<B>) -> Option<u32>
+where
+    B: ResamplerBackend,
+{
+    None
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+fn track_with_output_domain_gapless(
+    track: &crate::demuxer::TrackInfo,
+    target_output_rate: Option<u32>,
+) -> DecodeResult<crate::demuxer::TrackInfo> {
+    let mut output_track = track.clone();
+    output_track.gapless = scale_gapless_for_output_domain(
+        output_track.gapless,
+        output_track.sample_rate,
+        target_output_rate,
+    )?;
+    Ok(output_track)
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+fn scale_gapless_for_output_domain(
+    gapless: Option<GaplessInfo>,
+    source_rate: u32,
+    target_output_rate: Option<u32>,
+) -> DecodeResult<Option<GaplessInfo>> {
+    let Some(info) = gapless else {
+        return Ok(None);
+    };
+    let Some(output_rate) = target_output_rate.filter(|rate| *rate != source_rate) else {
+        return Ok(Some(info));
+    };
+
+    if source_rate == 0 {
+        return Err(DecodeError::InvalidSampleRate {
+            resource: "apple.gapless.source",
+        });
+    }
+    if output_rate == 0 {
+        return Err(DecodeError::InvalidSampleRate {
+            resource: "apple.gapless.output",
+        });
+    }
+
+    // Container probes are born in source-rate frames; the trimmer only sees
+    // decoder-output frames, so Apple fused SRC scales once at this boundary.
+    Ok(Some(GaplessInfo {
+        leading_frames: round_scaled_frames(info.leading_frames, source_rate, output_rate)?,
+        trailing_frames: round_scaled_frames(info.trailing_frames, source_rate, output_rate)?,
+    }))
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+fn round_scaled_frames(count: u64, source_rate: u32, output_rate: u32) -> DecodeResult<u64> {
+    let numerator = u128::from(count)
+        .saturating_mul(u128::from(output_rate))
+        .saturating_add(u128::from(source_rate / 2));
+    let scaled = numerator / u128::from(source_rate);
+    u64::try_from(scaled).map_err(|_| DecodeError::InvalidData {
+        detail: "apple gapless output-domain frame count overflow",
+    })
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]
-fn create_android(
+fn create_android<B>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::android::AndroidCodec;
 
     if should_use_segment_aware(codec, container, &config)
@@ -437,12 +604,15 @@ fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFor
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]
-fn build_android_standalone_decoder(
+fn build_android_standalone_decoder<B>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::{
         android::{AndroidCodec, AndroidMediaExtractorDemuxer},
         composed::{ComposedDecoder, DecoderRuntime},
@@ -465,26 +635,30 @@ fn build_android_standalone_decoder(
         .pcm_pool
         .clone()
         .unwrap_or_else(|| PcmPool::default().clone());
+    let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         DecoderRuntime {
-            pool,
+            pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    Ok(Box::new(decoder))
+    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
 }
 
 #[cfg(feature = "symphonia")]
-fn create_symphonia(
+fn create_symphonia<B>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -494,12 +668,15 @@ fn create_symphonia(
 }
 
 #[cfg(feature = "symphonia")]
-fn create_file_symphonia_universal(
+fn create_file_symphonia_universal<B>(
     mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::{
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
@@ -544,17 +721,18 @@ fn create_file_symphonia_universal(
         .pcm_pool
         .clone()
         .unwrap_or_else(|| PcmPool::default().clone());
+    let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         DecoderRuntime {
-            pool,
+            pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    Ok(Box::new(decoder))
+    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
 }
 
 /// Gate for the segment-aware fMP4 path. Routes AAC / FLAC fMP4 with a
@@ -564,7 +742,7 @@ fn create_file_symphonia_universal(
 fn should_use_segment_aware(
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: &DecoderConfig,
+    config: &DecoderConfig<impl ResamplerBackend>,
 ) -> bool {
     segment_aware_container(codec, container) && config.byte_map.is_some()
 }
@@ -578,12 +756,15 @@ fn segment_aware_container(codec: AudioCodec, container: Option<ContainerFormat>
 }
 
 #[cfg(feature = "symphonia")]
-fn create_fmp4_segment_symphonia(
+fn create_fmp4_segment_symphonia<B>(
     source: BoxedSource,
     codec: AudioCodec,
     layout: Arc<dyn ByteMap>,
-    config: DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig};
 
     tracing::debug!(
@@ -608,15 +789,16 @@ fn create_fmp4_segment_symphonia(
 /// [`Fmp4SegmentDemuxer`] open + pool-resolution + [`ComposedDecoder`]
 /// boilerplate so apple/android/symphonia call-sites collapse into a
 /// single closure that opens the codec from `TrackInfo`.
-fn build_fmp4_segment_decoder<C, F>(
+fn build_fmp4_segment_decoder<C, F, B>(
     source: BoxedSource,
     layout: Arc<dyn ByteMap>,
-    config: DecoderConfig,
+    config: DecoderConfig<B>,
     open_codec: F,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     C: crate::codec::FrameCodec + 'static,
     F: FnOnce(&crate::demuxer::TrackInfo) -> DecodeResult<C>,
+    B: ResamplerBackend,
 {
     use crate::{
         composed::{ComposedDecoder, DecoderRuntime},
@@ -631,17 +813,39 @@ where
         .pcm_pool
         .clone()
         .unwrap_or_else(|| PcmPool::default().clone());
+    let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec,
         DecoderRuntime {
-            pool,
+            pool: pool.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    Ok(Box::new(decoder))
+    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoder_resampler_config_keeps_typed_backend() {
+        let target_sample_rate = NonZeroU32::new(48_000).expect("test rate");
+        let config: DecoderResamplerConfig<kithara_resampler::rubato::RubatoBackend> =
+            DecoderResamplerConfig::builder()
+                .target_sample_rate(target_sample_rate)
+                .backend(kithara_resampler::rubato::RubatoBackend::default())
+                .build();
+
+        assert_eq!(config.target_sample_rate, target_sample_rate);
+        assert_eq!(
+            config.backend.name(),
+            kithara_resampler::rubato::RubatoBackend::default().name()
+        );
+    }
 }
 
 /// RED (device repro): on the size-reduced apple-only build (no symphonia
@@ -649,16 +853,147 @@ where
 /// bytes must resolve the shared container hint before backend dispatch.
 #[cfg(all(test, feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple_factory_tests {
-    use std::{io::Cursor, sync::Arc};
+    use std::{io::Cursor, num::NonZeroU32};
 
+    use kithara_bufpool::PcmBuf;
+    use kithara_platform::{sync::Arc, time::Duration};
     use kithara_stream::{AudioCodec, ByteMap, MediaInfo};
     use kithara_test_utils::kithara;
 
-    use super::{DecoderBackend, DecoderConfig, DecoderFactory};
-    use crate::{
-        DecodeError,
-        fmp4::test_layout::{TestLayoutCodec, build_test_layout},
+    use super::{
+        DecoderBackend, DecoderConfig, DecoderFactory, round_scaled_frames,
+        track_with_output_domain_gapless,
     };
+    use crate::{
+        DecodeError, DecoderChunkOutcome, DecoderTrackInfo, GaplessInfo, GaplessTrimmer, PcmSpec,
+        codec::FrameCodec,
+        composed::{ComposedDecoder, DecoderRuntime},
+        demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
+        duration_for_frames,
+        error::DecodeResult,
+        fmp4::test_layout::{TestLayoutCodec, build_test_layout},
+        traits::Decoder,
+    };
+
+    struct PacketDemuxer {
+        track: TrackInfo,
+        held: Vec<u8>,
+        next_index: u64,
+        packet_count: u64,
+        packet_frames: u32,
+        source_rate: u32,
+    }
+
+    impl Demuxer for PacketDemuxer {
+        fn duration(&self) -> Option<Duration> {
+            Some(duration_for_frames(
+                self.source_rate,
+                self.packet_count
+                    .saturating_mul(u64::from(self.packet_frames)),
+            ))
+        }
+
+        fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+            if self.next_index >= self.packet_count {
+                return Ok(DemuxOutcome::Eof);
+            }
+            let packet_idx = self.next_index;
+            self.next_index = self.next_index.saturating_add(1);
+            self.held = vec![1u8; 4];
+            Ok(DemuxOutcome::Frame(Frame {
+                data: &self.held,
+                packet_desc: &[],
+                pts: duration_for_frames(
+                    self.source_rate,
+                    packet_idx.saturating_mul(u64::from(self.packet_frames)),
+                ),
+                duration: duration_for_frames(self.source_rate, u64::from(self.packet_frames)),
+            }))
+        }
+
+        fn seek(
+            &mut self,
+            _target: Duration,
+            _priming: crate::codec::CodecPriming,
+        ) -> DecodeResult<DemuxSeekOutcome> {
+            self.next_index = 0;
+            Ok(DemuxSeekOutcome::Landed {
+                landed_at: Duration::ZERO,
+                landed_byte: Some(0),
+                preroll: crate::demuxer::PrerollHint::NotNeeded,
+            })
+        }
+
+        fn track_info(&self) -> &TrackInfo {
+            &self.track
+        }
+    }
+
+    struct OutputDomainCodec {
+        spec: PcmSpec,
+        frames_per_call: u32,
+        track_info: DecoderTrackInfo,
+    }
+
+    impl FrameCodec for OutputDomainCodec {
+        fn decode_frame(
+            &mut self,
+            bytes: &[u8],
+            _pts: Duration,
+            _packet_desc: &[u8],
+            out: &mut PcmBuf,
+        ) -> DecodeResult<u32> {
+            if bytes.is_empty() {
+                out.clear();
+                return Ok(0);
+            }
+            write_silent_frame(self.spec, self.frames_per_call, out)
+        }
+
+        fn flush(&mut self) -> DecodeResult<()> {
+            Ok(())
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn track_info(&self) -> DecoderTrackInfo {
+            self.track_info.clone()
+        }
+    }
+
+    fn write_silent_frame(spec: PcmSpec, frames: u32, out: &mut PcmBuf) -> DecodeResult<u32> {
+        let samples = usize::try_from(frames)?
+            .checked_mul(usize::from(spec.channels))
+            .ok_or(DecodeError::InvalidData {
+                detail: "factory test sample count overflow",
+            })?;
+        out.ensure_len(samples)?;
+        for sample in out.iter_mut() {
+            *sample = 0.0;
+        }
+        out.truncate(samples);
+        Ok(frames)
+    }
+
+    fn aac_track(sample_rate: u32, gapless: Option<GaplessInfo>) -> TrackInfo {
+        TrackInfo {
+            codec: AudioCodec::AacLc,
+            sample_rate,
+            channels: 2,
+            extra_data: Vec::new(),
+            duration: None,
+            gapless,
+        }
+    }
+
+    fn output_frames(chunks: impl IntoIterator<Item = crate::PcmChunk>) -> u64 {
+        chunks
+            .into_iter()
+            .map(|chunk| u64::from(chunk.meta.frames))
+            .sum()
+    }
 
     #[kithara::test]
     fn apple_aac_lc_metadata_probe_is_not_rejected_as_unsupported_codec() {
@@ -666,7 +1001,7 @@ mod apple_factory_tests {
         let source = Cursor::new(blob);
         let byte_map: Arc<dyn ByteMap> = Arc::new(segmented);
         let media_info = MediaInfo::new(Some(AudioCodec::AacLc), None);
-        let config = DecoderConfig {
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend> = DecoderConfig {
             backend: DecoderBackend::Apple,
             byte_map: Some(byte_map),
             ..DecoderConfig::default()
@@ -683,5 +1018,106 @@ mod apple_factory_tests {
             ),
             "apple-only AAC-LC fMP4 metadata probe was rejected as UnsupportedCodec"
         );
+    }
+
+    #[kithara::test]
+    fn apple_gapless_scaling_is_identity_without_fused_src() {
+        let source_gapless = Some(GaplessInfo {
+            leading_frames: 1024,
+            trailing_frames: 441,
+        });
+        let track = aac_track(44_100, source_gapless);
+
+        let no_target = track_with_output_domain_gapless(&track, None)
+            .expect("BUG: output-domain track without target");
+        let equal_target = track_with_output_domain_gapless(&track, Some(44_100))
+            .expect("BUG: output-domain track with equal target");
+
+        assert_eq!(no_target.gapless, source_gapless);
+        assert_eq!(equal_target.gapless, source_gapless);
+    }
+
+    #[kithara::test]
+    fn apple_gapless_scaling_rounds_source_counts_to_output_rate() {
+        let source_gapless = Some(GaplessInfo {
+            leading_frames: 1024,
+            trailing_frames: 441,
+        });
+        let track = aac_track(44_100, source_gapless);
+
+        let output_track = track_with_output_domain_gapless(&track, Some(48_000))
+            .expect("BUG: output-domain track with fused SRC");
+
+        assert_eq!(
+            output_track.gapless,
+            Some(GaplessInfo {
+                leading_frames: 1115,
+                trailing_frames: 480,
+            })
+        );
+    }
+
+    #[kithara::test]
+    fn apple_scaled_gapless_trims_composed_resampled_output_domain() {
+        const SOURCE_RATE: u32 = 44_100;
+        const OUTPUT_RATE: u32 = 48_000;
+        const PACKET_COUNT: u64 = 10;
+        const PACKET_FRAMES: u32 = 1024;
+
+        let source_gapless = GaplessInfo {
+            leading_frames: 1024,
+            trailing_frames: 441,
+        };
+        let source_track = aac_track(SOURCE_RATE, Some(source_gapless));
+        let output_track = track_with_output_domain_gapless(&source_track, Some(OUTPUT_RATE))
+            .expect("BUG: output-domain track with fused SRC");
+        let output_gapless = output_track.gapless.expect("BUG: scaled gapless");
+        let frames_per_call = u32::try_from(
+            round_scaled_frames(u64::from(PACKET_FRAMES), SOURCE_RATE, OUTPUT_RATE)
+                .expect("BUG: scaled packet frame count"),
+        )
+        .expect("BUG: scaled packet frames fit u32");
+        let decoded_frames = u64::from(frames_per_call).saturating_mul(PACKET_COUNT);
+        let demuxer = PacketDemuxer {
+            track: source_track,
+            held: Vec::new(),
+            next_index: 0,
+            packet_count: PACKET_COUNT,
+            packet_frames: PACKET_FRAMES,
+            source_rate: SOURCE_RATE,
+        };
+        let codec = OutputDomainCodec {
+            spec: PcmSpec::new(2, NonZeroU32::new(OUTPUT_RATE).expect("test rate")),
+            frames_per_call,
+            track_info: DecoderTrackInfo {
+                gapless: Some(output_gapless),
+                ..DecoderTrackInfo::default()
+            },
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        let mut trimmer =
+            GaplessTrimmer::from(decoder.track_info().gapless.expect("BUG: decoder gapless"));
+        let mut trimmed_frames = 0_u64;
+        loop {
+            match decoder.next_chunk().expect("BUG: next chunk") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    trimmed_frames =
+                        trimmed_frames.saturating_add(output_frames(trimmer.push(chunk)));
+                }
+                DecoderChunkOutcome::Pending(reason) => panic!("unexpected Pending: {reason:?}"),
+                DecoderChunkOutcome::Eof => {
+                    trimmed_frames = trimmed_frames.saturating_add(output_frames(trimmer.flush()));
+                    break;
+                }
+            }
+        }
+        let expected_frames = decoded_frames
+            .saturating_sub(output_gapless.leading_frames)
+            .saturating_sub(output_gapless.trailing_frames);
+
+        assert_eq!(output_gapless.leading_frames, 1115);
+        assert_eq!(output_gapless.trailing_frames, 480);
+        assert_eq!(decoded_frames, 11_150);
+        assert_eq!(trimmed_frames, expected_frames);
     }
 }

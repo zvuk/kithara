@@ -47,8 +47,8 @@ processed chunks to the caller through lock-free rings.
   resampling, gapless mode, stretch controls, worker handle, and engine load.
 - `AudioWorkerHandle` / `AudioWorkerSource` — shared worker thread handle and
   per-track source contract.
-- `ResamplerQuality` / `ResamplerProcessor` — sample-rate-conversion controls
-  and processor.
+- `ResamplerQuality` / `ResamplerOptions` — sample-rate-conversion config
+  threaded into the decoder-owned resampler plan.
 - `StretchControls` / `TimeStretchProcessor` — preserve-pitch tempo mode when a
   `kithara-stretch` backend is compiled.
 - `AnalyzerBuilder` / `AnalysisWorker` / `TrackAnalysis` — source-signal
@@ -60,16 +60,25 @@ processed chunks to the caller through lock-free rings.
 ## Usage
 
 ```rust
-use kithara_audio::{Audio, AudioConfig, ResamplerQuality};
+use kithara_audio::{
+    Audio, AudioConfig, AudioDecoderConfig, DecoderResamplerSettings, ResamplerQuality,
+};
 use kithara_decode::GaplessMode;
 use kithara_hls::{Hls, HlsConfig};
 use kithara_stream::Stream;
 
+let decoder_config = AudioDecoderConfig::builder()
+    .gapless_mode(GaplessMode::CodecPriming)
+    .resampler(
+        DecoderResamplerSettings::builder()
+            .quality(ResamplerQuality::High)
+            .build(),
+    )
+    .build();
 let audio_config = AudioConfig::<Hls>::builder()
     .stream(hls_config)
     .host_sample_rate(sample_rate)
-    .resampler_quality(ResamplerQuality::High)
-    .gapless_mode(GaplessMode::CodecPriming)
+    .decoder(decoder_config)
     .build();
 
 let mut audio = Audio::<Stream<Hls>>::new(audio_config).await?;

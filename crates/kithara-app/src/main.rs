@@ -1,10 +1,7 @@
 #[cfg(not(any(feature = "tui", feature = "gui")))]
 compile_error!("`kithara` binary requires at least one of `tui` or `gui` feature");
 
-use std::{
-    io::{self, IsTerminal},
-    sync::Arc,
-};
+use std::io::{self, IsTerminal};
 
 use clap::Parser;
 use kithara::{
@@ -21,7 +18,7 @@ use kithara_app::gui::GuiFrontend;
 #[cfg(feature = "tui")]
 use kithara_app::tui::TuiFrontend;
 use kithara_app::{baked, config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_queue::{Queue, QueueConfig};
 
 /// Kithara — audio player application.

@@ -10,7 +10,15 @@ keywords = ["audio", "dsp", "resampling", "playback", "player"]
 categories = ["multimedia::audio"]
 
 [features]
-default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
+default = [
+    "symphonia",
+    "resample-rubato",
+    "analysis-beat",
+    "analysis-waveform",
+    "stretch-signalsmith",
+    "client-reqwest",
+    "tls-rustls",
+]
 probe = []
 mock = []
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -42,10 +50,12 @@ tls-native = [
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # Enable memory profiling for examples (includes allocation tracking, adds overhead)
 memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
-# Enable Apple AudioToolbox hardware decoder (macOS/iOS)
+# Enable Apple AudioToolbox hardware decoder (macOS/iOS).
 apple = ["kithara-decode/apple"]
+# Enable Apple AudioToolbox fused decode+SRC, used by the Apple device FFI set.
+apple-fused-src = ["kithara-decode/apple-codec-embedded-resampler"]
 # Enable Android MediaCodec hardware decoder (Android)
-android = ["kithara-decode/android"]
+android = ["kithara-decode/android", "resample-rubato"]
 # Enable the Symphonia software decoder path. Disable to build with
 # only the hardware backend (apple or android) and no software fallback.
 symphonia = ["kithara-decode/symphonia"]
@@ -53,6 +63,10 @@ symphonia = ["kithara-decode/symphonia"]
 # decoder is LC-only; without this feature, HE-AAC v2 streams fail to
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
+resample-glide = ["kithara-decode/resample-glide", "kithara-resampler/resample-glide"]
+resample-rubato = ["kithara-resampler/resample-rubato"]
+analysis-beat = []
+analysis-waveform = ["dep:realfft"]
 # Native-only C++ time-stretch backends. Default native builds use signalsmith;
 # bungee stays opt-in. Wasm builds pass `--no-default-features`, so they carry
 # no stretch DSP: speed control stays, key-lock is compiled out.
@@ -60,7 +74,7 @@ stretch-signalsmith = ["dep:kithara-stretch", "kithara-stretch/stretch-signalsmi
 stretch-bungee = ["dep:kithara-stretch", "kithara-stretch/stretch-bungee"]
 # NN beat/downbeat detector (kithara-beat, embedded small model). Native-only
 # in practice: wasm builds simply do not enable it (rten on wasm unverified).
-beat-nn = ["dep:kithara-beat", "kithara-beat/embed-small-model"]
+beat-nn = ["analysis-beat", "dep:kithara-beat", "kithara-beat/embed-small-model"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
@@ -69,13 +83,13 @@ kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-resampler = { workspace = true, default-features = false }
 kithara-stream = { workspace = true, default-features = false }
 kithara-stretch = { workspace = true, default-features = false, optional = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 arc-swap = { workspace = true }
-audioadapter-buffers = { workspace = true }
 biquad = { workspace = true }
 bon = { workspace = true }
 crossbeam-queue = { workspace = true }
@@ -84,9 +98,8 @@ fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
-realfft = { workspace = true }
+realfft = { workspace = true, optional = true }
 ringbuf = { workspace = true }
-rubato = { workspace = true }
 serde = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
@@ -113,7 +126,7 @@ kithara-audio = { path = ".", default-features = false, features = ["mock", "pro
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
 kithara-storage = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 aes = { workspace = true }
 assert_no_alloc = { workspace = true }
@@ -121,6 +134,7 @@ bytes = { workspace = true }
 cbc = { workspace = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
+realfft = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

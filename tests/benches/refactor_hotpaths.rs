@@ -4,11 +4,7 @@ use std::{
     fs,
     hint::black_box,
     io::{Read, Seek, SeekFrom},
-    num::NonZeroU32,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
+    num::{NonZeroU32, NonZeroUsize},
 };
 
 use axum::{
@@ -23,11 +19,8 @@ use bytes::Bytes;
 use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
     assets::{StorageBackend, StoreOptions},
-    audio::{
-        Audio, AudioConfig, AudioEffect, ResamplerParams, ResamplerProcessor, ResamplerQuality,
-    },
+    audio::{Audio, AudioConfig},
     bufpool::PcmPool,
-    decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -35,6 +28,10 @@ use kithara::{
         CancelToken,
         time::Duration,
         tokio::runtime::{Builder, Runtime},
+    },
+    resampler::{
+        Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
+        ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
     stream::{
         Stream,
@@ -77,14 +74,53 @@ fn make_pcm(frames: usize, channels: usize) -> Vec<f32> {
         .collect()
 }
 
-fn make_chunk(sample_rate: u32, channels: u16, frames: usize) -> PcmChunk {
-    PcmChunk::new(
-        PcmMeta {
-            spec: PcmSpec::new(channels, NonZeroU32::new(sample_rate).expect("bench rate")),
-            ..Default::default()
-        },
-        PcmPool::default().attach(make_pcm(frames, usize::from(channels))),
-    )
+fn make_planar(frames: usize) -> [Vec<f32>; 2] {
+    let interleaved = make_pcm(frames, 2);
+    [
+        interleaved.iter().step_by(2).copied().collect(),
+        interleaved.iter().skip(1).step_by(2).copied().collect(),
+    ]
+}
+
+fn make_output(resampler: &dyn Resampler) -> [Vec<f32>; 2] {
+    [
+        vec![0.0; resampler.output_frames_next()],
+        vec![0.0; resampler.output_frames_next()],
+    ]
+}
+
+fn build_resampler(source_rate: u32, target_rate: u32, frames: usize) -> Box<dyn Resampler> {
+    let settings = ResamplerSettings::builder()
+        .channels(NonZeroUsize::new(2).unwrap_or_else(|| panic!("bench channels")))
+        .mode(ResamplerMode::FixedRatio {
+            source_sample_rate: NonZeroU32::new(source_rate)
+                .unwrap_or_else(|| panic!("bench source rate")),
+            target_sample_rate: NonZeroU32::new(target_rate)
+                .unwrap_or_else(|| panic!("bench target rate")),
+        })
+        .quality(ResamplerQuality::High)
+        .options(ResamplerOptions::builder().chunk_size(frames).build())
+        .pcm_pool(PcmPool::new(64, frames.saturating_mul(16)))
+        .build();
+    let config = ResamplerConfig::builder()
+        .backend(RubatoBackend::new())
+        .settings(settings)
+        .build();
+    create_resampler(&config).unwrap_or_else(|err| panic!("bench resampler should build: {err}"))
+}
+
+fn process_stereo(
+    resampler: &mut dyn Resampler,
+    input: &[Vec<f32>; 2],
+    output: &mut [Vec<f32>; 2],
+) -> usize {
+    let input_refs = [&input[0][..], &input[1][..]];
+    let (left, right) = output.split_at_mut(1);
+    let mut output_refs = [&mut left[0][..], &mut right[0][..]];
+    resampler
+        .process_into_buffer(&input_refs, &mut output_refs)
+        .unwrap_or_else(|err| panic!("bench resampler process should succeed: {err}"))
+        .output_frames
 }
 
 #[expect(
@@ -233,33 +269,27 @@ fn bench_resampler_process(c: &mut Criterion) {
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(8));
 
-    group.bench_function("passthrough_process", |b| {
-        let host_rate = Arc::new(AtomicU32::new(44_100));
-        let mut params = ResamplerParams::new(Arc::clone(&host_rate), 44_100, 2);
-        params.quality = ResamplerQuality::High;
-        let mut processor = ResamplerProcessor::new(params);
-        let chunk = make_chunk(44_100, 2, 4_096);
+    group.bench_function("unity_ratio_process", |b| {
+        let mut resampler = build_resampler(44_100, 44_100, 4_096);
+        let input = make_planar(4_096);
+        let mut output = make_output(&*resampler);
 
         b.iter(|| {
-            let output = processor.process(chunk.clone());
-            black_box(output);
-            AudioEffect::reset(&mut processor);
+            let frames = process_stereo(&mut *resampler, &input, &mut output);
+            black_box(frames);
+            resampler.reset();
         });
     });
 
-    group.bench_function("rate_switch_process", |b| {
-        let host_rate = Arc::new(AtomicU32::new(44_100));
-        let mut params = ResamplerParams::new(Arc::clone(&host_rate), 48_000, 2);
-        params.quality = ResamplerQuality::High;
-        let mut processor = ResamplerProcessor::new(params);
-        let chunk = make_chunk(48_000, 2, 8_192);
+    group.bench_function("fixed_ratio_process", |b| {
+        let mut resampler = build_resampler(48_000, 44_100, 8_192);
+        let input = make_planar(8_192);
+        let mut output = make_output(&*resampler);
 
         b.iter(|| {
-            host_rate.store(44_100, Ordering::Relaxed);
-            let output = processor.process(chunk.clone());
-            black_box(output);
-            host_rate.store(48_000, Ordering::Relaxed);
-            AudioEffect::reset(&mut processor);
+            let frames = process_stereo(&mut *resampler, &input, &mut output);
+            black_box(frames);
+            resampler.reset();
         });
     });
 

@@ -1,9 +1,6 @@
 use std::{
     panic::Location,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     task::Waker,
     time::Duration as StdDuration,
 };
@@ -14,7 +11,10 @@ use super::{
     gate::{AtomicTaskState, ParkOutcome, TaskState, WakeOutcome},
     wake::{Token, Wake},
 };
-use crate::flash::{ctx, diag, ids::ThreadKey};
+use crate::{
+    flash::{ctx, diag, ids::ThreadKey},
+    sync::Arc,
+};
 
 /// What kind of waiter an [`Entry`] is, so a signal targets the right group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

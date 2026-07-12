@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{cmp, hash, ops, sync::Arc};
+use std::{cmp, hash, ops};
 
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

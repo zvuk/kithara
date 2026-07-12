@@ -1,9 +1,11 @@
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_decode::PcmChunk;
 
 use crate::waveform::{BeatGrid, Waveform};
 
 /// Streaming per-track analyzer contract: fed every decoded chunk once, then
 /// consumed to yield its own artifact.
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 pub(crate) trait Analyzer: Send {
     /// The artifact this analyzer produces.
     type Output;

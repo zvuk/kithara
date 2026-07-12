@@ -1,5 +1,7 @@
+use std::hash::Hash;
+
 pub(in crate::flash) use super::system::{CvId, WaiterId};
-use crate::{common::thread_id::thread_id_hash, native::thread::ThreadId};
+use crate::common::thread_id::thread_id_hash;
 
 /// Park/wake mechanism of a stateful flash primitive ([`crate::sync::Condvar`],
 /// [`crate::sync::Notify`], `tokio::oneshot`; the bounded channel carries a
@@ -44,15 +46,19 @@ pub(in crate::flash) fn trace_native_from_ambient(primitive: &'static str, op: &
     }
 }
 
-/// Hashed [`ThreadId`] key targeting a parked thread. [`ThreadKey::of`] is the
-/// ONLY constructor, so the park side and the unpark side always derive the key
-/// through the SAME hasher (parity contract of
-/// [`thread_id_hash`](crate::common::thread_id::thread_id_hash)).
+/// Hashed [`ThreadId`] key targeting a parked thread.
+/// Park and wake paths must derive it through the same `thread_id_hash`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::flash) struct ThreadKey(u64);
 
 impl ThreadKey {
-    pub(in crate::flash) fn of(id: ThreadId) -> Self {
+    pub(in crate::flash) fn of<I: Hash>(id: I) -> Self {
         Self(thread_id_hash(id))
+    }
+}
+
+impl From<u64> for ThreadKey {
+    fn from(hash: u64) -> Self {
+        Self(hash)
     }
 }

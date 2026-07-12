@@ -1,9 +1,6 @@
 use std::{
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use bon::Builder;
@@ -16,7 +13,9 @@ use kithara_bufpool::PcmPool;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{
-    CancelScope, CancelToken, sync::Mutex, tokio::runtime::Handle as RuntimeHandle,
+    CancelScope, CancelToken,
+    sync::{Arc, Mutex},
+    tokio::runtime::Handle as RuntimeHandle,
 };
 use portable_atomic::AtomicF32;
 use tracing::debug;
@@ -399,17 +398,18 @@ impl PlayerImpl {
         // player's master when none was supplied.
         let parent = config.cancel.unwrap_or_else(|| self.core.cancel.clone());
         let cancel = Some(parent.child());
-        // Always engage tempo mode: with a stretch backend compiled in, the
-        // stretch slot is present regardless of key-lock (it bypasses cleanly
-        // when off), so key-lock and backend can be toggled live without
-        // reloading the track. Without one, the resampler follows the speed.
+        // Always pass the shared speed controls: with a stretch backend
+        // compiled in, the stretch slot owns speed and key-lock live. Without
+        // one, PCM speed is pinned and the controls remain state only.
         let stretch = Some(Arc::clone(&self.core.config.timestretch));
+        let mut decoder = config.decoder.clone();
+        decoder.gapless_mode = self.core.config.gapless_mode;
         crate::impls::config::ResourceConfig {
             bus,
             cancel,
             worker: Some(self.core.engine.worker().clone()),
             host_sample_rate: std::num::NonZeroU32::new(self.core.engine.master_sample_rate()),
-            gapless_mode: self.core.config.gapless_mode,
+            decoder,
             stretch,
             engine_load: Some(Arc::clone(&self.core.engine_load)),
             ..config
@@ -645,7 +645,7 @@ mod tests {
 
         config = player.prepare_config(config);
 
-        assert_eq!(config.gapless_mode, GaplessMode::Disabled);
+        assert_eq!(config.decoder.gapless_mode, GaplessMode::Disabled);
         assert!(
             config.cancel.is_some(),
             "prepare_config must inject a per-track cancel child"

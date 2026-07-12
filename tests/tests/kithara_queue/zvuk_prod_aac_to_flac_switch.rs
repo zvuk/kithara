@@ -188,7 +188,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         panic!("expected an HLS config source for {PROD_TRACK}");
     };
     cfg.store = StoreOptions::new(temp.path());
-    cfg.decoder_backend = backend;
+    cfg.decoder.backend = backend;
     cfg.initial_abr_mode = AbrMode::manual(START_VARIANT);
     cfg.name = Some(TRACK_NAME.to_string());
 

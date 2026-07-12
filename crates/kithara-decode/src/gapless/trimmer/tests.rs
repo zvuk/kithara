@@ -5,7 +5,10 @@ use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 use super::{Consts, GaplessTrimmer};
-use crate::{GaplessInfo, PcmChunk, PcmMeta, PcmSpec, gapless::heuristic::SilenceTrimParams};
+use crate::{
+    GaplessInfo, GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec,
+    gapless::heuristic::SilenceTrimParams,
+};
 
 fn chunk(spec: PcmSpec, frame_offset: u64, frames: usize) -> PcmChunk {
     let samples = frames.saturating_mul(usize::from(spec.channels));
@@ -105,6 +108,44 @@ fn leading_trim_can_consume_multiple_chunks() {
     assert_eq!(out.frames(), 672);
     assert_eq!(out.meta.frame_offset, 2400);
     assert_eq!(out.samples[0], 352.0);
+}
+
+#[kithara::test]
+fn tail_compensation_reduces_fixed_trailing_trim_by_one_frame() {
+    let spec = mono_spec();
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
+        leading_frames: 0,
+        trailing_frames: 2,
+    })
+    .with_tail_compensation(Some(GaplessTailCompensation::new(5)));
+
+    let mut output = super::GaplessOutput::new();
+    output.extend(trimmer.push(chunk(spec, 0, 2)));
+    output.extend(trimmer.push(chunk(spec, 2, 2)));
+    output.extend(trimmer.flush());
+
+    assert_eq!(output.len(), 2);
+    assert_eq!(output.iter().map(PcmChunk::frames).sum::<usize>(), 3);
+    assert_eq!(collect_pcm(&output), vec![0.0, 1.0, 0.0]);
+}
+
+#[kithara::test]
+fn tail_compensation_is_identity_without_deficit() {
+    let spec = mono_spec();
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
+        leading_frames: 0,
+        trailing_frames: 2,
+    })
+    .with_tail_compensation(Some(GaplessTailCompensation::new(4)));
+
+    let mut output = super::GaplessOutput::new();
+    output.extend(trimmer.push(chunk(spec, 0, 2)));
+    output.extend(trimmer.push(chunk(spec, 2, 2)));
+    output.extend(trimmer.flush());
+
+    assert_eq!(output.len(), 1);
+    assert_eq!(output.iter().map(PcmChunk::frames).sum::<usize>(), 2);
+    assert_eq!(collect_pcm(&output), vec![0.0, 1.0]);
 }
 
 #[kithara::test]

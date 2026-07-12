@@ -1,10 +1,11 @@
-use std::sync::Arc;
-
 use kithara::{
     self,
     abr::{AbrMode, AbrSettings, AbrState, AbrView},
     events::{VariantDuration, VariantIndex, VariantInfo},
-    platform::time::{Duration, Duration as StdDuration},
+    platform::{
+        sync::Arc,
+        time::{Duration, Duration as StdDuration},
+    },
 };
 
 fn fast_settings() -> AbrSettings {

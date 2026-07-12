@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{fmt::Write, sync::Arc};
+use std::fmt::Write;
 
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
@@ -10,6 +10,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, sleep},
         tokio,
     },
@@ -411,7 +412,11 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
         .expect("valid track URL")
         .downloader(downloader.clone())
         .store(store)
-        .decoder_backend(DecoderBackend::Symphonia)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+        )
         .initial_abr_mode(AbrMode::Auto(None))
         .build();
     let player = Arc::new(PlayerImpl::new(
@@ -652,7 +657,7 @@ fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource {
     match build_source(url, &ctx.config) {
         TrackSource::Config(mut cfg) => {
             cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder_backend = DecoderBackend::Symphonia;
+            cfg.decoder.backend = DecoderBackend::Symphonia;
             cfg.initial_abr_mode = AbrMode::Auto(None);
             TrackSource::Config(cfg)
         }

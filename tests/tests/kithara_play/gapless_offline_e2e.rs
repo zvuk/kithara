@@ -1,11 +1,24 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::num::{NonZeroU32, NonZeroUsize};
 
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+use kithara::decode::DecoderBackend;
 use kithara::{
     assets::StoreOptions,
-    decode::{GaplessMode, SilenceTrimParams},
-    platform::time::{self, Duration, Instant},
+    audio::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
+    decode::{
+        DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
+        PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
+    },
+    events::EventBus,
+    platform::{
+        sync::Arc,
+        time::{self, Duration, Instant},
+    },
     play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig},
     stream::AudioCodec,
 };
@@ -27,6 +40,27 @@ use crate::gapless_common::{
 const BLOCK_FRAMES: usize = 512;
 const POST_ROLL_BLOCKS: usize = 8;
 const SILENCE_THRESHOLD: f32 = 1.0e-3;
+const FUSED_FIXTURE_SOURCE_RATE: u32 = 44_100;
+const FUSED_FIXTURE_DEVICE_RATE: u32 = 48_000;
+const FUSED_FIXTURE_SOURCE_FRAMES: u64 = 44_100;
+const FUSED_FIXTURE_IDEAL_DEVICE_FRAMES: usize = 48_000;
+const FUSED_FIXTURE_SEAM_OMEGA: f64 = 0.23925;
+const FUSED_FIXTURE_SEAM_PHASE: f64 = -1.365_523_678_408_751_2;
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+const APPLE_FUSED_DEFICIT_SOURCE_FRAMES: u64 = 261_120;
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+const APPLE_FUSED_DEFICIT_SEGMENT_SECS: f64 = 5.921_088_435_374_15;
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+const APPLE_FUSED_DEFICIT_SEGMENTS: usize = 1;
 /// Phase-locked tone: period = 100 frames at 48 kHz, integer divisor of the
 /// sample rate, integer divisor of the AAC frame size (1024 / 100 ≠ int but
 /// the wave is still perfectly periodic over any block large enough — only
@@ -274,6 +308,195 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
         ratio < ContinuityMetric::MAX_RATIO,
         "gapless stitch discontinuity {switch_peak:.6} is {ratio:.1}x the worst same-track control window {control_peak:.6}",
     );
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch() {
+    let compensated = render_synthetic_fused_deficit_seam(true).await;
+    let uncompensated = render_synthetic_fused_deficit_seam(false).await;
+
+    let stitch_frame = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES;
+    let compensated_db = seam_step_db(&compensated.left, stitch_frame);
+    let uncompensated_db = seam_step_db(&uncompensated.left, stitch_frame - 1);
+    println!(
+        "FUSED_GAPLESS_DEFICIT compensated_db={compensated_db:.2} uncompensated_db={uncompensated_db:.2}"
+    );
+
+    assert_prefetch_before_first_end(&compensated.events, "fused-deficit-1");
+    assert_eq!(compensated.first_frames, FUSED_FIXTURE_IDEAL_DEVICE_FRAMES);
+    assert_eq!(
+        uncompensated.first_frames,
+        FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1
+    );
+    assert!(
+        compensated_db < -30.0,
+        "compensated seam residual too high: {compensated_db:.2} dB; events={:?}",
+        compensated.events
+    );
+    assert!(
+        uncompensated_db > -32.0,
+        "uncompensated control seam should expose the one-frame deficit: {uncompensated_db:.2} dB; events={:?}",
+        uncompensated.events
+    );
+    assert!(
+        compensated_db + 1.0 < uncompensated_db,
+        "tail-side compensation must measurably improve the seam: compensated={compensated_db:.2}, uncompensated={uncompensated_db:.2}"
+    );
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
+    let expected_device_frames = usize::try_from(ceil_scaled_frames(
+        source_stitch_frame,
+        FUSED_FIXTURE_DEVICE_RATE,
+        FUSED_FIXTURE_SOURCE_RATE,
+    ))
+    .expect("fixture length fits usize");
+    assert_eq!(
+        expected_device_frames, 284_213,
+        "fixture must keep the selected one-frame-deficit search geometry"
+    );
+
+    let probe_harness = OfflinePlayerHarness::with_sample_rate(
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(silence_trim_with_trailing())
+            .build(),
+        FUSED_FIXTURE_DEVICE_RATE,
+    );
+    let (probe, _) = create_apple_fused_resource(
+        probe_harness.player(),
+        &server,
+        temp_dir.path(),
+        "apple-fused-probe",
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        None,
+        0,
+    )
+    .await;
+    let probe = drain_resource_to_eof(probe).await;
+    assert_eq!(
+        probe.output_frames, expected_device_frames,
+        "tail-side compensation should restore exact visible device-frame length"
+    );
+
+    let pending_decision =
+        render_apple_fused_deficit_seam(&server, temp_dir.path(), probe.output_frames).await;
+
+    println!(
+        "APPLE_FUSED_TAIL_SEAM measured_frames={} ideal_frames={} length_delta={} \
+         seam_db={:.2} control_db={:.2} stitch_frame={} nearby={:?}",
+        probe.output_frames,
+        expected_device_frames,
+        isize::try_from(probe.output_frames).expect("probe frames fit isize")
+            - isize::try_from(expected_device_frames).expect("ideal frames fit isize"),
+        pending_decision.seam_db,
+        pending_decision.control_db,
+        pending_decision.stitch_frame,
+        pending_decision.nearby_db
+    );
+
+    assert!(pending_decision.seam_db.is_finite());
+    assert!(
+        pending_decision.seam_db < -26.0,
+        "tail-side fused seam regression floor: {:.2} dB",
+        pending_decision.seam_db
+    );
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+async fn render_apple_fused_deficit_seam(
+    server: &TestServerHelper,
+    cache_dir: &std::path::Path,
+    stitch_frame: usize,
+) -> AppleFusedSeamRender {
+    let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(silence_trim_with_trailing())
+            .build(),
+        FUSED_FIXTURE_DEVICE_RATE,
+    );
+
+    let (first, first_id) = create_apple_fused_resource(
+        harness.player(),
+        server,
+        cache_dir,
+        "apple-fused-1",
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        None,
+        0,
+    )
+    .await;
+    let second = create_apple_fused_resource(
+        harness.player(),
+        server,
+        cache_dir,
+        "apple-fused-2",
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        None,
+        source_stitch_frame,
+    )
+    .await;
+
+    load_tagged_queue(&harness, [(first, first_id), second]);
+
+    let control_post_roll_blocks =
+        (ContinuityMetric::CONTROL_STRIDE_FRAMES / BLOCK_FRAMES) + POST_ROLL_BLOCKS;
+    let (rendered, events) =
+        render_until_item_end_with_post_roll(&harness, "apple-fused-1", control_post_roll_blocks)
+            .await;
+    let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
+    let _ = timed_event_frame_end(&events, |event| {
+        matches!(
+            event,
+            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
+                if id.as_ref() == "apple-fused-1"
+        )
+    })
+    .expect("first fused item must emit ItemDidPlayToEnd");
+
+    assert_prefetch_before_first_end(&events, "apple-fused-1");
+    assert!(
+        stitch_frame < left.len(),
+        "fused stitch frame must be inside rendered PCM; stitch_frame={stitch_frame}, left_frames={}, events={events:?}",
+        left.len()
+    );
+
+    let seam_db = seam_step_db(&left, stitch_frame);
+    let (control_peak, control_count) = gapless_control_peak(&left, stitch_frame);
+    let control_db = amplitude_db(control_peak);
+    assert!(
+        control_count >= ContinuityMetric::MIN_CONTROL_WINDOWS,
+        "Apple fused seam metric needs at least {} same-track control windows, got {control_count}",
+        ContinuityMetric::MIN_CONTROL_WINDOWS
+    );
+    AppleFusedSeamRender {
+        control_db,
+        nearby_db: nearby_seam_step_db(&left, stitch_frame),
+        seam_db,
+        stitch_frame,
+    }
 }
 
 #[kithara::test(
@@ -638,6 +861,181 @@ async fn create_resource_with_encoding(
     (resource, item_id)
 }
 
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fixture builder: each parameter pins one HLS-fixture knob"
+)]
+async fn create_apple_fused_resource(
+    player: &kithara::play::PlayerImpl,
+    server: &TestServerHelper,
+    cache_dir: &std::path::Path,
+    item_id: &'static str,
+    encoder_delay: Option<u32>,
+    trailing_delay: Option<u32>,
+    start_frame: u64,
+) -> (Resource, Arc<str>) {
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(APPLE_FUSED_DEFICIT_SEGMENTS)
+                .segment_duration_secs(APPLE_FUSED_DEFICIT_SEGMENT_SECS)
+                .packaged_audio(PackagedAudioRequest {
+                    codec: AudioCodec::AacLc,
+                    sample_rate: FUSED_FIXTURE_SOURCE_RATE,
+                    channels: GAPLESS_CHANNELS,
+                    start_frame: NonZeroU32::new(
+                        u32::try_from(start_frame).expect("start_frame fits u32"),
+                    ),
+                    timescale: Some(FUSED_FIXTURE_SOURCE_RATE),
+                    bit_rate: Some(128_000),
+                    encoder_delay: encoder_delay.and_then(NonZeroU32::new),
+                    trailing_delay: trailing_delay.and_then(NonZeroU32::new),
+                    source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: SINE_HZ }),
+                    gapless_encoding: GaplessEncoding::default(),
+                    variant_overrides: Vec::new(),
+                }),
+        )
+        .await
+        .expect("create Apple fused gapless HLS fixture");
+
+    let item_id = Arc::<str>::from(item_id);
+    let store = StoreOptions::new(cache_dir);
+    let config = ResourceConfig::for_src(created.master_url().as_str())
+        .expect("valid HLS master URL")
+        .store(store)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Apple)
+                .build(),
+        )
+        .build();
+    let config = player.prepare_config(config);
+    let mut resource = Resource::new(config)
+        .await
+        .expect("open HLS resource for Apple fused fixture");
+    let _ = resource.preload().await;
+    assert_eq!(
+        resource.spec().sample_rate.get(),
+        FUSED_FIXTURE_DEVICE_RATE,
+        "Apple fused decoder must emit the host/device rate"
+    );
+    (resource, item_id)
+}
+
+async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> SyntheticSeamRender {
+    let expected_device_frames = ceil_scaled_frames(
+        FUSED_FIXTURE_SOURCE_FRAMES,
+        FUSED_FIXTURE_DEVICE_RATE,
+        FUSED_FIXTURE_SOURCE_RATE,
+    );
+    assert_eq!(
+        expected_device_frames,
+        u64::try_from(FUSED_FIXTURE_IDEAL_DEVICE_FRAMES).expect("fixture size fits u64")
+    );
+
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(GaplessMode::Disabled)
+            .build(),
+        FUSED_FIXTURE_DEVICE_RATE,
+    );
+    let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation);
+    let first_frame_count = first_frames.len();
+    let first = Resource::from_reader(
+        SyntheticPcmReader::new(first_frames, first_frame_count),
+        Some(Arc::from("fused-deficit-1")),
+    );
+    let second = Resource::from_reader(
+        SyntheticPcmReader::new(
+            synthetic_second_track_frames(),
+            FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
+        ),
+        Some(Arc::from("fused-deficit-2")),
+    );
+
+    load_tagged_queue(
+        &harness,
+        [
+            (first, Arc::from("fused-deficit-1")),
+            (second, Arc::from("fused-deficit-2")),
+        ],
+    );
+
+    let (rendered, events) = render_until_item_end(&harness, "fused-deficit-2").await;
+    SyntheticSeamRender {
+        left: deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS)),
+        events,
+        first_frames: first_frame_count,
+    }
+}
+
+fn synthetic_tail_trimmed_first_frames(tail_compensation: bool) -> Vec<f32> {
+    const TRAILING_FRAMES: u64 = 1;
+
+    let actual_pre_trim_frames =
+        FUSED_FIXTURE_IDEAL_DEVICE_FRAMES + usize::try_from(TRAILING_FRAMES).expect("fits") - 1;
+    let ideal_pre_trim_frames =
+        u64::try_from(actual_pre_trim_frames).expect("fixture frame count fits u64") + 1;
+    let source =
+        synthetic_interleaved_chunk((0..actual_pre_trim_frames).map(fused_seam_sample).collect());
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo::new(0, TRAILING_FRAMES))
+        .with_tail_compensation(
+            tail_compensation.then_some(GaplessTailCompensation::new(ideal_pre_trim_frames)),
+        );
+
+    let mut output = Vec::new();
+    output.extend(left_frames_from_chunks(trimmer.push(source)));
+    output.extend(left_frames_from_chunks(trimmer.flush()));
+    output
+}
+
+fn synthetic_second_track_frames() -> Vec<f32> {
+    let start = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES;
+    let end = start + FUSED_FIXTURE_IDEAL_DEVICE_FRAMES;
+    (start..end).map(fused_seam_sample).collect()
+}
+
+fn synthetic_interleaved_chunk(frames: Vec<f32>) -> PcmChunk {
+    let spec = PcmSpec::new(
+        GAPLESS_CHANNELS,
+        NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("test sample rate"),
+    );
+    let mut chunk = PcmChunk::default();
+    chunk.meta = PcmMeta {
+        frames: u32::try_from(frames.len()).expect("fixture frame count fits u32"),
+        spec,
+        ..Default::default()
+    };
+    chunk
+        .samples
+        .reserve(frames.len() * usize::from(GAPLESS_CHANNELS));
+    for sample in frames {
+        for _ in 0..GAPLESS_CHANNELS {
+            chunk.samples.push(sample);
+        }
+    }
+    chunk
+}
+
+fn left_frames_from_chunks(chunks: impl IntoIterator<Item = PcmChunk>) -> Vec<f32> {
+    chunks
+        .into_iter()
+        .flat_map(|chunk| {
+            chunk
+                .samples
+                .chunks_exact(usize::from(GAPLESS_CHANNELS))
+                .map(|frame| frame[0])
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 fn load_tagged_queue<const N: usize>(
     harness: &OfflinePlayerHarness,
     items: [(Resource, Arc<str>); N],
@@ -654,9 +1052,203 @@ fn load_tagged_queue<const N: usize>(
         .expect("select first queue item");
 }
 
+struct SyntheticSeamRender {
+    left: Vec<f32>,
+    events: Vec<TimedPlayerEvent>,
+    first_frames: usize,
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[derive(Debug)]
+struct AppleFusedSeamRender {
+    control_db: f32,
+    nearby_db: [f32; 7],
+    seam_db: f32,
+    stitch_frame: usize,
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[derive(Debug)]
+struct DrainedResource {
+    output_frames: usize,
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+async fn drain_resource_to_eof(mut resource: Resource) -> DrainedResource {
+    let mut output_frames = 0usize;
+    let mut pending = 0usize;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match resource.next_chunk().expect("drain Apple fused resource") {
+            ChunkOutcome::Chunk(chunk) => {
+                pending = 0;
+                output_frames = output_frames.saturating_add(chunk.frames());
+            }
+            ChunkOutcome::Pending { .. } => {
+                pending = pending.saturating_add(1);
+                assert!(
+                    pending < 4096,
+                    "Apple fused resource stayed pending while draining to EOF"
+                );
+                assert!(
+                    Instant::now() <= deadline,
+                    "timed out draining Apple fused resource to EOF"
+                );
+                time::sleep(Duration::from_millis(1)).await;
+            }
+            ChunkOutcome::Eof { .. } => {
+                return DrainedResource { output_frames };
+            }
+        }
+    }
+}
+
+struct SyntheticPcmReader {
+    bus: EventBus,
+    duration_frames: usize,
+    frames: Vec<f32>,
+    metadata: TrackMetadata,
+    position_frames: usize,
+    spec: PcmSpec,
+}
+
+impl SyntheticPcmReader {
+    fn new(frames: Vec<f32>, duration_frames: usize) -> Self {
+        Self {
+            bus: EventBus::default(),
+            duration_frames,
+            frames,
+            metadata: TrackMetadata::default(),
+            position_frames: 0,
+            spec: PcmSpec::new(
+                GAPLESS_CHANNELS,
+                NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("test sample rate"),
+            ),
+        }
+    }
+
+    fn fill_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
+        let requested = output
+            .iter()
+            .map(|channel| channel.len())
+            .min()
+            .unwrap_or(0);
+        let frames = requested.min(self.frames.len().saturating_sub(self.position_frames));
+        for frame in 0..frames {
+            let sample = self.frames[self.position_frames + frame];
+            for channel in output.iter_mut() {
+                channel[frame] = sample;
+            }
+        }
+        self.position_frames += frames;
+        frames
+    }
+
+    fn fill_interleaved(&mut self, output: &mut [f32]) -> usize {
+        let channels = usize::from(self.spec.channels);
+        let requested = output.len().saturating_div(channels.max(1));
+        let frames = requested.min(self.frames.len().saturating_sub(self.position_frames));
+        for frame in 0..frames {
+            let sample = self.frames[self.position_frames + frame];
+            let start = frame.saturating_mul(channels);
+            let end = start.saturating_add(channels).min(output.len());
+            output[start..end].fill(sample);
+        }
+        self.position_frames += frames;
+        frames
+    }
+
+    fn read_outcome(&self, frames: usize) -> ReadOutcome {
+        NonZeroUsize::new(frames).map_or_else(
+            || ReadOutcome::Eof {
+                position: self.position(),
+            },
+            |count| ReadOutcome::Frames {
+                count,
+                position: self.position(),
+            },
+        )
+    }
+}
+
+impl PcmReader for SyntheticPcmReader {
+    fn duration(&self) -> Option<Duration> {
+        Some(duration_for_test_frames(self.duration_frames))
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
+    }
+
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        Ok(ChunkOutcome::Eof {
+            position: self.position(),
+        })
+    }
+
+    fn position(&self) -> Duration {
+        duration_for_test_frames(self.position_frames)
+    }
+
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        let frames = self.fill_interleaved(buf);
+        Ok(self.read_outcome(frames))
+    }
+
+    fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        let frames = self.fill_planar(output);
+        Ok(self.read_outcome(frames))
+    }
+
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        let frames = frames_for_test_duration(position);
+        if frames >= self.frames.len() {
+            self.position_frames = self.frames.len();
+            Ok(SeekOutcome::PastEof {
+                target: position,
+                duration: self.position(),
+            })
+        } else {
+            self.position_frames = frames;
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: self.position(),
+            })
+        }
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
 async fn render_until_item_end(
     harness: &OfflinePlayerHarness,
     terminal_item_id: &'static str,
+) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
+    render_until_item_end_with_post_roll(harness, terminal_item_id, POST_ROLL_BLOCKS).await
+}
+
+async fn render_until_item_end_with_post_roll(
+    harness: &OfflinePlayerHarness,
+    terminal_item_id: &'static str,
+    post_roll_blocks: usize,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut rendered = Vec::new();
@@ -684,7 +1276,7 @@ async fn render_until_item_end(
                     if id.as_ref() == terminal_item_id
             )
         }) {
-            for _ in 0..POST_ROLL_BLOCKS {
+            for _ in 0..post_roll_blocks {
                 let block = harness.render(BLOCK_FRAMES);
                 rendered.extend_from_slice(&block);
                 rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES);
@@ -797,6 +1389,63 @@ fn gapless_control_peak(left: &[f32], stitch_frame: usize) -> (f32, usize) {
         count += 1;
     }
     (peak, count)
+}
+
+fn ceil_scaled_frames(frames: u64, output_rate: u32, input_rate: u32) -> u64 {
+    let numerator = u128::from(frames).saturating_mul(u128::from(output_rate));
+    let denominator = u128::from(input_rate.max(1));
+    let scaled = numerator.saturating_add(denominator - 1) / denominator;
+    u64::try_from(scaled).unwrap_or(u64::MAX)
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "test-only signal synthesis narrows bounded sine samples to f32"
+)]
+fn fused_seam_sample(global_frame: usize) -> f32 {
+    let global = u32::try_from(global_frame).expect("fixture frame fits u32");
+    let seam = u32::try_from(FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1).expect("seam fits u32");
+    let delta = f64::from(global) - f64::from(seam);
+    (FUSED_FIXTURE_SEAM_PHASE + delta * FUSED_FIXTURE_SEAM_OMEGA).sin() as f32
+}
+
+fn seam_step_db(left: &[f32], stitch_frame: usize) -> f32 {
+    assert!(
+        (1..left.len()).contains(&stitch_frame),
+        "stitch frame must be in 1..{}, got {stitch_frame}",
+        left.len(),
+    );
+    amplitude_db((left[stitch_frame] - left[stitch_frame - 1]).abs())
+}
+
+fn nearby_seam_step_db(left: &[f32], stitch_frame: usize) -> [f32; 7] {
+    let mut values = [0.0_f32; 7];
+    let start = stitch_frame.saturating_sub(3);
+    for (index, value) in values.iter_mut().enumerate() {
+        *value = seam_step_db(left, start.saturating_add(index));
+    }
+    values
+}
+
+fn amplitude_db(value: f32) -> f32 {
+    20.0 * value.max(1.0e-9).log10()
+}
+
+fn duration_for_test_frames(frames: usize) -> Duration {
+    let nanos = u128::try_from(frames)
+        .unwrap_or(u128::MAX)
+        .saturating_mul(1_000_000_000)
+        / u128::from(FUSED_FIXTURE_DEVICE_RATE);
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+}
+
+fn frames_for_test_duration(duration: Duration) -> usize {
+    let frames = duration
+        .as_nanos()
+        .saturating_mul(u128::from(FUSED_FIXTURE_DEVICE_RATE))
+        / 1_000_000_000;
+    usize::try_from(frames).unwrap_or(usize::MAX)
 }
 
 /// Index just past the last sample whose absolute amplitude is at or above

@@ -1,8 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     decode::DecoderBackend,
@@ -10,6 +8,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{self, Duration, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,
@@ -172,7 +171,11 @@ async fn run_one_attempt(
         .downloader(downloader.clone())
         .store(store)
         .initial_abr_mode(AbrMode::Auto(None))
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
 

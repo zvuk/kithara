@@ -3,8 +3,6 @@ use kithara_decode::PcmChunk;
 use super::track_analysis::Analyzer;
 use crate::waveform::{AnalysisParams, Waveform, WaveformAnalyzer};
 
-/// [`Analyzer`] adapter over the pure-DSP [`WaveformAnalyzer`]: carries the
-/// target bucket count and speaks the chunk-stream contract.
 pub(crate) struct WaveformPass {
     inner: WaveformAnalyzer,
     buckets: usize,

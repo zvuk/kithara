@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use kithara::{
     self,
     abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator},
     events::{BandwidthSource, VariantDuration, VariantIndex, VariantInfo},
-    platform::{CancelToken, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
 };
 
 fn settings_fast() -> AbrSettings {

@@ -17,14 +17,12 @@
 //! Auto-advance is observed as a `Queue::current_index()` change against a
 //! multi-track queue.
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDispatcher},
     queue::{Queue, QueueConfig, Transition},
     stream::dl::{Downloader, DownloaderConfig},
@@ -97,7 +95,11 @@ async fn build_hls_resource(
         .expect("valid master URL")
         .downloader(downloader.clone())
         .store(store.clone())
-        .decoder_backend(DecoderBackend::Symphonia)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+        )
         .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
         .build();
     Resource::new(cfg).await.expect("create HLS resource")
@@ -180,11 +182,9 @@ async fn run_case(mode: GateMode) {
     );
 
     let harness = Harness::new();
-    let queue = Queue::new(
-        QueueConfig::default()
-            .with_should_autoplay(false)
-            .with_player(Arc::clone(&harness.player)),
-    );
+    let mut queue_config = QueueConfig::default().with_player(Arc::clone(&harness.player));
+    queue_config.should_autoplay = false;
+    let queue = Queue::new(queue_config);
     let mut rx = harness.player.subscribe();
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward

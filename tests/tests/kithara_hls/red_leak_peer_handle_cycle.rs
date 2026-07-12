@@ -2,14 +2,18 @@
 
 use std::{
     error::Error as StdError,
-    sync::{Arc, atomic::AtomicBool},
+    sync::atomic::AtomicBool,
     task::{Context, Poll},
 };
 
 use kithara::{
     abr::Abr,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Mutex, time::Duration},
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        time::Duration,
+    },
     stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle},
 };
 

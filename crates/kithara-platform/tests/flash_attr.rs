@@ -7,16 +7,14 @@
 #![cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::Instant as RealInstant,
 };
 
 use kithara_platform::{
     flash::ambient_scope,
+    sync::Arc,
     time::{self, Duration},
 };
 

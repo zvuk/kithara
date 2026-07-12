@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use axum::{
     Router,
@@ -8,6 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use kithara::platform::sync::Arc;
 use tower_http::services::ServeDir;
 
 use crate::test_server_state::TestServerState;

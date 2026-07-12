@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use kithara_platform::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackPlaybackStopReason {
@@ -71,8 +71,7 @@ impl PlayerNotification {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;

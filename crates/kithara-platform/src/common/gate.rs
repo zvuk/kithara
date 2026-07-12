@@ -1,12 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicU64, Ordering},
-};
-
 use crate::{
-    sync::{Condvar, Mutex, MutexGuard},
+    sync::{
+        Condvar, Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     thread::{self, Thread},
     time::{Duration, Instant},
 };
@@ -108,65 +106,110 @@ impl WaitGate for CondvarGate<u64> {
     }
 }
 
-/// RT-safe edge gate: a lock-free [`signal`](WaitGate::signal) (atomic bump +
-/// `unpark`) plus a `park_timeout` waiter. Single-waiter — the first
-/// [`wait_timeout`](WaitGate::wait_timeout) caller registers its thread for
-/// the `unpark` fast-path.
-#[derive(Default)]
+/// Single-waiter edge gate with a non-blocking signal path and timed backstop.
+/// Sequence and waiter registration share one atomic to prevent lost wakeups.
 pub struct ThreadGate {
-    seq: AtomicU64,
-    waiter: OnceLock<Thread>,
+    backend: thread::GateBackend,
+    state: AtomicU64,
+    waiter: Mutex<Option<Thread>>,
+    waiter_id: AtomicU64,
+}
+
+impl Default for ThreadGate {
+    fn default() -> Self {
+        Self {
+            backend: thread::GateBackend::default(),
+            state: AtomicU64::new(0),
+            waiter: Mutex::new(None),
+            waiter_id: AtomicU64::new(0),
+        }
+    }
 }
 
 impl ThreadGate {
-    fn register(&self) {
-        if self.waiter.get().is_none() {
-            let _ = self.waiter.set(thread::current());
+    const SEQUENCE_MASK: u64 = !Self::WAITING;
+    const WAITING: u64 = 1 << 63;
+
+    fn advance(&self) -> u64 {
+        let mut current = self.state.load(Ordering::SeqCst);
+        loop {
+            let next = (current & Self::WAITING) | (current.wrapping_add(1) & Self::SEQUENCE_MASK);
+            match self.state.compare_exchange_weak(
+                current,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(previous) => return previous,
+                Err(observed) => current = observed,
+            }
         }
+    }
+
+    fn register(&self) {
+        let waiter_id = thread::current_thread_id();
+        let mut waiter = self.waiter.lock();
+        if self.waiter_id.load(Ordering::Acquire) != waiter_id || waiter.is_none() {
+            *waiter = Some(thread::current());
+            self.waiter_id.store(waiter_id, Ordering::Release);
+        }
+        drop(waiter);
+        self.state.fetch_or(Self::WAITING, Ordering::SeqCst);
+    }
+
+    fn sequence(state: u64) -> u64 {
+        state & Self::SEQUENCE_MASK
     }
 }
 
 impl WaitGate for ThreadGate {
     fn current(&self) -> u64 {
-        self.seq.load(Ordering::Acquire)
+        Self::sequence(self.state.load(Ordering::Acquire))
     }
 
-    /// Lock-free: bump the counter and `unpark` the registered waiter. Safe on
-    /// the RT audio core — no condvar mutex. The counter bump alone closes the
-    /// lost-wakeup window (a waiter that snapshotted the old value sees the
-    /// change and never parks); the `unpark` is a latency fast-path.
+    /// Advance the edge and attempt to unpark an active waiter without blocking.
     fn signal(&self) {
-        self.seq.fetch_add(1, Ordering::Release);
-        if let Some(waiter) = self.waiter.get() {
-            thread::unpark(waiter);
+        let previous = self.advance();
+        if previous & Self::WAITING != 0
+            && let Ok(waiter) = self.waiter.try_lock()
+        {
+            self.backend
+                .unpark(self.waiter_id.load(Ordering::Relaxed), waiter.as_ref());
         }
     }
 
     fn wait_timeout(&self, since: u64, timeout: Duration) -> bool {
         self.register();
-        let deadline = Instant::now() + timeout;
-        loop {
-            if self.seq.load(Ordering::Acquire) != since {
-                return true;
+        let deadline = thread::gate_instant(&self.backend) + timeout;
+        let result = loop {
+            let state = self.state.load(Ordering::SeqCst);
+            if Self::sequence(state) != since {
+                break true;
             }
-            let now = Instant::now();
+            let now = thread::gate_instant(&self.backend);
             if now >= deadline {
-                return self.seq.load(Ordering::Acquire) != since;
+                break Self::sequence(self.state.load(Ordering::SeqCst)) != since;
             }
-            thread::park_timeout(deadline - now);
-        }
+            self.backend.park_timeout(deadline - now);
+        };
+        self.state.fetch_and(Self::SEQUENCE_MASK, Ordering::SeqCst);
+        result
     }
 }
 
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::sync::Arc;
+    use std::time::{Duration, Instant as StdInstant};
 
+    use assert_no_alloc::assert_no_alloc;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::thread;
+    use crate::{
+        sync::{Arc, mpsc},
+        thread,
+    };
 
     #[kithara::test]
     fn edge_signal_advances_current() {
@@ -235,5 +278,73 @@ mod tests {
         // counter bump alone must make the next wait return immediately.
         g.signal();
         assert!(g.wait_timeout(s0, Duration::from_millis(10)));
+    }
+
+    #[kithara::test(flash(false))]
+    fn thread_gate_refreshes_waiter_handle() {
+        let g = Arc::new(ThreadGate::default());
+
+        let first_gate = Arc::clone(&g);
+        let first = thread::spawn_named("threadgate-stale-waiter", move || {
+            let first_id = thread::current_thread_id();
+            let since = first_gate.current();
+            first_gate.signal();
+            assert!(first_gate.wait_timeout(since, Duration::from_millis(10)));
+            first_id
+        });
+        let first_id = first.join().expect("first waiter thread");
+
+        let (registered_tx, registered_rx) = mpsc::channel();
+
+        let second_gate = Arc::clone(&g);
+        let second = thread::spawn_named("threadgate-current-waiter", move || {
+            let since = second_gate.current();
+            let second_id = thread::current_thread_id();
+            registered_tx
+                .send(second_id)
+                .expect("report second waiter registration");
+
+            let started = StdInstant::now();
+            let moved = second_gate.wait_timeout(since, Duration::from_millis(250));
+            let elapsed = started.elapsed();
+            (second_id, elapsed, moved)
+        });
+
+        let second_id = registered_rx
+            .recv_timeout(Instant::now() + Duration::from_secs(1))
+            .expect("second waiter registered");
+        assert!(
+            first_id != second_id,
+            "test requires two live waiter threads"
+        );
+
+        while g.state.load(Ordering::Acquire) & ThreadGate::WAITING == 0 {
+            thread::yield_now();
+        }
+        g.signal();
+
+        let (_second_id, elapsed, moved) = second.join().expect("second waiter thread");
+        assert!(moved, "signal must advance the gate before waking");
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "signal woke stale waiter; current waiter only returned after {elapsed:?}"
+        );
+    }
+
+    #[kithara::test(flash(false))]
+    fn thread_gate_signal_does_not_allocate() {
+        let gate = Arc::new(ThreadGate::default());
+        let waiter_gate = Arc::clone(&gate);
+        let waiter = thread::spawn_named("threadgate-allocation-waiter", move || {
+            let since = waiter_gate.current();
+            waiter_gate.wait_timeout(since, Duration::from_secs(1))
+        });
+
+        while gate.state.load(Ordering::Acquire) & ThreadGate::WAITING == 0 {
+            thread::yield_now();
+        }
+        assert_no_alloc(|| gate.signal());
+
+        assert!(waiter.join().expect("allocation waiter thread"));
     }
 }

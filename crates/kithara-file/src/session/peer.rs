@@ -1,10 +1,7 @@
 use std::{
     io,
     io::Error,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     task::{Context, Poll},
 };
 
@@ -12,7 +9,7 @@ use kithara_abr::Abr;
 use kithara_assets::{ProducerHandle, ReadSide, WriteSide};
 use kithara_events::{FileError, FileEvent};
 use kithara_net::{Headers, NetError, RangeSpec, Retryability};
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::ResourceStatus;
 use kithara_stream::{
     MediaInfo,

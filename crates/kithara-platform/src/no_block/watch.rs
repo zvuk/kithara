@@ -49,9 +49,14 @@ impl<F: Future> Future for Watched<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
+        if mode::is_off() {
+            return this.fut.poll(cx);
+        }
+
         let paused_before = ctx::paused_nanos();
-        let cpu_start = clock::thread_cpu_now();
         let wall_start = Instant::now();
+        // Snapshot can be up to 1 ms old, which is safe: budgets are 25 ms strict / 3000 ms blanket.
+        let cpu_start = clock::snapshot(wall_start);
         let res = {
             let _scope = ctx::PollScope::enter((this.name, this.loc));
             this.fut.poll(cx)

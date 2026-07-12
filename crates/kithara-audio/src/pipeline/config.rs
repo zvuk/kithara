@@ -1,15 +1,11 @@
-use std::{
-    num::{NonZeroU32, NonZeroUsize},
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{DecoderBackend, GaplessMode, PcmSpec};
+use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode, PcmSpec};
 use kithara_events::EventBus;
+use kithara_platform::sync::Arc;
+use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
 
@@ -20,10 +16,82 @@ use portable_atomic::AtomicF32;
 use crate::effects::timestretch::TimeStretchProcessor;
 use crate::{
     effects::timestretch::StretchControls,
-    resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
     worker::{EngineLoad, handle},
 };
+
+#[derive(Clone, Debug, Builder)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct DecoderResamplerSettings<B = NoResamplerBackend> {
+    pub backend: B,
+    #[builder(default)]
+    pub options: ResamplerOptions,
+    #[builder(default)]
+    pub quality: ResamplerQuality,
+}
+
+impl<B> Default for DecoderResamplerSettings<B>
+where
+    B: Default,
+{
+    fn default() -> Self {
+        Self {
+            backend: B::default(),
+            options: ResamplerOptions::default(),
+            quality: ResamplerQuality::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Builder)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct AudioDecoderConfig<B = NoResamplerBackend> {
+    #[builder(default)]
+    pub backend: DecoderBackend,
+    #[builder(default)]
+    pub gapless_mode: GaplessMode,
+    pub resampler: Option<DecoderResamplerSettings<B>>,
+}
+
+impl<B> AudioDecoderConfig<B>
+where
+    B: ResamplerBackend,
+{
+    pub(crate) fn build_resampler_config(
+        &self,
+        target_sample_rate: Option<NonZeroU32>,
+    ) -> Result<Option<DecoderResamplerConfig<B>>, kithara_decode::DecodeError> {
+        let Some(target_sample_rate) = target_sample_rate else {
+            return Ok(None);
+        };
+        let Some(resampler) = self.resampler.as_ref() else {
+            return Ok(None);
+        };
+        DecoderResamplerConfig::for_decoder_backend(
+            self.backend,
+            target_sample_rate,
+            resampler.backend.clone(),
+            resampler.quality,
+            resampler.options,
+        )
+    }
+
+    pub(crate) fn recreates_on_host_rate_change(&self) -> bool {
+        self.resampler.is_some()
+    }
+}
+
+impl<B> Default for AudioDecoderConfig<B> {
+    fn default() -> Self {
+        Self {
+            backend: DecoderBackend::default(),
+            gapless_mode: GaplessMode::default(),
+            resampler: None,
+        }
+    }
+}
 
 /// Configuration for audio pipeline with stream config.
 ///
@@ -32,15 +100,12 @@ use crate::{
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct AudioConfig<T: StreamType> {
+pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
     pub stream: T::Config,
-    /// Decoder backend selection. See [`DecoderBackend`].
+    /// Decoder construction settings, including decoder-side resampling.
     #[builder(default)]
-    pub decoder_backend: DecoderBackend,
-    /// How leading/trailing PCM is trimmed after the decode.
-    #[builder(default)]
-    pub gapless_mode: GaplessMode,
+    pub decoder: AudioDecoderConfig<B>,
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = NonZeroUsize::new(3).expect("3 is non-zero"))]
     pub preload_chunks: NonZeroUsize,
@@ -62,22 +127,19 @@ pub struct AudioConfig<T: StreamType> {
     pub media_info: Option<kithara_stream::MediaInfo>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
-    /// Shared atomic for dynamic playback rate (1.0 = normal speed). Used by
-    /// the resampler in the non-tempo (no-`stretch`) chain.
+    /// Legacy shared playback-rate state for direct `Audio` callers. The
+    /// effect chain no longer consumes this value: speed lives in
+    /// [`StretchControls`] when a stretch backend is compiled in.
     pub playback_rate: Option<Arc<AtomicF32>>,
     /// Live playback-speed controls (plus key-lock + backend when a stretch
-    /// backend is compiled in). `Some` selects tempo mode: a
-    /// `TimeStretchProcessor` is added and drives the resampler rate (see
-    /// `create_effects`); without a compiled-in backend the resampler follows
-    /// the speed directly. `None` keeps the resampler-first chain reading
-    /// `playback_rate`.
+    /// backend is compiled in). `Some` inserts a `TimeStretchProcessor` in the
+    /// source domain on native stretch builds. Without a compiled
+    /// backend, including wasm, no speed DSP is inserted and playback remains
+    /// at unity.
     pub stretch: Option<Arc<StretchControls>>,
     /// Optional shared audio worker handle.
     pub worker: Option<handle::AudioWorkerHandle>,
-    /// Resampling quality preset.
-    #[builder(default)]
-    pub resampler_quality: ResamplerQuality,
-    /// Additional effects to append after resampler in the processing chain.
+    /// Additional effects to append after decoder-domain processing.
     #[builder(default)]
     pub effects: Vec<Box<dyn AudioEffect>>,
     /// Make a producer-ring underrun block (engine-aware park) instead of
@@ -104,7 +166,11 @@ const fn default_pcm_buffer_chunks() -> usize {
     32
 }
 
-impl<T: StreamType> AudioConfig<T> {
+impl<T, B> AudioConfig<T, B>
+where
+    T: StreamType,
+    B: ResamplerBackend,
+{
     /// Create config with stream config and default audio settings.
     pub fn new(stream: T::Config) -> Self {
         Self::for_stream(stream).build()
@@ -112,95 +178,61 @@ impl<T: StreamType> AudioConfig<T> {
 
     /// Chainable counterpart to [`AudioConfig::new`]: returns a builder
     /// with `stream` set so callers can attach further setters.
-    pub fn for_stream(stream: T::Config) -> AudioConfigBuilder<T, audio_config_builder::SetStream> {
+    pub fn for_stream(
+        stream: T::Config,
+    ) -> AudioConfigBuilder<T, B, audio_config_builder::SetStream> {
         Self::builder().stream(stream)
     }
 }
 
-/// Compute expected output spec after effects (primarily resampling).
-pub(crate) fn expected_output_spec(
-    initial_spec: PcmSpec,
-    host_sample_rate: &Arc<AtomicU32>,
-) -> PcmSpec {
-    let host_sr = host_sample_rate.load(Ordering::Relaxed);
-    if host_sr == 0 || host_sr == initial_spec.sample_rate.get() {
-        initial_spec
-    } else if let Some(nz_host) = NonZeroU32::new(host_sr) {
-        PcmSpec::new(initial_spec.channels, nz_host)
-    } else {
-        initial_spec
-    }
-}
-
-/// Build `[..pre, Resampler, ..custom]`. Tempo mode (`stretch` `Some`) always
-/// adds a `TimeStretchProcessor` pre-slot that drives the resampler rate (it
-/// bypasses cleanly when key-lock is off); else resampler-first with
-/// `playback_rate`.
+/// Build `[Stretch?, ..custom]`. Fixed-ratio sample-rate conversion belongs to
+/// the decoder plan.
 pub(crate) fn create_effects(
     initial_spec: PcmSpec,
-    host_sample_rate: &Arc<AtomicU32>,
-    playback_rate: &Arc<AtomicF32>,
     stretch: Option<&Arc<StretchControls>>,
-    quality: ResamplerQuality,
-    pool: Option<PcmPool>,
+    pool: &PcmPool,
     custom_effects: Vec<Box<dyn AudioEffect>>,
 ) -> Vec<Box<dyn AudioEffect>> {
     let mut chain: Vec<Box<dyn AudioEffect>> = Vec::new();
 
-    let resampler_rate = stretch.map_or_else(
-        || Arc::clone(playback_rate),
-        |controls| stretch_rate(controls, &mut chain, initial_spec, pool.as_ref()),
-    );
-
-    let params = ResamplerParams::builder()
-        .host_sample_rate(Arc::clone(host_sample_rate))
-        .source_sample_rate(initial_spec.sample_rate.get())
-        .channels(initial_spec.channels as usize)
-        .playback_rate(resampler_rate)
-        .quality(quality)
-        .maybe_pool(pool)
-        .build();
-
-    chain.push(Box::new(ResamplerProcessor::new(params)));
+    append_stretch_slot(stretch, &mut chain, initial_spec, pool);
     chain.extend(custom_effects);
     chain
 }
 
-/// Tempo mode with a compiled-in backend: prepend the stretch slot. It is the
-/// sole writer of the returned rate atomic; the resampler reads it.
+/// Tempo mode with a compiled-in backend: prepend the stretch slot.
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
-fn stretch_rate(
-    controls: &Arc<StretchControls>,
+fn append_stretch_slot(
+    controls: Option<&Arc<StretchControls>>,
     chain: &mut Vec<Box<dyn AudioEffect>>,
     initial_spec: PcmSpec,
-    pool: Option<&PcmPool>,
-) -> Arc<AtomicF32> {
-    let resampler_rate = Arc::new(AtomicF32::new(1.0));
+    pool: &PcmPool,
+) {
+    let Some(controls) = controls else {
+        return;
+    };
     chain.push(Box::new(TimeStretchProcessor::new(
         Arc::clone(controls),
-        Arc::clone(&resampler_rate),
         initial_spec,
-        pool.cloned().unwrap_or_default(),
+        pool.clone(),
     )));
-    resampler_rate
 }
 
-/// No stretch backend compiled in: the resampler follows the shared speed
-/// atomic directly (pitch follows speed, no key-lock).
+/// No stretch backend compiled in: speed DSP is absent and playback is pinned
+/// to unity.
 #[cfg(not(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 )))]
-fn stretch_rate(
-    controls: &Arc<StretchControls>,
+fn append_stretch_slot(
+    _controls: Option<&Arc<StretchControls>>,
     _chain: &mut Vec<Box<dyn AudioEffect>>,
     _initial_spec: PcmSpec,
-    _pool: Option<&PcmPool>,
-) -> Arc<AtomicF32> {
-    controls.speed_shared()
+    _pool: &PcmPool,
+) {
 }
 
 #[cfg(test)]
@@ -230,9 +262,11 @@ mod tests {
     fn audio_config_with_effect_adds_to_chain() {
         let effects: Vec<Box<dyn AudioEffect>> =
             vec![Box::new(PassthroughEffect), Box::new(PassthroughEffect)];
-        let config = AudioConfig::<kithara_file::File>::for_stream(FileConfig::default())
-            .effects(effects)
-            .build();
+        let config = AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(
+            FileConfig::default(),
+        )
+        .effects(effects)
+        .build();
         assert_eq!(config.effects.len(), 2);
     }
 
@@ -240,46 +274,29 @@ mod tests {
         PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
     }
 
-    /// Without a compiled-in stretch backend, `stretch` still selects live
-    /// speed control: no pre-slot is added and the resampler follows the
-    /// shared speed atomic directly.
+    fn pool() -> PcmPool {
+        PcmPool::default().clone()
+    }
+
+    /// Without a compiled-in stretch backend, `stretch` does not add a speed
+    /// slot: playback remains at unity.
     #[cfg(not(all(
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     )))]
     #[kithara::test]
-    fn create_effects_stretch_without_backends_is_resampler_first() {
-        let host_sr = Arc::new(AtomicU32::new(44100));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
+    fn create_effects_stretch_without_backends_keeps_chain_empty() {
         let controls = StretchControls::new(1.5);
-        let effects = create_effects(
-            spec(),
-            &host_sr,
-            &playback_rate,
-            Some(&controls),
-            ResamplerQuality::default(),
-            None,
-            Vec::new(),
-        );
-        // [Resampler] only — the rate it reads is the controls' speed atomic.
-        assert_eq!(effects.len(), 1);
+        let pool = pool();
+        let effects = create_effects(spec(), Some(&controls), &pool, Vec::new());
+        assert!(effects.is_empty());
     }
 
     #[kithara::test]
     fn create_effects_includes_custom_effects() {
-        let host_sr = Arc::new(AtomicU32::new(44100));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
-        let effects = create_effects(
-            spec(),
-            &host_sr,
-            &playback_rate,
-            None,
-            ResamplerQuality::default(),
-            None,
-            vec![Box::new(PassthroughEffect)],
-        );
-        // [Resampler, custom] -- resampler-first, no pre slot.
-        assert_eq!(effects.len(), 2);
+        let pool = pool();
+        let effects = create_effects(spec(), None, &pool, vec![Box::new(PassthroughEffect)]);
+        assert_eq!(effects.len(), 1);
     }
 
     #[cfg(all(
@@ -288,47 +305,31 @@ mod tests {
     ))]
     #[kithara::test]
     fn create_effects_tempo_mode_prepends_stretch_slot() {
-        let host_sr = Arc::new(AtomicU32::new(44100));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
         let controls = StretchControls::new(1.0);
+        let pool = pool();
         let effects = create_effects(
             spec(),
-            &host_sr,
-            &playback_rate,
             Some(&controls),
-            ResamplerQuality::default(),
-            None,
+            &pool,
             vec![Box::new(PassthroughEffect)],
         );
-        // [TimeStretch, Resampler, custom] -- pre-resampler slot present
-        // whenever tempo mode is engaged (even with key-lock off, it bypasses).
-        assert_eq!(effects.len(), 3);
+        assert_eq!(effects.len(), 2);
     }
 
-    /// Key-lock off in tempo mode routes the speed to the resampler (pitch
-    /// follows speed) — the stretch slot bypasses but still drives the rate.
+    /// Key-lock off in tempo mode is still handled by the stretch slot.
     #[cfg(all(
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     ))]
     #[kithara::test]
-    fn create_effects_tempo_bypass_routes_speed_to_resampler() {
+    fn create_effects_tempo_vinyl_uses_stretch_slot() {
         use kithara_decode::{PcmChunk, PcmMeta};
 
-        let host_sr = Arc::new(AtomicU32::new(44100));
-        let playback_rate = Arc::new(AtomicF32::new(1.0));
         let controls = StretchControls::new(1.5);
-        // key-lock off (default).
-        let mut effects = create_effects(
-            spec(),
-            &host_sr,
-            &playback_rate,
-            Some(&controls),
-            ResamplerQuality::default(),
-            None,
-            Vec::new(),
-        );
-        // Drive one chunk through the stretch slot (index 0) so it routes rate.
+        controls.set_keylock(false);
+        let pool = pool();
+        let mut effects = create_effects(spec(), Some(&controls), &pool, Vec::new());
+        // Drive one chunk through the stretch slot (index 0).
         let frames = 1024usize;
         let samples = vec![0.0_f32; frames * 2];
         let meta = PcmMeta {
@@ -339,7 +340,8 @@ mod tests {
         let chunk = PcmChunk::new(meta, PcmPool::default().attach(samples.clone()));
         let out = effects[0]
             .process(chunk)
-            .expect("bypass forwards the chunk");
-        assert_eq!(&out.samples[..], &samples[..], "bypass: PCM untouched");
+            .expect("vinyl stretch emits a chunk");
+        assert_eq!(out.spec(), spec());
+        assert!(!out.samples.is_empty());
     }
 }

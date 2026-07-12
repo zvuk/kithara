@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use kithara_assets::{
     AcquisitionResult, AssetLayout, AssetReader, AssetStore, AssetStoreBuilder, AssetWriter,
@@ -8,7 +8,7 @@ use kithara_events::EventBus;
 use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{
     CancelScope, CancelToken,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, sleep},
 };
 use kithara_storage::StorageError;

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use bon::Builder;
 use kithara_abr::AbrMode;
@@ -8,7 +8,7 @@ use kithara_assets::{AssetStore, BytePool, StoreOptions};
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
 use url::Url;
 

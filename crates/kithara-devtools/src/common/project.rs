@@ -45,7 +45,7 @@ pub struct OrphansConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QualityConfig {
-    /// Trait directory whose every `pub trait` must carry `#[unimock]`.
+    /// Trait directory whose every `pub trait` must carry workspace mock coverage.
     pub unimock_traits_dir: String,
 }
 
@@ -128,6 +128,8 @@ pub struct TestCommandConfig {
     pub default_lane: String,
     pub feature_arg: String,
     pub flash: TestFlashConfig,
+    pub no_block: TestNoBlockConfig,
+    pub loom_lane: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,6 +146,13 @@ impl Default for TestFlashConfig {
             default: true,
         }
     }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestNoBlockConfig {
+    pub features: Vec<String>,
+    pub default: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]

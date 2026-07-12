@@ -7,14 +7,14 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::num::NonZeroU32;
 
 use firewheel::node::ProcBuffers;
 use kithara::{
     self,
     bufpool::PcmPool,
     decode::PcmSpec,
-    platform::sync::Mutex as PlatformMutex,
+    platform::sync::{Arc, Mutex as PlatformMutex},
     play::{
         Resource,
         impls::{

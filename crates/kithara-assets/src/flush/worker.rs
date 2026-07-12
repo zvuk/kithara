@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{OnceLock, Weak};
 
 use kithara_platform::{
     CancelToken,
-    thread::{JoinHandle, spawn_named},
+    sync::Arc,
+    thread::{self, JoinHandle, spawn_named},
     time::Instant,
 };
 
@@ -34,7 +35,7 @@ impl WorkerSlot {
     /// exit, so the handle is simply detached.
     pub(super) fn shutdown_join(&mut self) {
         if let Some(handle) = self.handle.take()
-            && handle.thread().id() != std::thread::current().id()
+            && handle.thread().id() != thread::current().id()
         {
             let _ = handle.join();
         }

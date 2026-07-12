@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use kithara_events::{AbrEvent, AbrMode, EventBus, VariantIndex, VariantInfo};
 use kithara_platform::{
-    sync::RwLock,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 use kithara_test_utils::kithara;

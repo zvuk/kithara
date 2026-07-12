@@ -2,14 +2,14 @@ use std::{
     io::Error as IoError,
     marker::PhantomData,
     sync::{
-        Arc, Weak,
+        Weak,
         atomic::{AtomicU64, Ordering},
     },
 };
 
 use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSide};
 use kithara_net::{NetError, Retryability};
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
 use kithara_stream::dl::{OnCompleteFn, WriterFn};
 use tracing::{debug, error, warn};

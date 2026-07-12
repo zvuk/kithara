@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use kithara::{
     platform::{
-        sync::{Mutex, mpsc},
+        sync::{Arc, Mutex, mpsc},
         thread::{JoinHandle, spawn_named},
         time::{Duration, Instant},
     },

@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use kithara::platform::time::Duration;
+use kithara::platform::{sync::Arc, time::Duration};
 use url::Url;
 
 use crate::{

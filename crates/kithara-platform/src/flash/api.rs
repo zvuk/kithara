@@ -3,10 +3,7 @@ use std::{
     marker::PhantomData,
     ops::{Add, Sub},
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     task::{Context, Poll},
 };
 
@@ -19,7 +16,10 @@ use super::{
     system::{self, FLASH},
 };
 pub use crate::common::time::Duration;
-use crate::flash::time::{FlashTimeout, TimeoutError};
+use crate::{
+    flash::time::{FlashTimeout, TimeoutError},
+    sync::Arc,
+};
 
 /// RAII bracket for ONE real I/O operation in flight (a socket send / response
 /// or body-chunk await in `kithara-net`). While at least one scope is live the
@@ -189,10 +189,8 @@ impl Future for Yield {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         // `Yield` is `Unpin` (every field of both variants is), so the safe
-        // `get_mut`/`Pin::new` projection is available — and the compiler
-        // enforces the premise: this stops building if a variant ever gains a
-        // `!Unpin` field. Same shape as the inert mirror in
-        // `common/flash_inert.rs`.
+        // `get_mut`/`Pin::new` projection is available, and the compiler rejects
+        // this code if a variant gains a `!Unpin` field.
         match self.get_mut() {
             Self::Flash(f) => Pin::new(f).poll(cx),
             Self::Real { yielded } => {
@@ -483,8 +481,14 @@ impl Instant {
         if flash_enabled() {
             Self::now_virtual()
         } else {
-            Self(FLASH.clock.real_now_nanos())
+            Self::now_real()
         }
+    }
+
+    #[inline]
+    #[must_use]
+    pub(crate) fn now_real() -> Self {
+        Self(FLASH.clock.real_now_nanos())
     }
 
     /// The virtual `now`, read UNCONDITIONALLY from the engine clock (no

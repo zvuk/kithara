@@ -1,9 +1,7 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use dashmap::DashMap;
-use kithara_platform::tokio::sync::broadcast;
+use kithara_platform::{sync::Arc, tokio::sync::broadcast};
 use smallvec::SmallVec;
 
 use crate::{

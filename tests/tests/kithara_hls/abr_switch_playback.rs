@@ -426,7 +426,11 @@ async fn stream_continues_after_seek(
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -579,7 +583,11 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .decoder_backend(DecoderBackend::Symphonia)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+        )
         .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)

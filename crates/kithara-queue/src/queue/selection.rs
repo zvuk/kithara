@@ -1,7 +1,7 @@
-use std::sync::{Arc, PoisonError};
+use std::sync::PoisonError;
 
 use kithara_events::{QueueEvent, TrackId, TrackStatus};
-use kithara_platform::tokio::task;
+use kithara_platform::{sync::Arc, tokio::task};
 use kithara_play::{Resource, SelectTransition};
 use tracing::{debug, warn};
 

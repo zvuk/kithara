@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
 use js_sys::Function;
+use kithara_platform::sync::Arc;
 use kithara_play::wasm_support::tick_and_poll;
 use num_traits::cast;
 use wasm_bindgen::prelude::*;

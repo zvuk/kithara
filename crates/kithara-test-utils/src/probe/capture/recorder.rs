@@ -1,6 +1,7 @@
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use kithara_platform::{
+    sync::Arc,
     thread::sleep as thread_sleep,
     time::{Duration, Instant, sleep},
 };

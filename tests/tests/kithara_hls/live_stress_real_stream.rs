@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    num::NonZeroUsize,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
@@ -19,6 +15,7 @@ use kithara::{
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
     hls::{Hls, HlsConfig},
     platform::{
+        sync::Arc,
         time::Duration,
         tokio,
         tokio::{sync::broadcast::error::RecvError, task::spawn},
@@ -420,7 +417,11 @@ async fn live_ephemeral_revisit_sequence_regression(
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -1255,7 +1256,11 @@ async fn live_ephemeral_small_cache_seek_stress(
             .build();
 
         let config = AudioConfig::<Hls>::for_stream(hls_config)
-            .decoder_backend(backend)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
             .block_on_underrun(true)
             .build();
         let mut audio = Audio::<Stream<Hls>>::new(config)

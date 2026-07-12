@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
 use kithara_events::{AbrProgressSnapshot, VariantInfo};
+use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 
 use crate::state::AbrState;

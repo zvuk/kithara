@@ -1,6 +1,7 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use kithara::assets::AssetLayout;
+use kithara_platform::sync::Arc;
 use url::Url;
 
 use crate::layout::FfiAssetLayout;

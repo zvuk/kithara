@@ -1,12 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus},
     hls::{Hls, HlsConfig},
-    platform::{CancelToken, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
     stream::Stream,
 };
 use kithara_integration_tests::{

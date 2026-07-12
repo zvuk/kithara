@@ -58,19 +58,16 @@ struct ThreadCtx {
     poll_depth: Cell<u32>,
 }
 
-thread_local! {
-    static CTX: ThreadCtx = const {
-        ThreadCtx {
-            // REAL by default: not flash-eligible, not propagating.
-            mode: Cell::new(Mode {
-                ambient: false,
-                active: false,
-            }),
-            credit: Cell::new(Credit::None),
-            poll_depth: Cell::new(0),
-            dedicated: Cell::new(false),
-            cur_async: Cell::new(None),
-        }
+crate::backend::thread_local! {
+    static CTX: ThreadCtx = ThreadCtx {
+        mode: Cell::new(Mode {
+            ambient: false,
+            active: false,
+        }),
+        credit: Cell::new(Credit::None),
+        poll_depth: Cell::new(0),
+        dedicated: Cell::new(false),
+        cur_async: Cell::new(None),
     };
 }
 

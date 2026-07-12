@@ -7,18 +7,15 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
 use bytes::Bytes;
 use kithara::{
     assets::{AssetStoreBuilder, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader, analysis::BeatAnalysisConfig},
     file::{File, FileConfig, FileSrc},
-    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     prelude::ResourceConfig,
     stream::Stream,
 };
@@ -104,7 +101,8 @@ async fn waveform_and_player_share_one_get() {
 
     // Run both concurrently so they cooperate on one download.
     let master = CancelToken::never();
-    let mut runner = TrackAnalysisRunner::new(&master, WAVEFORM_BUCKETS);
+    let mut runner =
+        TrackAnalysisRunner::new(&master, WAVEFORM_BUCKETS, BeatAnalysisConfig::default());
     let mut analysis_rx = runner.analyze(waveform_cfg);
 
     let mut player = Audio::<Stream<File>>::new(player_cfg)

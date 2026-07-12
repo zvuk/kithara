@@ -6,7 +6,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    audio::Bucket,
+    audio::{Bucket, analysis::BeatAnalysisConfig},
     platform::{CancelToken, time::Duration},
     prelude::ResourceConfig,
 };
@@ -29,7 +29,7 @@ async fn run_analysis(
     config: ResourceConfig,
     buckets: usize,
 ) -> Option<TrackAnalysis> {
-    let mut runner = TrackAnalysisRunner::new(master, buckets);
+    let mut runner = TrackAnalysisRunner::new(master, buckets, BeatAnalysisConfig::default());
     let mut rx = runner.analyze(config);
 
     // Staged analysis can emit twice (waveform, then waveform+beat).

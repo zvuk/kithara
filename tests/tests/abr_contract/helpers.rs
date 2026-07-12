@@ -279,7 +279,11 @@ pub(crate) mod params {
         // autonomously and fill the channel while the test thread waits via
         // `wait_for_probe`.
         let config = AudioConfig::<Hls>::for_stream(hls_config)
-            .decoder_backend(backend)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
             .pcm_buffer_chunks(300)
             .build();
         let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -519,7 +523,7 @@ pub(crate) mod probe_contracts {
     }
 
     /// Verify the 5-stage HTTP request lifecycle (`start_request →
-    /// establish → with_soft_timeout → deliver → finish_request`) for
+    /// with_soft_timeout(establish -> deliver) -> finish_request`) for
     /// `request_id` runs to completion on a single thread.
     ///
     /// Returns `Ok(())` on a complete lifecycle. On failure the error
@@ -570,8 +574,7 @@ pub(crate) mod probe_contracts {
                  no terminal stage observed \
                  (expected `finish_request`, `abort_request` or `fail_request`). \
                  observed: {observed:?}. \
-                 this means `req.send().await` in reqwest did not complete — \
-                 spawn_fetch task is stuck between `with_soft_timeout` and `deliver`. \
+                 this means the request did not reach a terminal delivery outcome. \
                  thread events: {events:#?}",
             ));
         }

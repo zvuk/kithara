@@ -23,6 +23,7 @@ backend-web-audio = ["kithara-play/backend-web-audio", "kithara-play/wasm-bindge
 symphonia = ["kithara-play/symphonia"]
 fdk-aac = ["kithara-play/fdk-aac"]
 apple = ["kithara-play/apple"]
+apple-fused-src = ["kithara-play/apple-fused-src"]
 # Exposes test-only helpers (`Queue::insert_loaded_for_test`) for
 # integration tests that drive Queue against an offline backend.
 probe = ["kithara-play/probe"]
@@ -43,7 +44,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-platform = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 [lints]
 workspace = true

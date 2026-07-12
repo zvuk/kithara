@@ -5,11 +5,10 @@ use std::{
     io,
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use arc_swap::ArcSwap;
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 
 use crate::{
     ResourceRead, ResourceReader, ResourceStatus, ResourceWriter, StorageError, StorageResult,

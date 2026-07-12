@@ -5,15 +5,12 @@ use std::{
     fmt::Debug,
     ops::Range,
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use kithara_bufpool::BytePool;
 use kithara_platform::{
-    sync::CondvarGate,
+    sync::{Arc, CondvarGate},
     time::{Duration, Instant},
 };
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};

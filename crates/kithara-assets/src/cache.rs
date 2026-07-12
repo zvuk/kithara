@@ -5,14 +5,11 @@ use std::{
     num::NonZeroUsize,
     ops::Range,
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use dashmap::DashSet;
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 use lru::LruCache;
 
@@ -701,9 +698,9 @@ where
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::{fs, path::Path, sync::Arc};
+    use std::{fs, path::Path};
 
-    use kithara_platform::{CancelToken, thread, time::Duration};
+    use kithara_platform::{CancelToken, sync::Arc, thread, time::Duration};
     use kithara_storage::StorageResource;
     use kithara_test_utils::kithara;
 

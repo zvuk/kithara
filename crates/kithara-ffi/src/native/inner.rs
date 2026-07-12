@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -12,7 +12,10 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_platform::{CancelToken, sync::Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource, Transition};
 
 use super::salt;

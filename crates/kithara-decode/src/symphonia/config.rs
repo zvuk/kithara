@@ -1,4 +1,6 @@
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::atomic::AtomicU64;
+
+use kithara_platform::sync::Arc;
 
 /// Minimal configuration carried into the probe / direct-reader path.
 #[derive(Default)]

@@ -2,7 +2,7 @@
 
 use std::{
     error::Error as StdError,
-    sync::{Arc, atomic::AtomicBool},
+    sync::atomic::AtomicBool,
     task::{Context, Poll},
 };
 
@@ -13,6 +13,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         thread::active_named_thread_count,
         time::{self, Duration, Instant},
     },

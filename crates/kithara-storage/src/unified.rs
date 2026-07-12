@@ -3,8 +3,9 @@
 use std::{
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
 };
+
+use kithara_platform::sync::Arc;
 
 use crate::{
     AtomicChunked, MemDriver, MemResource, StorageResult,

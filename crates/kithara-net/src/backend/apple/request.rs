@@ -1,6 +1,8 @@
 use bytes::Bytes;
-use objc2::rc::Retained;
-use objc2_foundation::{NSData, NSMutableURLRequest, NSString, NSURL};
+use kithara_apple::foundation::{
+    ns::{NSData, NSMutableURLRequest, NSString, NSURL},
+    objc::rc::Retained,
+};
 use url::Url;
 
 use crate::{
@@ -66,9 +68,7 @@ impl AppleRequest {
         let mut has_accept_encoding = false;
         if let Some(headers) = self.headers {
             for (key, value) in headers.iter() {
-                if key.eq_ignore_ascii_case("accept-encoding") {
-                    has_accept_encoding = true;
-                }
+                has_accept_encoding |= key.eq_ignore_ascii_case("accept-encoding");
                 set_header(&request, key, value);
             }
         }

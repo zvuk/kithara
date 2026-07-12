@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, path::Path, sync::Arc};
+use std::{ops::Range, path::Path};
 
 use kithara_platform::{
     CancelToken,
     maybe_send::{MaybeSend, MaybeSync},
+    sync::Arc,
 };
 use tracing::warn;
 

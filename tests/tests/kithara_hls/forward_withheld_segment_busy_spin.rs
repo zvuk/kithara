@@ -37,10 +37,7 @@
 
 use std::{
     num::NonZeroUsize,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use kithara::{
@@ -49,6 +46,7 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, Instant},
         tokio,
         tokio::task::spawn_blocking,

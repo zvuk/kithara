@@ -76,9 +76,7 @@ impl PreloadGate {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use kithara_platform::{thread, time::Duration};
+    use kithara_platform::{sync::Arc, thread, time::Duration};
     use kithara_test_utils::kithara;
 
     use super::PreloadGate;

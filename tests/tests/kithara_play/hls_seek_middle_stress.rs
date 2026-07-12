@@ -82,7 +82,11 @@ async fn hls_seek_middle_repeated_seeks_stress(
         .downloader(downloader.clone())
         .name("t0".to_string())
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
 
     let resource = Resource::new(cfg)

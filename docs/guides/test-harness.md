@@ -10,6 +10,14 @@ validation scope.
 - If a probe is reported, name the package, filter, lane, and why it is enough
   for that local question.
 
+### Axes
+
+- `flash` is the default axis and defaults ON.
+- `no-block` is off by default; enable with `--no-block=on` for poll-blocking
+  detector coverage.
+- `just gate` keeps two explicit lanes: flash ON + no-block ON, and flash OFF.
+- Tests that verify detector behavior are gated behind the `no-block` feature.
+
 ## Regression Tests
 
 - A regression test must fail on the broken surface and pass after the fix.
@@ -17,6 +25,8 @@ validation scope.
   code path must be load-bearing.
 - Flash-sensitive changes should verify the relevant runtime surface. If
   `flash=off` is required because the test is real-time or live I/O, say so.
+- Loom models run through `just test --loom=on`; add `--flash=on` only when the
+  modeled contract also requires Flash virtual-time behavior.
 
 ## Harness Shape
 

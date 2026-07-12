@@ -5,12 +5,10 @@
 //! drops, and concurrent get/put from many threads neither deadlocks nor
 //! leaks buffers beyond the configured per-pool capacity.
 
-use std::{
-    sync::{Arc, Barrier},
-    thread,
-};
+use std::{sync::Barrier, thread};
 
 use kithara_bufpool::SharedPool;
+use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 
 type VecPool = SharedPool<8, Vec<u8>>;

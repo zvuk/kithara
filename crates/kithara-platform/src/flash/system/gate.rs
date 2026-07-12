@@ -1,14 +1,11 @@
 use std::{
     panic::Location,
-    sync::{
-        Arc,
-        atomic::{AtomicU8, Ordering},
-    },
+    sync::atomic::{AtomicU8, Ordering},
     task::{Wake, Waker},
 };
 
 use super::FLASH;
-use crate::native::sync::Mutex;
+use crate::{sync::Arc, system::lock::Mutex};
 
 /// Per-task quiescence states. The task occupies one `active_async` slot
 /// while it is in any non-quiescent state ([`Runnable`](TaskState::Runnable),

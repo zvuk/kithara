@@ -134,14 +134,16 @@ doc:
 #   * Android       → Android MediaCodec + Symphonia software
 #   * Linux / other → Symphonia only
 #
-# The flash virtual clock and no-block poll detection are ENABLED by default
-# (`--features flash,no-block`): tests run on a deterministic engine-driven
-# clock that collapses artificial waits, so the suite is fast and reproducible.
-# Opt out with `--flash=off` (`--no-flash` / `--flash=false`) to run on the real
-# wall clock — the regression baseline.
+# The flash virtual clock is ON by default. no-block poll detection is OFF by
+# default and must be enabled explicitly with `--no-block=on` to target
+# potential async blocking violations.
+# Opt out of flash with `--flash=off` (`--no-flash` / `--flash=false`) to run on the
+# real wall clock regression baseline.
+# `just gate` keeps both the default production-shaped baseline (flash OFF) and the
+# no-block-enabled lane (flash ON + no-block ON).
 # `--net-backend=apple` opts the integration crate into `kithara/apple-net`;
 # the default backend is the target's normal test backend (`wreq` on Apple
-# hosts). Recipe-level `--flash=*` / `--net-backend=*` tokens are stripped
+# hosts). Recipe-level `--flash=*` / `--loom=*` / `--no-block=*` / `--net-backend=*` tokens are stripped
 # before reaching nextest; every other arg passes through unchanged.
 #
 #   just test                          # whole workspace, flash ON, target default backend
@@ -150,6 +152,8 @@ doc:
 #   just test --lane=e2e               # real-network + cpal hardware end-to-end tests
 #   just test --lane=selenium          # Selenium WebDriver tests
 #   just test --flash=off              # real wall clock (regression baseline)
+#   just test --loom=on                # only #[kithara::test(loom)] models
+#   just test --loom=on --flash=on     # Loom primitives decorated by Flash
 #   just test --flash=true --net-backend=apple
 #   just test -p kithara-hls           # one package, flash ON
 #   just test --profile ci             # CI nextest profile
@@ -157,16 +161,28 @@ doc:
 test *ARGS:
     cargo xtask test {{ARGS}}
 
+# Save periodic Loom execution checkpoints while reproducing a failure.
+loom-checkpoint FILE *ARGS:
+    LOOM_CHECKPOINT_FILE="{{FILE}}" just test --loom=on {{ARGS}}
+
+# Advance an existing checkpoint to the exact failing permutation.
+loom-isolate FILE *ARGS:
+    LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="{{FILE}}" just test --loom=on {{ARGS}}
+
+# Replay the isolated permutation with scheduler switches and source locations.
+loom-debug FILE *ARGS:
+    LOOM_LOG=trace LOOM_LOCATION=1 LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="{{FILE}}" just test --loom=on --no-capture {{ARGS}}
+
 # Dual-run wave gate for the platform refactor: flash ON, then flash OFF.
 # OFF lane builds in its own target dir so the feature flip does not
 # invalidate the ON cache (and vice versa).
 gate *ARGS:
     #!/usr/bin/env bash
     set -eo pipefail
-    echo "=== gate: flash ON ==="
-    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features flash,no-block {{ARGS}}
+    echo "=== gate: flash ON + no-block ON ==="
+    cargo xtask test --flash=on --no-block=on {{ARGS}}
     echo "=== gate: flash OFF ==="
-    CARGO_TARGET_DIR=target-flash-off cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features no-block {{ARGS}}
+    CARGO_TARGET_DIR=target-flash-off cargo xtask test --flash=off {{ARGS}}
 
 # RealtimeSanitizer: compile the player RT path under `-Zsanitizer=realtime`
 # and run the offline-render tests, which enter the
@@ -188,6 +204,7 @@ _rtsan SUITE FILTER:
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
         cargo +nightly test -p kithara-integration-tests --test {{SUITE}} \
+        --features apple-fused-src \
         --target "$target" -- --nocapture {{FILTER}}
 
 # RTSan async-executor lane: every no_block-watched poll is a nonblocking RT
@@ -216,6 +233,19 @@ rtsan-hls FILTER="phase_continuity::hls": (_rtsan "suite_stress" FILTER)
 test-all:
     just test
     just test --lane=doc
+
+# Resampler-backend e2e matrix: every SRC backend (Rubato, Apple fused,
+# Glide) against the real silvercomet streams. The 48 kHz MP3 exercises
+# fixed-ratio SRC on any 44.1 kHz device; HLS/DRM cover the AAC and AES
+# paths. Narrow with a custom filter:
+#   just e2e-resamplers                                        # silvercomet track set
+#   just e2e-resamplers "-E \"'test(silvercomet_mp3)'\""       # one track, 3 backends
+# (the nextest filter needs the doubled quoting: `just test` re-renders args
+# through a second shell)
+e2e-resamplers ARGS="-E \"'test(track_plays_end_to_end_silvercomet)'\" --test-threads=4":
+    just test --lane=e2e {{ARGS}}
+    just test --lane=e2e-fused {{ARGS}}
+    just test --lane=e2e-glide {{ARGS}}
 
 # Run all linters scoped to a crate / path / workspace. With
 # `--autofix`, run each tool's autofix first (where available), then
@@ -672,7 +702,7 @@ memory-check:
     cargo test -p kithara-bufpool --test alloc_regression -- --test-threads=1
     @echo ""
     @echo "=== Tier 3: Audio hot path zero-alloc ==="
-    cargo test -p kithara-audio --test alloc_free_hotpath -- --test-threads=1
+    cargo test -p kithara-integration-tests --test suite_heavy kithara_audio::alloc_free_hotpath -- --test-threads=1
     @echo ""
     @echo "=== Tier 4: RSS budget (HLS playback) ==="
     cargo test --test memory_rss -- --test-threads=1

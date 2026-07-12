@@ -3,7 +3,7 @@
 use std::{
     num::NonZeroUsize,
     sync::{
-        Arc, Weak,
+        Weak,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -13,7 +13,7 @@ use dashmap::DashSet;
 use kithara_platform::thread;
 use kithara_platform::{
     CancelToken,
-    sync::{Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::Duration,
 };
 
@@ -229,11 +229,9 @@ impl FlushHub {
     /// Returns the first per-source flush error encountered (others
     /// are logged through `tracing::warn!` and the source's `dirty`
     /// flag is restored so the next cycle retries).
-    /// Number of live (still-strong) sources registered with this hub.
-    /// GC-drops dead `Weak`s while counting so the result reflects only
-    /// indexes whose `AssetStore` is still alive.
+    #[cfg(test)]
     #[must_use]
-    pub fn live_source_count(&self) -> usize {
+    fn live_source_count(&self) -> usize {
         let mut g = self.sources.lock();
         g.retain(|w| w.strong_count() > 0);
         g.len()
@@ -502,12 +500,16 @@ mod tests {
         let hub = FlushHub::new(CancelToken::never(), fast_policy());
         let src = CountingSource::new("ephemeral");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
+        assert_eq!(hub.live_source_count(), 1);
         drop(src);
 
         hub.flush_now().unwrap();
 
-        let remaining = hub.sources.lock().len();
-        assert_eq!(remaining, 0, "dropped sources must be GC'd from registry");
+        assert_eq!(
+            hub.live_source_count(),
+            0,
+            "dropped sources must be GC'd from registry"
+        );
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

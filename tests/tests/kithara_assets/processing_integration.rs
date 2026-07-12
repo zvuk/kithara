@@ -2,10 +2,7 @@
 
 use std::{
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -15,7 +12,7 @@ use kithara::{
         AcquisitionResult, AssetScope, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide,
         ResourceProcessor, StorageBackend, WriteSide,
     },
-    platform::time::Duration,
+    platform::{sync::Arc, time::Duration},
 };
 use kithara_integration_tests::temp_dir;
 

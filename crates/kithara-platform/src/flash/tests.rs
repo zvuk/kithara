@@ -2,9 +2,8 @@ use std::{
     future::Future,
     panic::Location,
     sync::{
-        Arc, Mutex, MutexGuard, PoisonError,
+        Mutex, MutexGuard, PoisonError,
         atomic::{AtomicUsize, Ordering},
-        mpsc,
     },
     task::{Context, Wake, Waker},
     thread,
@@ -16,7 +15,7 @@ use super::{
     system::{FlashInner, credit, sched},
     yield_now,
 };
-use crate::sync::Notify;
+use crate::sync::{Arc, Notify};
 
 /// Serialize the cases that drive the process-global `FLASH` engine (the
 /// primitive/TLS-path tests). The pure-scheduler tests run on LOCAL
@@ -930,12 +929,13 @@ fn ambient_blocking_closure_pins_virtual_clock() {
 /// the engine's `unpark_pending` while the target sleeps out its full real
 /// timeout. Delivery must hold in BOTH orderings (wake-then-park / park-then-wake),
 /// so no synchronization beyond the handle send is needed.
+#[cfg(not(feature = "loom"))]
 #[test]
 fn unpark_from_flash_callstack_reaches_real_parked_thread() {
     let _g = guard();
     reset();
     let start = RealInstant::now();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = std::sync::mpsc::channel();
     let target = thread::spawn(move || {
         tx.send(thread::current()).expect("send park handle");
         crate::thread::park_timeout(Duration::from_secs(5));

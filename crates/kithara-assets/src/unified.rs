@@ -1,15 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    num::NonZeroUsize,
-    ops::Range,
-    path::Path,
-    sync::{Arc, atomic::AtomicU64},
-};
+use std::{num::NonZeroUsize, ops::Range, path::Path, sync::atomic::AtomicU64};
 
 #[cfg(test)]
 use kithara_platform::CancelToken;
-use kithara_platform::tokio::sync::mpsc;
+use kithara_platform::{sync::Arc, tokio::sync::mpsc};
 use rangemap::RangeSet;
 
 use crate::{

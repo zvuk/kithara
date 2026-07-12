@@ -1,17 +1,20 @@
-use std::{iter, sync::Arc};
+use std::num::NonZeroU32;
 
-use audioadapter_buffers::direct::SequentialSliceOfVecs;
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::PcmChunk;
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
+use kithara_resampler::{MonoStream, MonoStreamConfig, ResamplerBackend, ResamplerOptions};
 use num_traits::cast::ToPrimitive;
-use rubato::{Fft, FixedSync, Resampler};
 use tracing::warn;
 
 use super::{
-    detector::{BeatDetectError, BeatDetector},
+    detector::{BeatDetectError, BeatDetector, RawBeats},
     grid::{GridParams, build_grid},
 };
-use crate::{analysis::analyzer::Analyzer, waveform::BeatGrid};
+use crate::{
+    analysis::analyzer::{Analyzer, BeatAnalysisConfig},
+    waveform::BeatGrid,
+};
 
 /// Detector shared across sequential per-track analyzers; model load is
 /// paid once at registration, the worker runs one analysis at a time.
@@ -21,66 +24,88 @@ pub(crate) type SharedBeatDetector = Arc<Mutex<Box<dyn BeatDetector>>>;
 /// mono and incrementally resamples it to the detector's 22 050 Hz input
 /// rate. `finalize` flushes the resampler tail, runs the detector, and
 /// builds the cleaned [`BeatGrid`] in source frames.
-pub(crate) struct BeatAnalyzer {
+pub(crate) struct BeatAnalyzer<B>
+where
+    B: ResamplerBackend,
+{
+    failure: Option<BeatDetectError>,
     params: GridParams,
     feed: MonoFeed,
+    resampler: Option<MonoStream<B>>,
+    windows: WindowedBeats,
     source_rate: u32,
 }
 
-/// Mono accumulation path: resample, pass through at the target rate, or
-/// degrade to nothing when the resampler cannot be built (degenerate rate).
 enum MonoFeed {
-    Pass(Vec<f32>),
-    Resample(MonoResampler),
+    Pass,
+    Resample,
     Broken,
 }
 
-impl BeatAnalyzer {
-    /// Input frames per resampler block. Off-line analysis: latency-free, so a
-    /// comfortable block keeps FFT overhead low.
-    const BLOCK_FRAMES: usize = 1024;
-
-    /// The detector's contractual input rate (`BeatDetector::detect`).
-    const TARGET_RATE: u32 = 22_050;
-
+impl<B> BeatAnalyzer<B>
+where
+    B: ResamplerBackend,
+{
     #[must_use]
-    pub(crate) fn new(source_rate: u32, params: GridParams) -> Self {
-        let feed = if source_rate == Self::TARGET_RATE {
-            MonoFeed::Pass(Vec::new())
+    pub(crate) fn new(
+        source_rate: u32,
+        params: GridParams,
+        config: &BeatAnalysisConfig<B>,
+        pcm_pool: &PcmPool,
+    ) -> Self {
+        let (feed, resampler) = if source_rate == config.target_rate {
+            (MonoFeed::Pass, None)
         } else {
-            MonoResampler::new(source_rate).map_or(MonoFeed::Broken, MonoFeed::Resample)
+            build_mono_stream(source_rate, config, pcm_pool).map_or_else(
+                || (MonoFeed::Broken, None),
+                |r| (MonoFeed::Resample, Some(r)),
+            )
         };
 
         Self {
+            failure: None,
             params,
             feed,
+            resampler,
+            windows: WindowedBeats::new(config, pcm_pool),
             source_rate,
         }
     }
 
-    /// Flush the resampler tail, detect beats on the whole mono track, and
-    /// build the grid. Positions are source frames at the analyzer's rate.
-    ///
     /// # Errors
     /// Propagates the detector failure.
     pub(crate) fn finalize(
-        self,
+        mut self,
         detector: &mut dyn BeatDetector,
     ) -> Result<BeatGrid, BeatDetectError> {
-        let mono = match self.feed {
-            MonoFeed::Pass(out) => out,
-            MonoFeed::Resample(resampler) => resampler.finish(),
-            MonoFeed::Broken => Vec::new(),
-        };
+        if let Some(e) = self.failure.take() {
+            return Err(e);
+        }
 
-        let raw = detector.detect(&mono)?;
+        self.resampler.take().map_or(Ok(()), |resampler| {
+            let windows = &mut self.windows;
+            let mut failure = None;
+            let flushed = resampler.finish(|samples| {
+                capture_failure(&mut failure, || windows.push_slice(samples, detector));
+            });
+            if let Err(e) = flushed {
+                warn!(?e, "beat analysis: resampler flush failed");
+                return Err(BeatDetectError::Buffer);
+            }
+            failure.map_or(Ok(()), Err)
+        })?;
+
+        let raw = self.windows.finish(detector)?;
         Ok(build_grid(&raw, self.source_rate, &self.params))
     }
 
-    /// Fold one interleaved chunk: downmix to mono (channel mean) and feed
-    /// the incremental resampler.
-    pub(crate) fn push_interleaved(&mut self, pcm: &[f32], channels: usize) {
-        if channels == 0 {
+    pub(crate) fn push_interleaved(
+        &mut self,
+        pcm: &[f32],
+        channels: usize,
+        detector: &mut dyn BeatDetector,
+    ) {
+        if channels == 0 || self.failure.is_some() {
             return;
         }
 
@@ -90,156 +115,259 @@ impl BeatAnalyzer {
             .map(|frame| frame.iter().sum::<f32>() * inv);
 
         match &mut self.feed {
-            MonoFeed::Pass(out) => out.extend(mono),
-            MonoFeed::Resample(resampler) => resampler.push(mono),
+            MonoFeed::Pass => {
+                if let Err(e) = self.windows.push(mono, detector) {
+                    self.failure = Some(e);
+                }
+            }
+            MonoFeed::Resample => {
+                if let Some(resampler) = &mut self.resampler {
+                    let windows = &mut self.windows;
+                    let mut failure = None;
+                    let pushed = resampler.push(mono, |samples| {
+                        capture_failure(&mut failure, || windows.push_slice(samples, detector));
+                    });
+                    self.failure = match pushed {
+                        Ok(()) => failure,
+                        Err(e) => {
+                            warn!(?e, "beat analysis: resample block failed");
+                            Some(BeatDetectError::Buffer)
+                        }
+                    };
+                }
+            }
             MonoFeed::Broken => {}
         }
     }
 }
 
-/// Incremental mono `source_rate` → 22 050 Hz resampler over rubato's
-/// synchronous FFT engine. `finish` pads with silence until the engine has
-/// emitted its whole delay line, then trims the leading delay and truncates
-/// to the duration-exact length — no tail loss, no position shift.
-struct MonoResampler {
-    fft: Box<Fft<f32>>,
-    /// Single-channel scratch in the adapter's slice-of-vecs shape.
-    input_block: Vec<Vec<f32>>,
-    /// Accumulated raw engine output (still carries the leading delay).
-    out: Vec<f32>,
-    output_block: Vec<Vec<f32>>,
-    /// Mono input awaiting a full block.
-    pending: Vec<f32>,
-    /// Output frames per input frame (`22 050 / source_rate`).
-    ratio: f64,
-    /// Real (non-padding) input frames seen.
-    total_in: u64,
-    /// Engine delay in output frames, trimmed from the front.
-    delay: usize,
-}
-
-impl MonoResampler {
-    fn new(source_rate: u32) -> Option<Self> {
-        let fft = Fft::<f32>::new(
-            source_rate.to_usize()?,
-            BeatAnalyzer::TARGET_RATE.to_usize()?,
-            BeatAnalyzer::BLOCK_FRAMES,
-            2,
-            1,
-            FixedSync::Input,
+fn build_mono_stream<B>(
+    source_rate: u32,
+    config: &BeatAnalysisConfig<B>,
+    pcm_pool: &PcmPool,
+) -> Option<MonoStream<B>>
+where
+    B: ResamplerBackend,
+{
+    let backend = config.resampler_backend.clone();
+    let source_sample_rate = NonZeroU32::new(source_rate)?;
+    let target_sample_rate = NonZeroU32::new(config.target_rate)?;
+    let stream_config = MonoStreamConfig::builder()
+        .backend(backend)
+        .source_sample_rate(source_sample_rate)
+        .target_sample_rate(target_sample_rate)
+        .quality(config.resampler_quality)
+        .options(
+            ResamplerOptions::builder()
+                .chunk_size(config.block_frames)
+                .build(),
         )
+        .pcm_pool(pcm_pool.clone())
+        .build();
+    MonoStream::new(stream_config)
         .map_err(|e| {
             warn!(
                 ?e,
                 source_rate, "beat analysis: resampler construction failed"
             );
         })
-        .ok()?;
+        .ok()
+}
 
-        let delay = fft.output_delay();
-
-        Some(Self {
-            delay,
-            fft: Box::new(fft),
-            ratio: f64::from(BeatAnalyzer::TARGET_RATE) / f64::from(source_rate),
-            pending: Vec::new(),
-            input_block: vec![Vec::new()],
-            output_block: vec![Vec::new()],
-            out: Vec::new(),
-            total_in: 0,
-        })
-    }
-
-    /// Flush: pad with silence until the engine has emitted `delay` plus the
-    /// duration-exact output, then cut the delay off the front. The lesson of
-    /// the waveform analyzer's lost tail, made structural.
-    fn finish(mut self) -> Vec<f32> {
-        let expected = self
-            .total_in
-            .to_f64()
-            .map(|frames| frames * self.ratio)
-            .and_then(|frames| frames.round().to_usize())
-            .unwrap_or(0);
-
-        while self.out.len() < self.delay + expected {
-            let needed = self.fft.input_frames_next();
-            let pad = needed.saturating_sub(self.pending.len());
-            self.pending.extend(iter::repeat_n(0.0_f32, pad));
-            if !self.process_block() {
-                break;
-            }
-        }
-
-        let mut out = self.out;
-        out.drain(..self.delay.min(out.len()));
-        out.truncate(expected);
-        out
-    }
-
-    /// Run one fixed-size input block through the engine, appending its
-    /// output. `false` on an engine error (the block is dropped).
-    fn process_block(&mut self) -> bool {
-        let needed = self.fft.input_frames_next();
-        let out_next = self.fft.output_frames_next();
-        self.input_block[0].clear();
-        self.input_block[0].extend_from_slice(&self.pending[..needed]);
-        self.output_block[0].resize(out_next, 0.0);
-
-        let written = SequentialSliceOfVecs::new(&self.input_block, 1, needed)
-            .map_err(|e| e.to_string())
-            .and_then(|input| {
-                let mut output =
-                    SequentialSliceOfVecs::new_mut(&mut self.output_block, 1, out_next)
-                        .map_err(|e| e.to_string())?;
-                self.fft
-                    .process_into_buffer(&input, &mut output, None)
-                    .map(|(_, written)| written)
-                    .map_err(|e| e.to_string())
-            });
-        self.pending.drain(..needed);
-
-        match written {
-            Ok(written) => {
-                self.out.extend_from_slice(&self.output_block[0][..written]);
-                true
-            }
-            Err(e) => {
-                warn!(e, "beat analysis: resample block failed; dropped");
-                false
-            }
-        }
-    }
-
-    fn push(&mut self, mono: impl Iterator<Item = f32>) {
-        let before = self.pending.len();
-        self.pending.extend(mono);
-        self.total_in += (self.pending.len() - before).to_u64().unwrap_or(0);
-
-        while self.pending.len() >= self.fft.input_frames_next() {
-            if !self.process_block() {
-                return;
-            }
-        }
+fn capture_failure<F>(failure: &mut Option<BeatDetectError>, detect: F)
+where
+    F: FnOnce() -> Result<(), BeatDetectError>,
+{
+    if failure.is_none() {
+        *failure = detect().err();
     }
 }
 
-/// [`Analyzer`] adapter over [`BeatAnalyzer`] and the shared detector. Its
-/// artifact is `Option<BeatGrid>`: `None` when detection fails (logged).
-pub(crate) struct BeatPass {
-    analyzer: BeatAnalyzer,
+struct WindowedBeats {
+    buffer: PcmBuf,
+    hop_frames: usize,
+    offset_frames: u64,
+    ready_frames: usize,
+    raw: RawBeats,
+    sample_rate: u32,
+    window_frames: usize,
+}
+
+impl WindowedBeats {
+    fn new<B>(config: &BeatAnalysisConfig<B>, pcm_pool: &PcmPool) -> Self
+    where
+        B: ResamplerBackend,
+    {
+        let sample_rate = config.target_rate.max(1);
+        let window_frames = frames_for_seconds(sample_rate, config.detector_window_seconds.max(1));
+        let overlap_seconds = config
+            .detector_overlap_seconds
+            .min(config.detector_window_seconds.saturating_sub(1));
+        let overlap_frames = frames_for_seconds(sample_rate, overlap_seconds);
+        let ready_frames = window_frames.saturating_add(overlap_frames);
+        let mut buffer = pcm_pool.get();
+        if buffer.ensure_len(ready_frames).is_ok() {
+            buffer.clear();
+        }
+        Self {
+            buffer,
+            hop_frames: window_frames.saturating_sub(overlap_frames).max(1),
+            offset_frames: 0,
+            ready_frames,
+            raw: RawBeats {
+                beats: Vec::new(),
+                downbeats: Vec::new(),
+            },
+            sample_rate,
+            window_frames,
+        }
+    }
+
+    fn detect_ready_windows(
+        &mut self,
+        detector: &mut dyn BeatDetector,
+    ) -> Result<(), BeatDetectError> {
+        while self.buffer.len() >= self.ready_frames {
+            self.detect_window(detector, false)?;
+        }
+        Ok(())
+    }
+
+    fn detect_window(
+        &mut self,
+        detector: &mut dyn BeatDetector,
+        final_window: bool,
+    ) -> Result<(), BeatDetectError> {
+        let window_len = if final_window {
+            self.buffer.len()
+        } else {
+            self.window_frames
+        };
+        let keep_frames = if final_window {
+            window_len
+        } else {
+            self.hop_frames.min(window_len)
+        };
+
+        let raw = detector.detect(&self.buffer[..window_len])?;
+        let sample_rate = self.sample_rate.to_f32().unwrap_or(1.0);
+        let offset_seconds = self.offset_frames.to_f32().unwrap_or(f32::MAX) / sample_rate;
+        let keep_seconds = keep_frames.to_f32().unwrap_or(f32::MAX) / sample_rate;
+        append_window_times(&mut self.raw.beats, raw.beats, offset_seconds, keep_seconds);
+        append_window_times(
+            &mut self.raw.downbeats,
+            raw.downbeats,
+            offset_seconds,
+            keep_seconds,
+        );
+
+        if final_window {
+            self.buffer.clear();
+        } else {
+            self.buffer.drain(..self.hop_frames);
+            self.offset_frames = self.offset_frames.saturating_add(self.hop_frames as u64);
+        }
+        Ok(())
+    }
+
+    fn finish(mut self, detector: &mut dyn BeatDetector) -> Result<RawBeats, BeatDetectError> {
+        if !self.buffer.is_empty() {
+            self.detect_window(detector, true)?;
+        }
+        normalize_times(&mut self.raw.beats);
+        normalize_times(&mut self.raw.downbeats);
+        Ok(self.raw)
+    }
+
+    fn push(
+        &mut self,
+        samples: impl Iterator<Item = f32>,
+        detector: &mut dyn BeatDetector,
+    ) -> Result<(), BeatDetectError> {
+        append_iter(&mut self.buffer, samples)?;
+        self.detect_ready_windows(detector)
+    }
+
+    fn push_slice(
+        &mut self,
+        samples: &[f32],
+        detector: &mut dyn BeatDetector,
+    ) -> Result<(), BeatDetectError> {
+        append_slice(&mut self.buffer, samples)?;
+        self.detect_ready_windows(detector)
+    }
+}
+
+fn append_window_times(target: &mut Vec<f32>, values: Vec<f32>, offset: f32, keep_until: f32) {
+    target.extend(
+        values
+            .into_iter()
+            .filter(|t| t.is_finite() && *t >= 0.0 && *t < keep_until)
+            .map(|t| offset + t),
+    );
+}
+
+fn frames_for_seconds(sample_rate: u32, seconds: u32) -> usize {
+    usize::try_from(u64::from(sample_rate) * u64::from(seconds)).unwrap_or(usize::MAX)
+}
+
+fn append_iter(
+    dst: &mut PcmBuf,
+    samples: impl Iterator<Item = f32>,
+) -> Result<(), BeatDetectError> {
+    for sample in samples {
+        let old_len = dst.len();
+        dst.ensure_len(old_len.saturating_add(1))
+            .map_err(|_| BeatDetectError::Buffer)?;
+        dst[old_len] = sample;
+    }
+    Ok(())
+}
+
+fn append_slice(dst: &mut PcmBuf, src: &[f32]) -> Result<(), BeatDetectError> {
+    let old_len = dst.len();
+    dst.ensure_len(old_len.saturating_add(src.len()))
+        .map_err(|_| BeatDetectError::Buffer)?;
+    dst[old_len..old_len + src.len()].copy_from_slice(src);
+    Ok(())
+}
+
+fn normalize_times(values: &mut Vec<f32>) {
+    values.retain(|t| t.is_finite() && *t >= 0.0);
+    values.sort_by(f32::total_cmp);
+    values.dedup_by(|a, b| *a == *b);
+}
+
+pub(crate) struct BeatPass<B>
+where
+    B: ResamplerBackend,
+{
+    analyzer: BeatAnalyzer<B>,
     detector: SharedBeatDetector,
 }
 
-impl BeatPass {
-    pub(crate) fn new(source_rate: u32, params: GridParams, detector: SharedBeatDetector) -> Self {
+impl<B> BeatPass<B>
+where
+    B: ResamplerBackend,
+{
+    pub(crate) fn new(
+        source_rate: u32,
+        params: GridParams,
+        detector: SharedBeatDetector,
+        config: &BeatAnalysisConfig<B>,
+        pcm_pool: &PcmPool,
+    ) -> Self {
         Self {
             detector,
-            analyzer: BeatAnalyzer::new(source_rate, params),
+            analyzer: BeatAnalyzer::new(source_rate, params, config, pcm_pool),
         }
     }
 }
 
-impl Analyzer for BeatPass {
+impl<B> Analyzer for BeatPass<B>
+where
+    B: ResamplerBackend,
+{
     type Output = Option<BeatGrid>;
 
     fn finish(self) -> Option<BeatGrid> {
@@ -255,23 +383,26 @@ impl Analyzer for BeatPass {
 
     fn push(&mut self, chunk: &PcmChunk) {
         let channels = usize::from(chunk.spec().channels.max(1));
-        self.analyzer.push_interleaved(&chunk.samples[..], channels);
+        let mut detector = self.detector.lock();
+        self.analyzer
+            .push_interleaved(&chunk.samples[..], channels, detector.as_mut());
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
+    use kithara_bufpool::PcmPool;
+    use kithara_platform::sync::Arc;
+    use kithara_resampler::{ResamplerBackend, rubato::RubatoBackend};
     use kithara_test_utils::kithara;
     use num_traits::cast::AsPrimitive;
     use unimock::{MockFn, Unimock, matching};
 
     use super::{
-        super::detector::{BeatDetectError, BeatDetectorMock, RawBeats},
+        super::detector::{BeatDetectError, BeatDetector, BeatDetectorMock, RawBeats},
         BeatAnalyzer,
     };
-    use crate::analysis::beat::GridParams;
+    use crate::analysis::{BeatAnalysisConfig, beat::GridParams};
 
     struct Consts;
 
@@ -287,12 +418,16 @@ mod tests {
         }
     }
 
+    fn pcm_pool() -> PcmPool {
+        PcmPool::default()
+    }
+
     /// Mocked detector, called exactly once: `check` asserts on the mono
     /// input it received and scripts the raw outcome.
     fn detector(check: impl Fn(&[f32]) -> RawBeats + Send + Sync + 'static) -> Unimock {
         Unimock::new(
             BeatDetectorMock
-                .next_call(matching!(_))
+                .each_call(matching!(_))
                 .answers_arc(Arc::new(move |_, mono| Ok(check(mono)))),
         )
     }
@@ -308,9 +443,16 @@ mod tests {
         out
     }
 
-    fn push_chunked(analyzer: &mut BeatAnalyzer, pcm: &[f32], frames_per_chunk: usize) {
+    fn push_chunked<B>(
+        analyzer: &mut BeatAnalyzer<B>,
+        pcm: &[f32],
+        frames_per_chunk: usize,
+        detector: &mut dyn BeatDetector,
+    ) where
+        B: ResamplerBackend,
+    {
         for chunk in pcm.chunks(frames_per_chunk * 2) {
-            analyzer.push_interleaved(chunk, 2);
+            analyzer.push_interleaved(chunk, 2, detector);
         }
     }
 
@@ -332,9 +474,12 @@ mod tests {
             let t: f32 = n.as_();
             0.5 * (step * t).sin()
         });
-        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
-        push_chunked(&mut analyzer, &pcm, 1000);
-
+        let mut analyzer = BeatAnalyzer::new(
+            Consts::SRC,
+            GridParams::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
+            &pcm_pool(),
+        );
         let mut detector = detector(|mono| {
             assert_eq!(
                 mono.len(),
@@ -353,6 +498,7 @@ mod tests {
             );
             empty_raw()
         });
+        push_chunked(&mut analyzer, &pcm, 1000, &mut detector);
         analyzer.finalize(&mut detector).expect("mock detects");
     }
 
@@ -361,9 +507,12 @@ mod tests {
         // 1 s silence then 1 s of DC 0.5: the step must sit at output
         // sample ~22050. An untrimmed resampler delay shifts it late.
         let pcm = stereo(2 * 44_100, |n| if n < 44_100 { 0.0 } else { 0.5 });
-        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
-        push_chunked(&mut analyzer, &pcm, 4096);
-
+        let mut analyzer = BeatAnalyzer::new(
+            Consts::SRC,
+            GridParams::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
+            &pcm_pool(),
+        );
         let mut detector = detector(|mono| {
             assert_eq!(mono.len(), 2 * Consts::TARGET);
             let crossing = mono
@@ -377,6 +526,7 @@ mod tests {
             );
             empty_raw()
         });
+        push_chunked(&mut analyzer, &pcm, 4096, &mut detector);
         analyzer.finalize(&mut detector).expect("mock detects");
     }
 
@@ -388,30 +538,107 @@ mod tests {
             pcm.push(0.8);
             pcm.push(-0.8);
         }
-        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
-        analyzer.push_interleaved(&pcm, 2);
-
+        let mut analyzer = BeatAnalyzer::new(
+            Consts::SRC,
+            GridParams::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
+            &pcm_pool(),
+        );
         let mut detector = detector(|mono| {
             assert_eq!(mono.len(), Consts::TARGET);
             let peak = mono.iter().fold(0.0_f32, |a, s| a.max(s.abs()));
             assert!(peak < 0.05, "cancelling stereo must downmix to ~0: {peak}");
             empty_raw()
         });
+        analyzer.push_interleaved(&pcm, 2, &mut detector);
         analyzer.finalize(&mut detector).expect("mock detects");
     }
 
     #[kithara::test]
     fn passthrough_at_detector_rate() {
-        // A 22 050 Hz source needs no resampling: the detector sees the
+        // A 22 050 Hz source needs no resampling: the detector sees the input.
         let pcm = stereo(10_000, |_| 0.25);
-        let mut analyzer = BeatAnalyzer::new(22_050, GridParams::default());
-        push_chunked(&mut analyzer, &pcm, 999);
-
+        let mut analyzer = BeatAnalyzer::new(
+            22_050,
+            GridParams::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
+            &pcm_pool(),
+        );
         let mut detector = detector(|mono| {
             assert_eq!(mono, vec![0.25_f32; 10_000].as_slice());
             empty_raw()
         });
+        push_chunked(&mut analyzer, &pcm, 999, &mut detector);
         analyzer.finalize(&mut detector).expect("mock detects");
+    }
+
+    #[kithara::test]
+    fn custom_detector_rate_controls_passthrough_domain() {
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(Consts::SRC)
+            .build();
+        let pcm = stereo(4096, |_| 0.25);
+        let mut analyzer =
+            BeatAnalyzer::new(Consts::SRC, GridParams::default(), &config, &pcm_pool());
+        let mut detector = detector(|mono| {
+            assert_eq!(mono, vec![0.25_f32; 4096].as_slice());
+            empty_raw()
+        });
+        analyzer.push_interleaved(&pcm, 2, &mut detector);
+        analyzer.finalize(&mut detector).expect("mock detects");
+    }
+
+    #[kithara::test]
+    fn detector_input_is_bounded_by_configured_window() {
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(Consts::SRC)
+            .detector_window_seconds(1)
+            .detector_overlap_seconds(0)
+            .build();
+        let pcm = stereo(3 * usize::try_from(Consts::SRC).unwrap_or(0), |_| 0.25);
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_for_detector = Arc::clone(&seen);
+        let mut detector = detector(move |mono| {
+            seen_for_detector.lock().unwrap().push(mono.len());
+            assert!(mono.len() <= usize::try_from(Consts::SRC).unwrap_or(0));
+            empty_raw()
+        });
+        let mut analyzer =
+            BeatAnalyzer::new(Consts::SRC, GridParams::default(), &config, &pcm_pool());
+
+        push_chunked(&mut analyzer, &pcm, 2048, &mut detector);
+        analyzer.finalize(&mut detector).expect("mock detects");
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.as_slice(), &[44_100, 44_100, 44_100]);
+    }
+
+    #[kithara::test]
+    fn exact_window_waits_for_final_flush_when_overlap_is_configured() {
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(Consts::SRC)
+            .detector_window_seconds(2)
+            .detector_overlap_seconds(1)
+            .build();
+        let pcm = stereo(2 * usize::try_from(Consts::SRC).unwrap_or(0), |_| 0.25);
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_for_detector = Arc::clone(&seen);
+        let mut detector = detector(move |mono| {
+            seen_for_detector.lock().unwrap().push(mono.len());
+            empty_raw()
+        });
+        let mut analyzer =
+            BeatAnalyzer::new(Consts::SRC, GridParams::default(), &config, &pcm_pool());
+
+        analyzer.push_interleaved(&pcm, 2, &mut detector);
+        assert!(seen.lock().unwrap().is_empty());
+        analyzer.finalize(&mut detector).expect("mock detects");
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.as_slice(), &[2 * 44_100]);
     }
 
     #[kithara::test]
@@ -432,10 +659,14 @@ mod tests {
                 })
                 .collect(),
         };
-        let mut analyzer = BeatAnalyzer::new(48_000, GridParams::default());
-        analyzer.push_interleaved(&stereo(48_000, |_| 0.1), 2);
-
+        let mut analyzer = BeatAnalyzer::new(
+            48_000,
+            GridParams::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
+            &pcm_pool(),
+        );
         let mut detector = detector(move |_| raw.clone());
+        analyzer.push_interleaved(&stereo(17 * 48_000, |_| 0.1), 2, &mut detector);
         let grid = analyzer.finalize(&mut detector).expect("mock detects");
 
         assert!(
@@ -454,14 +685,19 @@ mod tests {
 
     #[kithara::test]
     fn detector_failure_propagates() {
-        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
-        analyzer.push_interleaved(&stereo(4096, |_| 0.1), 2);
+        let mut analyzer = BeatAnalyzer::new(
+            Consts::SRC,
+            GridParams::default(),
+            &BeatAnalysisConfig::<RubatoBackend>::default(),
+            &pcm_pool(),
+        );
         let mut detector =
             Unimock::new(BeatDetectorMock.next_call(matching!(_)).answers(&|_, _| {
                 Err(BeatDetectError::Detect {
                     reason: "scripted".to_string(),
                 })
             }));
+        analyzer.push_interleaved(&stereo(4096, |_| 0.1), 2, &mut detector);
         assert!(analyzer.finalize(&mut detector).is_err());
     }
 }

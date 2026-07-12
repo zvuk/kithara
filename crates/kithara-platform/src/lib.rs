@@ -1,35 +1,40 @@
-//! Platform-aware primitives for native and wasm32 targets.
-//!
-//! One backend tree per configuration — `native`, `wasm`, or `flash` — is
-//! selected by the gated glob re-exports below; the backends mirror one
-//! public module tree 1:1 (`sync`, `thread`, `time`, `tokio`, …) and
-//! 100% cross-platform code lives in `common`. All crate cfg lives in this
-//! file. See the crate `CONTEXT.md` for per-target backends.
+//! Platform-aware primitives with one compile-time-selected backend.
+//! Backends mirror the public sync, thread, time, and Tokio facade.
 
-// In feature-ON lanes the inert control surfaces (`common::flash_inert`,
-// `common::no_block_inert`) and the real-clock arms they alias compile but are
-// intentionally unwired, so `unreachable_pub`/`dead_code` are structurally
-// false-positive there. OFF + wasm lanes re-export the inert forms and keep
-// full coverage. See AGENTS.md "Non-Negotiables" legalized
-#[cfg_attr(
-    all(
-        not(target_arch = "wasm32"),
-        any(feature = "flash", feature = "no-block")
-    ),
-    expect(unreachable_pub, dead_code)
-)]
 mod common;
 
-#[cfg(not(target_arch = "wasm32"))]
-// Flash-ON wraps (not re-exports) some native items: `unreachable_pub` is
-// structurally false-positive there; `dead_code` covers W1-interim unconsumed
-// arms and dies with the W2 wrappers; `unused_imports` covers pub-use items in
-// native backends that are shadowed by the flash facade arm. OFF lane keeps
-// full coverage. See AGENTS.md "Non-Negotiables" legalized exceptions.
-#[cfg_attr(feature = "flash", expect(unreachable_pub, dead_code, unused_imports))]
-mod native;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(feature = "flash"),
+    not(feature = "loom")
+))]
+#[path = "backend/system.rs"]
+mod backend;
+#[cfg(all(not(target_arch = "wasm32"), feature = "loom", not(feature = "flash")))]
+#[path = "backend/loom.rs"]
+mod backend;
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash", not(feature = "loom")))]
+#[path = "backend/flash_system.rs"]
+mod backend;
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash", feature = "loom"))]
+#[path = "backend/flash_loom.rs"]
+mod backend;
+#[cfg(all(not(target_arch = "wasm32"), feature = "loom"))]
+mod loom;
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash", feature = "loom"))]
+#[path = "system/flash_loom.rs"]
+mod system;
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash", not(feature = "loom")))]
+#[path = "system/flash_system.rs"]
+mod system;
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
-pub use native::*;
+mod system;
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
+pub use backend::{env, logging, maybe_send, sync, thread, time, tokio};
+
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub mod __private;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm;
@@ -38,17 +43,15 @@ pub use wasm::*;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub mod flash;
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash")))]
+#[path = "common/flash_inert.rs"]
+pub mod flash;
 #[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
 pub mod no_block;
-
-// W3 propagate-down cancel — the workspace's only cancel surface (the legacy
-// runtime-backed roots were dropped in 3.4).
-// `kithara_platform::flash::*` (macro emissions, prod attributes) must resolve
-// in every configuration: inert forms off the engine.
-#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash")))]
-pub use common::flash_inert as flash;
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "no-block")))]
-pub use common::no_block_inert as no_block;
+#[path = "common/no_block_inert.rs"]
+pub mod no_block;
+
 pub use common::{
     cancel::{CancelGroup, CancelScope, CancelToken, CancelWakerGuard, Cancelled},
     traits,

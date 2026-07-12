@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
 #[cfg(target_arch = "wasm32")]
 use kithara::platform::thread;
@@ -8,6 +8,7 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, sleep},
         tokio::task::{JoinHandle, spawn, spawn_blocking},
     },

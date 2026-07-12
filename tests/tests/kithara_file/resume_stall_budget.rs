@@ -28,10 +28,7 @@ use kithara::{
     events::{Event, EventBus, FileEvent},
     file::{File, FileConfig, FileSrc},
     net::{HttpClient, NetOptions, RetryPolicy},
-    platform::{
-        CancelToken,
-        time::{self, Duration},
-    },
+    platform::{CancelToken, time::Duration},
     stream::{
         Stream,
         dl::{Downloader, DownloaderConfig},
@@ -144,7 +141,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
         .await
         .expect("stream opens on the reachable head");
 
-    let terminal = time::timeout(Consts::ERROR_DEADLINE, async {
+    let terminal = kithara::platform::time::timeout(Consts::ERROR_DEADLINE, async {
         loop {
             match rx.recv().await {
                 Ok(Event::File(FileEvent::Error { .. })) => return true,

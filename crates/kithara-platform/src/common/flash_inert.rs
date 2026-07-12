@@ -6,15 +6,11 @@ use std::{
     task::{Context, Poll},
 };
 
-pub use crate::common::time::Instant;
-use crate::common::time::TimeoutError;
-// Functional references (`sleep`/`timeout` below, `crate::thread::park_timeout`
-// in `virtual_park_timeout`) deliberately stay on the lane-gated root glob:
-// the inert `virtual_*` aliases ARE whichever backend owns the lane (native or
-// wasm), so they must resolve through it. Typed imports above come from
-// `common::time` directly (the backends re-export the same types). The glob
-// dependency is a known wart; it dies with the W3/W5 layering work.
-use crate::time::{sleep, timeout};
+pub use crate::time::Instant;
+use crate::{
+    common::time::TimeoutError,
+    time::{sleep, timeout},
+};
 
 /// Off the sim path a spawned task needs no quiescence accounting, so the
 /// participant wrapper is the future itself. Under `flash` this is the

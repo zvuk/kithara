@@ -26,6 +26,7 @@ pub mod consts;
 pub mod decode_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod decode_mock;
+pub mod e2e;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod encode_ext;
 #[cfg(not(target_arch = "wasm32"))]

@@ -1,8 +1,10 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
 
 use kithara_events::{DownloaderEvent, Event, EventBus, TrackId, TrackStatus};
 use kithara_platform::{
-    CancelToken, tokio,
+    CancelToken,
+    sync::Arc,
+    tokio,
     tokio::{
         sync::Semaphore,
         task::{JoinHandle, spawn},

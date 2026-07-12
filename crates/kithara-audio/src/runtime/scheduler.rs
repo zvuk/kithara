@@ -1,11 +1,11 @@
-use std::{
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::Arc,
-};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use kithara_platform::{
     CancelToken,
-    sync::mpsc::{self, TryRecvError},
+    sync::{
+        Arc,
+        mpsc::{self, TryRecvError},
+    },
     thread::{spawn_named, yield_now},
     time::{Duration, Instant},
 };
@@ -13,7 +13,8 @@ use kithara_test_utils::kithara;
 use tracing::{debug, trace, warn};
 
 use crate::runtime::{
-    Node, PassOutcome, SchedulerEvent, SchedulerObserver, SchedulerWake, ServiceClass, TickResult,
+    Node, PassOutcome, PassReport, SchedulerEvent, SchedulerObserver, SchedulerWake, ServiceClass,
+    TickResult,
 };
 
 /// Unique identifier for a slot in the scheduler.
@@ -209,15 +210,15 @@ fn run_loop<N: Node, O: SchedulerObserver>(
 
         recycle_all(&mut slots, &slots_order);
 
-        let outcome = produce_pass(&mut slots, &slots_order, &mut observer);
+        let report = produce_pass(&mut slots, &slots_order, &mut observer);
 
         let before = slots.len();
         slots.retain(|slot| !slot.is_removable());
         needs_reorder |= slots.len() < before;
 
-        report_outcome(&mut observer, outcome);
+        report_outcome(&mut observer, report);
         observer.on_event(SchedulerEvent::PassEnd);
-        park_after_outcome::<N, O>(wake, outcome, &mut produced_streak);
+        park_after_outcome::<N, O>(wake, report.outcome, &mut produced_streak);
     }
 }
 
@@ -248,13 +249,13 @@ fn cancel_and_drain<N: Node>(
     drain_commands(cmd_rx, slots, needs_reorder)
 }
 
-fn report_outcome<O: SchedulerObserver>(observer: &mut O, outcome: PassOutcome) {
-    match outcome {
-        PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress),
-        PassOutcome::Waiting => observer.on_event(SchedulerEvent::Waiting),
-        PassOutcome::UpstreamPending => observer.on_event(SchedulerEvent::UpstreamPending),
-        PassOutcome::Backpressured => observer.on_event(SchedulerEvent::Backpressured),
-        PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle),
+fn report_outcome<O: SchedulerObserver>(observer: &mut O, report: PassReport) {
+    match report.outcome {
+        PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress(report)),
+        PassOutcome::Waiting => observer.on_event(SchedulerEvent::Waiting(report)),
+        PassOutcome::UpstreamPending => observer.on_event(SchedulerEvent::UpstreamPending(report)),
+        PassOutcome::Backpressured => observer.on_event(SchedulerEvent::Backpressured(report)),
+        PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle(report)),
     }
 }
 
@@ -308,9 +309,10 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
     slots: &mut [Slot<N>],
     slots_order: &[usize],
     observer: &mut O,
-) -> PassOutcome {
+) -> PassReport {
+    let mut report = PassReport::new(slots.len());
     if slots.is_empty() {
-        return PassOutcome::Idle;
+        return report;
     }
 
     let mut best = TickResult::Done;
@@ -339,6 +341,8 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
             });
         }
 
+        report.record(slot.id, slot.service_class, result);
+
         if result == TickResult::Done {
             slot.is_terminal = true;
         }
@@ -356,13 +360,14 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
         };
     }
 
-    match best {
+    report.outcome = match best {
         TickResult::Progress => PassOutcome::Produced,
         TickResult::Waiting => PassOutcome::Waiting,
         TickResult::UpstreamPending => PassOutcome::UpstreamPending,
         TickResult::Backpressured => PassOutcome::Backpressured,
         TickResult::Done => PassOutcome::Idle,
-    }
+    };
+    report
 }
 
 /// Outcome of processing a single scheduler command.
@@ -785,7 +790,7 @@ mod tests {
         let order = vec![0usize];
         let mut pending = vec![fixed_slot(1, TickResult::UpstreamPending)];
         assert_eq!(
-            produce_pass(&mut pending, &order, &mut observer),
+            produce_pass(&mut pending, &order, &mut observer).outcome,
             PassOutcome::UpstreamPending
         );
 
@@ -795,7 +800,7 @@ mod tests {
         ];
         let order = vec![0usize, 1usize];
         assert_eq!(
-            produce_pass(&mut mixed, &order, &mut observer),
+            produce_pass(&mut mixed, &order, &mut observer).outcome,
             PassOutcome::Waiting,
             "a real dead upstream wait must still tick the hang detector"
         );
@@ -914,7 +919,7 @@ mod tests {
                 }
             }
             recycle_all(&mut slots, &slots_order);
-            let _ = produce_pass(&mut slots, &slots_order, &mut observer);
+            let _report = produce_pass(&mut slots, &slots_order, &mut observer);
             while pcm_rx.try_pop().is_some() {}
         }
 

@@ -1,8 +1,8 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::marker::PhantomData;
 
 use crossbeam_queue::ArrayQueue;
 use kithara_decode::{DecodeError, Decoder};
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor};
 
 use crate::pipeline::fetch::Fetch;
@@ -322,6 +322,8 @@ pub(crate) enum SeekMode {
 pub(crate) enum RecreateCause {
     /// Codec boundary detected during playback.
     FormatBoundary,
+    /// Host audio route changed the device sample rate.
+    RouteChange,
     /// ABR switch changed the codec or variant.
     VariantSwitch,
 }
@@ -405,9 +407,8 @@ pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use crossbeam_queue::ArrayQueue;
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;

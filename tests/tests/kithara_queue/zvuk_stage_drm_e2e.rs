@@ -1,7 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
     decode::DecoderBackend,
@@ -9,6 +7,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::OnceCell,
@@ -73,7 +72,7 @@ fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSou
     match build_source(url, &ctx.config) {
         TrackSource::Config(mut cfg) => {
             cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder_backend = backend;
+            cfg.decoder.backend = backend;
             cfg.initial_abr_mode = AbrMode::Auto(None);
             TrackSource::Config(cfg)
         }

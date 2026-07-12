@@ -1,6 +1,7 @@
-use std::{cell::RefCell, num::NonZeroU32, sync::Arc};
+use std::{cell::RefCell, num::NonZeroU32};
 
 use firewheel::{FirewheelCtx, StreamInfo, backend::AudioBackend, processor::FirewheelProcessor};
+use kithara_platform::sync::Arc;
 
 use super::{Cmd, Reply, SessionDispatcher, SessionState, run_cmd};
 use crate::error::PlayError;

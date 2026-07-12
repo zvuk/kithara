@@ -1,12 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use bitflags::bitflags;
 use kithara_events::{AbrMode, AbrReason, VariantIndex};
 use kithara_platform::{
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use num_traits::ToPrimitive;

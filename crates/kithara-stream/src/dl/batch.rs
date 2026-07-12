@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use futures::StreamExt;
 use kithara_abr::{AbrController, AbrPeerId};
@@ -9,6 +9,7 @@ use kithara_net::{HttpClient, NetError, Retryability};
 use kithara_platform::{
     CancelGroup, CancelToken,
     flash::virtual_now,
+    sync::Arc,
     time::{Duration, Instant},
     tokio,
     tokio::task,
@@ -220,32 +221,34 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     start_request(bus.as_ref(), &inflight, request_id, wait_in_queue);
 
     task::spawn(async move {
-        let result = establish(
-            &client,
+        let slow_bus = bus.clone();
+        let fetch = async move {
+            let result = establish(&client, &cancel, cmd, request_id).await;
+            deliver(
+                request_id,
+                DeliveryContext {
+                    result,
+                    writer,
+                    on_complete_cb,
+                    on_response_cb,
+                    abr,
+                    peer_id,
+                    started,
+                    bus,
+                    target: internal.response,
+                    peer_cancel: &peer_cancel,
+                    epoch_cancel: epoch_cancel.as_ref(),
+                    downloader_cancel: &downloader_cancel,
+                },
+            )
+            .await;
+        };
+        with_soft_timeout(
+            fetch,
             soft_timeout,
-            &cancel,
-            bus.clone(),
-            cmd,
+            slow_bus.as_ref(),
             request_id,
             on_slow_cb,
-        )
-        .await;
-        deliver(
-            request_id,
-            DeliveryContext {
-                result,
-                writer,
-                on_complete_cb,
-                on_response_cb,
-                abr,
-                peer_id,
-                started,
-                bus,
-                target: internal.response,
-                peer_cancel: &peer_cancel,
-                epoch_cancel: epoch_cancel.as_ref(),
-                downloader_cancel: &downloader_cancel,
-            },
         )
         .await;
         inflight.fetch_sub(1, Ordering::Relaxed);
@@ -309,12 +312,9 @@ where
 #[kithara::probe(request_id)]
 async fn establish(
     client: &HttpClient,
-    soft_timeout: Duration,
     cancel: &CancelGroup,
-    bus: Option<EventBus>,
     cmd: FetchCmd,
     request_id: RequestId,
-    on_slow: Option<super::cmd::OnSlowFn>,
 ) -> Result<FetchResponse, NetError> {
     let FetchCmd {
         method,
@@ -336,7 +336,7 @@ async fn establish(
     if method == RequestMethod::Head {
         let resp_headers = tokio::select! {
             () = cancel.cancelled() => return Err(NetError::Cancelled),
-            r = with_soft_timeout(client.head(url, headers), soft_timeout, bus.as_ref(), request_id, on_slow) => r?,
+            r = client.head(url, headers) => r?,
         };
         return Ok(FetchResponse {
             headers: resp_headers,
@@ -353,7 +353,7 @@ async fn establish(
     };
     let byte_stream = tokio::select! {
         () = cancel.cancelled() => return Err(NetError::Cancelled),
-        r = with_soft_timeout(fetch, soft_timeout, bus.as_ref(), request_id, on_slow) => r?,
+        r = fetch => r?,
     };
 
     if let Some(validate) = validator

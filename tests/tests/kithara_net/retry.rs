@@ -2,16 +2,13 @@
 
 use std::{
     num::NonZeroU16,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use bytes::Bytes;
 use kithara::{
     net::{Net, NetError, NetExt, RetryPolicy, mock::NetMock},
-    platform::{CancelToken, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
 };
 use kithara_integration_tests::net_fixture::{
     assert_success_all_net_methods, leaked, ok_headers, success_stream, test_url,

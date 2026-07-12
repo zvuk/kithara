@@ -1,11 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use kithara_platform::sync::Arc;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use url::Url;
 
@@ -25,30 +23,28 @@ use crate::error::{AssetsError, AssetsResult};
 pub enum ResourceKey {
     /// `rel_path` under an `asset_root` namespace.
     Relative {
-        #[serde(with = "arc_str")]
+        #[serde(
+            serialize_with = "serialize_arc_str",
+            deserialize_with = "deserialize_arc_str"
+        )]
         asset_root: Arc<str>,
-        #[serde(with = "arc_str")]
+        #[serde(
+            serialize_with = "serialize_arc_str",
+            deserialize_with = "deserialize_arc_str"
+        )]
         rel_path: Arc<str>,
     },
     /// Absolute filesystem path - its own namespace.
     Absolute(PathBuf),
 }
 
-/// Serialize `Arc<str>` as a plain string; the workspace serde has no
-/// `rc` feature, so the reference-counting is dropped on the wire.
-mod arc_str {
-    use std::sync::Arc;
+fn serialize_arc_str<S: Serializer>(value: &Arc<str>, ser: S) -> Result<S::Ok, S::Error> {
+    ser.serialize_str(value)
+}
 
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub(super) fn serialize<S: Serializer>(value: &Arc<str>, ser: S) -> Result<S::Ok, S::Error> {
-        ser.serialize_str(value)
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Arc<str>, D::Error> {
-        let s = String::deserialize(de)?;
-        Ok(Arc::from(s.as_str()))
-    }
+fn deserialize_arc_str<'de, D: Deserializer<'de>>(de: D) -> Result<Arc<str>, D::Error> {
+    let s = String::deserialize(de)?;
+    Ok(Arc::from(s.as_str()))
 }
 
 impl ResourceKey {
@@ -78,7 +74,7 @@ impl ResourceKey {
     /// Returns true if this is an absolute path key.
     #[must_use]
     pub fn is_absolute(&self) -> bool {
-        matches!(self, Self::Absolute(_))
+        self.as_absolute_path().is_some()
     }
 
     /// The relative path, or `None` for an absolute key.

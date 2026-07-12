@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use kithara_platform::sync::Arc;
 use kithara_stream::dl::FetchCmd;
 use kithara_test_utils::kithara;
 use tracing::debug;

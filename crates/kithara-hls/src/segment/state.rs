@@ -1,9 +1,10 @@
 use std::sync::{
-    Arc, Weak,
+    Weak,
     atomic::{AtomicU8, Ordering},
 };
 
 use bitflags::bitflags;
+use kithara_platform::sync::Arc;
 
 use crate::{
     segment::fetch::{FetchClaim, PlannedFetch},

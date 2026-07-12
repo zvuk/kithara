@@ -170,7 +170,11 @@ async fn run_case_paced(
     // Keep HLS scan nonblocking: readiness is observed through Frames/Pending,
     // not through the blocking read watchdog's wall-clock budget.
     let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(audio_config)
         .await

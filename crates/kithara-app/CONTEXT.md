@@ -29,8 +29,10 @@ audio bytes. A `TrackSource` variant with no stable source (the reserved
 non-exhaustive seam) is in-memory-only by capability, not a fallback.
 
 Invalidation is by `ANALYSIS_BYTES_VERSION` (kithara-app): bump it whenever
-the blob encoding, BPM analysis parameters, waveform encoding, or
-`WAVEFORM_MAX_BUCKETS` change. The
+the blob encoding, waveform encoding, or `WAVEFORM_MAX_BUCKETS` change.
+`AppConfig.beat_analysis` is part of each blob fingerprint through
+`BeatAnalysisConfig::cache_tag`, so runtime beat-analysis tuning re-analyses
+without a version bump. The
 filename is a sha256 of the key — a `std` hasher is not stable across toolchain
 versions and would orphan every blob. Because the key is the source location
 and not the bytes, a file overwritten in place keeps its key until the version

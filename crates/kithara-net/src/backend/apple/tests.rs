@@ -5,16 +5,14 @@ mod kithara {
 use std::{
     future::Future,
     net::SocketAddr,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicU32, AtomicUsize, Ordering},
 };
 
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_platform::{
     CancelToken,
+    sync::Arc,
     time::Duration,
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},

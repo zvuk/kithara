@@ -1,9 +1,10 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use kithara::{
     assets::{AssetLayout, StorageBackend},
     play::ResourceConfig,
 };
+use kithara_platform::sync::Arc;
 
 use crate::config::StoreOptions;
 

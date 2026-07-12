@@ -5,13 +5,13 @@ use std::sync::Weak;
 use std::{
     ops::Range,
     sync::{
-        Arc, OnceLock,
+        OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
 
 use dashmap::DashMap;
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::AvailabilityObserver;
 use rangemap::RangeSet;
 

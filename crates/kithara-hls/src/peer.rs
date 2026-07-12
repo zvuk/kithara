@@ -1,10 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll, Waker},
 };
 
@@ -13,7 +10,7 @@ use kithara_assets::ResourceKey;
 use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo};
 use kithara_platform::{
     CancelToken,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::Duration,
     tokio::{self, sync::mpsc, task::spawn},
 };

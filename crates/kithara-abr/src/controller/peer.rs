@@ -1,12 +1,12 @@
 use std::sync::{
-    Arc, Weak,
+    Weak,
     atomic::{AtomicBool, AtomicU64},
 };
 
 use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
-    sync::{Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 

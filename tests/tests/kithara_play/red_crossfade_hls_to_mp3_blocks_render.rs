@@ -1,13 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use kithara::{
     audio::{Audio, AudioConfig, AudioWorkerHandle},
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
-    platform::{CancelToken, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
     play::Resource,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };

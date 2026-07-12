@@ -13,7 +13,7 @@ message: |
   roots and platform spawn chokepoints.
 
   Suppress with `// ast-grep-ignore: arch.no-raw-no-block` ONLY for
-  platform-internal work on the no_block implementation or its flash/native
+  platform-internal work on the no_block implementation or its backend
   chokepoints.
 
   This is an ERROR gate covering ALL workspace Rust - production AND tests.
@@ -29,8 +29,10 @@ ignores:
   - "crates/kithara-platform/src/common/no_block_inert.rs"
   # Flash interop legitimately calls pause/forbid_bridged and wraps spawned work.
   - "crates/kithara-platform/src/flash/**"
-  # Native chokepoints legitimately call forbid/watch_blanket_at.
-  - "crates/kithara-platform/src/native/**"
+  # Backend chokepoints legitimately call forbid/watch_blanket_at.
+  - "crates/kithara-platform/src/system/**"
+  - "crates/kithara-platform/src/loom/**"
+  - "crates/kithara-platform/src/backend/**"
   # The macros emit these calls as their expansion.
   - "crates/kithara-test-macros/src/**"
   # The test-utils facade is the public macro target for watch/watch_root.

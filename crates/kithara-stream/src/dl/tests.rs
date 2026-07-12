@@ -1,14 +1,13 @@
 use std::{
+    convert::Infallible,
     net::SocketAddr,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll},
 };
 
 use axum::{
     Router,
+    body::Body,
     routing::{get, head},
 };
 use bytes::Bytes;
@@ -18,7 +17,7 @@ use kithara_events::{DownloaderEvent, Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    sync::{Mutex, Notify},
+    sync::{Arc, Mutex, Notify},
     time::{self, Duration},
     tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
 };
@@ -673,6 +672,45 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     );
 }
 
+#[kithara::test(tokio, timeout(Duration::from_secs(SLOW_DEADLINE_SECS + SLOW_DEADLINE_SECS)))]
+async fn soft_timeout_covers_response_body() {
+    const SLOW_BODY_DELAY_MS: u64 = 500;
+    const SOFT_TIMEOUT_MS: u64 = 50;
+    const EVENT_BUS_CAPACITY: usize = 64;
+    const SLOW_POLL_TIMEOUT_MS: u64 = 200;
+
+    let url = spawn_slow_body_server(SLOW_BODY_DELAY_MS).await;
+    let config = DownloaderConfig::for_client(test_client())
+        .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
+        .build();
+    let dl = Downloader::new(config);
+    let root = EventBus::new(EVENT_BUS_CAPACITY);
+    let scoped = root.scoped();
+    let mut rx = scoped.subscribe();
+
+    let handle = dl.register(Arc::new(MockPeer)).with_bus(scoped);
+    let response = handle
+        .execute(FetchCmd::get(url).build())
+        .await
+        .expect("fetch slow body");
+    let body = response.body.collect().await.expect("collect slow body");
+    assert_eq!(body.as_ref(), b"ok");
+
+    let deadline = Instant::now() + Duration::from_secs(SLOW_DEADLINE_SECS);
+    let mut seen_slow = false;
+    while Instant::now() < deadline {
+        match time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
+            Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow { .. }))) => {
+                seen_slow = true;
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    assert!(seen_slow, "body-only stall must publish LoadSlow");
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PeerTag {
     Active,
@@ -764,6 +802,26 @@ async fn spawn_slow_server(delay_ms: u64) -> Url {
         get(move || async move {
             time::sleep(Duration::from_millis(delay_ms)).await;
             "ok"
+        }),
+    );
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+    Url::parse(&format!("http://{addr}/data")).expect("url")
+}
+
+async fn spawn_slow_body_server(delay_ms: u64) -> Url {
+    let app = Router::new().route(
+        "/data",
+        get(move || async move {
+            Body::from_stream(futures::stream::once(async move {
+                time::sleep(Duration::from_millis(delay_ms)).await;
+                Ok::<_, Infallible>(Bytes::from_static(b"ok"))
+            }))
         }),
     );
     let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");

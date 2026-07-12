@@ -1,15 +1,17 @@
 use std::{
     collections::VecDeque,
     ops::Deref,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, AtomicU64},
-    },
+    sync::atomic::{AtomicU32, AtomicU64},
 };
 
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
-use kithara_platform::{CancelToken, sync::Mutex, time::Duration, traits::FromWithParams};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+    time::Duration,
+    traits::FromWithParams,
+};
 use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve};
 
 use super::{

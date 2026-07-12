@@ -1,41 +1,59 @@
+#[cfg(not(feature = "beat-nn"))]
+pub(crate) use disabled::*;
 #[cfg(feature = "beat-nn")]
-mod model {
-    /// Embedded NN model identity for the cache tag.
-    pub(super) const NN_MODEL_TAG: &str = "beat_this_small_v1";
-}
+pub(crate) use enabled::*;
 
-/// Build the shared NN detector once. `None` when its model fails to load.
 #[cfg(feature = "beat-nn")]
-pub(crate) fn detector() -> Option<crate::analysis::beat::SharedBeatDetector> {
-    use std::sync::Arc;
-
-    use kithara_platform::sync::Mutex;
+mod enabled {
+    use kithara_platform::sync::{Arc, Mutex};
+    use kithara_resampler::ResamplerBackend;
     use tracing::warn;
 
-    use crate::analysis::beat::{BeatDetectorKind, build_detector};
+    use crate::analysis::{
+        BeatAnalysisConfig,
+        beat::{BeatDetectorKind, GridParams, SharedBeatDetector, build_detector},
+    };
 
-    match build_detector(BeatDetectorKind::default()) {
-        Ok(detector) => Some(Arc::new(Mutex::new(detector))),
-        Err(e) => {
-            warn!(?e, "beat detector init failed; beat analysis disabled");
-            None
+    const NN_MODEL_TAG: &str = "beat_this_small_v1";
+
+    pub(crate) fn detector() -> Option<SharedBeatDetector> {
+        match build_detector(BeatDetectorKind::default()) {
+            Ok(detector) => Some(Arc::new(Mutex::new(detector))),
+            Err(e) => {
+                warn!(?e, "beat detector init failed; beat analysis disabled");
+                None
+            }
         }
+    }
+
+    pub(crate) fn tag<B>(config: &BeatAnalysisConfig<B>) -> Option<String>
+    where
+        B: ResamplerBackend,
+    {
+        BeatDetectorKind::ALL.first().map(|kind| {
+            format!(
+                "{kind}:{NN_MODEL_TAG}:{:?}:{:?}",
+                GridParams::default(),
+                config
+            )
+        })
     }
 }
 
-/// Cache fingerprint of the compiled-in detector + grid tuning. `None` when no
-/// detector is compiled in.
-pub(crate) fn tag() -> Option<String> {
-    #[cfg(feature = "beat-nn")]
-    {
-        use crate::analysis::beat::{BeatDetectorKind, GridParams};
+#[cfg(not(feature = "beat-nn"))]
+mod disabled {
+    use kithara_resampler::ResamplerBackend;
 
-        // The first compiled-in detector is the `Default` the builder uses.
-        BeatDetectorKind::ALL
-            .first()
-            .map(|kind| format!("{kind}:{}:{:?}", model::NN_MODEL_TAG, GridParams::default()))
+    use super::super::config::BeatAnalysisConfig;
+
+    #[cfg(feature = "analysis-beat")]
+    pub(crate) fn detector() -> Option<crate::analysis::beat::SharedBeatDetector> {
+        None
     }
-    #[cfg(not(feature = "beat-nn"))]
+
+    pub(crate) fn tag<B>(_config: &BeatAnalysisConfig<B>) -> Option<String>
+    where
+        B: ResamplerBackend,
     {
         None
     }

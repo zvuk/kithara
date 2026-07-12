@@ -1,13 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::OnceCell,

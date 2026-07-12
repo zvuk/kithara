@@ -1,4 +1,4 @@
-use std::{convert::Infallible, mem::size_of, sync::Arc};
+use std::{convert::Infallible, mem::size_of};
 
 use axum::{
     Router,
@@ -9,6 +9,7 @@ use axum::{
     routing::get,
 };
 use futures::stream;
+use kithara::platform::sync::Arc;
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 
 use crate::{
@@ -148,6 +149,12 @@ fn encode_signal_payload_with_cache(
     cache: &crate::fixture_cache::FixtureCache,
 ) -> Option<EncodedSignal> {
     let spec_key = signal_l2_spec_key(request);
+    if let Some(blob) = cache.get("signal", spec_key.as_bytes())
+        && let Some(hit) = decode_l2_blob(&blob)
+    {
+        return Some(hit);
+    }
+    let _lock = cache.lock_entry("signal", spec_key.as_bytes());
     if let Some(blob) = cache.get("signal", spec_key.as_bytes())
         && let Some(hit) = decode_l2_blob(&blob)
     {

@@ -7,14 +7,14 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::num::NonZeroU32;
 
 use firewheel::dsp::fade::FadeCurve;
 use kithara::{
     self,
     bufpool::PcmPool,
     decode::PcmSpec,
-    platform::sync::Mutex,
+    platform::sync::{Arc, Mutex},
     play::{
         Resource,
         impls::{
@@ -246,7 +246,7 @@ async fn read_outcome_partial_then_eof() {
                 assert!(frames > 0);
                 saw_partial = true;
             }
-            TrackReadOutcome::Eof => {
+            TrackReadOutcome::Eof { .. } => {
                 if saw_partial {
                     saw_eof_after_partial = true;
                     break;
@@ -599,5 +599,5 @@ async fn read_outcome_eof_when_track_finished() {
 
     let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
 
-    assert!(matches!(outcome, TrackReadOutcome::Eof));
+    assert!(matches!(outcome, TrackReadOutcome::Eof { .. }));
 }

@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, VecDeque},
     fmt,
     io::{Error as IoError, ErrorKind},
-    sync::Arc,
 };
 
 use kithara::{
@@ -11,8 +10,9 @@ use kithara::{
         WriteSide, asset_root_for_url,
     },
     audio::{BeatGrid, Waveform},
-    prelude::{ResourceConfig, ResourceSrc},
+    prelude::{PlaybackResamplerBackend, ResourceConfig, ResourceSrc},
 };
+use kithara_platform::sync::Arc;
 use kithara_queue::TrackSource;
 use tracing::{debug, warn};
 use url::Url;
@@ -49,7 +49,10 @@ impl AnalysisKey {
 /// cross-session identity.
 pub(crate) fn source_key(source: &TrackSource) -> Option<AnalysisKey> {
     match source {
-        TrackSource::Uri(src) => key_for_src(&ResourceConfig::parse_src(src).ok()?, None),
+        TrackSource::Uri(src) => key_for_src(
+            &ResourceConfig::<PlaybackResamplerBackend>::parse_src(src).ok()?,
+            None,
+        ),
         TrackSource::Config(cfg) => key_for_src(&cfg.src, cfg.name.as_deref()),
         _ => None,
     }
@@ -333,7 +336,7 @@ fn read_array<const N: usize>(
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, sync::Arc};
+    use std::path::Path;
 
     // The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
@@ -341,6 +344,7 @@ mod tests {
         audio::{BeatGrid, GridSegment, Waveform},
         prelude::ResourceConfig,
     };
+    use kithara_platform::sync::Arc;
     use kithara_queue::TrackSource;
     use kithara_test_utils::kithara;
 

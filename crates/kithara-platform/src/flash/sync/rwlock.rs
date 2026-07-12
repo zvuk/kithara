@@ -1,15 +1,15 @@
 use std::{
     ops::{Deref, DerefMut},
     panic::Location,
-    sync::Arc,
 };
 
 use crate::{
-    flash::diag::{self, PrimEntry, PrimKind},
-    native::sync::rwlock::{
+    backend::sync::rwlock::{
         RwLock as NativeRwLock, RwLockReadGuard as NativeReadGuard,
         RwLockWriteGuard as NativeWriteGuard,
     },
+    flash::diag::{self, PrimEntry, PrimKind},
+    sync::Arc,
 };
 
 /// `RwLock` under `flash`: a real `parking_lot` lock — flash-blind to the engine

@@ -5,13 +5,65 @@ Detailed contracts and invariants for the kithara-platform crate; the README is 
 ## Synchronization Backends
 
 <table>
-<tr><th>Type</th><th>Native</th><th>wasm32</th></tr>
-<tr><td><code>Mutex&lt;T&gt;</code></td><td><code>parking_lot::Mutex</code> wrapper</td><td><code>wasm_safe_thread::Mutex</code> wrapper</td></tr>
-<tr><td><code>RwLock&lt;T&gt;</code></td><td><code>parking_lot::RwLock</code> wrapper</td><td><code>wasm_safe_thread::rwlock::RwLock</code> wrapper</td></tr>
-<tr><td><code>Condvar</code></td><td><code>parking_lot::Condvar</code> wrapper</td><td><code>wasm_safe_thread::condvar::Condvar</code> wrapper</td></tr>
-<tr><td><code>MaybeSend</code></td><td>Equivalent to <code>Send</code></td><td>Blanket trait (no Send requirement)</td></tr>
-<tr><td><code>MaybeSync</code></td><td>Equivalent to <code>Sync</code></td><td>Blanket trait (no Sync requirement)</td></tr>
+<tr><th>Type</th><th>System</th><th>Loom</th><th>wasm32</th></tr>
+<tr><td><code>Arc&lt;T&gt;</code></td><td><code>std::sync::Arc</code></td><td>system backend</td><td><code>std::sync::Arc</code></td></tr>
+<tr><td><code>Mutex&lt;T&gt;</code></td><td><code>parking_lot::Mutex</code> wrapper</td><td><code>loom::sync::Mutex</code> wrapper</td><td><code>wasm_safe_thread::Mutex</code> wrapper</td></tr>
+<tr><td><code>RwLock&lt;T&gt;</code></td><td><code>parking_lot::RwLock</code> wrapper</td><td><code>loom::sync::RwLock</code> wrapper</td><td><code>wasm_safe_thread::rwlock::RwLock</code> wrapper</td></tr>
+<tr><td><code>Condvar</code></td><td><code>parking_lot::Condvar</code> wrapper</td><td><code>loom::sync::Condvar</code> wrapper</td><td><code>wasm_safe_thread::condvar::Condvar</code> wrapper</td></tr>
+<tr><td><code>atomic::*</code></td><td><code>std::sync::atomic</code></td><td><code>loom::sync::atomic</code></td><td><code>std::sync::atomic</code></td></tr>
+<tr><td><code>MaybeSend</code></td><td>Equivalent to <code>Send</code></td><td>Equivalent to <code>Send</code></td><td>Blanket trait (no Send requirement)</td></tr>
+<tr><td><code>MaybeSync</code></td><td>Equivalent to <code>Sync</code></td><td>Equivalent to <code>Sync</code></td><td>Blanket trait (no Sync requirement)</td></tr>
 </table>
+
+`Arc<T>`, `Weak<T>`, and `OnceLock<T>` always route through the system backend.
+This keeps one ownership type across the workspace and preserves `Weak`,
+`new_cyclic`, unsized coercion, and APIs such as `ArcSwap`. Loom models the
+coordination primitives stored inside that ownership graph: locks, channels,
+atomics, and threads. Consumers import every synchronization type from this
+crate rather than importing `std` directly.
+
+The backend composition is compile-time only:
+
+<table>
+<tr><th>Features</th><th>Facade</th><th>Primitive backend</th></tr>
+<tr><td>none</td><td>system</td><td>system</td></tr>
+<tr><td><code>flash</code></td><td>Flash wrappers</td><td>system</td></tr>
+<tr><td><code>loom</code></td><td>Loom</td><td>Loom</td></tr>
+<tr><td><code>flash,loom</code></td><td>Flash wrappers</td><td>Loom</td></tr>
+</table>
+
+`system` and `loom` are private implementation modules. The only consumer
+surface is the root `sync`, `thread`, `time`, and `tokio` facade. With `flash`
+enabled, that facade decorates whichever primitive backend was selected; it
+does not expose a second backend path. The process-wide Flash scheduler and
+diagnostics registry are the exception to backend selection: their bookkeeping
+locks always use the private system lock because they outlive individual Loom
+model permutations. User-visible Flash primitives still wrap Loom in the
+`flash,loom` lane.
+
+Loom does not provide timed condvar or synchronous channel waits. Those calls
+fail explicitly in the `loom`-only lane; model tests that require virtual
+deadlines use `flash,loom`.
+
+Model tests opt in with `#[kithara::test(loom)]`. The macro invokes a hidden
+platform hook; no Loom type or module is public. Ordinary `just test` does not
+enable the `loom` feature, so a marked test runs once against the system
+backend. `just test --loom=on` enables the feature and selects only marked
+tests. Add `--flash=on` to run the same models through the Flash decorator.
+Unmarked tests are never run under the Loom backend.
+
+Loom only explores operations routed through its replacement primitives.
+`Arc`, `Weak`, and `ArcSwap` ownership operations remain system operations and
+are outside the model; synchronization stored inside that ownership graph is
+still explored. A Loom model must therefore assert a small deterministic
+coordination contract, not wrap a full network, decoder, Tokio runtime, random
+fixture, or wall-clock integration test.
+
+`ThreadGate` has one waiter. Waiter registration may take its private lock and
+must happen outside real-time code. `signal` is the real-time path: it advances
+the edge first, uses only a non-blocking `try_lock` to fetch the current waiter,
+and does not allocate. A missed immediate unpark cannot lose the edge; the
+waiter observes the changed sequence or returns through its timed backstop.
 
 ## Thread and Task Primitives
 
@@ -37,6 +89,7 @@ On native these delegate to `tokio` runtime primitives, on wasm they use `setTim
 <table>
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
 <tr><td><code>flash</code></td><td>no</td><td>Native test-only virtual clock and flash-aware primitive wrappers</td></tr>
+<tr><td><code>loom</code></td><td>no</td><td>Native test-only exhaustive concurrency backend; independent from <code>flash</code></td></tr>
 <tr><td><code>no-block</code></td><td>no</td><td>Native test-only async poll blocking detector; inert twin off the feature</td></tr>
 <tr><td><code>signal</code></td><td>no</td><td>Enable <code>tokio::signal</code> forwarding for desktop binaries that own process shutdown</td></tr>
 <tr><td><code>tokio-net</code></td><td>no</td><td>Enable native <code>tokio::net</code> and async I/O extension traits for test/server plumbing</td></tr>
@@ -97,7 +150,7 @@ Contract:
     `Parked`); its wake re-increments (`Parked` → `Running`). A thread that exits
     while `Running` drops its `active` slot via the spawn bracket.
 - The spawn bracket is where the exit decrement happens — again with no consumer
-  call. `thread::spawn_named` (the named-thread bracket) and the platform
+  call. `thread::spawn`, `thread::spawn_named` (the named-thread bracket), and the platform
   `task::spawn_blocking` both reset the credit on entry (a reused pool thread
   must not inherit a stale credit) and run the exit decrement after the closure
   returns. A consumer that runs a wrapped wait on a blocking pool thread spawns
@@ -202,8 +255,9 @@ divergence.
 
 ## Blocking Detection (`no_block`)
 
-Poll-scoped async blocking detection, feature `no-block` (test lanes only;
-the inert twin `common/no_block_inert.rs` keeps prod builds byte-identical).
+Poll-scoped async blocking detection, feature `no-block` (test lanes only; enabled
+by `just test --no-block=on`, off for normal runs, and kept ON by `just gate` lane
+1; the inert twin `common/no_block_inert.rs` keeps prod builds byte-identical).
 Real tree: `src/no_block/` — cfg-free inside, selected in `lib.rs` like
 `flash`/`flash_inert`.
 
@@ -219,7 +273,10 @@ spawn chokepoints — native and flash `tokio::task::spawn`/`spawn_on`):
    deliberately NOT intercepted (short locks in async are legal; long waits
    are level 2's job).
 2. **Budget** — wall/CPU timing of each poll on the REAL clock (`std::time`,
-   never the virtualized platform clock). Blanket default 3000 ms (measured:
+   never the virtualized platform clock; thread-CPU is sampled through a
+   per-thread bounded snapshot with 1 ms max age, so each poll can include up to
+   1 ms of pre-poll CPU in its window and `KITHARA_NO_BLOCK=off` skips timing
+   entirely). Blanket default 3000 ms (measured:
    legitimate IO-bound polls reach 1.05 s; `KITHARA_NO_BLOCK_BUDGET_MS`
    overrides); the strict 25 ms tier is opt-in via
    `#[kithara::no_block(budget_ms = N)]`. Over-budget reports classify

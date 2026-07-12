@@ -1,7 +1,7 @@
-use std::{fmt, num::NonZeroUsize, sync::Arc};
+use std::{fmt, num::NonZeroUsize};
 
 use bon::Builder;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.
@@ -95,13 +95,6 @@ impl QueueConfig {
     #[must_use]
     pub fn with_player(mut self, player: Arc<PlayerImpl>) -> Self {
         self.player = Some(player);
-        self
-    }
-
-    /// Set whether the queue auto-advances at EOF.
-    #[must_use]
-    pub fn with_should_autoplay(mut self, value: bool) -> Self {
-        self.should_autoplay = value;
         self
     }
 }

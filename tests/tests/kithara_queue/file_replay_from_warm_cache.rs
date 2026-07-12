@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
@@ -10,6 +10,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, sleep},
         tokio,
     },
@@ -73,7 +74,11 @@ fn track_source(url: &Url, session: &Session) -> TrackSource {
         .expect("valid fixture URL")
         .downloader(session.downloader.clone())
         .store(session.store.clone())
-        .decoder_backend(DecoderBackend::Symphonia)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+        )
         .initial_abr_mode(AbrMode::Auto(None))
         .build();
     TrackSource::Config(Box::new(cfg))

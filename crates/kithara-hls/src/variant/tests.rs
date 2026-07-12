@@ -1,11 +1,15 @@
 use std::sync::{
-    Arc, Barrier, OnceLock,
+    Barrier, OnceLock,
     atomic::{AtomicUsize, Ordering},
 };
 
 use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide};
 use kithara_drm::DecryptContext;
-use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, ThreadGate},
+    time::Duration,
+};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, ContainerFormat, ReadOutcome, SeekControl, SeekObserve, SeekState, SourceError,

@@ -3220,6 +3220,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "generator"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3b854b0e584ead1a33f18b2fcad7cf7be18b3875c78816b753639aa501513ae"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "log",
+ "rustversion",
+ "windows-link 0.2.1",
+ "windows-result 0.4.1",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4370,6 +4385,7 @@ dependencies = [
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
+ "kithara-resampler",
  "kithara-storage",
  "kithara-stream",
  "kithara-test-utils",
@@ -4432,6 +4448,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-apple"
+version = "0.0.1-alpha4"
+dependencies = [
+ "block2 0.6.2",
+ "kithara-platform",
+ "kithara-workspace-hack",
+ "num-traits",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "kithara-assets"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -4471,7 +4500,6 @@ dependencies = [
  "aes",
  "arc-swap",
  "assert_no_alloc",
- "audioadapter-buffers",
  "axum",
  "biquad",
  "bon",
@@ -4493,6 +4521,7 @@ dependencies = [
  "kithara-hls",
  "kithara-net",
  "kithara-platform",
+ "kithara-resampler",
  "kithara-storage",
  "kithara-stream",
  "kithara-stretch",
@@ -4503,7 +4532,6 @@ dependencies = [
  "portable-atomic",
  "realfft",
  "ringbuf 0.5.0",
- "rubato",
  "serde",
  "smallvec",
  "tempfile",
@@ -4551,12 +4579,15 @@ dependencies = [
  "bon",
  "core-foundation 0.10.1",
  "core-foundation-sys",
+ "criterion",
  "derive_more",
  "fdk-aac",
  "hotpath",
  "jni 0.22.4",
+ "kithara-apple",
  "kithara-bufpool",
  "kithara-platform",
+ "kithara-resampler",
  "kithara-storage",
  "kithara-stream",
  "kithara-test-macros",
@@ -4603,6 +4634,7 @@ dependencies = [
  "bytes",
  "cbc",
  "kithara-drm",
+ "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "thiserror 2.0.18",
@@ -4829,13 +4861,13 @@ dependencies = [
  "async-trait",
  "axum",
  "bitflags 2.13.0",
- "block2 0.6.2",
  "bon",
  "bytes",
  "dashmap",
  "futures",
  "gloo-timers",
  "hotpath",
+ "kithara-apple",
  "kithara-bufpool",
  "kithara-net",
  "kithara-platform",
@@ -4844,8 +4876,6 @@ dependencies = [
  "kithara-workspace-hack",
  "memory-stats",
  "num-traits",
- "objc2 0.6.4",
- "objc2-foundation 0.3.2",
  "reqwest",
  "thiserror 2.0.18",
  "tower-layer",
@@ -4863,6 +4893,7 @@ dependencies = [
 name = "kithara-platform"
 version = "0.0.1-alpha4"
 dependencies = [
+ "assert_no_alloc",
  "console_error_panic_hook",
  "cpu-time",
  "criterion",
@@ -4873,6 +4904,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "loom",
  "parking_lot",
  "pin-project-lite",
  "tokio",
@@ -4933,6 +4965,23 @@ dependencies = [
  "kithara-play",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "kithara-resampler"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bitflags 2.13.0",
+ "bon",
+ "criterion",
+ "kithara-apple",
+ "kithara-bufpool",
+ "kithara-workspace-hack",
+ "num-traits",
+ "rubato",
+ "smallvec",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -5048,7 +5097,6 @@ dependencies = [
  "bit-vec 0.8.0",
  "bitflags 2.13.0",
  "block2 0.6.2",
- "bytemuck",
  "cc",
  "clang-sys",
  "clap",
@@ -5089,7 +5137,6 @@ dependencies = [
  "memchr",
  "miniz_oxide",
  "mio",
- "num-integer",
  "num-traits",
  "objc2-foundation 0.3.2",
  "once_cell",
@@ -5104,7 +5151,6 @@ dependencies = [
  "reqwest",
  "ringbuf 0.4.8",
  "rustc-hash 1.1.0",
- "rustfft",
  "rustix 1.1.4",
  "rustls-pki-types",
  "semver",
@@ -5114,7 +5160,6 @@ dependencies = [
  "simd-adler32",
  "slab",
  "smallvec",
- "symphonia-core 0.6.0",
  "syn 2.0.118",
  "sync_wrapper",
  "thiserror 2.0.18",
@@ -5308,6 +5353,21 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
+name = "loom"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "419e0dc8046cb947daa77eb95ae174acfbddb7673b4151f56d1eed8e93fbfaca"
+dependencies = [
+ "cfg-if",
+ "generator",
+ "scoped-tls",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "lru"

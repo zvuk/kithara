@@ -1,6 +1,6 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::atomic::Ordering;
 
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use ringbuf::traits::Consumer;
 use tracing::debug;
 
@@ -395,9 +395,8 @@ pub(crate) fn player_event_from_notification(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use kithara_events::Event;
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;

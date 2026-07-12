@@ -7,11 +7,11 @@ use std::{
     io::{self, Error as IoError, ErrorKind, Read, Seek, SeekFrom},
     num::NonZeroUsize,
     ops::Range,
-    sync::Arc,
 };
 
 use kithara_platform::{
     maybe_send::{MaybeSend, MaybeSync},
+    sync::Arc,
     time::Duration,
     tokio::task,
 };
@@ -776,12 +776,10 @@ impl<T: StreamType> Seek for Stream<T> {
 mod tests {
     use std::{
         collections::VecDeque,
-        sync::{
-            Arc,
-            atomic::{AtomicU64, Ordering},
-        },
+        sync::atomic::{AtomicU64, Ordering},
     };
 
+    use kithara_platform::sync::Arc;
     use kithara_storage::WaitOutcome;
     use kithara_test_utils::kithara;
 

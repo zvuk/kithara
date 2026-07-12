@@ -3,18 +3,20 @@ use std::{
     ops::Deref,
     panic::Location,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll, Waker},
 };
 
 use parking_lot::{Mutex, MutexGuard};
 
 pub use super::errors::{RecvError, SendError};
-use crate::flash::{
-    diag::PrimKind,
-    flash_ambient,
-    ids::{Backend, trace_native_from_ambient},
-    system,
+use crate::{
+    flash::{
+        diag::PrimKind,
+        flash_ambient,
+        ids::{Backend, trace_native_from_ambient},
+        system,
+    },
+    sync::Arc,
 };
 
 /// Value + version + close latch, plus the off-flash parked-receiver wakers,

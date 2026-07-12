@@ -1,11 +1,9 @@
 use std::{
     io::{Read, Seek},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
+use kithara_platform::sync::Arc;
 use kithara_stream::ContainerFormat;
 use symphonia::{
     core::{

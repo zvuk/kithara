@@ -4,7 +4,7 @@ use kithara_abr::AbrMode;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_hls::{KeyOptions, KeyProcessorRule};
 use kithara_platform::{
-    sync::mpsc,
+    sync::{Arc, mpsc},
     thread::{assert_not_main_thread, keep_worker_alive},
     time::{Duration, sleep},
     tokio::task::spawn as task_spawn,
@@ -239,7 +239,7 @@ fn register_key_rule(
 
     let factory: KeyRequestFactory = {
         let salt = salt.to_owned();
-        std::sync::Arc::new(move || {
+        Arc::new(move || {
             let mut req_headers = HashMap::new();
             req_headers.insert(SALT_HEADER.to_string(), salt.clone());
             KeyRequest::new(

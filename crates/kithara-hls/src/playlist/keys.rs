@@ -1,15 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use kithara_assets::{AssetScope, ReadSide};
 use kithara_drm::{DecryptContext, KeyProcessorRegistry};
 use kithara_net::Headers;
+use kithara_platform::sync::Arc;
 use kithara_stream::dl::{FetchCmd, PeerHandle};
 use url::Url;
 

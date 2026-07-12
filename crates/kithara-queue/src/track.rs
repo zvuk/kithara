@@ -93,7 +93,7 @@ pub(crate) struct TrackRecord {
     pub(crate) url: Option<String>,
     pub(crate) status: TrackStatus,
     pub(crate) source: TrackSource,
-    pub(crate) attempt: Option<AttemptGuard>,
+    pub(crate) load: Option<AttemptGuard>,
 }
 
 impl TrackRecord {
@@ -104,7 +104,7 @@ impl TrackRecord {
             url: source.uri().map(str::to_string),
             status: TrackStatus::Pending,
             source,
-            attempt: None,
+            load: None,
         }
     }
 
@@ -158,7 +158,7 @@ impl Tracks {
         };
         record.status = status.clone();
         let aborted = matches!(status, TrackStatus::Cancelled)
-            .then(|| record.attempt.take())
+            .then(|| record.load.take())
             .flatten();
         drop(guard);
         drop(aborted);
@@ -179,12 +179,7 @@ impl Tracks {
     pub(crate) fn begin_attempt(&self, id: TrackId, cancel: CancelToken) -> Option<Ticket> {
         let mut guard = self.lock();
         let ticket = match guard.iter_mut().find(|r| r.id == id) {
-            Some(record)
-                if record
-                    .attempt
-                    .as_ref()
-                    .is_none_or(AttemptGuard::is_cancelled) =>
-            {
+            Some(record) if record.load.as_ref().is_none_or(AttemptGuard::is_cancelled) => {
                 Some(install(record, &self.next_generation, cancel))
             }
             _ => None,
@@ -203,7 +198,7 @@ impl Tracks {
         let ticket = match guard.iter_mut().find(|r| r.id == id) {
             Some(record)
                 if record
-                    .attempt
+                    .load
                     .as_ref()
                     .is_some_and(|a| a.waiting || a.is_cancelled()) =>
             {
@@ -224,7 +219,7 @@ impl Tracks {
             .iter_mut()
             .find(|r| r.id == ticket.id)
             .is_some_and(|r| {
-                let Some(attempt) = r.attempt.as_mut() else {
+                let Some(attempt) = r.load.as_mut() else {
                     return false;
                 };
                 if attempt.generation != ticket.generation || attempt.is_cancelled() {
@@ -254,13 +249,13 @@ impl Tracks {
             return;
         };
         if record
-            .attempt
+            .load
             .as_ref()
             .is_none_or(|a| a.generation != ticket.generation)
         {
             return;
         }
-        if let Some(mut attempt) = record.attempt.take() {
+        if let Some(mut attempt) = record.load.take() {
             attempt.disarm();
         }
         let Some(reason) = failure else {
@@ -279,7 +274,7 @@ fn install(record: &mut TrackRecord, generations: &AtomicU64, cancel: CancelToke
     let generation = generations.fetch_add(1, Ordering::Relaxed);
     // Replacing the guard drops the old one armed, cancelling the
     // superseded attempt.
-    record.attempt = Some(AttemptGuard::new(generation, cancel));
+    record.load = Some(AttemptGuard::new(generation, cancel));
     Ticket {
         id: record.id,
         generation,

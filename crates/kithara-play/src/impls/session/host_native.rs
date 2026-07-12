@@ -1,8 +1,8 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend};
 use kithara_platform::{
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
 };
 use kithara_test_utils::kithara;

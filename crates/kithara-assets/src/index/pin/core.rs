@@ -3,10 +3,11 @@
 use std::{
     collections::HashSet,
     num::NonZeroU32,
-    sync::{Arc, OnceLock, Weak, atomic::AtomicBool},
+    sync::{OnceLock, Weak, atomic::AtomicBool},
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
+use kithara_platform::sync::Arc;
 
 use crate::{
     error::AssetsResult,

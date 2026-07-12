@@ -506,7 +506,11 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
         box_tags.iter().any(|tag| tag == "mdat"),
         "packaged {label} bytes must contain mdat, got {box_summaries:?}"
     );
-    let config = || DecoderConfig::builder().backend(backend).build();
+    let config = || {
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .backend(backend)
+            .build()
+    };
     let mut direct_decoder = DecoderFactory::create_from_media_info(
         Cursor::new(mp4_bytes.clone()),
         &media_info,

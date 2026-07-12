@@ -7,7 +7,7 @@ use super::{
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_env_setup,
         make_runtime_builder, make_selenium_attrs, make_serial_attr, make_tracing_init,
-        wrap_with_soft_fail, wrap_with_timeout,
+        wrap_with_model, wrap_with_soft_fail, wrap_with_timeout,
     },
 };
 
@@ -43,37 +43,15 @@ pub(crate) fn emit_async_runtime_test(
         quote! { { #body } }
     };
 
-    quote! {
-        #(#remaining_attrs)*
-        #serial_attr
-        #selenium_attr
-        #[cfg(not(target_arch = "wasm32"))]
-        #[test]
-        #vis fn #fn_name() #ret_type {
-            #env_setup
+    let runtime_body = quote! {
+        {
             let __rt = #runtime_builder;
             let __probe_install_id =
                 ::kithara_test_utils::probe::bump_install_id();
             __rt.block_on(
-                // Wrap the root task in the quiescence poll-wrapper so the test
-                // driver counts as a running participant while polled (identity
-                // off the sim path). Without this the virtual clock would race
-                // past the driver's own work between awaits — the worker's idle
-                // timer advances the clock while the driver is between polls, so
-                // a `sleep`/`read` loop times out on a deadline that already
-                // jumped. Mirrors `emit_async_timeout_test`.
                 ::kithara_test_utils::kithara_platform::flash::participate(
                     ::kithara_test_utils::probe::OWNED_INSTALL_ID
                         .scope(__probe_install_id,
-                            // `with_ambient` is the SOLE ambient holder of the
-                            // async-native body: it re-asserts FLASH_AMBIENT
-                            // around every poll, so a worker-thread resume
-                            // after `.await` keeps the right ambient and a
-                            // `spawn_blocking` from the body cannot capture the
-                            // wrong one (lost wake). A body-held scope is
-                            // forbidden here: its cancel-drop on a timeout
-                            // `Elapsed` is a non-LIFO mode restore (stale
-                            // ambient resurrect). Identity off the feature.
                             ::kithara_test_utils::kithara_platform::flash::with_ambient(
                                 #flash,
                                 ::kithara_test_utils::no_block::watch_root(
@@ -86,6 +64,19 @@ pub(crate) fn emit_async_runtime_test(
                     ::core::panic::Location::caller(),
                 ),
             )
+        }
+    };
+    let runtime_body = wrap_with_model(&runtime_body, args);
+
+    quote! {
+        #(#remaining_attrs)*
+        #serial_attr
+        #selenium_attr
+        #[cfg(not(target_arch = "wasm32"))]
+        #[test]
+        #vis fn #fn_name() #ret_type {
+            #env_setup
+            #runtime_body
         }
     }
 }
@@ -165,46 +156,8 @@ pub(crate) fn emit_async_timeout_test(
     let runtime_builder = make_runtime_builder(args);
     let flash = args.flash.unwrap_or(true);
 
-    quote! {
-        #(#remaining_attrs)*
-        #serial_attr
-        #selenium_attr
-        #[cfg(not(target_arch = "wasm32"))]
-        #[test]
-        #vis fn #fn_name() #ret_type {
-            #env_setup
-
-            let __timeout_dur: ::std::time::Duration = #dur;
-
-            let __done = ::std::sync::Arc::new(
-                ::std::sync::atomic::AtomicBool::new(false),
-            );
-            {
-                let __done_w = __done.clone();
-                let __fn = #fn_name_str;
-                ::std::thread::spawn(move || {
-                    ::std::thread::sleep(
-                        __timeout_dur + ::std::time::Duration::from_secs(3),
-                    );
-                    if !__done_w.load(::std::sync::atomic::Ordering::SeqCst) {
-                        eprintln!(
-                            "\n\x1b[1;31mHARD TIMEOUT\x1b[0m: test `{}` exceeded {:?} \
-                             (runtime shutdown blocked). Aborting process.\n",
-                            __fn, __timeout_dur,
-                        );
-                        ::kithara_test_utils::kithara_platform::flash::log_hang_dump("hard-timeout");
-                        ::std::process::abort();
-                    }
-                });
-            }
-            struct __WG(::std::sync::Arc<::std::sync::atomic::AtomicBool>);
-            impl Drop for __WG {
-                fn drop(&mut self) {
-                    self.0.store(true, ::std::sync::atomic::Ordering::SeqCst);
-                }
-            }
-            let _wg = __WG(__done);
-
+    let runtime_body = quote! {
+        {
             let __rt = #runtime_builder;
             let __probe_install_id =
                 ::kithara_test_utils::probe::bump_install_id();
@@ -212,30 +165,12 @@ pub(crate) fn emit_async_timeout_test(
             let __result = ::std::panic::catch_unwind(
                 ::std::panic::AssertUnwindSafe(|| {
                     __rt.block_on(
-                        // Wrap the root task in the quiescence poll-wrapper so the
-                        // test driver counts as a running participant while polled
-                        // (identity off the sim path). Without this the virtual
-                        // clock would race past the driver's own work between awaits.
                         ::kithara_test_utils::kithara_platform::flash::participate(
                             ::kithara_test_utils::probe::OWNED_INSTALL_ID.scope(
                                 __probe_install_id,
                                 async {
-                                    // Wall-clock safety net: must fire on REAL
-                                    // time even under `flash` (a hung test
-                                    // hangs real time too).
                                     ::kithara_test_utils::kithara_platform::time::timeout(
                                         __timeout_dur,
-                                        // `with_ambient` is the SOLE ambient holder
-                                        // of the async-native body: it re-asserts
-                                        // FLASH_AMBIENT around every poll, so a
-                                        // worker-thread resume after `.await` keeps
-                                        // the right ambient (a `spawn_blocking`
-                                        // cannot capture the wrong one — lost wake).
-                                        // A body-held scope is forbidden here: its
-                                        // cancel-drop on `Elapsed` is a non-LIFO
-                                        // mode restore (stale ambient resurrect).
-                                        // `timeout` itself stays REAL (gates on
-                                        // FLASH_ACTIVE, untouched here).
                                         ::kithara_test_utils::kithara_platform::flash::with_ambient(
                                             #flash,
                                             ::kithara_test_utils::no_block::watch_root(
@@ -270,6 +205,54 @@ pub(crate) fn emit_async_timeout_test(
                 Ok(__v) => __v,
                 #timeout_panic_arm
             }
+        }
+    };
+    let runtime_body = wrap_with_model(&runtime_body, args);
+
+    quote! {
+        #(#remaining_attrs)*
+        #serial_attr
+        #selenium_attr
+        #[cfg(not(target_arch = "wasm32"))]
+        #[test]
+        #vis fn #fn_name() #ret_type {
+            #env_setup
+
+            let __timeout_dur: ::std::time::Duration = #dur;
+
+            let __done = ::kithara_test_utils::kithara_platform::sync::Arc::new(
+                ::std::sync::atomic::AtomicBool::new(false),
+            );
+            {
+                let __done_w = __done.clone();
+                let __fn = #fn_name_str;
+                ::std::thread::spawn(move || {
+                    ::std::thread::sleep(
+                        __timeout_dur + ::std::time::Duration::from_secs(3),
+                    );
+                    if !__done_w.load(::std::sync::atomic::Ordering::SeqCst) {
+                        eprintln!(
+                            "\n\x1b[1;31mHARD TIMEOUT\x1b[0m: test `{}` exceeded {:?} \
+                             (runtime shutdown blocked). Aborting process.\n",
+                            __fn, __timeout_dur,
+                        );
+                        ::kithara_test_utils::kithara_platform::flash::log_hang_dump("hard-timeout");
+                        ::std::process::abort();
+                    }
+                });
+            }
+            struct __WG(
+                ::kithara_test_utils::kithara_platform::sync::Arc<
+                    ::std::sync::atomic::AtomicBool,
+                >,
+            );
+            impl Drop for __WG {
+                fn drop(&mut self) {
+                    self.0.store(true, ::std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            let _wg = __WG(__done);
+            #runtime_body
         }
     }
 }

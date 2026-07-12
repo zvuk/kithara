@@ -1,9 +1,9 @@
 #[cfg(any(test, feature = "probe"))]
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 
 use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_platform::{CancelScope, CancelToken};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 use kithara_play::{PlayerConfig, PlayerImpl};
 
 use super::types::{
