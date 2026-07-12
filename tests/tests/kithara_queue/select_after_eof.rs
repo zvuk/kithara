@@ -58,7 +58,9 @@ fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usiz
 
 fn make_fixture() -> (OfflinePlayerHarness, Queue) {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::default().crossfade_duration(0.0),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
     let mut config = QueueConfig::default().with_player(Arc::clone(harness.player()));

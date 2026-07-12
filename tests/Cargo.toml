@@ -62,11 +62,12 @@ aes = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 
+# Misc
+bon = { workspace = true }
+
 # Channels/buffers
 bytes = { workspace = true }
 cbc = { workspace = true }
-
-# Misc
 futures = { workspace = true }
 hex = { workspace = true }
 rkyv = { workspace = true }

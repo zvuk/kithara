@@ -983,20 +983,24 @@ async fn run_crossfade_flac_case(
 }
 
 fn crossfade_player_config() -> OfflinePlayerOptions {
-    OfflinePlayerOptions::default().crossfade_duration(CROSSFADE_SECS)
+    OfflinePlayerOptions::builder()
+        .crossfade_duration(CROSSFADE_SECS)
+        .build()
 }
 
 fn crossfade_eq_player_config() -> OfflinePlayerOptions {
-    OfflinePlayerOptions::default()
+    OfflinePlayerOptions::builder()
         .crossfade_duration(CROSSFADE_SECS)
         .eq_layout(generate_log_spaced_bands(10))
+        .build()
 }
 
 fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> OfflinePlayerOptions {
-    OfflinePlayerOptions::default()
+    OfflinePlayerOptions::builder()
         .crossfade_duration(CROSSFADE_SECS)
         .eq_layout(generate_log_spaced_bands(10))
         .timestretch(Arc::clone(timestretch))
+        .build()
 }
 
 async fn setup_queue(server: &TestServerHelper, temp_dir: &TestTempDir, flac: bool) -> QueueSetup {
@@ -1010,7 +1014,9 @@ async fn setup_queue_with_sample_rate(
     render_sample_rate: u32,
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::default().crossfade_duration(0.0),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
         render_sample_rate,
     );
     let queue = Queue::new(with_autoplay(
@@ -1049,7 +1055,9 @@ async fn setup_multivariant_flac_queue(
     temp_dir: &TestTempDir,
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::default().crossfade_duration(0.0),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
@@ -1173,7 +1181,9 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
 
 async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::default().crossfade_duration(0.0),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(

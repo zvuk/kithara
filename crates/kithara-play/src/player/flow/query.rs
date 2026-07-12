@@ -1,3 +1,4 @@
+use delegate::delegate;
 use kithara_audio::{AudioWorkerHandle, EngineLoadSnapshot};
 use kithara_events::EventBus;
 use kithara_platform::tokio::runtime::Handle as RuntimeHandle;
@@ -6,31 +7,42 @@ use super::super::core::PlayerImpl;
 use crate::{api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl};
 
 impl PlayerImpl {
-    /// Whether the built-in linear auto-advance handler is enabled.
-    #[must_use]
-    pub fn auto_advance_enabled(&self) -> bool {
-        self.core.params.auto_advance_enabled()
-    }
-
-    /// Root event bus for this player.
-    #[must_use]
-    pub fn bus(&self) -> &EventBus {
-        self.core.engine.bus()
-    }
-
-    /// Get crossfade duration in seconds.
-    pub fn crossfade_duration(&self) -> f32 {
-        self.core.params.crossfade_duration()
+    delegate! {
+        to self.core.params {
+            /// Whether the built-in linear auto-advance handler is enabled.
+            #[must_use]
+            pub fn auto_advance_enabled(&self) -> bool;
+            /// Get crossfade duration in seconds.
+            pub fn crossfade_duration(&self) -> f32;
+            /// Default playback rate used by `play()` and `select_item()`.
+            pub fn default_rate(&self) -> f32;
+            /// Returns `true` if the player is muted.
+            pub fn is_muted(&self) -> bool;
+            /// Get prefetch lead time in seconds.
+            pub fn prefetch_duration(&self) -> f32;
+            /// Current playback rate (0.0 = paused).
+            pub fn rate(&self) -> f32;
+            /// Get current volume (0.0..=1.0).
+            pub fn volume(&self) -> f32;
+        }
+        to self.core.engine {
+            /// Root event bus for this player.
+            #[must_use]
+            pub fn bus(&self) -> &EventBus;
+            /// Number of EQ bands available for this player.
+            pub fn eq_band_count(&self) -> usize;
+            /// Runtime handle captured by this player's engine.
+            #[must_use]
+            pub fn runtime(&self) -> Option<&RuntimeHandle>;
+            /// Shared audio worker handle for this player's engine.
+            #[must_use]
+            pub fn worker(&self) -> &AudioWorkerHandle;
+        }
     }
 
     /// Current item index in the queue.
     pub fn current_index(&self) -> usize {
         self.core.playlist.lock().current()
-    }
-
-    /// Default playback rate used by `play()` and `select_item()`.
-    pub fn default_rate(&self) -> f32 {
-        self.core.params.default_rate()
     }
 
     /// ABR handle of the currently loaded item, if any.
@@ -52,11 +64,6 @@ impl PlayerImpl {
     #[must_use]
     pub fn engine_load(&self) -> EngineLoadSnapshot {
         self.core.engine_load.snapshot()
-    }
-
-    /// Number of EQ bands available for this player.
-    pub fn eq_band_count(&self) -> usize {
-        self.core.engine.eq_band_count()
     }
 
     /// Current media duration in seconds.
@@ -86,11 +93,6 @@ impl PlayerImpl {
         self.playback_snapshot().is_some_and(|s| s.playing)
     }
 
-    /// Returns `true` if the player is muted.
-    pub fn is_muted(&self) -> bool {
-        self.core.params.is_muted()
-    }
-
     /// Get the number of items in the queue (including consumed items).
     pub fn item_count(&self) -> usize {
         self.core.playlist.lock().len()
@@ -111,22 +113,6 @@ impl PlayerImpl {
         Some(self.playback_snapshot()?.position)
     }
 
-    /// Get prefetch lead time in seconds.
-    pub fn prefetch_duration(&self) -> f32 {
-        self.core.params.prefetch_duration()
-    }
-
-    /// Current playback rate (0.0 = paused).
-    pub fn rate(&self) -> f32 {
-        self.core.params.rate()
-    }
-
-    /// Runtime handle captured by this player's engine.
-    #[must_use]
-    pub fn runtime(&self) -> Option<&RuntimeHandle> {
-        self.core.engine.runtime()
-    }
-
     /// Get current player status.
     pub fn status(&self) -> PlayerStatus {
         *self.core.status.lock()
@@ -135,16 +121,5 @@ impl PlayerImpl {
     /// Subscribe to player events.
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.core.engine.bus().subscribe()
-    }
-
-    /// Get current volume (0.0..=1.0).
-    pub fn volume(&self) -> f32 {
-        self.core.params.volume()
-    }
-
-    /// Shared audio worker handle for this player's engine.
-    #[must_use]
-    pub fn worker(&self) -> &AudioWorkerHandle {
-        self.core.engine.worker()
     }
 }

@@ -98,6 +98,7 @@ kithara-test-utils = { workspace = true }
 
 # Utilities
 bon = { workspace = true }
+delegate = { workspace = true }
 
 # Audio engine
 firewheel = { workspace = true }

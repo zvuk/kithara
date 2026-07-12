@@ -26,8 +26,10 @@ fn make_resource(duration_secs: f64) -> Resource {
 
 #[kithara::test]
 fn offline_harness_smoke() {
-    let harness =
-        OfflinePlayerHarness::with_sample_rate(OfflinePlayerOptions::default(), SAMPLE_RATE);
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder().build(),
+        SAMPLE_RATE,
+    );
     harness.player().insert(make_resource(0.1), None, None);
     harness.player().insert(make_resource(0.1), None, None);
 

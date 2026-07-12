@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use bon::Builder;
 use firewheel::dsp::fade::FadeCurve;
 use kithara_audio::ServiceClass;
 use kithara_platform::sync::Arc;
@@ -9,51 +10,17 @@ use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
 use crate::bridge::TrackState;
 
 /// Parameters used to create a track around an owned resource.
+#[derive(Builder)]
 pub struct TrackParams {
     item_id: Option<Arc<str>>,
     src: Arc<str>,
+    #[builder(default)]
     fade_duration: f32,
+    #[builder(default)]
     prefetch_duration: f32,
     sample_rate: NonZeroU32,
+    #[builder(default = FadeCurve::SquareRoot)]
     fade_curve: FadeCurve,
-}
-
-impl TrackParams {
-    #[must_use]
-    pub fn new(src: Arc<str>, sample_rate: NonZeroU32) -> Self {
-        Self {
-            item_id: None,
-            src,
-            fade_duration: 0.0,
-            prefetch_duration: 0.0,
-            sample_rate,
-            fade_curve: FadeCurve::SquareRoot,
-        }
-    }
-
-    #[must_use]
-    pub fn with_fade_curve(mut self, fade_curve: FadeCurve) -> Self {
-        self.fade_curve = fade_curve;
-        self
-    }
-
-    #[must_use]
-    pub fn with_fade_duration(mut self, fade_duration: f32) -> Self {
-        self.fade_duration = fade_duration;
-        self
-    }
-
-    #[must_use]
-    pub fn with_item_id(mut self, item_id: Option<Arc<str>>) -> Self {
-        self.item_id = item_id;
-        self
-    }
-
-    #[must_use]
-    pub fn with_prefetch_duration(mut self, prefetch_duration: f32) -> Self {
-        self.prefetch_duration = prefetch_duration;
-        self
-    }
 }
 
 /// Per-track state in the processor arena.
@@ -61,7 +28,7 @@ impl TrackParams {
 /// Manages the `MixDSP` fade, track state, cached position/duration,
 /// and notification logic for a single loaded track.
 pub struct PlayerTrack {
-    pub(super) resource: PlayerResource,
+    pub(super) resource: Box<PlayerResource>,
     pub(super) fade: TrackFade,
     pub(super) item_id: Option<Arc<str>>,
     pub(super) state: TrackState,
@@ -101,7 +68,7 @@ impl PlayerTrack {
     /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
     /// `fade_in()` or `play()` is required to produce audio.
     #[must_use]
-    pub fn new(resource: PlayerResource, params: TrackParams) -> Self {
+    pub fn new(resource: Box<PlayerResource>, params: TrackParams) -> Self {
         let TrackParams {
             item_id,
             src: _src,

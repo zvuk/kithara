@@ -46,9 +46,10 @@ impl Playlist {
         self.items.get(index).is_some_and(Option::is_some)
     }
 
-    pub(crate) fn insert(&mut self, q: QueuedResource, at: Option<usize>) {
+    pub(crate) fn insert(&mut self, q: QueuedResource, at: Option<usize>) -> usize {
         let pos = at.map_or(self.items.len(), |i| i.min(self.items.len()));
         self.items.insert(pos, Some(q));
+        pos
     }
 
     pub(crate) fn is_announced(&self, index: usize) -> bool {

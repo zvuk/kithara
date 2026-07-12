@@ -4810,6 +4810,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64",
+ "bon",
  "bytes",
  "cbc",
  "console_error_panic_hook",
@@ -4924,6 +4925,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bevy_platform 0.19.0",
  "bon",
+ "delegate",
  "firewheel",
  "firewheel-web-audio",
  "kithara-abr",

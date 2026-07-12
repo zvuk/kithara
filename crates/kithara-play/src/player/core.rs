@@ -1,3 +1,4 @@
+use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
 use kithara_audio::{EngineLoad, StretchControls};
 use kithara_decode::GaplessMode;
@@ -157,12 +158,11 @@ impl PlayerImpl {
         item_id: Option<Arc<str>>,
         at_position: Option<usize>,
     ) {
-        let count = {
+        let (count, pos) = {
             let mut playlist = self.core.playlist.lock();
-            playlist.insert(QueuedResource { item_id, resource }, at_position);
-            playlist.len()
+            let pos = playlist.insert(QueuedResource { item_id, resource }, at_position);
+            (playlist.len(), pos)
         };
-        let pos = at_position.map_or_else(|| count.saturating_sub(1), |i| i.min(count));
         debug!(count, pos, "item inserted");
     }
 
@@ -271,20 +271,17 @@ impl Drop for PlayerImpl {
 }
 
 impl crate::api::Equalizer for PlayerImpl {
-    fn band_count(&self) -> usize {
-        self.eq_band_count()
-    }
-
-    fn gain(&self, band: usize) -> Option<f32> {
-        self.eq_gain(band)
-    }
-
-    fn reset(&self) -> Result<(), PlayError> {
-        self.reset_eq()
-    }
-
-    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        self.set_eq_gain(band, gain_db)
+    delegate! {
+        to self {
+            #[call(eq_band_count)]
+            fn band_count(&self) -> usize;
+            #[call(eq_gain)]
+            fn gain(&self, band: usize) -> Option<f32>;
+            #[call(reset_eq)]
+            fn reset(&self) -> Result<(), PlayError>;
+            #[call(set_eq_gain)]
+            fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError>;
+        }
     }
 }
 

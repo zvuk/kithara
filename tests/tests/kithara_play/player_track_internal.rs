@@ -57,11 +57,14 @@ fn make_track_from_resource(
 ) -> PlayerTrack {
     let player_resource = PlayerResource::new(resource, Arc::clone(&src), &PcmPool::default());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    let params = TrackParams::new(src, sample_rate)
-        .with_item_id(item_id)
-        .with_fade_duration(1.0)
-        .with_fade_curve(FadeCurve::SquareRoot);
-    PlayerTrack::new(player_resource, params)
+    let params = TrackParams::builder()
+        .src(src)
+        .sample_rate(sample_rate)
+        .maybe_item_id(item_id)
+        .fade_duration(1.0)
+        .fade_curve(FadeCurve::SquareRoot)
+        .build();
+    PlayerTrack::new(Box::new(player_resource), params)
 }
 
 fn make_track() -> PlayerTrack {

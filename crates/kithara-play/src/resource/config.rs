@@ -14,7 +14,7 @@ use kithara_stream::dl::Downloader;
 use portable_atomic::AtomicF32;
 use url::Url;
 
-use super::{ResourceSrc, playback_resampler::PlaybackResamplerBackend, source::parse_src};
+use super::{ResourceSrc, resampler::PlaybackResamplerBackend, source::parse_src};
 
 /// Default decoder configuration for a resource: auto backend selection with
 /// the resampler pre-selected for `B`. Exposed so callers that need a

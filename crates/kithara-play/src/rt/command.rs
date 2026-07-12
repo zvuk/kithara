@@ -178,15 +178,17 @@ impl PlayerNodeProcessor {
 
         self.evict_tracks_if_needed();
 
-        let resource = *resource;
         resource.set_host_sample_rate(self.sample_rate);
 
         let loaded_src = src.clone();
-        let params = TrackParams::new(src.clone(), self.sample_rate)
-            .with_item_id(item_id)
-            .with_fade_duration(self.crossfade.duration)
-            .with_prefetch_duration(self.prefetch_duration)
-            .with_fade_curve(self.crossfade.fade_curve());
+        let params = TrackParams::builder()
+            .src(src.clone())
+            .sample_rate(self.sample_rate)
+            .maybe_item_id(item_id)
+            .fade_duration(self.crossfade.duration)
+            .prefetch_duration(self.prefetch_duration)
+            .fade_curve(self.crossfade.fade_curve())
+            .build();
         let track = PlayerTrack::new(resource, params);
         self.tracks.insert(src, track);
 
