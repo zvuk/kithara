@@ -1,10 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
 use kithara::{
     assets::StoreOptions,
-    platform::time::Duration,
+    platform::{sync::Arc, time::Duration},
     play::{PlayerEvent, PlayerImpl, Resource, ResourceConfig},
 };
 use kithara_integration_tests::{

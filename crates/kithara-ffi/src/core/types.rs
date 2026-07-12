@@ -1,5 +1,5 @@
 use kithara_events::{TrackId, TrackStatus as TS};
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
@@ -111,7 +111,7 @@ impl std::fmt::Debug for FfiKeyOptions {
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiKeyRule {
-    pub processor: std::sync::Arc<dyn crate::observer::FfiKeyProcessor>,
+    pub processor: Arc<dyn crate::observer::FfiKeyProcessor>,
     pub headers: Option<std::collections::HashMap<String, String>>,
     pub query_params: Option<std::collections::HashMap<String, String>>,
     /// Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]

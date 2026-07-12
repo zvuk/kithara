@@ -17,6 +17,9 @@ categories = ["wasm", "concurrency"]
 # run warm-cache offline tests at CPU speed (compared against the real-time run
 # as ground truth).
 flash = []
+# Concurrency model backend. Independent from `flash`: the two features form
+# the system/loom x real/virtual execution matrix.
+loom = ["dep:loom"]
 # Async blocking detection (poll context + budgets). OFF by default and
 # referenced by no shipping crate; the inert twin keeps prod byte-identical.
 no-block = ["dep:cpu-time"]
@@ -30,6 +33,7 @@ tokio-rt-multi-thread = ["tokio/rt-multi-thread"]
 [dependencies]
 delegate = { workspace = true }
 futures = { workspace = true }
+loom = { workspace = true, optional = true }
 tracing = { workspace = true }
 web-time = { workspace = true }
 
@@ -53,7 +57,9 @@ web-sys = { workspace = true }
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false }
 kithara-test-macros = { path = "../kithara-test-macros" }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+
+assert_no_alloc = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 # Native-only: criterion pulls a native-only toolchain, never wasm.

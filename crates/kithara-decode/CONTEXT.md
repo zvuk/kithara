@@ -44,7 +44,17 @@ resolves to concrete bytes in its own virtual coordinate space.
 
 `DecoderConfig::gapless` is enabled by default. Decoders report engine-level trim
 metadata through `DecoderTrackInfo::gapless: Option<GaplessInfo>`, where
-`leading_frames` and `trailing_frames` are PCM frame counts.
+`leading_frames` and `trailing_frames` are always decoder-output PCM frame
+counts: this is the trimmer-input domain. When Apple fused decode+SRC is active,
+the factory scales source-rate container metadata once before codec open so
+`GaplessTrimmer` never sees mixed domains.
+
+For fused SRC, the factory also carries the ideal pre-trim output length
+(`ceil(source_frames * output_rate / source_rate)`) into the trimmer. At EOF the
+trimmer compares that value to the decoder-output frames it actually received
+and reduces fixed trailing trim by the bounded deficit (currently at most one
+frame). The compensation is tail-side and track-local: no measured deficit flows
+to the next track's leading trim.
 
 The contract has one owner for actual trimming:
 
@@ -166,10 +176,44 @@ This keeps the strand contained in the decode layer: it never reaches into the
 
 When `symphonia` is disabled (`default-features = false` + only `apple` / `android`), the factory has no software fallback — it errors if the active hardware backend cannot handle a codec/container.
 
+## Resampler integration
+
+`kithara-resampler` owns standalone resampler traits, config, and backend
+families such as Rubato and Glide. `kithara-decode` imports that crate for
+decoder integration and keeps only decoder-owned placement decisions.
+`DecoderConfig.resampler` carries an optional `DecoderResamplerConfig`;
+codec-embedded Apple conversion is spelled as
+`DecoderResamplerConfig::codec_embedded(target_rate)`, not as a bare sample-rate
+field.
+
+There are two decoder-side placements:
+
+- `DecoderEmbedded` lets a backend that already owns a converter emit target-rate
+  PCM directly. Apple uses the codec-embedded `AudioConverter` path in
+  `AppleCodec`.
+- `Standalone` builds the selected `kithara-resampler::ResamplerBackend` and
+  wraps the chosen decoder in `src/resampled.rs`. This works with any decoder
+  backend that compiles in the current target; invalid backend/config pairs fail
+  at construction instead of trying another backend.
+  Glide and Rubato use this generic adapter route from `kithara-resampler`.
+  On macOS/iOS, `kithara_resampler::apple::AppleAudioConverterBackend` exposes
+  the standalone PCM-to-PCM `AudioConverter` backend and receives
+  `kithara_resampler::apple::AudioToolboxConverterFactory` as its concrete
+  factory. The backend and config stay in `kithara-resampler`; shared
+  AudioToolbox FFI, `AudioConverter`, `AudioFile`, `AudioBufferList`, and POD
+  byte-copy wrappers stay in `kithara-apple`. `kithara-decode` owns codec
+  planning, gapless policy, and the codec-embedded Apple decode path.
+
+`AppleCodec::SRC_OUTPUT_MARGIN_FRAMES = 1` is not configuration. It is the
+ceil-domain slack used by fused decode+SRC when carrying the ideal output length
+into gapless trailing-trim compensation. Changing it changes the correctness
+contract, not a tunable, so it stays named and local to the Apple codec owner.
+
 ## Module layout
 
 - `src/traits.rs` — public `Decoder` trait plus typed outcomes (`DecoderChunkOutcome`, `DecoderSeekOutcome`, `InputReadOutcome`) and the `DecoderInput` source supertrait.
 - `src/factory/` — `DecoderConfig`, `DecoderFactory`, and the `DecoderBackend` selector enum. The factory boxes every backend into `Box<dyn Decoder>` so callers stay codec-agnostic.
+- `src/resampled.rs` — generic decoder wrapper for `DecoderResamplerConfig::Standalone`; it owns interleaving, pooled planar scratch, target-rate metadata, and seek/gapless domain scaling.
 - `src/composed.rs` — internal `ComposedDecoder<D: Demuxer, C: FrameCodec>` that implements `Decoder` by pairing a demuxer with a frame-level codec.
 - `src/demuxer.rs` — internal `Demuxer` trait.
 - `src/codec.rs` — internal `FrameCodec` trait and `CodecPriming`.
@@ -177,7 +221,7 @@ When `symphonia` is disabled (`default-features = false` + only `apple` / `andro
 - `src/mock.rs` — mock support for tests and the `mock` feature.
 - `src/fmp4/`, `src/mp4/` — fMP4/MP4 container helpers.
 - `src/symphonia/` (feature `symphonia`) — Symphonia `Decoder` implementation; probe and direct paths; `ReadSeekAdapter`.
-- `src/apple/` (feature `apple`, macOS / iOS) — Apple `AudioToolbox` backend over `AudioFile` / `AudioConverter` FFI.
+- `src/apple/` (feature `apple`, macOS / iOS) — Apple backend over shared `kithara-apple` `AudioFile` / `AudioConverter` wrappers.
 - `src/android/` (feature `android`, Android) — `MediaExtractor` / `MediaCodec` backend over JNI.
 - `src/gapless/` — `GaplessInfo`, `GaplessMode`, `GaplessTrimmer`, `SilenceTrimParams`, the encoder-side `probe_codec_gapless`, MP4 `udta`/`iTunSMPB` / MPEG-audio Xing/LAME tag parsers, and the trailing fade/silence trim heuristics.
 - `src/pcm_time.rs` — timeline math (`duration_for_frames`, `frames_for_duration`, PTS helpers) shared across backends.

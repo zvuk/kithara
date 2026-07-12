@@ -18,9 +18,17 @@ ignored = ["hotpath"]
 # an apple/android hardware-only build set `default-features = false`
 # and enable just the platform feature; consumers explicitly avoiding
 # libfdk-aac (LGPL + patent constraints) keep `["symphonia"]` only.
-default = ["symphonia", "fdk-aac", "client-reqwest", "tls-rustls"]
+default = ["symphonia", "fdk-aac", "resample-rubato", "client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-apple = ["dep:core-foundation", "dep:core-foundation-sys", "dep:symphonia-core"]
+apple = [
+    "dep:core-foundation",
+    "dep:core-foundation-sys",
+    "dep:kithara-apple",
+    "dep:symphonia-core",
+    "kithara-apple/audio-toolbox",
+]
+# Select Apple codec-embedded resampling as the default decoder placement.
+apple-codec-embedded-resampler = ["apple"]
 # In-tree fdk-aac adapter needs symphonia-core macros (`codec_profile!`,
 # `support_audio_codec!`) which expand to `symphonia_core::*` paths.
 android = []
@@ -32,6 +40,8 @@ symphonia = ["dep:symphonia"]
 fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]
 probe = []
 mock = []
+resample-glide = ["kithara-resampler/resample-glide"]
+resample-rubato = ["kithara-resampler/resample-rubato"]
 # HTTP backend forwarding (kithara-net reached via kithara-stream).
 client-reqwest = ["kithara-stream/client-reqwest"]
 client-wreq = ["kithara-stream/client-wreq"]
@@ -41,6 +51,7 @@ tls-native = ["kithara-stream/tls-native"]
 [dependencies]
 kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-resampler = { workspace = true, default-features = false }
 kithara-stream = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
@@ -59,6 +70,8 @@ tracing = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara-apple = { workspace = true, optional = true }
+
 core-foundation = { workspace = true, optional = true }
 core-foundation-sys = { workspace = true, optional = true }
 
@@ -71,8 +84,11 @@ ndk-context = { workspace = true }
 
 [dev-dependencies]
 kithara-storage = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
 
 [lints]
 workspace = true

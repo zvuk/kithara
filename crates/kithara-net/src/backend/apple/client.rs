@@ -1,8 +1,8 @@
-use std::{num::NonZeroU16, sync::Arc};
+use std::num::NonZeroU16;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_platform::{CancelToken, time::timeout};
+use kithara_platform::{CancelToken, sync::Arc, time::timeout};
 use url::Url;
 
 use super::{

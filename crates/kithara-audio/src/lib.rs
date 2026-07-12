@@ -2,7 +2,7 @@
 //!
 //! - [`Audio`] — generic audio pipeline running in a separate thread
 //! - [`AudioConfig`] — pipeline configuration
-//! - [`ResamplerQuality`] — sample rate conversion quality
+//! - [`ResamplerQuality`] - sample rate conversion quality
 //! - `Audio` implements [`PcmReader`] for pull-based PCM consumers
 //!
 //! See the crate `README.md` for usage and `CONTEXT.md` for threading model and architecture.
@@ -18,7 +18,6 @@ pub mod effects;
 pub mod mock;
 mod pipeline;
 mod region;
-mod resampler;
 mod runtime;
 mod traits;
 mod waveform;
@@ -35,17 +34,25 @@ pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     timestretch::StretchControls,
 };
+#[cfg(feature = "resample-glide")]
+pub use kithara_resampler::glide::{GlideBackend, GlideConfig, GlideInterpolation};
+#[cfg(feature = "resample-rubato")]
+pub use kithara_resampler::rubato::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
+pub use kithara_resampler::{
+    NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality,
+};
 pub use pipeline::{
-    config::AudioConfig,
+    config::{AudioConfig, AudioDecoderConfig, DecoderResamplerSettings},
     fetch::{EpochValidator, Fetch},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
-pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
     SeekOutcome,
 };
-pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, Waveform, WaveformAnalyzer};
+#[cfg(feature = "analysis-waveform")]
+pub use waveform::WaveformAnalyzer;
+pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, Waveform};
 pub use worker::{
     AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, handle::AudioWorkerHandle,
     types::ServiceClass,

@@ -1,10 +1,7 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_decode::PcmChunk;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 
 use super::{
     AudioWorkerSource, EngineLoad, PreloadGate,
@@ -124,13 +121,11 @@ impl kithara_stream::WorkerWake for WorkerWakeBridge {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use kithara_decode::PcmChunk;
     use kithara_platform::{
+        sync::Arc,
         thread::sleep as thread_sleep,
         time::{Duration, Instant, timeout as platform_timeout},
     };

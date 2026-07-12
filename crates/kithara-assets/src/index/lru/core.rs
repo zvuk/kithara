@@ -4,10 +4,10 @@
 use std::collections::BTreeMap;
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, OnceLock, Weak, atomic::AtomicBool},
+    sync::{OnceLock, Weak, atomic::AtomicBool},
 };
 
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::index::schema::{LruEntryFile, LruIndexFile};

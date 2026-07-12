@@ -1,5 +1,6 @@
 use kithara_decode::{
-    Decoder, GaplessMode, GaplessOutput, GaplessTrimmer, PcmChunk, duration_for_frames,
+    Decoder, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
+    duration_for_frames,
 };
 use kithara_platform::time::Duration;
 use kithara_stream::MediaInfo;
@@ -35,19 +36,19 @@ impl GaplessStage {
         mode: GaplessMode,
         media_info: Option<&MediaInfo>,
     ) -> Self {
+        let track_info = decoder.track_info();
+        let from_info =
+            |info| GaplessTrimmer::from(info).with_tail_compensation(track_info.gapless_tail);
         let trimmer = match mode {
-            GaplessMode::MediaOnly => decoder
-                .track_info()
+            GaplessMode::MediaOnly => track_info
                 .gapless
-                .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from),
-            GaplessMode::CodecPriming => decoder.track_info().gapless.map_or_else(
-                || resolve_codec_priming(decoder, media_info),
-                GaplessTrimmer::from,
-            ),
-            GaplessMode::SilenceTrim(params) => decoder.track_info().gapless.map_or_else(
-                || GaplessTrimmer::silence_trim(params),
-                GaplessTrimmer::from,
-            ),
+                .map_or_else(GaplessTrimmer::disabled, from_info),
+            GaplessMode::CodecPriming => track_info
+                .gapless
+                .map_or_else(|| resolve_codec_priming(decoder, media_info), from_info),
+            GaplessMode::SilenceTrim(params) => track_info
+                .gapless
+                .map_or_else(|| GaplessTrimmer::silence_trim(params), from_info),
             _ => GaplessTrimmer::disabled(),
         };
         Self {
@@ -60,6 +61,10 @@ impl GaplessStage {
     pub(crate) fn flush(&mut self) {
         let output = self.trimmer.flush();
         self.replace_pending(output);
+    }
+
+    pub(crate) fn set_tail_compensation(&mut self, compensation: Option<GaplessTailCompensation>) {
+        self.trimmer.set_tail_compensation(compensation);
     }
 
     /// Return the next trimmed chunk from the current output batch.

@@ -1,13 +1,13 @@
 use std::{
     ops::{Deref, DerefMut},
     panic::Location,
-    sync::Arc,
 };
 
-pub use crate::native::sync::mutex::NotAvailable;
+pub use crate::common::error::NotAvailable;
 use crate::{
+    backend::sync::{Mutex as NativeMutex, MutexGuard as NativeGuard},
     flash::diag::{self, PrimEntry, PrimKind},
-    native::sync::mutex::{Mutex as NativeMutex, MutexGuard as NativeGuard},
+    sync::Arc,
 };
 
 /// `Mutex` under `flash`: a real `parking_lot` lock — flash-blind to the

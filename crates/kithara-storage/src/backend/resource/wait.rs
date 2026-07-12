@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -11,11 +11,11 @@ use crate::{
     resource::{WaitOutcome, range_covered_by},
 };
 
-/// Watchdog timeout for the network-bound `wait_range_inner`: must exceed
-/// the `kithara-net` `total_timeout` (default 120s) so a stalled upstream is
-/// failed by the network layer (this wait then returns `Failed`) before the
-/// deadlock-watchdog fires. Only a wait that never returns after the fetch
-/// resolved is a real deadlock.
+/// Watchdog timeout for the network-bound `wait_range_inner`: sized well
+/// above the `kithara-net` `inactivity_timeout` (plus retry backoff) so a
+/// stalled upstream is failed by the network layer (this wait then returns
+/// `Failed`) before the deadlock-watchdog fires. Only a wait that never
+/// returns after the fetch resolved is a real deadlock.
 const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 
 impl<D: DriverIo> ResourceCore<D> {

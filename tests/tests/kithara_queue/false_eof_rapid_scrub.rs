@@ -1,7 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
     decode::DecoderBackend,
@@ -9,6 +7,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },

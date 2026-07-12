@@ -5,16 +5,14 @@ mod kithara {
 use std::{
     future::Future,
     net::SocketAddr,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicU32, AtomicUsize, Ordering},
 };
 
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_platform::{
     CancelToken,
+    sync::Arc,
     time::Duration,
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -90,7 +88,6 @@ fn fast_options(max_retries: u32) -> NetOptions {
             max_delay: Duration::from_millis(10),
         })
         .inactivity_timeout(Duration::from_millis(30))
-        .total_timeout(Duration::from_secs(5))
         .build()
 }
 
@@ -102,7 +99,6 @@ fn stream_options(inactivity_ms: u64) -> NetOptions {
             max_delay: Duration::from_millis(10),
         })
         .inactivity_timeout(Duration::from_millis(inactivity_ms))
-        .total_timeout(Duration::from_secs(5))
         .build()
 }
 

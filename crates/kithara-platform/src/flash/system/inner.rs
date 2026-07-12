@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     panic::Location,
     sync::{
-        Arc, LazyLock, OnceLock, Weak,
+        LazyLock,
         atomic::{AtomicU64, Ordering},
     },
     thread::Thread,
@@ -12,7 +12,8 @@ use super::{pace::Pacer, sched::Entry, wake::Wake};
 use crate::{
     common::time::Instant as RealInstant,
     flash::{diag::PrimKind, ids::ThreadKey},
-    native::sync::Mutex,
+    sync::{Arc, OnceLock, Weak},
+    system::lock::Mutex,
 };
 
 /// Engine condvar id: one per stateful-primitive latch (Condvar/Notify/channel

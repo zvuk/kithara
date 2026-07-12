@@ -30,7 +30,7 @@ time::sleep(time::Duration::from_millis(10)).await;
 
 ## Key types and entry points
 
-- `Mutex<T>` / `RwLock<T>` / `Condvar` — synchronization wrappers over `parking_lot` (native) or `wasm_safe_thread` (wasm32).
+- `Arc<T>` / atomics / `Mutex<T>` / `RwLock<T>` / `Condvar` - synchronization primitives selected from the system, Loom, or wasm backend.
 - `MaybeSend` / `MaybeSync` — conditional trait bounds (`Send`/`Sync` on native, blanket no-op on wasm32).
 - `thread::{spawn, spawn_named, is_main_thread, is_worker_thread, assert_main_thread, park_timeout, paced_backoff, unpark}` — thread primitives with thread-affinity helpers.
 - `tokio::task::{spawn, spawn_blocking, yield_now}` — runtime task primitives (native `tokio`, worker-aware on wasm).
@@ -42,6 +42,7 @@ time::sleep(time::Duration::from_millis(10)).await;
 ## Features
 
 - `flash` — native test-only virtual clock and flash-aware primitive wrappers.
+- `loom` - opt-in native concurrency backend used only by `#[kithara::test(loom)]`; composes independently with `flash`.
 - `signal` — forwards `tokio::signal`.
 - `tokio-net` — enables native `tokio::net` and async I/O extension traits.
 - `tokio-rt-multi-thread` — forwards Tokio's multi-thread runtime feature.

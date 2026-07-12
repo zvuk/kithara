@@ -1,23 +1,38 @@
-use std::{
-    num::{NonZeroU32, NonZeroUsize},
-    sync::Arc,
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::{AssetStore, FlushHub, StoreOptions};
-use kithara_audio::{AudioWorkerHandle, EngineLoad, ResamplerQuality, StretchControls};
+use kithara_audio::{AudioDecoderConfig, AudioWorkerHandle, EngineLoad, StretchControls};
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{DecodeError, DecoderBackend};
+use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 use kithara_hls::{KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
 use portable_atomic::AtomicF32;
 use url::Url;
 
-use super::{ResourceSrc, source::parse_src};
+use super::{ResourceSrc, playback_resampler::PlaybackResamplerBackend, source::parse_src};
+
+/// Default decoder configuration for a resource: auto backend selection with
+/// the resampler pre-selected for `B`. Exposed so callers that need a
+/// specific decoder backend can start from this default and override just
+/// [`AudioDecoderConfig::backend`] rather than losing the resampler setup.
+#[must_use]
+pub fn default_resource_decoder_config<B>() -> AudioDecoderConfig<B>
+where
+    B: Default,
+{
+    AudioDecoderConfig::builder()
+        .resampler(
+            kithara_audio::DecoderResamplerSettings::builder()
+                .backend(B::default())
+                .build(),
+        )
+        .build()
+}
 
 /// Default number of preload chunks.
 const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
@@ -26,16 +41,14 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 #[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct ResourceConfig {
+pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Initial ABR mode passed to the HLS stream.
     #[builder(default)]
     pub(crate) initial_abr_mode: AbrMode,
-    /// Selects the decoder backend explicitly.
-    #[builder(default)]
-    pub(crate) decoder_backend: DecoderBackend,
-    /// How leading/trailing PCM is trimmed after decode.
-    #[builder(default)]
-    pub(crate) gapless_mode: kithara_decode::GaplessMode,
+    /// Decoder construction settings: backend selection, gapless mode, and
+    /// decoder-side resampling.
+    #[builder(default = default_resource_decoder_config())]
+    pub(crate) decoder: AudioDecoderConfig<B>,
     /// Encryption key handling configuration.
     #[builder(default)]
     pub(crate) keys: KeyOptions,
@@ -85,9 +98,6 @@ pub struct ResourceConfig {
     pub(crate) stretch: Option<Arc<StretchControls>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     pub(crate) worker: Option<AudioWorkerHandle>,
-    /// Resampling quality preset.
-    #[builder(default)]
-    pub(crate) resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
     pub(crate) src: ResourceSrc,
     /// Method used by HLS size estimation to probe segment lengths.
@@ -104,7 +114,7 @@ pub struct ResourceConfig {
     pub(crate) preferred_peak_bitrate: f64,
 }
 
-impl ResourceConfig {
+impl ResourceConfig<PlaybackResamplerBackend> {
     /// Terminal constructor — parses input and returns a fully-built config.
     ///
     /// # Errors
@@ -125,7 +135,10 @@ impl ResourceConfig {
     /// absolute path. See [`Self::parse_src`].
     pub fn for_src<S: AsRef<str>>(
         input: S,
-    ) -> Result<ResourceConfigBuilder<resource_config_builder::SetSrc>, DecodeError> {
+    ) -> Result<
+        ResourceConfigBuilder<PlaybackResamplerBackend, resource_config_builder::SetSrc>,
+        DecodeError,
+    > {
         parse_src(input).map(|src| Self::builder().src(src))
     }
 }
@@ -134,6 +147,7 @@ impl ResourceConfig {
 mod tests {
     use std::path::Path;
 
+    use kithara_audio::{DecoderResamplerSettings, ResamplerBackend, ResamplerOptions};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -208,6 +222,61 @@ mod tests {
             .build();
         let audio_config = config.build_hls_config().unwrap();
         assert!(audio_config.stream.bus.is_some());
+    }
+
+    #[kithara::test]
+    fn config_resampler_options_propagate_to_file_config() {
+        let decoder = AudioDecoderConfig::builder()
+            .resampler(
+                DecoderResamplerSettings::builder()
+                    .backend(PlaybackResamplerBackend::default())
+                    .options(ResamplerOptions::builder().chunk_size(2_048).build())
+                    .build(),
+            )
+            .build();
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
+            .unwrap()
+            .decoder(decoder)
+            .build();
+        let audio_config = config.build_file_config();
+
+        assert_eq!(
+            audio_config
+                .decoder
+                .resampler
+                .as_ref()
+                .expect("resampler config")
+                .options
+                .chunk_size,
+            2_048
+        );
+    }
+
+    #[kithara::test]
+    fn config_explicit_resampler_backend_propagates_to_hls_config() {
+        let decoder = AudioDecoderConfig::builder()
+            .resampler(
+                DecoderResamplerSettings::builder()
+                    .backend(PlaybackResamplerBackend::default())
+                    .build(),
+            )
+            .build();
+        let config = ResourceConfig::for_src("https://example.com/live.m3u8")
+            .unwrap()
+            .decoder(decoder)
+            .build();
+        let audio_config = config.build_hls_config().unwrap();
+
+        assert_eq!(
+            audio_config
+                .decoder
+                .resampler
+                .as_ref()
+                .expect("resampler config")
+                .backend
+                .name(),
+            PlaybackResamplerBackend::default().name()
+        );
     }
 
     #[kithara::test]

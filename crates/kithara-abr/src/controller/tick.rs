@@ -1,7 +1,10 @@
 use std::sync::atomic::Ordering;
 
 use kithara_events::{AbrEvent, AbrReason, BandwidthSource, VariantIndex};
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use kithara_test_utils::kithara;
 use tracing::{debug, trace};
 
@@ -152,8 +155,8 @@ impl AbrController {
 /// heterogeneous cascade case in `decide()` and a single Option-resolver
 /// is the recommended fix.
 struct TickContext {
-    entry: std::sync::Arc<PeerEntry>,
-    peer: std::sync::Arc<dyn crate::abr::Abr>,
+    entry: Arc<PeerEntry>,
+    peer: Arc<dyn crate::abr::Abr>,
 }
 
 impl TickContext {

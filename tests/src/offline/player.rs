@@ -1,8 +1,9 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};
 use kithara::{
     audio::PcmReader,
+    platform::sync::Arc,
     play::{
         PlayerNode, Resource, SharedEq, TrackTransition,
         bridge::{PlaybackShared, PlayerCmd, SlotControl, slot_channels},

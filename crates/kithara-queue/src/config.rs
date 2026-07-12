@@ -1,7 +1,7 @@
-use std::{fmt, num::NonZeroUsize, sync::Arc};
+use std::{fmt, num::NonZeroUsize};
 
 use bon::Builder;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.
@@ -36,7 +36,7 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct QueueConfig {
-    /// Max concurrent `Loader` in-flight loads. Default: 3.
+    /// Max concurrent background prefetch loads. Default: 3.
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
 

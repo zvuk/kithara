@@ -1,15 +1,13 @@
-#![allow(unsafe_code)]
+use std::mem::size_of;
 
+use kithara_apple::audio_toolbox::{
+    AudioStreamBasicDescription, AudioStreamPacketDescription, pod_to_vec, pod_write_to_slice,
+};
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, PrerollHint};
 use num_traits::ToPrimitive;
 
-use super::{
-    audio_file::AppleAudioFile,
-    consts::Consts,
-    ffi::{AudioStreamBasicDescription, AudioStreamPacketDescription},
-    flac::StreamInfo,
-};
+use super::{audio_file::AppleAudioFile, consts::Consts, flac::StreamInfo};
 use crate::{
     GaplessInfo,
     codec::CodecPriming,
@@ -38,7 +36,7 @@ fn sample_rate_from_asbd(rate: f64) -> Option<u32> {
 pub(crate) struct AppleAudioFileDemuxer {
     file: AppleAudioFile,
     /// `Some(packets_per_call)` for CBR (`LinearPCM`) — every `next_frame`
-    /// issues one batched `AudioFileReadPacketData` for that many
+    /// issues one batched `audio_file_read_packet_data` for that many
     /// packets. `None` for VBR (MP3, ALAC) — one packet per call so
     /// each `Frame` carries its own `AudioStreamPacketDescription`.
     cbr_batch_packets: Option<u32>,
@@ -71,18 +69,18 @@ impl AppleAudioFileDemuxer {
     /// match arm here.
     fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
         Some(match (codec, container) {
-            (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::kAudioFileWAVEType,
-            (AudioCodec::Mp3, ContainerFormat::MpegAudio) => Consts::kAudioFileMP3Type,
-            (AudioCodec::Flac, ContainerFormat::Flac) => Consts::kAudioFileFLACType,
-            (AudioCodec::Alac, ContainerFormat::Mp4) => Consts::kAudioFileM4AType,
-            (AudioCodec::Alac, ContainerFormat::Caf) => Consts::kAudioFileCAFType,
+            (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::FILE_WAVE_TYPE,
+            (AudioCodec::Mp3, ContainerFormat::MpegAudio) => Consts::FILE_MP3_TYPE,
+            (AudioCodec::Flac, ContainerFormat::Flac) => Consts::FILE_FLAC_TYPE,
+            (AudioCodec::Alac, ContainerFormat::Mp4) => Consts::FILE_M4A_TYPE,
+            (AudioCodec::Alac, ContainerFormat::Caf) => Consts::FILE_CAF_TYPE,
             (AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2, ContainerFormat::Mp4) => {
-                Consts::kAudioFileM4AType
+                Consts::FILE_M4A_TYPE
             }
             (
                 AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
                 ContainerFormat::Adts,
-            ) => Consts::kAudioFileAAC_ADTSType,
+            ) => Consts::FILE_AAC_ADTS_TYPE,
             _ => return None,
         })
     }
@@ -117,8 +115,8 @@ impl AppleAudioFileDemuxer {
         };
         let asbd = file.data_format();
         let total_packets = file.packet_count();
-        let frames_per_packet = if asbd.mFramesPerPacket > 0 {
-            asbd.mFramesPerPacket
+        let frames_per_packet = if asbd.frames_per_packet > 0 {
+            asbd.frames_per_packet
         } else {
             4096
         };
@@ -136,7 +134,7 @@ impl AppleAudioFileDemuxer {
             .flatten();
 
         let channels =
-            u16::try_from(asbd.mChannelsPerFrame).map_err(|_| DecodeError::InvalidData {
+            u16::try_from(asbd.channels_per_frame).map_err(|_| DecodeError::InvalidData {
                 detail: "apple.audio_file: invalid channel count",
             })?;
         if channels == 0 {
@@ -144,7 +142,7 @@ impl AppleAudioFileDemuxer {
                 detail: "apple.audio_file: invalid zero channel count",
             });
         }
-        let Some(sample_rate) = sample_rate_from_asbd(asbd.mSampleRate) else {
+        let Some(sample_rate) = sample_rate_from_asbd(asbd.sample_rate) else {
             return Err(DecodeError::InvalidSampleRate {
                 resource: "apple.audio_file",
             });
@@ -170,7 +168,7 @@ impl AppleAudioFileDemuxer {
             gapless: None,
         };
 
-        let (cbr_batch_packets, buf_cap) = if asbd.mBytesPerPacket == 0 {
+        let (cbr_batch_packets, buf_cap) = if asbd.bytes_per_packet == 0 {
             // VBR. A streaming open reports no max packet size, so fall back
             // to the FLAC STREAMINFO frame bound (FLAC frames reach ~16-19
             // KiB, far past the 4 KiB floor) when AudioFile can't supply one.
@@ -179,9 +177,9 @@ impl AppleAudioFileDemuxer {
             (None, reported.max(flac_bound).max(4096))
         } else {
             let packets = Self::CBR_BATCH_TARGET_BYTES
-                .checked_div(asbd.mBytesPerPacket)
+                .checked_div(asbd.bytes_per_packet)
                 .map_or(1, |packets| packets.max(1));
-            let bytes = packets.saturating_mul(asbd.mBytesPerPacket);
+            let bytes = packets.saturating_mul(asbd.bytes_per_packet);
             (
                 Some(packets),
                 usize::try_from(bytes).map_err(DecodeError::backend)?,
@@ -312,17 +310,14 @@ impl Demuxer for AppleAudioFileDemuxer {
         };
 
         self.last_read_len = usize::try_from(bytes).map_err(DecodeError::backend)?;
-        // SAFETY: `AudioStreamPacketDescription` is `#[repr(C)]` POD
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                std::ptr::from_ref(&desc).cast::<u8>(),
-                self.last_packet_desc_blob.as_mut_ptr(),
-                size_of::<AudioStreamPacketDescription>(),
-            );
+        if !pod_write_to_slice(&desc, &mut self.last_packet_desc_blob) {
+            return Err(DecodeError::InvalidData {
+                detail: "packet descriptor buffer has invalid Apple ABI size",
+            });
         }
 
-        let frames = if desc.mVariableFramesInPacket > 0 {
-            u64::from(desc.mVariableFramesInPacket)
+        let frames = if desc.variable_frames_in_packet > 0 {
+            u64::from(desc.variable_frames_in_packet)
         } else {
             u64::from(self.frames_per_packet)
         };
@@ -380,16 +375,7 @@ impl Demuxer for AppleAudioFileDemuxer {
 }
 
 fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
-    let mut out = vec![0u8; size_of::<AudioStreamBasicDescription>()];
-    // SAFETY: `AudioStreamBasicDescription` is `#[repr(C)]` POD; we copy
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            std::ptr::from_ref(asbd).cast::<u8>(),
-            out.as_mut_ptr(),
-            out.len(),
-        );
-    }
-    out
+    pod_to_vec(asbd)
 }
 
 #[cfg(test)]
@@ -397,12 +383,10 @@ fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
 mod tests {
     use std::{
         io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
-        sync::{
-            Arc,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-        },
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
+    use kithara_platform::sync::Arc;
     use kithara_stream::{
         AudioCodec, ContainerFormat, NotReadyCause, PendingReason, SourcePhase, StreamPending,
     };

@@ -5,10 +5,9 @@ use std::{
     fs,
     io::{self, Error as IoError, ErrorKind},
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{
     AtomicChunked, AvailabilityObserver, MmapDriver, MmapOptions, MmapResource, OpenIntent,
     OpenMode, Resource, ResourceRead, ResourceStatus, StorageError, StorageResource,

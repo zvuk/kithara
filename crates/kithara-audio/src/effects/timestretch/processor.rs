@@ -1,9 +1,7 @@
-use std::sync::{Arc, atomic::Ordering};
-
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_platform::sync::Arc;
 use kithara_stretch::{StretchBackend, StretchKind, StretchOptions, build_backend};
-use portable_atomic::AtomicF32;
 use tracing::warn;
 
 use super::controls::StretchControls;
@@ -16,25 +14,21 @@ use crate::{
 /// from the shared [`StretchControls`] each chunk:
 ///
 /// - key-lock **on**: drives the backend with the inverse stretch factor
-///   (`1 / speed`), pitch held at `1.0`, and pins the resampler to `1.0`;
-/// - key-lock **off**: a true pass-through — the chunk is forwarded untouched
-///   and `speed` is routed to the resampler instead (pitch follows speed).
+///   (`1 / speed`) and pitch held at `1.0`;
+/// - key-lock **off**: drives the same stretch factor and sets pitch to
+///   `speed` for vinyl-style playback.
 ///
-/// In key-lock mode an optional [`RegionPlan`] (also on the controls) maps
+/// At unity speed with no region plan the slot is a byte-identical
+/// passthrough, so default playback keeps the old no-DSP behavior.
+///
+/// An optional [`RegionPlan`] (also on the controls) maps
 /// `frame_offset` to per-region ratio corrections: chunks split at segment
 /// boundaries and the effective stretch is `1/speed × ratio_correction`.
 /// The backend is flushed + reset only when a boundary actually moves the
 /// ratio beyond `RATIO_EPS`; equal-ratio boundaries cost nothing.
 ///
-/// It owns the speed split: each chunk it writes the resampler's rate atomic
-/// (`1.0` when key-locked, else `speed`). Both effects run sequentially on the
-/// same worker thread, so the resampler always reads the value written for the
-/// current chunk. See the crate `CONTEXT.md` ("Live stretch controls").
 pub struct TimeStretchProcessor {
     controls: Arc<StretchControls>,
-    /// Resampler rate atomic this slot drives. Shared with the resampler that
-    /// follows it in the chain.
-    resampler_rate: Arc<AtomicF32>,
     backend: Box<dyn StretchBackend>,
     /// Most recent input meta, carried onto each output chunk.
     last_input_meta: Option<PcmMeta>,
@@ -50,53 +44,42 @@ pub struct TimeStretchProcessor {
     current_kind: StretchKind,
     /// Interleaved output scratch, reused across calls (alloc-free steady state).
     scratch: Vec<f32>,
-    /// Whether the previous chunk ran through the backend (key-lock on). Drives
-    /// a clean backend reset on an on->off transition.
+    /// Whether previous input ran through the backend. Drives a clean backend
+    /// reset when the processor returns to unity passthrough.
     active: bool,
     /// Last stretch factor pushed to the backend; avoids redundant updates.
     applied_stretch: f64,
+    /// Last pitch factor pushed to the backend; avoids redundant updates.
+    applied_pitch: f64,
 }
 
 impl TimeStretchProcessor {
     /// Floor for the shared playback speed before inverting to a stretch
-    /// factor. Higher than the resampler's `0.01` floor: at `speed = 0.05` the
-    /// stretch is already 20x, beyond which time-stretch quality collapses, so
-    /// there is no point clamping lower.
+    /// factor. At `speed = 0.05` the stretch is already 20x, beyond which
+    /// time-stretch quality collapses, so there is no point clamping lower.
     const MIN_SPEED: f32 = 0.05;
     /// Re-apply the stretch ratio to the backend only when it moves this much.
     const RATIO_EPS: f64 = 1e-4;
 
     /// Build the slot at the source `spec`, driven by the shared `controls`.
-    /// `resampler_rate` is the atomic the following resampler reads; this slot
-    /// is its sole writer.
-    pub fn new(
-        controls: Arc<StretchControls>,
-        resampler_rate: Arc<AtomicF32>,
-        spec: PcmSpec,
-        pool: PcmPool,
-    ) -> Self {
+    pub fn new(controls: Arc<StretchControls>, spec: PcmSpec, pool: PcmPool) -> Self {
         let current_kind = controls.backend();
         let options = Self::options_for(spec, &pool);
-        let mut backend = build_backend(current_kind, &options);
-        if let Err(e) = backend.set_pitch(1.0) {
-            warn!(error = %e, "time-stretch set_pitch(1.0) failed");
-        }
-        let me = Self {
+        let backend = build_backend(current_kind, &options);
+        Self {
             backend,
             current_kind,
             controls,
-            resampler_rate,
             pool,
             spec,
             applied_stretch: f64::NAN,
+            applied_pitch: f64::NAN,
             active: false,
             last_input_meta: None,
             scratch: Vec::new(),
             plan: None,
             region: None,
-        };
-        me.route_rate();
-        me
+        }
     }
 
     /// Push `stretch` to the backend when it moved beyond `RATIO_EPS`. At a
@@ -119,6 +102,17 @@ impl TimeStretchProcessor {
         match self.backend.set_ratio(stretch) {
             Ok(()) => self.applied_stretch = stretch,
             Err(e) => warn!(error = %e, "time-stretch set_ratio failed"),
+        }
+    }
+
+    /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.
+    fn apply_pitch(&mut self, pitch: f64) {
+        if !self.applied_pitch.is_nan() && (pitch - self.applied_pitch).abs() <= Self::RATIO_EPS {
+            return;
+        }
+        match self.backend.set_pitch(pitch) {
+            Ok(()) => self.applied_pitch = pitch,
+            Err(e) => warn!(error = %e, "time-stretch set_pitch failed"),
         }
     }
 
@@ -160,11 +154,9 @@ impl TimeStretchProcessor {
     fn rebuild_backend(&mut self, kind: StretchKind) {
         let options = Self::options_for(self.spec, &self.pool);
         self.backend = build_backend(kind, &options);
-        if let Err(e) = self.backend.set_pitch(1.0) {
-            warn!(error = %e, "time-stretch set_pitch(1.0) failed");
-        }
         self.current_kind = kind;
         self.applied_stretch = f64::NAN;
+        self.applied_pitch = f64::NAN;
         self.active = false;
     }
 
@@ -185,17 +177,6 @@ impl TimeStretchProcessor {
         (next, crossed)
     }
 
-    /// Route the playback speed: the resampler stays at `1.0` while key-locked
-    /// (this slot owns the tempo) and follows `speed` otherwise.
-    fn route_rate(&self) {
-        let rate = if self.controls.keylock() {
-            1.0
-        } else {
-            self.controls.speed()
-        };
-        self.resampler_rate.store(rate, Ordering::Relaxed);
-    }
-
     /// Pull the live region plan handle; on a swap drop the region cursor.
     fn sync_plan(&mut self) {
         let want = self.controls.region_plan();
@@ -209,15 +190,28 @@ impl TimeStretchProcessor {
             self.region = None;
         }
     }
+
+    fn unity_passthrough(&self, speed: f32) -> bool {
+        self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON
+    }
+
+    fn reset_for_passthrough(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.backend.reset();
+        self.applied_stretch = f64::NAN;
+        self.applied_pitch = f64::NAN;
+        self.active = false;
+    }
 }
 
 impl AudioEffect for TimeStretchProcessor {
     fn flush(&mut self) -> Option<PcmChunk> {
-        // Only drain the backend when it actually processed input. In bypass
-        // (key-lock off) `process` forwards chunks untouched and never feeds
-        // the backend, so flushing it would emit its algorithmic-latency
-        // buffer as spurious trailing zeros — a silent tail appended after
-        // gapless trim, breaking seamless joins. Nothing was buffered: skip.
+        // Only drain the backend when it actually processed input. In unity
+        // passthrough `process` forwards chunks untouched and never feeds the
+        // backend, so flushing it would emit its algorithmic-latency buffer as
+        // spurious trailing zeros. Nothing was buffered: skip.
         if !self.active {
             return None;
         }
@@ -230,10 +224,6 @@ impl AudioEffect for TimeStretchProcessor {
     }
 
     fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
-        // Route the resampler rate first, before any accumulation early-return,
-        // so a live key-lock toggle reaches the resampler on the same chunk.
-        self.route_rate();
-
         let spec_changed = chunk.spec() != self.spec;
         if spec_changed {
             self.spec = chunk.spec();
@@ -243,24 +233,24 @@ impl AudioEffect for TimeStretchProcessor {
             self.rebuild_backend(want_kind);
         }
 
-        if !self.controls.keylock() {
-            // Bypass: forward untouched. Clear any buffer left from a prior
-            // key-locked run so the next on-transition starts clean.
-            if self.active {
-                self.backend.reset();
-                self.applied_stretch = f64::NAN;
-                self.active = false;
-            }
+        self.sync_plan();
+        let speed = self.controls.speed().max(Self::MIN_SPEED);
+        if self.unity_passthrough(speed) {
+            self.reset_for_passthrough();
             return Some(chunk);
         }
 
         self.active = true;
-        self.sync_plan();
         self.last_input_meta = Some(chunk.meta);
         self.scratch.clear();
 
-        let speed = self.controls.speed().max(Self::MIN_SPEED);
         let base = 1.0 / f64::from(speed);
+        let pitch = if self.controls.keylock() {
+            1.0
+        } else {
+            f64::from(speed)
+        };
+        self.apply_pitch(pitch);
         let channels = usize::from(self.spec.channels.max(1));
         let frames = chunk.frames();
         let samples = &chunk.samples;
@@ -294,6 +284,7 @@ impl AudioEffect for TimeStretchProcessor {
         self.scratch.clear();
         self.last_input_meta = None;
         self.applied_stretch = f64::NAN;
+        self.applied_pitch = f64::NAN;
         self.active = false;
         self.region = None;
     }
@@ -389,25 +380,25 @@ mod tests {
         }
     }
 
-    /// Build a key-locked processor at `speed` on `kind`, plus the resampler
-    /// rate atomic it drives.
-    fn keylocked(kind: StretchKind, speed: f32) -> (TimeStretchProcessor, Arc<AtomicF32>) {
+    fn processor(controls: Arc<StretchControls>) -> TimeStretchProcessor {
+        TimeStretchProcessor::new(controls, spec(), PcmPool::default().clone())
+    }
+
+    fn keylocked(kind: StretchKind, speed: f32) -> TimeStretchProcessor {
         let controls = StretchControls::new(speed);
         controls.set_keylock(true);
         controls.set_backend(kind);
-        let resampler_rate = Arc::new(AtomicF32::new(1.0));
-        let fx = TimeStretchProcessor::new(
-            controls,
-            Arc::clone(&resampler_rate),
-            spec(),
-            PcmPool::default().clone(),
-        );
-        (fx, resampler_rate)
+        processor(controls)
     }
 
-    fn run(kind: StretchKind, speed: f32, in_frames: usize) -> Vec<f32> {
-        let input = sine(in_frames);
-        let (mut fx, _rate) = keylocked(kind, speed);
+    fn vinyl(kind: StretchKind, speed: f32) -> TimeStretchProcessor {
+        let controls = StretchControls::new(speed);
+        controls.set_keylock(false);
+        controls.set_backend(kind);
+        processor(controls)
+    }
+
+    fn render(fx: &mut TimeStretchProcessor, input: &[f32]) -> Vec<f32> {
         let mut out: Vec<f32> = Vec::new();
         let block = 4096 * usize::from(Consts::CH);
         for data in input.chunks(block) {
@@ -436,12 +427,22 @@ mod tests {
         out
     }
 
+    fn run_keylocked(kind: StretchKind, speed: f32, in_frames: usize) -> Vec<f32> {
+        let input = sine(in_frames);
+        render(&mut keylocked(kind, speed), &input)
+    }
+
+    fn run_vinyl(kind: StretchKind, speed: f32, in_frames: usize) -> Vec<f32> {
+        let input = sine(in_frames);
+        render(&mut vinyl(kind, speed), &input)
+    }
+
     /// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
     /// Shared across every compiled-in backend.
     fn assert_half_speed_contract(kind: StretchKind) {
         let channels = usize::from(Consts::CH);
         let in_frames = usize::try_from(Consts::SR).unwrap() * 2; // 2 s
-        let out = run(kind, 0.5, in_frames);
+        let out = run_keylocked(kind, 0.5, in_frames);
         let out_frames = out.len() / channels;
 
         // Both C++ backends emit fixed-length output with leading latency-fill
@@ -468,20 +469,10 @@ mod tests {
     }
 
     fn assert_unity_contract(kind: StretchKind) {
-        let channels = usize::from(Consts::CH);
         let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
-        let out = run(kind, 1.0, in_frames);
-        let out_frames = out.len() / channels;
-        assert!(
-            out_frames * 10 >= in_frames * 9 && out_frames * 10 <= in_frames * 12,
-            "{kind:?}: expected ~1x duration, got {out_frames} from {in_frames}"
-        );
-        let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
-        let peak = dominant_bin(&mono);
-        assert!(
-            peak.abs_diff(expected_bin(Consts::F0)) <= 3,
-            "{kind:?}: pitch moved at unity speed"
-        );
+        let input = sine(in_frames);
+        let out = render(&mut keylocked(kind, 1.0), &input);
+        assert_eq!(out, input, "{kind:?}: unity speed must bypass byte-exact");
     }
 
     #[cfg(feature = "stretch-signalsmith")]
@@ -501,7 +492,7 @@ mod tests {
     #[kithara::test]
     fn output_meta_preserves_decoder_timeline() {
         let channels = usize::from(Consts::CH);
-        let (mut fx, _rate) = keylocked(StretchKind::default(), 0.5);
+        let mut fx = keylocked(StretchKind::default(), 0.5);
         let cf = 1024usize;
         let block = sine(cf);
         let mut fed_ends = std::collections::HashSet::new();
@@ -542,68 +533,42 @@ mod tests {
         }
     }
 
-    /// Key-lock off is a true pass-through: PCM is forwarded byte-identical and
-    /// the speed is routed to the resampler (which then moves pitch with it).
+    /// Key-lock off is vinyl mode: speed changes duration and pitch in the
+    /// stretch slot, with no resampler-rate handoff.
     #[kithara::test]
-    fn bypass_forwards_input_and_routes_speed_to_resampler() {
-        let controls = StretchControls::new(1.5);
-        let rate = Arc::new(AtomicF32::new(1.0));
-        let mut fx = TimeStretchProcessor::new(
-            Arc::clone(&controls),
-            Arc::clone(&rate),
-            spec(),
-            PcmPool::default().clone(),
-        );
-        let input = sine(8192);
-        let block = 4096 * usize::from(Consts::CH);
-        let mut out: Vec<f32> = Vec::new();
-        for data in input.chunks(block) {
-            if let Some(c) = fx.process(chunk(data)) {
-                out.extend_from_slice(&c.samples);
-            }
-        }
-        assert_eq!(out, input, "key-lock off forwards PCM untouched");
+    fn vinyl_speed_scales_duration_and_pitch() {
+        let channels = usize::from(Consts::CH);
+        let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
+        let out = run_vinyl(StretchKind::default(), 2.0, in_frames);
+        let out_frames = out.len() / channels;
         assert!(
-            (rate.load(Ordering::Relaxed) - 1.5).abs() < 1e-6,
-            "speed routed to the resampler in bypass"
+            out_frames * 10 >= in_frames * 4 && out_frames * 10 <= in_frames * 6,
+            "vinyl 2x should roughly halve duration, got {out_frames} from {in_frames}"
+        );
+        let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
+        assert!(
+            mono.len() >= Consts::N,
+            "not enough vinyl output for the FFT window"
+        );
+        let peak = dominant_bin(&mono);
+        let want = expected_bin(Consts::F0 * 2.0);
+        assert!(
+            peak.abs_diff(want) <= 4,
+            "vinyl pitch did not follow speed: peak bin {peak}, expected {want}"
         );
     }
 
-    /// Key-lock on pins the resampler to unity (this slot owns the tempo).
     #[kithara::test]
-    fn keylock_pins_resampler_to_unity() {
-        let (mut fx, rate) = keylocked(StretchKind::default(), 0.5);
-        let _ = fx.process(chunk(&sine(4096)));
-        assert!(
-            (rate.load(Ordering::Relaxed) - 1.0).abs() < 1e-6,
-            "resampler pinned to 1.0 while key-locked"
-        );
-    }
-
-    /// Flipping key-lock mid-stream switches routing live: bypass + rate=speed
-    /// before, pitch-preserving stretch + rate=1.0 after — no reload.
-    #[kithara::test]
-    fn live_keylock_toggle_switches_routing_and_stretches() {
-        let controls = StretchControls::new(0.5);
-        let rate = Arc::new(AtomicF32::new(1.0));
-        let mut fx = TimeStretchProcessor::new(
-            Arc::clone(&controls),
-            Arc::clone(&rate),
-            spec(),
-            PcmPool::default().clone(),
-        );
-        let block = sine(4096);
-
-        // Phase 1: key-lock off -> untouched passthrough, speed routed out.
-        let off = fx.process(chunk(&block)).expect("bypass emits every chunk");
-        assert_eq!(&off.samples[..], &block[..], "off: PCM forwarded untouched");
-        assert!(
-            (rate.load(Ordering::Relaxed) - 0.5).abs() < 1e-6,
-            "off: speed routed to resampler"
-        );
-
-        // Phase 2: toggle on mid-stream.
+    fn live_speed_change_updates_stretch_duration() {
+        let controls = StretchControls::new(1.0);
         controls.set_keylock(true);
+        controls.set_backend(StretchKind::default());
+        let mut fx = processor(Arc::clone(&controls));
+        let block = sine(4096);
+        let unity = fx.process(chunk(&block)).expect("unity bypass emits");
+        assert_eq!(&unity.samples[..], &block[..], "unity phase bypasses");
+
+        controls.set_speed(0.5);
         let mut stretched: Vec<f32> = Vec::new();
         for _ in 0..24 {
             if let Some(c) = fx.process(chunk(&block)) {
@@ -614,9 +579,47 @@ mod tests {
             stretched.extend_from_slice(&c.samples);
         }
         assert!(
-            (rate.load(Ordering::Relaxed) - 1.0).abs() < 1e-6,
-            "on: resampler pinned to unity"
+            stretched.len() > block.len() * 24,
+            "half-speed key-lock should lengthen output after a live speed change"
         );
+    }
+
+    /// Flipping key-lock mid-stream switches from vinyl pitch shift to
+    /// pitch-preserving stretch — no reload.
+    #[kithara::test]
+    fn live_keylock_toggle_switches_pitch_mode() {
+        let controls = StretchControls::new(0.5);
+        controls.set_keylock(false);
+        controls.set_backend(StretchKind::default());
+        let mut fx = processor(Arc::clone(&controls));
+        let block = sine(4096);
+
+        let mut vinyl_out: Vec<f32> = Vec::new();
+        for _ in 0..24 {
+            if let Some(c) = fx.process(chunk(&block)) {
+                vinyl_out.extend_from_slice(&c.samples);
+            }
+        }
+        let vinyl_mono: Vec<f32> = vinyl_out
+            .iter()
+            .step_by(usize::from(Consts::CH))
+            .copied()
+            .collect();
+        assert!(
+            dominant_bin(&vinyl_mono).abs_diff(expected_bin(Consts::F0 * 0.5)) <= 4,
+            "off: vinyl pitch follows speed"
+        );
+
+        controls.set_keylock(true);
+        let mut stretched: Vec<f32> = Vec::new();
+        for _ in 0..24 {
+            if let Some(c) = fx.process(chunk(&block)) {
+                stretched.extend_from_slice(&c.samples);
+            }
+        }
+        while let Some(c) = fx.flush() {
+            stretched.extend_from_slice(&c.samples);
+        }
         let mono: Vec<f32> = stretched
             .iter()
             .step_by(usize::from(Consts::CH))
@@ -639,13 +642,7 @@ mod tests {
         let controls = StretchControls::new(0.5);
         controls.set_keylock(true);
         controls.set_backend(StretchKind::Bungee);
-        let rate = Arc::new(AtomicF32::new(1.0));
-        let mut fx = TimeStretchProcessor::new(
-            Arc::clone(&controls),
-            rate,
-            spec(),
-            PcmPool::default().clone(),
-        );
+        let mut fx = processor(Arc::clone(&controls));
         let block = sine(4096);
         let mut out: Vec<f32> = Vec::new();
         for i in 0..24 {

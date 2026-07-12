@@ -1,4 +1,4 @@
-// NOTE: deny instead of forbid to allow unsafe in platform-specific FFI modules (apple, android)
+// NOTE: deny instead of forbid to allow unsafe in Android FFI modules.
 #![deny(unsafe_code)]
 
 //! # Kithara Decode
@@ -27,6 +27,7 @@ mod gapless;
 mod input;
 mod mp4;
 mod pcm_time;
+mod resampled;
 #[cfg(feature = "symphonia")]
 mod symphonia;
 mod traits;
@@ -42,9 +43,10 @@ mod apple;
 
 pub use codec::CodecPriming;
 pub use error::{DecodeError, DecodeResult, ErrorClass};
-pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
+pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
 pub use gapless::{
-    GaplessInfo, GaplessMode, GaplessOutput, GaplessTrimmer, SilenceTrimParams, probe_mp4_gapless,
+    GaplessInfo, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,
+    SilenceTrimParams, probe_mp4_gapless,
 };
 pub use input::InputRequirement;
 pub use pcm_time::{duration_for_frames, frames_for_duration};

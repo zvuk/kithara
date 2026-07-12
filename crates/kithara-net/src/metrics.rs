@@ -1,7 +1,6 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use kithara_platform::sync::Arc;
 
 #[derive(Clone, Default)]
 pub(crate) struct ConnectionMetrics {

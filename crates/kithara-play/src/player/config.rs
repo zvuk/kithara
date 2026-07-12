@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use bon::Builder;
 use kithara_abr::AbrController;
@@ -6,7 +6,7 @@ use kithara_audio::{EqBandConfig, StretchControls, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 
 use crate::session::SessionDispatcher;
 

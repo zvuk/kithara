@@ -5,15 +5,12 @@ use std::{
     io::{Error as IoError, Read, Seek, SeekFrom},
     num::NonZeroUsize,
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use kithara::{
     self,
-    platform::{time::Duration, tokio::runtime::Runtime},
+    platform::{sync::Arc, time::Duration, tokio::runtime::Runtime},
     storage::WaitOutcome,
     stream::{
         Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,

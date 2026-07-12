@@ -2,17 +2,19 @@ use std::{
     future::Future,
     panic::Location,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll, Waker},
 };
 
 use parking_lot::Mutex;
 
-use crate::flash::{
-    diag::PrimKind,
-    flash_ambient,
-    ids::{Backend, trace_native_from_ambient},
-    system,
+use crate::{
+    flash::{
+        diag::PrimKind,
+        flash_ambient,
+        ids::{Backend, trace_native_from_ambient},
+        system,
+    },
+    sync::Arc,
 };
 
 /// Returned by [`Semaphore::acquire_owned`] when the semaphore is closed. A
@@ -192,16 +194,14 @@ impl Drop for AcquireOwned {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use kithara_test_utils::kithara;
 
     use super::Semaphore;
     use crate::{
         flash,
+        sync::Arc,
         tokio::task::{spawn, yield_now},
     };
 

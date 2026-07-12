@@ -106,9 +106,10 @@ mod decrypt {
 }
 
 mod registry {
-    use std::{collections::HashMap, sync::Arc};
+    use std::collections::HashMap;
 
     use bytes::Bytes;
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
     use url::Url;
 

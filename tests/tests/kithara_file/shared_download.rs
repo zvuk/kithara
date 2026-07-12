@@ -9,10 +9,7 @@
 
 use std::{
     io::{self, Read},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
@@ -20,7 +17,7 @@ use bytes::Bytes;
 use kithara::{
     assets::{AssetStoreBuilder, StorageBackend},
     file::{File, FileConfig},
-    platform::{time::Duration, tokio::task::spawn_blocking},
+    platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::TestHttpServer;

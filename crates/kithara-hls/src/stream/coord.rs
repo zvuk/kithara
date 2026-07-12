@@ -2,10 +2,7 @@
 
 use std::{
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 use delegate::delegate;
@@ -14,7 +11,7 @@ use kithara_assets::{AssetScope, ResourceKey};
 use kithara_events::AbrReason;
 use kithara_platform::{
     CancelToken,
-    sync::{ThreadGate, WaitGate},
+    sync::{Arc, ThreadGate, WaitGate},
     time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;

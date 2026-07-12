@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
     assets::StoreOptions,
@@ -10,6 +7,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     platform::{
         CancelToken,
+        sync::Arc,
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },

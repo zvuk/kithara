@@ -1,43 +1,12 @@
-use std::sync::Arc;
-
+use kithara_platform::sync::Arc;
 use num_traits::cast::ToPrimitive;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
 use super::{
     bucket::{Bucket, Waveform},
     bucketize::bucketize,
+    params::AnalysisParams,
 };
-
-/// FFT / band-split / reduction tunables. One home for the constants.
-#[derive(Clone, Copy, Debug)]
-#[non_exhaustive]
-pub struct AnalysisParams {
-    /// Per-band perceptual gain (`[low, mid, high]`) applied to magnitudes
-    /// before shared normalization. Music tilts energy toward the low end, so
-    /// without lifting mid/high the upper bands render as invisible slivers.
-    /// This is the balance knob, not a color: low stays the dominant hull.
-    pub band_gain: [f32; 3],
-    /// Per-window RMS gate; windows below it contribute no band energy.
-    pub energy_floor: f32,
-    /// Low/mid crossover in Hz.
-    pub low_mid_hz: f32,
-    /// Mid/high crossover in Hz.
-    pub mid_high_hz: f32,
-    /// FFT window length (real input); band bins span `0..=fft_size/2`.
-    pub fft_size: usize,
-}
-
-impl Default for AnalysisParams {
-    fn default() -> Self {
-        Self {
-            fft_size: 4096,
-            low_mid_hz: 250.0,
-            mid_high_hz: 2500.0,
-            energy_floor: 1e-4,
-            band_gain: [1.0, 2.5, 12.0],
-        }
-    }
-}
 
 /// Synchronous streaming waveform analyzer. Downmixes to mono once (channel
 /// mean) and reduces the spectrum to an overlapping-window (75% Hann overlap)
@@ -77,7 +46,7 @@ impl WaveformAnalyzer {
         let mid_high_bin = crossover_bin(params.mid_high_hz, bin_hz, bins).max(low_mid_bin);
         // Per-band inverse bin count: divide summed energy by bandwidth so a
         // wide band (mid/high) doesn't outweigh a narrow one (low) by sheer bin
-        // count. This makes each band an energy density (RMS-like), so bass can
+        // count. This makes each band an energy density (RMS-like).
         let inv = |count: usize| 1.0 / count.max(1).to_f32().unwrap_or(1.0);
         let band_bin_inv = [
             inv(low_mid_bin.saturating_sub(1)),
@@ -281,8 +250,8 @@ mod tests {
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
-    use super::{AnalysisParams, WaveformAnalyzer};
-    use crate::waveform::bucket::Bucket;
+    use super::WaveformAnalyzer;
+    use crate::waveform::{AnalysisParams, bucket::Bucket};
 
     struct Consts;
 

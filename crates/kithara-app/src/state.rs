@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use kithara::{
     abr::AbrHandle,
     events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo},
@@ -7,7 +5,11 @@ use kithara::{
     prelude::EngineLoadSnapshot,
     stream::AudioCodec,
 };
-use kithara_platform::{CancelToken, sync::Mutex, tokio::task};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+    tokio::task,
+};
 use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry};
 use num_traits::cast::AsPrimitive;
 

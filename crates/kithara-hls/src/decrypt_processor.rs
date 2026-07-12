@@ -1,10 +1,11 @@
 //! AES-128-CBC adapter binding the `kithara-drm` cipher to the
 //! `kithara-assets` `ResourceProcessor` / `ChunkSink` contract.
 
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use kithara_assets::{ChunkSink, ProcessCtx, ResourceProcessor};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
+use kithara_platform::sync::Arc;
 
 /// Wrap a [`DecryptContext`] as a per-acquire [`ProcessCtx`] trait object.
 pub(crate) fn as_process_ctx(ctx: DecryptContext) -> ProcessCtx {

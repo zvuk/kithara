@@ -4,9 +4,9 @@ use std::{
     fs::{self, OpenOptions},
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
+use kithara_platform::sync::Arc;
 use mmap_io::MemoryMappedFile;
 
 use crate::{

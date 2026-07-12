@@ -9,7 +9,7 @@
 
 use std::{
     num::NonZeroU32,
-    sync::{Arc, Mutex, atomic::Ordering as AtomicOrdering},
+    sync::{Mutex, atomic::Ordering as AtomicOrdering},
 };
 
 use firewheel::node::ProcBuffers;
@@ -17,7 +17,7 @@ use kithara::{
     self,
     bufpool::PcmPool,
     decode::PcmSpec,
-    platform::time::Duration,
+    platform::{sync::Arc, time::Duration},
     play::{
         PlayerNotification, Resource, SharedEq, TrackState, TrackTransition,
         bridge::{PlayerCmd, SlotControl, slot_channels},

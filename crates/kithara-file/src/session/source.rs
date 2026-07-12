@@ -1,8 +1,12 @@
-use std::{num::NonZeroUsize, ops::Range, sync::Arc};
+use std::{num::NonZeroUsize, ops::Range};
 
 use kithara_assets::{AssetReader, AssetStore, ReadSide, ResourceKey};
 use kithara_events::EventBus;
-use kithara_platform::{CancelToken, sync::Mutex, time::Duration};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use kithara_storage::{ResourceStatus, StorageError, WaitOutcome};
 use kithara_stream::{
     Activity, AudioCodec, MediaInfo, NotReadyCause, PendingReason, PlayheadRead, PlayheadWrite,

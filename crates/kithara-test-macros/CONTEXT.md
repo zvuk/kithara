@@ -17,9 +17,51 @@ A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
 - `serial` — emits `#[serial_test::serial]` so the test never runs in parallel with other `serial` tests; for resource-intensive / contention-sensitive tests. Requires `serial_test` at the call site
 - `multi_thread` — uses `new_multi_thread().worker_threads(2)` instead of `new_current_thread()`; required when the body spawns tasks needing a multi-threaded executor (e.g. `thirtyfour` `WebDriver`)
 - `selenium` — convenience flag implying `native + tokio + serial + multi_thread` and adding `#[ignore = "requires selenium"]`, for Selenium/WebDriver integration tests
+- `loom` - marks a synchronous native model test returning `()`. The body runs once with the system backend in ordinary lanes, or through `loom::model` when `kithara/loom` is enabled. It is incompatible with `tokio`, async functions, non-unit returns, `soft_fail`, `wasm`, `browser`, `selenium`, and `multi_thread`
 - `flash(true|false)` — opt the test body into or out of flash time rewriting
 
 Supports `#[case]` / `#[case::name]` parameterization and fixture injection.
+
+### Loom execution and debugging
+
+The macro emits a `loom_model_` test-name prefix. `just test --loom=on` enables
+`kithara/loom`, uses the optimized test profile, and selects only that
+prefix. This is required: enabling the Loom primitive backend while running an
+unmarked test would access modeled primitives outside `loom::model`. Ordinary
+`just test` never enables Loom and still runs the marked regression once, so
+the model annotation adds no permutation cost to the normal gate. Use
+`just test --loom=on --flash=on` to compose Flash over the Loom primitives.
+
+Do not annotate a full flaky async integration test. Loom cannot model sockets,
+Tokio scheduling, random input, decoder FFI, or wall time. Extract the smallest
+deterministic synchronization contract that explains the flake and exercise it
+with `kithara::platform::sync`, `thread`, and atomics. A spin/poll loop whose
+progress requires another modeled thread must call `thread::yield_now`.
+
+The model hook calls `loom::model` directly. Assertion and Loom panics propagate
+without `catch_unwind`, and no per-permutation result is buffered. The debug
+workflow follows Loom's checkpoint contract:
+
+1. `just loom-checkpoint path/to/checkpoint.json TEST_FILTER` periodically saves progress while reproducing the failure.
+2. `just loom-isolate path/to/checkpoint.json TEST_FILTER` resumes with `LOOM_CHECKPOINT_INTERVAL=1`; after it fails, the file identifies the exact failing permutation.
+3. `just loom-debug path/to/checkpoint.json TEST_FILTER` replays that permutation with `LOOM_LOG=trace`, `LOOM_LOCATION=1`, and uncaptured output.
+
+The checkpoint JSON is an opaque execution path, not a report to inspect by
+hand. In the replay, switch markers show which modeled thread became runnable;
+location records identify the primitive operation that created the branch. An
+assertion failure or deadlock is a reachable modeled execution. A branch-limit
+failure usually means the model is too broad or a fairness-dependent loop is
+missing `yield_now`; shrink the model before raising limits. For a deliberately
+bounded large model, set `LOOM_MAX_PREEMPTIONS` (usually 2 or 3) or another Loom
+`Builder` environment limit explicitly.
+
+Read a replay backward from the first panic or deadlock. `Iteration N` names the
+replayed schedule, `thread{id=N}` names the currently executing modeled thread,
+and `branch switch=true` records an actual scheduler handoff; `switch=false`
+means the current thread retained control at that branch. The primitive trace
+(`mutex`, `atomic`, `notify`, or channel) plus its `location=` field identifies
+the synchronization operation to inspect. `thread_done` is normal completion,
+not evidence of the failure.
 
 ### Flash ambient holder per emit path
 

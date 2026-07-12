@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
     diff::{Diff, Patch},
     node::{AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig},
 };
 use kithara_bufpool::PcmPool;
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 
 use super::processor::{PlayerNodeProcessor, StreamShape};
 use crate::bridge::{NodeInputs, SharedEq, slot_channels};

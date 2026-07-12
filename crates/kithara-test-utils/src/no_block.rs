@@ -105,7 +105,7 @@ pub fn watch_root<F: Future>(name: &'static str, fut: F) -> Watched<rtsan_gate::
     kithara_platform::no_block::watch_blanket(name, rtsan_gate::RtsanChecked { fut })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "no-block"))]
 mod tests {
     use std::{
         any::Any,

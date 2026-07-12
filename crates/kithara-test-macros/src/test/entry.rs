@@ -5,8 +5,8 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
-use syn::{Attribute, Expr, Ident, ItemFn, parse_macro_input, visit_mut::VisitMut};
+use quote::{format_ident, quote};
+use syn::{Attribute, Expr, Ident, ItemFn, ReturnType, parse_macro_input, visit_mut::VisitMut};
 
 use super::{
     case::{Case, case_ident, extract_cases, is_case_attr},
@@ -23,10 +23,9 @@ use super::{
 
 /// Unified async/wasm test attribute.
 ///
-/// Flags (`tokio`, `wasm`, `native`, `browser`, `timeout`, `env`,
+/// Flags (`tokio`, `wasm`, `native`, `browser`, `loom`, `timeout`, `env`,
 /// `tracing`, `soft_fail`, `serial`, `multi_thread`, `selenium`) can be
 /// combined and support `#[case]` parameterization plus fixture injection.
-/// See the crate `CONTEXT.md` "`#[kithara::test]` flags".
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as TestArgs);
     let func = parse_macro_input!(item as ItemFn);
@@ -38,6 +37,20 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
+    if args.is_loom && func.sig.asyncness.is_some() {
+        return Err(syn::Error::new_spanned(
+            func.sig.asyncness,
+            "`loom` requires a synchronous deterministic model; extract the concurrent contract \
+             from async integration work",
+        ));
+    }
+    if args.is_loom && !matches!(func.sig.output, ReturnType::Default) {
+        return Err(syn::Error::new_spanned(
+            &func.sig.output,
+            "`loom` tests must return `()` so every failing permutation panics inside the model",
+        ));
+    }
+
     let cases = extract_cases(&func.attrs)?;
     let remaining_attrs: Vec<_> = func.attrs.iter().filter(|a| !is_case_attr(a)).collect();
     let params = extract_params(&func);
@@ -99,7 +112,7 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
 /// Shared context for the `generate*` per-branch helpers.
 pub(crate) struct GenCtx<'a> {
     pub(crate) fn_name: &'a Ident,
-    pub(crate) ret_type: &'a syn::ReturnType,
+    pub(crate) ret_type: &'a ReturnType,
     pub(crate) args: &'a TestArgs,
     pub(crate) vis: &'a syn::Visibility,
     pub(crate) remaining_attrs: &'a [&'a Attribute],
@@ -175,14 +188,24 @@ fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
     };
 
     if ctx.cases.is_empty() {
-        emit_one(ctx.fn_name, None);
+        let name = emitted_name(ctx.fn_name, ctx.args);
+        emit_one(&name, None);
     } else {
         for (i, case) in ctx.cases.iter().enumerate() {
             let case_name = case_ident(ctx.fn_name, case, i);
-            emit_one(&case_name, Some(&case.values));
+            let name = emitted_name(&case_name, ctx.args);
+            emit_one(&name, Some(&case.values));
         }
     }
     tests
+}
+
+fn emitted_name(name: &Ident, args: &TestArgs) -> Ident {
+    if args.is_loom {
+        format_ident!("loom_model_{name}", span = name.span())
+    } else {
+        name.clone()
+    }
 }
 
 /// browser: WASM with `tokio::ensure_thread_pool` init, optionally dual-platform.
@@ -248,4 +271,32 @@ fn generate_default(ctx: &GenCtx<'_>) -> TokenStream2 {
         }
     }
     tests
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TestArgs, emitted_name, generate};
+
+    #[test]
+    fn loom_tests_have_a_filterable_name() -> syn::Result<()> {
+        let args = syn::parse_str::<TestArgs>("loom")?;
+        let name = syn::parse_str("concurrent_contract")?;
+
+        assert_eq!(emitted_name(&name, &args), "loom_model_concurrent_contract");
+        Ok(())
+    }
+
+    #[test]
+    fn loom_rejects_async_and_non_unit_tests() -> syn::Result<()> {
+        for source in [
+            "async fn contract() {}",
+            "fn contract() -> Result<(), String> { Ok(()) }",
+        ] {
+            let args = syn::parse_str::<TestArgs>("loom")?;
+            let function = syn::parse_str(source)?;
+
+            assert!(generate(args, function).is_err(), "accepted `{source}`");
+        }
+        Ok(())
+    }
 }

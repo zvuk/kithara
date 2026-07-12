@@ -1,11 +1,9 @@
 use std::{
     io::{self, Read, Seek, SeekFrom},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use kithara_platform::sync::Arc;
 use symphonia::core::io::MediaSource;
 
 /// Adapter that wraps a Read + Seek source as a Symphonia [`MediaSource`].

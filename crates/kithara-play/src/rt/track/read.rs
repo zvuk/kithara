@@ -1,5 +1,6 @@
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
+use kithara_platform::sync::Arc;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 use ringbuf::{HeapProd, traits::Producer};
 
@@ -155,7 +156,7 @@ impl PlayerTrack {
             range,
         } = ctx;
         let PartialRead { frames, duration } = partial;
-        self.advance_served_frames(frames as u64);
+        self.advance_served_frames(frames.to_u64().unwrap_or(0));
         let position = self.position();
         self.observed_duration = if position > 0.0 { position } else { duration };
         let duration = self.observed_duration;
@@ -267,7 +268,7 @@ impl PlayerTrack {
                 frames_until_eof: resource.frames_until_eof(),
                 position: 0.0,
             },
-            ReadOutcome::Partial(frames) => TrackReadOutcome::Partial {
+            ReadOutcome::Partial { frames } => TrackReadOutcome::Partial {
                 frames,
                 duration: resource.duration(),
             },

@@ -169,7 +169,7 @@ fn test_attach_into_inner_does_not_recycle() {
 
 #[kithara::test(tokio, browser)]
 async fn test_multi_threaded_contention() {
-    use std::sync::Arc;
+    use kithara::platform::sync::Arc;
 
     let pool = Arc::new(Pool::<4, Vec<u8>>::new(64, 4096));
     let num_threads = 8usize;

@@ -134,7 +134,11 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
         .downloader(downloader.clone())
         .name("t0".to_string())
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
         .build();
 

@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range, sync::Arc};
+use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range};
 
 use kithara_platform::{
     maybe_send::{MaybeSend, MaybeSync},
+    sync::Arc,
     time::Duration,
 };
 use kithara_storage::WaitOutcome;

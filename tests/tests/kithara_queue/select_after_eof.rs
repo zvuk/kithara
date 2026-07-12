@@ -1,11 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{num::NonZero, sync::Arc};
+use std::num::NonZero;
 
 use kithara::{
     self,
     decode::PcmSpec,
     events::TrackStatus,
+    platform::sync::Arc,
     play::Resource,
     queue::{Queue, QueueConfig, Transition},
 };

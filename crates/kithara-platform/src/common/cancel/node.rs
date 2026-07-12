@@ -1,10 +1,12 @@
 use std::{
     sync::{
-        Arc, Mutex, MutexGuard, PoisonError, Weak,
+        Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
     task::Waker,
 };
+
+use crate::sync::{Arc, Weak};
 
 /// A synchronous cancel-waker: invoked from the cancelling thread when the node
 /// is cancelled. Cheap, non-blocking, idempotent — typically a `Condvar`/`Notify`
@@ -154,11 +156,12 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
     use kithara_test_utils::kithara;
 
     use super::{Node, Slot, lock};
+    use crate::sync::Arc;
 
     fn noop_sync() -> Slot {
         Slot::Sync(Arc::new(|| {}))

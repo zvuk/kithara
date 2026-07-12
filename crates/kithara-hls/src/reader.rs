@@ -1,11 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_events::{DeferredBus, EventBus, HlsEvent};
+use kithara_platform::sync::Arc;
 use kithara_stream::{PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
 use crate::stream::HlsCoord;

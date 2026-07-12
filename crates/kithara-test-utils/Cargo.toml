@@ -46,7 +46,7 @@ pin-project-lite = { workspace = true }
 tracing-wasm = { workspace = true }
 
 [dev-dependencies]
-kithara-test-utils = { path = ".", default-features = false, features = ["no-block"] }
+kithara-test-utils = { path = ".", default-features = false }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [lints]

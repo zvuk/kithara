@@ -1,15 +1,11 @@
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::{borrow::Cow, collections::HashMap, sync::RwLock};
 
 use aes::Aes128;
 use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara::stream::MediaInfo;
+use kithara::{platform::sync::Arc, stream::MediaInfo};
 use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource};
 use num_traits::AsPrimitive;
 
@@ -333,6 +329,13 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
                     scope.spawn(move || {
                         let cache = crate::fixture_cache::FixtureCache::from_env();
                         let key = format!("{}|v{idx}", spec.cache_key());
+                        if let Some(data) = cache
+                            .get("hls-variant", key.as_bytes())
+                            .and_then(|blob| decode_variant_blob(&blob))
+                        {
+                            return Ok(data);
+                        }
+                        let _lock = cache.lock_entry("hls-variant", key.as_bytes());
                         if let Some(data) = cache
                             .get("hls-variant", key.as_bytes())
                             .and_then(|blob| decode_variant_blob(&blob))

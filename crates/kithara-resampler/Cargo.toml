@@ -1,0 +1,43 @@
+[package]
+name = "kithara-resampler"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Sample-rate resampler contracts and backend adapters."
+keywords = ["audio", "dsp", "resampling", "sample-rate", "playback"]
+categories = ["multimedia::audio"]
+
+[features]
+default = []
+apple-accelerate = ["kithara-apple/accelerate"]
+resample-glide = []
+resample-rubato = ["dep:rubato"]
+
+[dependencies]
+kithara-bufpool = { workspace = true }
+
+bitflags = { workspace = true }
+bon = { workspace = true }
+num-traits = { workspace = true }
+rubato = { workspace = true, optional = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara-apple = { workspace = true, features = ["accelerate", "audio-toolbox"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "resampler_backends"
+harness = false
+
+[lints]
+workspace = true

@@ -4,9 +4,12 @@
 //! switches off the legacy in 3.3), so its tests live in `src/common/cancel/
 //! group.rs` `#[cfg(test)]`.
 
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_test_utils::kithara;
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
@@ -54,11 +57,6 @@ async fn recreate_cancelled_in_loop_does_not_leak_slots() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn late_sync_registration_after_fire_fires_immediately() {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
     let token = CancelToken::never();
     token.cancel();
 

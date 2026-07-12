@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use js_sys::Reflect;
 use kithara_events::TrackId;
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use web_sys::{BroadcastChannel, MessageEvent};
 

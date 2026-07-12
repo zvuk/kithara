@@ -4,7 +4,7 @@ use kithara_platform::CancelToken;
 
 use super::{ResourceConfig, ResourceSrc};
 
-impl ResourceConfig {
+impl<B: Default> ResourceConfig<B> {
     /// Event bus attached to this resource, when one was configured.
     #[must_use]
     pub fn bus(&self) -> Option<&EventBus> {
@@ -21,6 +21,12 @@ impl ResourceConfig {
     #[must_use]
     pub fn preferred_peak_bitrate(&self) -> f64 {
         self.preferred_peak_bitrate
+    }
+
+    /// Per-track parent cancel token, when one was configured.
+    #[must_use]
+    pub fn cancel(&self) -> Option<&CancelToken> {
+        self.cancel.as_ref()
     }
 
     /// Replace the parent cancel token for this resource.

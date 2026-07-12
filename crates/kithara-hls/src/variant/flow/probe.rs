@@ -1,9 +1,7 @@
-use std::{
-    collections::{BTreeSet, VecDeque},
-    sync::Arc,
-};
+use std::collections::{BTreeSet, VecDeque};
 
 use kithara_net::Headers;
+use kithara_platform::sync::Arc;
 use kithara_stream::dl::{FetchCmd, OnCompleteFn, WriterFn};
 use tracing::{debug, trace};
 use url::Url;

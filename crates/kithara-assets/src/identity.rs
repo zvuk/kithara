@@ -15,9 +15,7 @@ impl RequestIdentity {
     /// Empty identity (no headers).
     #[must_use]
     pub fn empty() -> Self {
-        Self {
-            headers: BTreeMap::new(),
-        }
+        Self::from_headers(std::iter::empty::<(&str, &[u8])>())
     }
 
     /// Build from an iterator of `(name, value)` pairs. Names are

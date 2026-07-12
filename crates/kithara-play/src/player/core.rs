@@ -1,9 +1,10 @@
-use std::sync::Arc;
-
 use kithara_abr::{AbrController, AbrSettings};
 use kithara_audio::{EngineLoad, StretchControls};
 use kithara_decode::GaplessMode;
-use kithara_platform::{CancelScope, sync::Mutex};
+use kithara_platform::{
+    CancelScope,
+    sync::{Arc, Mutex},
+};
 use tracing::debug;
 
 use super::{
@@ -319,7 +320,7 @@ mod tests {
 
         config = player.prepare_config(config);
 
-        assert_eq!(config.gapless_mode, GaplessMode::Disabled);
+        assert_eq!(config.decoder.gapless_mode, GaplessMode::Disabled);
         assert!(
             config.cancel.is_some(),
             "prepare_config must inject a per-track cancel child"

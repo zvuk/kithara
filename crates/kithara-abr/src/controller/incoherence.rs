@@ -1,5 +1,6 @@
 use kithara_events::AbrEvent;
 use kithara_platform::{
+    sync::Arc,
     time::{Duration, Instant, sleep},
     tokio,
     tokio::task,
@@ -13,7 +14,7 @@ use super::{
 /// Resolved context for `check_incoherence`.
 struct IncoherenceCtx {
     progress: kithara_events::AbrProgressSnapshot,
-    entry: std::sync::Arc<PeerEntry>,
+    entry: Arc<PeerEntry>,
 }
 
 impl AbrController {
@@ -90,9 +91,7 @@ impl AbrController {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use kithara_platform::{CancelToken, time::Duration};
+    use kithara_platform::{CancelToken, sync::Arc, time::Duration};
     use kithara_test_utils::kithara;
 
     use crate::{Abr, AbrController, AbrSettings};

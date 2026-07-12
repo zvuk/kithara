@@ -3,20 +3,20 @@ use std::{
     future::Future,
     panic::Location,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     task::{Context, Poll, Waker},
 };
 
 use parking_lot::Mutex;
 
-use crate::flash::{
-    diag::PrimKind,
-    flash_ambient,
-    ids::{Backend, trace_native_from_ambient},
-    system,
+use crate::{
+    flash::{
+        diag::PrimKind,
+        flash_ambient,
+        ids::{Backend, trace_native_from_ambient},
+        system,
+    },
+    sync::Arc,
 };
 
 /// Real-wake state for the off-flash path: FIFO queue of parked waiters (each a

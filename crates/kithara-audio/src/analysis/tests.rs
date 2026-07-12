@@ -1,13 +1,15 @@
-use std::{collections::VecDeque, num::NonZeroU32, sync::Arc};
+use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{DecodeError, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use num_traits::cast::AsPrimitive;
 
+#[cfg(feature = "analysis-waveform")]
+use crate::traits::PendingReason;
 use crate::{
-    traits::{ChunkOutcome, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
+    traits::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
     worker::PreloadGate,
 };
 
@@ -77,6 +79,7 @@ impl FakeReader {
     }
 
     /// Like [`Self::chunked`] with a `Pending` tick between every chunk.
+    #[cfg(feature = "analysis-waveform")]
     fn chunked_with_pending(samples: &[f32], parts: usize) -> Self {
         let mut with_pending = VecDeque::new();
         for outcome in Self::chunked(samples, parts).outcomes {
@@ -86,10 +89,12 @@ impl FakeReader {
         Self::new(with_pending)
     }
 
+    #[cfg(feature = "analysis-waveform")]
     fn empty() -> Self {
         Self::new(VecDeque::from([Ok(eof())]))
     }
 
+    #[cfg(feature = "analysis-waveform")]
     fn failing() -> Self {
         Self::new(VecDeque::from([Err(DecodeError::InvalidData {
             detail: "scripted failure",
@@ -103,6 +108,7 @@ fn eof() -> ChunkOutcome {
     }
 }
 
+#[cfg(feature = "analysis-waveform")]
 fn pending() -> ChunkOutcome {
     ChunkOutcome::Pending {
         reason: PendingReason::Buffering,
@@ -158,41 +164,55 @@ impl PcmReader for FakeReader {
 }
 
 mod run {
-    use std::sync::Arc;
-
-    use kithara_platform::{CancelToken, sync::Mutex};
+    use kithara_platform::CancelToken;
+    #[cfg(feature = "analysis-beat")]
+    use kithara_platform::sync::Arc;
+    #[cfg(feature = "analysis-beat")]
+    use kithara_platform::sync::Mutex;
+    #[cfg(feature = "analysis-beat")]
+    use kithara_resampler::rubato::RubatoBackend;
+    use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
     use kithara_test_utils::kithara;
+    #[cfg(feature = "analysis-beat")]
     use unimock::{MockFn, Unimock, matching};
 
+    #[cfg(feature = "analysis-beat")]
+    use super::super::beat::{
+        BeatDetector, BeatDetectorMock, GridParams, RawBeats, SharedBeatDetector,
+    };
     use super::{
         super::{
             analyzer::{AnalyzerBuilder, TrackAnalysis},
-            beat::{BeatDetector, BeatDetectorMock, GridParams, RawBeats, SharedBeatDetector},
             run::analyze_reader,
         },
         FakeReader, SR, sine,
     };
-    use crate::{
-        traits::PcmReader,
-        waveform::{AnalysisParams, WaveformAnalyzer},
-    };
+    use crate::traits::PcmReader;
+    #[cfg(feature = "analysis-waveform")]
+    use crate::waveform::{AnalysisParams, WaveformAnalyzer};
 
+    #[cfg(feature = "analysis-waveform")]
     const BUCKETS: usize = 64;
 
-    fn waveform_only() -> AnalyzerBuilder {
-        AnalyzerBuilder::default().with_waveform(BUCKETS)
+    #[cfg(feature = "analysis-waveform")]
+    fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend> {
+        AnalyzerBuilder::<NoResamplerBackend>::default().with_waveform(BUCKETS)
     }
 
-    fn stages(
+    fn stages<B>(
         reader: &mut dyn PcmReader,
-        builder: &AnalyzerBuilder,
+        builder: &AnalyzerBuilder<B>,
         cancel: &CancelToken,
-    ) -> Vec<TrackAnalysis> {
+    ) -> Vec<TrackAnalysis>
+    where
+        B: ResamplerBackend,
+    {
         let mut out = Vec::new();
         analyze_reader(reader, builder, cancel, |a| out.push(a));
         out
     }
 
+    #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
     fn matches_direct_waveform_analyzer_over_chunked_stream() {
         let samples = sine(usize::try_from(SR).unwrap());
@@ -214,6 +234,7 @@ mod run {
         );
     }
 
+    #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
     fn cancelled_token_yields_none() {
         let cancel = CancelToken::root();
@@ -222,6 +243,7 @@ mod run {
         assert!(stages(&mut reader, &waveform_only(), &cancel).is_empty());
     }
 
+    #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
     fn decode_error_yields_none() {
         let mut reader = FakeReader::failing();
@@ -229,6 +251,7 @@ mod run {
         assert!(out.is_empty());
     }
 
+    #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
     fn empty_stream_yields_none() {
         let mut reader = FakeReader::empty();
@@ -236,6 +259,7 @@ mod run {
         assert!(out.is_empty(), "EOF with no chunks is not an analysis");
     }
 
+    #[cfg(feature = "analysis-beat")]
     #[kithara::test]
     fn beat_slot_fills_the_beat_grid() {
         let raw = RawBeats {
@@ -249,10 +273,10 @@ mod run {
         );
         let detector: SharedBeatDetector =
             Arc::new(Mutex::new(Box::new(mock) as Box<dyn BeatDetector>));
-        let builder =
-            AnalyzerBuilder::default().with_beat_detector(detector, GridParams::default());
+        let builder = AnalyzerBuilder::<RubatoBackend>::default()
+            .with_beat_detector(detector, GridParams::default());
 
-        let mut reader = FakeReader::chunked(&sine(8192), 3);
+        let mut reader = FakeReader::chunked(&sine(17 * usize::try_from(SR).unwrap()), 3);
         let out = stages(&mut reader, &builder, &CancelToken::root());
         assert_eq!(
             out.len(),
@@ -271,6 +295,7 @@ mod run {
         assert_eq!(grid.downbeats[1], u64::from(SR) * 2, "source frames");
     }
 
+    #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
     fn pending_is_tolerated_mid_stream() {
         let samples = sine(8192);
@@ -280,9 +305,10 @@ mod run {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "analysis-waveform"))]
 mod worker {
     use kithara_platform::CancelToken;
+    use kithara_resampler::NoResamplerBackend;
     use kithara_test_utils::kithara;
 
     use super::{
@@ -290,8 +316,8 @@ mod worker {
         FakeReader, sine,
     };
 
-    fn waveform_only() -> AnalyzerBuilder {
-        AnalyzerBuilder::default().with_waveform(16)
+    fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend> {
+        AnalyzerBuilder::<NoResamplerBackend>::default().with_waveform(16)
     }
 
     #[kithara::test(tokio)]

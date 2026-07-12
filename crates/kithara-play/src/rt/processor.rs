@@ -1,8 +1,4 @@
-use std::{
-    collections::VecDeque,
-    num::NonZeroU32,
-    sync::{Arc, atomic::Ordering},
-};
+use std::{collections::VecDeque, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::{
     StreamInfo,
@@ -11,6 +7,7 @@ use firewheel::{
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
 use kithara_bufpool::PcmPool;
+use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapCons, HeapProd, traits::Producer};
@@ -310,21 +307,29 @@ impl PlayerNodeProcessor {
             }
         }
     }
+
+    fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.tracks
+            .iter()
+            .for_each(|(_, track)| track.resource().set_host_sample_rate(sample_rate));
+    }
+
+    fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        let rate_changed = self.sample_rate != sample_rate;
+        self.sample_rate = sample_rate;
+        self.playback
+            .sample_rate
+            .store(sample_rate.get(), Ordering::Relaxed);
+        if rate_changed {
+            self.set_tracks_host_sample_rate(sample_rate);
+        }
+    }
 }
 
 impl AudioNodeProcessor for PlayerNodeProcessor {
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
-        let new_sr = stream_info.sample_rate;
-        self.sample_rate = new_sr;
-        self.playback
-            .sample_rate
-            .store(new_sr.get(), Ordering::Relaxed);
-
+        self.update_host_sample_rate(stream_info.sample_rate);
         self.render.resize(stream_info.max_block_frames.get().as_());
-
-        self.tracks
-            .iter()
-            .for_each(|(_, track)| track.resource().set_host_sample_rate(new_sr));
     }
 
     #[kithara::rtsan_forbid_blocking]

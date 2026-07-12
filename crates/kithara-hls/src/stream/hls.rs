@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use kithara_assets::{
     AssetStore, AssetStoreBuilder, BytePool, EvictConfig, ResourceKey, StorageBackend, StoreOptions,
@@ -8,7 +8,10 @@ use kithara_assets::{
 use kithara_events::{EventBus, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancelScope, CancelToken, sync::ThreadGate, tokio::sync::mpsc, traits::FromWithParams,
+    CancelScope, CancelToken,
+    sync::{Arc, ThreadGate},
+    tokio::sync::mpsc,
+    traits::FromWithParams,
 };
 use kithara_stream::{
     Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,

@@ -1,15 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    sync::Arc,
-};
+use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{
     assets::StoreOptions,
     hls::{Hls, HlsConfig},
-    platform::{CancelToken, thread, time::Duration, tokio::task},
+    platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::task},
     stream::Stream,
 };
 use kithara_integration_tests::{

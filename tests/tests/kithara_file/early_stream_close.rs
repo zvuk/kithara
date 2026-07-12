@@ -3,7 +3,6 @@
 use std::{
     fs,
     io::{Read, Seek, SeekFrom},
-    sync::Arc,
 };
 
 use kithara::{
@@ -14,6 +13,7 @@ use kithara::{
     platform::{
         CancelToken,
         flash::real_io,
+        sync::Arc,
         time::{self, Duration, Instant},
         tokio::task::spawn_blocking,
     },
@@ -98,7 +98,6 @@ async fn file_stream_closes_early_seek_still_works() {
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::builder()
                 .inactivity_timeout(Duration::from_secs(1))
-                .total_timeout(Duration::from_secs(1))
                 .build(),
             CancelToken::never(),
         ))

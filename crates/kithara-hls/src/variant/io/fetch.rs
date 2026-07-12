@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
 use kithara_assets::{AcquisitionResult, AssetResource, ReadSide, WriteSide};
+use kithara_platform::sync::Arc;
 use kithara_storage::ResourceStatus;
 use kithara_stream::dl::{FetchCmd, OnCompleteFn, OnSlowFn, WriterFn};
 use url::Url;

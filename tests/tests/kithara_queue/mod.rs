@@ -42,6 +42,8 @@ fn app_track_source(
             .and_then(|rule| rule.headers.clone())
             .map(Headers::from)
     });
+    let mut decoder = kithara::play::default_resource_decoder_config();
+    decoder.backend = backend;
     let builder = builder
         .downloader(config.downloader.clone())
         .flush_hub(config.flush_hub.clone())
@@ -51,7 +53,7 @@ fn app_track_source(
         .maybe_headers(headers)
         .size_probe_method(config.size_probe_method)
         .store(store)
-        .decoder_backend(backend)
+        .decoder(decoder)
         .initial_abr_mode(abr);
     let cfg = match name {
         Some(name) => builder.name(name.to_owned()).build(),
@@ -71,8 +73,11 @@ mod flac_swallow_fixture;
 mod hls_seek_cancels_stale_fetches;
 mod hls_seek_near_end_stress;
 mod hls_variant_playlists_concurrent;
+mod loader_lanes;
 mod loader_starvation;
 mod local_track_plays;
+mod packaged_drm_seek;
+mod playlist_stall_fails_load;
 mod rapid_scrub_decode_failure;
 mod real_playlist;
 mod select_after_eof;

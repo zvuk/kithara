@@ -10,6 +10,8 @@ use regex::Regex;
 
 use crate::common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files};
 
+const MOCK_COVERAGE_PATTERN: &str = r"(unimock::unimock\(|#\[\s*kithara::mock)";
+
 #[derive(Clone, Copy, Debug, Subcommand)]
 pub enum QualityCommand {
     /// Generate a quality report.
@@ -145,13 +147,13 @@ fn run_report(
     let test_files = collect_rs_files(&[&tests_dir])?;
 
     let re_pub_trait = Regex::new(r"pub trait ")?;
-    let re_unimock = Regex::new(r"unimock::unimock\(")?;
+    let re_mock_coverage = Regex::new(MOCK_COVERAGE_PATTERN)?;
     let re_rstest = Regex::new(r"#\[rstest\]")?;
     let re_plain_test = Regex::new(r"#\[(tokio::)?test\]")?;
     let re_tcp_listener = Regex::new(r#"TcpListener::bind\("127\.0\.0\.1:0"\)"#)?;
 
     let total_traits = count_pattern(&crate_files, &re_pub_trait)?;
-    let unimock_traits = count_pattern(&crate_files, &re_unimock)?;
+    let unimock_traits = count_pattern(&crate_files, &re_mock_coverage)?;
     let rstest_cases = count_pattern(&crate_and_test_files, &re_rstest)?;
     let plain_tests = count_pattern(&crate_and_test_files, &re_plain_test)?;
     let perf_tests = count_rs_files_in(&tests_dir.join("perf"))?;
@@ -204,7 +206,7 @@ fn run_report(
 | Metric | Count |
 | --- | ---: |
 | Traits in crates/ | {total_traits} |
-| Traits with unimock::unimock | {unimock_traits} |
+| Traits with mock coverage | {unimock_traits} |
 | rstest test cases | {rstest_cases} |
 | Plain #[test]/#[tokio::test] markers | {plain_tests} |
 | perf test files (tests/perf) | {perf_tests} |
@@ -215,7 +217,7 @@ fn run_report(
 
 | Gate | Threshold | Status |
 | --- | ---: | --- |
-| Traits with unimock::unimock | {unimock_gate} |
+| Traits with mock coverage | {unimock_gate} |
 | rstest test cases | {rstest_gate} |
 | perf test files | {perf_gate} |
 | bench targets | {bench_gate} |
@@ -357,7 +359,7 @@ fn scan_trait_files(root: &Path) -> Result<Vec<TraitFileInfo>> {
     let files = walk_rs_files(&crates_dir)?;
 
     let re_pub_trait = Regex::new(r"pub trait ")?;
-    let re_unimock = Regex::new(r"unimock(::unimock)?\(")?;
+    let re_mock_coverage = Regex::new(MOCK_COVERAGE_PATTERN)?;
 
     let mut results = Vec::new();
 
@@ -369,7 +371,10 @@ fn scan_trait_files(root: &Path) -> Result<Vec<TraitFileInfo>> {
             continue;
         }
 
-        let unimock_count = content.lines().filter(|l| re_unimock.is_match(l)).count();
+        let unimock_count = content
+            .lines()
+            .filter(|l| re_mock_coverage.is_match(l))
+            .count();
         let rel_path = file
             .strip_prefix(root)
             .unwrap_or(file)
@@ -426,12 +431,12 @@ fn run_trait_mock_audit() -> Result<()> {
 | Metric | Count |
 | --- | ---: |
 | Trait files | {total_trait_files} |
-| Trait files with unimock | {unimock_trait_files} |
-| Trait files without unimock | {missing_unimock_trait_files} |
+| Trait files with mock coverage | {unimock_trait_files} |
+| Trait files without mock coverage | {missing_unimock_trait_files} |
 
 ## Details
 
-| File | pub trait count | unimock attr count | has unimock |
+| File | pub trait count | mock coverage count | has mock coverage |
 | --- | ---: | ---: | --- |
 {detail_rows}
 "
@@ -460,7 +465,7 @@ fn run_trait_mock_exceptions() -> Result<()> {
 
     let mut rows: Vec<String> = Vec::new();
     for path in &actual_missing {
-        rows.push(format!("| {path} | missing unimock | advisory |"));
+        rows.push(format!("| {path} | missing mock coverage | advisory |"));
     }
 
     let detail_rows = if rows.is_empty() {
@@ -479,7 +484,7 @@ fn run_trait_mock_exceptions() -> Result<()> {
 
 | Metric | Count |
 | --- | ---: |
-| Actual trait files without unimock | {actual_missing_count} |
+| Actual trait files without mock coverage | {actual_missing_count} |
 
 ## Details
 
@@ -498,12 +503,12 @@ fn run_trait_mock_exceptions() -> Result<()> {
     );
 
     if !actual_missing.is_empty() {
-        println!("ADVISORY: the following trait files are missing unimock:");
+        println!("ADVISORY: the following trait files are missing mock coverage:");
         for path in &actual_missing {
             println!("  - {path}");
         }
     } else {
-        println!("OK: all trait files have unimock.");
+        println!("OK: all trait files have mock coverage.");
     }
 
     Ok(())
@@ -524,7 +529,7 @@ fn run_unimock_check() -> Result<()> {
     let files = walk_rs_files(&traits_dir)?;
 
     let re_pub_trait = Regex::new(r"pub trait ")?;
-    let re_unimock = Regex::new(r"unimock::unimock\(")?;
+    let re_mock_coverage = Regex::new(MOCK_COVERAGE_PATTERN)?;
 
     let mut checked = 0usize;
     let mut missing: Vec<String> = Vec::new();
@@ -539,7 +544,7 @@ fn run_unimock_check() -> Result<()> {
 
         checked += 1;
 
-        let has_unimock = content.lines().any(|l| re_unimock.is_match(l));
+        let has_unimock = content.lines().any(|l| re_mock_coverage.is_match(l));
         if !has_unimock {
             let rel = file
                 .strip_prefix(&root)
@@ -551,18 +556,18 @@ fn run_unimock_check() -> Result<()> {
     }
 
     if !missing.is_empty() {
-        println!("FAILED: traits without unimock in {traits_rel}:");
+        println!("FAILED: traits without mock coverage in {traits_rel}:");
         for path in &missing {
             println!("  - {path}");
         }
         bail!(
-            "{} trait file(s) without unimock in {traits_rel}",
+            "{} trait file(s) without mock coverage in {traits_rel}",
             missing.len()
         );
     }
 
     println!(
-        "OK: kithara-play traits unimock coverage is complete \
+        "OK: kithara-play traits mock coverage is complete \
          ({checked} files with traits checked)."
     );
     Ok(())

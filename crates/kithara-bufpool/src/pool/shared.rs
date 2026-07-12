@@ -1,4 +1,6 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
+
+use kithara_platform::sync::Arc;
 
 use super::{
     core::{ByteBudget, Pool, PoolStats},

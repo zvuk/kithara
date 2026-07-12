@@ -1,7 +1,8 @@
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, fmt};
 
 use bon::Builder;
 use bytes::Bytes;
+use kithara_platform::sync::Arc;
 use url::Url;
 
 /// Result of processing a key through a [`KeyProcessor`].

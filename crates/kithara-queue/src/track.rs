@@ -1,7 +1,13 @@
-use std::sync::{Mutex, PoisonError};
+use std::sync::{
+    Mutex, PoisonError,
+    atomic::{AtomicU64, Ordering},
+};
 
 use kithara_events::{EventBus, QueueEvent, TrackId, TrackStatus};
+use kithara_platform::CancelToken;
 use kithara_play::ResourceConfig;
+
+use crate::attempts::{AttemptGuard, Ticket};
 
 /// Snapshot of a track entry in the queue.
 #[derive(Debug, Clone)]
@@ -79,17 +85,50 @@ impl From<Box<ResourceConfig>> for TrackSource {
     }
 }
 
+/// Single owner of everything the queue knows about one track. Dropping the record aborts its
+/// attempt via [`AttemptGuard`].
+pub(crate) struct TrackRecord {
+    pub(crate) id: TrackId,
+    pub(crate) name: String,
+    pub(crate) url: Option<String>,
+    pub(crate) status: TrackStatus,
+    pub(crate) source: TrackSource,
+    pub(crate) load: Option<AttemptGuard>,
+}
+
+impl TrackRecord {
+    pub(crate) fn new(id: TrackId, name: String, source: TrackSource) -> Self {
+        Self {
+            id,
+            name,
+            url: source.uri().map(str::to_string),
+            status: TrackStatus::Pending,
+            source,
+            load: None,
+        }
+    }
+
+    pub(crate) fn entry(&self) -> TrackEntry {
+        TrackEntry {
+            id: self.id,
+            name: self.name.clone(),
+            url: self.url.clone(),
+            status: self.status.clone(),
+        }
+    }
+}
+
 /// Authoritative store for the queue's track list.
 ///
-/// Single owner of `Vec<TrackEntry>`; shared between [`Queue`](crate::Queue)
+/// Single owner of `Vec<TrackRecord>`; shared between [`Queue`](crate::Queue)
 /// and [`Loader`](crate::loader::Loader) via `Arc<Tracks>`. Every status
-/// transition — `Loading` / `Slow` / `Failed` / `Loaded` / `Consumed`
-/// / `Pending` respawn — MUST go through [`Tracks::set_status`] so that
-/// the polled view (`tracks[i].status`) and the reactive
+/// transition MUST go through [`Tracks::set_status`] (or the attempt ops
+/// below) so the polled view and the reactive
 /// [`QueueEvent::TrackStatusChanged`] stream never drift.
 pub(crate) struct Tracks {
     bus: EventBus,
-    inner: Mutex<Vec<TrackEntry>>,
+    inner: Mutex<Vec<TrackRecord>>,
+    next_generation: AtomicU64,
 }
 
 impl Tracks {
@@ -97,27 +136,148 @@ impl Tracks {
         Self {
             bus,
             inner: Mutex::new(Vec::new()),
+            next_generation: AtomicU64::new(0),
         }
     }
 
-    /// Lock the underlying `Vec<TrackEntry>` for direct read/write.
+    /// Lock the underlying `Vec<TrackRecord>` for direct read/write.
     /// Callers that only need to flip status should prefer
     /// [`Self::set_status`].
-    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Atomically mutate `entry.status` and publish
-    /// [`QueueEvent::TrackStatusChanged`]. No-op when `id` is not
-    /// present (caller most likely raced with `Queue::remove`).
+    /// Atomically mutate `record.status` and publish
+    /// [`QueueEvent::TrackStatusChanged`]. `Cancelled` also aborts the
+    /// track's live attempt — a cancelled track never keeps loading.
+    /// No-op when `id` is not present (caller raced `Queue::remove`).
     pub(crate) fn set_status(&self, id: TrackId, status: TrackStatus) {
         let mut guard = self.lock();
-        if let Some(entry) = guard.iter_mut().find(|e| e.id == id) {
-            entry.status = status.clone();
-            drop(guard);
-            self.bus
-                .publish(QueueEvent::TrackStatusChanged { id, status });
+        let Some(record) = guard.iter_mut().find(|r| r.id == id) else {
+            return;
+        };
+        record.status = status.clone();
+        let aborted = matches!(status, TrackStatus::Cancelled)
+            .then(|| record.load.take())
+            .flatten();
+        drop(guard);
+        drop(aborted);
+        self.bus
+            .publish(QueueEvent::TrackStatusChanged { id, status });
+    }
+
+    /// Original source for `id`, if still queued.
+    pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource> {
+        self.lock()
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.source.clone())
+    }
+
+    /// Register a fresh attempt. Dedupes against a live attempt; replaces
+    /// one that is already cancelled but still unwinding.
+    pub(crate) fn begin_attempt(&self, id: TrackId, cancel: CancelToken) -> Option<Ticket> {
+        let mut guard = self.lock();
+        let ticket = match guard.iter_mut().find(|r| r.id == id) {
+            Some(record) if record.load.as_ref().is_none_or(AttemptGuard::is_cancelled) => {
+                Some(install(record, &self.next_generation, cancel))
+            }
+            _ => None,
+        };
+        drop(guard);
+        ticket
+    }
+
+    /// Move a track's pending load into the interactive lane: replace a
+    /// still-waiting (or cancelled-but-unwinding) attempt. An attempt
+    /// already holding a permit is kept - its download is progressing.
+    /// Vacant means the attempt just finished; the completion path owns
+    /// what happens next, so no new attempt starts.
+    pub(crate) fn promote_attempt(&self, id: TrackId, cancel: CancelToken) -> Option<Ticket> {
+        let mut guard = self.lock();
+        let ticket = match guard.iter_mut().find(|r| r.id == id) {
+            Some(record)
+                if record
+                    .load
+                    .as_ref()
+                    .is_some_and(|a| a.waiting || a.is_cancelled()) =>
+            {
+                Some(install(record, &self.next_generation, cancel))
+            }
+            _ => None,
+        };
+        drop(guard);
+        ticket
+    }
+
+    /// Attempt won its lane permit: flip the track to `Loading`. `false`
+    /// means the ticket was replaced or cancelled while waiting - the
+    /// caller must release the permit and bail out without loading.
+    pub(crate) fn mark_loading(&self, ticket: &Ticket) -> bool {
+        let mut guard = self.lock();
+        let claimed = guard
+            .iter_mut()
+            .find(|r| r.id == ticket.id)
+            .is_some_and(|r| {
+                let Some(attempt) = r.load.as_mut() else {
+                    return false;
+                };
+                if attempt.generation != ticket.generation || attempt.is_cancelled() {
+                    return false;
+                }
+                attempt.waiting = false;
+                r.status = TrackStatus::Loading;
+                true
+            });
+        drop(guard);
+        if claimed {
+            self.bus.publish(QueueEvent::TrackStatusChanged {
+                id: ticket.id,
+                status: TrackStatus::Loading,
+            });
         }
+        claimed
+    }
+
+    /// Attempt finished. Disarms and removes the guard this ticket owns
+    /// (the token now belongs to the built `Resource`, or died with the
+    /// dropped load future); `failure` flips the track to `Failed`.
+    /// A stale ticket changes nothing.
+    pub(crate) fn finish_attempt(&self, ticket: &Ticket, failure: Option<String>) {
+        let mut guard = self.lock();
+        let Some(record) = guard.iter_mut().find(|r| r.id == ticket.id) else {
+            return;
+        };
+        if record
+            .load
+            .as_ref()
+            .is_none_or(|a| a.generation != ticket.generation)
+        {
+            return;
+        }
+        if let Some(mut attempt) = record.load.take() {
+            attempt.disarm();
+        }
+        let Some(reason) = failure else {
+            return;
+        };
+        record.status = TrackStatus::Failed(reason.clone());
+        drop(guard);
+        self.bus.publish(QueueEvent::TrackStatusChanged {
+            id: ticket.id,
+            status: TrackStatus::Failed(reason),
+        });
+    }
+}
+
+fn install(record: &mut TrackRecord, generations: &AtomicU64, cancel: CancelToken) -> Ticket {
+    let generation = generations.fetch_add(1, Ordering::Relaxed);
+    // Replacing the guard drops the old one armed, cancelling the
+    // superseded attempt.
+    record.load = Some(AttemptGuard::new(generation, cancel));
+    Ticket {
+        id: record.id,
+        generation,
     }
 }
 
@@ -145,5 +305,117 @@ mod tests {
         let src: TrackSource = cfg.into();
         assert!(matches!(src, TrackSource::Config(_)));
         assert_eq!(src.uri(), None);
+    }
+
+    fn tracks_with(id: TrackId) -> Tracks {
+        let tracks = Tracks::new(EventBus::default());
+        tracks.lock().push(TrackRecord::new(
+            id,
+            String::new(),
+            "https://x/a.mp3".into(),
+        ));
+        tracks
+    }
+
+    fn token() -> CancelToken {
+        CancelToken::never().child()
+    }
+
+    #[kithara::test]
+    fn begin_dedupes_live_attempt() {
+        let tracks = tracks_with(TrackId(1));
+        assert!(tracks.begin_attempt(TrackId(1), token()).is_some());
+        assert!(tracks.begin_attempt(TrackId(1), token()).is_none());
+    }
+
+    #[kithara::test]
+    fn begin_replaces_cancelled_unwinding_attempt() {
+        let tracks = tracks_with(TrackId(1));
+        let first_cancel = token();
+        let first = tracks
+            .begin_attempt(TrackId(1), first_cancel.clone())
+            .expect("BUG: vacant record must accept an attempt");
+        tracks.set_status(TrackId(1), TrackStatus::Cancelled);
+        assert!(first_cancel.is_cancelled(), "Cancelled must abort the load");
+        let second = tracks
+            .begin_attempt(TrackId(1), token())
+            .expect("cancelled attempt must be replaceable");
+        assert!(!tracks.mark_loading(&first), "replaced ticket loses claim");
+        assert!(tracks.mark_loading(&second));
+    }
+
+    #[kithara::test]
+    fn promote_replaces_waiting_and_cancels_it() {
+        let tracks = tracks_with(TrackId(1));
+        let parked_cancel = token();
+        let parked = tracks
+            .begin_attempt(TrackId(1), parked_cancel.clone())
+            .expect("BUG: vacant record must accept an attempt");
+        let promoted = tracks
+            .promote_attempt(TrackId(1), token())
+            .expect("waiting attempt must be promotable");
+        assert!(parked_cancel.is_cancelled(), "parked attempt must abort");
+        assert!(!tracks.mark_loading(&parked));
+        assert!(tracks.mark_loading(&promoted));
+    }
+
+    #[kithara::test]
+    fn promote_keeps_attempt_holding_permit() {
+        let tracks = tracks_with(TrackId(1));
+        let loading = tracks
+            .begin_attempt(TrackId(1), token())
+            .expect("BUG: vacant record must accept an attempt");
+        assert!(tracks.mark_loading(&loading));
+        assert!(
+            tracks.promote_attempt(TrackId(1), token()).is_none(),
+            "an attempt past the permit gate keeps its download"
+        );
+    }
+
+    #[kithara::test]
+    fn promote_vacant_is_noop() {
+        let tracks = tracks_with(TrackId(1));
+        assert!(tracks.promote_attempt(TrackId(1), token()).is_none());
+    }
+
+    #[kithara::test]
+    fn finish_disarms_and_ignores_stale_ticket() {
+        let tracks = tracks_with(TrackId(1));
+        let first_cancel = token();
+        let old = tracks
+            .begin_attempt(TrackId(1), first_cancel.clone())
+            .expect("BUG: vacant record must accept an attempt");
+        let new = tracks
+            .promote_attempt(TrackId(1), token())
+            .expect("waiting attempt must be promotable");
+        tracks.finish_attempt(&old, None);
+        assert!(tracks.mark_loading(&new), "stale finish must not evict");
+        tracks.finish_attempt(&new, None);
+        assert!(
+            tracks.begin_attempt(TrackId(1), token()).is_some(),
+            "finished attempt must leave the record vacant"
+        );
+    }
+
+    #[kithara::test]
+    fn removing_record_cancels_attempt() {
+        let tracks = tracks_with(TrackId(1));
+        let cancel = token();
+        let _ticket = tracks
+            .begin_attempt(TrackId(1), cancel.clone())
+            .expect("BUG: vacant record must accept an attempt");
+        tracks.lock().clear();
+        assert!(cancel.is_cancelled(), "dropping the record aborts the load");
+    }
+
+    #[kithara::test]
+    fn finish_with_failure_sets_failed_once() {
+        let tracks = tracks_with(TrackId(1));
+        let ticket = tracks
+            .begin_attempt(TrackId(1), token())
+            .expect("BUG: vacant record must accept an attempt");
+        tracks.finish_attempt(&ticket, Some("boom".into()));
+        let status = tracks.lock()[0].status.clone();
+        assert!(matches!(status, TrackStatus::Failed(_)));
     }
 }

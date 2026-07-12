@@ -2,12 +2,12 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
-use std::{fmt, num::NonZeroUsize, path::PathBuf, sync::Arc};
+use std::{fmt, num::NonZeroUsize, path::PathBuf};
 
 use bon::{Builder, bon};
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use kithara_platform::{CancelScope, CancelToken};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::DiskAssetStore;

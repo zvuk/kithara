@@ -3,11 +3,14 @@
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, OnceLock, atomic::Ordering},
+    sync::{OnceLock, atomic::Ordering},
 };
 
 use dashmap::DashMap;
-use kithara_platform::{CancelToken, sync::Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{Availability, AvailabilityIndex, InnerIndex};

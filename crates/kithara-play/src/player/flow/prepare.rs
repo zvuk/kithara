@@ -1,4 +1,6 @@
-use std::{num::NonZeroU32, sync::Arc};
+use std::num::NonZeroU32;
+
+use kithara_platform::sync::Arc;
 
 use super::super::core::PlayerImpl;
 use crate::resource::ResourceConfig;
@@ -22,12 +24,14 @@ impl PlayerImpl {
         let stretch = Some(Arc::clone(&self.core.timestretch));
         let host_sample_rate = NonZeroU32::new(self.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.core.engine.configured_sample_rate()));
+        let mut decoder = config.decoder.clone();
+        decoder.gapless_mode = self.core.gapless_mode;
         ResourceConfig {
             bus,
             cancel,
             worker: Some(self.core.engine.worker().clone()),
             host_sample_rate,
-            gapless_mode: self.core.gapless_mode,
+            decoder,
             stretch,
             engine_load: Some(Arc::clone(&self.core.engine_load)),
             ..config

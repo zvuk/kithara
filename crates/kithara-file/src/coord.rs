@@ -1,11 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_platform::sync::Notify;
+use kithara_platform::sync::{Arc, Notify};
 use kithara_stream::{
     Activity, PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState,
 };

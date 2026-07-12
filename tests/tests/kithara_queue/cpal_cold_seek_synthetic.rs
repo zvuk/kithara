@@ -1,13 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     decode::DecoderBackend,
     events::{AudioEvent, Event},
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration, tokio},
+    platform::{CancelToken, sync::Arc, time::Duration, tokio},
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
@@ -78,7 +76,11 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
         .expect("valid master URL")
         .downloader(downloader.clone())
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let source = TrackSource::Config(Box::new(cfg));
 

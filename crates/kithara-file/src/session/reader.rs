@@ -1,9 +1,7 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_events::{DeferredBus, EventBus, FileEvent};
+use kithara_platform::sync::Arc;
 use kithara_stream::{ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
 use crate::coord::FileCoord;

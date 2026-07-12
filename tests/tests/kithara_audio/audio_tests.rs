@@ -154,10 +154,14 @@ fn test_audio_config_with_media_info() {
 }))]
 fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
     let config = AudioConfig::<kithara::file::File>::for_stream(FileConfig::default())
-        .gapless_mode(mode)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .gapless_mode(mode)
+                .build(),
+        )
         .build();
 
-    assert_eq!(config.gapless_mode, mode);
+    assert_eq!(config.decoder.gapless_mode, mode);
 }
 
 #[kithara::test(tokio)]

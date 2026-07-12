@@ -10,7 +10,17 @@ keywords = ["audio", "streaming", "hls", "player", "dj"]
 categories = ["multimedia::audio"]
 
 [features]
-default = ["file", "hls", "symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
+default = [
+    "file",
+    "hls",
+    "symphonia",
+    "resample-rubato",
+    "analysis-beat",
+    "analysis-waveform",
+    "stretch-signalsmith",
+    "client-reqwest",
+    "tls-rustls",
+]
 # HTTP backend forwarding to every kithara-net-reaching dep. Optional deps
 # (kithara-net / kithara-file / kithara-hls / kithara-abr) use the weak `?`
 # form so a backend choice never force-enables them. Android forwards
@@ -78,6 +88,20 @@ symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia", "kithara-que
 # LC-only AAC decoder; without this feature, HE-AAC v2 (parametric
 # stereo + SBR) streams fail in the software pipeline.
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac", "kithara-queue?/fdk-aac"]
+resample-glide = [
+    "kithara-audio/resample-glide",
+    "kithara-decode/resample-glide",
+    "kithara-play/resample-glide",
+    "kithara-resampler/resample-glide",
+]
+resample-rubato = [
+    "kithara-audio/resample-rubato",
+    "kithara-decode/resample-rubato",
+    "kithara-play/resample-rubato",
+    "kithara-resampler/resample-rubato",
+]
+analysis-beat = ["kithara-audio/analysis-beat", "kithara-play/analysis-beat"]
+analysis-waveform = ["kithara-audio/analysis-waveform", "kithara-play/analysis-waveform"]
 # Native-only C++ time-stretch backends (selectable at runtime in the DJ
 # deck). Each pulls a C++ toolchain; without one, key-lock is compiled out.
 stretch-signalsmith = ["kithara-audio/stretch-signalsmith"]
@@ -92,6 +116,7 @@ net = ["dep:kithara-net"]
 bufpool = []
 queue = ["dep:kithara-queue"]
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
+loom = ["kithara-platform/loom"]
 no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 tokio-net = ["kithara-platform/tokio-net"]
 tokio-rt-multi-thread = ["kithara-platform/tokio-rt-multi-thread"]
@@ -139,12 +164,24 @@ perf = [
 # backend selection is separate so macOS desktop/tests can use the decoder
 # without pulling the real-clock NSURLSession backend.
 apple = ["kithara-audio/apple", "kithara-decode/apple", "kithara-play/apple", "kithara-queue?/apple"]
+apple-fused-src = [
+    "kithara-audio/apple-fused-src",
+    "kithara-decode/apple",
+    "kithara-play/apple-fused-src",
+    "kithara-queue?/apple-fused-src",
+]
 # Apple HTTP backend for the shipped FFI framework build. It uses NSURLSession,
 # which passes the DRM keyserver anti-bot WAF natively and removes the wreq /
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
 apple-net = ["kithara-net?/client-apple", "kithara-stream/client-apple"]
-android = ["kithara-audio/android", "kithara-decode/android", "kithara-net?/client-wreq"]
+android = [
+    "kithara-audio/android",
+    "kithara-decode/android",
+    "kithara-net?/client-wreq",
+    "resample-rubato",
+    "analysis-beat",
+]
 full = ["file", "hls", "assets", "net", "bufpool"]
 
 [dependencies]
@@ -161,6 +198,7 @@ kithara-net = { workspace = true, optional = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
 kithara-queue = { workspace = true, optional = true, default-features = false }
+kithara-resampler = { workspace = true, default-features = false }
 kithara-storage = { workspace = true, optional = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }

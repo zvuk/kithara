@@ -108,10 +108,9 @@ mod wire {
 }
 
 mod handle {
-    use std::sync::Arc;
-
     use kithara_audio::EqBandConfig;
     use kithara_bufpool::PcmPool;
+    use kithara_platform::sync::Arc;
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply};
     use crate::{api::SlotId, error::PlayError};

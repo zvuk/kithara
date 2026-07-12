@@ -1,10 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use kithara::{
     assets::StoreOptions,
@@ -13,6 +10,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{self, Duration, Instant, sleep},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
@@ -175,7 +173,11 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         .downloader(downloader.clone())
         .store(store)
         .initial_abr_mode(AbrMode::Auto(None))
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
 
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));

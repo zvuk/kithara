@@ -1,13 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,

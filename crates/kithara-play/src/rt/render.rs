@@ -1,7 +1,6 @@
-use std::sync::Arc;
-
 use firewheel::node::ProcBuffers;
 use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_platform::sync::Arc;
 use ringbuf::HeapProd;
 use smallvec::SmallVec;
 use thunderdome::Index;
@@ -16,6 +15,11 @@ use crate::{
 };
 
 type ActiveTrackEntry = (usize, Index, bool);
+
+#[derive(Clone, Copy)]
+struct Handover {
+    offset: usize,
+}
 
 pub(crate) struct RenderTargets<'a> {
     pub(crate) tracks: &'a mut ArenaRegistry<Arc<str>, PlayerTrack>,
@@ -124,14 +128,15 @@ impl RenderPass {
                     leading_outcome_pos_dur = Some(snapshot);
                 }
 
-                let mut handover_offset = initial_handover_offset(&read_outcome);
+                let mut handover = initial_handover(&read_outcome);
 
                 for (next_idx, (_, next_handle, next_is_leading)) in
                     active_tracks.iter().enumerate()
                 {
-                    let Some(offset) = handover_offset else {
+                    let Some(handoff) = handover else {
                         break;
                     };
+                    let offset = handoff.offset;
                     if next_idx == track_idx || skip_tracks[next_idx] || !*next_is_leading {
                         continue;
                     }
@@ -156,12 +161,13 @@ impl RenderPass {
                         leading_outcome_pos_dur = Some(snapshot);
                     }
 
-                    handover_offset = next_handover_offset(&read_outcome, offset);
+                    handover = next_handover(&read_outcome, offset);
                 }
 
-                if let Some(offset) = handover_offset
-                    && offset < frames
+                if let Some(handoff) = handover
+                    && handoff.offset < frames
                 {
+                    let offset = handoff.offset;
                     for (next_arena_idx, (next_handle, next_state)) in
                         arena_tracks.iter().enumerate()
                     {
@@ -208,19 +214,21 @@ impl RenderPass {
     }
 }
 
-fn initial_handover_offset(read_outcome: &TrackReadOutcome) -> Option<usize> {
+fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {
     match read_outcome {
-        TrackReadOutcome::Partial { frames, .. } => Some(*frames),
-        TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(0),
+        TrackReadOutcome::Partial { frames, .. } => Some(Handover { offset: *frames }),
+        TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(Handover { offset: 0 }),
         TrackReadOutcome::Full { .. } => None,
     }
 }
 
-fn next_handover_offset(read_outcome: &TrackReadOutcome, offset: usize) -> Option<usize> {
+fn next_handover(read_outcome: &TrackReadOutcome, offset: usize) -> Option<Handover> {
     match read_outcome {
         TrackReadOutcome::Full { .. } => None,
-        TrackReadOutcome::Partial { frames, .. } => Some(offset + *frames),
-        TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(offset),
+        TrackReadOutcome::Partial { frames, .. } => Some(Handover {
+            offset: offset.saturating_add(*frames),
+        }),
+        TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(Handover { offset }),
     }
 }
 

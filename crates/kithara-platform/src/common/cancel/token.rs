@@ -1,9 +1,10 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use super::{
     node::{Node, Slot},
     wait::Cancelled,
 };
+use crate::sync::Arc;
 
 /// A handle into a cancel subtree.
 ///
@@ -118,10 +119,7 @@ impl fmt::Debug for CancelWakerGuard {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
 
@@ -129,6 +127,7 @@ mod tests {
     use tokio::{spawn, task, time as tokio_time};
 
     use super::CancelToken;
+    use crate::sync::Arc;
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn fresh_token_not_cancelled() {

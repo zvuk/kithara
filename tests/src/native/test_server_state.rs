@@ -1,12 +1,15 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc, RwLock,
+        RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
-use kithara::platform::{sync::Notify, tokio::sync::watch};
+use kithara::platform::{
+    sync::{Arc, Notify},
+    tokio::sync::watch,
+};
 use moka::sync::Cache;
 use uuid::Uuid;
 
@@ -43,8 +46,19 @@ pub enum Content {
 pub enum Delivery {
     Normal,
     Range,
-    EarlyClose { after_bytes: usize },
-    Throttle { chunk: usize, delay_ms: u64 },
+    EarlyClose {
+        after_bytes: usize,
+    },
+    /// Send `200 OK` headers (with the full `Content-Length`) and the first
+    /// `after_bytes` of the body, then never deliver the rest — the
+    /// throttling-CDN shape where the connection stays open but goes silent.
+    StallAfter {
+        after_bytes: usize,
+    },
+    Throttle {
+        chunk: usize,
+        delay_ms: u64,
+    },
 }
 
 #[derive(Clone)]

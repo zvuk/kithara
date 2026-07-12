@@ -1,10 +1,9 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, PoisonError},
-};
+#[cfg(any(test, feature = "probe"))]
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 
 use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_platform::{CancelScope, CancelToken};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 use kithara_play::{PlayerConfig, PlayerImpl};
 
 use super::types::{
@@ -14,16 +13,12 @@ use crate::{
     config::QueueConfig,
     loader::Loader,
     navigation::NavigationState,
-    track::{TrackEntry, TrackSource, Tracks},
+    track::{TrackRecord, Tracks},
 };
 
-/// Track-id keyed cache of original `TrackSource`s. Aliased so the
-/// field declaration stays free of the structural
-/// `Arc<Mutex<HashMap<…>>>` god-map pattern (see `arch.no-arc-mutex-godmap`).
-pub(super) type TrackSources = HashMap<TrackId, TrackSource>;
-
-/// Test-only respawn resource cache, same aliasing rationale as
-/// [`TrackSources`].
+/// Test-only respawn resource cache. Aliased so the field declaration
+/// stays free of the structural `Arc<Mutex<HashMap<…>>>` god-map
+/// pattern (see `arch.no-arc-mutex-godmap`).
 #[cfg(any(test, feature = "probe"))]
 pub(super) type TestResources = HashMap<TrackId, kithara_play::Resource>;
 
@@ -82,12 +77,6 @@ pub struct Queue {
     /// "Selection serialization".
     pub(super) select_apply: Arc<Mutex<()>>,
     pub(super) player: Arc<PlayerImpl>,
-    /// Kept alongside `tracks` so a `Consumed` track can be re-spawned
-    /// on re-selection (user tapping a previously-played track). The
-    /// original `TrackSource::Config` — including DRM keys and custom
-    /// net/headers — is preserved; a bare URL wouldn't be enough to
-    /// reconstruct a DRM-protected source.
-    pub(super) sources: Arc<Mutex<TrackSources>>,
     /// Test-only respawn resource cache. Populated by
     /// [`Queue::supply_test_resource_for_respawn`] and consumed by
     /// `select` when a `Consumed` / `Cancelled` / `Failed` track is
@@ -95,8 +84,9 @@ pub struct Queue {
     /// without a real loader.
     #[cfg(any(test, feature = "probe"))]
     pub(super) test_resources: Arc<Mutex<TestResources>>,
-    /// Sole owner of the `Vec<TrackEntry>`. Shared with [`Loader`]
-    /// through `Arc<Tracks>`; every status transition goes through
+    /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
+    /// load attempt per track). Shared with [`Loader`] through
+    /// `Arc<Tracks>`; every status transition goes through
     /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
     /// and the event stream stay in sync.
     pub(super) tracks: Arc<Tracks>,
@@ -166,7 +156,6 @@ impl Queue {
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             select_apply: Arc::new(Mutex::new(())),
-            sources: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(test, feature = "probe"))]
             test_resources: Arc::new(Mutex::new(HashMap::new())),
             player_rx: Mutex::new(player_rx),
@@ -207,11 +196,11 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
+    pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>> {
         self.tracks.lock()
     }
 
-    pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
+    pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>> {
         self.tracks.lock()
     }
 

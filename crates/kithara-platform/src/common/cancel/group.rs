@@ -3,11 +3,11 @@ use std::{
     future::Future,
     ops::BitOr,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
 use super::{token::CancelToken, wait::Cancelled};
+use crate::sync::Arc;
 
 /// OR-combinator for cancellation tokens.
 ///

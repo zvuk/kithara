@@ -42,6 +42,10 @@ pub mod play {
     pub use kithara_play::*;
 }
 
+pub mod resampler {
+    pub use kithara_resampler::*;
+}
+
 #[cfg(feature = "queue")]
 pub mod queue {
     pub use kithara_queue::*;
@@ -91,12 +95,12 @@ pub mod storage {
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 pub use kithara_audio::effects::{StretchBackend, StretchBackendError};
-pub use kithara_audio::{GridSegment, RegionPlan, RegionPlanError};
+pub use kithara_audio::{GridSegment, RegionPlan, RegionPlanError, StretchControls};
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
-pub use kithara_audio::{StretchControls, StretchKind, TimeStretchProcessor};
+pub use kithara_audio::{StretchKind, TimeStretchProcessor};
 pub use kithara_test_utils::{kithara::mock, no_block};
 #[cfg(feature = "probe")]
 pub use kithara_test_utils::{
@@ -118,14 +122,14 @@ pub mod prelude {
     pub use kithara_abr::AbrMode;
     pub use kithara_audio::{
         Audio, AudioConfig, EngineLoadSnapshot, GridSegment, PcmReader, RegionPlan,
-        RegionPlanError, ResamplerQuality,
+        RegionPlanError, ResamplerQuality, StretchControls,
     };
     #[cfg(all(
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     ))]
     pub use kithara_audio::{
-        StretchControls, StretchKind, TimeStretchProcessor,
+        StretchKind, TimeStretchProcessor,
         effects::{StretchBackend, StretchBackendError},
     };
     pub use kithara_decode::{
@@ -139,8 +143,8 @@ pub mod prelude {
     #[cfg(feature = "hls")]
     pub use kithara_hls::{Hls, HlsConfig};
     pub use kithara_play::{
-        AudioWorkerHandle, EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource,
-        ResourceConfig, ResourceSrc, ServiceClass, SourceType,
+        AudioWorkerHandle, EngineConfig, EngineImpl, PlaybackResamplerBackend, PlayerConfig,
+        PlayerImpl, Resource, ResourceConfig, ResourceSrc, ServiceClass, SourceType,
     };
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
 }

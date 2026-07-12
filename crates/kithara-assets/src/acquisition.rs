@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, fmt::Debug, ops::Range, path::Path, sync::Arc};
+use std::{fmt, fmt::Debug, ops::Range, path::Path};
 
+use kithara_platform::sync::Arc;
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
 /// A clone-able raw-byte write handle, decoupled from the non-`Clone` commit

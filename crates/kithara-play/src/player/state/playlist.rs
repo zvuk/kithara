@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use kithara_platform::sync::Arc;
 
 use crate::resource::Resource;
 

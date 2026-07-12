@@ -2,15 +2,12 @@ use std::{
     io::Error as IoError,
     num::NonZeroUsize,
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use futures::executor::block_on;
 use kithara::{
-    platform::time::Duration,
+    platform::{sync::Arc, time::Duration},
     storage::WaitOutcome,
     stream::{
         Activity, AudioCodec, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,

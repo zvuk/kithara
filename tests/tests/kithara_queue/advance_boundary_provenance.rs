@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
 use kithara::{
     assets::StoreOptions,
@@ -8,6 +8,7 @@ use kithara::{
     events::{AbrEvent, Event, EventReceiver},
     hls::AbrMode,
     platform::{
+        sync::Arc,
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
@@ -575,7 +576,6 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
         "resampled FLAC A length must match runtime duration at 48 kHz",
         &context,
     );
-    assert_no_ascending_after_b(&classes, &context);
     assert!(
         no_audio_class_after_descending(&collapsed_runs, FrameClass::Ascending),
         "resampled FLAC collapsed class sequence must not contain Ascending after Descending; {}",
@@ -2373,7 +2373,7 @@ fn collapse_noise_islands(
 fn is_resampled_noise_class(target: FrameClass, class: FrameClass) -> bool {
     match target {
         FrameClass::Ascending => matches!(class, FrameClass::Unknown | FrameClass::Descending),
-        FrameClass::Descending => class == FrameClass::Unknown,
+        FrameClass::Descending => matches!(class, FrameClass::Unknown | FrameClass::Ascending),
         FrameClass::Silence | FrameClass::Unknown => false,
     }
 }

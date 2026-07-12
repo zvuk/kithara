@@ -10,7 +10,15 @@ keywords = ["audio", "player", "dj", "crossfade", "playback"]
 categories = ["multimedia::audio"]
 
 [features]
-default = ["backend-cpal", "symphonia", "client-reqwest", "tls-rustls"]
+default = [
+    "backend-cpal",
+    "symphonia",
+    "resample-rubato",
+    "analysis-beat",
+    "analysis-waveform",
+    "client-reqwest",
+    "tls-rustls",
+]
 backend-cpal = ["firewheel/cpal"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
@@ -55,13 +63,18 @@ tls-native = [
 ]
 backend-web-audio = ["dep:firewheel-web-audio", "symphonia"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
-apple = ["kithara-audio/apple"]
+apple = ["kithara-audio/apple", "kithara-decode/apple"]
+apple-fused-src = ["kithara-audio/apple-fused-src", "kithara-decode/apple"]
 # Software decoder pass-through. Required when not opting into a hardware
 # backend, since `kithara-decode`'s `DecoderBackend` enum needs at least
 # one variant available. `backend-web-audio` pulls it in transitively:
 # wasm has no hardware decoder (apple/android are native-only).
 symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
+resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide"]
+resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
+analysis-beat = ["kithara-audio/analysis-beat"]
+analysis-waveform = ["kithara-audio/analysis-waveform"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
 probe = []
@@ -111,7 +124,7 @@ firewheel-web-audio = { workspace = true, optional = true }
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["probe"] }
 kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

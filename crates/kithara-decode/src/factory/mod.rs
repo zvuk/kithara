@@ -9,4 +9,4 @@
 mod inner;
 mod probe;
 
-pub use inner::{DecoderBackend, DecoderConfig, DecoderFactory};
+pub use inner::{DecoderBackend, DecoderConfig, DecoderFactory, DecoderResamplerConfig};

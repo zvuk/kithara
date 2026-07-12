@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
 use kithara::platform::{
-    sync::{Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex},
     thread,
     time::Duration,
 };

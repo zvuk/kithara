@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use kithara::stream::AudioCodec;
+use kithara::{platform::sync::Arc, stream::AudioCodec};
 #[cfg(target_arch = "wasm32")]
 use reqwest::Client;
 use thiserror::Error;

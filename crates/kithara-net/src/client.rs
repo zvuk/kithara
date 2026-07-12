@@ -1,9 +1,13 @@
-use std::{num::NonZeroU16, sync::Arc};
+use std::num::NonZeroU16;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::TryStreamExt;
-use kithara_platform::{CancelToken, time::timeout};
+use futures::{StreamExt, TryStreamExt};
+use kithara_platform::{
+    CancelToken,
+    sync::Arc,
+    time::{Duration, timeout},
+};
 use url::Url;
 
 mod kithara {
@@ -45,19 +49,38 @@ fn truncate_error_body(mut body: String) -> String {
 }
 
 /// Read an error response's body for [`NetError::Status`] context — a real
-/// socket read, so the fn is one `flash(io)` bracket.
+/// socket read, so the fn is one `flash(io)` bracket. Bounded by the same
+/// inactivity budget as [`body_bytes`]: the body is diagnostics only, so a
+/// stall degrades to an empty string instead of parking the error path.
 #[kithara::flash(io)]
-async fn error_body(resp: Response) -> String {
-    truncate_error_body(resp.text().await.unwrap_or_default())
+async fn error_body(resp: Response, inactivity: Duration) -> String {
+    let body = timeout(inactivity, resp.text())
+        .await
+        .map_or_else(|_| String::new(), Result::unwrap_or_default);
+    truncate_error_body(body)
 }
 
-/// Collect a full response body — a real socket read, so the fn is one
-/// `flash(io)` bracket. The `Net` trait methods cannot carry the attribute
-/// themselves: `#[async_trait]` rewrites them into sync constructors of boxed
-/// futures, which would drop the bracket before the I/O starts.
+/// Collect a full response body under the per-chunk inactivity bound: no
+/// chunk within `inactivity` ⇒ transient [`NetError::Timeout`] the retry
+/// decorator owns. `get_bytes`/`post_bytes` bodies (playlists, DRM keys)
+/// do not ride the resilient stream, so without this bound a server that
+/// sends headers and then stalls the body parks the caller forever.
+///
+/// A real socket read, so the fn is one `flash(io)` bracket. The `Net`
+/// trait methods cannot carry the attribute themselves: `#[async_trait]`
+/// rewrites them into sync constructors of boxed futures, which would drop
+/// the bracket before the I/O starts.
 #[kithara::flash(io)]
-async fn body_bytes(resp: Response) -> Result<Bytes, NetError> {
-    resp.bytes().await.map_err(NetError::from)
+async fn body_bytes(resp: Response, inactivity: Duration) -> Result<Bytes, NetError> {
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::new();
+    while let Some(chunk) = timeout(inactivity, stream.next())
+        .await
+        .map_err(|_| NetError::Timeout)?
+    {
+        buf.extend_from_slice(&chunk.map_err(NetError::from)?);
+    }
+    Ok(Bytes::from(buf))
 }
 
 fn status_error(url: Url, status: u16, body: String) -> NetError {
@@ -146,17 +169,12 @@ impl RawHttp {
         accept_partial: bool,
     ) -> Result<Response, NetError> {
         let req = Self::apply_headers(req, headers);
-        let req = if let Some(total) = self.options.total_timeout {
-            req.timeout(total)
-        } else {
-            req
-        };
         let resp = self.send_idle_bounded(req).await?;
         let status = resp.status();
 
         let ok = status.is_success() || (accept_partial && status == StatusCode::PARTIAL_CONTENT);
         if !ok {
-            let body = error_body(resp).await;
+            let body = error_body(resp, self.options.inactivity_timeout).await;
             return Err(status_error(url, status.as_u16(), body));
         }
 
@@ -374,7 +392,7 @@ impl Net for RawHttp {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.clone());
         let resp = self.send_checked(req, headers, url, false).await?;
-        body_bytes(resp).await
+        body_bytes(resp, self.options.inactivity_timeout).await
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -394,17 +412,12 @@ impl Net for RawHttp {
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
         let req = self.head_request(url.clone());
         let req = Self::apply_headers(req, headers);
-        let req = if let Some(total) = self.options.total_timeout {
-            req.timeout(total)
-        } else {
-            req
-        };
         let resp = self.send_idle_bounded(req).await?;
 
         let status = resp.status();
 
         if !status.is_success() && status != StatusCode::PARTIAL_CONTENT {
-            let body = error_body(resp).await;
+            let body = error_body(resp, self.options.inactivity_timeout).await;
             return Err(status_error(url, status.as_u16(), body));
         }
 
@@ -440,7 +453,7 @@ impl Net for RawHttp {
     ) -> Result<Bytes, NetError> {
         let req = post_request(&self.inner, url.clone(), body);
         let resp = self.send_checked(req, headers, url, false).await?;
-        body_bytes(resp).await
+        body_bytes(resp, self.options.inactivity_timeout).await
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -466,10 +479,7 @@ mod tests {
 
     use std::{
         net::SocketAddr,
-        sync::{
-            Arc,
-            atomic::{AtomicU32, Ordering},
-        },
+        sync::atomic::{AtomicU32, Ordering},
     };
 
     use axum::{
@@ -478,6 +488,7 @@ mod tests {
         routing::{get, post},
     };
     use kithara_platform::{
+        sync::Arc,
         time::Duration,
         tokio::{net::TcpListener, task::spawn},
     };
@@ -555,6 +566,75 @@ mod tests {
                 max_delay: Duration::from_millis(10),
             })
             .build()
+    }
+
+    /// Spawn an axum server whose `/stall` routes send `200 OK` with headers
+    /// and one body chunk, then never deliver the rest of the body — the
+    /// throttling-CDN shape that must surface as a timeout, not a hang.
+    async fn server_stalling_body() -> Url {
+        use axum::{body::Body, response::Response as HttpResponse};
+        use futures::{StreamExt, stream};
+
+        fn stalled() -> HttpResponse {
+            HttpResponse::new(Body::from_stream(
+                stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"partial"))])
+                    .chain(stream::pending()),
+            ))
+        }
+        let app = Router::new()
+            .route("/stall", get(|| async { stalled() }))
+            .route("/stall", post(|_body: Bytes| async { stalled() }));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr: SocketAddr = listener.local_addr().expect("local_addr");
+        spawn(async move {
+            axum::serve(listener, app.into_make_service())
+                .await
+                .expect("serve");
+        });
+        Url::parse(&format!("http://{addr}/stall")).expect("url")
+    }
+
+    fn stall_options() -> NetOptions {
+        NetOptions::builder()
+            .inactivity_timeout(Duration::from_millis(100))
+            .retry_policy(RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(10),
+            })
+            .build()
+    }
+
+    fn assert_timeout_class(err: &NetError) {
+        assert!(
+            matches!(
+                err,
+                NetError::Timeout | NetError::RetryExhausted { .. } | NetError::Network(_)
+            ),
+            "expected timeout-class error, got {err:?}"
+        );
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn get_bytes_aborts_when_body_stalls() {
+        let url = server_stalling_body().await;
+        let client = HttpClient::new(stall_options(), CancelToken::never());
+        let err = client
+            .get_bytes(url, None)
+            .await
+            .expect_err("stalled body must abort, not hang");
+        assert_timeout_class(&err);
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn post_bytes_aborts_when_body_stalls() {
+        let url = server_stalling_body().await;
+        let client = HttpClient::new(stall_options(), CancelToken::never());
+        let err = client
+            .post_bytes(url, Bytes::from_static(b"req"), None)
+            .await
+            .expect_err("stalled body must abort, not hang");
+        assert_timeout_class(&err);
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]

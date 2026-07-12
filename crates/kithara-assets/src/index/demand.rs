@@ -1,14 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use dashmap::{DashMap, mapref::entry::Entry};
 use kithara_platform::{
     CancelToken,
-    sync::{Mutex, Notify},
+    sync::{Arc, Mutex, Notify},
 };
 
 use crate::key::ResourceKey;
@@ -274,12 +271,9 @@ impl std::fmt::Debug for DemandIndex {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    };
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-    use kithara_platform::{CancelToken, time::Duration};
+    use kithara_platform::{CancelToken, sync::Arc, time::Duration};
     use kithara_test_utils::kithara;
 
     use super::*;

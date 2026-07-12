@@ -17,6 +17,10 @@ pub enum QueueError {
     #[error("track not ready: {0:?}")]
     NotReady(TrackId),
 
+    /// Load attempt aborted: superseded by a newer selection or torn down with its track.
+    #[error("load cancelled: {0:?}")]
+    Cancelled(TrackId),
+
     /// Error bubbled up from `kithara-play`.
     #[error(transparent)]
     Play(#[from] PlayError),

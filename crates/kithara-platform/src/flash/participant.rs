@@ -2,13 +2,13 @@ use std::{
     future::Future,
     panic::Location,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll, Waker},
 };
 
 use pin_project_lite::pin_project;
 
 use super::system::{self, credit, gate::TaskGate};
+use crate::sync::Arc;
 
 pin_project! {
     /// Spawn poll-wrapper: keeps the wrapped task counted in the engine's

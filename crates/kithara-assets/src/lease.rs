@@ -6,11 +6,14 @@ use std::{
     num::NonZeroUsize,
     ops::Range,
     path::Path,
-    sync::{Arc, Weak},
+    sync::Weak,
 };
 
 use dashmap::DashMap;
-use kithara_platform::{CancelToken, sync::Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
 use crate::{
@@ -119,19 +122,6 @@ where
 {
     pub(crate) fn new(inner: Arc<A>, cancel: CancelToken, pins: PinsIndex) -> Self {
         Self::with_byte_recorder(inner, cancel, None, pins)
-    }
-
-    /// Force-persist the in-memory pin set to disk. No-op when the lease
-    /// layer is bypassed (capability inactive) or the underlying pins
-    /// index is ephemeral.
-    ///
-    /// # Errors
-    /// Returns `AssetsError` if the underlying pins index flush fails.
-    pub fn flush_pins(&self) -> AssetsResult<()> {
-        if !self.is_active() {
-            return Ok(());
-        }
-        self.pins.flush()
     }
 
     fn is_active(&self) -> bool {
@@ -662,20 +652,6 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn explicit_flush_after_pin_is_safe() {
-        let dir = tempfile::tempdir().unwrap();
-        let lease = make_lease(dir.path());
-        let key = ResourceKey::relative(ROOT, "audio.mp3");
-
-        let _res = lease.acquire_resource(&key, None).unwrap();
-
-        lease.flush_pins().unwrap();
-
-        let on_disk = load_persisted_pins(dir.path());
-        assert!(on_disk.contains(ROOT));
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn drop_guard_eagerly_persists_unpin() {
         let dir = tempfile::tempdir().unwrap();
         let key = ResourceKey::relative(ROOT, "audio.mp3");
@@ -693,19 +669,6 @@ mod tests {
             "unpin should be eagerly persisted, got {:?}",
             on_disk
         );
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn flush_persists_active_pins() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = ResourceKey::relative(ROOT, "audio.mp3");
-
-        let lease = make_lease(dir.path());
-        let _res = lease.acquire_resource(&key, None).unwrap();
-
-        lease.flush_pins().unwrap();
-        let on_disk = load_persisted_pins(dir.path());
-        assert!(on_disk.contains(ROOT), "flush should persist active pins");
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

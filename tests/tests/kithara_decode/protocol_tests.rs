@@ -33,7 +33,9 @@ enum Backend {
 impl Backend {
     fn make_decoder(self, bytes: Vec<u8>, info: &MediaInfo) -> Box<dyn Decoder> {
         let source = Cursor::new(bytes);
-        let config = DecoderConfig::builder().backend(self.to_choice()).build();
+        let config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .backend(self.to_choice())
+            .build();
         DecoderFactory::create_from_media_info(source, info, config)
             .unwrap_or_else(|e| panic!("{self:?} decoder should create: {e}"))
     }

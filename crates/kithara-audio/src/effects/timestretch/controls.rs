@@ -1,6 +1,7 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use arc_swap::ArcSwapOption;
+use kithara_platform::sync::Arc;
 use portable_atomic::AtomicF32;
 #[cfg(all(
     not(target_arch = "wasm32"),
@@ -13,24 +14,11 @@ use {
 
 use crate::region::RegionPlan;
 
-/// Single source of truth for live playback-speed control, shared (via `Arc`)
-/// between the consumer/UI and the audio worker's effect chain. Replaces the
-/// former split `playback_rate` / `tempo_ratio` mirror.
-///
-/// Region plans can be installed independently of backend availability.
-/// Key-lock and backend selection exist only when a stretch backend is compiled
-/// in (`stretch-signalsmith` / `stretch-bungee`, native targets); without one
-/// the chain is resampler-first and pitch follows speed.
-///
-/// All fields are read each chunk by the effect chain and may be written at
-/// any time from the control thread; updates take effect on the next
-/// processed chunk. See the crate `CONTEXT.md` ("Live stretch controls")
-/// for the speed-routing contract.
+/// Live playback-speed control shared by the caller and the effect chain.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct StretchControls {
-    /// Shared with the resampler directly when no stretch backend is
-    /// compiled in; with one, `TimeStretchProcessor` reads it per chunk.
+    /// Read per chunk by `TimeStretchProcessor` when a backend is compiled in.
     speed: Arc<AtomicF32>,
     region_plan: ArcSwapOption<RegionPlan>,
     #[cfg(all(
@@ -52,7 +40,7 @@ struct EngineControls {
 }
 
 impl StretchControls {
-    /// Build a handle at `speed` (1.0 = normal), key-lock off, default backend.
+    /// Build a handle at `speed` (1.0 = normal) with key-lock off.
     #[must_use]
     pub fn new(speed: f32) -> Arc<Self> {
         Arc::new(Self {
@@ -85,21 +73,11 @@ impl StretchControls {
         self.speed.store(speed, Ordering::Relaxed);
     }
 
-    /// Playback speed (>1 faster). In tempo mode this drives the stretch
-    /// factor; with key-lock off it is routed to the resampler instead.
+    /// Playback speed (>1 faster). When stretch is compiled in this drives the
+    /// stretch slot; otherwise it is retained as control state only.
     #[must_use]
     pub fn speed(&self) -> f32 {
         self.speed.load(Ordering::Relaxed)
-    }
-
-    /// The speed atomic itself, for chains where the resampler follows the
-    /// speed directly (no stretch backend compiled in).
-    #[cfg(not(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    )))]
-    pub(crate) fn speed_shared(&self) -> Arc<AtomicF32> {
-        Arc::clone(&self.speed)
     }
 }
 

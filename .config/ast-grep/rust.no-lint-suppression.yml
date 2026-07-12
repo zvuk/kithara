@@ -60,11 +60,11 @@ ignores:
   - "**/kithara-test-utils/**"
   - "**/kithara-test-macros/**"
   # FFI binding modules — `#![allow(unsafe_code)]` is a structural
-  # requirement (raw `extern` blocks, JNI/CoreAudio handles). The
-  # `#[deny(unsafe_code)]` ratchet at crate root keeps non-FFI code
-  # honest; these directories own the carve-out.
-  - "**/kithara-net/src/backend/apple/**"
-  - "**/kithara-decode/src/apple/**"
+  # requirement where Rust cannot model platform ownership directly.
+  # Apple unsafe code belongs in `kithara-apple`; Android unsafe code
+  # remains in the Android decode backend until it has a shared platform
+  # wrapper.
+  - "**/kithara-apple/src/**"
   - "**/kithara-decode/src/android/**"
   # Crate root file holds two lint allows that quiet `unimock`-generated
   # code (`ignored_unit_patterns`, `allow_attributes`). Documented

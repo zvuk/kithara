@@ -88,7 +88,11 @@ async fn startup_issues_no_eager_size_probe_storm(#[case] fixture: StartupFixtur
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .media_info(fixture.media_info())
-        .decoder_backend(DecoderBackend::Symphonia)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+        )
         .block_on_underrun(true)
         .build();
 

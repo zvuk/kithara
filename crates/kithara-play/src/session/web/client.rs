@@ -1,6 +1,6 @@
-use std::{cell::RefCell, sync::Arc};
+use std::cell::RefCell;
 
-use kithara_platform::sync::mpsc;
+use kithara_platform::sync::{Arc, mpsc};
 
 use super::bridge::{init_bridge_state, start_stream_web_audio};
 use crate::{

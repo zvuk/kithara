@@ -21,6 +21,8 @@ fn missing_config_file_yields_defaults() {
 
     assert!(config.workspace_scan.exclude.is_empty());
     assert_eq!(config.perf.nextest_profile, "perf");
+    assert!(!config.test.no_block.default);
+    assert!(config.test.no_block.features.is_empty());
 }
 
 #[test]
@@ -141,6 +143,10 @@ features = ["always-on"]
 
 [test.flash]
 features = ["virtual-time"]
+
+[test.no_block]
+default = false
+features = ["no-block-detector"]
 "#,
     );
 
@@ -148,6 +154,8 @@ features = ["virtual-time"]
 
     assert_eq!(config.test.features, ["always-on"]);
     assert_eq!(config.test.flash.features, ["virtual-time"]);
+    assert!(!config.test.no_block.default);
+    assert_eq!(config.test.no_block.features, ["no-block-detector"]);
 }
 
 #[test]

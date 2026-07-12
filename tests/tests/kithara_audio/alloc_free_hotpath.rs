@@ -1,13 +1,14 @@
-use std::{
-    num::NonZeroU32,
-    sync::{Arc, atomic::AtomicU32},
-};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use assert_no_alloc::*;
 use kithara::{
     self,
     bufpool::{PcmPool, SharedPool},
     decode::{PcmChunk, PcmMeta, PcmSpec},
+    resampler::{
+        Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
+        ResamplerSettings, create_resampler, rubato::RubatoBackend,
+    },
 };
 
 #[cfg(debug_assertions)]
@@ -79,91 +80,128 @@ fn test_pcm_chunk_access_allocation_free() {
     permit_alloc(|| drop(chunk));
 }
 
-fn active_resampler(pool: &PcmPool) -> kithara::audio::ResamplerProcessor {
-    use kithara::audio::{ResamplerParams, ResamplerProcessor};
-
-    let host_rate = Arc::new(AtomicU32::new(44_100));
-    let params = ResamplerParams::builder()
-        .host_sample_rate(host_rate)
-        .source_sample_rate(48_000)
-        .channels(2)
-        .pool(pool.clone())
+fn build_resampler(pool: &PcmPool, source_rate: u32, target_rate: u32) -> impl Resampler {
+    let settings = ResamplerSettings::builder()
+        .channels(NonZeroUsize::new(2).unwrap_or_else(|| panic!("test channels")))
+        .mode(ResamplerMode::FixedRatio {
+            source_sample_rate: NonZeroU32::new(source_rate)
+                .unwrap_or_else(|| panic!("test source rate")),
+            target_sample_rate: NonZeroU32::new(target_rate)
+                .unwrap_or_else(|| panic!("test target rate")),
+        })
+        .quality(ResamplerQuality::High)
+        .options(ResamplerOptions::builder().chunk_size(4_096).build())
+        .pcm_pool(pool.clone())
         .build();
-    ResamplerProcessor::new(params)
+    let config = ResamplerConfig::builder()
+        .backend(RubatoBackend::new())
+        .settings(settings)
+        .build();
+    create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
 }
 
-/// `WS5b`: the ACTIVE resampler (source != host) pre-allocates its scratch at
-/// construction, so the VERY FIRST `process` on the produce-core is already
-/// allocation-free — no cold-start malloc once `decode_next_chunk` loses its
-/// permit. Without the constructor pre-size this aborts (SIGABRT) on the first
-/// chunk's scratch growth.
+fn planar_block(pool: &PcmPool, frames: usize) -> [kithara::bufpool::PcmBuf; 2] {
+    let mut left = pool.get();
+    let mut right = pool.get();
+    left.ensure_len(frames)
+        .unwrap_or_else(|err| panic!("left channel buffer should fit: {err}"));
+    right
+        .ensure_len(frames)
+        .unwrap_or_else(|err| panic!("right channel buffer should fit: {err}"));
+    for frame in 0..frames {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "test data, precision irrelevant"
+        )]
+        let phase = frame as f32 * 0.001;
+        left[frame] = phase.sin();
+        right[frame] = phase.cos();
+    }
+    [left, right]
+}
+
+fn output_block(pool: &PcmPool, frames: usize) -> [kithara::bufpool::PcmBuf; 2] {
+    let mut left = pool.get();
+    let mut right = pool.get();
+    left.ensure_len(frames)
+        .unwrap_or_else(|err| panic!("left output buffer should fit: {err}"));
+    right
+        .ensure_len(frames)
+        .unwrap_or_else(|err| panic!("right output buffer should fit: {err}"));
+    [left, right]
+}
+
+fn process_planar(
+    resampler: &mut dyn Resampler,
+    input: &[kithara::bufpool::PcmBuf; 2],
+    output: &mut [kithara::bufpool::PcmBuf; 2],
+) -> usize {
+    let input_refs = [&input[0][..], &input[1][..]];
+    let (left, right) = output.split_at_mut(1);
+    let mut output_refs = [&mut left[0][..], &mut right[0][..]];
+    resampler
+        .process_into_buffer(&input_refs, &mut output_refs)
+        .unwrap_or_else(|err| panic!("resampler process should succeed: {err}"))
+        .output_frames
+}
+
+/// Active fixed-ratio resampler construction pre-allocates its scratch, so the
+/// first process call after construction is allocation-free.
 #[kithara::test]
 fn resampler_active_first_chunk_alloc_free() {
-    use kithara::audio::AudioEffect;
-
     let pool = make_pool();
 
-    let (mut processor, first_chunk) = permit_alloc(|| {
+    let (mut resampler, input, mut output) = permit_alloc(|| {
         pool.pre_warm(64, |v| v.resize(16384, 0.0));
-        let processor = active_resampler(&pool);
-        let first_chunk = make_chunk_at(&pool, 4096, 2, 48_000);
-        (processor, first_chunk)
+        let resampler = build_resampler(&pool, 48_000, 44_100);
+        let input = planar_block(&pool, 4_096);
+        let output = output_block(&pool, resampler.output_frames_next());
+        (resampler, input, output)
     });
 
     assert_no_alloc(|| {
-        if let Some(output) = processor.process(first_chunk) {
-            let _ = output.samples.len();
-            drop(output);
-        }
+        let frames = process_planar(&mut resampler, &input, &mut output);
+        assert!(frames > 0);
     });
 }
 
-/// `WS5b`: a live ratio change (DJ rate sweep) stays allocation-free — the
-/// scratch is pre-sized to the resampler's worst-case block across the whole
-/// `MAX_RATIO_ADJUSTMENT` window, so the steady `process` after a rate change
-/// never reallocates.
+/// Active fixed-ratio resampler stays allocation-free after warmup.
 #[kithara::test]
 fn resampler_active_steady_state_alloc_free() {
-    use kithara::audio::AudioEffect;
-
     let pool = make_pool();
 
-    let (mut processor, steady_chunk) = permit_alloc(|| {
+    let (mut resampler, input, mut output) = permit_alloc(|| {
         pool.pre_warm(64, |v| v.resize(16384, 0.0));
-        let mut processor = active_resampler(&pool);
+        let mut resampler = build_resampler(&pool, 48_000, 44_100);
         for _ in 0..16 {
-            let warm = make_chunk_at(&pool, 4096, 2, 48_000);
-            let _ = processor.process(warm);
+            let warm = planar_block(&pool, 4_096);
+            let mut warm_output = output_block(&pool, resampler.output_frames_next());
+            let _ = process_planar(&mut resampler, &warm, &mut warm_output);
         }
-        let steady_chunk = make_chunk_at(&pool, 4096, 2, 48_000);
-        (processor, steady_chunk)
+        let input = planar_block(&pool, 4_096);
+        let output = output_block(&pool, resampler.output_frames_next());
+        (resampler, input, output)
     });
 
     assert_no_alloc(|| {
-        if let Some(output) = processor.process(steady_chunk) {
-            let _ = output.samples.len();
-            drop(output);
-        }
+        let frames = process_planar(&mut resampler, &input, &mut output);
+        assert!(frames > 0);
     });
 }
 
-/// `WS5b` bit-exactness guard: pre-sizing the scratch only changes capacity, so
-/// two independent processors fed the same input must emit byte-identical
-/// output. Catches any accidental value/length change the pre-size could
-/// introduce (pro-DJ zero phase tolerance).
+/// Pre-sizing scratch only changes capacity; two independent resamplers fed
+/// the same input must emit byte-identical output.
 #[kithara::test]
 fn resampler_presize_keeps_output_bit_exact() {
-    use kithara::audio::AudioEffect;
-
     let pool = make_pool();
     pool.pre_warm(64, |v| v.resize(16384, 0.0));
 
     let render = || -> Vec<f32> {
-        let mut processor = active_resampler(&pool);
+        let mut resampler = build_resampler(&pool, 48_000, 44_100);
         let mut out = Vec::new();
         for n in 0..12 {
-            let mut chunk = make_chunk_at(&pool, 4096, 2, 48_000);
-            for (i, s) in chunk.samples.as_mut_slice().iter_mut().enumerate() {
+            let mut input = planar_block(&pool, 4_096);
+            for (i, s) in input[0].iter_mut().enumerate() {
                 #[expect(
                     clippy::cast_precision_loss,
                     reason = "test waveform, precision irrelevant"
@@ -171,9 +209,10 @@ fn resampler_presize_keeps_output_bit_exact() {
                 let v = ((n * 4096 + i) as f32 * 0.0007).sin();
                 *s = v;
             }
-            if let Some(output) = processor.process(chunk) {
-                out.extend_from_slice(&output.samples);
-            }
+            let mut output = output_block(&pool, resampler.output_frames_next());
+            let frames = process_planar(&mut resampler, &input, &mut output);
+            out.extend_from_slice(&output[0][..frames]);
+            out.extend_from_slice(&output[1][..frames]);
         }
         out
     };
@@ -186,45 +225,21 @@ fn resampler_presize_keeps_output_bit_exact() {
 
 #[kithara::test]
 fn test_resampler_passthrough_allocation_free() {
-    use kithara::audio::{AudioEffect, ResamplerParams, ResamplerProcessor};
-
     let pool = make_pool();
 
-    let (mut processor, chunk) = permit_alloc(|| {
+    let (mut resampler, input, mut output) = permit_alloc(|| {
         pool.pre_warm(32, |v| v.resize(8192, 0.0));
-
-        let host_rate = Arc::new(AtomicU32::new(44100));
-        let params = ResamplerParams::builder()
-            .host_sample_rate(host_rate)
-            .source_sample_rate(44100)
-            .channels(2)
-            .pool(pool.clone())
-            .build();
-        let processor = ResamplerProcessor::new(params);
-
-        let chunk = make_chunk(&pool, 4096, 2);
-
-        let warmup_chunk = make_chunk(&pool, 4096, 2);
-        let mut warmup_proc = {
-            let host_rate = Arc::new(AtomicU32::new(44100));
-            let params = ResamplerParams::builder()
-                .host_sample_rate(host_rate)
-                .source_sample_rate(44100)
-                .channels(2)
-                .pool(pool.clone())
-                .build();
-            ResamplerProcessor::new(params)
-        };
-        let _ = warmup_proc.process(warmup_chunk);
-
-        (processor, chunk)
+        let mut resampler = build_resampler(&pool, 44_100, 44_100);
+        let warmup = planar_block(&pool, 4_096);
+        let mut warmup_output = output_block(&pool, resampler.output_frames_next());
+        let _ = process_planar(&mut resampler, &warmup, &mut warmup_output);
+        let input = planar_block(&pool, 4_096);
+        let output = output_block(&pool, resampler.output_frames_next());
+        (resampler, input, output)
     });
 
     assert_no_alloc(|| {
-        let result = processor.process(chunk);
-        if let Some(output) = result {
-            let _ = output.samples.len();
-            drop(output);
-        }
+        let frames = process_planar(&mut resampler, &input, &mut output);
+        assert!(frames > 0);
     });
 }

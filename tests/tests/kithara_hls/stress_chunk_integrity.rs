@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{StorageBackend, StoreOptions},
@@ -7,6 +7,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, Instant, sleep},
     },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},

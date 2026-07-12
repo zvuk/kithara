@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use iced::{Size, window::Settings};
 use kithara::play::StretchControls;
-use kithara_platform::tokio;
+use kithara_platform::{sync::Arc, tokio};
 use kithara_queue::Queue;
 
 use super::{app::Kithara, fonts, update, view};

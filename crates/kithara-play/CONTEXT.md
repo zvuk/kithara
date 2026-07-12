@@ -12,20 +12,25 @@ it each chunk. Rate setters (`set_rate`, `play`) and `set_keylock` / `set_backen
 all write this one handle; there is no second rate atomic and no manual mirror.
 
 `prepare_config` always passes the shared controls into every track (`stretch =
-Some(..)`). With a compiled-in backend the effect chain runs a
-`TimeStretchProcessor` in tempo mode whether or not key-lock is on:
+Some(..)`). With a compiled-in backend the effect chain runs a source-domain
+`TimeStretchProcessor`; fixed-ratio sample-rate conversion is handled by Apple
+codec-embedded decode when that placement is selected, otherwise by the
+standalone playback resampler stage:
 
-- **key-lock off** (default): the stretch slot bypasses (PCM forwarded untouched)
-  and routes `speed` to the resampler — changing speed shifts pitch (vinyl-style).
-- **key-lock on**: the stretch slot changes tempo with pitch held and pins the
-  resampler to 1.0.
+- **key-lock off**: the stretch slot applies `set_ratio(1/speed)` and
+  `set_pitch(speed)` — changing speed shifts pitch (vinyl-style).
+- **key-lock on**: the stretch slot applies `set_ratio(1/speed)` and
+  `set_pitch(1.0)` — changing speed preserves pitch.
 
-Without one (default native build, wasm) there is no key-lock: the resampler
-follows the shared speed atomic directly, identical to key-lock off.
+At speed 1.0 with no region plan the slot bypasses byte-identically. Without a
+stretch backend, including wasm, no speed DSP is inserted and PCM output remains
+pinned to 1.0 speed. Mobile feature sets default key-lock to on, so app-level
+rate changes are pitch-preserving unless the consumer explicitly disables
+key-lock.
 
 Because the controls are read each chunk, **key-lock, backend, and speed all apply
-live, mid-track — no reload.** Switching key-lock or backend resets the FFT
-backend's buffer, so a brief transient (~100–300 ms) is expected at the switch.
+live, mid-track — no reload.** Switching backend rebuilds the DSP backend;
+returning to unity passthrough resets buffered stretch state.
 `Queue` delegates `set_rate` to the player; key-lock and backend are set by the
 consumer directly on the shared `StretchControls` handle.
 
@@ -165,6 +170,26 @@ cross-platform core (`session/{state,dispatch,protocol}.rs`) carries zero
 `#[cfg]`; the structural gates are the cfg lines around `mod native`, `mod web`,
 and their re-exports in `mod.rs`.
 
+## Route Changes
+
+`PlayerNodeProcessor::new_stream` is the host-rate bridge. A platform route
+notification updates the session host sample rate and propagates it to every
+loaded resource. When the numeric rate changes, resources enter the existing
+decoder recreate path with `RecreateCause::RouteChange`; the same machinery
+preserves playback position and gapless state. Equal-rate notifications only
+refresh the host state and do not recreate. The recreated decoder receives the
+current host rate through `DecoderConfig.resampler`: Apple fused builds use the
+codec-embedded placement, while non-fused builds use the standalone decoder
+adapter placement with the selected backend.
+
+`ResourceConfig.decoder` is the only resource-level owner of decoder
+construction settings. Its `AudioDecoderConfig.resampler` threads the selected
+backend handle and implementation tunables into `AudioConfig`, then into
+`DecoderConfig.resampler`. The portable default backend order is owned by
+`kithara-resampler`; callers that want a platform backend such as Apple
+AudioConverter inject it through `ResourceConfig.decoder.resampler`, not
+through separate resource-level resampler fields.
+
 ## Feature Flags
 
 <table>
@@ -174,7 +199,12 @@ and their re-exports in `mod.rs`.
 <tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM bindings via <code>firewheel/wasm-bindgen</code></td></tr>
 <tr><td><code>symphonia</code></td><td>yes</td><td>Software decode forwarding to <code>kithara-audio</code> and <code>kithara-decode</code></td></tr>
 <tr><td><code>fdk-aac</code></td><td>no</td><td>FDK-AAC decode forwarding to <code>kithara-audio</code> and <code>kithara-decode</code></td></tr>
-<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode via <code>kithara-audio/apple</code></td></tr>
+<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode via <code>kithara-audio/apple</code> and <code>kithara-decode/apple</code>; does not imply Rubato</td></tr>
+<tr><td><code>apple-fused-src</code></td><td>no</td><td>Apple AudioToolbox fused decode+SRC through decoder-embedded resampler placement</td></tr>
+<tr><td><code>resample-rubato</code></td><td>yes</td><td>Default fixed-ratio Rubato backend for playback decode adapters and beat analysis in default builds</td></tr>
+<tr><td><code>resample-glide</code></td><td>no</td><td>Glide resampler backend forwarding for explicit config selection without Rubato</td></tr>
+<tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass forwarding to <code>kithara-audio</code>; absent from Apple FFI device sets</td></tr>
+<tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer forwarding to <code>kithara-audio</code></td></tr>
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the reqwest HTTP backend to network-reaching deps</td></tr>
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend to network-reaching deps</td></tr>
 <tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>

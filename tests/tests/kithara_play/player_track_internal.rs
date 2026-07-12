@@ -9,10 +9,7 @@
 
 use std::{
     num::NonZeroU32,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use firewheel::dsp::fade::FadeCurve;
@@ -20,7 +17,7 @@ use kithara::{
     self,
     bufpool::PcmPool,
     decode::PcmSpec,
-    platform::time::Duration,
+    platform::{sync::Arc, time::Duration},
     play::{
         PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
         rt::track::{PlayerResource, PlayerTrack, TrackParams, TrackReadOutcome},
@@ -282,7 +279,7 @@ async fn read_outcome_partial_then_eof() {
                 assert!(frames > 0);
                 saw_partial = true;
             }
-            TrackReadOutcome::Eof => {
+            TrackReadOutcome::Eof { .. } => {
                 if saw_partial {
                     saw_eof_after_partial = true;
                     break;
@@ -747,5 +744,5 @@ async fn read_outcome_eof_when_track_finished() {
         &mut notification_tx,
     );
 
-    assert!(matches!(outcome, TrackReadOutcome::Eof));
+    assert!(matches!(outcome, TrackReadOutcome::Eof { .. }));
 }

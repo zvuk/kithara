@@ -1,8 +1,9 @@
 use std::{
     fmt,
     ops::{Deref, DerefMut},
-    sync::Arc,
 };
+
+use kithara_platform::sync::Arc;
 
 use super::{core::Pool, reuse::Reuse};
 use crate::growth::BudgetExhausted;

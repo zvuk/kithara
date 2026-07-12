@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use kithara_platform::sync::Arc;
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
 
 use super::PlaybackShared;

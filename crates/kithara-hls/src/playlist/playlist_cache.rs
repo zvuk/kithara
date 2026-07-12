@@ -1,11 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use dashmap::DashMap;
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_net::Headers;
-use kithara_platform::{sync::RwLock, tokio::sync::OnceCell};
+use kithara_platform::{
+    sync::{Arc, RwLock},
+    tokio::sync::OnceCell,
+};
 use kithara_stream::dl::PeerHandle;
 use url::Url;
 

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
+use kithara_platform::sync::Arc;
 
 use crate::{
     StorageError, StorageResult,
@@ -153,12 +153,11 @@ mod tests {
     }
 
     use std::sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc,
     };
 
-    use kithara_platform::{CancelToken, thread, time::Duration};
+    use kithara_platform::{CancelToken, sync::Arc, thread, time::Duration};
 
     use crate::{
         WaitOutcome,

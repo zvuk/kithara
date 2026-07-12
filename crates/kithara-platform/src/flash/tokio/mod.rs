@@ -7,10 +7,10 @@
 //! flash-aware.
 
 #[cfg(feature = "signal")]
-pub use crate::native::tokio::signal;
+pub use crate::backend::tokio::signal;
 #[cfg(feature = "tokio-net")]
-pub use crate::native::tokio::{io, net};
-pub use crate::native::tokio::{join, main, pin, select, task_local, try_join};
+pub use crate::backend::tokio::{io, net};
+pub use crate::backend::tokio::{join, main, pin, select, task_local, try_join};
 
 pub mod broadcast;
 mod errors;
@@ -23,4 +23,4 @@ pub mod task;
 mod unbounded;
 pub mod watch;
 
-pub use crate::native::tokio::{runtime, thread_pool::ensure_thread_pool};
+pub use crate::backend::tokio::{runtime, thread_pool::ensure_thread_pool};

@@ -1,12 +1,9 @@
 use std::{
     io::{ErrorKind, Read, Seek},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{
     AudioCodec, ContainerFormat, NotReadyCause, PendingReason, PrerollHint, StreamPending,
     StreamSeekPastEof,

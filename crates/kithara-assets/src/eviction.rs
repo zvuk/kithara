@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
 use dashmap::DashMap;
-use kithara_platform::tokio::sync::mpsc;
+use kithara_platform::{sync::Arc, tokio::sync::mpsc};
 
 use crate::key::ResourceKey;
 

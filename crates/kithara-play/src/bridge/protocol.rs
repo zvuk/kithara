@@ -1,4 +1,6 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
+
+use kithara_platform::sync::Arc;
 
 use crate::rt::track::PlayerResource;
 
@@ -163,8 +165,7 @@ impl PlayerNotification {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;

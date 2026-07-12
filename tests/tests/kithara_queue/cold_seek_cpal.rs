@@ -1,15 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     decode::DecoderBackend,
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken, time,
+        CancelToken,
+        sync::Arc,
+        time,
         time::{Duration, Instant, timeout},
+        tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -100,6 +101,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    queue.set_volume(kithara_integration_tests::e2e::volume());
 
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
@@ -115,7 +117,11 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         .expect("valid silvercomet URL")
         .downloader(downloader.clone())
         .store(store)
-        .decoder_backend(backend)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
     let source = TrackSource::Config(Box::new(cfg));
 

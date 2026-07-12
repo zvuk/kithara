@@ -6,7 +6,8 @@ use super::{
     expand_async::{emit_async_runtime_test, emit_async_timeout_test},
     parse::TestArgs,
     shared::{
-        finalize_body, make_ambient_stmt, make_serial_attr, make_tracing_init, wrap_with_timeout,
+        finalize_body, make_ambient_stmt, make_serial_attr, make_tracing_init, wrap_with_model,
+        wrap_with_timeout,
     },
 };
 
@@ -74,7 +75,8 @@ pub(crate) fn emit_one_test(
         return output;
     }
 
-    let with_timeout = wrap_with_timeout(&full_held, &args.timeout, false, fn_name);
+    let modeled = wrap_with_model(&full_held, args);
+    let with_timeout = wrap_with_timeout(&modeled, &args.timeout, false, fn_name);
     let wrapped = finalize_body(&with_timeout, args, fn_name, false);
 
     quote! {
@@ -123,7 +125,8 @@ pub(crate) fn emit_native_only_one(
             serial_attr,
         );
     }
-    let with_timeout = wrap_with_timeout(full_held, &args.timeout, false, name);
+    let modeled = wrap_with_model(full_held, args);
+    let with_timeout = wrap_with_timeout(&modeled, &args.timeout, false, name);
     let wrapped = finalize_body(&with_timeout, args, name, false);
     quote! {
         #(#remaining_attrs)*

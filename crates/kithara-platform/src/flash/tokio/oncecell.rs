@@ -294,16 +294,14 @@ impl<T> Drop for AbandonGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use kithara_test_utils::kithara;
 
     use super::OnceCell;
     use crate::{
         flash,
+        sync::Arc,
         tokio::task::{spawn, yield_now},
     };
 

@@ -4,14 +4,14 @@ use std::{
     io::Read,
     path::PathBuf,
     process::{Command, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use kithara::{
-    platform::time::{Duration, Instant},
+    platform::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     test as kithara_test,
 };
 

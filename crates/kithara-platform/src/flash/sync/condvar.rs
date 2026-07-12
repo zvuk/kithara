@@ -2,6 +2,7 @@ use std::panic::Location;
 
 use super::mutex::MutexGuard;
 use crate::{
+    backend::sync::Condvar as NativeCondvar,
     common::time::Instant as RealInstant,
     flash::{
         Instant,
@@ -10,7 +11,6 @@ use crate::{
         ids::{Backend, trace_native_from_ambient},
         system,
     },
-    native::sync::Condvar as NativeCondvar,
 };
 
 /// Condvar under `flash`. Each operation matches on the construction-latched

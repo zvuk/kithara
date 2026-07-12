@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use futures::task::AtomicWaker;
 use kithara_abr::{Abr, AbrController, AbrPeerId};
@@ -9,7 +6,7 @@ use kithara_events::{EventBus, RequestId};
 use kithara_net::HttpClient;
 use kithara_platform::{
     CancelScope, CancelToken,
-    sync::{Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::Duration,
     tokio,
     tokio::{sync::mpsc, task},

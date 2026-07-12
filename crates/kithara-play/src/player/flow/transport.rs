@@ -1,7 +1,7 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use kithara_audio::SeekOutcome;
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use tracing::{debug, warn};
 
 use super::super::core::PlayerImpl;

@@ -1,6 +1,7 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use kithara_audio::effects::eq::{MAX_GAIN_DB, MIN_GAIN_DB};
+use kithara_platform::sync::Arc;
 use portable_atomic::AtomicF32;
 
 use crate::error::PlayError;

@@ -1,5 +1,6 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::atomic::Ordering;
 
+use kithara_platform::sync::Arc;
 use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
 

@@ -1,12 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use bitflags::bitflags;
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 
 bitflags! {
     /// Boolean playback-state flags stored in a single `AtomicU8` on [`SeekState`].
@@ -257,11 +254,9 @@ impl Activity for SeekState {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{Arc, Barrier},
-        thread,
-    };
+    use std::{sync::Barrier, thread};
 
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;

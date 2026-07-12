@@ -1,14 +1,11 @@
+pub use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError};
 use std::{
     collections::VecDeque,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-pub use crate::native::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError};
 use crate::{
-    sync::{Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::Instant,
 };
 

@@ -1,9 +1,12 @@
 #![cfg(feature = "perf")]
 
-use std::{mem, sync::Arc, thread};
+use std::{mem, thread};
 
 use hotpath::HotpathGuardBuilder;
-use kithara::{bufpool::PcmPool, platform::time::Instant};
+use kithara::{
+    bufpool::PcmPool,
+    platform::{sync::Arc, time::Instant},
+};
 
 #[hotpath::measure]
 fn pool_get_put_cycle(pool: &PcmPool) {

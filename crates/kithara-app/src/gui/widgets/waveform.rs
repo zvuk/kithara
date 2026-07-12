@@ -1,11 +1,10 @@
-use std::sync::Arc;
-
 use iced::{
     Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     mouse::{self, Button, Cursor, ScrollDelta},
     widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
 };
 use kithara::audio::Waveform;
+use kithara_platform::sync::Arc;
 use num_traits::cast::AsPrimitive;
 
 use super::waveform_viewport::{Viewport, WaveMsg};

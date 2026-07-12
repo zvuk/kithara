@@ -29,7 +29,9 @@ test = false
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
 # End-to-end tests that require real networks and real audio hardware.
-# Gated off by default so `just test` never compiles `suite_e2e`.
+# Gated off by default so `just test` never compiles `suite_e2e`. Real devices
+# run at arbitrary sample rates, so every e2e lane in .config/xtask.toml pairs
+# this with a fixed-ratio SRC backend (rubato / glide / apple fused).
 e2e = []
 # Selenium-driven WebDriver tests. Gated off by default so `just test`
 # doesn't try to spin up trunk + chromedriver. Run via `just test-selenium`.
@@ -37,18 +39,21 @@ selenium = []
 # Deterministic virtual-clock test mode. Routes the platform's blocking waits
 # (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
 # waits collapse to virtual time. Off by default; enabling it compiles every
-# path-dep against the virtual `kithara_platform::time::Instant`. Used by the
+# path-dep against the virtual `kithara::platform::time::Instant`. Used by the
 # phase-continuity equivalence proof.
 flash = ["kithara/flash", "kithara-test-utils/flash"]
+# Poll-blocking detector; enabled by `just test --no-block=on`.
+no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 # Run integration tests with the native Apple HTTP backend (`NSURLSession`).
 # This is separate from `apple`, which only brings Apple decode/audio variants
 # into scope for tests.
 apple-net = ["kithara/apple-net"]
+apple-fused-src = ["kithara/apple-fused-src"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang", "no-block"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }
@@ -98,7 +103,7 @@ kithara = { workspace = true, features = ["apple", "client-wreq"] }
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true, features = ["backend-cpal", "fdk-aac", "tokio-net", "tokio-rt-multi-thread"] }
-kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
+kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
 # fdk-aac came from kithara-decode defaults before Phase 2 (workspace
 # default-features=false). HE-AAC v2 fMP4 fixtures in rapid-scrub /
 # stress-seek tests decode through the symphonia path, and without fdk-aac
@@ -167,6 +172,10 @@ workspace = true
 [[test]]
 name = "red_env_guard_leak_thread"
 path = "tests/red_env_guard_leak_thread.rs"
+
+[[test]]
+name = "loom"
+path = "tests/loom.rs"
 
 [[test]]
 name = "suite_light"

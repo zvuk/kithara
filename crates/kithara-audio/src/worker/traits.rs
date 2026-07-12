@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
 use kithara_decode::PcmChunk;
+use kithara_platform::sync::Arc;
 use kithara_stream::SeekObserve;
 
 use crate::{pipeline::track_fsm, traits::AudioEffect};

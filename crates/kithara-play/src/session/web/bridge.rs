@@ -1,11 +1,7 @@
-use std::{
-    cell::RefCell,
-    num::NonZeroU32,
-    sync::{Arc, atomic::Ordering},
-};
+use std::{cell::RefCell, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::FirewheelCtx;
-use kithara_platform::sync::mpsc;
+use kithara_platform::sync::{Arc, mpsc};
 use tracing::warn;
 
 use super::client::WASM_SESSION_STATE;

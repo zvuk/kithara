@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use kithara_platform::sync::Arc;
 
 use super::super::core::PlayerImpl;
 use crate::{api::SlotId, bridge::PlayerCmd, error::PlayError};

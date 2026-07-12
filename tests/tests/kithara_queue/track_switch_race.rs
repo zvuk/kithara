@@ -21,14 +21,13 @@
 //! undelayed — so `slow` routinely reached `Loaded` before the second select,
 //! leaving the supersede path untaken.
 
-use std::sync::Arc;
-
 use kithara::{
     assets::StoreOptions,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
+        sync::Arc,
         time::{Duration, sleep},
         tokio,
         tokio::sync::broadcast::error::RecvError,
