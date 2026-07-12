@@ -113,6 +113,21 @@ pub enum AudioEvent {
         base_offset: u64,
         variant: Option<u32>,
     },
+    /// Host-rate adaptation selected or reconfigured for playback.
+    PlaybackResamplerConfigured {
+        backend: PlaybackResamplerKind,
+        host_sample_rate: u32,
+        source_sample_rate: u32,
+        active: bool,
+    },
     /// Decoding finished (EOF).
     EndOfStream,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PlaybackResamplerKind {
+    Rubato,
+    Glide,
+    None,
 }

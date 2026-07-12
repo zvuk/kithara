@@ -12,7 +12,12 @@ use kithara_decode::{
     Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig, GaplessMode, PcmChunk, PcmMeta,
     PcmSpec, TrackMetadata,
 };
-use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, SegmentLocation};
+use kithara_events::{
+    AudioCodecKind, AudioEvent, DecodeErrorClass, DecodeErrorKind,
+    DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, DeferredBus, Event,
+    EventBus, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage,
+    SegmentLocation,
+};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
@@ -50,6 +55,207 @@ use crate::{
         types::{ServiceClass, TrackId},
     },
 };
+
+pub(crate) fn map_audio_codec_kind(codec: kithara_stream::AudioCodec) -> AudioCodecKind {
+    match codec {
+        kithara_stream::AudioCodec::AacLc => AudioCodecKind::AacLc,
+        kithara_stream::AudioCodec::AacHe => AudioCodecKind::AacHe,
+        kithara_stream::AudioCodec::AacHeV2 => AudioCodecKind::AacHeV2,
+        kithara_stream::AudioCodec::Mp3 => AudioCodecKind::Mp3,
+        kithara_stream::AudioCodec::Flac => AudioCodecKind::Flac,
+        kithara_stream::AudioCodec::Vorbis => AudioCodecKind::Vorbis,
+        kithara_stream::AudioCodec::Opus => AudioCodecKind::Opus,
+        kithara_stream::AudioCodec::Alac => AudioCodecKind::Alac,
+        kithara_stream::AudioCodec::Pcm => AudioCodecKind::Pcm,
+        kithara_stream::AudioCodec::Adpcm => AudioCodecKind::Adpcm,
+    }
+}
+
+pub(crate) fn map_container_kind(
+    container: kithara_stream::ContainerFormat,
+) -> kithara_events::ContainerKind {
+    match container {
+        kithara_stream::ContainerFormat::Mp4 => kithara_events::ContainerKind::Mp4,
+        kithara_stream::ContainerFormat::Fmp4 => kithara_events::ContainerKind::Fmp4,
+        kithara_stream::ContainerFormat::MpegTs => kithara_events::ContainerKind::MpegTs,
+        kithara_stream::ContainerFormat::MpegAudio => kithara_events::ContainerKind::MpegAudio,
+        kithara_stream::ContainerFormat::Adts => kithara_events::ContainerKind::Adts,
+        kithara_stream::ContainerFormat::Flac => kithara_events::ContainerKind::Flac,
+        kithara_stream::ContainerFormat::Wav => kithara_events::ContainerKind::Wav,
+        kithara_stream::ContainerFormat::Ogg => kithara_events::ContainerKind::Ogg,
+        kithara_stream::ContainerFormat::Caf => kithara_events::ContainerKind::Caf,
+        kithara_stream::ContainerFormat::Mkv => kithara_events::ContainerKind::Mkv,
+    }
+}
+
+pub(crate) fn map_decoder_backend(backend: kithara_decode::DecoderBackend) -> EventDecoderBackend {
+    match backend {
+        #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+        kithara_decode::DecoderBackend::Apple => EventDecoderBackend::Apple,
+        #[cfg(all(feature = "android", target_os = "android"))]
+        kithara_decode::DecoderBackend::Android => EventDecoderBackend::Android,
+        #[cfg(feature = "symphonia")]
+        kithara_decode::DecoderBackend::Symphonia => EventDecoderBackend::Symphonia,
+        _ => EventDecoderBackend::Symphonia,
+    }
+}
+
+pub(crate) fn map_resampler_kind(name: &'static str) -> ResamplerKind {
+    match name {
+        "rubato" => ResamplerKind::Rubato,
+        "apple" => ResamplerKind::Apple,
+        "glide" => ResamplerKind::Glide,
+        _ => ResamplerKind::None,
+    }
+}
+
+pub(crate) fn map_playback_resampler_kind(name: &'static str) -> PlaybackResamplerKind {
+    match name {
+        "rubato" => PlaybackResamplerKind::Rubato,
+        "glide" => PlaybackResamplerKind::Glide,
+        _ => PlaybackResamplerKind::None,
+    }
+}
+
+pub(crate) fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
+    match error {
+        DecodeError::Io { .. } => DecodeErrorKind::Io,
+        DecodeError::UnsupportedCodec { .. } => DecodeErrorKind::UnsupportedCodec,
+        DecodeError::UnsupportedContainer { .. } => DecodeErrorKind::UnsupportedContainer,
+        DecodeError::InvalidData { .. } => DecodeErrorKind::InvalidData,
+        DecodeError::SeekFailed { .. } => DecodeErrorKind::SeekFailed,
+        DecodeError::SeekOutOfRange { .. } => DecodeErrorKind::SeekOutOfRange,
+        DecodeError::Parse { .. } => DecodeErrorKind::Parse,
+        DecodeError::ProbeFailed => DecodeErrorKind::ProbeFailed,
+        DecodeError::BackendUnavailable { .. } => DecodeErrorKind::BackendUnavailable,
+        DecodeError::InvalidSampleRate { .. } => DecodeErrorKind::InvalidSampleRate,
+        DecodeError::BackendStatus { .. } => DecodeErrorKind::BackendStatus,
+        DecodeError::Interrupted => DecodeErrorKind::Interrupted,
+        _ => DecodeErrorKind::Backend,
+    }
+}
+
+pub(crate) fn map_decode_error_class(class: kithara_decode::ErrorClass) -> DecodeErrorClass {
+    match class {
+        kithara_decode::ErrorClass::Interrupted => DecodeErrorClass::Interrupted,
+        kithara_decode::ErrorClass::VariantChange => DecodeErrorClass::VariantChange,
+        _ => DecodeErrorClass::Other,
+    }
+}
+
+pub(crate) fn decode_error_detail(error: &DecodeError) -> &'static str {
+    match error {
+        DecodeError::Io { .. } => "io",
+        DecodeError::UnsupportedCodec { .. } => "unsupported codec",
+        DecodeError::UnsupportedContainer { .. } => "unsupported container",
+        DecodeError::InvalidData { detail }
+        | DecodeError::SeekFailed { detail }
+        | DecodeError::SeekOutOfRange { detail } => detail,
+        DecodeError::Parse { what, .. } => what,
+        DecodeError::ProbeFailed => "probe failed",
+        DecodeError::BackendUnavailable { backend } => backend,
+        DecodeError::InvalidSampleRate { resource } => resource,
+        DecodeError::BackendStatus { op, .. } => op,
+        DecodeError::Interrupted => "interrupted",
+        _ => "other",
+    }
+}
+
+pub(crate) fn gapless_span(track_info: &kithara_decode::DecoderTrackInfo) -> Option<GaplessSpan> {
+    track_info
+        .gapless
+        .map(|gapless| GaplessSpan::new(gapless.leading_frames, gapless.trailing_frames))
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct DecoderChangedEventData<'a> {
+    pub(crate) backend: kithara_decode::DecoderBackend,
+    pub(crate) media_info: Option<&'a MediaInfo>,
+    pub(crate) spec: PcmSpec,
+    pub(crate) track_info: &'a kithara_decode::DecoderTrackInfo,
+    pub(crate) epoch: u64,
+    pub(crate) cause: DecoderChangeCause,
+    pub(crate) base_offset: u64,
+    pub(crate) duration: Option<Duration>,
+}
+
+pub(crate) fn decoder_changed_event(data: DecoderChangedEventData<'_>) -> DecoderEvent {
+    DecoderEvent::DecoderChanged {
+        backend: map_decoder_backend(data.backend),
+        codec: data
+            .media_info
+            .and_then(|info| info.codec)
+            .map(map_audio_codec_kind),
+        container: data
+            .media_info
+            .and_then(|info| info.container)
+            .map(map_container_kind),
+        sample_rate: data.spec.sample_rate.get(),
+        channels: data.spec.channels,
+        bit_depth: None,
+        bitrate: None,
+        epoch: data.epoch,
+        cause: data.cause,
+        variant: data.media_info.and_then(|info| info.variant_index),
+        base_offset: data.base_offset,
+        duration: data.duration,
+        gapless: gapless_span(data.track_info),
+    }
+}
+
+pub(crate) fn decoder_gapless_event(
+    media_info: Option<&MediaInfo>,
+    spec: PcmSpec,
+    track_info: &kithara_decode::DecoderTrackInfo,
+    domain: FrameDomain,
+) -> Option<DecoderEvent> {
+    let gapless = track_info.gapless?;
+    Some(DecoderEvent::GaplessResolved {
+        leading_frames: gapless.leading_frames,
+        trailing_frames: gapless.trailing_frames,
+        domain,
+        codec: media_info
+            .and_then(|info| info.codec)
+            .map(map_audio_codec_kind),
+        sample_rate: spec.sample_rate.get(),
+    })
+}
+
+pub(crate) fn decoder_resampler_event<B>(
+    resampler: Option<&DecoderResamplerConfig<B>>,
+    spec: PcmSpec,
+    input_rate: Option<u32>,
+) -> Option<DecoderEvent>
+where
+    B: ResamplerBackend,
+{
+    let resampler = resampler?;
+    let input_rate = input_rate.unwrap_or_else(|| spec.sample_rate.get());
+    Some(DecoderEvent::ResamplerConfigured {
+        backend: map_resampler_kind(resampler.backend.name()),
+        input_rate,
+        output_rate: resampler.target_sample_rate.get(),
+        channels: spec.channels,
+        bypassed: input_rate == resampler.target_sample_rate.get(),
+    })
+}
+
+pub(crate) fn playback_resampler_event<B>(
+    backend: &B,
+    host_sample_rate: u32,
+    source_sample_rate: Option<u32>,
+) -> Option<AudioEvent>
+where
+    B: ResamplerBackend,
+{
+    let source_sample_rate = source_sample_rate?;
+    Some(AudioEvent::PlaybackResamplerConfigured {
+        backend: map_playback_resampler_kind(backend.name()),
+        host_sample_rate,
+        source_sample_rate,
+        active: host_sample_rate != source_sample_rate && backend.name() != "none",
+    })
+}
 
 /// Saturating-clamp `u128` milliseconds into `u64`. Caller has explicitly
 /// chosen "report capped value" semantics for telemetry events that can't
@@ -89,11 +295,11 @@ const AUDIO_EVENT_CAPACITY: usize = 64;
 
 struct ReaderOutputWake {
     thread: Arc<ThreadWake>,
-    emit: Arc<DeferredBus<AudioEvent>>,
+    emit: Arc<DeferredBus<Event>>,
 }
 
 impl ReaderOutputWake {
-    fn new(thread: Arc<ThreadWake>, emit: Arc<DeferredBus<AudioEvent>>) -> Self {
+    fn new(thread: Arc<ThreadWake>, emit: Arc<DeferredBus<Event>>) -> Self {
         Self { thread, emit }
     }
 }
@@ -104,7 +310,7 @@ impl WakeSignal for ReaderOutputWake {
     }
 
     fn on_data_available(&self) {
-        self.emit.enqueue(AudioEvent::OutputAvailable);
+        self.emit.enqueue(AudioEvent::OutputAvailable.into());
     }
 
     fn flush_deferred(&self) {
@@ -173,7 +379,7 @@ pub struct Audio<S> {
 
     /// Lock-free event handoff for audio-thread telemetry and lifecycle
     /// events. The scheduler shell flushes it via the wake-signal cadence.
-    emit: Arc<DeferredBus<AudioEvent>>,
+    emit: Arc<DeferredBus<Event>>,
 
     /// PCM chunk receiver.
     pcm_rx: crate::runtime::Inlet<Fetch<PcmChunk>>,
@@ -264,7 +470,7 @@ impl<S> Audio<S> {
     fn create_channels(
         pcm_buffer_chunks: usize,
         reader_wake: &Arc<ThreadWake>,
-        emit: Arc<DeferredBus<AudioEvent>>,
+        emit: Arc<DeferredBus<Event>>,
     ) -> (
         crate::runtime::Outlet<Fetch<PcmChunk>>,
         crate::runtime::Inlet<Fetch<PcmChunk>>,
@@ -279,7 +485,7 @@ impl<S> Audio<S> {
     /// `kevent` the forbid-blocking core must not make). Capacity covers a pass's
     /// worth of lifecycle events with margin — flushed every pass, so under
     /// normal lifecycle it never fills.
-    fn create_emit(bus: &EventBus) -> Arc<DeferredBus<AudioEvent>> {
+    fn create_emit(bus: &EventBus) -> Arc<DeferredBus<Event>> {
         Arc::new(DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY))
     }
 
@@ -361,7 +567,7 @@ impl<S> Audio<S> {
     }
 
     fn emit_audio_event(&self, event: AudioEvent) {
-        self.emit.enqueue(event);
+        self.emit.enqueue(event.into());
     }
 
     fn emit_playback_progress(&mut self) {
@@ -959,17 +1165,18 @@ where
 }
 
 struct StreamSourceRegistration<'a, T: StreamType> {
-    bus: &'a EventBus,
     cancel: &'a CancelToken,
     decoder: Box<dyn Decoder>,
+    decoder_backend: kithara_decode::DecoderBackend,
     decoder_factory: crate::pipeline::source::DecoderFactory<T>,
     effects: Vec<Box<dyn AudioEffect>>,
-    emit: Arc<DeferredBus<AudioEvent>>,
+    emit: Arc<DeferredBus<Event>>,
     engine_load: Option<Arc<EngineLoad>>,
     epoch: Arc<AtomicU64>,
     gapless_mode: GaplessMode,
     host_sample_rate: Arc<AtomicU32>,
     initial_media_info: Option<MediaInfo>,
+    playback_resampler_backend: &'static str,
     pcm_buffer_chunks: usize,
     preload_chunks: NonZeroUsize,
     recreate_on_host_rate_change: bool,
@@ -995,6 +1202,56 @@ impl<T> Audio<Stream<T>>
 where
     T: StreamType<Events = EventBus>,
 {
+    fn publish_initial_decoder_events<B>(
+        bus: &EventBus,
+        deps: &DecoderDeps<B>,
+        host_sample_rate: &Arc<AtomicU32>,
+        initial_media_info: Option<&MediaInfo>,
+        initial_spec: PcmSpec,
+        initial_track_info: &kithara_decode::DecoderTrackInfo,
+        total_duration: Option<Duration>,
+    ) -> Result<(), DecodeError>
+    where
+        B: ResamplerBackend,
+    {
+        bus.publish(decoder_changed_event(DecoderChangedEventData {
+            backend: deps.decoder.backend,
+            media_info: initial_media_info,
+            spec: initial_spec,
+            track_info: initial_track_info,
+            epoch: 0,
+            cause: DecoderChangeCause::Initial,
+            base_offset: 0,
+            duration: total_duration,
+        }));
+        if let Some(event) = decoder_gapless_event(
+            initial_media_info,
+            initial_spec,
+            initial_track_info,
+            FrameDomain::Output,
+        ) {
+            bus.publish(event);
+        }
+        if let Some(event) = decoder_resampler_event(
+            deps.resampler_config()?.as_ref(),
+            initial_spec,
+            initial_media_info.and_then(|info| info.sample_rate),
+        ) {
+            bus.publish(event);
+        }
+        if let Some(host_rate) = NonZeroU32::new(host_sample_rate.load(Ordering::Acquire))
+            && let Some(resampler) = deps.decoder.resampler.as_ref()
+            && let Some(event) = playback_resampler_event(
+                &resampler.backend,
+                host_rate.get(),
+                initial_media_info.and_then(|info| info.sample_rate),
+            )
+        {
+            bus.publish(event);
+        }
+        Ok(())
+    }
+
     /// Create audio pipeline from `AudioConfig`.
     ///
     /// This is the target API for Stream sources.
@@ -1079,6 +1336,7 @@ where
         let decoder = decoder?;
 
         let initial_spec = decoder.spec();
+        let initial_track_info = decoder.track_info();
         let total_duration = decoder.duration().or_else(|| playhead.duration());
         playhead.set_duration(total_duration);
         let metadata = decoder.metadata();
@@ -1105,9 +1363,9 @@ where
             trash_tx,
             worker,
         } = Self::register_stream_audio_source(StreamSourceRegistration {
-            bus: &bus,
             cancel: &cancel,
             decoder,
+            decoder_backend: deps.decoder.backend,
             decoder_factory: Self::create_decoder_factory(&deps, &epoch, &byte_len_handle),
             effects,
             emit: Arc::clone(&emit),
@@ -1115,7 +1373,12 @@ where
             epoch: Arc::clone(&epoch),
             gapless_mode: config_gapless_mode,
             host_sample_rate: Arc::clone(&host_sample_rate),
-            initial_media_info,
+            initial_media_info: initial_media_info.clone(),
+            playback_resampler_backend: deps
+                .decoder
+                .resampler
+                .as_ref()
+                .map_or("none", |resampler| resampler.backend.name()),
             pcm_buffer_chunks,
             preload_chunks,
             recreate_on_host_rate_change: deps.recreates_on_host_rate_change(),
@@ -1123,6 +1386,15 @@ where
             shared_stream,
             worker: config_worker,
         });
+        Self::publish_initial_decoder_events(
+            &bus,
+            &deps,
+            &host_sample_rate,
+            initial_media_info.as_ref(),
+            initial_spec,
+            &initial_track_info,
+            total_duration,
+        )?;
 
         Ok(Self {
             playhead,
@@ -1164,9 +1436,9 @@ where
         registration: StreamSourceRegistration<'_, T>,
     ) -> RegisteredStreamSource {
         let StreamSourceRegistration {
-            bus,
             cancel,
             decoder,
+            decoder_backend,
             decoder_factory,
             effects,
             emit,
@@ -1175,6 +1447,7 @@ where
             gapless_mode,
             host_sample_rate,
             initial_media_info,
+            playback_resampler_backend,
             pcm_buffer_chunks,
             preload_chunks,
             recreate_on_host_rate_change,
@@ -1182,7 +1455,6 @@ where
             shared_stream,
             worker,
         } = registration;
-        let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
         // Retain a handle to inject the worker wake after the worker exists —
         // `shared_stream` itself is moved into the source below. `SharedStream`
         // is `Arc`-backed, so the clone shares the same inner stream/coord.
@@ -1202,9 +1474,11 @@ where
             DecodeInit {
                 decoder,
                 decoder_factory,
+                decoder_backend,
                 gapless_mode,
                 host_sample_rate,
                 media_info: initial_media_info,
+                playback_resampler_backend,
                 recreate_on_host_rate_change,
             },
             epoch,
@@ -1213,11 +1487,6 @@ where
             Arc::clone(&worker_wake),
         )
         .with_emit(emit);
-
-        bus.publish(AudioEvent::DecoderReady {
-            base_offset: 0,
-            variant: initial_variant,
-        });
 
         let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
         let track_id = worker.register_track(TrackRegistration {
@@ -1790,7 +2059,7 @@ mod tests {
         tx.flush_wake_signals();
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(kithara_events::Event::Audio(AudioEvent::OutputAvailable))
+            Ok(Event::Audio(AudioEvent::OutputAvailable))
         ));
 
         tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
@@ -1809,7 +2078,7 @@ mod tests {
         tx.flush_wake_signals();
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(kithara_events::Event::Audio(AudioEvent::OutputAvailable))
+            Ok(Event::Audio(AudioEvent::OutputAvailable))
         ));
     }
 
@@ -1926,7 +2195,7 @@ mod tests {
         assert!(
             matches!(
                 events.try_recv().map(|envelope| envelope.event),
-                Ok(kithara_events::Event::Audio(AudioEvent::SeekLifecycle {
+                Ok(Event::Audio(AudioEvent::SeekLifecycle {
                     seek_epoch: 1,
                     stage: SeekLifecycleStage::SeekRequest,
                     location,
@@ -1952,7 +2221,7 @@ mod tests {
 
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(kithara_events::Event::Audio(AudioEvent::SeekLifecycle {
+            Ok(Event::Audio(AudioEvent::SeekLifecycle {
                 seek_epoch: 1,
                 stage: SeekLifecycleStage::OutputCommitted,
                 location,
@@ -1960,7 +2229,7 @@ mod tests {
         ));
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(kithara_events::Event::Audio(AudioEvent::SeekComplete {
+            Ok(Event::Audio(AudioEvent::SeekComplete {
                 seek_epoch: 1,
                 position,
             })) if position == Duration::from_millis(250)
@@ -1989,7 +2258,7 @@ mod tests {
 
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(kithara_events::Event::Audio(AudioEvent::PlaybackProgress {
+            Ok(Event::Audio(AudioEvent::PlaybackProgress {
                 position_ms: 100,
                 total_ms: Some(5_000),
                 buffered_ms: Some(900),
@@ -2006,7 +2275,7 @@ mod tests {
         tx.flush_wake_signals();
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(kithara_events::Event::Audio(AudioEvent::PlaybackProgress {
+            Ok(Event::Audio(AudioEvent::PlaybackProgress {
                 position_ms: 210,
                 total_ms: Some(5_000),
                 buffered_ms: Some(900),
@@ -2020,7 +2289,7 @@ mod tests {
         tx.flush_wake_signals();
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(kithara_events::Event::Audio(AudioEvent::PlaybackProgress {
+            Ok(Event::Audio(AudioEvent::PlaybackProgress {
                 position_ms: 220,
                 total_ms: Some(5_000),
                 buffered_ms: Some(900),

@@ -7,6 +7,8 @@ use crate::AppEvent;
 #[cfg(feature = "audio")]
 use crate::AudioEvent;
 use crate::BusEvent;
+#[cfg(feature = "decoder")]
+use crate::DecoderEvent;
 #[cfg(feature = "downloader")]
 use crate::DownloaderEvent;
 #[cfg(feature = "file")]
@@ -40,6 +42,9 @@ pub enum Event {
     /// Audio pipeline event.
     #[cfg(feature = "audio")]
     Audio(AudioEvent),
+    /// Decoder lifecycle event.
+    #[cfg(feature = "decoder")]
+    Decoder(DecoderEvent),
     /// Player state event.
     #[cfg(feature = "player")]
     Player(PlayerEvent),
@@ -97,6 +102,13 @@ impl From<FileEvent> for Event {
 impl From<AudioEvent> for Event {
     fn from(e: AudioEvent) -> Self {
         Self::Audio(e)
+    }
+}
+
+#[cfg(feature = "decoder")]
+impl From<DecoderEvent> for Event {
+    fn from(e: DecoderEvent) -> Self {
+        Self::Decoder(e)
     }
 }
 
@@ -205,5 +217,26 @@ mod tests {
     fn audio_event_into_event() {
         let event: Event = AudioEvent::EndOfStream.into();
         assert!(matches!(event, Event::Audio(AudioEvent::EndOfStream)));
+    }
+
+    #[cfg(feature = "decoder")]
+    #[kithara::test]
+    fn decoder_event_into_event() {
+        let event: Event = DecoderEvent::DecodeError {
+            class: crate::DecodeErrorClass::Other,
+            kind: crate::DecodeErrorKind::InvalidData,
+            codec: None,
+            detail: "invalid data",
+        }
+        .into();
+        assert!(matches!(
+            event,
+            Event::Decoder(DecoderEvent::DecodeError {
+                class: crate::DecodeErrorClass::Other,
+                kind: crate::DecodeErrorKind::InvalidData,
+                codec: None,
+                detail: "invalid data",
+            })
+        ));
     }
 }

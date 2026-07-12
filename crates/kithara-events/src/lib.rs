@@ -18,6 +18,8 @@ mod abr;
 mod app;
 #[cfg(feature = "audio")]
 mod audio;
+#[cfg(feature = "decoder")]
+mod decoder;
 #[cfg(feature = "downloader")]
 mod downloader;
 #[cfg(feature = "file")]
@@ -37,9 +39,16 @@ pub use abr::{
 #[cfg(feature = "app")]
 pub use app::AppEvent;
 #[cfg(feature = "audio")]
-pub use audio::{AudioEvent, AudioFormat, SeekLifecycleStage, SegmentLocation};
+pub use audio::{
+    AudioEvent, AudioFormat, PlaybackResamplerKind, SeekLifecycleStage, SegmentLocation,
+};
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 pub use bus_event::BusEvent;
+#[cfg(feature = "decoder")]
+pub use decoder::{
+    AudioCodecKind, ContainerKind, DecodeErrorClass, DecodeErrorKind, DecoderBackend,
+    DecoderChangeCause, DecoderEvent, FrameDomain, GaplessSpan, ResamplerKind,
+};
 pub use deferred::DeferredBus;
 #[cfg(feature = "downloader")]
 pub use downloader::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};

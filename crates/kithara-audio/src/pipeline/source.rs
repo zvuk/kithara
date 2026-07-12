@@ -14,7 +14,10 @@ use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, ErrorClass,
     GaplessMode, InputRequirement, PcmChunk, PcmSpec, duration_for_frames,
 };
-use kithara_events::{AudioEvent, AudioFormat, DeferredBus, SeekLifecycleStage, SegmentLocation};
+use kithara_events::{
+    AudioEvent, AudioFormat, DecoderChangeCause, DecoderEvent, DeferredBus, Event, FrameDomain,
+    SeekLifecycleStage, SegmentLocation,
+};
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -28,6 +31,10 @@ use kithara_test_utils::kithara;
 use tracing::{debug, info, trace, warn};
 
 use crate::{
+    audio::{
+        DecoderChangedEventData, decode_error_detail, decoder_changed_event, decoder_gapless_event,
+        map_audio_codec_kind, map_decode_error_class, map_decode_error_kind,
+    },
     pipeline::{
         fetch::Fetch,
         gapless::GaplessStage,
@@ -42,6 +49,74 @@ use crate::{
     traits::AudioEffect,
     worker::{AudioWorkerSource, apply_effects, reset_effects},
 };
+
+fn decoder_change_cause(cause: RecreateCause) -> DecoderChangeCause {
+    match cause {
+        RecreateCause::FormatBoundary => DecoderChangeCause::FormatBoundary,
+        RecreateCause::RouteChange => DecoderChangeCause::HostRateChange,
+        RecreateCause::VariantSwitch => DecoderChangeCause::VariantSwitch,
+    }
+}
+
+fn playback_resampler_event_for_session<T: StreamType>(
+    source: &StreamAudioSource<T>,
+    media_info: Option<&MediaInfo>,
+    spec: PcmSpec,
+) -> Option<AudioEvent> {
+    let host_sample_rate = source.host_sample_rate.load(Ordering::Acquire);
+    if host_sample_rate == 0 {
+        return None;
+    }
+    playback_resampler_event_from_parts(
+        source.playback_resampler_backend,
+        host_sample_rate,
+        media_info.and_then(|info| info.sample_rate).or_else(|| {
+            (spec.sample_rate.get() == host_sample_rate).then_some(spec.sample_rate.get())
+        }),
+    )
+}
+
+fn decoder_resampler_event_for_session<T: StreamType>(
+    source: &StreamAudioSource<T>,
+    media_info: Option<&MediaInfo>,
+    spec: PcmSpec,
+) -> Option<DecoderEvent> {
+    if !source.recreate_on_host_rate_change {
+        return None;
+    }
+    let output_rate = source.host_sample_rate.load(Ordering::Acquire);
+    if output_rate == 0 {
+        return None;
+    }
+    let input_rate = media_info
+        .and_then(|info| info.sample_rate)
+        .or_else(|| (spec.sample_rate.get() == output_rate).then_some(spec.sample_rate.get()))?;
+    Some(DecoderEvent::ResamplerConfigured {
+        backend: crate::audio::map_resampler_kind(source.playback_resampler_backend),
+        input_rate,
+        output_rate,
+        channels: spec.channels,
+        bypassed: input_rate == output_rate,
+    })
+}
+
+fn playback_resampler_event_from_parts(
+    backend: &'static str,
+    host_sample_rate: u32,
+    source_sample_rate: Option<u32>,
+) -> Option<AudioEvent> {
+    let source_sample_rate = source_sample_rate?;
+    Some(AudioEvent::PlaybackResamplerConfigured {
+        backend: match backend {
+            "rubato" => kithara_events::PlaybackResamplerKind::Rubato,
+            "glide" => kithara_events::PlaybackResamplerKind::Glide,
+            _ => kithara_events::PlaybackResamplerKind::None,
+        },
+        host_sample_rate,
+        source_sample_rate,
+        active: host_sample_rate != source_sample_rate && backend != "none",
+    })
+}
 
 /// Shared stream wrapper for format change detection.
 ///
@@ -281,7 +356,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// flushes via [`flush_deferred`](AudioWorkerSource::flush_deferred) and on
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
-    emit: Option<Arc<DeferredBus<AudioEvent>>>,
+    emit: Option<Arc<DeferredBus<Event>>>,
     /// Incremental end-of-stream effect drain. Allocated at source construction;
     /// true EOF only flips booleans and pulls one tail chunk per pass.
     eof_drain_inputs_exhausted: Vec<bool>,
@@ -292,6 +367,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     host_sample_rate: Arc<AtomicU32>,
     recreate_on_host_rate_change: bool,
     decoder_host_sample_rate: u32,
+    decoder_backend: kithara_decode::DecoderBackend,
+    playback_resampler_backend: &'static str,
     last_spec: Option<PcmSpec>,
     /// Reader→peer wake handle, resolved from [`Source::peer_wake`] at
     /// construction. The FSM runs on the produce core, so it `arm`s this
@@ -328,9 +405,11 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
 pub(crate) struct DecodeInit<T: StreamType> {
     pub(crate) decoder: Box<dyn Decoder>,
     pub(crate) decoder_factory: DecoderFactory<T>,
+    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     pub(crate) gapless_mode: GaplessMode,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) media_info: Option<MediaInfo>,
+    pub(crate) playback_resampler_backend: &'static str,
     pub(crate) recreate_on_host_rate_change: bool,
 }
 
@@ -433,9 +512,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         let DecodeInit {
             decoder,
             decoder_factory,
+            decoder_backend,
             media_info: initial_media_info,
             gapless_mode,
             host_sample_rate,
+            playback_resampler_backend,
             recreate_on_host_rate_change,
         } = init;
         let decoder_host_sample_rate = host_sample_rate.load(Ordering::Acquire);
@@ -477,6 +558,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             host_sample_rate,
             recreate_on_host_rate_change,
             decoder_host_sample_rate,
+            decoder_backend,
+            playback_resampler_backend,
             state: CurrentFsm::decoding(),
             chunks_decoded: 0,
             total_samples: 0,
@@ -489,7 +572,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    pub(crate) fn with_emit(mut self, emit: Arc<DeferredBus<AudioEvent>>) -> Self {
+    pub(crate) fn with_emit(mut self, emit: Arc<DeferredBus<Event>>) -> Self {
         self.emit = Some(emit);
         self
     }
@@ -523,7 +606,13 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// `Drop` — the `broadcast::send` is a `kevent` the forbid path must not make.
     fn emit_event(&self, event: AudioEvent) {
         if let Some(ref emit) = self.emit {
-            emit.enqueue(event);
+            emit.enqueue(event.into());
+        }
+    }
+
+    fn emit_decoder_event(&self, event: DecoderEvent) {
+        if let Some(ref emit) = self.emit {
+            emit.enqueue(event.into());
         }
     }
 
@@ -1332,22 +1421,44 @@ impl<T: StreamType> StreamAudioSource<T> {
 impl<T: StreamType> StreamAudioSource<T> {
     fn install_recreated_session(
         &mut self,
+        recreate_cause: RecreateCause,
         new_info: &MediaInfo,
         base_offset: u64,
         new_decoder: Box<dyn Decoder>,
     ) {
         let new_duration = new_decoder.duration();
-        let variant = new_info.variant_index;
+        let new_spec = new_decoder.spec();
+        let new_track_info = new_decoder.track_info();
         let old_decoder = mem::replace(&mut self.session.decoder, new_decoder);
         self.retire_decoder(old_decoder);
         self.session.base_offset = base_offset;
         self.session.media_info = Some(new_info.clone());
         self.session.installed_at_seek_epoch = self.seek_obs.epoch();
         debug!(?new_duration, base_offset, "Decoder recreated successfully");
-        self.emit_event(AudioEvent::DecoderReady {
+        self.emit_decoder_event(decoder_changed_event(DecoderChangedEventData {
+            backend: self.decoder_backend,
+            media_info: Some(new_info),
+            spec: new_spec,
+            track_info: &new_track_info,
+            epoch: self.seek_obs.epoch(),
+            cause: decoder_change_cause(recreate_cause),
             base_offset,
-            variant,
-        });
+            duration: new_duration,
+        }));
+        if let Some(event) = decoder_gapless_event(
+            Some(new_info),
+            new_spec,
+            &new_track_info,
+            FrameDomain::Output,
+        ) {
+            self.emit_decoder_event(event);
+        }
+        if let Some(event) = decoder_resampler_event_for_session(self, Some(new_info), new_spec) {
+            self.emit_decoder_event(event);
+        }
+        if let Some(event) = playback_resampler_event_for_session(self, Some(new_info), new_spec) {
+            self.emit_event(event);
+        }
     }
 
     fn retire_decoder(&self, decoder: Box<dyn Decoder>) {
@@ -1568,9 +1679,12 @@ impl<T: StreamType> StreamAudioSource<T> {
         if self.chunks_decoded == 1
             && let Some(ref emit) = self.emit
         {
-            emit.enqueue(AudioEvent::FormatDetected {
-                spec: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate.get()),
-            });
+            emit.enqueue(
+                AudioEvent::FormatDetected {
+                    spec: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate.get()),
+                }
+                .into(),
+            );
             self.last_spec = Some(chunk.spec());
         }
 
@@ -1698,8 +1812,19 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Handle decode error without boundary fallback.
     #[cold]
-    fn handle_decode_error(e: DecodeError) -> DecodeAction {
+    fn handle_decode_error(&mut self, e: DecodeError) -> DecodeAction {
         warn!(?e, "decode error");
+        self.emit_decoder_event(DecoderEvent::DecodeError {
+            class: map_decode_error_class(e.classify()),
+            kind: map_decode_error_kind(&e),
+            codec: self
+                .session
+                .media_info
+                .as_ref()
+                .and_then(|info| info.codec)
+                .map(map_audio_codec_kind),
+            detail: decode_error_detail(&e),
+        });
         DecodeAction::Return(Err(e))
     }
 
@@ -1881,7 +2006,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                         DecodeAction::Return(result) => return result,
                     },
                     ErrorClass::Interrupted => continue,
-                    _ => match Self::handle_decode_error(e) {
+                    _ => match self.handle_decode_error(e) {
                         DecodeAction::Yield => return Err(DecodeError::Interrupted),
                         DecodeAction::Return(result) => return result,
                     },
@@ -2527,7 +2652,12 @@ impl<T: StreamType> StreamAudioSource<T> {
             Ok(decoder) => decoder,
             Err(outcome) => return self.finish_recreate_outcome(recreate, outcome),
         };
-        self.install_recreated_session(&recreate.media_info, recreate.offset, decoder);
+        self.install_recreated_session(
+            recreate.cause,
+            &recreate.media_info,
+            recreate.offset,
+            decoder,
+        );
         let outcome = if recreate_resumes_decode_head(&recreate) {
             self.finish_format_boundary_rebuild()
         } else {
@@ -3206,9 +3336,10 @@ mod rebuilding_decoder_tests {
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{
-        DecodeResult, DecoderChunkOutcome, DecoderSeekOutcome, PcmMeta, PcmSpec,
+        DecodeError, DecodeResult, DecoderChunkOutcome, DecoderSeekOutcome, PcmMeta, PcmSpec,
         frames_for_duration,
     };
+    use kithara_events::{DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus};
     use kithara_platform::{
         sync::{Arc, Mutex},
         tokio::runtime::Handle as RuntimeHandle,
@@ -3280,6 +3411,38 @@ mod rebuilding_decoder_tests {
         id: u64,
         next_frame: u64,
         sample_rate: u32,
+    }
+
+    struct FailingDecoder;
+
+    impl Decoder for FailingDecoder {
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+
+        fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+            Err(DecodeError::InvalidData {
+                detail: "fixture decode failure",
+            })
+        }
+
+        fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+            Ok(DecoderSeekOutcome::Landed {
+                landed_at: pos,
+                landed_frame: 0,
+                landed_byte: None,
+                preroll: PrerollHint::NotNeeded,
+            })
+        }
+
+        fn spec(&self) -> PcmSpec {
+            PcmSpec::new(
+                Consts::CHANNELS,
+                NonZeroU32::new(Consts::SAMPLE_RATE).expect("test rate"),
+            )
+        }
+
+        fn update_byte_len(&self, _len: u64) {}
     }
 
     impl RouteSignalDecoder {
@@ -3585,9 +3748,11 @@ mod rebuilding_decoder_tests {
             DecodeInit {
                 decoder: Box::new(TestDecoder::new(1, Arc::clone(&drops))),
                 decoder_factory,
+                decoder_backend: kithara_decode::DecoderBackend::default(),
                 gapless_mode: GaplessMode::Disabled,
                 host_sample_rate: Arc::new(AtomicU32::new(Consts::SAMPLE_RATE)),
                 media_info: Some(media_info(0)),
+                playback_resampler_backend: "none",
                 recreate_on_host_rate_change: true,
             },
             Arc::new(AtomicU64::new(0)),
@@ -3635,9 +3800,11 @@ mod rebuilding_decoder_tests {
                     Arc::clone(&drops),
                 )),
                 decoder_factory,
+                decoder_backend: kithara_decode::DecoderBackend::default(),
                 gapless_mode: GaplessMode::Disabled,
                 host_sample_rate,
                 media_info: Some(media_info(0)),
+                playback_resampler_backend: "none",
                 recreate_on_host_rate_change: true,
             },
             Arc::new(AtomicU64::new(0)),
@@ -3645,6 +3812,17 @@ mod rebuilding_decoder_tests {
             runtime_handle,
             Arc::new(TestWake),
         )
+    }
+
+    async fn evented_test_source(
+        control: Arc<TestControl>,
+        drops: Arc<Mutex<Vec<u64>>>,
+    ) -> (StreamAudioSource<TestStream>, kithara_events::EventReceiver) {
+        let bus = EventBus::new(16);
+        let events = bus.subscribe();
+        let emit = Arc::new(DeferredBus::new(bus, 16));
+        let source = test_source(control, drops).await.with_emit(emit);
+        (source, events)
     }
 
     fn run_pending_rebuild_inline(source: &mut StreamAudioSource<TestStream>) {
@@ -3762,6 +3940,49 @@ mod rebuilding_decoder_tests {
 
         source.flush_deferred();
         assert_eq!(drops.lock().as_slice(), &[1]);
+    }
+
+    #[kithara::test(tokio)]
+    async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
+        let control = Arc::new(TestControl::new(media_info(1)));
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let (mut source, mut events) = evented_test_source(control, Arc::clone(&drops)).await;
+        enter_rebuilding(&mut source, 7, recreate_state(1));
+        push_completion_with_drops(&source, 7, 2, drops);
+
+        assert!(matches!(source.step_track(), TrackStep::StateChanged));
+        source.flush_deferred();
+
+        assert!(matches!(
+            events.try_recv().map(|env| env.event),
+            Ok(Event::Decoder(DecoderEvent::DecoderChanged {
+                cause: DecoderChangeCause::FormatBoundary,
+                ..
+            }))
+        ));
+    }
+
+    #[kithara::test(tokio)]
+    async fn decode_error_reaches_bus_via_deferred_path() {
+        let control = Arc::new(TestControl::new(media_info(0)));
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let (mut source, mut events) = evented_test_source(control, drops).await;
+        source.session.decoder = Box::new(FailingDecoder);
+
+        assert!(matches!(source.step_track(), TrackStep::Failed));
+        assert!(
+            events.try_recv().is_err(),
+            "event must stay deferred before flush"
+        );
+
+        source.flush_deferred();
+        assert!(matches!(
+            events.try_recv().map(|env| env.event),
+            Ok(Event::Decoder(DecoderEvent::DecodeError {
+                detail: "fixture decode failure",
+                ..
+            }))
+        ));
     }
 
     #[kithara::test(tokio)]
@@ -4490,9 +4711,11 @@ mod splice_continuity_tests {
             DecodeInit {
                 decoder: initial_decoder,
                 decoder_factory,
+                decoder_backend: backend,
                 gapless_mode: GaplessMode::Disabled,
                 host_sample_rate,
                 media_info: Some(media_info(Consts::SLQ_VARIANT)),
+                playback_resampler_backend: "none",
                 recreate_on_host_rate_change: false,
             },
             Arc::new(AtomicU64::new(0)),

@@ -7,7 +7,10 @@ use kithara::{
     audio::{Audio, AudioConfig, ReadOutcome},
     bufpool::{PcmPool, SharedPool},
     decode::{GaplessMode, SilenceTrimParams},
-    events::{AudioEvent, Event, EventReceiver, SeekEpoch, SeekLifecycleStage},
+    events::{
+        AudioEvent, DecoderBackend, DecoderChangeCause, DecoderEvent, Event, EventBus,
+        EventReceiver, SeekEpoch, SeekLifecycleStage,
+    },
     file::{FileConfig, FileSrc},
     platform::time::{self, Duration, Instant},
     stream::{ContainerFormat, MediaInfo, Stream},
@@ -86,6 +89,44 @@ async fn test_audio_new(#[case] sample_count: usize) {
     let _audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
         .unwrap();
+}
+
+#[kithara::test(tokio)]
+async fn test_audio_new_publishes_initial_decoder_changed() {
+    let (_cache, _tmp, mut config) = test_wav_config(1000);
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe();
+    config.bus = Some(bus);
+
+    let audio = Audio::<Stream<kithara::file::File>>::new(config)
+        .await
+        .unwrap();
+    let expected_backend = {
+        #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+        {
+            DecoderBackend::Apple
+        }
+        #[cfg(not(all(feature = "apple", any(target_os = "macos", target_os = "ios"))))]
+        {
+            DecoderBackend::Symphonia
+        }
+    };
+
+    match events.try_recv().map(|env| env.event) {
+        Ok(Event::Decoder(DecoderEvent::DecoderChanged {
+            backend,
+            sample_rate,
+            channels,
+            cause,
+            ..
+        })) => {
+            assert_eq!(backend, expected_backend);
+            assert_eq!(sample_rate, audio.spec().sample_rate.get());
+            assert_eq!(channels, audio.spec().channels);
+            assert_eq!(cause, DecoderChangeCause::Initial);
+        }
+        other => panic!("expected initial DecoderChanged event, got {other:?}"),
+    }
 }
 
 /// `Audio::new` pre-warms its PCM pool so the decode hot path and the
