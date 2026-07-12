@@ -6,6 +6,7 @@ use kithara_stream::{
     PendingReason, ReadOutcome, SourcePhase, StreamError, StreamResult, needs_exact_byte_sizes,
 };
 use kithara_test_utils::kithara;
+use tracing::trace;
 
 use super::HlsVariant;
 use crate::{HlsError, segment::PlannedFetch};
@@ -226,6 +227,10 @@ impl HlsVariant {
         }
         if self.exact_seek_metadata_phase().is_some() || self.exact_byte_metadata_phase().is_some()
         {
+            trace!(
+                variant = self.variant,
+                offset, "read_at: gated by exact-size metadata demand"
+            );
             return Ok(Self::wrap(0));
         }
 
@@ -293,15 +298,31 @@ impl HlsVariant {
             let local_end = slice_end - seg_off;
             let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
             let dst = &mut buf[written..written + take];
-            match self.segment_read_at(seg_idx, local_start..local_end, dst)? {
-                Some(n) => {
-                    written += n;
-                    cursor += n as u64;
-                    if n < take {
-                        break;
-                    }
-                }
-                None => break,
+            let Some(n) = self.segment_read_at(seg_idx, local_start..local_end, dst)? else {
+                trace!(
+                    variant = self.variant,
+                    seg_idx,
+                    cursor,
+                    size_exact = self
+                        .segments
+                        .get(seg_idx as usize)
+                        .is_some_and(|s| s.size().is_exact()),
+                    loaded = self
+                        .segments
+                        .get(seg_idx as usize)
+                        .is_some_and(|s| s.state().is_loaded()),
+                    "read_at: segment bytes unavailable"
+                );
+                break;
+            };
+            written += n;
+            cursor += n as u64;
+            if n < take {
+                trace!(
+                    variant = self.variant,
+                    seg_idx, cursor, n, take, "read_at: short segment read"
+                );
+                break;
             }
         }
 
@@ -355,6 +376,12 @@ impl HlsVariant {
                 // Not ready: the reader driver (`Stream::probe_read` / `read` /
                 // `prime_seek_range`) wakes the peer for this range, per its own
                 // on-core/off-core context — this method stays wake-free.
+                trace!(
+                    variant = self.variant,
+                    start = range.start,
+                    end = range.end,
+                    "wait_range: range not ready (budget exceeded)"
+                );
                 Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
             }
         }

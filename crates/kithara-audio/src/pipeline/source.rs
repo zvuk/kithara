@@ -1814,6 +1814,11 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn decode_next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             if self.seek_obs.is_flushing() || self.seek_obs.is_pending() {
+                trace!(
+                    flushing = self.seek_obs.is_flushing(),
+                    pending = self.seek_obs.is_pending(),
+                    "decode_next_chunk: gated by seek flags"
+                );
                 return Err(DecodeError::Interrupted);
             }
 
@@ -1906,41 +1911,20 @@ impl<T: StreamType> StreamAudioSource<T> {
                 .and_then(|h| h.current_variant_index()),
             "apply_seek_from_timeline: enter (TIMELINE seek picked up)"
         );
-        if self.seek_obs.target().is_none() {
-            self.seek.complete(epoch);
-            self.finalize_seek_pending(epoch);
-            self.update_state(CurrentFsm::decoding());
-            return;
-        }
-
-        let current_epoch = self.epoch.load(Ordering::Acquire);
-        if epoch <= current_epoch {
-            self.seek.complete(epoch);
-            self.finalize_seek_pending(epoch);
-            self.update_state(CurrentFsm::decoding());
+        if self.ack_unappliable_seek(epoch) {
             return;
         }
 
         if let Some(duration) = self.playhead.duration()
             && position >= duration
         {
-            let sample_rate = self.session.decoder.spec().sample_rate.get();
-            let end_frame = num_traits::cast::ToPrimitive::to_u64(
-                &(duration.as_secs_f64() * f64::from(sample_rate)),
-            )
-            .unwrap_or(u64::MAX);
-            let end_position_ns = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
-            self.playhead.land(&kithara_stream::ChunkPosition {
-                end_position_ns,
-                frame_offset: end_frame,
-                frames: 0,
-                source_bytes: 0,
-                source_byte_offset: None,
-            });
-            self.seek.complete(epoch);
-            self.finalize_seek_pending(epoch);
-            self.epoch.store(epoch, Ordering::Release);
-            self.update_state(CurrentFsm::at_eof());
+            debug!(
+                ?position,
+                ?duration,
+                epoch,
+                "apply_seek_from_timeline: target at/past duration — landing at EOF"
+            );
+            self.land_seek_at_eof(epoch, duration);
             return;
         }
 
@@ -1974,6 +1958,53 @@ impl<T: StreamType> StreamAudioSource<T> {
             }
         };
         self.update_state(CurrentFsm::applying_seek(ApplySeekState { mode, request }));
+    }
+
+    /// Ack a timeline seek that cannot be applied — no timeline target
+    /// (already consumed) or a stale epoch — clearing the seek flags and
+    /// returning the FSM to `Decoding`. Returns `true` when it acked.
+    fn ack_unappliable_seek(&mut self, epoch: u64) -> bool {
+        if self.seek_obs.target().is_none() {
+            debug!(
+                epoch,
+                "apply_seek_from_timeline: no timeline target — acking epoch"
+            );
+        } else {
+            let current_epoch = self.epoch.load(Ordering::Acquire);
+            if epoch > current_epoch {
+                return false;
+            }
+            debug!(
+                epoch,
+                current_epoch, "apply_seek_from_timeline: stale epoch — acking without apply"
+            );
+        }
+        self.seek.complete(epoch);
+        self.finalize_seek_pending(epoch);
+        self.update_state(CurrentFsm::decoding());
+        true
+    }
+
+    /// Land a seek whose target sits at/past the known duration: park the
+    /// playhead at the stream end, ack the epoch, and enter `AtEof`.
+    fn land_seek_at_eof(&mut self, epoch: u64, duration: Duration) {
+        let sample_rate = self.session.decoder.spec().sample_rate.get();
+        let end_frame = num_traits::cast::ToPrimitive::to_u64(
+            &(duration.as_secs_f64() * f64::from(sample_rate)),
+        )
+        .unwrap_or(u64::MAX);
+        let end_position_ns = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
+        self.playhead.land(&kithara_stream::ChunkPosition {
+            end_position_ns,
+            frame_offset: end_frame,
+            frames: 0,
+            source_bytes: 0,
+            source_byte_offset: None,
+        });
+        self.seek.complete(epoch);
+        self.finalize_seek_pending(epoch);
+        self.epoch.store(epoch, Ordering::Release);
+        self.update_state(CurrentFsm::at_eof());
     }
 
     /// Arm the reader→peer wake on the produce core (lock-free). The scheduler
@@ -2040,10 +2071,23 @@ impl<T: StreamType> StreamAudioSource<T> {
                 self.update_state(CurrentFsm::at_eof());
                 DecodeStep::Eof
             }
-            Ok(DecoderChunkOutcome::Pending(_reason)) => {
+            Ok(DecoderChunkOutcome::Pending(reason)) => {
+                trace!(
+                    ?reason,
+                    pos = self.shared_stream.position(),
+                    "decode_one_step: pending"
+                );
                 DecodeStep::NotReady(WaitingReason::Waiting)
             }
-            Err(e) if e.is_interrupted() => DecodeStep::Interrupted,
+            Err(e) if e.is_interrupted() => {
+                trace!(
+                    flushing = self.seek_obs.is_flushing(),
+                    pending = self.seek_obs.is_pending(),
+                    pos = self.shared_stream.position(),
+                    "decode_one_step: interrupted"
+                );
+                DecodeStep::Interrupted
+            }
             Err(e) => {
                 self.update_state(CurrentFsm::failed(TrackFailure::Decode(e)));
                 DecodeStep::Failed
@@ -2180,7 +2224,12 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// next segment boundary matters — a fixed 32 KB window straddles the
     /// boundary into a not-yet-fetched next segment, so the gate would never
     /// clear even though the decoder only needs the rest of the current
-    /// segment to emit a chunk.
+    /// segment to emit a chunk. Exactly ON a boundary the window is empty
+    /// and therefore vacuously ready: that is deliberate — the demuxer may
+    /// still hold buffered input from the previous segment, and gating on
+    /// the (possibly withheld) next segment here would park the FSM before
+    /// it drains those frames (see `hls_seek_middle_stress_long`). A decode
+    /// attempt that finds no bytes parks through `DecodeStep::NotReady`.
     fn chunk_lookahead_range(&self, byte: u64) -> Range<u64> {
         let lookahead_end = byte.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
         let check_end = self
@@ -2244,6 +2293,12 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     fn source_park(&self, phase: SourcePhase) -> Option<WaitingReason> {
         let reason = map_source_phase(phase)?;
+        trace!(
+            ?phase,
+            ?reason,
+            pos = self.shared_stream.position(),
+            "source_park: parking on source phase"
+        );
         self.arm_peer_wake();
         Some(reason)
     }
