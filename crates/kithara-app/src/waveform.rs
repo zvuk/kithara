@@ -46,9 +46,14 @@ impl TrackAnalysisRunner {
     /// and every run scope live under it. `buckets` caps the waveform output;
     /// the native window count is the real resolution.
     #[must_use]
-    pub fn new(master: &CancelToken, _buckets: usize, beat_config: AppBeatAnalysisConfig) -> Self {
+    pub fn new(
+        master: &CancelToken,
+        _buckets: usize,
+        beat_config: AppBeatAnalysisConfig,
+        pcm_pool: PcmPool,
+    ) -> Self {
         let builder = AnalyzerBuilder::default()
-            .with_pcm_pool(PcmPool::default())
+            .with_pcm_pool(pcm_pool)
             .with_beat_config(beat_config);
         #[cfg(feature = "analysis-waveform")]
         let builder = builder.with_waveform(_buckets);

@@ -106,8 +106,9 @@ pub struct HlsConfig {
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
     pub name: Option<String>,
-    /// Buffer pool (shared across all components, created if not provided).
-    pub pool: Option<BytePool>,
+    /// Buffer pool shared across all components.
+    #[builder(default = BytePool::default())]
+    pub pool: BytePool,
     /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
     /// never issues these probes; file-like paths use them after a seek needs
     /// exact prefix offsets.

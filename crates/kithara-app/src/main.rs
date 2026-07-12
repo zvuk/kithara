@@ -5,8 +5,9 @@ use std::io::{self, IsTerminal};
 
 use clap::Parser;
 use kithara::{
-    assets::{AssetStoreBuilder, BytePool, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
+    assets::{AssetStoreBuilder, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
     audio::generate_log_spaced_bands,
+    bufpool::Region,
     net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, StretchControls},
     stream::dl::{Downloader, DownloaderConfig},
@@ -100,7 +101,8 @@ fn main() -> AppResult {
     // every subsystem derives from `shutdown.child()`, so a frontend
     // `config.shutdown.cancel()` propagates down the shutdown subtree to all of
     let shutdown = CancelToken::root();
-    let byte_pool = BytePool::default();
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let net = NetOptions::builder()
         .is_insecure(args.insecure || baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
         .compression(baked::BAKED_COMPRESSION)
@@ -128,6 +130,7 @@ fn main() -> AppResult {
         .flush_hub(flush_hub)
         .shutdown(shutdown.clone())
         .byte_pool(byte_pool)
+        .pcm_pool(region.pcm_pool())
         .asset_store(asset_store)
         .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
         .should_accept_invalid_certs(args.insecure)
@@ -138,6 +141,7 @@ fn main() -> AppResult {
         .cancel(shutdown.child())
         .crossfade_duration(config.crossfade_seconds)
         .eq_layout(generate_log_spaced_bands(config.eq_band_count))
+        .pcm_pool(region.pcm_pool())
         .timestretch(Arc::clone(&timestretch))
         .build();
     let player = Arc::new(PlayerImpl::new(player_config));

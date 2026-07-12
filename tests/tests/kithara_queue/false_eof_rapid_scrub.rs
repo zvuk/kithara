@@ -2,6 +2,7 @@
 
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -58,7 +59,13 @@ async fn build_ctx() -> Ctx {
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
+    let config = AppConfig::new(
+        downloader,
+        flush_hub,
+        CancelToken::never(),
+        BytePool::default(),
+        PcmPool::default(),
+    );
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .session(OfflineSession::arc_auto())

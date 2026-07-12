@@ -7,6 +7,7 @@ use std::{
 };
 
 use dashmap::DashMap;
+use kithara_bufpool::BytePool;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{
     AvailabilityObserver, MemOptions, MemResource, Resource, ResourceStatus, StorageResource,
@@ -60,6 +61,7 @@ pub struct MemAssetStore {
     availability: AvailabilityIndex,
     cancel: CancelToken,
     mem_resource_capacity: Option<usize>,
+    pool: BytePool,
 }
 
 #[derive(Debug)]
@@ -112,17 +114,14 @@ pub(crate) struct MemStoreSetup {
     pub(crate) availability: AvailabilityIndex,
     pub(crate) cancel: CancelToken,
     pub(crate) mem_resource_capacity: Option<usize>,
+    pub(crate) pool: BytePool,
 }
 
 impl MemAssetStore {
     /// Create a new in-memory asset store with its own unshared
     /// [`AvailabilityIndex`].
     #[must_use]
-    pub fn new(
-        cancel: CancelToken,
-        mem_resource_capacity: Option<usize>,
-        pool: &kithara_bufpool::BytePool,
-    ) -> Self {
+    pub fn new(cancel: CancelToken, mem_resource_capacity: Option<usize>, pool: &BytePool) -> Self {
         Self::with_availability(
             cancel,
             mem_resource_capacity,
@@ -141,10 +140,9 @@ impl MemAssetStore {
         cancel: CancelToken,
         mem_resource_capacity: Option<usize>,
         availability: AvailabilityIndex,
-        pool: &kithara_bufpool::BytePool,
+        pool: &BytePool,
     ) -> Self {
         let active_resources = Arc::new(DashMap::new());
-        let _ = pool;
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
         let deleter: Arc<dyn AssetDeleter> = Arc::new(MemAssetDeleter::new(
@@ -159,6 +157,7 @@ impl MemAssetStore {
             availability,
             cancel,
             mem_resource_capacity,
+            pool: pool.clone(),
         })
     }
 
@@ -172,6 +171,7 @@ impl MemAssetStore {
             availability,
             active_resources,
             deleter,
+            pool,
         } = setup;
         Self {
             active_resources,
@@ -179,6 +179,7 @@ impl MemAssetStore {
             availability,
             cancel,
             mem_resource_capacity,
+            pool,
         }
     }
 }
@@ -210,7 +211,10 @@ impl Assets for MemAssetStore {
             return Ok(AcquisitionResult::Pending(BaseWriter::new(storage)));
         }
 
-        let mut options = MemOptions::default();
+        let mut options = MemOptions {
+            pool: self.pool.clone(),
+            ..MemOptions::default()
+        };
         if let Some(capacity) = self.mem_resource_capacity
             && capacity > 0
         {
@@ -241,11 +245,17 @@ impl Assets for MemAssetStore {
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(StorageResource::from(MemResource::new(self.cancel.clone())))
+        Ok(StorageResource::from(MemResource::new(
+            self.cancel.clone(),
+            self.pool.clone(),
+        )))
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(StorageResource::from(MemResource::new(self.cancel.clone())))
+        Ok(StorageResource::from(MemResource::new(
+            self.cancel.clone(),
+            self.pool.clone(),
+        )))
     }
 
     fn open_resource_with_ctx(

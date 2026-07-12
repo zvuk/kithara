@@ -7,6 +7,7 @@
 
 use kithara::{
     audio::{Bucket, analysis::BeatAnalysisConfig},
+    bufpool::PcmPool,
     platform::{CancelToken, time::Duration},
     prelude::ResourceConfig,
 };
@@ -29,7 +30,12 @@ async fn run_analysis(
     config: ResourceConfig,
     buckets: usize,
 ) -> Option<TrackAnalysis> {
-    let mut runner = TrackAnalysisRunner::new(master, buckets, BeatAnalysisConfig::default());
+    let mut runner = TrackAnalysisRunner::new(
+        master,
+        buckets,
+        BeatAnalysisConfig::default(),
+        PcmPool::default(),
+    );
     let mut rx = runner.analyze(config);
 
     // Staged analysis can emit twice (waveform, then waveform+beat).

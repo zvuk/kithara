@@ -591,6 +591,7 @@ mod tests {
             MemOptions {
                 initial_data: None,
                 capacity: 0,
+                pool: test_pool(),
             },
         )
         .unwrap();
