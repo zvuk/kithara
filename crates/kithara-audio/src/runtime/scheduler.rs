@@ -40,7 +40,7 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
     ///
     /// `cancel` is the externally-owned [`CancelToken`] that drives the run
     /// loop's shutdown. Callers (e.g.
-    /// [`AudioWorkerHandle`](super::super::worker::AudioWorkerHandle)) derive
+    /// [`AudioWorkerHandle`](super::super::renderer::AudioWorkerHandle) derive
     /// it as a `child()` of the player master so worker shutdown
     /// participates in the unified cancel hierarchy and the lock-free
     /// `is_cancelled()` read on the produce-core observes a master cancel.

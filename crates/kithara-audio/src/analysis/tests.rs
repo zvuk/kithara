@@ -9,8 +9,8 @@ use num_traits::cast::AsPrimitive;
 #[cfg(feature = "analysis-waveform")]
 use crate::traits::PendingReason;
 use crate::{
+    renderer::PreloadGate,
     traits::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
-    worker::PreloadGate,
 };
 
 const SR: u32 = 44_100;

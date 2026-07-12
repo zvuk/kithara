@@ -39,15 +39,13 @@ use crate::{
         source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
+    renderer::{
+        AudioWorkerHandle, EngineLoad, PreloadGate, ServiceClass, ThreadWake, TrackId,
+        TrackRegistration, WorkerWakeBridge,
+    },
     runtime::{AtomicServiceClass, WakeSignal},
     traits::{
         AudioEffect, ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome,
-    },
-    worker::{
-        EngineLoad, PreloadGate,
-        handle::{AudioWorkerHandle, TrackRegistration, WorkerWakeBridge},
-        thread_wake::ThreadWake,
-        types::{ServiceClass, TrackId},
     },
 };
 

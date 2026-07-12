@@ -18,10 +18,10 @@ pub mod effects;
 pub mod mock;
 mod pipeline;
 mod region;
+pub(crate) mod renderer;
 mod runtime;
 mod traits;
 mod waveform;
-pub(crate) mod worker;
 
 pub use audio::Audio;
 pub use blob::BlobError;
@@ -46,6 +46,9 @@ pub use pipeline::{
     fetch::{EpochValidator, Fetch},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
+pub use renderer::{
+    AudioWorkerHandle, AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass,
+};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
     SeekOutcome,
@@ -53,7 +56,3 @@ pub use traits::{
 #[cfg(feature = "analysis-waveform")]
 pub use waveform::WaveformAnalyzer;
 pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, Waveform};
-pub use worker::{
-    AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, handle::AudioWorkerHandle,
-    types::ServiceClass,
-};

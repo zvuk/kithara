@@ -16,8 +16,8 @@ use portable_atomic::AtomicF32;
 use crate::effects::timestretch::TimeStretchProcessor;
 use crate::{
     effects::timestretch::StretchControls,
+    renderer::{AudioWorkerHandle, EngineLoad},
     traits::AudioEffect,
-    worker::{EngineLoad, handle},
 };
 
 #[derive(Clone, Debug, Builder)]
@@ -138,7 +138,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// at unity.
     pub stretch: Option<Arc<StretchControls>>,
     /// Optional shared audio worker handle.
-    pub worker: Option<handle::AudioWorkerHandle>,
+    pub worker: Option<AudioWorkerHandle>,
     /// Additional effects to append after decoder-domain processing.
     #[builder(default)]
     pub effects: Vec<Box<dyn AudioEffect>>,

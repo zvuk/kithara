@@ -5,9 +5,7 @@ use kithara_platform::{
 };
 use kithara_stream::SeekObserve;
 
-use super::{
-    AudioWorkerSource, EngineLoad, PreloadGate, handle::TrackRegistration, types::ServiceClass,
-};
+use super::{AudioWorkerSource, EngineLoad, PreloadGate, ServiceClass};
 use crate::{
     pipeline::{
         fetch::Fetch,
@@ -15,6 +13,23 @@ use crate::{
     },
     runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
 };
+
+/// Everything needed to register a track with the shared worker.
+pub(crate) struct TrackRegistration {
+    pub(crate) preload_gate: Arc<PreloadGate>,
+    /// Shared priority hint. The real-time consumer writes it wait-free
+    /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
+    pub(crate) service_class: Arc<AtomicServiceClass>,
+    pub(crate) source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+    /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
+    /// hands every consumed `PcmChunk` here instead of dropping it, so the
+    /// pooled buffer is freed/recycled on the worker thread rather than on
+    /// the audio thread. See `crates/kithara-audio/CONTEXT.md`.
+    pub(crate) trash_inlet: Inlet<PcmChunk>,
+    pub(crate) engine_load: Option<Arc<EngineLoad>>,
+    pub(crate) outlet: Outlet<Fetch<PcmChunk>>,
+    pub(crate) preload_chunks: usize,
+}
 
 /// Per-tick state of a [`DecoderNode`] — preload progress, EOF flag, and
 /// the cached seek epoch — bundled so the constructor and the
@@ -237,8 +252,8 @@ mod tests {
 
     use super::*;
     use crate::{
+        renderer::MockAudioWorkerSource,
         runtime::{Inlet, Outlet, connect},
-        worker::MockAudioWorkerSource,
     };
 
     /// Build a `DecoderNode` for tests: same defaults across the whole

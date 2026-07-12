@@ -90,14 +90,32 @@ impl EngineLoad {
 #[non_exhaustive]
 pub struct EngineLoadSnapshot {
     /// Fraction of realtime spent producing (`0.05` = 5% load).
-    pub load: f32,
+    load: f32,
     /// Wall time per produced chunk, in milliseconds.
-    pub ms: f32,
+    ms: f32,
     /// Produced audio-seconds per CPU-second (`>1` = faster than realtime).
-    pub realtime: f32,
+    realtime: f32,
 }
 
 impl EngineLoadSnapshot {
+    /// Fraction of realtime spent producing (`0.05` = 5% load).
+    #[must_use]
+    pub fn load(&self) -> f32 {
+        self.load
+    }
+
+    /// Wall time per produced chunk, in milliseconds.
+    #[must_use]
+    pub fn ms(&self) -> f32 {
+        self.ms
+    }
+
+    /// Produced audio-seconds per CPU-second (`>1` = faster than realtime).
+    #[must_use]
+    pub fn realtime(&self) -> f32 {
+        self.realtime
+    }
+
     /// `true` once the worker has produced at least one measurement.
     #[must_use]
     pub fn is_active(&self) -> bool {
@@ -125,11 +143,11 @@ mod tests {
         }
         let s = meter.snapshot();
         assert!(s.is_active(), "active after producing: {s:?}");
-        assert!(s.realtime > 1.0, "faster than realtime: {s:?}");
+        assert!(s.realtime() > 1.0, "faster than realtime: {s:?}");
         assert!(
-            s.load > 0.0 && s.load < 1.0,
+            s.load() > 0.0 && s.load() < 1.0,
             "load fraction in (0,1): {s:?}"
         );
-        assert!(s.ms > 0.0, "ms populated: {s:?}");
+        assert!(s.ms() > 0.0, "ms populated: {s:?}");
     }
 }

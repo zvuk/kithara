@@ -1,34 +1,25 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_decode::PcmChunk;
 use kithara_platform::{CancelToken, sync::Arc};
 
-use super::{
-    AudioWorkerSource, EngineLoad, PreloadGate,
-    decoder::DecoderNode,
-    hang_observer::HangWatchdogObserver,
-    types::{TrackId, TrackIdGen},
-};
-use crate::{
-    pipeline::fetch::Fetch,
-    runtime::{AtomicServiceClass, Scheduler, SchedulerHandle},
-};
+use super::{DecoderNode, HangWatchdogObserver, TrackRegistration};
+use crate::runtime::{Node, Scheduler, SchedulerHandle};
 
-/// Everything needed to register a track with the shared worker.
-pub(crate) struct TrackRegistration {
-    pub(crate) preload_gate: Arc<PreloadGate>,
-    /// Shared priority hint. The real-time consumer writes it wait-free
-    /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
-    pub(crate) service_class: Arc<AtomicServiceClass>,
-    pub(crate) source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-    /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
-    /// hands every consumed `PcmChunk` here instead of dropping it, so the
-    /// pooled buffer is freed/recycled on the worker thread rather than on
-    /// the audio thread. See `crates/kithara-audio/CONTEXT.md`.
-    pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
-    pub(crate) engine_load: Option<Arc<EngineLoad>>,
-    pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
-    pub(crate) preload_chunks: usize,
+/// Unique identifier for a track registered with a shared worker.
+pub(crate) type TrackId = u64;
+
+/// Monotonic counter for generating unique [`TrackId`] values.
+pub(crate) struct TrackIdGen(AtomicU64);
+
+impl TrackIdGen {
+    // ast-grep-ignore: style.prefer-default-derive
+    pub(crate) fn new() -> Self {
+        Self(AtomicU64::new(1))
+    }
+
+    pub(crate) fn next(&self) -> TrackId {
+        self.0.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 /// Clonable handle to a shared audio worker.
@@ -37,7 +28,7 @@ pub(crate) struct TrackRegistration {
 /// the handle and passing it via [`AudioConfig`](crate::AudioConfig).
 pub struct AudioWorkerHandle {
     id_gen: Arc<TrackIdGen>,
-    inner: SchedulerHandle<Box<dyn crate::runtime::Node>>,
+    inner: SchedulerHandle<Box<dyn Node>>,
 }
 
 impl Clone for AudioWorkerHandle {
@@ -49,9 +40,6 @@ impl Clone for AudioWorkerHandle {
     }
 }
 
-/// Monotonic counter for unique audio-worker thread names.
-static AUDIO_WORKER_ID: AtomicU64 = AtomicU64::new(0);
-
 impl AudioWorkerHandle {
     /// Register a track. Returns the assigned [`TrackId`].
     ///
@@ -60,7 +48,7 @@ impl AudioWorkerHandle {
     /// data. Callers must ensure the worker is alive before registering.
     pub(crate) fn register_track(&self, reg: TrackRegistration) -> TrackId {
         let id = self.id_gen.next();
-        let node: Box<dyn crate::runtime::Node> = Box::new(DecoderNode::from(reg));
+        let node: Box<dyn Node> = Box::new(DecoderNode::from(reg));
         self.inner.register(id, node);
         id
     }
@@ -92,17 +80,15 @@ impl AudioWorkerHandle {
     /// `is_cancelled()` read observes a master cancel.
     #[must_use]
     pub fn with_cancel(cancel: CancelToken) -> Self {
-        let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
-        let inner = Scheduler::<Box<dyn crate::runtime::Node>, HangWatchdogObserver>::start(
-            format!("kithara-audio-worker-{id}"),
+        let id_gen = Arc::new(TrackIdGen::new());
+        let id = Arc::as_ptr(&id_gen);
+        let inner = Scheduler::<Box<dyn Node>, HangWatchdogObserver>::start(
+            format!("kithara-audio-worker-{id:p}"),
             HangWatchdogObserver::new(),
             cancel,
         );
 
-        Self {
-            inner,
-            id_gen: Arc::new(TrackIdGen::new()),
-        }
+        Self { id_gen, inner }
     }
 }
 
@@ -129,82 +115,18 @@ mod tests {
         thread::sleep as thread_sleep,
         time::{Duration, Instant, timeout as platform_timeout},
     };
-    use kithara_stream::{SeekControl, SeekObserve, SeekState};
+    use kithara_stream::{SeekObserve, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        pipeline::track_fsm::{TrackStep, WaitingReason},
-        runtime::connect,
-        worker::{AudioWorkerSource, thread_wake::ThreadWake, types::ServiceClass},
+        pipeline::{
+            fetch::Fetch,
+            track_fsm::{TrackStep, WaitingReason},
+        },
+        renderer::{AudioWorkerSource, MockSource, PreloadGate, ServiceClass, ThreadWake},
+        runtime::{AtomicServiceClass, connect},
     };
-
-    struct MockSource {
-        seek: Arc<dyn SeekControl>,
-        seek_obs: Arc<dyn SeekObserve>,
-        ready: bool,
-        should_panic: bool,
-        chunks_to_produce: usize,
-        cursor: usize,
-    }
-
-    impl MockSource {
-        fn new(chunks: usize) -> Self {
-            let state = Arc::new(SeekState::new());
-            let seek = Arc::clone(&state) as Arc<dyn SeekControl>;
-            let seek_obs = Arc::clone(&state) as Arc<dyn SeekObserve>;
-            Self {
-                seek,
-                seek_obs,
-                chunks_to_produce: chunks,
-                cursor: 0,
-                ready: true,
-                should_panic: false,
-            }
-        }
-
-        fn not_ready(chunks: usize) -> Self {
-            Self {
-                ready: false,
-                ..Self::new(chunks)
-            }
-        }
-
-        fn panicking() -> Self {
-            Self {
-                should_panic: true,
-                ..Self::new(100)
-            }
-        }
-    }
-
-    impl AudioWorkerSource for MockSource {
-        type Chunk = PcmChunk;
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek_obs)
-        }
-
-        fn step_track(&mut self) -> TrackStep<PcmChunk> {
-            if self.seek_obs.is_pending() || self.seek_obs.is_flushing() {
-                let epoch = self.seek_obs.epoch();
-                self.seek.complete(epoch);
-                self.seek.clear_pending(epoch);
-                return TrackStep::StateChanged;
-            }
-            if !self.ready {
-                return TrackStep::Blocked(WaitingReason::Waiting);
-            }
-            if self.should_panic {
-                panic!("mock panic for testing");
-            }
-            if self.cursor >= self.chunks_to_produce {
-                return TrackStep::Eof;
-            }
-            self.cursor += 1;
-            TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
-        }
-    }
 
     struct FailingSource {
         seek_obs: Arc<dyn SeekObserve>,
@@ -274,6 +196,17 @@ mod tests {
             }
         }
         received
+    }
+
+    #[kithara::test]
+    fn track_id_gen_produces_unique_ids() {
+        let id_gen = TrackIdGen::new();
+        let a = id_gen.next();
+        let b = id_gen.next();
+        let c = id_gen.next();
+        assert_eq!(a, 1);
+        assert_eq!(b, 2);
+        assert_eq!(c, 3);
     }
 
     #[kithara::test]

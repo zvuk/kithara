@@ -39,8 +39,8 @@ use crate::{
             WaitingForSource, WaitingReason, map_source_phase,
         },
     },
+    renderer::{AudioWorkerSource, apply_effects, reset_effects},
     traits::AudioEffect,
-    worker::{AudioWorkerSource, apply_effects, reset_effects},
 };
 
 /// Shared stream wrapper for format change detection.

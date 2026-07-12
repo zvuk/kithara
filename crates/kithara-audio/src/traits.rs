@@ -9,7 +9,7 @@ mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
 
-use crate::{ServiceClass, worker::PreloadGate};
+use crate::{ServiceClass, renderer::PreloadGate};
 
 /// Reason a [`ReadOutcome::Pending`] / [`ChunkOutcome::Pending`] was
 /// returned — i.e. why the reader did not advance this call. Each
