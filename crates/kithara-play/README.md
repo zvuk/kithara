@@ -12,38 +12,45 @@
 
 # kithara-play
 
-The player engine behind kithara. It provides the concrete playback, resource,
-engine, and equalizer surfaces used by queue, FFI, and app crates. Enable
-`mock` for the `Equalizer` unimock helper.
+The playback orchestration crate behind Kithara. It provides concrete player,
+engine, resource, session, and real-time rendering surfaces for queue, FFI, app,
+and test-harness crates. Enable `mock` for the `Equalizer` unimock helper.
 
 ## Usage
 
 ```rust
-use kithara_events::EventBus;
-use kithara_play::{EngineConfig, EngineImpl};
+use kithara_play::{ResourceConfig, default_resource_decoder_config};
 
-let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
-engine.start()?;
-let slot = engine.allocate_slot()?;
-engine.release_slot(slot)?;
-engine.stop()?;
+let decoder = default_resource_decoder_config();
+let resource = ResourceConfig::for_src("https://example.com/track.m3u8")?
+    .decoder(decoder)
+    .build();
 ```
+
+`ResourceConfig` fields are crate-private. Configure resources with its `bon`
+builder and inspect caller-facing values through getters such as `source()`,
+`store()`, and `bus()`. Decoder backend, gapless, and resampler settings belong
+to the single `decoder` field.
 
 ## Core Surface
 
-- `EngineImpl` owns the session client, slots, master output, and shared decode
-  worker.
-- `PlayerImpl` owns queue state, transport commands, status snapshots, and
+- `EngineImpl` owns session dispatch, slot registration, master output state,
+  and the shared decode worker.
+- `PlayerImpl` owns playlist and parameter state, transport flow, status, and
   item handover.
-- `Resource` opens file/HLS/reader sources for the player.
+- `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
+- `PlayerNode` is the public real-time audio graph node.
 - `Equalizer` is the remaining mockable trait surface.
 
 ## Orientation
 
 - **Lifecycle:** start the engine, allocate a slot, attach a player item, play,
   then release the slot and stop the engine.
-- **Tempo & key-lock:** driven by the shared `StretchControls` handle in
-  `PlayerConfig.timestretch`; speed, key-lock, and backend apply live, mid-track.
+- **Configuration:** `PlayerConfig`, `EngineConfig`, and `ResourceConfig` expose
+  builders while their fields remain crate-private.
+- **Tempo and key-lock:** a shared `StretchControls` handle is supplied through
+  `PlayerConfig::builder().timestretch(...)`; speed, key-lock, and backend apply
+  live, mid-track.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
   `engine.subscribe()` (`PlayerEvent`, `ItemEvent`, `EngineEvent`,
   `SessionEvent`, `DjEvent`).
@@ -55,5 +62,9 @@ engine.stop()?;
 
 File and HLS pipelines are unconditional; cpal output is the default backend.
 Enable `mock` for `EqualizerMock`.
+
+The role-first source tree is organized as `api/`, `bridge/`, `engine/`,
+`player/{state,flow}/`, `resource/`, `rt/{track}/`, `session/{web}/`, plus the
+target-gated `wasm` surface.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

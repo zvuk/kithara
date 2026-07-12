@@ -1,11 +1,11 @@
-# kithara-play — Context
+# kithara-play - Context
 
 Detailed contracts and invariants for the kithara-play crate; the README is the overview.
 
 ## Tempo & Key-Lock
 
 `kithara-audio`'s `StretchControls` (one per deck, in `PlayerConfig.timestretch`)
-is a single `Arc` holding `speed` — plus `keylock` + `backend` when a stretch
+is a single `Arc` holding `speed` - plus `keylock` + `backend` when a stretch
 backend is compiled in (`stretch-signalsmith` / `stretch-bungee`). It is the one
 source of truth, shared between the UI and the worker's effect chain, which reads
 it each chunk. Rate setters (`set_rate`, `play`) and `set_keylock` / `set_backend`
@@ -18,9 +18,9 @@ codec-embedded decode when that placement is selected, otherwise by the
 standalone playback resampler stage:
 
 - **key-lock off**: the stretch slot applies `set_ratio(1/speed)` and
-  `set_pitch(speed)` — changing speed shifts pitch (vinyl-style).
+  `set_pitch(speed)` - changing speed shifts pitch (vinyl-style).
 - **key-lock on**: the stretch slot applies `set_ratio(1/speed)` and
-  `set_pitch(1.0)` — changing speed preserves pitch.
+  `set_pitch(1.0)` - changing speed preserves pitch.
 
 At speed 1.0 with no region plan the slot bypasses byte-identically. Without a
 stretch backend, including wasm, no speed DSP is inserted and PCM output remains
@@ -29,7 +29,7 @@ rate changes are pitch-preserving unless the consumer explicitly disables
 key-lock.
 
 Because the controls are read each chunk, **key-lock, backend, and speed all apply
-live, mid-track — no reload.** Switching backend rebuilds the DSP backend;
+live, mid-track - no reload.** Switching backend rebuilds the DSP backend;
 returning to unity passthrough resets buffered stretch state.
 `Queue` delegates `set_rate` to the player; key-lock and backend are set by the
 consumer directly on the shared `StretchControls` handle.
@@ -56,12 +56,12 @@ Status types: `PlayerStatus`, `TimeControlStatus`, `ItemStatus`,
 `PlayerImpl` exposes a handover API for external orchestrators and internal
 tests:
 
-- `arm_next(idx) -> Option<Arc<str>>` — load the next item into the audio thread,
+- `arm_next(idx) -> Option<Arc<str>>` - load the next item into the audio thread,
   ready for gapless stitch (cf=0) or parallel fade (cf>0).
-- `commit_next(idx) -> Result<(), PlayError>` — promote the armed slot (cf>0 only;
+- `commit_next(idx) -> Result<(), PlayError>` - promote the armed slot (cf>0 only;
   the audio thread handles cf=0 internally).
-- `unarm_next()` — drop the armed slot without committing.
-- `armed_next() -> Option<usize>` — snapshot of the armed index.
+- `unarm_next()` - drop the armed slot without committing.
+- `armed_next() -> Option<usize>` - snapshot of the armed index.
 
 Two near-end triggers are published: `PlayerEvent::PrefetchRequested` and
 `PlayerEvent::HandoverRequested` (emitted only when `crossfade_duration > 0`).
@@ -72,15 +72,30 @@ policy and reacts to `HandoverRequested` by selecting the loaded successor via
 
 ## Planes & Ownership
 
-`api/` owns stable public shapes, `bridge/` owns cross-plane protocol and shared
-RT handles, `resource/` owns source/config/reader construction, `player/` owns
-main-thread queue and flow state, `engine/` owns session/slot registration, and
-`rt/` owns lock-free audio-node rendering.
+`api/` owns stable public shapes; `bridge/` owns cross-plane protocol and shared
+RT handles; `resource/` owns source, config, and reader construction; `player/`
+owns main-thread playlist and parameter state in `state/` and transitions in
+`flow/`; `engine/` owns session and slot registration; `rt/` owns lock-free
+audio-node rendering, with per-track state under `rt/track/`; and `session/`
+owns protocol, state, graph dispatch, and platform clients. `wasm` is the
+target-gated browser binding surface.
 
 `player`, `engine`, and `session` are intentional orchestration planes: their
 entry files import several sibling modules to bind API state, RT controls, and
 session commands. The per-crate `module_fan_out` threshold is raised for
 `kithara-play`; do not add re-export hops solely to lower that count.
+
+### Accepted lint residue
+
+The live architecture lint warnings retained after the role-first split are
+intentional: six `single_impl_size` warnings are layout-inherent after the
+fine-grained module split; two `god_struct` warnings, including `PlayerImpl`,
+remain because further delegation would add risk to event and timing
+correctness for little lint value; and two `mixed_entities` warnings reflect
+modules whose paired entities share one owner and lifecycle. The two
+`pub_struct_open_fields` warnings on `SlotControl` and `PlaybackShared` preserve
+the intentional white-box render API used by the offline harness in
+`kithara-integration-tests`.
 
 ## Engine Lifecycle
 
@@ -95,7 +110,7 @@ synchronous `Queue::select` path and an async loader-completion both calling
 `PlayerImpl::ensure_engine_started`) cannot both dispatch `start_player`: the
 loser observes `running == true` under the lock and returns
 `EngineAlreadyRunning`. `ensure_engine_started` treats `EngineAlreadyRunning` as
-success — the engine is started, which is all it promises — so a concurrent start
+success - the engine is started, which is all it promises - so a concurrent start
 is idempotent, never a `"player already started"` session desync.
 
 ## Cancel Hierarchy
@@ -114,7 +129,7 @@ audio worker, epoch cancel) derive children via `.child()` from the scope's
 token, so a master / parent `cancel()` is observed by all of them.
 
 `CancelScope::Drop` is **passive**. Teardown is an explicit `scope.cancel()`
-that cancels the player's own subtree — it never implicitly cancels a
+that cancels the player's own subtree - it never implicitly cancels a
 potentially-foreign master passed in from above (the previous `Drop`-cancel of
 the passed token is gone). Hard-coded `CancelToken::root()` and
 `CancelToken::never()` outside the allowlist are forbidden, enforced by
@@ -126,16 +141,16 @@ Two distinct real-time surfaces carry the `#[kithara::rtsan_forbid_blocking]`
 contract; both are verified by RealtimeSanitizer (gated by `--cfg rtsan`, so
 stable/production builds are byte-identical).
 
-**Consumer `process()` — permanent.** `PlayerNodeProcessor::process` and
+**Consumer `process()` - permanent.** `PlayerNodeProcessor::process` and
 `MasterEqProcessor::process` run on the Firewheel audio thread and stay
 allocation-, free-, and lock-free: scratch buffers are pre-sized at stream
 start, and evicted tracks are handed to a bounded deferred-drop channel (drained
 on the main thread) instead of being freed on the audio thread.
 
-**Worker produce-core — verified-after-refactor.** The audio worker's
+**Worker produce-core - verified-after-refactor.** The audio worker's
 `produce_pass` (`kithara-audio` scheduler) is `#[rtsan_forbid_blocking]`: the
 decode core reads/seeks without malloc/lock/syscall. Off-core work is pushed to
-the unchecked **shell** of the run-loop — pooled-buffer free, the deferred
+the unchecked **shell** of the run-loop - pooled-buffer free, the deferred
 reader-hook + peer-wake flush (`flush_deferred`, run by `recycle`), the parked
 `wait`, and the intrinsic symphonia `next_packet` allocation are all
 **blocking-by-design in the shell**, never on the forbid path. The reader wakes
@@ -144,7 +159,7 @@ the downloader by *arming* a lock-free flag on the core (`Stream::probe_read` /
 telemetry (`AudioEvent` via `emit_seek_lifecycle`) is enqueued lock-free on the
 core into a `DeferredBus<AudioEvent>` and published by the shell
 (`flush_deferred` + `Drop`), so the `EventBus` tokio-broadcast send stays off
-the forbid path — like the reader-hooks. The produce-core read/seek path is
+the forbid path - like the reader-hooks. The produce-core read/seek path is
 verified kevent/yield-free; the CI lane stays advisory (soak) until that holds
 across the full lane set.
 
@@ -155,7 +170,7 @@ nightly `.github/workflows/rtsan.yml.disabled` runs all three on linux+macos
 are green.
 
 **No `kithara-rtsan` crate.** The `permit()` / forbid-blocking macros stay in
-`kithara-test-utils` alongside the USDT probe system — it is a normal dependency
+`kithara-test-utils` alongside the USDT probe system - it is a normal dependency
 of the production crates (most purely for probes), so splitting only the RT
 attributes would fragment the shared `kithara::` facade and shed nothing.
 
@@ -226,20 +241,21 @@ File and HLS pipelines are unconditional: `kithara-play` always links
 ## Current item
 
 `PlayerEvent::CurrentItemChanged` means the *identity* of the current item
-changed — not merely that playback (re)started. A bare `play()` that resumes
+changed - not merely that playback (re)started. A bare `play()` that resumes
 the already-current item must **not** emit it: consumers (the queue, which
 re-publishes `QueueEvent::CurrentTrackChanged`, and FFI observers) treat the
-event as a track switch and do real work on it — e.g. the DJ studio re-analyses
+event as a track switch and do real work on it - e.g. the DJ studio re-analyses
 the waveform.
 
-`play()` enforces this with `last_announced_index` (sentinel `usize::MAX` until
-the first announce): it emits only when the loaded index differs from the last
-announced one, so first activation announces but a resume does not. The genuine
-track moves (`commit_next`, `advance_to_next_item`, the handover finaliser, the
-jump path) go through `announce_current_item`, which records the index and
-emits. Item-set mutations that change identity under a reused index
-(`remove_all_items`, `remove_at`, `replace_item*` on the announced index) reset
-the sentinel to `usize::MAX`, so the next `play()` re-announces.
+`Playlist` owns both the current index and the announce-dedup state. Its
+`last_announced: Option<usize>` starts as `None`; `mark_announced` records an
+index and reports whether it changed. `announce_current_item` is the sole event
+publisher and emits only when that report is true, so first activation
+announces but a resume does not. Genuine track moves (`commit_next`,
+`advance_to_next_item`, the handover finaliser, and the jump path) route through
+that publisher. Playlist mutations that can change identity under a reused
+index (`clear`, `remove_at`, and replacement of the announced index) reset the
+dedup state to `None`, so the next `play()` re-announces.
 
 ## Testing
 
