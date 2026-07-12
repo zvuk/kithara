@@ -1,0 +1,11 @@
+id: idioms.derive-from-candidate
+message: 1:1 From impl; use `#[derive(derive_more::From)]` on the type or variant.
+severity: warning
+language: Rust
+files: ["crates/**/*.rs"]
+ignores: ["**/tests/**", "**/test_*.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests.rs"]
+rule:
+  any:
+    - pattern: "impl From<$S> for $T { fn from($V: $S) -> Self { Self($V) } }"
+    - pattern: "impl From<$S> for $T { fn from($V: $S) -> Self { Self { $FIELD: $V } } }"
+    - pattern: "impl From<$S> for $T { fn from($V: $S) -> Self { Self::$VARIANT($V) } }"

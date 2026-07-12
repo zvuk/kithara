@@ -18,6 +18,7 @@ pub(crate) mod await_under_guard;
 pub(crate) mod box_concrete_type;
 pub(crate) mod branch_chains;
 pub(crate) mod const_group_enum_shape;
+pub(crate) mod derivable_delegation;
 pub(crate) mod fat_loop_body;
 pub(crate) mod function_branch_density;
 pub(crate) mod guard_cascade;
@@ -46,6 +47,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(branch_chains::BranchChains),
         Box::new(guard_cascade::GuardCascade),
+        Box::new(derivable_delegation::DerivableDelegation),
         Box::new(accumulator_loops::AccumulatorLoops),
         Box::new(multi_accumulator_loop::MultiAccumulatorLoop),
         Box::new(parallel_loops::ParallelLoops),

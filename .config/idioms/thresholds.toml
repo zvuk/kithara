@@ -27,6 +27,11 @@ count_if_let = false
 # decision-table anti-pattern is meaningful at 4+. See module docs.
 warn_streak = 4
 
+[derivable_delegation]
+enabled = true
+trait_min_methods = 2
+inherent_min_methods = 3
+
 [retry_fallback]
 # retry_fallback flags retry/fallback vocabulary (max_retries, should_retry,
 # attempt, ...) to catch try-A-else-B chains that paper over state bugs. The

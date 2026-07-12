@@ -32,6 +32,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) const_group_enum_shape: ConstGroupEnumShapeConfig,
     #[serde(default)]
+    pub(crate) derivable_delegation: DerivableDelegationConfig,
+    #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]
     pub(crate) function_branch_density: FunctionBranchDensityConfig,
@@ -55,6 +57,39 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) pointwise_loop: PointwiseLoopConfig,
     #[serde(default)]
     pub(crate) retry_fallback: RetryFallbackConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DerivableDelegationConfig {
+    #[serde(default = "default_delegation_enabled")]
+    pub(crate) enabled: bool,
+    #[serde(default = "default_trait_delegation_methods")]
+    pub(crate) trait_min_methods: usize,
+    #[serde(default = "default_inherent_delegation_methods")]
+    pub(crate) inherent_min_methods: usize,
+}
+
+fn default_delegation_enabled() -> bool {
+    true
+}
+
+fn default_trait_delegation_methods() -> usize {
+    2
+}
+
+fn default_inherent_delegation_methods() -> usize {
+    3
+}
+
+impl Default for DerivableDelegationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            trait_min_methods: default_trait_delegation_methods(),
+            inherent_min_methods: default_inherent_delegation_methods(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

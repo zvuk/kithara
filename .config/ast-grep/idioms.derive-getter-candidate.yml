@@ -1,0 +1,35 @@
+id: idioms.derive-getter-candidate
+message: Field passthrough accessor; expose the field at the right visibility, delete the redundant accessor, or derive it with fieldwork once the crate adopts it. For reference conversion APIs, derive_more::AsRef may fit.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  all:
+    - any:
+        - pattern: "fn $NAME(&self) -> $RET { &self.$F }"
+        - pattern: "fn $NAME(&self) -> $RET { self.$F }"
+        - pattern: "fn $NAME(&self) -> $RET { self.$F.clone() }"
+        - pattern: "pub fn $NAME(&self) -> $RET { &self.$F }"
+        - pattern: "pub fn $NAME(&self) -> $RET { self.$F }"
+        - pattern: "pub fn $NAME(&self) -> $RET { self.$F.clone() }"
+        - pattern: "pub(crate) fn $NAME(&self) -> $RET { &self.$F }"
+        - pattern: "pub(crate) fn $NAME(&self) -> $RET { self.$F }"
+        - pattern: "pub(crate) fn $NAME(&self) -> $RET { self.$F.clone() }"
+    - inside:
+        kind: impl_item
+        stopBy: end
+    - not:
+        inside:
+          pattern: "impl $TRAIT for $TYPE { $$$ }"
+          stopBy: end
+constraints:
+  NAME:
+    not:
+      regex: "^(default|clone|from|into|as_ref|as_mut|deref|deref_mut|drop|eq|cmp|partial_cmp|hash|fmt|next|borrow|borrow_mut)$"
