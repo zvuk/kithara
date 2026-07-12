@@ -2,10 +2,8 @@
 
 pub(crate) mod decoder;
 pub(crate) mod handle;
-pub(crate) mod hang_observer;
 mod load;
 pub(crate) mod preload_gate;
-pub(crate) mod thread_wake;
 mod traits;
 pub(crate) mod types;
 
@@ -15,3 +13,5 @@ pub use traits::AudioWorkerSource;
 #[cfg(test)]
 pub(crate) use traits::MockAudioWorkerSource;
 pub(crate) use traits::{apply_effects, reset_effects};
+
+pub(crate) use crate::runtime::{observer as hang_observer, wake as thread_wake};

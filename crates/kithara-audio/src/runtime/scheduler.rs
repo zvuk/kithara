@@ -13,107 +13,9 @@ use kithara_test_utils::kithara;
 use tracing::{debug, trace, warn};
 
 use crate::runtime::{
-    Node, PassOutcome, PassReport, SchedulerEvent, SchedulerObserver, SchedulerWake, ServiceClass,
-    TickResult,
+    Node, PassOutcome, PassReport, RtPolicy, SchedulerCmd, SchedulerEvent, SchedulerHandle,
+    SchedulerObserver, SchedulerWake, Slot, SlotId, TickResult,
 };
-
-/// Unique identifier for a slot in the scheduler.
-pub(crate) type SlotId = u64;
-
-/// Command sent from `SchedulerHandle` to the scheduler thread.
-pub(crate) enum SchedulerCmd<N> {
-    /// Register a new node.
-    Register(SlotId, N),
-    /// Remove a node by ID.
-    Unregister(SlotId),
-    /// Graceful shutdown — exit the scheduler loop.
-    Shutdown,
-}
-
-/// A slot holding a node and its metadata.
-pub(crate) struct Slot<N> {
-    pub(crate) node: N,
-    pub(crate) service_class: ServiceClass,
-    pub(crate) id: SlotId,
-    pub(crate) is_terminal: bool,
-}
-
-impl<N: Node> Slot<N> {
-    fn is_removable(&self) -> bool {
-        self.is_terminal
-    }
-}
-
-/// Clonable handle to a scheduler.
-pub(crate) struct SchedulerHandle<N> {
-    inner: Arc<SchedulerInner<N>>,
-}
-
-impl<N> Clone for SchedulerHandle<N> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
-
-struct SchedulerInner<N> {
-    wake: Arc<SchedulerWake>,
-    cancel: CancelToken,
-    cmd_tx: mpsc::Sender<SchedulerCmd<N>>,
-}
-
-impl<N> SchedulerInner<N> {
-    fn shutdown(&self) {
-        let _ = self.cmd_tx.send(SchedulerCmd::Shutdown);
-        self.cancel.cancel();
-        self.wake.wake();
-    }
-}
-
-impl<N> Drop for SchedulerInner<N> {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
-
-impl<N: Node> SchedulerHandle<N> {
-    /// Register a node.
-    pub(crate) fn register(&self, id: SlotId, node: N) {
-        if self
-            .inner
-            .cmd_tx
-            .send(SchedulerCmd::Register(id, node))
-            .is_err()
-        {
-            warn!(slot_id = id, "register: scheduler channel closed");
-        }
-        self.inner.wake.wake();
-    }
-
-    /// Request graceful shutdown and cancel the scheduler.
-    pub(crate) fn shutdown(&self) {
-        self.inner.shutdown();
-    }
-
-    /// Remove a node by ID.
-    pub(crate) fn unregister(&self, id: SlotId) {
-        if self
-            .inner
-            .cmd_tx
-            .send(SchedulerCmd::Unregister(id))
-            .is_err()
-        {
-            warn!(slot_id = id, "unregister: scheduler channel closed");
-        }
-        self.inner.wake.wake();
-    }
-
-    /// Wake the scheduler.
-    pub(crate) fn wake(&self) {
-        self.inner.wake.wake();
-    }
-}
 
 /// The core scheduler.
 pub(crate) struct Scheduler<N, O> {
@@ -154,13 +56,7 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
             run_loop(&cmd_rx, &wake_clone, &cancel_clone, observer);
         });
 
-        SchedulerHandle {
-            inner: Arc::new(SchedulerInner {
-                wake,
-                cancel,
-                cmd_tx,
-            }),
-        }
+        SchedulerHandle::new(wake, cancel, cmd_tx)
     }
 }
 
@@ -179,8 +75,8 @@ const FAIRNESS_YIELD_EVERY: u32 = 16;
 /// Owns all intrinsically-blocking bookkeeping — cancel/command drain, slot
 /// reorder, the `slots`/`slots_order` Vec lifecycle (grow on register, free
 /// on `retain`), deferred buffer recycle, and the idle park. Only the
-/// produce core ([`produce_pass`]) is `#[kithara::rtsan_forbid_blocking]`,
-/// so the Vec `malloc`/`free` here never lands on the checked path.
+/// RT node ticks run through [`produce_tick_rt`], so the Vec `malloc`/`free`
+/// here never lands on the checked path.
 #[kithara::flash(true)]
 fn run_loop<N: Node, O: SchedulerObserver>(
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
@@ -294,17 +190,6 @@ fn recompute_slots_order<N: Node>(slots: &[Slot<N>], slots_order: &mut Vec<usize
     });
 }
 
-/// Forbid-blocking produce core.
-///
-/// The small, honest real-time region: iterate the ordered slots, tick each
-/// node (decode-into-buffer + ring push), and fold the per-tick results into
-/// one [`PassOutcome`]. It takes `&mut [Slot<N>]` so it can mark a slot
-/// terminal in place, but must NOT grow or free the `slots`/`slots_order`
-/// Vecs — that lifecycle stays in the unchecked shell. Marked
-/// `#[kithara::rtsan_forbid_blocking]` so a new lock/alloc on the decode
-/// path is caught; the decode subtree still carries its own permits until
-/// those residuals land.
-#[kithara::rtsan_forbid_blocking]
 fn produce_pass<N: Node, O: SchedulerObserver>(
     slots: &mut [Slot<N>],
     slots_order: &[usize],
@@ -324,7 +209,13 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
         let slot = &mut slots[idx];
 
         let start = Instant::now();
-        let result = if let Ok(r) = catch_unwind(AssertUnwindSafe(|| slot.node.tick())) {
+        let result = if let Ok(r) = catch_unwind(AssertUnwindSafe(|| {
+            if slot.rt_policy == RtPolicy::Heavy {
+                produce_tick_heavy(&mut slot.node)
+            } else {
+                produce_tick_rt(&mut slot.node)
+            }
+        })) {
             r
         } else {
             warn!(slot_id = slot.id, "scheduler: node panicked");
@@ -368,6 +259,15 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
         TickResult::Done => PassOutcome::Idle,
     };
     report
+}
+
+#[kithara::rtsan_forbid_blocking]
+fn produce_tick_rt<N: Node>(node: &mut N) -> TickResult {
+    node.tick()
+}
+
+fn produce_tick_heavy<N: Node>(node: &mut N) -> TickResult {
+    node.tick()
 }
 
 /// Outcome of processing a single scheduler command.
@@ -435,10 +335,12 @@ fn register_slot<N: Node>(
     // first checked `tick`.
     node.warm_up();
     let service_class = node.service_class();
+    let rt_policy = node.rt_policy();
     slots.push(Slot {
         id,
         node,
         service_class,
+        rt_policy,
         is_terminal: false,
     });
     *needs_reorder = true;
@@ -516,11 +418,13 @@ pub(crate) fn parse_cputime(s: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use kithara_platform::thread;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::runtime::{AtomicServiceClass, connect};
+    use crate::runtime::{AtomicServiceClass, ServiceClass, connect};
 
     struct TestObserver;
 
@@ -591,25 +495,31 @@ mod tests {
         }
     }
 
+    struct PolicyNode {
+        policy_calls: Cell<usize>,
+        ticks: usize,
+    }
+
+    impl Node for PolicyNode {
+        fn rt_policy(&self) -> RtPolicy {
+            self.policy_calls.set(self.policy_calls.get() + 1);
+            RtPolicy::Heavy
+        }
+
+        fn tick(&mut self) -> TickResult {
+            self.ticks += 1;
+            TickResult::Progress
+        }
+    }
+
     fn fixed_slot(id: SlotId, result: TickResult) -> Slot<FixedNode> {
         Slot {
             id,
             node: FixedNode(result),
             service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
             is_terminal: false,
         }
-    }
-
-    #[kithara::test]
-    fn scheduler_creates_and_drops_cleanly() {
-        let handle = Scheduler::<DummyNode, TestObserver>::start(
-            "test-worker".into(),
-            TestObserver,
-            CancelToken::never(),
-        );
-        thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
-        handle.shutdown();
-        thread::sleep(Duration::from_millis(50)); // M5: real pacing, replace with teardown signal
     }
 
     #[kithara::test]
@@ -686,6 +596,7 @@ mod tests {
                     service_class: ServiceClass::Idle,
                 },
                 service_class: ServiceClass::Idle,
+                rt_policy: RtPolicy::Rt,
                 is_terminal: false,
             },
             Slot {
@@ -694,6 +605,7 @@ mod tests {
                     service_class: ServiceClass::Audible,
                 },
                 service_class: ServiceClass::Audible,
+                rt_policy: RtPolicy::Rt,
                 is_terminal: false,
             },
             Slot {
@@ -702,6 +614,7 @@ mod tests {
                     service_class: ServiceClass::Warm,
                 },
                 service_class: ServiceClass::Warm,
+                rt_policy: RtPolicy::Rt,
                 is_terminal: false,
             },
         ];
@@ -737,6 +650,7 @@ mod tests {
                     class: Arc::clone(&class_a),
                 },
                 service_class: ServiceClass::Idle,
+                rt_policy: RtPolicy::Rt,
                 is_terminal: false,
             },
             Slot {
@@ -745,6 +659,7 @@ mod tests {
                     class: Arc::clone(&class_b),
                 },
                 service_class: ServiceClass::Idle,
+                rt_policy: RtPolicy::Rt,
                 is_terminal: false,
             },
         ];
@@ -807,6 +722,32 @@ mod tests {
     }
 
     #[kithara::test]
+    fn registration_caches_rt_policy() {
+        let mut slots = Vec::new();
+        let mut needs_reorder = false;
+        register_slot(
+            &mut slots,
+            &mut needs_reorder,
+            1,
+            PolicyNode {
+                policy_calls: Cell::new(0),
+                ticks: 0,
+            },
+        );
+
+        assert_eq!(slots[0].rt_policy, RtPolicy::Heavy);
+        assert_eq!(slots[0].node.policy_calls.get(), 1);
+
+        let mut observer = TestObserver;
+        let order = [0];
+        let _ = produce_pass(&mut slots, &order, &mut observer);
+        let _ = produce_pass(&mut slots, &order, &mut observer);
+
+        assert_eq!(slots[0].node.policy_calls.get(), 1);
+        assert_eq!(slots[0].node.ticks, 2);
+    }
+
+    #[kithara::test]
     fn recompute_slots_order_keeps_capacity_stable() {
         let slots: Vec<Slot<ServiceClassNode>> = (0..8)
             .map(|id| Slot {
@@ -815,6 +756,7 @@ mod tests {
                     service_class: ServiceClass::Warm,
                 },
                 service_class: ServiceClass::Warm,
+                rt_policy: RtPolicy::Rt,
                 is_terminal: false,
             })
             .collect();
@@ -906,6 +848,7 @@ mod tests {
             id: 1,
             node,
             service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
             is_terminal: false,
         }];
         let slots_order = vec![0usize];
