@@ -101,6 +101,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    queue.set_volume(kithara_integration_tests::e2e::volume());
 
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
