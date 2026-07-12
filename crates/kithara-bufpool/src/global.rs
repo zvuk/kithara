@@ -1,6 +1,14 @@
 use std::sync::OnceLock;
 
-use crate::pool::{ByteBudget, PooledOwned, SharedPool};
+use crate::{
+    ByteBudget,
+    pool::{PooledOwned, SharedPool},
+};
+
+pub(crate) const BYTE_MAX_BUFFERS: usize = usize::MAX;
+pub(crate) const BYTE_TRIM_CAPACITY: usize = 0;
+pub(crate) const PCM_MAX_BUFFERS: usize = 128;
+pub(crate) const PCM_TRIM_CAPACITY: usize = 200_000;
 
 /// Standard byte buffer pool type for the entire workspace.
 ///
@@ -32,7 +40,7 @@ impl Default for BytePool {
         static GLOBAL: OnceLock<BytePool> = OnceLock::new();
         const BUDGET: ByteBudget = ByteBudget(256 * 1024 * 1024);
         GLOBAL
-            .get_or_init(|| Self::with_byte_budget(usize::MAX, 0, BUDGET))
+            .get_or_init(|| Self::with_byte_budget(BYTE_MAX_BUFFERS, BYTE_TRIM_CAPACITY, BUDGET))
             .clone()
     }
 }
@@ -42,10 +50,8 @@ impl Default for BytePool {
 impl Default for PcmPool {
     fn default() -> Self {
         static GLOBAL: OnceLock<PcmPool> = OnceLock::new();
-        const MAX_BUFFERS: usize = 128;
-        const TRIM_CAPACITY: usize = 200_000;
         GLOBAL
-            .get_or_init(|| Self::new(MAX_BUFFERS, TRIM_CAPACITY))
+            .get_or_init(|| Self::new(PCM_MAX_BUFFERS, PCM_TRIM_CAPACITY))
             .clone()
     }
 }

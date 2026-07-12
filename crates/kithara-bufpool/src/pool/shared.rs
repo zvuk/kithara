@@ -3,10 +3,11 @@ use std::fmt;
 use kithara_platform::sync::Arc;
 
 use super::{
-    core::{ByteBudget, Pool, PoolStats},
+    core::{Pool, PoolStats},
     owned::PooledOwned,
     reuse::Reuse,
 };
+use crate::{ByteBudget, budget::RegionBudget};
 
 /// Helper to create `Arc`-wrapped Pool for shared access.
 ///
@@ -65,6 +66,18 @@ where
     #[must_use]
     pub fn with_byte_budget(max_buffers: usize, trim_capacity: usize, budget: ByteBudget) -> Self {
         Self(Arc::new(Pool::with_byte_budget(
+            max_buffers,
+            trim_capacity,
+            budget,
+        )))
+    }
+
+    pub(crate) fn with_region_budget(
+        max_buffers: usize,
+        trim_capacity: usize,
+        budget: RegionBudget,
+    ) -> Self {
+        Self(Arc::new(Pool::with_region_budget(
             max_buffers,
             trim_capacity,
             budget,

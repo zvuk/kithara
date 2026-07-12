@@ -1,21 +1,12 @@
 use std::{
     array,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use kithara_platform::thread::current_thread_id;
 
 use super::{reuse::Reuse, shard::PoolShard};
-use crate::growth::BudgetExhausted;
-
-/// Maximum total bytes a pool may track across all live buffers.
-///
-/// Newtype so the byte-budget cap is unmistakable at call sites
-/// (`with_byte_budget(.., .., ByteBudget(256 * MB))` instead of three
-/// adjacent `usize`s where order is easy to swap). Pass
-/// `ByteBudget(usize::MAX)` for "no cap".
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ByteBudget(pub usize);
+use crate::{ByteBudget, budget::RegionBudget, growth::BudgetExhausted};
 
 /// Pool hit/miss statistics for observability.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -29,6 +20,8 @@ pub struct PoolStats {
     /// Buffer stolen from a non-home shard.
     pub steal_hits: u64,
     /// Current tracked byte budget usage.
+    ///
+    /// For region-derived pools this is the region's shared byte count.
     pub allocated_bytes: usize,
 }
 
@@ -56,11 +49,8 @@ where
     stat_home_hits: AtomicU64,
     stat_put_drops: AtomicU64,
     stat_steal_hits: AtomicU64,
-    /// Total bytes tracked across all live buffers (pooled + checked out).
-    allocated_bytes: AtomicUsize,
+    budget: RegionBudget,
     shards: [PoolShard<T>; SHARDS],
-    /// Maximum allowed byte budget. `usize::MAX` means unlimited.
-    max_bytes: usize,
 }
 
 impl<const SHARDS: usize, T> Pool<SHARDS, T>
@@ -74,7 +64,7 @@ where
 
     /// Current number of tracked bytes across all live buffers.
     pub fn allocated_bytes(&self) -> usize {
-        self.allocated_bytes.load(Ordering::Relaxed)
+        self.budget.allocated_bytes()
     }
 
     /// Return a buffer to the pool.
@@ -92,22 +82,7 @@ where
     /// via `DerefMut` (e.g., `Vec::resize`) without going through
     /// [`super::owned::PooledOwned::ensure_len`].
     pub fn release_budget(&self, amount: usize) {
-        if amount == 0 {
-            return;
-        }
-        let mut current = self.allocated_bytes.load(Ordering::Relaxed);
-        loop {
-            let new = current.saturating_sub(amount);
-            match self.allocated_bytes.compare_exchange_weak(
-                current,
-                new,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return,
-                Err(actual) => current = actual,
-            }
-        }
+        self.budget.release(amount);
     }
 
     /// Request additional byte budget. Returns `Err` if exceeding `max_bytes`.
@@ -119,25 +94,7 @@ where
     /// Returns [`BudgetExhausted`] if adding `additional` bytes would exceed
     /// the pool's `max_bytes` limit, or if the total would overflow `usize`.
     pub fn request_budget(&self, additional: usize) -> Result<(), BudgetExhausted> {
-        if additional == 0 {
-            return Ok(());
-        }
-        let mut current = self.allocated_bytes.load(Ordering::Relaxed);
-        loop {
-            let new = current.checked_add(additional).ok_or(BudgetExhausted)?;
-            if new > self.max_bytes {
-                return Err(BudgetExhausted);
-            }
-            match self.allocated_bytes.compare_exchange_weak(
-                current,
-                new,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(actual) => current = actual,
-            }
-        }
+        self.budget.request(additional)
     }
 
     /// Determine shard index for current thread. Pure function of the
@@ -157,7 +114,7 @@ where
     pub fn stats(&self) -> PoolStats {
         PoolStats {
             alloc_misses: self.stat_alloc_misses.load(Ordering::Relaxed),
-            allocated_bytes: self.allocated_bytes.load(Ordering::Relaxed),
+            allocated_bytes: self.budget.allocated_bytes(),
             home_hits: self.stat_home_hits.load(Ordering::Relaxed),
             put_drops: self.stat_put_drops.load(Ordering::Relaxed),
             steal_hits: self.stat_steal_hits.load(Ordering::Relaxed),
@@ -169,12 +126,7 @@ where
     /// When shrinking (before > after), uses saturating subtraction
     /// to prevent underflow from untracked external growth.
     fn track_byte_delta(&self, before: usize, after: usize) {
-        if after > before {
-            self.allocated_bytes
-                .fetch_add(after - before, Ordering::Relaxed);
-        } else if before > after {
-            self.release_budget(before - after);
-        }
+        self.budget.track_byte_delta(before, after);
     }
 
     /// Try to steal a buffer from nearby shards via lock-free `pop`.
@@ -307,12 +259,19 @@ where
     /// Panics if `SHARDS` is zero.
     #[must_use]
     pub fn with_byte_budget(max_buffers: usize, trim_capacity: usize, budget: ByteBudget) -> Self {
+        Self::with_region_budget(max_buffers, trim_capacity, RegionBudget::new(budget.0))
+    }
+
+    pub(crate) fn with_region_budget(
+        max_buffers: usize,
+        trim_capacity: usize,
+        budget: RegionBudget,
+    ) -> Self {
         assert!(SHARDS > 0, "Pool must have at least 1 shard");
         let buffers_per_shard = max_buffers / SHARDS;
 
         Self {
-            max_bytes: budget.0,
-            allocated_bytes: AtomicUsize::new(0),
+            budget,
             shards: array::from_fn(|_| PoolShard::new(buffers_per_shard, trim_capacity)),
             stat_alloc_misses: AtomicU64::new(0),
             stat_home_hits: AtomicU64::new(0),
