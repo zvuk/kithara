@@ -171,9 +171,14 @@ async fn dispatch(
                     detail: "decoder is not configured".to_owned(),
                 })),
             };
-            if let Err(err) = result {
-                tracing::error!(generation, error = %err, "failed to flush WebCodecs decoder");
-                send_error(out_tx, &err, generation);
+            match result {
+                Ok(()) => {
+                    let _ = out_tx.send(HostOut::Flushed { generation });
+                }
+                Err(err) => {
+                    tracing::error!(generation, error = %err, "failed to flush WebCodecs decoder");
+                    send_error(out_tx, &err, generation);
+                }
             }
         }
         HostCmd::Shutdown => return true,

@@ -37,6 +37,9 @@ pub(crate) enum HostOut {
         channels: u16,
         generation: u64,
     },
+    Flushed {
+        generation: u64,
+    },
     Error {
         detail: String,
         generation: u64,

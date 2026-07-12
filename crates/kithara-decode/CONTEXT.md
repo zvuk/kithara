@@ -244,12 +244,16 @@ not an `esds` box or cookie. MP3 has no description. FLAC description is the
 The frame codec owns the current generation. A seek advances it, sends `Reset`,
 discards queued output, then sends `Configure` again because WebCodecs `reset()`
 returns `AudioDecoder` to the unconfigured state. Host commands and callbacks
-from older generations are discarded. The first empty frame sends `Flush`; each
-empty-frame call waits only for one bounded output. `drain_codec_eof` currently
-invokes this path only when decoder and demuxer rates differ. Equal-rate tail
-drain needs a later `ComposedDecoder` extension and is out of scope. WebCodecs
-AAC priming and algorithmic-delay characterization are also deferred; both
-remain at the `FrameCodec` defaults for now.
+from older generations are discarded. `FrameCodec::needs_eof_drain` defaults to
+rate mismatch so fused-SRC backends retain their existing contract; WebCodecs
+always opts in because its browser pipeline queues output at every rate. The
+first empty frame sends `Flush`. Each drain call waits within one bounded budget
+for current-generation PCM, an explicit `Flushed` completion, or an error;
+completion returns zero frames, while budget exhaustion is a typed backend
+error rather than synthetic EOF. Seek clears EOF-drain state, and stale output
+or flush completion from older generations is discarded. WebCodecs AAC priming
+and algorithmic-delay characterization remain deferred at the `FrameCodec`
+defaults.
 
 ## Module layout
 

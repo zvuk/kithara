@@ -90,6 +90,14 @@ pub(crate) trait FrameCodec: Send + 'static {
         CodecPriming::default()
     }
 
+    /// Whether demux EOF must drive empty-frame decode calls until the codec
+    /// returns zero frames. The default preserves the fused sample-rate
+    /// conversion contract: only a codec whose output rate differs from the
+    /// source rate needs an explicit tail drain.
+    fn needs_eof_drain(&self, source_sample_rate: u32) -> bool {
+        self.spec().sample_rate.get() != source_sample_rate
+    }
+
     /// PCM output specification.
     fn spec(&self) -> PcmSpec;
 

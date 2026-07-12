@@ -19,6 +19,7 @@ use crate::{
 struct Consts;
 
 impl Consts {
+    const DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
     const OUTPUT_TIMEOUT: Duration = Duration::from_millis(10);
     const FLAC_STREAMINFO_LEN: u8 = 34;
 }
@@ -29,6 +30,8 @@ enum WebCodecsError {
     Backend { detail: String },
     #[error("WebCodecs host {channel} channel disconnected")]
     ChannelDisconnected { channel: &'static str },
+    #[error("WebCodecs flush timed out for generation {generation}")]
+    FlushTimeout { generation: u64 },
     #[error(
         "WebCodecs PCM output length {samples} does not match {frames} frames and {channels} channels"
     )]
@@ -53,6 +56,7 @@ pub(crate) struct WebCodecsCodec {
     track_info: DecoderTrackInfo,
     config: CodecConfig,
     eof_draining: bool,
+    eof_flushed: bool,
 }
 
 impl WebCodecsCodec {
@@ -80,6 +84,7 @@ impl WebCodecsCodec {
             },
             config,
             eof_draining: false,
+            eof_flushed: false,
         })
     }
 
@@ -131,27 +136,15 @@ impl WebCodecsCodec {
                     pts_us,
                     generation,
                 } if generation == self.generation => {
-                    let expected = usize::try_from(frames)
-                        .ok()
-                        .and_then(|frames| frames.checked_mul(usize::from(channels)));
-                    if expected != Some(interleaved.len()) {
-                        return Err(DecodeError::backend(WebCodecsError::OutputShape {
-                            samples: interleaved.len(),
-                            frames,
-                            channels,
-                        }));
-                    }
-                    out.ensure_len(interleaved.len())?;
-                    out.copy_from_slice(&interleaved);
-                    tracing::debug!(
-                        generation,
-                        pts_us,
+                    return Self::write_pcm(
+                        out,
+                        &interleaved,
+                        frames,
                         sample_rate,
                         channels,
-                        frames,
-                        "received WebCodecs PCM"
+                        pts_us,
+                        generation,
                     );
-                    return Ok(frames);
                 }
                 HostOut::Configured {
                     sample_rate,
@@ -166,8 +159,15 @@ impl WebCodecsCodec {
                 HostOut::Error { detail, generation } if generation == self.generation => {
                     return Err(DecodeError::backend(WebCodecsError::Backend { detail }));
                 }
+                HostOut::Flushed { generation } if generation == self.generation => {
+                    tracing::debug!(
+                        generation,
+                        "dropping completed WebCodecs flush outside EOF drain"
+                    );
+                }
                 HostOut::Pcm { generation, .. }
                 | HostOut::Configured { generation, .. }
+                | HostOut::Flushed { generation }
                 | HostOut::Error { generation, .. } => {
                     tracing::debug!(
                         output_generation = generation,
@@ -177,6 +177,108 @@ impl WebCodecsCodec {
                 }
             }
         }
+    }
+
+    fn drain_output(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
+        let deadline = Instant::now() + Consts::DRAIN_TIMEOUT;
+        loop {
+            let output = match self.host.out.recv_timeout(deadline) {
+                Ok(output) => output,
+                Err(RecvTimeoutError::Timeout) => {
+                    tracing::warn!(
+                        codec = self.config.codec_string,
+                        generation = self.generation,
+                        "timed out draining WebCodecs flush"
+                    );
+                    return Err(DecodeError::backend(WebCodecsError::FlushTimeout {
+                        generation: self.generation,
+                    }));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(channel_disconnected("output"));
+                }
+                Err(_) => return Err(channel_disconnected("output")),
+            };
+
+            match output {
+                HostOut::Pcm {
+                    interleaved,
+                    frames,
+                    sample_rate,
+                    channels,
+                    pts_us,
+                    generation,
+                } if generation == self.generation => {
+                    return Self::write_pcm(
+                        out,
+                        &interleaved,
+                        frames,
+                        sample_rate,
+                        channels,
+                        pts_us,
+                        generation,
+                    );
+                }
+                HostOut::Flushed { generation } if generation == self.generation => {
+                    self.eof_flushed = true;
+                    out.clear();
+                    return Ok(0);
+                }
+                HostOut::Error { detail, generation } if generation == self.generation => {
+                    return Err(DecodeError::backend(WebCodecsError::Backend { detail }));
+                }
+                HostOut::Configured {
+                    sample_rate,
+                    channels,
+                    generation,
+                } if generation == self.generation => {
+                    self.spec =
+                        PcmSpec::checked(channels, sample_rate, "webcodecs.output.sample_rate")?;
+                }
+                HostOut::Pcm { generation, .. }
+                | HostOut::Configured { generation, .. }
+                | HostOut::Flushed { generation }
+                | HostOut::Error { generation, .. } => {
+                    tracing::debug!(
+                        output_generation = generation,
+                        generation = self.generation,
+                        "dropping stale WebCodecs output"
+                    );
+                }
+            }
+        }
+    }
+
+    fn write_pcm(
+        out: &mut PcmBuf,
+        interleaved: &[f32],
+        frames: u32,
+        sample_rate: u32,
+        channels: u16,
+        pts_us: u64,
+        generation: u64,
+    ) -> DecodeResult<u32> {
+        let expected = usize::try_from(frames)
+            .ok()
+            .and_then(|frames| frames.checked_mul(usize::from(channels)));
+        if expected != Some(interleaved.len()) {
+            return Err(DecodeError::backend(WebCodecsError::OutputShape {
+                samples: interleaved.len(),
+                frames,
+                channels,
+            }));
+        }
+        out.ensure_len(interleaved.len())?;
+        out.copy_from_slice(interleaved);
+        tracing::debug!(
+            generation,
+            pts_us,
+            sample_rate,
+            channels,
+            frames,
+            "received WebCodecs PCM"
+        );
+        Ok(frames)
     }
 }
 
@@ -189,16 +291,21 @@ impl FrameCodec for WebCodecsCodec {
         out: &mut PcmBuf,
     ) -> DecodeResult<u32> {
         if frame_data.is_empty() {
+            if self.eof_flushed {
+                out.clear();
+                return Ok(0);
+            }
             if !self.eof_draining {
                 self.send(HostCmd::Flush {
                     generation: self.generation,
                 })?;
                 self.eof_draining = true;
             }
-            return self.poll_output(out);
+            return self.drain_output(out);
         }
 
         self.eof_draining = false;
+        self.eof_flushed = false;
         let pts_us = u64::try_from(pts.as_micros()).unwrap_or(u64::MAX);
         self.send(HostCmd::Decode {
             data: frame_data.to_vec(),
@@ -216,6 +323,7 @@ impl FrameCodec for WebCodecsCodec {
         })?;
         while self.host.out.try_recv().is_ok() {}
         self.eof_draining = false;
+        self.eof_flushed = false;
         send_configure(&self.host, &self.config, self.generation)?;
         tracing::debug!(
             codec = self.config.codec_string,
@@ -223,6 +331,10 @@ impl FrameCodec for WebCodecsCodec {
             "reset and reconfigured WebCodecs codec"
         );
         Ok(())
+    }
+
+    fn needs_eof_drain(&self, _source_sample_rate: u32) -> bool {
+        true
     }
 
     fn spec(&self) -> PcmSpec {
