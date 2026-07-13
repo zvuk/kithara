@@ -54,6 +54,13 @@ pub(crate) trait FrameCodec: Send + 'static {
         out: &mut PcmBuf,
     ) -> DecodeResult<u32>;
 
+    /// Presentation time of the PCM produced by the most recent non-empty
+    /// [`Self::decode_frame`] call. Queue codecs override this when output lags
+    /// the packet supplied to that call.
+    fn decoded_pts(&self, input_pts: Duration) -> Duration {
+        input_pts
+    }
+
     /// Decoder-side algorithmic delay in PCM frames for `codec` — the
     /// silent lead-in this concrete decoder emits **in addition to**
     /// the encoder-declared priming. LAME-convention MP3 decoders

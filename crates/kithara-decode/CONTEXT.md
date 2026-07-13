@@ -117,8 +117,10 @@ Seeking is a two-step contract shared by the demuxer and `ComposedDecoder`:
    drops whole pre-target frames, then trims the leading samples of the
    straddling frame (`frames_to_trim`, round-to-nearest sample) so the
    emitted chunk starts exactly at `target` rather than at the packet
-   boundary. Without this trim a seek leaks up to one packet of pre-target
-   audio.
+   boundary. Queue codecs retain the pending target across zero-frame decode
+   calls and report the timestamp of the PCM that eventually surfaces, so trim
+   is evaluated against decoded output rather than the later packet being fed.
+   Without this trim a seek leaks up to one packet of pre-target audio.
 
 Current metadata sources:
 

@@ -143,6 +143,58 @@ async fn seek_generation() {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(300)))]
+async fn seek_trim_no_preroll_leak() {
+    prepare_webcodecs("mp3").await;
+
+    let mut decoder = create_file_decoder(MP3, "mp3", DecoderBackend::WebCodecs);
+    let duration = decoder.duration().expect("MP3 duration must be known");
+    let sample_rate = decoder.spec().sample_rate.get();
+
+    for ratio in [0.17, 0.37, 0.73] {
+        let target = mid_packet_target(duration, sample_rate, ratio);
+        assert!(
+            matches!(
+                decoder.seek(target).expect("seek WebCodecs MP3"),
+                DecoderSeekOutcome::Landed { .. }
+            ),
+            "MP3 seek at ratio {ratio} must land before EOF"
+        );
+
+        let mut chunks = 0usize;
+        let mut decoded_frames = 0usize;
+        for _ in 0..MAX_DECODE_OUTCOMES {
+            match decoder.next_chunk().expect("decode post-seek MP3 chunk") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    if chunks == 0 {
+                        assert!(
+                            chunk.meta.timestamp >= target,
+                            "post-seek PCM timestamp {:?} precedes target {:?} at ratio {ratio}",
+                            chunk.meta.timestamp,
+                            target
+                        );
+                    }
+                    assert!(!chunk.samples.is_empty(), "post-seek PCM must be non-empty");
+                    assert!(
+                        chunk.samples.iter().all(|sample| sample.is_finite()),
+                        "post-seek PCM must be finite"
+                    );
+                    decoded_frames = decoded_frames.saturating_add(chunk.frames());
+                    chunks += 1;
+                    if chunks == 4 {
+                        break;
+                    }
+                }
+                DecoderChunkOutcome::Pending(_) => {}
+                DecoderChunkOutcome::Eof => break,
+            }
+            time::sleep(Duration::ZERO).await;
+        }
+        assert_eq!(chunks, 4, "WebCodecs MP3 must continue after seek");
+        assert!(decoded_frames > 0, "post-seek PCM must contain frames");
+    }
+}
+
+#[kithara::test(wasm, timeout(Duration::from_secs(300)))]
 async fn eof_tail_drain() {
     prepare_webcodecs("mp3").await;
 
@@ -283,7 +335,7 @@ async fn assert_browser_support(codec: &str) {
     let support = JsFuture::from(AudioDecoder::is_config_supported(&config))
         .await
         .ok()
-        .map(|value| value.unchecked_into::<AudioDecoderSupport>())
+        .map(JsCast::unchecked_into::<AudioDecoderSupport>)
         .and_then(|support| support.get_supported())
         .unwrap_or(false);
     assert!(support, "WebCodecs unsupported in test browser: {codec}");
@@ -293,6 +345,17 @@ fn decoder_config(backend: DecoderBackend) -> DecoderConfig<NoResamplerBackend> 
     DecoderConfig::<NoResamplerBackend>::builder()
         .backend(backend)
         .build()
+}
+
+fn mid_packet_target(duration: Duration, sample_rate: u32, ratio: f64) -> Duration {
+    const PACKET_FRAMES: u64 = 1_152;
+
+    let scaled_frames = duration.as_secs_f64() * f64::from(sample_rate) * ratio;
+    let mut target_frame = scaled_frames.round().to_u64().unwrap_or(1);
+    if target_frame.is_multiple_of(PACKET_FRAMES) {
+        target_frame = target_frame.saturating_add(1);
+    }
+    duration_for_frames(sample_rate, target_frame)
 }
 
 fn create_file_decoder(bytes: &[u8], hint: &str, backend: DecoderBackend) -> Box<dyn Decoder> {

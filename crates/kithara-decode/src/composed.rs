@@ -191,9 +191,21 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 self.zero_frame_count = 0;
                 false
             };
-            let mut chunk_pts = frame_pts;
+            let mut chunk_pts = if frames == 0 {
+                frame_pts
+            } else {
+                self.codec.decoded_pts(frame_pts)
+            };
             if let Some(target) = self.pending_seek_target {
-                if frame_end <= target {
+                let decoded_end = if chunk_pts == frame_pts {
+                    frame_end
+                } else {
+                    chunk_pts.saturating_add(duration_for_frames(
+                        self.codec.spec().sample_rate.get(),
+                        u64::from(frames),
+                    ))
+                };
+                if (frames == 0 && frame_end <= target) || (frames > 0 && decoded_end <= target) {
                     drop(buf);
                     if zero_frame_budget_reached {
                         return Ok(DecoderChunkOutcome::Pending(PendingReason::NotReady(
@@ -203,10 +215,10 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                     continue;
                 }
                 // WHY: frame straddles target — trim leading samples (CONTEXT.md "Seek pre-roll and trim").
-                if frame_pts < target && frames > 0 {
+                if frames > 0 && chunk_pts < target {
                     let live_spec = self.codec.spec();
                     let trim_frames_u64 =
-                        frames_to_trim(frame_pts, target, live_spec.sample_rate.get())
+                        frames_to_trim(chunk_pts, target, live_spec.sample_rate.get())
                             .min(u64::from(frames));
                     let trim_frames = u32::try_from(trim_frames_u64).unwrap_or(frames);
                     // Duration rounding can leave `frame_end > target` even when
@@ -231,7 +243,9 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                         }
                     }
                 }
-                self.pending_seek_target = None;
+                if frames > 0 {
+                    self.pending_seek_target = None;
+                }
             }
             if frames == 0 {
                 if zero_frame_budget_reached {
@@ -627,11 +641,29 @@ mod test_stub_codec {
         frames_per_call: u32,
     }
 
+    pub(super) struct LaggedQueueCodec {
+        spec: PcmSpec,
+        frames_per_call: u32,
+        pending_pts: Option<Duration>,
+        decoded_pts: Duration,
+    }
+
     impl ConstFrameCodec {
         pub(super) fn new(spec: PcmSpec, frames_per_call: u32) -> Self {
             Self {
                 spec,
                 frames_per_call,
+            }
+        }
+    }
+
+    impl LaggedQueueCodec {
+        pub(super) fn new(spec: PcmSpec, frames_per_call: u32) -> Self {
+            Self {
+                spec,
+                frames_per_call,
+                pending_pts: None,
+                decoded_pts: Duration::ZERO,
             }
         }
     }
@@ -648,6 +680,36 @@ mod test_stub_codec {
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
+            Ok(())
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    impl FrameCodec for LaggedQueueCodec {
+        fn decode_frame(
+            &mut self,
+            _bytes: &[u8],
+            pts: Duration,
+            _packet_desc: &[u8],
+            out: &mut PcmBuf,
+        ) -> DecodeResult<u32> {
+            let Some(decoded_pts) = self.pending_pts.replace(pts) else {
+                out.clear();
+                return Ok(0);
+            };
+            self.decoded_pts = decoded_pts;
+            super::write_silent_test_frame(self.spec, self.frames_per_call, out)
+        }
+
+        fn decoded_pts(&self, _input_pts: Duration) -> Duration {
+            self.decoded_pts
+        }
+
+        fn flush(&mut self) -> DecodeResult<()> {
+            self.pending_pts = None;
             Ok(())
         }
 
@@ -834,7 +896,7 @@ mod seek_trim_tests {
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
-    use super::{test_counting_codec::CountingCodec, *};
+    use super::{test_counting_codec::CountingCodec, test_stub_codec::LaggedQueueCodec, *};
     use crate::{
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
         duration_for_frames,
@@ -1075,6 +1137,32 @@ mod seek_trim_tests {
         );
         assert_eq!(chunk.meta.frame_offset, u64::from(PACKET_FRAMES));
         assert_eq!(chunk.meta.timestamp, target);
+    }
+
+    #[kithara::test]
+    fn queue_codec_keeps_seek_target_until_straddling_pcm_arrives() {
+        const FRAME_FRAMES: u32 = 882;
+
+        let target = Duration::from_millis(10);
+        let codec = LaggedQueueCodec::new(
+            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
+            FRAME_FRAMES,
+        );
+        let demuxer = ThreeFrameDemuxer {
+            track: empty_track(),
+            idx: 0,
+            held: Vec::new(),
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+
+        let _ = decoder.seek(target).expect("BUG: seek");
+        let outcome = decoder.next_chunk().expect("BUG: next_chunk");
+        let DecoderChunkOutcome::Chunk(chunk) = outcome else {
+            panic!("expected Chunk, got {outcome:?}");
+        };
+
+        assert_eq!(chunk.meta.timestamp, target);
+        assert_eq!(chunk.meta.frames, FRAME_FRAMES / 2);
     }
 
     #[kithara::test]

@@ -69,6 +69,7 @@ pub(crate) struct WebCodecsCodec {
     spec: PcmSpec,
     track_info: DecoderTrackInfo,
     config: CodecConfig,
+    decoded_pts: Duration,
     eof_draining: bool,
     eof_flushed: bool,
 }
@@ -101,6 +102,7 @@ impl WebCodecsCodec {
                 ..DecoderTrackInfo::default()
             },
             config,
+            decoded_pts: Duration::ZERO,
             eof_draining: false,
             eof_flushed: false,
         };
@@ -275,7 +277,7 @@ impl WebCodecsCodec {
         }
     }
 
-    fn write_pcm(&self, out: &mut PcmBuf, pcm: &PcmOut<'_>) -> DecodeResult<u32> {
+    fn write_pcm(&mut self, out: &mut PcmBuf, pcm: &PcmOut<'_>) -> DecodeResult<u32> {
         let expected = usize::try_from(pcm.frames)
             .ok()
             .and_then(|frames| frames.checked_mul(usize::from(pcm.channels)));
@@ -288,6 +290,7 @@ impl WebCodecsCodec {
         }
         out.ensure_len(pcm.interleaved.len())?;
         out.copy_from_slice(pcm.interleaved);
+        self.decoded_pts = Duration::from_micros(pcm.pts_us);
         tracing::debug!(
             generation = pcm.generation,
             decoder_id = self.decoder_id,
@@ -335,6 +338,10 @@ impl FrameCodec for WebCodecsCodec {
             generation: self.generation,
         })?;
         self.poll_output(out)
+    }
+
+    fn decoded_pts(&self, _input_pts: Duration) -> Duration {
+        self.decoded_pts
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
