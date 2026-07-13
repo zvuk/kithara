@@ -101,18 +101,13 @@ impl<T> Future for JoinHandle<T> {
 }
 
 /// Error returned when a spawned task fails.
-#[derive(Debug, derive_more::Display)]
+#[derive(Debug, derive_more::Display, fieldwork::Fieldwork)]
 #[display("task failed to execute to completion")]
+#[fieldwork(get)]
 pub struct JoinError {
-    cancelled: bool,
-}
-
-impl JoinError {
     /// Returns `true` if the task was cancelled.
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled
-    }
+    #[field(get = is_cancelled)]
+    cancelled: bool,
 }
 
 impl std::error::Error for JoinError {}

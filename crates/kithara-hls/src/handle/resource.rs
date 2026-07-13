@@ -27,7 +27,7 @@ pub(crate) struct ResourceHandle {
     /// The pre-minted [`ResourceKey`] for this resource.
     #[field(get, vis = "pub(crate)")]
     key: ResourceKey,
-    /// The segment URL this handle fetches from — consumed by the fetch path
+    /// The segment URL this handle fetches from - consumed by the fetch path
     /// when building the `FetchCmd` after [`acquire`](Self::acquire).
     #[field(get, vis = "pub(crate)")]
     url: Url,

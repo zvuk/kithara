@@ -128,10 +128,12 @@ impl RawAppleNet {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct AppleNet {
     net: Arc<RetryNet<RawAppleNet, DefaultRetryPolicy>>,
     connection_metrics: ConnectionMetrics,
+    #[field(get)]
     options: NetOptions,
 }
 
@@ -181,11 +183,6 @@ impl AppleNet {
     /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
     pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
         self.net.head(url, headers).await
-    }
-
-    #[must_use]
-    pub fn options(&self) -> &NetOptions {
-        &self.options
     }
 
     /// # Errors

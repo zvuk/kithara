@@ -165,10 +165,15 @@ fn frames_to_fractions(frames: &[u64], total: u64) -> Arc<[f32]> {
 /// `parking_lot` mutex) instead of `tokio::sync::Mutex`. The previous
 /// design called `blocking_lock` from inside the iced runtime, which
 /// would panic; this one avoids `await`s while the lock is held.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct StateController {
+    #[field(get, deref = false)]
     queue: Arc<Queue>,
     state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
+    /// The per-deck time-stretch handle.
+    #[field(get = deck, deref = false)]
     timestretch: Arc<StretchControls>,
     cancel: CancelToken,
 }
@@ -204,12 +209,6 @@ impl StateController {
         }
     }
 
-    /// The per-deck time-stretch handle.
-    #[must_use]
-    pub fn deck(&self) -> &Arc<StretchControls> {
-        &self.timestretch
-    }
-
     /// Apply a closure under the lock. Returns the closure's result.
     /// Used for UI-driven optimistic mutations (seek scrub, crossfade,
     /// abr selection) that must outlive the next event echo.
@@ -219,11 +218,6 @@ impl StateController {
     {
         let mut st = self.state.lock();
         f(&mut st)
-    }
-
-    #[must_use]
-    pub fn queue(&self) -> &Arc<Queue> {
-        &self.queue
     }
 
     /// Pull the continuous values (position, duration, volume, tracks,

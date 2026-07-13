@@ -8,8 +8,11 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct FileCoord {
     /// Narrow activity handle (`is_playing`) read by the downloader peer.
+    #[field(get, vis = "pub(crate)", deref = false)]
     activity: Arc<dyn Activity>,
     /// Backing playhead state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
@@ -24,6 +27,7 @@ pub(crate) struct FileCoord {
     seek: Arc<SeekState>,
     /// Narrow seek-observe handle (flush gate) — derived from the shared
     /// `SeekState`, so it observes the same flags without the wide type.
+    #[field(get, vis = "pub(crate)", deref = false)]
     seek_obs: Arc<dyn SeekObserve>,
     total_bytes: Arc<AtomicU64>,
     reader_advanced: Notify,
@@ -49,11 +53,6 @@ impl FileCoord {
             reader_advanced: Notify::default(),
             total_bytes: Arc::new(AtomicU64::new(Self::NO_TOTAL_BYTES)),
         }
-    }
-
-    #[must_use]
-    pub(crate) fn activity(&self) -> &Arc<dyn Activity> {
-        &self.activity
     }
 
     #[must_use]
@@ -100,11 +99,6 @@ impl FileCoord {
     #[must_use]
     pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
         self.seek.seek_epoch_arc()
-    }
-
-    #[must_use]
-    pub(crate) fn seek_obs(&self) -> &Arc<dyn SeekObserve> {
-        &self.seek_obs
     }
 
     #[must_use]

@@ -18,11 +18,18 @@ pub enum RepeatMode {
 /// Mirrors `kithara-app::playlist::PlaylistState`. Caller owns locking;
 /// methods take `&mut self` so the surrounding [`Queue`](crate::Queue) can
 /// decide the lock granularity.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct NavigationState {
+    /// Current track index, if selected.
+    #[field(get)]
     current_index: Option<usize>,
+    /// Current repeat mode.
+    #[field(get, copy)]
     repeat_mode: RepeatMode,
     history: VecDeque<usize>,
+    /// Shuffle flag.
+    #[field(get = is_shuffle_enabled)]
     shuffle_enabled: bool,
 }
 
@@ -35,24 +42,12 @@ impl NavigationState {
         Self::default()
     }
 
-    /// Current track index, if selected.
-    #[must_use]
-    pub fn current_index(&self) -> Option<usize> {
-        self.current_index
-    }
-
     /// Mark the queue exhausted without selecting a successor.
     pub(crate) fn finish(&mut self) {
         if let Some(current) = self.current_index {
             add_to_history(&mut self.history, current);
         }
         self.current_index = None;
-    }
-
-    /// Shuffle flag.
-    #[must_use]
-    pub fn is_shuffle_enabled(&self) -> bool {
-        self.shuffle_enabled
     }
 
     /// Current index, or the last selected index after [`Self::finish`].
@@ -98,12 +93,6 @@ impl NavigationState {
         let prev = current - 1;
         self.current_index = Some(prev);
         Some(prev)
-    }
-
-    /// Current repeat mode.
-    #[must_use]
-    pub fn repeat_mode(&self) -> RepeatMode {
-        self.repeat_mode
     }
 
     /// Record an explicit selection. If the previously-current track is

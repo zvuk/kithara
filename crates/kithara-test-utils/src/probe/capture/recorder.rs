@@ -49,8 +49,11 @@ pub fn install() -> Recorder {
 }
 
 /// Per-test snapshot handle.
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct Recorder {
+    /// Wall-clock instant the recorder began capturing.
+    #[field(get, copy)]
     start_at: Instant,
     log: SharedLog,
     install_id: u64,
@@ -80,12 +83,6 @@ impl Recorder {
             .filter(|e| e.u64("install_id") == Some(self.install_id) && e.at >= self.start_at)
             .cloned()
             .collect()
-    }
-
-    /// Wall-clock instant the recorder began capturing.
-    #[must_use]
-    pub fn start_at(&self) -> Instant {
-        self.start_at
     }
 
     /// Block until a probe event matches `predicate` or `budget` elapses.

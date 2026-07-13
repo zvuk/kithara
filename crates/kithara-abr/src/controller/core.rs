@@ -96,7 +96,11 @@ impl Default for AbrSettings {
 /// Holds the bandwidth estimator (one per controller) and a map of
 /// registered peers. Constructed via [`AbrController::new`]; peers are
 /// attached with [`AbrController::register`].
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct AbrController {
+    /// Settings snapshot.
+    #[field(get)]
     pub(super) settings: AbrSettings,
     pub(super) estimator: Arc<dyn Estimator>,
     /// Parent cancel gating this controller's background watches. Per-watch
@@ -197,12 +201,6 @@ impl AbrController {
         if let Some(bps) = settings.initial_throughput_bps {
             estimator.seed_initial_bps(bps);
         }
-    }
-
-    /// Settings snapshot.
-    #[must_use]
-    pub fn settings(&self) -> &AbrSettings {
-        &self.settings
     }
 
     /// Called from [`AbrHandle::drop`].

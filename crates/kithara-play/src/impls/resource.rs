@@ -31,8 +31,12 @@ use crate::impls::{config::ResourceConfig, source_type::SourceType};
 /// let mut buf = [0.0f32; 1024];
 /// resource.read(&mut buf);
 /// ```
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
+    /// Source identifier for this resource.
+    #[field(get, deref = false)]
     src: Arc<str>,
     /// Drop guard for the per-track cancel — the token passed as
     /// `ResourceConfig.cancel`, whose subtree covers BOTH the inner stream
@@ -44,6 +48,10 @@ pub struct Resource {
     /// disarmed by the `From<Resource>` reader unwrap when the live reader
     /// passes to the analysis worker.
     cancel: CancelGuard,
+    ///
+    /// Get a reference to the underlying `EventBus`.
+    /// Useful for passing to downstream components that also publish events.
+    #[field(get = event_bus)]
     bus: EventBus,
 }
 
@@ -120,14 +128,6 @@ impl Resource {
     #[must_use]
     pub fn duration(&self) -> Option<Duration> {
         self.inner.duration()
-    }
-
-    /// Get a reference to the underlying `EventBus`.
-    ///
-    /// Useful for passing to downstream components that also publish events.
-    #[must_use]
-    pub fn event_bus(&self) -> &EventBus {
-        &self.bus
     }
 
     /// Create a resource from any `PcmReader`.
@@ -265,11 +265,6 @@ impl Resource {
         self.inner.spec()
     }
 
-    /// Source identifier for this resource.
-    #[must_use]
-    pub fn src(&self) -> &Arc<str> {
-        &self.src
-    }
     /// Subscribe to unified events.
     ///
     /// Returns a receiver for all events published to the bus,

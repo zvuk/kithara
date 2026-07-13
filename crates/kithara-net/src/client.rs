@@ -246,10 +246,12 @@ impl RawHttp {
 /// `options.retry_policy` — retryable errors (TLS-close, timeout,
 /// 5xx, IO) are re-issued with exponential backoff; non-retryable
 /// errors (HTTP 4xx, cancellation) propagate immediately.
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct HttpClient {
     net: Arc<RetryNet<RawHttp, DefaultRetryPolicy>>,
     connection_metrics: ConnectionMetrics,
+    #[field(get)]
     options: NetOptions,
 }
 
@@ -312,11 +314,6 @@ impl HttpClient {
     /// Returns [`NetError`] on HTTP failure or network error.
     pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
         self.net.head(url, headers).await
-    }
-
-    #[must_use]
-    pub fn options(&self) -> &NetOptions {
-        &self.options
     }
 
     /// # Errors

@@ -484,9 +484,9 @@ fn conversion_reason<'a>(
         .method
         .attrs
         .iter()
-        .any(|attr| !attr.path().is_ident("doc"))
+        .any(|attr| !attr.path().is_ident("doc") && !attr.path().is_ident("must_use"))
     {
-        return Err("method has a non-doc attribute");
+        return Err("method has a non-droppable attribute");
     }
     if method_body_has_comment(src, accessor.method) {
         return Err("method body contains a comment");
@@ -1531,5 +1531,29 @@ mod tests {
                 .any(|line| !line.is_empty() && line.trim().is_empty())
         );
         Ok(())
+    }
+
+    #[test]
+    fn must_use_getter_converts_and_drops_the_attribute() -> Result<()> {
+        let source = "struct User {\n    name: String,\n}\nimpl User {\n    /// The name.\n    #[must_use]\n    pub fn name(&self) -> &str { &self.name }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+        assert_eq!(outcome.changes, ["name"]);
+        assert!(!fixed.contains("must_use"));
+        assert!(fixed.contains("/// The name."));
+        assert!(!fixed.contains("fn name"));
+        Ok(())
+    }
+
+    #[test]
+    fn inline_getter_stays_manual() {
+        let source = "struct User { name: String }\nimpl User {\n    #[inline]\n    pub fn name(&self) -> &str { &self.name }\n}\n";
+        let (fixed, outcome, _) = fix(source).expect("fix");
+        assert_eq!(fixed, source);
+        assert!(
+            outcome
+                .skipped
+                .iter()
+                .any(|reason| reason.contains("non-droppable"))
+        );
     }
 }

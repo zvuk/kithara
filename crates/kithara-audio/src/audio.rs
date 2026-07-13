@@ -116,6 +116,8 @@ impl WakeSignal for ReaderOutputWake {
 ///
 /// Provides a simple interface for reading decoded PCM audio, compatible
 /// with cpal and rodio backends. See the crate `README.md` "Usage".
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct Audio<S> {
     /// Narrow mutating playhead handle — committed position and total duration.
     pub(crate) playhead: Arc<dyn PlayheadWrite>,
@@ -139,6 +141,11 @@ pub struct Audio<S> {
     pub(crate) current_chunk: Option<PcmChunk>,
 
     /// Current audio specification (updated from chunks).
+    ///
+    /// Get current audio specification.
+    /// Returns sample rate and channel count for audio output setup.
+    /// Subscribe to audio events.
+    #[field(get, copy)]
     pub(crate) spec: PcmSpec,
 
     /// How many frames of `current_chunk` have been served to the
@@ -224,6 +231,8 @@ pub struct Audio<S> {
     _marker: PhantomData<S>,
 
     /// Track metadata (title, artist, album, artwork).
+    /// Get track metadata (title, artist, album, artwork).
+    #[field(get)]
     metadata: TrackMetadata,
 
     /// Offline-consumer opt-in: a ring underrun blocks (engine-aware park)
@@ -235,6 +244,10 @@ pub struct Audio<S> {
     is_standalone_worker: bool,
 
     /// Whether `preload()` has been called (enables non-blocking mode).
+    ///
+    /// Returns `false` after `seek()` until `preload()` is called again.
+    /// Whether non-blocking recv is active.
+    #[field(get = is_preloaded)]
     preloaded: bool,
 }
 
@@ -432,20 +445,6 @@ impl<S> Audio<S> {
             self.consumer_phase = ConsumerPhase::Playing;
         }
         true
-    }
-
-    /// Whether non-blocking recv is active.
-    ///
-    /// Returns `false` after `seek()` until `preload()` is called again.
-    #[must_use]
-    pub fn is_preloaded(&self) -> bool {
-        self.preloaded
-    }
-
-    /// Get track metadata (title, artist, album, artwork).
-    #[must_use]
-    pub fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
     }
 
     /// Get current playback position.
@@ -836,16 +835,6 @@ impl<S> Audio<S> {
                 })
             }
         }
-    }
-
-    /// Subscribe to audio events.
-    ///
-    /// Get current audio specification.
-    ///
-    /// Returns sample rate and channel count for audio output setup.
-    #[must_use]
-    pub fn spec(&self) -> PcmSpec {
-        self.spec
     }
 
     fn use_nonblocking_recv(&self) -> bool {
