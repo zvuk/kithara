@@ -11,4 +11,4 @@ Detailed contracts and invariants for the kithara-encode crate; the README is th
 
 ## Integration
 
-Consumes canonical `AudioCodec`, `ContainerFormat`, and `MediaInfo` from `kithara-stream`. Intended for test infrastructure and used by `kithara-test-utils` for native FFmpeg-backed signal and packaged-audio generation. HE-AAC v2 packaged output is handled by the in-tree fdk-aac backend (`AacHeV2Encoder`), wired through the FFmpeg facade so packaging callers keep one factory surface.
+Consumes canonical `AudioCodec`, `ContainerFormat`, and `MediaInfo` from `kithara-stream`. Intended for test infrastructure and used by `kithara-test-utils` for native FFmpeg-backed signal and packaged-audio generation. HE-AAC v1/v2 packaged output is handled by the parameterized in-tree fdk-aac backend (`AacHeEncoder`), wired through the FFmpeg facade so packaging callers keep one factory surface.

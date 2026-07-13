@@ -16,6 +16,43 @@ const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(30)))]
+#[ignore = "regenerates committed HE-AAC v1 browser fixtures"]
+async fn generate_he_aac_v1_fixture() {
+    let server = TestServerHelper::new().await;
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(1)
+                .segment_duration_secs(1.0)
+                .packaged_audio_aac_he(SAMPLE_RATE, CHANNELS),
+        )
+        .await
+        .expect("create HE-AAC v1 fixture");
+    let init = reqwest::get(created.init_url(0))
+        .await
+        .expect("request HE-AAC v1 init segment")
+        .error_for_status()
+        .expect("HE-AAC v1 init segment status")
+        .bytes()
+        .await
+        .expect("read HE-AAC v1 init segment");
+    let segment = reqwest::get(created.segment_url(0, 0))
+        .await
+        .expect("request HE-AAC v1 media segment")
+        .error_for_status()
+        .expect("HE-AAC v1 media segment status")
+        .bytes()
+        .await
+        .expect("read HE-AAC v1 media segment");
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets");
+
+    fs::write(assets.join("he_aac_v1_init.mp4"), init).expect("write HE-AAC v1 init fixture");
+    fs::write(assets.join("he_aac_v1_segment.m4s"), segment)
+        .expect("write HE-AAC v1 media fixture");
+}
+
+#[kithara::test(tokio, native, timeout(Duration::from_secs(30)))]
 #[ignore = "regenerates committed HE-AAC v2 browser fixtures"]
 async fn generate_he_aac_v2_fixture() {
     let server = TestServerHelper::new().await;

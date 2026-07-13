@@ -35,6 +35,13 @@ const FLAC_PROBE_STREAMINFO: [u8; 34] = [
 
 static PROBE_STARTED: Once = Once::new();
 
+struct HeAacV1Fixture;
+
+impl HeAacV1Fixture {
+    const INIT: &'static [u8] = include_bytes!("../../../assets/he_aac_v1_init.mp4");
+    const SEGMENT: &'static [u8] = include_bytes!("../../../assets/he_aac_v1_segment.m4s");
+}
+
 struct HeAacV2Fixture;
 
 impl HeAacV2Fixture {
@@ -236,6 +243,35 @@ async fn aac_parity() {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+async fn he_aac_v1_decode() {
+    prepare_webcodecs("mp4a.40.5").await;
+
+    let mut bytes = Vec::with_capacity(HeAacV1Fixture::INIT.len() + HeAacV1Fixture::SEGMENT.len());
+    bytes.extend_from_slice(HeAacV1Fixture::INIT);
+    bytes.extend_from_slice(HeAacV1Fixture::SEGMENT);
+    let decoded = decode_he_aac_v1(&bytes).await;
+
+    assert!(decoded.eof, "WebCodecs HE-AAC v1 must reach explicit EOF");
+    assert!(
+        decoded.non_empty_chunks > 0,
+        "WebCodecs HE-AAC v1 PCM must be non-empty"
+    );
+    assert!(
+        decoded.frames > 1_024,
+        "WebCodecs HE-AAC v1 decoded too few frames: {}",
+        decoded.frames
+    );
+    assert_eq!(decoded.spec.channels, EXPECTED_CHANNELS);
+    assert_eq!(decoded.spec.sample_rate.get(), EXPECTED_SAMPLE_RATE);
+    tracing::info!(
+        frames = decoded.frames,
+        channels = decoded.spec.channels,
+        sample_rate = decoded.spec.sample_rate.get(),
+        "WebCodecs HE-AAC v1 resolved output spec"
+    );
+}
+
+#[kithara::test(wasm, timeout(Duration::from_secs(120)))]
 async fn he_aac_v2_decode() {
     prepare_webcodecs("mp4a.40.29").await;
 
@@ -302,6 +338,18 @@ fn webcodecs_runtime_ready(codec: &str) -> bool {
                     .sample_rate(EXPECTED_SAMPLE_RATE)
                     .channels(EXPECTED_CHANNELS)
                     .build(),
+                decoder_config(DecoderBackend::WebCodecs),
+            )
+            .is_ok()
+        }
+        "mp4a.40.5" => {
+            let mut bytes =
+                Vec::with_capacity(HeAacV1Fixture::INIT.len() + HeAacV1Fixture::SEGMENT.len());
+            bytes.extend_from_slice(HeAacV1Fixture::INIT);
+            bytes.extend_from_slice(HeAacV1Fixture::SEGMENT);
+            DecoderFactory::create_from_media_info(
+                Cursor::new(bytes),
+                &aac_media_info(AudioCodec::AacHe),
                 decoder_config(DecoderBackend::WebCodecs),
             )
             .is_ok()
@@ -402,8 +450,16 @@ async fn decode_aac(bytes: &[u8], backend: DecoderBackend) -> DecodeSummary {
     .await
 }
 
+async fn decode_he_aac_v1(bytes: &[u8]) -> DecodeSummary {
+    decode_he_aac(bytes, AudioCodec::AacHe, "HE-AAC v1").await
+}
+
 async fn decode_he_aac_v2(bytes: &[u8]) -> DecodeSummary {
-    let mut decoder = create_aac_decoder(bytes, AudioCodec::AacHeV2, DecoderBackend::WebCodecs);
+    decode_he_aac(bytes, AudioCodec::AacHeV2, "HE-AAC v2").await
+}
+
+async fn decode_he_aac(bytes: &[u8], codec: AudioCodec, fixture: &str) -> DecodeSummary {
+    let mut decoder = create_aac_decoder(bytes, codec, DecoderBackend::WebCodecs);
     let mut frames = 0usize;
     let mut non_empty_chunks = 0usize;
     let mut eof = false;
@@ -411,23 +467,21 @@ async fn decode_he_aac_v2(bytes: &[u8]) -> DecodeSummary {
     for _ in 0..MAX_DECODE_OUTCOMES {
         match decoder
             .next_chunk()
-            .unwrap_or_else(|error| panic!("decode HE-AAC v2 with WebCodecs: {error}"))
+            .unwrap_or_else(|error| panic!("decode {fixture} with WebCodecs: {error}"))
         {
             DecoderChunkOutcome::Chunk(chunk) => {
                 assert!(
                     !chunk.samples.is_empty(),
-                    "WebCodecs emitted empty HE-AAC v2 PCM"
+                    "WebCodecs emitted empty {fixture} PCM"
                 );
-                // Lossy SBR/PS reconstruction legitimately overshoots [-1, 1]
-                // (measured peak ~1.03 in Chrome); float PCM is not clamped at
-                // the decoder, only downstream at the mixer. Assert finite and a
-                // sane magnitude bound to catch real corruption, not the overshoot.
+                // Lossy SBR reconstruction can legitimately overshoot [-1, 1],
+                // while larger or non-finite values indicate corrupt output.
                 assert!(
                     chunk
                         .samples
                         .iter()
                         .all(|sample| sample.is_finite() && sample.abs() < 2.0),
-                    "WebCodecs emitted non-finite or wildly out-of-range HE-AAC v2 PCM"
+                    "WebCodecs emitted non-finite or wildly out-of-range {fixture} PCM"
                 );
                 frames += chunk.frames();
                 non_empty_chunks += 1;

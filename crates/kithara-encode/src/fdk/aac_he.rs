@@ -1,6 +1,6 @@
 use std::{
     cmp,
-    mem::{MaybeUninit, size_of, size_of_val},
+    mem::{MaybeUninit, size_of, size_of_val, zeroed},
     os::raw::c_void,
     ptr,
 };
@@ -15,35 +15,63 @@ use crate::{
 
 struct Consts;
 impl Consts {
-    /// Soft upper bound on the encoded byte size of a single
-    /// access unit. HE-AAC v2 frames at 32 kbps @ `44_100` Hz fit
-    /// well under `1 KiB`; `8 KiB` leaves head-room for higher
-    /// bitrates.
     const ACCESS_UNIT_CAPACITY: usize = 8 * 1024;
-
-    /// Each HE-AAC v2 access unit holds 1024 base-AAC samples
-    /// upsampled by SBR to 2048 output samples at the encoder's
-    /// declared (output) sample rate. The encoder consumes 2048
-    /// input samples per output frame.
+    const CHANNELS: u16 = 2;
+    const ENCODER_MODULES: u32 = 0;
+    const FRAME_BUFFER_COUNT: usize = 2;
     const FRAME_OUTPUT_SAMPLES: usize = 2048;
 }
 
-pub(crate) struct AacHeV2Encoder;
+#[derive(Clone, Copy)]
+pub(crate) enum AacHeProfile {
+    V1,
+    V2,
+}
 
-impl AacHeV2Encoder {
-    pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
+impl AacHeProfile {
+    const fn aot(self) -> sys::AUDIO_OBJECT_TYPE {
+        match self {
+            Self::V1 => sys::AUDIO_OBJECT_TYPE_AOT_SBR,
+            Self::V2 => sys::AUDIO_OBJECT_TYPE_AOT_PS,
+        }
+    }
+
+    const fn codec(self) -> AudioCodec {
+        match self {
+            Self::V1 => AudioCodec::AacHe,
+            Self::V2 => AudioCodec::AacHeV2,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::V1 => "HE-AAC v1",
+            Self::V2 => "HE-AAC v2",
+        }
+    }
+}
+
+pub(crate) struct AacHeEncoder;
+
+impl AacHeEncoder {
+    pub(crate) fn encode(
+        request: &PackagedEncodeRequest<'_>,
+        profile: AacHeProfile,
+    ) -> EncodeResult<EncodedTrack> {
         request.validate()?;
 
         let sample_rate = request.pcm.sample_rate();
         let channels = request.pcm.channels();
-        if channels != 2 {
-            return Err(EncodeError::InvalidInput(
-                "HE-AAC v2 requires stereo input (channels=2)".to_owned(),
-            ));
+        if channels != Consts::CHANNELS {
+            return Err(EncodeError::InvalidInput(format!(
+                "{} requires stereo input (channels={})",
+                profile.name(),
+                Consts::CHANNELS
+            )));
         }
 
-        // SAFETY: handle is owned by `Encoder` for the lifetime of
         let encoder = Encoder::new(&EncoderParams {
+            profile,
             sample_rate,
             bit_rate: request.bit_rate.try_into().map_err(|_| {
                 EncodeError::InvalidInput("bit_rate does not fit into u32".to_owned())
@@ -62,11 +90,14 @@ impl AacHeV2Encoder {
         let mut units: Vec<EncodedAccessUnit> = Vec::new();
         let mut pts: u64 = 0;
         let timescale = request.timescale;
-        let frame_pts_step = (u64::try_from(frame_input_samples).unwrap_or(u64::MAX)
-            / u64::from(channels))
-            * u64::from(timescale)
-            / u64::from(sample_rate);
+        let frame_samples = u64::try_from(frame_input_samples).map_err(|_| {
+            EncodeError::backend_message("frame sample count does not fit into u64".to_owned())
+        })? / u64::from(channels);
+        let frame_pts_step = frame_samples * u64::from(timescale) / u64::from(sample_rate);
         let frame_pts_step = frame_pts_step.max(1);
+        let frame_duration = u32::try_from(frame_pts_step).map_err(|_| {
+            EncodeError::backend_message("frame duration does not fit into u32".to_owned())
+        })?;
 
         pump_pcm_into_encoder(request.pcm, frame_input_samples, |input| {
             let mut output = [0u8; Consts::ACCESS_UNIT_CAPACITY];
@@ -76,7 +107,7 @@ impl AacHeV2Encoder {
                     pts,
                     bytes: output[..encoded.output_size].to_vec(),
                     dts: pts,
-                    duration: u32::try_from(frame_pts_step).unwrap_or(u32::MAX),
+                    duration: frame_duration,
                     is_sync: true,
                 });
                 pts = pts.saturating_add(frame_pts_step);
@@ -95,14 +126,14 @@ impl AacHeV2Encoder {
                 pts,
                 bytes: output[..encoded.output_size].to_vec(),
                 dts: pts,
-                duration: u32::try_from(frame_pts_step).unwrap_or(u32::MAX),
+                duration: frame_duration,
                 is_sync: true,
             });
             pts = pts.saturating_add(frame_pts_step);
         }
 
         let mut media_info = request.media_info.clone();
-        media_info.codec = Some(AudioCodec::AacHeV2);
+        media_info.codec = Some(profile.codec());
         media_info.container = Some(ContainerFormat::Fmp4);
         media_info.sample_rate = Some(sample_rate);
         media_info.channels = Some(channels);
@@ -124,10 +155,6 @@ impl AacHeV2Encoder {
     }
 }
 
-/// Streams interleaved i16 samples from `pcm` into `feed` in
-/// chunks of `frame_input_samples` (channels × per-channel samples
-/// per frame). `feed` returns how many samples (i16 elements) the
-/// encoder actually consumed — we slide forward by that amount.
 fn pump_pcm_into_encoder<F>(
     pcm: &dyn PcmSource,
     frame_input_samples: usize,
@@ -140,7 +167,7 @@ where
     let bytes_per_sample = size_of::<i16>();
     let frame_bytes = frame_input_samples * bytes_per_sample;
     let mut byte_offset: usize = 0;
-    let mut buf: Vec<i16> = Vec::with_capacity(frame_input_samples * 2);
+    let mut buf: Vec<i16> = Vec::with_capacity(frame_input_samples * Consts::FRAME_BUFFER_COUNT);
     let mut raw: Vec<u8> = vec![0u8; frame_bytes];
     while byte_offset < total {
         let want = cmp::min(frame_bytes, total - byte_offset);
@@ -171,6 +198,7 @@ struct Encoder {
 
 struct EncoderParams {
     bit_rate: u32,
+    profile: AacHeProfile,
     sample_rate: u32,
 }
 
@@ -184,16 +212,26 @@ impl Encoder {
         let mut handle: sys::HANDLE_AACENCODER = ptr::null_mut();
         // SAFETY: aacEncOpen writes a valid handle on AACENC_OK.
         unsafe {
-            check(sys::aacEncOpen(&mut handle as *mut _, 0, 2))?;
+            check(sys::aacEncOpen(
+                &mut handle as *mut _,
+                Consts::ENCODER_MODULES,
+                u32::from(Consts::CHANNELS),
+            ))?;
         }
         let encoder = Self { handle };
+        let aot = u32::try_from(params.profile.aot()).map_err(|_| {
+            EncodeError::backend_message("audio object type does not fit into u32".to_owned())
+        })?;
+        let channel_mode = u32::try_from(sys::CHANNEL_MODE_MODE_2).map_err(|_| {
+            EncodeError::backend_message("channel mode does not fit into u32".to_owned())
+        })?;
 
         // SAFETY: handle is non-null after aacEncOpen succeeded.
         unsafe {
             check(sys::aacEncoder_SetParam(
                 handle,
                 sys::AACENC_PARAM_AACENC_AOT,
-                sys::AUDIO_OBJECT_TYPE_AOT_PS as u32,
+                aot,
             ))?;
             check(sys::aacEncoder_SetParam(
                 handle,
@@ -203,7 +241,7 @@ impl Encoder {
             check(sys::aacEncoder_SetParam(
                 handle,
                 sys::AACENC_PARAM_AACENC_CHANNELMODE,
-                2,
+                channel_mode,
             ))?;
             check(sys::aacEncoder_SetParam(
                 handle,
@@ -248,10 +286,12 @@ impl Encoder {
         let mut input_buf_ident: i32 = sys::AACENC_BufferIdentifier_IN_AUDIO_DATA as i32;
         let mut input_buf_size: i32 = i32::try_from(size_of_val(input))
             .map_err(|_| EncodeError::backend_message("input slice too large".to_owned()))?;
-        let mut input_buf_el_size: i32 = i32::try_from(size_of::<i16>()).unwrap_or(i32::MAX);
+        let mut input_buf_el_size: i32 = i32::try_from(size_of::<i16>()).map_err(|_| {
+            EncodeError::backend_message("input sample size does not fit into i32".to_owned())
+        })?;
         let input_desc = sys::AACENC_BufDesc {
             numBufs: 1,
-            bufs: std::ptr::addr_of_mut!(input_buf_ptr).cast::<*mut c_void>(),
+            bufs: ptr::addr_of_mut!(input_buf_ptr).cast::<*mut c_void>(),
             bufferIdentifiers: &mut input_buf_ident,
             bufSizes: &mut input_buf_size,
             bufElSizes: &mut input_buf_el_size,
@@ -259,24 +299,30 @@ impl Encoder {
 
         let mut output_buf_ptr = output.as_mut_ptr();
         let mut output_buf_ident: i32 = sys::AACENC_BufferIdentifier_OUT_BITSTREAM_DATA as i32;
-        let mut output_buf_size: i32 = i32::try_from(output.len()).unwrap_or(i32::MAX);
-        let mut output_buf_el_size: i32 = i32::try_from(size_of::<u8>()).unwrap_or(i32::MAX);
+        let mut output_buf_size: i32 = i32::try_from(output.len())
+            .map_err(|_| EncodeError::backend_message("output slice too large".to_owned()))?;
+        let mut output_buf_el_size: i32 = i32::try_from(size_of::<u8>()).map_err(|_| {
+            EncodeError::backend_message("output element size does not fit into i32".to_owned())
+        })?;
         let output_desc = sys::AACENC_BufDesc {
             numBufs: 1,
-            bufs: std::ptr::addr_of_mut!(output_buf_ptr).cast::<*mut c_void>(),
+            bufs: ptr::addr_of_mut!(output_buf_ptr).cast::<*mut c_void>(),
             bufferIdentifiers: &mut output_buf_ident,
             bufSizes: &mut output_buf_size,
             bufElSizes: &mut output_buf_el_size,
         };
 
+        let input_samples = i32::try_from(input_len).map_err(|_| {
+            EncodeError::backend_message("input sample count does not fit into i32".to_owned())
+        })?;
         let in_args = sys::AACENC_InArgs {
-            numInSamples: i32::try_from(input_len).unwrap_or(i32::MAX),
+            numInSamples: input_samples,
             numAncBytes: 0,
         };
-        // SAFETY: `AACENC_OutArgs` is a plain POD struct of two
-        let mut out_args: sys::AACENC_OutArgs = unsafe { core::mem::zeroed() };
+        // SAFETY: AACENC_OutArgs is a C POD whose zero value is valid input.
+        let mut out_args: sys::AACENC_OutArgs = unsafe { zeroed() };
 
-        // SAFETY: all buffers + descriptors above point into valid
+        // SAFETY: descriptors reference valid slices for the duration of this call.
         unsafe {
             check(sys::aacEncEncode(
                 self.handle,
@@ -295,7 +341,7 @@ impl Encoder {
 
     fn info(&self) -> EncodeResult<sys::AACENC_InfoStruct> {
         let mut info: MaybeUninit<sys::AACENC_InfoStruct> = MaybeUninit::uninit();
-        // SAFETY: aacEncInfo writes a fully-initialised struct on
+        // SAFETY: aacEncInfo initializes the struct before returning AACENC_OK.
         unsafe {
             check(sys::aacEncInfo(self.handle, info.as_mut_ptr()))?;
             Ok(info.assume_init())
@@ -306,7 +352,7 @@ impl Encoder {
 impl Drop for Encoder {
     fn drop(&mut self) {
         if !self.handle.is_null() {
-            // SAFETY: handle was returned by aacEncOpen and not
+            // SAFETY: this instance owns the handle returned by aacEncOpen.
             unsafe {
                 sys::aacEncClose(&mut self.handle as *mut _);
             }

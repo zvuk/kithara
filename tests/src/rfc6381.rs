@@ -73,7 +73,7 @@ fn rfc6381_for_codec_and_container(
 pub(crate) const fn audio_codec_supports_fmp4_packaging(codec: AudioCodec) -> bool {
     matches!(
         codec,
-        AudioCodec::AacLc | AudioCodec::AacHeV2 | AudioCodec::Flac
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac
     )
 }
 
@@ -110,11 +110,15 @@ mod tests {
     }
 
     #[kithara::test]
+    fn he_aac_v1_supports_fmp4_packaging() {
+        assert!(audio_codec_supports_fmp4_packaging(AudioCodec::AacHe));
+    }
+
+    #[kithara::test]
     fn fmp4_packaging_support_matches_supported_audio_codecs() {
         assert!(audio_codec_supports_fmp4_packaging(AudioCodec::AacLc));
         assert!(audio_codec_supports_fmp4_packaging(AudioCodec::AacHeV2));
         assert!(audio_codec_supports_fmp4_packaging(AudioCodec::Flac));
         assert!(!audio_codec_supports_fmp4_packaging(AudioCodec::Mp3));
-        assert!(!audio_codec_supports_fmp4_packaging(AudioCodec::AacHe));
     }
 }
