@@ -96,6 +96,8 @@ pub enum HlsEvent {
     },
     /// Decoder acknowledged a fenced variant generation.
     VariantSwitchAcked { variant: usize, generation: u64 },
+    /// Active variant is fully cached for offline-ready playback.
+    CacheComplete { total_bytes: Option<u64> },
     /// Stream ended (reader hit EOF).
     EndOfStream,
 }

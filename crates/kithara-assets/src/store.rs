@@ -7,6 +7,8 @@ use std::{fmt, num::NonZeroUsize, path::PathBuf};
 use bon::{Builder, bon};
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
+#[cfg(feature = "events")]
+use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -170,6 +172,8 @@ struct AssetStoreBuildArgs {
     cache_capacity: Option<NonZeroUsize>,
     cancel: Option<CancelToken>,
     evict_config: Option<EvictConfig>,
+    #[cfg(feature = "events")]
+    event_bus: Option<EventBus>,
     flush_hub: Option<Arc<FlushHub>>,
     layout: Option<Arc<dyn AssetLayout>>,
     mem_resource_capacity: Option<usize>,
@@ -191,6 +195,7 @@ impl AssetStoreBuilderFactory {
         cache_capacity: Option<NonZeroUsize>,
         cancel: Option<CancelToken>,
         evict_config: Option<EvictConfig>,
+        #[cfg(feature = "events")] event_bus: Option<EventBus>,
         flush_hub: Option<Arc<FlushHub>>,
         layout: Option<Arc<dyn AssetLayout>>,
         mem_resource_capacity: Option<usize>,
@@ -201,6 +206,8 @@ impl AssetStoreBuilderFactory {
             cache_capacity,
             cancel,
             evict_config,
+            #[cfg(feature = "events")]
+            event_bus,
             flush_hub,
             layout,
             mem_resource_capacity,
@@ -367,6 +374,16 @@ impl AssetStoreBuildArgs {
                 deleter,
                 cfg: evict_cfg,
                 cancel: cancel.clone(),
+                events: {
+                    #[cfg(feature = "events")]
+                    {
+                        crate::evict::evict_events::EventsHandle::new(self.event_bus.clone())
+                    }
+                    #[cfg(not(feature = "events"))]
+                    {
+                        crate::evict::evict_events::EventsHandle::new(None)
+                    }
+                },
                 pins: pins.clone(),
             },
         ));
@@ -380,7 +397,22 @@ impl AssetStoreBuildArgs {
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
         let _ = pool;
-        let chain = LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pins);
+        let chain = LeaseAssets::with_byte_recorder(
+            cached,
+            cancel,
+            byte_recorder,
+            {
+                #[cfg(feature = "events")]
+                {
+                    crate::lease::lease_events::EventsHandle::new(self.event_bus.clone())
+                }
+                #[cfg(not(feature = "events"))]
+                {
+                    crate::lease::lease_events::EventsHandle::new(None)
+                }
+            },
+            pins,
+        );
         (chain, base)
     }
 
@@ -432,6 +464,16 @@ impl AssetStoreBuildArgs {
                 deleter,
                 cfg: evict_cfg,
                 cancel: cancel.clone(),
+                events: {
+                    #[cfg(feature = "events")]
+                    {
+                        crate::evict::evict_events::EventsHandle::new(self.event_bus.clone())
+                    }
+                    #[cfg(not(feature = "events"))]
+                    {
+                        crate::evict::evict_events::EventsHandle::new(None)
+                    }
+                },
                 pins: pins.clone(),
             },
         ));
@@ -453,7 +495,22 @@ impl AssetStoreBuildArgs {
             Some(on_invalidated),
             true,
         ));
-        LeaseAssets::new(cached, cancel, pins)
+        LeaseAssets::with_byte_recorder(
+            cached,
+            cancel,
+            None,
+            {
+                #[cfg(feature = "events")]
+                {
+                    crate::lease::lease_events::EventsHandle::new(self.event_bus.clone())
+                }
+                #[cfg(not(feature = "events"))]
+                {
+                    crate::lease::lease_events::EventsHandle::new(None)
+                }
+            },
+            pins,
+        )
     }
 }
 
@@ -512,6 +569,8 @@ fn lazy_index_path(root_dir: &std::path::Path, name: &str) -> Option<PathBuf> {
 mod tests {
     use std::fs;
 
+    #[cfg(feature = "events")]
+    use kithara_events::{AssetEvent, Event, EventBus, EvictReason};
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
@@ -540,6 +599,95 @@ mod tests {
             AcquisitionResult::Pending(w) => w,
             AcquisitionResult::Ready(_) => panic!("expected a Pending writer"),
         }
+    }
+
+    #[cfg(feature = "events")]
+    fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
+        std::iter::from_fn(|| events.try_recv().ok())
+            .map(|envelope| envelope.event)
+            .collect()
+    }
+
+    #[cfg(feature = "events")]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn commit_publishes_asset_committed() {
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .event_bus(bus.clone())
+            .build();
+        let key = ResourceKey::relative(ROOT, "seg.m4s");
+
+        write_commit(store.acquire_resource(&key, None).unwrap(), b"data");
+
+        let events = collect_events(&mut events);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Asset(AssetEvent::Committed {
+                asset_root,
+                rel_path,
+                final_len: Some(4),
+            }) if asset_root == ROOT && rel_path == "seg.m4s"
+        )));
+    }
+
+    #[cfg(feature = "events")]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn fail_publishes_asset_failed() {
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .event_bus(bus.clone())
+            .build();
+        let key = ResourceKey::relative(ROOT, "seg.m4s");
+        let writer = pending(store.acquire_resource(&key, None).unwrap());
+
+        writer.fail("fixture failure".to_string());
+
+        let events = collect_events(&mut events);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Asset(AssetEvent::Failed {
+                asset_root,
+                rel_path,
+                reason,
+            }) if asset_root == ROOT && rel_path == "seg.m4s" && reason == "fixture failure"
+        )));
+    }
+
+    #[cfg(all(feature = "events", not(target_arch = "wasm32")))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn quota_eviction_publishes_asset_evicted() {
+        let dir = tempdir().unwrap();
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: dir.path().into(),
+            })
+            .evict_config(EvictConfig {
+                max_assets: Some(1),
+                max_bytes: None,
+            })
+            .event_bus(bus.clone())
+            .build();
+
+        let key_a = ResourceKey::relative("asset-a", "seg0.m4s");
+        let key_b = ResourceKey::relative("asset-b", "seg0.m4s");
+        write_commit(store.acquire_resource(&key_a, None).unwrap(), b"a");
+        let _ = collect_events(&mut events);
+        write_commit(store.acquire_resource(&key_b, None).unwrap(), b"b");
+
+        let events = collect_events(&mut events);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Asset(AssetEvent::Evicted {
+                asset_root,
+                reason: EvictReason::QuotaAssets,
+            }) if asset_root == "asset-a"
+        )));
     }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]

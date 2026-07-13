@@ -6,9 +6,11 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara_assets::{AssetScope, ReadSide};
 use kithara_drm::{DecryptContext, KeyProcessorRegistry};
-use kithara_events::{EventBus, HlsError as EventHlsError, HlsEvent};
+use kithara_events::{
+    DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent, KeyFailureStage, KeySource,
+};
 use kithara_net::Headers;
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Instant};
 use kithara_stream::dl::{FetchCmd, PeerHandle};
 use url::Url;
 
@@ -82,25 +84,13 @@ impl KeyStore {
                     )
                     && let Some(ref key_info) = seg_key.key_info
                     && let Ok(seg_url) = playlist.url.join(&segment.uri)
-                    && let Ok(key_url) = Self::resolve_key_url(key_info, &seg_url)
+                    && let Ok(key_url) = resolve_key_url(key_info, &seg_url)
                 {
                     urls.insert(key_url);
                 }
             }
         }
         urls
-    }
-
-    pub(crate) fn derive_iv(
-        key_info: &crate::playlist::parse::KeyInfo,
-        sequence: u64,
-    ) -> [u8; Self::AES_KEY_LEN] {
-        if let Some(iv) = key_info.iv {
-            return iv;
-        }
-        let mut iv = [0u8; Self::AES_KEY_LEN];
-        iv[Self::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
-        iv
     }
 
     /// Synchronous key lookup — no I/O.
@@ -118,7 +108,15 @@ impl KeyStore {
                 .decrypted_keys
                 .get(url)
                 .map(|r| r.value().clone())
-                .ok_or_else(|| HlsError::KeyProcessing(format!("key not prefetched: {url}")));
+                .ok_or_else(|| {
+                    publish_key_fetch_failed(
+                        &self.bus,
+                        url,
+                        KeyFailureStage::Missing,
+                        "key not prefetched",
+                    );
+                    HlsError::KeyProcessing("key not prefetched".to_string())
+                });
         }
 
         let cache_key = self.scope.key_for(url);
@@ -126,17 +124,37 @@ impl KeyStore {
             .scope
             .store()
             .open_resource(&cache_key, None)
-            .map_err(|e| HlsError::KeyProcessing(format!("key not in cache: {url} - {e}")))?;
+            .map_err(|_e| {
+                publish_key_fetch_failed(
+                    &self.bus,
+                    url,
+                    KeyFailureStage::Missing,
+                    "key not in cache",
+                );
+                HlsError::KeyProcessing("key not in cache".to_string())
+            })?;
         let mut buf = self.byte_pool.get();
-        let n = res.read_into(&mut buf).map_err(|e| {
-            HlsError::KeyProcessing(format!("failed to read cached key: {url} — {e}"))
+        let n = res.read_into(&mut buf).map_err(|_e| {
+            publish_key_fetch_failed(
+                &self.bus,
+                url,
+                KeyFailureStage::Missing,
+                "cached key read failed",
+            );
+            HlsError::KeyProcessing("cached key read failed".to_string())
         })?;
         if n == 0 {
-            return Err(HlsError::KeyProcessing(format!(
-                "cached key is empty: {url}",
-            )));
+            publish_key_fetch_failed(
+                &self.bus,
+                url,
+                KeyFailureStage::Missing,
+                "cached key is empty",
+            );
+            return Err(HlsError::KeyProcessing("cached key is empty".to_string()));
         }
-        Ok(Bytes::copy_from_slice(&buf[..n]))
+        let bytes = Bytes::copy_from_slice(&buf[..n]);
+        publish_key_acquired(&self.bus, url, KeySource::DiskCache, bytes.len(), None);
+        Ok(bytes)
     }
 
     /// Load, optionally preprocess, and return the final key bytes.
@@ -168,16 +186,22 @@ impl KeyStore {
 
         if let Some(cached) = self.decrypted_keys.get(url).map(|r| r.value().clone()) {
             tracing::debug!(%url, "drm key: served from in-memory cache");
+            publish_key_acquired(&self.bus, url, KeySource::MemCache, cached.len(), None);
             return Ok(cached);
         }
 
         if let Some(bytes) = self.key_peer.try_cached(&cache_key, url)? {
             tracing::info!(%url, bytes = bytes.len(), "drm key: served from disk cache");
             self.decrypted_keys.insert(url.clone(), bytes.clone());
+            publish_key_acquired(&self.bus, url, KeySource::DiskCache, bytes.len(), None);
             return Ok(bytes);
         }
 
-        let rule = rule.expect("rule matched above");
+        let Some(rule) = rule else {
+            return Err(HlsError::KeyProcessing(
+                "key processor rule missing".to_string(),
+            ));
+        };
         let mut fetch_url = url.clone();
         if let Some(params) = rule.query_params.as_ref() {
             let mut pairs = fetch_url.query_pairs_mut();
@@ -193,21 +217,36 @@ impl KeyStore {
 
         tracing::info!(%url, "drm key: fetching from network");
         let cmd = FetchCmd::get(fetch_url).maybe_headers(headers).build();
+        let started_at = Instant::now();
         let resp = self.key_peer.execute(cmd).await.map_err(|e| {
             tracing::warn!(%url, error = %e, "drm key: network fetch failed");
-            self.publish_decryption_error("key fetch failed");
-            HlsError::KeyProcessing(format!("key fetch failed: {url}"))
+            publish_key_fetch_failed(&self.bus, url, KeyFailureStage::Network, "key fetch failed");
+            publish_decryption_error(&self.bus, "key fetch failed");
+            HlsError::KeyProcessing("key fetch failed".to_string())
         })?;
+        let latency_ms = u64::try_from(started_at.elapsed().as_millis()).ok();
         let raw_key = resp.body.collect().await.map_err(|e| {
             tracing::warn!(%url, error = %e, "drm key: body collect failed");
-            self.publish_decryption_error("key body read failed");
-            HlsError::KeyProcessing(format!("key body read failed: {url}"))
+            publish_key_fetch_failed(
+                &self.bus,
+                url,
+                KeyFailureStage::BodyCollect,
+                "key body read failed",
+            );
+            publish_decryption_error(&self.bus, "key body read failed");
+            HlsError::KeyProcessing("key body read failed".to_string())
         })?;
 
         let decrypted = (request.processor)(raw_key).map_err(|e| {
             tracing::warn!(%url, error = %e, "drm key: registry processor (decrypt) failed");
-            self.publish_decryption_error("key processor failed");
-            HlsError::KeyProcessing(format!("key processor failed: {url}"))
+            publish_key_fetch_failed(
+                &self.bus,
+                url,
+                KeyFailureStage::Processor,
+                "key processor failed",
+            );
+            publish_decryption_error(&self.bus, "key processor failed");
+            HlsError::KeyProcessing("key processor failed".to_string())
         })?;
         tracing::info!(
             %url,
@@ -218,6 +257,13 @@ impl KeyStore {
         self.key_peer.write_back(&cache_key, url, &decrypted)?;
 
         self.decrypted_keys.insert(url.clone(), decrypted.clone());
+        publish_key_acquired(
+            &self.bus,
+            url,
+            KeySource::Network,
+            decrypted.len(),
+            latency_ms,
+        );
         Ok(decrypted)
     }
 
@@ -258,127 +304,6 @@ impl KeyStore {
         Ok(())
     }
 
-    /// Build a [`DecryptContext`] from a pre-fetched key. Glues
-    /// `resolve_key_url` + `get_cached_key` + `derive_iv` into a single
-    /// sync step that runs after [`Self::get_raw_key`] has populated the
-    /// cache. Caller invokes this only for AES-128 segments — the
-    /// presence of [`KeyInfo`](crate::playlist::parse::KeyInfo) means a key is
-    /// required, so every failure path here is a real error.
-    ///
-    /// # Errors
-    /// - [`HlsError::InvalidUrl`] when the key URI cannot be resolved.
-    /// - [`HlsError::KeyProcessing`] when the cached key is missing,
-    ///   empty, or not 16 bytes (AES-128 size).
-    pub(crate) fn resolve_decrypt_ctx(
-        &self,
-        key_info: &crate::playlist::parse::KeyInfo,
-        segment_url: &Url,
-        sequence: u64,
-    ) -> HlsResult<DecryptContext> {
-        let key_url = Self::resolve_key_url(key_info, segment_url)?;
-        let key_bytes = self.get_cached_key(&key_url)?;
-        let key: [u8; Self::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
-            HlsError::KeyProcessing(format!(
-                "AES-128 key must be {} bytes, got {} for {key_url}",
-                Self::AES_KEY_LEN,
-                key_bytes.len()
-            ))
-        })?;
-        Ok(DecryptContext::new(
-            key,
-            Self::derive_iv(key_info, sequence),
-        ))
-    }
-
-    /// Resolve the [`DecryptContext`] for a variant's init segment.
-    /// Returns `None` when the playlist has no init segment, when the
-    /// init segment carries no key (cleartext), or when key resolution
-    /// fails (same fallback policy as media segments).
-    pub(crate) fn resolve_init_decrypt_ctx(
-        &self,
-        playlist: &crate::playlist::parse::MediaPlaylist,
-    ) -> Option<DecryptContext> {
-        let init = playlist.init_segment.as_ref()?;
-        let key = init.key.as_ref()?;
-        if !matches!(key.method, crate::playlist::parse::EncryptionMethod::Aes128) {
-            return None;
-        }
-        let key_info = key.key_info.as_ref()?;
-        let init_url = playlist.url.join(&init.uri).ok()?;
-        match self.resolve_decrypt_ctx(key_info, &init_url, 0) {
-            Ok(ctx) => Some(ctx),
-            Err(e) => {
-                tracing::warn!(
-                    url = %init_url,
-                    error = %e,
-                    "resolve_init_decrypt_ctx failed; init will be unreadable",
-                );
-                None
-            }
-        }
-    }
-
-    pub(crate) fn resolve_key_url(
-        key_info: &crate::playlist::parse::KeyInfo,
-        segment_url: &Url,
-    ) -> HlsResult<Url> {
-        let key_uri = key_info
-            .uri
-            .as_ref()
-            .ok_or_else(|| HlsError::InvalidUrl("missing key URI".to_string()))?;
-
-        if key_uri.starts_with("http://") || key_uri.starts_with("https://") {
-            Url::parse(key_uri).map_err(|e| HlsError::InvalidUrl(format!("Invalid key URL: {e}")))
-        } else {
-            segment_url
-                .join(key_uri)
-                .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve key URL: {e}")))
-        }
-    }
-
-    fn resolve_segment_decrypt_ctx(
-        &self,
-        media_url: &Url,
-        segment: &crate::playlist::parse::MediaSegment,
-    ) -> Option<DecryptContext> {
-        let key = segment.key.as_ref()?;
-        if !matches!(key.method, crate::playlist::parse::EncryptionMethod::Aes128) {
-            return None;
-        }
-        let key_info = key.key_info.as_ref()?;
-        let segment_url = media_url.join(&segment.uri).ok()?;
-        match self.resolve_decrypt_ctx(key_info, &segment_url, segment.sequence) {
-            Ok(ctx) => Some(ctx),
-            Err(e) => {
-                tracing::warn!(
-                    url = %segment_url,
-                    sequence = segment.sequence,
-                    error = %e,
-                    "resolve_decrypt_ctx failed; segment will be unreadable",
-                );
-                None
-            }
-        }
-    }
-
-    /// Resolve one [`DecryptContext`] per segment of `playlist`, using
-    /// keys already pre-fetched by [`Self::prefetch_aes128_keys`].
-    /// Cleartext segments map to `None`; AES-128 segments map to
-    /// `Some(ctx)`. A resolution failure on an encrypted segment is
-    /// logged and the segment falls back to `None` — the dispatch path
-    /// will surface a decoder error, which is preferable to silently
-    /// shipping garbage bytes.
-    pub(crate) fn resolve_variant_decrypt_contexts(
-        &self,
-        playlist: &crate::playlist::parse::MediaPlaylist,
-    ) -> Vec<Option<DecryptContext>> {
-        playlist
-            .segments
-            .iter()
-            .map(|segment| self.resolve_segment_decrypt_ctx(&playlist.url, segment))
-            .collect()
-    }
-
     /// Convenience constructor from [`crate::config::KeyOptions`].
     #[must_use]
     pub fn with_options(
@@ -398,12 +323,175 @@ impl KeyStore {
             byte_pool,
         )
     }
+}
 
-    fn publish_decryption_error(&self, detail: &str) {
-        self.bus.publish(HlsEvent::Error {
-            error: EventHlsError::Decryption(detail.to_string()),
-        });
+pub(crate) fn derive_iv(
+    key_info: &crate::playlist::parse::KeyInfo,
+    sequence: u64,
+) -> [u8; KeyStore::AES_KEY_LEN] {
+    if let Some(iv) = key_info.iv {
+        return iv;
     }
+    let mut iv = [0u8; KeyStore::AES_KEY_LEN];
+    iv[KeyStore::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
+    iv
+}
+
+/// Build a [`DecryptContext`] from a pre-fetched key. Glues
+/// `resolve_key_url` + `get_cached_key` + `derive_iv` into a single
+/// sync step that runs after [`KeyStore::get_raw_key`] has populated the
+/// cache. Caller invokes this only for AES-128 segments — the
+/// presence of [`KeyInfo`](crate::playlist::parse::KeyInfo) means a key is
+/// required, so every failure path here is a real error.
+///
+/// # Errors
+/// - [`HlsError::InvalidUrl`] when the key URI cannot be resolved.
+/// - [`HlsError::KeyProcessing`] when the cached key is missing,
+///   empty, or not 16 bytes (AES-128 size).
+pub(crate) fn resolve_decrypt_ctx(
+    key_store: &KeyStore,
+    key_info: &crate::playlist::parse::KeyInfo,
+    segment_url: &Url,
+    sequence: u64,
+) -> HlsResult<DecryptContext> {
+    let key_url = resolve_key_url(key_info, segment_url)?;
+    let key_bytes = key_store.get_cached_key(&key_url)?;
+    let key: [u8; KeyStore::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
+        publish_key_fetch_failed(
+            &key_store.bus,
+            &key_url,
+            KeyFailureStage::Missing,
+            "cached key has invalid length",
+        );
+        HlsError::KeyProcessing(format!(
+            "AES-128 key must be {} bytes, got {}",
+            KeyStore::AES_KEY_LEN,
+            key_bytes.len()
+        ))
+    })?;
+    Ok(DecryptContext::new(key, derive_iv(key_info, sequence)))
+}
+
+/// Resolve the [`DecryptContext`] for a variant's init segment.
+/// Returns `None` when the playlist has no init segment, when the
+/// init segment carries no key (cleartext), or when key resolution
+/// fails (same fallback policy as media segments).
+pub(crate) fn resolve_init_decrypt_ctx(
+    key_store: &KeyStore,
+    playlist: &crate::playlist::parse::MediaPlaylist,
+) -> Option<DecryptContext> {
+    let init = playlist.init_segment.as_ref()?;
+    let key = init.key.as_ref()?;
+    if !matches!(key.method, crate::playlist::parse::EncryptionMethod::Aes128) {
+        return None;
+    }
+    let key_info = key.key_info.as_ref()?;
+    let init_url = playlist.url.join(&init.uri).ok()?;
+    match resolve_decrypt_ctx(key_store, key_info, &init_url, 0) {
+        Ok(ctx) => Some(ctx),
+        Err(e) => {
+            tracing::warn!(
+                url = %init_url,
+                error = %e,
+                "resolve_init_decrypt_ctx failed; init will be unreadable",
+            );
+            None
+        }
+    }
+}
+
+pub(crate) fn resolve_key_url(
+    key_info: &crate::playlist::parse::KeyInfo,
+    segment_url: &Url,
+) -> HlsResult<Url> {
+    let key_uri = key_info
+        .uri
+        .as_ref()
+        .ok_or_else(|| HlsError::InvalidUrl("missing key URI".to_string()))?;
+
+    if key_uri.starts_with("http://") || key_uri.starts_with("https://") {
+        Url::parse(key_uri).map_err(|e| HlsError::InvalidUrl(format!("Invalid key URL: {e}")))
+    } else {
+        segment_url
+            .join(key_uri)
+            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve key URL: {e}")))
+    }
+}
+
+fn resolve_segment_decrypt_ctx(
+    key_store: &KeyStore,
+    media_url: &Url,
+    segment: &crate::playlist::parse::MediaSegment,
+) -> Option<DecryptContext> {
+    let key = segment.key.as_ref()?;
+    if !matches!(key.method, crate::playlist::parse::EncryptionMethod::Aes128) {
+        return None;
+    }
+    let key_info = key.key_info.as_ref()?;
+    let segment_url = media_url.join(&segment.uri).ok()?;
+    match resolve_decrypt_ctx(key_store, key_info, &segment_url, segment.sequence) {
+        Ok(ctx) => Some(ctx),
+        Err(e) => {
+            tracing::warn!(
+                url = %segment_url,
+                sequence = segment.sequence,
+                error = %e,
+                "resolve_decrypt_ctx failed; segment will be unreadable",
+            );
+            None
+        }
+    }
+}
+
+/// Resolve one [`DecryptContext`] per segment of `playlist`, using
+/// keys already pre-fetched by [`KeyStore::prefetch_aes128_keys`].
+/// Cleartext segments map to `None`; AES-128 segments map to
+/// `Some(ctx)`. A resolution failure on an encrypted segment is
+/// logged and the segment falls back to `None` — the dispatch path
+/// will surface a decoder error, which is preferable to silently
+/// shipping garbage bytes.
+pub(crate) fn resolve_variant_decrypt_contexts(
+    key_store: &KeyStore,
+    playlist: &crate::playlist::parse::MediaPlaylist,
+) -> Vec<Option<DecryptContext>> {
+    playlist
+        .segments
+        .iter()
+        .map(|segment| resolve_segment_decrypt_ctx(key_store, &playlist.url, segment))
+        .collect()
+}
+
+fn publish_decryption_error(bus: &EventBus, detail: &str) {
+    bus.publish(HlsEvent::Error {
+        error: EventHlsError::Decryption(detail.to_string()),
+    });
+}
+
+fn publish_key_acquired(
+    bus: &EventBus,
+    url: &Url,
+    source: KeySource,
+    bytes: usize,
+    latency_ms: Option<u64>,
+) {
+    bus.publish(DrmEvent::KeyAcquired {
+        key_host: key_host(url),
+        source,
+        bytes,
+        latency_ms,
+    });
+}
+
+fn publish_key_fetch_failed(bus: &EventBus, url: &Url, stage: KeyFailureStage, detail: &str) {
+    bus.publish(DrmEvent::KeyFetchFailed {
+        key_host: key_host(url),
+        stage,
+        detail: detail.to_string(),
+    });
+}
+
+fn key_host(url: &Url) -> Option<String> {
+    url.host_str().map(ToString::to_string)
 }
 
 #[cfg(test)]
@@ -417,7 +505,7 @@ mod tests {
         DrmError, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule, KeyRequest,
         KeyRequestFactory,
     };
-    use kithara_events::{Event, EventBus};
+    use kithara_events::{DrmEvent, Event, EventBus, KeyFailureStage, KeySource};
     use kithara_net::{HttpClient, NetOptions};
     use kithara_platform::{
         CancelToken,
@@ -451,11 +539,17 @@ mod tests {
         Url::parse(&format!("http://{addr}/key.bin")).expect("url")
     }
 
-    #[kithara::test(tokio)]
-    async fn key_resolution_failure_publishes_hls_error() {
-        let bus = EventBus::new(8);
-        let mut events = bus.subscribe();
-        let cancel = CancelToken::never();
+    fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
+        std::iter::from_fn(|| events.try_recv().ok())
+            .map(|envelope| envelope.event)
+            .collect()
+    }
+
+    fn make_store(
+        bus: &EventBus,
+        cancel: CancelToken,
+        registry: Option<KeyProcessorRegistry>,
+    ) -> KeyStore {
         let store = Arc::new(
             AssetStoreBuilder::default()
                 .backend(StorageBackend::Memory)
@@ -468,6 +562,50 @@ mod tests {
         let handle = downloader
             .register(Arc::new(MockPeer))
             .with_bus(bus.clone());
+        KeyStore::new(
+            handle,
+            store.scope("key-test"),
+            bus.clone(),
+            None,
+            registry,
+            kithara_bufpool::BytePool::default(),
+        )
+    }
+
+    #[kithara::test(tokio)]
+    async fn key_fetch_success_publishes_network_acquired() {
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let mut registry = KeyProcessorRegistry::new();
+        registry.add(KeyProcessorRule::new(
+            ["127.0.0.1"],
+            const_factory(Arc::new(Ok::<Bytes, DrmError>)),
+        ));
+        let store = make_store(&bus, CancelToken::never(), Some(registry));
+        let url = spawn_key_server().await;
+
+        let key = store
+            .get_raw_key(&url, None)
+            .await
+            .expect("key fetch succeeds");
+        assert_eq!(key.as_ref(), b"abcd");
+
+        let events = collect_events(&mut events);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Drm(DrmEvent::KeyAcquired {
+                key_host: Some(host),
+                source: KeySource::Network,
+                bytes: 4,
+                latency_ms: Some(_),
+            }) if host == "127.0.0.1"
+        )));
+    }
+
+    #[kithara::test(tokio)]
+    async fn key_resolution_failure_publishes_hls_error() {
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
         let mut registry = KeyProcessorRegistry::new();
         registry.add(KeyProcessorRule::new(
             ["127.0.0.1"],
@@ -475,14 +613,7 @@ mod tests {
                 Err(DrmError::KeyProcessing("fixture processor failed".into()))
             })),
         ));
-        let store = KeyStore::new(
-            handle,
-            store.scope("key-test"),
-            bus.clone(),
-            None,
-            Some(registry),
-            kithara_bufpool::BytePool::default(),
-        );
+        let store = make_store(&bus, CancelToken::never(), Some(registry));
         let url = spawn_key_server().await;
 
         let err = store
@@ -492,8 +623,17 @@ mod tests {
         assert!(
             matches!(err, HlsError::KeyProcessing(detail) if detail.contains("key processor failed"))
         );
-        let hls_error = std::iter::from_fn(|| events.try_recv().ok())
-            .map(|envelope| envelope.event)
+        let events = collect_events(&mut events);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Drm(DrmEvent::KeyFetchFailed {
+                key_host: Some(host),
+                stage: KeyFailureStage::Processor,
+                detail,
+            }) if host == "127.0.0.1" && detail == "key processor failed"
+        )));
+        let hls_error = events
+            .into_iter()
             .find(|event| matches!(event, Event::Hls(HlsEvent::Error { .. })));
         assert!(matches!(
             hls_error,
@@ -501,5 +641,40 @@ mod tests {
                 error: EventHlsError::Decryption(detail),
             })) if detail == "key processor failed"
         ));
+    }
+
+    #[kithara::test(tokio)]
+    async fn key_mem_cache_hit_publishes_mem_cache_acquired() {
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let mut registry = KeyProcessorRegistry::new();
+        registry.add(KeyProcessorRule::new(
+            ["127.0.0.1"],
+            const_factory(Arc::new(Ok::<Bytes, DrmError>)),
+        ));
+        let store = make_store(&bus, CancelToken::never(), Some(registry));
+        let url = spawn_key_server().await;
+
+        let _ = store
+            .get_raw_key(&url, None)
+            .await
+            .expect("first fetch succeeds");
+        let _ = collect_events(&mut events);
+        let key = store
+            .get_raw_key(&url, None)
+            .await
+            .expect("mem cache hit succeeds");
+        assert_eq!(key.as_ref(), b"abcd");
+
+        let events = collect_events(&mut events);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Drm(DrmEvent::KeyAcquired {
+                key_host: Some(host),
+                source: KeySource::MemCache,
+                bytes: 4,
+                latency_ms: None,
+            }) if host == "127.0.0.1"
+        )));
     }
 }

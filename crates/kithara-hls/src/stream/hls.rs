@@ -28,7 +28,7 @@ use crate::{
     peer::HlsPeer,
     playlist::{
         KeyStore, MasterPlaylist, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState,
-        load_variant_playlists,
+        load_variant_playlists, resolve_init_decrypt_ctx, resolve_variant_decrypt_contexts,
     },
     signal::SizeSignal,
     variant::{HlsVariant, PlanCtx, VariantParams},
@@ -183,8 +183,8 @@ impl StreamType for Hls {
             .iter()
             .enumerate()
             .map(|(idx, mp)| {
-                let init_decrypt_ctx = key_store.resolve_init_decrypt_ctx(mp);
-                let decrypt_contexts = key_store.resolve_variant_decrypt_contexts(mp);
+                let init_decrypt_ctx = resolve_init_decrypt_ctx(&key_store, mp);
+                let decrypt_contexts = resolve_variant_decrypt_contexts(&key_store, mp);
                 FromWithParams::build(
                     &playlist_state,
                     VariantParams {

@@ -16,12 +16,16 @@ mod seek;
 mod abr;
 #[cfg(feature = "app")]
 mod app;
+#[cfg(feature = "asset")]
+mod asset;
 #[cfg(feature = "audio")]
 mod audio;
 #[cfg(feature = "decoder")]
 mod decoder;
 #[cfg(feature = "downloader")]
 mod downloader;
+#[cfg(feature = "drm")]
+mod drm;
 #[cfg(feature = "file")]
 mod file;
 #[cfg(feature = "hls")]
@@ -38,6 +42,8 @@ pub use abr::{
 };
 #[cfg(feature = "app")]
 pub use app::AppEvent;
+#[cfg(feature = "asset")]
+pub use asset::{AssetEvent, EvictReason};
 #[cfg(feature = "audio")]
 pub use audio::{
     AudioEvent, AudioFormat, PlaybackResamplerKind, SeekLifecycleStage, SegmentLocation,
@@ -53,6 +59,8 @@ pub use decoder::{
 pub use deferred::DeferredBus;
 #[cfg(feature = "downloader")]
 pub use downloader::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
+#[cfg(feature = "drm")]
+pub use drm::{DrmEvent, KeyFailureStage, KeySource};
 pub use event::Event;
 #[cfg(feature = "file")]
 pub use file::{FileError, FileEvent, TotalBytesSource};

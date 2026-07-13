@@ -4,6 +4,8 @@
 use crate::AbrEvent;
 #[cfg(feature = "app")]
 use crate::AppEvent;
+#[cfg(feature = "asset")]
+use crate::AssetEvent;
 #[cfg(feature = "audio")]
 use crate::AudioEvent;
 use crate::BusEvent;
@@ -11,6 +13,8 @@ use crate::BusEvent;
 use crate::DecoderEvent;
 #[cfg(feature = "downloader")]
 use crate::DownloaderEvent;
+#[cfg(feature = "drm")]
+use crate::DrmEvent;
 #[cfg(feature = "file")]
 use crate::FileEvent;
 #[cfg(feature = "hls")]
@@ -63,9 +67,15 @@ pub enum Event {
     /// Application lifecycle event.
     #[cfg(feature = "app")]
     App(AppEvent),
+    /// Asset cache event.
+    #[cfg(feature = "asset")]
+    Asset(AssetEvent),
     /// Queue-level event (track added/removed/status/current/ended).
     #[cfg(feature = "queue")]
     Queue(QueueEvent),
+    /// DRM lifecycle event.
+    #[cfg(feature = "drm")]
+    Drm(DrmEvent),
     /// ABR controller event.
     #[cfg(feature = "abr")]
     Abr(AbrEvent),
@@ -154,10 +164,24 @@ impl From<AppEvent> for Event {
     }
 }
 
+#[cfg(feature = "asset")]
+impl From<AssetEvent> for Event {
+    fn from(e: AssetEvent) -> Self {
+        Self::Asset(e)
+    }
+}
+
 #[cfg(feature = "queue")]
 impl From<QueueEvent> for Event {
     fn from(e: QueueEvent) -> Self {
         Self::Queue(e)
+    }
+}
+
+#[cfg(feature = "drm")]
+impl From<DrmEvent> for Event {
+    fn from(e: DrmEvent) -> Self {
+        Self::Drm(e)
     }
 }
 
@@ -237,6 +261,42 @@ mod tests {
                 codec: None,
                 detail: "invalid data",
             })
+        ));
+    }
+
+    #[cfg(feature = "asset")]
+    #[kithara::test]
+    fn asset_event_into_event() {
+        let event: Event = AssetEvent::Evicted {
+            asset_root: "root".to_string(),
+            reason: crate::EvictReason::Displaced,
+        }
+        .into();
+        assert!(matches!(
+            event,
+            Event::Asset(AssetEvent::Evicted {
+                asset_root,
+                reason: crate::EvictReason::Displaced,
+            }) if asset_root == "root"
+        ));
+    }
+
+    #[cfg(feature = "drm")]
+    #[kithara::test]
+    fn drm_event_into_event() {
+        let event: Event = DrmEvent::KeyFetchFailed {
+            key_host: Some("example.com".to_string()),
+            stage: crate::KeyFailureStage::Network,
+            detail: "network failed".to_string(),
+        }
+        .into();
+        assert!(matches!(
+            event,
+            Event::Drm(DrmEvent::KeyFetchFailed {
+                key_host: Some(host),
+                stage: crate::KeyFailureStage::Network,
+                detail,
+            }) if host == "example.com" && detail == "network failed"
         ));
     }
 }

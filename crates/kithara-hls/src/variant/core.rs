@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     ops::Deref,
-    sync::atomic::{AtomicU32, AtomicU64},
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
 use kithara_drm::DecryptContext;
@@ -97,6 +97,7 @@ pub(crate) struct HlsVariant {
     pub(super) seek: VariantSeek,
     pub(super) segments: VariantSegments,
     pub(super) variant: usize,
+    pub(super) cache_complete_emitted: AtomicBool,
 }
 
 pub(super) struct VariantProfile {
@@ -353,6 +354,7 @@ impl VariantParts {
             },
             seek: VariantSeek::new(HlsVariant::NO_SEEK_TAIL),
             segments: VariantSegments::new(ctx.scope.clone(), init, segments),
+            cache_complete_emitted: AtomicBool::new(false),
         })
     }
 }
@@ -362,6 +364,30 @@ impl HlsVariant {
 
     pub(crate) fn event_bus(&self) -> EventBus {
         self.profile.bus.clone()
+    }
+
+    pub(crate) fn is_encrypted_segment(&self, segment_index: u32) -> bool {
+        self.segments
+            .get(segment_index as usize)
+            .is_some_and(|segment| matches!(segment.content(), SegmentContent::Encrypted(_)))
+    }
+
+    pub(crate) fn maybe_publish_cache_complete(&self) {
+        if !self.fetch_plan_satisfied(0) {
+            return;
+        }
+        if self.cache_complete_emitted.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.profile
+            .bus
+            .publish(kithara_events::HlsEvent::CacheComplete {
+                total_bytes: self.authoritative_len(),
+            });
+    }
+
+    pub(crate) fn variant_index_u32(&self) -> Option<u32> {
+        u32::try_from(self.variant).ok()
     }
 
     /// Builds per-segment metadata. `#EXT-X-BYTERANGE` supplies an exact

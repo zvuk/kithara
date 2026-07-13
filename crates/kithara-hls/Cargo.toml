@@ -44,10 +44,10 @@ tls-native = [
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
-kithara-assets = { workspace = true }
+kithara-assets = { workspace = true, features = ["events"] }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
-kithara-events = { workspace = true, features = ["hls"] }
+kithara-events = { workspace = true, features = ["drm", "hls"] }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }

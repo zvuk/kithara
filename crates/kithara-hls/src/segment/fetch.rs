@@ -8,7 +8,7 @@ use std::{
 };
 
 use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSide};
-use kithara_events::{EventBus, HlsError as EventHlsError, HlsEvent};
+use kithara_events::{DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent};
 use kithara_net::{NetError, Retryability};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
@@ -155,6 +155,14 @@ impl FetchClaim<Downloading> {
     /// the `FetchSlot`'s `on_complete`.
     pub(crate) fn slot_state(&self) -> Arc<SegmentSlotState> {
         Arc::clone(&self.data.slot)
+    }
+
+    pub(crate) fn planned(&self) -> PlannedFetch {
+        self.data.planned
+    }
+
+    pub(crate) fn variant(&self) -> Option<Arc<HlsVariant>> {
+        self.data.variant.upgrade()
     }
 }
 
@@ -332,7 +340,14 @@ impl FetchSlot {
     }
 
     fn settle_success(self, bytes_written: u64) {
-        let Self { handle, writer, .. } = self;
+        let Self {
+            handle,
+            writer,
+            bus,
+            ..
+        } = self;
+        let planned = handle.planned();
+        let variant = handle.variant();
         // Consume-self commit returns the Ready reader; read `final_len` off it
         // (PKCS7 unpad shrinks DRM segments below the announced size).
         match writer.commit(Some(bytes_written)) {
@@ -343,6 +358,9 @@ impl FetchSlot {
                     _ => bytes_written,
                 };
                 handle.into_loaded(actual);
+                if let Some(variant) = variant {
+                    variant.maybe_publish_cache_complete();
+                }
             }
             Err(e) => {
                 debug!(
@@ -351,6 +369,15 @@ impl FetchSlot {
                     err = %e,
                     "success-but-commit-failed"
                 );
+                if let Some((variant_idx, segment_index)) =
+                    decrypt_failure_site(planned, variant.as_ref())
+                {
+                    bus.publish(DrmEvent::SegmentDecryptFailed {
+                        variant: variant_idx,
+                        segment_index,
+                        detail: e.to_string(),
+                    });
+                }
                 handle.into_missing();
             }
         }
@@ -364,4 +391,19 @@ impl FetchSlot {
             raw.write_at(pos, chunk).map_err(IoError::other)
         })
     }
+}
+
+fn decrypt_failure_site(
+    planned: PlannedFetch,
+    variant: Option<&Arc<HlsVariant>>,
+) -> Option<(u32, u32)> {
+    let PlannedFetch::Segment(segment_index) = planned else {
+        return None;
+    };
+    let variant = variant?;
+    if !variant.is_encrypted_segment(segment_index) {
+        return None;
+    }
+    let variant_idx = variant.variant_index_u32()?;
+    Some((variant_idx, segment_index))
 }

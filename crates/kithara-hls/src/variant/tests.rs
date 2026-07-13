@@ -5,7 +5,7 @@ use std::sync::{
 
 use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide};
 use kithara_drm::DecryptContext;
-use kithara_events::EventBus;
+use kithara_events::{Event, EventBus, HlsEvent};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate},
@@ -210,6 +210,12 @@ fn queue_has_init(v: &HlsVariant) -> bool {
         .any(|p| matches!(p, PlannedFetch::Init))
 }
 
+fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .map(|envelope| envelope.event)
+        .collect()
+}
+
 #[kithara::test]
 fn placeholder_size_uses_duration_as_route_geometry() {
     let size = segment_placeholder_size(Duration::from_secs(2), Some(64_000));
@@ -219,6 +225,60 @@ fn placeholder_size_uses_duration_as_route_geometry() {
         !SegmentSize::placeholder(size).is_exact(),
         "duration-derived route sizes must stay non-exact"
     );
+}
+
+#[kithara::test]
+fn cache_complete_publishes_once_after_full_commit() {
+    let ctx = test_ctx(3);
+    let mut events = ctx.bus.subscribe();
+    let v = VariantParts {
+        init: make_init(8, &ctx.scope),
+        segments: (0..2).map(|idx| make_seg(idx, 4, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+
+    if let Some(init) = v.init() {
+        let key = init.resource_id().clone();
+        let AcquisitionResult::Pending(writer) =
+            ctx.scope.store().acquire_resource(&key, None).unwrap()
+        else {
+            panic!("init must acquire as Pending");
+        };
+        writer.write_at(0, b"initinit").unwrap();
+        writer.commit(Some(8)).unwrap();
+        init.state().mark_loaded();
+    }
+    for segment in v.segments() {
+        let key = segment.resource_id().clone();
+        let AcquisitionResult::Pending(writer) =
+            ctx.scope.store().acquire_resource(&key, None).unwrap()
+        else {
+            panic!("segment must acquire as Pending");
+        };
+        writer.write_at(0, b"data").unwrap();
+        writer.commit(Some(4)).unwrap();
+        segment.state().mark_loaded();
+    }
+
+    v.maybe_publish_cache_complete();
+    v.maybe_publish_cache_complete();
+
+    let events = collect_events(&mut events);
+    let cache_complete_count = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::Hls(HlsEvent::CacheComplete {
+                    total_bytes: Some(16),
+                })
+            )
+        })
+        .count();
+    assert_eq!(cache_complete_count, 1);
 }
 
 #[kithara::test]
