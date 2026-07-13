@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use bungee_rs::Stream;
 use fast_interleave::{deinterleave_variable, interleave_variable};
-use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
+use kithara_bufpool::{BudgetExhausted, PcmPool};
 use num_traits::cast::AsPrimitive;
 use tracing::warn;
 
@@ -15,14 +15,17 @@ struct PooledPlanar {
 
 impl PooledPlanar {
     fn new(pool: &PcmPool, channels: usize, min_len: usize) -> Result<Self, BudgetExhausted> {
-        let mut pooled = (0..channels).map(|_| pool.get()).collect::<Vec<_>>();
-        for samples in &mut pooled {
-            samples.ensure_len(min_len)?;
-            samples.clear();
-        }
+        let channels = (0..channels)
+            .map(|_| {
+                let mut samples = pool.get();
+                samples.ensure_len(min_len)?;
+                samples.clear();
+                Ok(samples.into_inner())
+            })
+            .collect::<Result<Vec<_>, BudgetExhausted>>()?;
         Ok(Self {
             pool: pool.clone(),
-            channels: pooled.into_iter().map(PcmBuf::into_inner).collect(),
+            channels,
         })
     }
 

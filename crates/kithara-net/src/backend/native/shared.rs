@@ -18,26 +18,17 @@ pub(crate) fn post_request(client: &Client, url: Url, body: Bytes) -> RequestBui
 /// type is the active native backend — `wreq` or `reqwest`.
 type ClientBuilderMod = fn(ClientBuilder) -> ClientBuilder;
 
-impl From<Compression> for Vec<ClientBuilderMod> {
-    fn from(c: Compression) -> Self {
-        [
-            (
-                Compression::GZIP,
-                ClientBuilder::no_gzip as ClientBuilderMod,
-            ),
-            (Compression::DEFLATE, ClientBuilder::no_deflate),
-            (Compression::BROTLI, ClientBuilder::no_brotli),
-            (Compression::ZSTD, ClientBuilder::no_zstd),
-        ]
-        .into_iter()
-        .filter(|(flag, _)| !c.contains(*flag))
-        .map(|(_, disable)| disable)
-        .collect()
-    }
-}
-
 pub(crate) fn apply_compression(builder: ClientBuilder, c: Compression) -> ClientBuilder {
-    Vec::<ClientBuilderMod>::from(c)
-        .into_iter()
-        .fold(builder, |b, disable| disable(b))
+    [
+        (
+            Compression::GZIP,
+            ClientBuilder::no_gzip as ClientBuilderMod,
+        ),
+        (Compression::DEFLATE, ClientBuilder::no_deflate),
+        (Compression::BROTLI, ClientBuilder::no_brotli),
+        (Compression::ZSTD, ClientBuilder::no_zstd),
+    ]
+    .into_iter()
+    .filter(|(flag, _)| !c.contains(*flag))
+    .fold(builder, |b, (_, disable)| disable(b))
 }
