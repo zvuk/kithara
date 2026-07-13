@@ -4473,6 +4473,7 @@ name = "kithara-apple"
 version = "0.0.1-alpha4"
 dependencies = [
  "block2 0.6.2",
+ "fieldwork",
  "kithara-platform",
  "kithara-workspace-hack",
  "num-traits",
@@ -4801,6 +4802,7 @@ dependencies = [
  "dashmap",
  "delegate",
  "derive_more",
+ "fieldwork",
  "futures",
  "hls_m3u8",
  "hotpath",
@@ -4928,6 +4930,7 @@ dependencies = [
  "criterion",
  "delegate",
  "derive_more",
+ "fieldwork",
  "futures",
  "js-sys",
  "kithara-platform",
@@ -4955,6 +4958,7 @@ dependencies = [
  "bevy_platform 0.19.0",
  "bon",
  "derive_more",
+ "fieldwork",
  "firewheel",
  "firewheel-web-audio",
  "kithara-abr",

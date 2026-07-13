@@ -95,7 +95,11 @@ struct Handover {
 
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct PlayerNodeProcessor {
+    /// Reference to the shared state used to bridge processor and main thread.
+    #[field(get(deref = false))]
     shared_state: Arc<SharedPlayerState>,
     tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
     crossfade: CrossfadeSettings,
@@ -692,12 +696,6 @@ impl PlayerNodeProcessor {
         }
 
         (playback_started, leading_outcome_pos_dur)
-    }
-
-    /// Reference to the shared state used to bridge processor and main thread.
-    #[must_use]
-    pub fn shared_state(&self) -> &Arc<SharedPlayerState> {
-        &self.shared_state
     }
 
     /// Look up a track by its source identifier.

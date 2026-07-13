@@ -91,6 +91,8 @@ pub(crate) struct SlotHandle {
 ///
 /// Multiple `EngineImpl` instances share one CPAL/Firewheel stream while
 /// retaining independent per-player graph controls.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct EngineImpl {
     /// Audio session backend. Production paths default to the
     /// process-wide cpal-backed `SessionClient`; tests inject a
@@ -103,9 +105,11 @@ pub struct EngineImpl {
     /// Master output volume for this player instance (linear 0.0 ..= 1.0).
     master_volume: AtomicF32,
 
-    /// Shared audio worker for cooperative multi-track decoding.
+    /// Shared audio worker handle for cooperative multi-track decoding.
     ///
-    /// All tracks loaded by this engine share this single worker thread.
+    /// Clone and pass to [`ResourceConfig::with_worker`] so all tracks loaded
+    /// through this engine share one decode thread.
+    #[field(get)]
     worker: AudioWorkerHandle,
 
     config: EngineConfig,
@@ -264,15 +268,6 @@ impl EngineImpl {
             worker: AudioWorkerHandle::with_cancel(worker_cancel),
             runtime: RuntimeHandle::try_current().ok(),
         }
-    }
-
-    /// Shared audio worker handle for this engine.
-    ///
-    /// Clone and pass to [`ResourceConfig::with_worker`] so all tracks
-    /// loaded through this engine share a single decode thread.
-    #[must_use]
-    pub fn worker(&self) -> &AudioWorkerHandle {
-        &self.worker
     }
 }
 

@@ -40,6 +40,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_from: DerivableConfig,
     #[serde(default)]
+    pub(crate) derivable_getter: DerivableConfig,
+    #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]
     pub(crate) function_branch_density: FunctionBranchDensityConfig,

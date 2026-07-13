@@ -99,6 +99,7 @@ kithara-test-utils = { workspace = true }
 # Utilities
 bon = { workspace = true }
 derive_more = { workspace = true }
+fieldwork = { workspace = true }
 
 # Audio engine
 firewheel = { workspace = true }

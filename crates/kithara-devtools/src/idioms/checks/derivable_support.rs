@@ -295,7 +295,7 @@ fn has_nontrivial_generics(item: &Item) -> bool {
         })
 }
 
-fn cfg_tokens(attrs: &[Attribute]) -> Vec<String> {
+pub(super) fn cfg_tokens(attrs: &[Attribute]) -> Vec<String> {
     attrs
         .iter()
         .filter(|attr| attr.path().is_ident("cfg"))
@@ -313,7 +313,7 @@ fn path_ends(path: &Path, expected: &str) -> bool {
         .is_some_and(|segment| segment.ident == expected)
 }
 
-fn impl_range(src: &str, impl_block: &ItemImpl) -> Range<usize> {
+pub(super) fn impl_range(src: &str, impl_block: &ItemImpl) -> Range<usize> {
     let mut range = impl_block.span().byte_range();
     let start = line_start(src, range.start);
     if src[start..range.start]
@@ -733,7 +733,7 @@ fn add_derive(src: &str, item: &Item, derive: &str, item_start: usize, candidate
     });
 }
 
-fn merge_derive(existing: &str, derive: &str) -> String {
+pub(super) fn merge_derive(existing: &str, derive: &str) -> String {
     let Some(close) = existing.rfind(')') else {
         return existing.to_owned();
     };
@@ -781,7 +781,7 @@ fn item_declaration_start(src: &str, item: &Item) -> usize {
     line_start(src, byte)
 }
 
-fn field_declaration_start(src: &str, field: &syn::Field) -> usize {
+pub(super) fn field_declaration_start(src: &str, field: &syn::Field) -> usize {
     let byte = match &field.vis {
         syn::Visibility::Inherited => field.ident.as_ref().map_or_else(
             || field.ty.span().byte_range().start,
@@ -792,11 +792,11 @@ fn field_declaration_start(src: &str, field: &syn::Field) -> usize {
     line_start(src, byte)
 }
 
-fn line_start(src: &str, at: usize) -> usize {
+pub(super) fn line_start(src: &str, at: usize) -> usize {
     src[..at].rfind('\n').map_or(0, |pos| pos + 1)
 }
 
-fn indent_attribute(src: &str, at: usize, attribute: &str) -> String {
+pub(super) fn indent_attribute(src: &str, at: usize, attribute: &str) -> String {
     let indent: String = src[at..]
         .chars()
         .take_while(|ch| matches!(ch, ' ' | '\t'))

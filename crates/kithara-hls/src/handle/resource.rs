@@ -20,9 +20,16 @@ use crate::{HlsError, decrypt_processor::as_process_ctx, segment::SegmentContent
 /// own one. At this stage it is a thin façade: every method routes to the same
 /// `scope` / `scope.store().open_resource` op the call site ran before. The
 /// held-resource lease optimization is deferred.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct ResourceHandle {
     scope: AssetScope,
+    /// The pre-minted [`ResourceKey`] for this resource.
+    #[field(get, vis = "pub(crate)")]
     key: ResourceKey,
+    /// The segment URL this handle fetches from — consumed by the fetch path
+    /// when building the `FetchCmd` after [`acquire`](Self::acquire).
+    #[field(get, vis = "pub(crate)")]
     url: Url,
 }
 
@@ -60,11 +67,6 @@ impl ResourceHandle {
         self.scope.store().contains_range(&self.key, range)
     }
 
-    /// The pre-minted [`ResourceKey`] for this resource.
-    pub(crate) fn key(&self) -> &ResourceKey {
-        &self.key
-    }
-
     /// Open the resource and copy `range` into `dst`. `Ok(None)` means the
     /// resource is not on disk yet (`NotFound`) — the caller treats that as a
     /// pending read.
@@ -81,11 +83,5 @@ impl ResourceHandle {
             .read_at(range.start, dst)
             .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
         Ok(Some(n))
-    }
-
-    /// The segment URL this handle fetches from — consumed by the fetch path
-    /// when building the `FetchCmd` after [`acquire`](Self::acquire).
-    pub(crate) fn url(&self) -> &Url {
-        &self.url
     }
 }

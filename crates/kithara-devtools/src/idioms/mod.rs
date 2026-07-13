@@ -67,6 +67,7 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
 
     let ctx = Context {
         workspace_root: &workspace_root,
+        metadata: &metadata,
         config: &config,
         scope: &scope,
     };

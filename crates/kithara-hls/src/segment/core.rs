@@ -140,7 +140,8 @@ impl Segment {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct MediaSegment {
     /// Cache state. The owning [`FetchClaim<Downloading>`](crate::segment::FetchClaim) handle (held by the
     /// segment's `FetchSlot`) shares this `Arc` and flips it on settle:
@@ -148,7 +149,11 @@ pub(crate) struct MediaSegment {
     /// settles (cancelled before completion) are gated by
     /// `FetchSlot.cancel` and leave the slot untouched.
     pub(crate) state: Arc<SegmentSlotState>,
+    /// Decode-time window start of this media segment.
+    #[field(get, vis = "pub(crate)", copy)]
     pub(crate) decode_time: Duration,
+    /// Decode-time window length of this media segment.
+    #[field(get, vis = "pub(crate)", copy)]
     pub(crate) duration: Duration,
     pub(crate) resource_id: ResourceKey,
     pub(crate) content: SegmentContent,
@@ -156,18 +161,6 @@ pub(crate) struct MediaSegment {
     /// committed lengths update the contiguous HLS byte map.
     pub(crate) size: SegmentSize,
     pub(crate) url: Url,
-}
-
-impl MediaSegment {
-    /// Decode-time window start of this media segment.
-    pub(crate) fn decode_time(&self) -> Duration {
-        self.decode_time
-    }
-
-    /// Decode-time window length of this media segment.
-    pub(crate) fn duration(&self) -> Duration {
-        self.duration
-    }
 }
 
 #[derive(Debug)]
