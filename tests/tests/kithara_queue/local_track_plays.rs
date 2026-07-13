@@ -4,7 +4,7 @@
 use kithara::{
     assets::StoreOptions,
     decode::DecoderBackend,
-    events::{AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
+    events::{AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -546,7 +546,7 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .await
         .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = queue.crossfade_duration();
-    queue.advance_to_next(Transition::Crossfade);
+    queue.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
     let started = wait_for_queue_event(
         &mut rx,
         |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),

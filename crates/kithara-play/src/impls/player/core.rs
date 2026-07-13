@@ -22,8 +22,9 @@ use tracing::debug;
 
 use super::phase::{PlayerPhase, QueuedResource};
 use crate::{
+    RouteDescription,
     error::PlayError,
-    events::PlayerEvent,
+    events::{PlayerEvent, RouteChangeReason, SessionEvent},
     impls::{
         engine::{EngineConfig, EngineImpl},
         resource::Resource,
@@ -321,7 +322,13 @@ impl PlayerImpl {
     /// Notify the audio host that the platform route changed and the
     /// native output stream must be recreated if playback is active.
     pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-        self.core.engine.invalidate_audio_route(reason)
+        self.core.engine.invalidate_audio_route(reason)?;
+        let _ = reason;
+        self.core.bus.publish(SessionEvent::RouteChanged {
+            reason: RouteChangeReason::Unknown,
+            previous_route: RouteDescription::default(),
+        });
+        Ok(())
     }
 
     /// Returns `true` if the player is muted.

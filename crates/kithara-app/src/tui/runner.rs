@@ -162,7 +162,10 @@ fn run_ui_loop(controller: &Arc<StateController>, palette: &tui::TuiPalette) -> 
             let not_yet_advanced = auto_advanced_index != Some(current);
             if not_yet_advanced && current + 1 < queue.len() {
                 auto_advanced_index = Some(current);
-                let _ = queue.advance_to_next(Transition::Crossfade);
+                let _ = queue.advance_to_next(
+                    Transition::Crossfade,
+                    kithara::events::AdvanceReason::UserNext,
+                );
             }
         }
 

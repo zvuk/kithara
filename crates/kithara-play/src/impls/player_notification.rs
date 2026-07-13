@@ -21,7 +21,10 @@ pub enum PlayerNotification {
     /// A track was removed from the processor arena.
     Unloaded { src: Arc<str> },
     /// A track started audible playback (fade-in completed or `play()`).
-    PlaybackStarted,
+    PlaybackStarted {
+        src: Arc<str>,
+        item_id: Option<Arc<str>>,
+    },
     /// A track stopped playback. `src` and `item_id` are read by the
     /// player to construct `PlayerEvent::ItemDidPlayToEnd`.
     PlaybackStopped {
@@ -42,9 +45,9 @@ pub enum PlayerNotification {
     /// A track change occurred: old track fading out, new track fading in.
     Changed { src: Arc<str> },
     /// A track started fading in.
-    FadingIn,
+    FadingIn { src: Arc<str> },
     /// A track started fading out.
-    FadingOut,
+    FadingOut { src: Arc<str> },
 }
 
 impl PlayerNotification {
@@ -59,12 +62,10 @@ impl PlayerNotification {
             Self::Loaded { src }
             | Self::Unloaded { src }
             | Self::Changed { src }
+            | Self::FadingIn { src }
+            | Self::FadingOut { src }
             | Self::PlaybackStopped { src, .. } => Some(src),
-            Self::PlaybackStarted
-            | Self::Requested
-            | Self::HandoverRequested
-            | Self::FadingIn
-            | Self::FadingOut => None,
+            Self::PlaybackStarted { .. } | Self::Requested | Self::HandoverRequested => None,
         }
     }
 }
@@ -80,6 +81,7 @@ mod tests {
     #[case(PlayerNotification::Loaded { src: Arc::from("a.mp3") }, "Loaded")]
     #[case(PlayerNotification::Requested, "Requested")]
     #[case(PlayerNotification::HandoverRequested, "HandoverRequested")]
+    #[case(PlayerNotification::FadingIn { src: Arc::from("a.mp3") }, "FadingIn")]
     #[case(
         PlayerNotification::PlaybackStopped {
             src: Arc::from("ended.mp3"),

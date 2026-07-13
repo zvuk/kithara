@@ -3,7 +3,7 @@
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
     decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{AbrMode, AdvanceReason, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -659,7 +659,8 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     .await
     .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = ctx.queue.crossfade_duration();
-    ctx.queue.advance_to_next(Transition::Crossfade);
+    ctx.queue
+        .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
     let started = wait_for_queue_event(
         &mut rx,
         |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),

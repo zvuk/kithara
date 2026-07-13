@@ -72,10 +72,10 @@ pub use meta::{Envelope, EventMeta, ScopeLabel};
 pub use play::{
     BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, MediaTime, PlayerEvent,
     PlayerStatus, PortDescription, PortType, RouteChangeReason, RouteDescription, SessionEvent,
-    TimeControlStatus, TimeRange, WaitingReason,
+    StretchBackendKind, TimeControlStatus, TimeRange, WaitingReason,
 };
 #[cfg(feature = "queue")]
-pub use queue::{QueueEvent, TrackStatus};
+pub use queue::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackStatus};
 pub use receiver::EventReceiver;
 pub use scope::BusScope;
 pub use seek::SeekEpoch;

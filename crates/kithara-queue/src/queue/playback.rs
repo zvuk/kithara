@@ -1,6 +1,9 @@
 use std::sync::PoisonError;
 
-use kithara_events::{Envelope, Event, PlayerEvent, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{
+    AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, PlayerEvent, QueueEvent, TrackId,
+    TrackStatus,
+};
 use kithara_platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError};
 use tracing::debug;
 
@@ -20,7 +23,10 @@ impl Queue {
         }
 
         let before_index = self.player.current_index();
-        if self.select(next.id, transition).is_err() {
+        if self
+            .select_with_reason(next.id, transition, AdvanceReason::CrossfadePreArm)
+            .is_err()
+        {
             return;
         }
         if self.player.current_index() != before_index {
@@ -55,7 +61,7 @@ impl Queue {
         const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
 
         if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
-            let _ = self.advance_to_next(Transition::Crossfade);
+            let _ = self.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof);
         } else {
             debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
         }
@@ -115,7 +121,18 @@ impl Queue {
         if self.consume_armed_advance(ended_id, pos, dur) {
             return;
         }
-        let _ = self.advance_to_next(Transition::None);
+        if let Some(id) = ended_id {
+            self.set_status(
+                id,
+                TrackStatus::Failed("mid-stream engine failure".to_string()),
+            );
+            self.bus.publish(QueueEvent::TrackLoadFailed {
+                id,
+                reason: "mid-stream engine failure".to_string(),
+                auto_skipped: true,
+            });
+        }
+        let _ = self.advance_to_next(Transition::None, AdvanceReason::TrackFailed);
     }
 
     /// Decide whether `ItemDidPlayToEnd` advances the queue or is
@@ -151,7 +168,7 @@ impl Queue {
         if src.is_empty() {
             self.dispatch_real_or_spurious(pos, dur);
         } else {
-            let _ = self.advance_to_next(Transition::Crossfade);
+            let _ = self.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof);
         }
     }
 
@@ -273,6 +290,12 @@ impl Queue {
             }
             Event::Player(PlayerEvent::HandoverRequested) => {
                 self.handle_handover_requested();
+            }
+            Event::Audio(AudioEvent::UnderrunStarted { .. }) => {
+                self.bus.publish(ItemEvent::PlaybackStalled);
+            }
+            Event::Audio(AudioEvent::UnderrunEnded { .. }) => {
+                self.bus.publish(ItemEvent::PlaybackLikelyToKeepUp);
             }
             _ => {}
         }

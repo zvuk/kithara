@@ -5,8 +5,8 @@ use kithara::{
     assets::StoreOptions,
     decode::DecoderBackend,
     events::{
-        AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId,
-        TrackStatus, VariantInfo,
+        AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
+        TrackId, TrackStatus, VariantInfo,
     },
     net::{HttpClient, NetOptions},
     platform::{
@@ -471,7 +471,11 @@ impl SimHarness {
 
     async fn do_select_next(&mut self) {
         let mut rx = self.queue.subscribe();
-        if self.queue.advance_to_next(Transition::None).is_some() {
+        if self
+            .queue
+            .advance_to_next(Transition::None, AdvanceReason::UserNext)
+            .is_some()
+        {
             self.await_current_changed(&mut rx).await;
             self.last_known_codec = self.current_codec();
         }

@@ -1,6 +1,9 @@
 use std::sync::atomic::Ordering;
 
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use ringbuf::traits::Consumer;
 use tracing::debug;
 
@@ -10,7 +13,7 @@ use super::{
 };
 use crate::{
     error::PlayError,
-    events::PlayerEvent,
+    events::{EngineEvent, PlayerEvent},
     impls::{
         player_notification::{PlayerNotification, TrackPlaybackStopReason},
         player_processor::PlayerCmd,
@@ -144,7 +147,8 @@ impl PlayerImpl {
             return Ok(());
         };
 
-        self.start_playback(activated.src);
+        self.start_playback(Arc::clone(&activated.src));
+        self.publish_crossfade_started();
         self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.core.current_index.load(Ordering::Relaxed);
         if index != current_index {
@@ -276,6 +280,10 @@ impl PlayerImpl {
     }
 
     fn handle_track_playback_stopped(&self, notification: PlayerNotification) {
+        let emitted = player_events_from_notification(self, &notification);
+        for event in emitted {
+            self.core.bus.publish(event);
+        }
         if let Some(event) = player_event_from_notification(notification) {
             self.core.bus.publish(event);
         }
@@ -370,8 +378,22 @@ impl PlayerImpl {
         let preserve_active_current = current_index_hint
             .is_some_and(|index| pending.state.activated() && pending.index == index);
         if !preserve_active_current {
+            if pending.state.activated() {
+                self.core.bus.publish(EngineEvent::CrossfadeCancelled);
+            }
             let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: pending.src });
         }
+    }
+
+    fn publish_crossfade_started(&self) {
+        let Some(slot) = self.slot() else {
+            return;
+        };
+        self.core.bus.publish(EngineEvent::CrossfadeStarted {
+            from: slot,
+            to: slot,
+            duration: Duration::from_secs_f32(self.crossfade_duration().max(0.0)),
+        });
     }
 }
 
@@ -391,6 +413,45 @@ pub(crate) fn player_event_from_notification(
         } => Some(PlayerEvent::ItemDidFail { src, item_id }),
         _ => None,
     }
+}
+
+fn player_events_from_notification(
+    player: &PlayerImpl,
+    notification: &PlayerNotification,
+) -> Vec<kithara_events::Event> {
+    let mut events = Vec::new();
+    match notification {
+        PlayerNotification::PlaybackStarted { src, item_id } => {
+            events.push(
+                PlayerEvent::PlaybackStarted {
+                    src: Arc::clone(src),
+                    item_id: item_id.clone(),
+                }
+                .into(),
+            );
+        }
+        PlayerNotification::PlaybackStopped {
+            reason: TrackPlaybackStopReason::Stop,
+            ..
+        } => {
+            let phase = player.phase.lock();
+            if phase
+                .pending()
+                .is_some_and(|pending| pending.state.activated())
+                && let Some(slot) = phase.slot()
+            {
+                events.push(
+                    EngineEvent::CrossfadeCompleted {
+                        from: slot,
+                        to: slot,
+                    }
+                    .into(),
+                );
+            }
+        }
+        _ => {}
+    }
+    events
 }
 
 #[cfg(test)]
@@ -456,6 +517,15 @@ mod tests {
 
         player.commit_next(1).expect("commit_next must succeed");
 
+        let first = rx.try_recv();
+        assert!(matches!(
+            first,
+            Ok(Envelope {
+                event: Event::Engine(EngineEvent::CrossfadeStarted { .. }),
+                ..
+            })
+        ));
+        assert_eq!(player.duration_seconds(), Some(162.0));
         assert!(matches!(
             rx.try_recv(),
             Ok(Envelope {
@@ -463,6 +533,5 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(player.duration_seconds(), Some(162.0));
     }
 }

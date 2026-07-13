@@ -3,9 +3,24 @@ use super::{
     error::TransitionError,
     phase::{PlayerPhase, PlayerPhaseKind},
 };
-use crate::{error::PlayError, impls::player_processor::PlayerCmd, types::SlotId};
+use crate::{
+    PlayerEvent,
+    error::PlayError,
+    impls::player_processor::PlayerCmd,
+    types::{SlotId, TimeControlStatus, WaitingReason},
+};
 
 impl PlayerImpl {
+    fn publish_time_control_status(
+        &self,
+        status: TimeControlStatus,
+        reason: Option<WaitingReason>,
+    ) {
+        self.core
+            .bus
+            .publish(PlayerEvent::TimeControlStatusChanged { status, reason });
+    }
+
     /// Promote the phase to `Loading` carrying `slot`, preserving any armed
     /// next / ABR handle the previous active phase held. A no-op transition
     /// when the phase already holds a slot keeps the existing payload.
@@ -35,6 +50,8 @@ impl PlayerImpl {
             abr_handle,
             pending,
         };
+        drop(phase);
+        self.publish_time_control_status(TimeControlStatus::WaitingToPlay, None);
     }
 
     /// Move an active (slot-holding) phase into `Paused`. No-op from `Idle`.
@@ -74,6 +91,8 @@ impl PlayerImpl {
             }
             PlayerPhase::Idle => *phase = PlayerPhase::Idle,
         }
+        drop(phase);
+        self.publish_time_control_status(TimeControlStatus::Paused, None);
     }
 
     /// Move an active (slot-holding) phase into `Playing`. No-op from `Idle`.
@@ -113,6 +132,8 @@ impl PlayerImpl {
             }
             PlayerPhase::Idle => *phase = PlayerPhase::Idle,
         }
+        drop(phase);
+        self.publish_time_control_status(TimeControlStatus::Playing, None);
     }
 
     /// Move the player into `Stopped`, preserving the slot/ABR handle.
@@ -132,6 +153,8 @@ impl PlayerImpl {
             PlayerPhase::Idle => (None, None),
         };
         *phase = PlayerPhase::Stopped { slot, abr_handle };
+        drop(phase);
+        self.publish_time_control_status(TimeControlStatus::Paused, None);
     }
 
     /// Discriminant of the current phase under a short lock.
