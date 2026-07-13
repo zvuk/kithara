@@ -11,7 +11,10 @@ use kithara_queue::Queue;
 use wasm_bindgen::JsValue;
 use web_sys::BroadcastChannel;
 
-use crate::types::{FfiPlayerEvent, FfiPlayerStatus, FfiTimeControlStatus, FfiTrackStatus};
+use crate::types::{
+    FfiAdvanceReason, FfiEvictReason, FfiPlayerEvent, FfiPlayerStatus, FfiRepeatMode,
+    FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus, FfiTrackStatus,
+};
 
 /// `BroadcastChannel` name carrying structured player events from the
 /// worker to the main-thread [`router`](crate::web::observer::router).
@@ -101,7 +104,7 @@ fn to_ffi(event: &Event) -> Option<FfiPlayerEvent> {
     match event {
         Event::Player(pe) => player_event_to_ffi(pe),
         Event::Queue(qe) => queue_event_to_ffi(qe),
-        _ => None,
+        _ => crate::core::convert::player_event_to_ffi(event),
     }
 }
 
@@ -125,6 +128,11 @@ fn player_event_to_ffi(event: &PlayerEvent) -> Option<FfiPlayerEvent> {
 
 fn queue_event_to_ffi(event: &QueueEvent) -> Option<FfiPlayerEvent> {
     Some(match event {
+        QueueEvent::TrackAdded { id, index } => FfiPlayerEvent::TrackAdded {
+            item_id: *id,
+            index: *index as u64,
+        },
+        QueueEvent::TrackRemoved { id } => FfiPlayerEvent::TrackRemoved { item_id: *id },
         QueueEvent::TrackStatusChanged { id, status } => FfiPlayerEvent::TrackStatusChanged {
             item_id: *id,
             status: FfiTrackStatus::from(status.clone()),
@@ -132,13 +140,33 @@ fn queue_event_to_ffi(event: &QueueEvent) -> Option<FfiPlayerEvent> {
         QueueEvent::CurrentTrackChanged { id } => {
             FfiPlayerEvent::CurrentItemChanged { item_id: *id }
         }
+        QueueEvent::CurrentTrackAdvance { id, reason } => FfiPlayerEvent::CurrentItemAdvanced {
+            item_id: *id,
+            reason: FfiAdvanceReason::from(*reason),
+        },
         QueueEvent::QueueEnded => FfiPlayerEvent::QueueEnded,
+        QueueEvent::TrackLoadFailed {
+            id,
+            reason,
+            auto_skipped,
+        } => FfiPlayerEvent::TrackLoadFailed {
+            item_id: *id,
+            reason: reason.clone(),
+            auto_skipped: *auto_skipped,
+        },
         QueueEvent::CrossfadeStarted { duration_seconds } => FfiPlayerEvent::CrossfadeStarted {
             duration_seconds: *duration_seconds,
         },
         QueueEvent::CrossfadeDurationChanged { seconds } => {
             FfiPlayerEvent::CrossfadeDurationChanged { seconds: *seconds }
         }
+        QueueEvent::RepeatModeChanged { mode } => FfiPlayerEvent::RepeatModeChanged {
+            mode: FfiRepeatMode::from(*mode),
+        },
+        QueueEvent::NextTrackReady { id, index } => FfiPlayerEvent::NextTrackReady {
+            item_id: *id,
+            index: *index as u64,
+        },
         _ => return None,
     })
 }
@@ -153,6 +181,12 @@ fn set_f64(obj: &Object, key: &str, val: f64) {
 
 fn set_bool(obj: &Object, key: &str, val: bool) {
     let _ = Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_bool(val));
+}
+
+fn set_opt_f64(obj: &Object, key: &str, val: Option<f64>) {
+    if let Some(val) = val {
+        set_f64(obj, key, val);
+    }
 }
 
 fn set_opt_id(obj: &Object, key: &str, id: Option<kithara_events::TrackId>) {
@@ -230,6 +264,120 @@ pub(crate) fn encode(event: &FfiPlayerEvent) -> JsValue {
             set_str(&obj, KIND, "CrossfadeDurationChanged");
             set_f64(&obj, "seconds", f64::from(*seconds));
         }
+        FfiPlayerEvent::TrackAdded { item_id, index } => {
+            set_str(&obj, KIND, "TrackAdded");
+            set_f64(
+                &obj,
+                "item_id",
+                num_traits::cast(item_id.as_u64()).unwrap_or(0.0),
+            );
+            set_f64(&obj, "index", num_traits::cast(*index).unwrap_or(0.0));
+        }
+        FfiPlayerEvent::TrackRemoved { item_id } => {
+            set_str(&obj, KIND, "TrackRemoved");
+            set_f64(
+                &obj,
+                "item_id",
+                num_traits::cast(item_id.as_u64()).unwrap_or(0.0),
+            );
+        }
+        FfiPlayerEvent::TrackLoadFailed {
+            item_id,
+            reason,
+            auto_skipped,
+        } => {
+            set_str(&obj, KIND, "TrackLoadFailed");
+            set_f64(
+                &obj,
+                "item_id",
+                num_traits::cast(item_id.as_u64()).unwrap_or(0.0),
+            );
+            set_str(&obj, "reason", reason);
+            set_bool(&obj, "auto_skipped", *auto_skipped);
+        }
+        FfiPlayerEvent::RepeatModeChanged { mode } => {
+            set_str(&obj, KIND, "RepeatModeChanged");
+            set_str(&obj, "mode", repeat_mode_str(*mode));
+        }
+        FfiPlayerEvent::NextTrackReady { item_id, index } => {
+            set_str(&obj, KIND, "NextTrackReady");
+            set_f64(
+                &obj,
+                "item_id",
+                num_traits::cast(item_id.as_u64()).unwrap_or(0.0),
+            );
+            set_f64(&obj, "index", num_traits::cast(*index).unwrap_or(0.0));
+        }
+        FfiPlayerEvent::CurrentItemAdvanced { item_id, reason } => {
+            set_str(&obj, KIND, "CurrentItemAdvanced");
+            set_opt_id(&obj, "item_id", *item_id);
+            set_str(&obj, "reason", advance_reason_str(*reason));
+        }
+        FfiPlayerEvent::EngineStarted => set_str(&obj, KIND, "EngineStarted"),
+        FfiPlayerEvent::EngineStopped => set_str(&obj, KIND, "EngineStopped"),
+        FfiPlayerEvent::CrossfadeCompleted => set_str(&obj, KIND, "CrossfadeCompleted"),
+        FfiPlayerEvent::CrossfadeCancelled => set_str(&obj, KIND, "CrossfadeCancelled"),
+        FfiPlayerEvent::MasterVolumeChanged { volume } => {
+            set_str(&obj, KIND, "MasterVolumeChanged");
+            set_f64(&obj, "volume", f64::from(*volume));
+        }
+        FfiPlayerEvent::AudioRouteChanged { reason } => {
+            set_str(&obj, KIND, "AudioRouteChanged");
+            set_str(&obj, "reason", route_change_reason_str(*reason));
+        }
+        FfiPlayerEvent::DjBpmDetected {
+            slot,
+            bpm,
+            confidence,
+            first_beat_offset_seconds,
+        } => {
+            set_str(&obj, KIND, "DjBpmDetected");
+            set_f64(&obj, "slot", num_traits::cast(*slot).unwrap_or(0.0));
+            set_f64(&obj, "bpm", *bpm);
+            set_opt_f64(&obj, "confidence", confidence.map(f64::from));
+            set_f64(
+                &obj,
+                "first_beat_offset_seconds",
+                *first_beat_offset_seconds,
+            );
+        }
+        FfiPlayerEvent::DjKeylockChanged { on } => {
+            set_str(&obj, KIND, "DjKeylockChanged");
+            set_bool(&obj, "on", *on);
+        }
+        FfiPlayerEvent::DjStretchBackendChanged { kind } => {
+            set_str(&obj, KIND, "DjStretchBackendChanged");
+            set_str(&obj, "kind", stretch_backend_kind_str(*kind));
+        }
+        FfiPlayerEvent::AssetCommitted {
+            asset_root,
+            rel_path,
+            final_len,
+        } => {
+            set_str(&obj, KIND, "AssetCommitted");
+            set_str(&obj, "asset_root", asset_root);
+            set_str(&obj, "rel_path", rel_path);
+            set_opt_f64(
+                &obj,
+                "final_len",
+                final_len.and_then(|len| num_traits::cast(len)),
+            );
+        }
+        FfiPlayerEvent::AssetFailed {
+            asset_root,
+            rel_path,
+            reason,
+        } => {
+            set_str(&obj, KIND, "AssetFailed");
+            set_str(&obj, "asset_root", asset_root);
+            set_str(&obj, "rel_path", rel_path);
+            set_str(&obj, "reason", reason);
+        }
+        FfiPlayerEvent::AssetEvicted { asset_root, reason } => {
+            set_str(&obj, KIND, "AssetEvicted");
+            set_str(&obj, "asset_root", asset_root);
+            set_str(&obj, "reason", evict_reason_str(*reason));
+        }
     }
     obj.into()
 }
@@ -263,5 +411,59 @@ fn time_control_code(status: FfiTimeControlStatus) -> f64 {
         FfiTimeControlStatus::Paused => 0.0,
         FfiTimeControlStatus::WaitingToPlay => 1.0,
         FfiTimeControlStatus::Playing => 2.0,
+    }
+}
+
+fn advance_reason_str(reason: FfiAdvanceReason) -> &'static str {
+    match reason {
+        FfiAdvanceReason::NaturalEof => "NaturalEof",
+        FfiAdvanceReason::CrossfadePreArm => "CrossfadePreArm",
+        FfiAdvanceReason::UserSelect => "UserSelect",
+        FfiAdvanceReason::UserNext => "UserNext",
+        FfiAdvanceReason::UserPrev => "UserPrev",
+        FfiAdvanceReason::TrackFailed => "TrackFailed",
+        FfiAdvanceReason::RemovedCurrent => "RemovedCurrent",
+        FfiAdvanceReason::Repeat => "Repeat",
+        FfiAdvanceReason::Cancelled => "Cancelled",
+        FfiAdvanceReason::Unknown => "Unknown",
+    }
+}
+
+fn repeat_mode_str(mode: FfiRepeatMode) -> &'static str {
+    match mode {
+        FfiRepeatMode::Off => "Off",
+        FfiRepeatMode::One => "One",
+        FfiRepeatMode::All => "All",
+        FfiRepeatMode::Unknown => "Unknown",
+    }
+}
+
+fn route_change_reason_str(reason: FfiRouteChangeReason) -> &'static str {
+    match reason {
+        FfiRouteChangeReason::Unknown => "Unknown",
+        FfiRouteChangeReason::NewDeviceAvailable => "NewDeviceAvailable",
+        FfiRouteChangeReason::OldDeviceUnavailable => "OldDeviceUnavailable",
+        FfiRouteChangeReason::CategoryChange => "CategoryChange",
+        FfiRouteChangeReason::Override => "Override",
+        FfiRouteChangeReason::WakeFromSleep => "WakeFromSleep",
+        FfiRouteChangeReason::NoSuitableRouteForCategory => "NoSuitableRouteForCategory",
+        FfiRouteChangeReason::RouteConfigurationChange => "RouteConfigurationChange",
+    }
+}
+
+fn stretch_backend_kind_str(kind: FfiStretchBackendKind) -> &'static str {
+    match kind {
+        FfiStretchBackendKind::Signalsmith => "Signalsmith",
+        FfiStretchBackendKind::Bungee => "Bungee",
+        FfiStretchBackendKind::Unknown => "Unknown",
+    }
+}
+
+fn evict_reason_str(reason: FfiEvictReason) -> &'static str {
+    match reason {
+        FfiEvictReason::QuotaBytes => "QuotaBytes",
+        FfiEvictReason::QuotaAssets => "QuotaAssets",
+        FfiEvictReason::Displaced => "Displaced",
+        FfiEvictReason::Unknown => "Unknown",
     }
 }
