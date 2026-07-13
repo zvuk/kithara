@@ -104,11 +104,7 @@ impl PlayerTrack {
     /// Current visible (post-gapless-trim) duration in seconds.
     #[must_use]
     pub fn duration(&self) -> f64 {
-        if self.observed_duration > 0.0 {
-            self.observed_duration
-        } else {
-            self.resource.duration()
-        }
+        observed_duration(self.observed_duration, self.resource.duration())
     }
 
     /// Whether this track reached *natural* EOF (vs `stop()` / faded-out).
@@ -215,6 +211,10 @@ impl PlayerTrack {
         self.resource
             .set_service_class(service_class_for_state(state));
     }
+}
+
+fn observed_duration(observed: f64, resource: f64) -> f64 {
+    if observed > 0.0 { observed } else { resource }
 }
 
 fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {

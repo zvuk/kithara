@@ -1,4 +1,4 @@
-use std::sync::atomic::Ordering;
+use std::{ops::Deref, sync::atomic::Ordering};
 
 use super::super::core::PlayerImpl;
 use crate::{
@@ -6,8 +6,26 @@ use crate::{
     bridge::{PlayerNotification, TrackPlaybackStopReason},
 };
 
-impl PlayerImpl {
-    pub(crate) fn dispatch_notification(&self, notification: PlayerNotification) {
+struct Notifier<'a> {
+    player: &'a PlayerImpl,
+}
+
+impl<'a> Notifier<'a> {
+    fn new(player: &'a PlayerImpl) -> Self {
+        Self { player }
+    }
+}
+
+impl Deref for Notifier<'_> {
+    type Target = PlayerImpl;
+
+    fn deref(&self) -> &Self::Target {
+        self.player
+    }
+}
+
+impl Notifier<'_> {
+    fn dispatch_notification(&self, notification: PlayerNotification) {
         match notification.clone() {
             PlayerNotification::Requested => {
                 self.handle_track_requested();
@@ -50,7 +68,7 @@ impl PlayerImpl {
         }
         let index = pending.index;
         self.publish_current_track_snapshot(pending.duration_seconds);
-        self.core.playlist.lock().set_current(index);
+        self.core.items.set_current(index);
         self.announce_current_item(index);
     }
 
@@ -92,7 +110,7 @@ impl PlayerImpl {
 
     /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
     /// only when a track finishes via natural EOF.
-    pub fn process_notifications(&self) {
+    fn process_notifications(&self) {
         for slot_id in self.core.engine.active_slots() {
             let mut saw_slot = false;
             while let Some(notification) = self.core.engine.pop_slot_notification(slot_id) {
@@ -106,7 +124,7 @@ impl PlayerImpl {
         }
     }
 
-    pub(crate) fn publish_current_track_snapshot(&self, duration_seconds: f64) {
+    fn publish_current_track_snapshot(&self, duration_seconds: f64) {
         let Some(slot_id) = self.slot() else {
             return;
         };
@@ -117,6 +135,16 @@ impl PlayerImpl {
         playback
             .duration
             .store(duration_seconds.max(0.0), Ordering::Relaxed);
+    }
+}
+
+impl PlayerImpl {
+    pub fn process_notifications(&self) {
+        Notifier::new(self).process_notifications();
+    }
+
+    pub(crate) fn publish_current_track_snapshot(&self, duration_seconds: f64) {
+        Notifier::new(self).publish_current_track_snapshot(duration_seconds);
     }
 }
 

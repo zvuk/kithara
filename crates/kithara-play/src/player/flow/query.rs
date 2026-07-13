@@ -42,7 +42,7 @@ impl PlayerImpl {
 
     /// Current item index in the queue.
     pub fn current_index(&self) -> usize {
-        self.core.playlist.lock().current()
+        self.core.items.current_index()
     }
 
     /// ABR handle of the currently loaded item, if any.
@@ -95,7 +95,7 @@ impl PlayerImpl {
 
     /// Get the number of items in the queue (including consumed items).
     pub fn item_count(&self) -> usize {
-        self.core.playlist.lock().len()
+        self.core.items.item_count()
     }
 
     /// Single coherent read of the active slot's live playback scalars.

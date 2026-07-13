@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use kithara_platform::sync::Arc;
 
 use super::super::{
@@ -20,7 +22,25 @@ struct ActivatedPending {
     duration_seconds: f64,
 }
 
-impl PlayerImpl {
+struct Handover<'a> {
+    player: &'a PlayerImpl,
+}
+
+impl<'a> Handover<'a> {
+    fn new(player: &'a PlayerImpl) -> Self {
+        Self { player }
+    }
+}
+
+impl Deref for Handover<'_> {
+    type Target = PlayerImpl;
+
+    fn deref(&self) -> &Self::Target {
+        self.player
+    }
+}
+
+impl Handover<'_> {
     /// Mark the armed-next slot at `index` activated under a short lock,
     /// returning its src. `Ok(None)` when it was already activated.
     fn activate_pending(&self, index: usize) -> Result<Option<ActivatedPending>, PlayError> {
@@ -58,7 +78,7 @@ impl PlayerImpl {
     /// Idempotent for the same index. Returns `Some(src)` on success;
     /// `None` if `items[index]` is empty (loader hasn't filled it yet) or
     /// `index` is out of range.
-    pub fn arm_next(&self, index: usize) -> Option<Arc<str>> {
+    fn arm_next(&self, index: usize) -> Option<Arc<str>> {
         let current_index = self.current_index();
         if index >= self.item_count() {
             return None;
@@ -108,7 +128,7 @@ impl PlayerImpl {
     /// Snapshot of the armed-next index. `None` when no slot is armed
     /// (or after `commit_next` has consumed it for the current handover).
     #[must_use]
-    pub fn armed_next(&self) -> Option<usize> {
+    fn armed_next(&self) -> Option<usize> {
         self.phase
             .lock()
             .pending()
@@ -125,7 +145,7 @@ impl PlayerImpl {
     /// - [`PlayError::NotReady`] if no slot is armed.
     /// - [`PlayError::ArmIndexMismatch`] if `index` does not match
     ///   [`Self::armed_next`].
-    pub fn commit_next(&self, index: usize) -> Result<(), PlayError> {
+    fn commit_next(&self, index: usize) -> Result<(), PlayError> {
         // `None` ⇒ the slot was already activated (idempotent no-op).
         let Some(activated) = self.activate_pending(index)? else {
             return Ok(());
@@ -135,7 +155,7 @@ impl PlayerImpl {
         self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.current_index();
         if index != current_index {
-            self.core.playlist.lock().set_current(index);
+            self.core.items.set_current(index);
             self.announce_current_item(index);
         }
         Ok(())
@@ -147,11 +167,11 @@ impl PlayerImpl {
     /// clears the pending slot. Skips the unload if the armed slot has
     /// already been activated for the current index (the activated track
     /// is now the leading one — unloading would silence playback).
-    pub fn unarm_next(&self) {
+    fn unarm_next(&self) {
         self.unarm_next_internal(Some(self.current_index()));
     }
 
-    pub(crate) fn unarm_next_internal(&self, current_index_hint: Option<usize>) {
+    fn unarm_next_internal(&self, current_index_hint: Option<usize>) {
         let pending = self.phase.lock().pending_mut().and_then(Option::take);
         let Some(pending) = pending else {
             return;
@@ -161,6 +181,29 @@ impl PlayerImpl {
         if !preserve_active_current {
             let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: pending.src });
         }
+    }
+}
+
+impl PlayerImpl {
+    pub fn arm_next(&self, index: usize) -> Option<Arc<str>> {
+        Handover::new(self).arm_next(index)
+    }
+
+    #[must_use]
+    pub fn armed_next(&self) -> Option<usize> {
+        Handover::new(self).armed_next()
+    }
+
+    pub fn commit_next(&self, index: usize) -> Result<(), PlayError> {
+        Handover::new(self).commit_next(index)
+    }
+
+    pub fn unarm_next(&self) {
+        Handover::new(self).unarm_next();
+    }
+
+    pub(crate) fn unarm_next_internal(&self, current_index_hint: Option<usize>) {
+        Handover::new(self).unarm_next_internal(current_index_hint);
     }
 }
 

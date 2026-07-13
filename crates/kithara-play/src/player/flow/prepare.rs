@@ -5,6 +5,37 @@ use kithara_platform::sync::Arc;
 use super::super::core::PlayerImpl;
 use crate::resource::ResourceConfig;
 
+struct ConfigPrep<'a> {
+    player: &'a PlayerImpl,
+}
+
+impl ConfigPrep<'_> {
+    fn prepare(&self, config: ResourceConfig) -> ResourceConfig {
+        let bus = config
+            .bus
+            .or_else(|| Some(self.player.core.engine.bus().scoped()));
+        let cancel = config
+            .cancel
+            .or_else(|| self.player.core.engine.cancel_token())
+            .map(|parent| parent.child());
+        let stretch = Some(Arc::clone(&self.player.core.timestretch));
+        let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
+            .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
+        let mut decoder = config.decoder.clone();
+        decoder.gapless_mode = self.player.core.gapless_mode;
+        ResourceConfig {
+            bus,
+            cancel,
+            worker: Some(self.player.core.engine.worker().clone()),
+            host_sample_rate,
+            decoder,
+            stretch,
+            engine_load: Some(Arc::clone(&self.player.core.engine_load)),
+            ..config
+        }
+    }
+}
+
 impl PlayerImpl {
     /// Apply shared worker, host sample rate, ABR, and bus to a resource
     /// config so the resource integrates with this player's engine.
@@ -16,25 +47,6 @@ impl PlayerImpl {
     /// [`ResourceConfig::with_downloader`] before passing the config in.
     #[must_use]
     pub fn prepare_config(&self, config: ResourceConfig) -> ResourceConfig {
-        let bus = config.bus.or_else(|| Some(self.core.engine.bus().scoped()));
-        let cancel = config
-            .cancel
-            .or_else(|| self.core.engine.cancel_token())
-            .map(|parent| parent.child());
-        let stretch = Some(Arc::clone(&self.core.timestretch));
-        let host_sample_rate = NonZeroU32::new(self.core.engine.master_sample_rate())
-            .or_else(|| NonZeroU32::new(self.core.engine.configured_sample_rate()));
-        let mut decoder = config.decoder.clone();
-        decoder.gapless_mode = self.core.gapless_mode;
-        ResourceConfig {
-            bus,
-            cancel,
-            worker: Some(self.core.engine.worker().clone()),
-            host_sample_rate,
-            decoder,
-            stretch,
-            engine_load: Some(Arc::clone(&self.core.engine_load)),
-            ..config
-        }
+        ConfigPrep { player: self }.prepare(config)
     }
 }

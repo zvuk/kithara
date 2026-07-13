@@ -97,6 +97,116 @@ impl From<&PlayerPhase> for PlayerPhaseKind {
 }
 
 impl PlayerPhase {
+    pub(crate) fn enter_loading_with_slot(&mut self, slot: SlotId) {
+        let (abr_handle, pending) = match std::mem::replace(self, Self::Idle) {
+            Self::Loading {
+                abr_handle,
+                pending,
+                ..
+            }
+            | Self::Playing {
+                abr_handle,
+                pending,
+                ..
+            }
+            | Self::Paused {
+                abr_handle,
+                pending,
+                ..
+            } => (abr_handle, pending),
+            Self::Stopped { abr_handle, .. } => (abr_handle, None),
+            Self::Idle => (None, None),
+        };
+        *self = Self::Loading {
+            slot,
+            abr_handle,
+            pending,
+        };
+    }
+
+    pub(crate) fn enter_paused(&mut self) {
+        *self = match std::mem::replace(self, Self::Idle) {
+            Self::Loading {
+                slot,
+                abr_handle,
+                pending,
+            }
+            | Self::Playing {
+                slot,
+                abr_handle,
+                pending,
+            }
+            | Self::Paused {
+                slot,
+                abr_handle,
+                pending,
+            } => Self::Paused {
+                slot,
+                abr_handle,
+                pending,
+            },
+            Self::Stopped {
+                slot: Some(slot),
+                abr_handle,
+            } => Self::Paused {
+                slot,
+                abr_handle,
+                pending: None,
+            },
+            phase => phase,
+        };
+    }
+
+    pub(crate) fn enter_playing(&mut self) {
+        *self = match std::mem::replace(self, Self::Idle) {
+            Self::Loading {
+                slot,
+                abr_handle,
+                pending,
+            }
+            | Self::Playing {
+                slot,
+                abr_handle,
+                pending,
+            }
+            | Self::Paused {
+                slot,
+                abr_handle,
+                pending,
+            } => Self::Playing {
+                slot,
+                abr_handle,
+                pending,
+            },
+            Self::Stopped {
+                slot: Some(slot),
+                abr_handle,
+            } => Self::Playing {
+                slot,
+                abr_handle,
+                pending: None,
+            },
+            phase => phase,
+        };
+    }
+
+    pub(crate) fn enter_stopped(&mut self) {
+        let (slot, abr_handle) = match std::mem::replace(self, Self::Idle) {
+            Self::Loading {
+                slot, abr_handle, ..
+            }
+            | Self::Playing {
+                slot, abr_handle, ..
+            }
+            | Self::Paused {
+                slot, abr_handle, ..
+            } => (Some(slot), abr_handle),
+            Self::Stopped { slot, abr_handle } => (slot, abr_handle),
+            Self::Idle => (None, None),
+        };
+        *self = Self::Stopped { slot, abr_handle };
+    }
+
     /// The ABR handle of the resource currently in the processor, if any.
     pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.abr_handle_ref().cloned()
@@ -172,128 +282,22 @@ impl PlayerImpl {
     /// next / ABR handle the previous active phase held. A no-op transition
     /// when the phase already holds a slot keeps the existing payload.
     pub(crate) fn enter_loading_with_slot(&self, slot: SlotId) {
-        let mut phase = self.phase.lock();
-        let (abr_handle, pending) = match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
-            PlayerPhase::Loading {
-                abr_handle,
-                pending,
-                ..
-            }
-            | PlayerPhase::Playing {
-                abr_handle,
-                pending,
-                ..
-            }
-            | PlayerPhase::Paused {
-                abr_handle,
-                pending,
-                ..
-            } => (abr_handle, pending),
-            PlayerPhase::Stopped { abr_handle, .. } => (abr_handle, None),
-            PlayerPhase::Idle => (None, None),
-        };
-        *phase = PlayerPhase::Loading {
-            slot,
-            abr_handle,
-            pending,
-        };
+        self.phase.lock().enter_loading_with_slot(slot);
     }
 
     /// Move an active (slot-holding) phase into `Paused`. No-op from `Idle`.
     pub(crate) fn enter_paused(&self) {
-        let mut phase = self.phase.lock();
-        match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
-            PlayerPhase::Loading {
-                slot,
-                abr_handle,
-                pending,
-            }
-            | PlayerPhase::Playing {
-                slot,
-                abr_handle,
-                pending,
-            }
-            | PlayerPhase::Paused {
-                slot,
-                abr_handle,
-                pending,
-            } => {
-                *phase = PlayerPhase::Paused {
-                    slot,
-                    abr_handle,
-                    pending,
-                };
-            }
-            PlayerPhase::Stopped { slot, abr_handle } => {
-                *phase = match slot {
-                    Some(slot) => PlayerPhase::Paused {
-                        slot,
-                        abr_handle,
-                        pending: None,
-                    },
-                    None => PlayerPhase::Stopped { slot, abr_handle },
-                };
-            }
-            PlayerPhase::Idle => *phase = PlayerPhase::Idle,
-        }
+        self.phase.lock().enter_paused();
     }
 
     /// Move an active (slot-holding) phase into `Playing`. No-op from `Idle`.
     pub(crate) fn enter_playing(&self) {
-        let mut phase = self.phase.lock();
-        match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
-            PlayerPhase::Loading {
-                slot,
-                abr_handle,
-                pending,
-            }
-            | PlayerPhase::Playing {
-                slot,
-                abr_handle,
-                pending,
-            }
-            | PlayerPhase::Paused {
-                slot,
-                abr_handle,
-                pending,
-            } => {
-                *phase = PlayerPhase::Playing {
-                    slot,
-                    abr_handle,
-                    pending,
-                };
-            }
-            PlayerPhase::Stopped { slot, abr_handle } => {
-                *phase = match slot {
-                    Some(slot) => PlayerPhase::Playing {
-                        slot,
-                        abr_handle,
-                        pending: None,
-                    },
-                    None => PlayerPhase::Stopped { slot, abr_handle },
-                };
-            }
-            PlayerPhase::Idle => *phase = PlayerPhase::Idle,
-        }
+        self.phase.lock().enter_playing();
     }
 
     /// Move the player into `Stopped`, preserving the slot/ABR handle.
     pub(crate) fn enter_stopped(&self) {
-        let mut phase = self.phase.lock();
-        let (slot, abr_handle) = match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
-            PlayerPhase::Loading {
-                slot, abr_handle, ..
-            }
-            | PlayerPhase::Playing {
-                slot, abr_handle, ..
-            }
-            | PlayerPhase::Paused {
-                slot, abr_handle, ..
-            } => (Some(slot), abr_handle),
-            PlayerPhase::Stopped { slot, abr_handle } => (slot, abr_handle),
-            PlayerPhase::Idle => (None, None),
-        };
-        *phase = PlayerPhase::Stopped { slot, abr_handle };
+        self.phase.lock().enter_stopped();
     }
 
     /// Discriminant of the current phase under a short lock.

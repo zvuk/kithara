@@ -1,25 +1,7 @@
-use tracing::{debug, warn};
-
 use super::super::core::PlayerImpl;
-use crate::{
-    api::{PlayerEvent, SlotId},
-    bridge::PlayerCmd,
-    error::PlayError,
-};
+use crate::{api::SlotId, error::PlayError};
 
 impl PlayerImpl {
-    /// Apply effective volume to the current slot (per-instance).
-    pub(crate) fn apply_effective_volume(&self, volume: f32) {
-        if let Some(slot_id) = self.slot() {
-            debug!(volume, ?slot_id, "applying effective volume to slot");
-            if let Err(e) = self.core.engine.set_slot_volume(slot_id, volume) {
-                warn!(?e, volume, "failed to set slot volume");
-            }
-        } else {
-            debug!(volume, "apply_effective_volume: no slot allocated yet");
-        }
-    }
-
     /// Ensure we have an active slot, allocating one if needed.
     pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
         if let Some(id) = self.slot() {
@@ -60,8 +42,9 @@ impl PlayerImpl {
 
     /// Set crossfade duration in seconds.
     pub fn set_crossfade_duration(&self, seconds: f32) {
-        let clamped = self.core.params.set_crossfade_duration(seconds);
-        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(clamped));
+        self.core
+            .params
+            .set_crossfade_duration(seconds, |cmd| self.send_to_slot(cmd));
     }
 
     /// Set the default playback rate used by `play()` and `select_item()`.
@@ -83,13 +66,13 @@ impl PlayerImpl {
 
     /// Set muted state.
     pub fn set_muted(&self, muted: bool) {
-        self.core.params.set_muted(muted);
-        let effective = if muted { 0.0 } else { self.volume() };
-        self.apply_effective_volume(effective);
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::MuteChanged { muted });
+        let slot = self.slot();
+        self.core.params.set_muted(
+            muted,
+            slot,
+            |slot, volume| self.core.engine.set_slot_volume(slot, volume),
+            self.core.engine.bus(),
+        );
     }
 
     /// Set prefetch lead time in seconds.
@@ -99,8 +82,9 @@ impl PlayerImpl {
     /// Controls how early the next queued item is loaded into the processor
     /// before EOF. Independent of crossfade activation.
     pub fn set_prefetch_duration(&self, seconds: f32) {
-        let clamped = self.core.params.set_prefetch_duration(seconds);
-        let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(clamped));
+        self.core
+            .params
+            .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
     }
 
     /// Pump audio backend/runtime state.
@@ -114,24 +98,22 @@ impl PlayerImpl {
     /// of truth, read each chunk by the effect chain) and propagates it via
     /// `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
     pub fn set_rate(&self, rate: f32) {
-        let clamped = self.core.params.set_rate(rate);
-        self.core.timestretch.set_speed(clamped);
-        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::RateChanged { rate: clamped });
+        self.core.params.set_rate(
+            rate,
+            &self.core.timestretch,
+            |cmd| self.send_to_slot(cmd),
+            self.core.engine.bus(),
+        );
     }
 
     /// Set volume, clamped to `0.0..=1.0`.
     pub fn set_volume(&self, volume: f32) {
-        let clamped = self.core.params.set_volume(volume);
-        if !self.is_muted() {
-            self.apply_effective_volume(clamped);
-        }
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::VolumeChanged { volume: clamped });
+        let slot = self.slot();
+        self.core.params.set_volume(
+            volume,
+            slot,
+            |slot, volume| self.core.engine.set_slot_volume(slot, volume),
+            self.core.engine.bus(),
+        );
     }
 }

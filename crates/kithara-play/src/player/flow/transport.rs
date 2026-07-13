@@ -37,7 +37,7 @@ impl PlayerImpl {
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
             let default_rate = self.default_rate();
-            self.core.params.set_rate(default_rate);
+            self.core.params.set_rate_value(default_rate);
             let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
             self.enter_playing();
             self.core
@@ -83,7 +83,7 @@ impl PlayerImpl {
     /// Start playback at the configured default rate.
     pub fn play(&self) {
         let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
-        self.core.params.set_rate(rate);
+        self.core.params.set_rate_value(rate);
         self.core.timestretch.set_speed(rate);
 
         if let Err(e) = self.ensure_engine_started() {
@@ -200,10 +200,9 @@ impl PlayerImpl {
         // Gated on `Playlist::last_announced` so it covers only an item
         // already loaded as current, not a fresh select of the current index whose
         // resource genuinely still sits in the slot.
-        let playlist = self.core.playlist.lock();
-        let reselecting_current = index == playlist.current() && playlist.is_announced(index);
-        let has_resource = playlist.has_resource(index);
-        drop(playlist);
+        let reselecting_current =
+            index == self.core.items.current_index() && self.core.items.is_announced(index);
+        let has_resource = self.core.items.has_resource(index);
 
         let armed_for_index = self
             .phase
@@ -229,7 +228,7 @@ impl PlayerImpl {
             self.commit_next(index)?;
         } else if !reselecting_current {
             self.unarm_next_internal(Some(index));
-            self.core.playlist.lock().set_current(index);
+            self.core.items.set_current(index);
             self.load_current_item();
             self.announce_current_item(index);
         }

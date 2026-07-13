@@ -88,14 +88,15 @@ session commands. The per-crate `module_fan_out` threshold is raised for
 ### Accepted lint residue
 
 The live architecture lint warnings retained after the role-first split are
-intentional: six `single_impl_size` warnings are layout-inherent after the
-fine-grained module split; two `god_struct` warnings, including `PlayerImpl`,
-remain because further delegation would add risk to event and timing
-correctness for little lint value; and two `mixed_entities` warnings reflect
-modules whose paired entities share one owner and lifecycle. The two
+intentional: four `single_impl_size` warnings are layout-inherent after the
+fine-grained module split; two `mixed_entities` warnings reflect modules whose
+paired entities share one owner and lifecycle; and the two
 `pub_struct_open_fields` warnings on `SlotControl` and `PlaybackShared` preserve
 the intentional white-box render API used by the offline harness in
-`kithara-integration-tests`.
+`kithara-integration-tests`. `PlayerImpl` and `PlayerTrack` were decomposed
+into per-responsibility owners (`ItemQueue`, `Handover`, `Notifier`,
+`ConfigPrep`, and the `PlayerPhase` typestate), so no `god_struct` warning
+remains.
 
 ## Engine Lifecycle
 
