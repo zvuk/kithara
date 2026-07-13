@@ -34,6 +34,12 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_delegation: DerivableDelegationConfig,
     #[serde(default)]
+    pub(crate) derivable_display: DerivableConfig,
+    #[serde(default)]
+    pub(crate) derivable_deref: DerivableConfig,
+    #[serde(default)]
+    pub(crate) derivable_from: DerivableConfig,
+    #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]
     pub(crate) function_branch_density: FunctionBranchDensityConfig,
@@ -57,6 +63,19 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) pointwise_loop: PointwiseLoopConfig,
     #[serde(default)]
     pub(crate) retry_fallback: RetryFallbackConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DerivableConfig {
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+}
+
+impl Default for DerivableConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -19,7 +19,7 @@ use clap::Args;
 mod checks;
 mod config;
 
-use checks::{Context, registry};
+use checks::{Check, Context, registry};
 use config::IdiomsConfig;
 
 use crate::common::{
@@ -45,6 +45,12 @@ pub struct IdiomsArgs {
     /// Restrict scan to workspace-relative path(s). Repeatable.
     #[arg(long = "path", value_name = "PATH")]
     pub paths: Vec<PathBuf>,
+    /// Skip the dirty-tree gate that protects `--fix` from uncommitted edits.
+    #[arg(long = "allow-dirty")]
+    pub allow_dirty: bool,
+    /// Apply safe idiom collapses in place, then re-run detection.
+    #[arg(long)]
+    pub fix: bool,
     #[arg(long)]
     pub json: bool,
     #[arg(long = "update-baseline")]
@@ -78,6 +84,10 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
         }
         Some(args.check.iter().map(String::as_str).collect())
     };
+
+    if args.fix {
+        run_fix(&registry, &filter, &ctx, args.allow_dirty)?;
+    }
 
     let mut report = Report::default();
     let mut ran: Vec<&'static str> = Vec::new();
@@ -138,6 +148,47 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
             diff.regressions.len(),
             diff.new_violations.len(),
         );
+    }
+    Ok(())
+}
+
+fn run_fix(
+    registry: &[Box<dyn Check>],
+    filter: &Option<HashSet<&str>>,
+    ctx: &Context<'_>,
+    allow_dirty: bool,
+) -> Result<()> {
+    crate::util::ensure_clean_tree(allow_dirty, "xtask lint idioms")?;
+    let mut writes = 0;
+    let mut changes = Vec::new();
+    let mut skipped = Vec::new();
+    for check in registry {
+        if let Some(filter) = filter
+            && !filter.contains(check.id())
+        {
+            continue;
+        }
+        let outcome = check.fix(ctx)?;
+        writes += outcome.writes;
+        changes.extend(
+            outcome
+                .changes
+                .into_iter()
+                .map(|value| format!("idioms/{}: {value}", check.id())),
+        );
+        skipped.extend(
+            outcome
+                .skipped
+                .into_iter()
+                .map(|value| format!("idioms/{}: {value}", check.id())),
+        );
+    }
+    println!("idioms fix: wrote {writes} file(s)");
+    for change in changes {
+        println!("  changed — {change}");
+    }
+    for reason in skipped {
+        println!("  skipped — {reason}");
     }
     Ok(())
 }

@@ -32,6 +32,15 @@ enabled = true
 trait_min_methods = 2
 inherent_min_methods = 3
 
+[derivable_from]
+enabled = true
+
+[derivable_deref]
+enabled = true
+
+[derivable_display]
+enabled = true
+
 [retry_fallback]
 # retry_fallback flags retry/fallback vocabulary (max_retries, should_retry,
 # attempt, ...) to catch try-A-else-B chains that paper over state bugs. The
