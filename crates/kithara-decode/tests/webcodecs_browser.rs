@@ -35,6 +35,13 @@ const FLAC_PROBE_STREAMINFO: [u8; 34] = [
 
 static PROBE_STARTED: Once = Once::new();
 
+struct HeAacV2Fixture;
+
+impl HeAacV2Fixture {
+    const INIT: &'static [u8] = include_bytes!("../../../assets/he_aac_v2_init.mp4");
+    const SEGMENT: &'static [u8] = include_bytes!("../../../assets/he_aac_v2_segment.m4s");
+}
+
 #[derive(Debug)]
 struct DecodeSummary {
     eof: bool,
@@ -176,6 +183,35 @@ async fn aac_parity() {
     );
 }
 
+#[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+async fn he_aac_v2_decode() {
+    prepare_webcodecs("mp4a.40.29").await;
+
+    let mut bytes = Vec::with_capacity(HeAacV2Fixture::INIT.len() + HeAacV2Fixture::SEGMENT.len());
+    bytes.extend_from_slice(HeAacV2Fixture::INIT);
+    bytes.extend_from_slice(HeAacV2Fixture::SEGMENT);
+    let decoded = decode_he_aac_v2(&bytes).await;
+
+    assert!(decoded.eof, "WebCodecs HE-AAC v2 must reach explicit EOF");
+    assert!(
+        decoded.non_empty_chunks > 0,
+        "WebCodecs HE-AAC v2 PCM must be non-empty"
+    );
+    assert!(
+        decoded.frames > 1_024,
+        "WebCodecs HE-AAC v2 decoded too few frames: {}",
+        decoded.frames
+    );
+    assert_eq!(decoded.spec.channels, EXPECTED_CHANNELS);
+    assert_eq!(decoded.spec.sample_rate.get(), EXPECTED_SAMPLE_RATE);
+    tracing::info!(
+        frames = decoded.frames,
+        channels = decoded.spec.channels,
+        sample_rate = decoded.spec.sample_rate.get(),
+        "WebCodecs HE-AAC v2 resolved output spec"
+    );
+}
+
 async fn prepare_webcodecs(codec: &str) {
     PROBE_STARTED.call_once(spawn_webcodecs_probe);
     assert_browser_support(codec).await;
@@ -218,6 +254,18 @@ fn webcodecs_runtime_ready(codec: &str) -> bool {
             )
             .is_ok()
         }
+        "mp4a.40.29" => {
+            let mut bytes =
+                Vec::with_capacity(HeAacV2Fixture::INIT.len() + HeAacV2Fixture::SEGMENT.len());
+            bytes.extend_from_slice(HeAacV2Fixture::INIT);
+            bytes.extend_from_slice(HeAacV2Fixture::SEGMENT);
+            DecoderFactory::create_from_media_info(
+                Cursor::new(bytes),
+                &aac_media_info(AudioCodec::AacHeV2),
+                decoder_config(DecoderBackend::WebCodecs),
+            )
+            .is_ok()
+        }
         _ => false,
     }
 }
@@ -256,19 +304,26 @@ fn create_file_decoder(bytes: &[u8], hint: &str, backend: DecoderBackend) -> Box
     .unwrap_or_else(|error| panic!("create {backend} decoder for {hint}: {error}"))
 }
 
-fn create_aac_decoder(bytes: &[u8], backend: DecoderBackend) -> Box<dyn Decoder> {
-    let media_info = MediaInfo::builder()
-        .codec(AudioCodec::AacLc)
+fn aac_media_info(codec: AudioCodec) -> MediaInfo {
+    MediaInfo::builder()
+        .codec(codec)
         .container(ContainerFormat::Fmp4)
         .sample_rate(EXPECTED_SAMPLE_RATE)
         .channels(EXPECTED_CHANNELS)
-        .build();
+        .build()
+}
+
+fn create_aac_decoder(
+    bytes: &[u8],
+    codec: AudioCodec,
+    backend: DecoderBackend,
+) -> Box<dyn Decoder> {
     DecoderFactory::create_from_media_info(
         Cursor::new(bytes.to_vec()),
-        &media_info,
+        &aac_media_info(codec),
         decoder_config(backend),
     )
-    .unwrap_or_else(|error| panic!("create {backend} decoder for AAC-LC fMP4: {error}"))
+    .unwrap_or_else(|error| panic!("create {backend} decoder for {codec:?} fMP4: {error}"))
 }
 
 async fn decode_file(bytes: &[u8], hint: &str, backend: DecoderBackend) -> DecodeSummary {
@@ -276,7 +331,60 @@ async fn decode_file(bytes: &[u8], hint: &str, backend: DecoderBackend) -> Decod
 }
 
 async fn decode_aac(bytes: &[u8], backend: DecoderBackend) -> DecodeSummary {
-    decode_to_eof(create_aac_decoder(bytes, backend), backend, "aac-lc").await
+    decode_to_eof(
+        create_aac_decoder(bytes, AudioCodec::AacLc, backend),
+        backend,
+        "aac-lc",
+    )
+    .await
+}
+
+async fn decode_he_aac_v2(bytes: &[u8]) -> DecodeSummary {
+    let mut decoder = create_aac_decoder(bytes, AudioCodec::AacHeV2, DecoderBackend::WebCodecs);
+    let mut frames = 0usize;
+    let mut non_empty_chunks = 0usize;
+    let mut eof = false;
+
+    for _ in 0..MAX_DECODE_OUTCOMES {
+        match decoder
+            .next_chunk()
+            .unwrap_or_else(|error| panic!("decode HE-AAC v2 with WebCodecs: {error}"))
+        {
+            DecoderChunkOutcome::Chunk(chunk) => {
+                assert!(
+                    !chunk.samples.is_empty(),
+                    "WebCodecs emitted empty HE-AAC v2 PCM"
+                );
+                // Lossy SBR/PS reconstruction legitimately overshoots [-1, 1]
+                // (measured peak ~1.03 in Chrome); float PCM is not clamped at
+                // the decoder, only downstream at the mixer. Assert finite and a
+                // sane magnitude bound to catch real corruption, not the overshoot.
+                assert!(
+                    chunk
+                        .samples
+                        .iter()
+                        .all(|sample| sample.is_finite() && sample.abs() < 2.0),
+                    "WebCodecs emitted non-finite or wildly out-of-range HE-AAC v2 PCM"
+                );
+                frames += chunk.frames();
+                non_empty_chunks += 1;
+            }
+            DecoderChunkOutcome::Pending(_) => {}
+            DecoderChunkOutcome::Eof => {
+                eof = true;
+                break;
+            }
+        }
+        time::sleep(Duration::ZERO).await;
+    }
+
+    DecodeSummary {
+        eof,
+        frames,
+        non_empty_chunks,
+        saw_ascending: false,
+        spec: decoder.spec(),
+    }
 }
 
 async fn decode_to_eof(
