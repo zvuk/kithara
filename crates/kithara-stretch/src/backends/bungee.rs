@@ -41,9 +41,11 @@ impl PooledPlanar {
     }
 
     fn fill_interleaved(&mut self, input: &[f32], start: usize, frames: usize, channels: usize) {
+        let start = start * channels;
+        let input = &input[start..start + frames * channels];
         for (channel, samples) in self.channels.iter_mut().take(channels).enumerate() {
             samples.clear();
-            samples.extend((0..frames).map(|frame| input[(start + frame) * channels + channel]));
+            samples.extend(input.chunks_exact(channels).map(|frame| frame[channel]));
         }
     }
 }
@@ -185,8 +187,18 @@ impl StretchBackend for BungeeBackend {
             );
             let rendered = rendered.min(cap);
             let output = self.out_planar.as_ref();
-            for frame in 0..rendered {
-                out.extend(output.iter().take(ch).map(|channel| channel[frame]));
+            out.reserve(rendered * ch);
+            if ch == 2 {
+                let left = &output[0][..rendered];
+                let right = &output[1][..rendered];
+                for (&left, &right) in left.iter().zip(right) {
+                    out.push(left);
+                    out.push(right);
+                }
+            } else {
+                for frame in 0..rendered {
+                    out.extend(output.iter().take(ch).map(|channel| channel[frame]));
+                }
             }
             done += n;
         }
