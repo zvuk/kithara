@@ -1,13 +1,14 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     rc::Rc,
 };
 
 use js_sys::{Float32Array, Object, Uint8Array};
 use kithara_platform::{
-    sync::mpsc,
+    sync::mpsc::{self, TryRecvError},
     thread::{assert_not_main_thread, keep_worker_alive, spawn_named},
+    time::{self, Duration},
     tokio::task::spawn as task_spawn,
 };
 use num_traits::ToPrimitive;
@@ -21,16 +22,18 @@ use web_sys::{
 use super::protocol::{HostCmd, HostOut};
 use crate::{DecodeError, DecodeResult};
 
-pub(crate) struct HostHandle {
-    pub(crate) cmd: mpsc::Sender<HostCmd>,
-    pub(crate) out: mpsc::Receiver<HostOut>,
-}
-
 struct DecoderHost {
     decoder: AudioDecoder,
     pending: Rc<RefCell<VecDeque<(u64, u64)>>>,
     _error_callback: Closure<dyn FnMut(JsValue)>,
     _output_callback: Closure<dyn FnMut(AudioData)>,
+}
+
+struct DecoderState {
+    host: DecoderHost,
+    out_tx: mpsc::Sender<HostOut>,
+    generation: Rc<Cell<u64>>,
+    announced_generation: Rc<Cell<Option<u64>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -47,147 +50,213 @@ enum HostError {
     BufferSize { frames: u32, channels: u32 },
 }
 
-pub(crate) fn spawn_host() -> HostHandle {
+pub(crate) fn spawn_host() -> mpsc::Sender<HostCmd> {
     let (cmd, cmd_rx) = mpsc::channel();
-    let (out_tx, out) = mpsc::channel();
-    let worker = spawn_named("kithara-webcodecs-host", move || host_main(cmd_rx, out_tx));
+    let worker = spawn_named("kithara-webcodecs-host", move || host_main(cmd_rx));
     std::mem::forget(worker);
-    HostHandle { cmd, out }
+    cmd
 }
 
-fn host_main(cmd_rx: mpsc::Receiver<HostCmd>, out_tx: mpsc::Sender<HostOut>) {
+fn host_main(cmd_rx: mpsc::Receiver<HostCmd>) {
     assert_not_main_thread(concat!(module_path!(), "::host_main"));
     keep_worker_alive();
 
     task_spawn(async move {
-        let generation = Rc::new(Cell::new(0));
-        let announced_generation = Rc::new(Cell::new(None));
-        let mut host = None;
+        const POLL_IDLE: Duration = Duration::from_millis(4);
+        let mut decoders = HashMap::new();
 
-        while let Ok(cmd) = cmd_rx.recv_async().await {
-            if dispatch(cmd, &mut host, &out_tx, &generation, &announced_generation).await {
-                break;
+        'outer: loop {
+            let mut worked = false;
+            loop {
+                match cmd_rx.try_recv() {
+                    Ok(cmd) => {
+                        worked = true;
+                        dispatch(cmd, &mut decoders).await;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(_) => break 'outer,
+                }
             }
+            let pause = if worked { Duration::ZERO } else { POLL_IDLE };
+            time::sleep(pause).await;
         }
 
-        if let Some(host) = host
-            && let Err(err) = host.decoder.close()
-        {
-            tracing::warn!(detail = %js_detail(&err), "failed to close WebCodecs decoder");
+        for (decoder_id, state) in decoders {
+            close_decoder(decoder_id, state);
         }
     });
 }
 
-async fn dispatch(
-    cmd: HostCmd,
-    host: &mut Option<DecoderHost>,
-    out_tx: &mpsc::Sender<HostOut>,
-    current_generation: &Rc<Cell<u64>>,
-    announced_generation: &Rc<Cell<Option<u64>>>,
-) -> bool {
+async fn dispatch(cmd: HostCmd, decoders: &mut HashMap<u64, DecoderState>) {
     match cmd {
+        HostCmd::Open { id, reply_tx } => on_open(id, reply_tx, decoders),
         HostCmd::Configure {
+            decoder_id,
             codec_string,
             description,
             sample_rate,
             channels,
             generation,
         } => {
-            if generation < current_generation.get() {
-                return false;
+            let Some(state) = decoders.get_mut(&decoder_id) else {
+                tracing::warn!(
+                    decoder_id,
+                    generation,
+                    "ignoring configure for unknown WebCodecs decoder"
+                );
+                return;
+            };
+            if generation < state.generation.get() {
+                return;
             }
-            current_generation.set(generation);
-            announced_generation.set(None);
-            if host.is_none() {
-                *host = match DecoderHost::new(
-                    out_tx.clone(),
-                    Rc::clone(current_generation),
-                    Rc::clone(announced_generation),
-                ) {
-                    Ok(host) => Some(host),
-                    Err(err) => {
-                        send_error(out_tx, &err, generation);
-                        None
-                    }
-                };
-            }
-            if let Some(host) = host
-                && let Err(err) =
-                    host.configure(&codec_string, description.as_deref(), sample_rate, channels)
+            state.generation.set(generation);
+            state.announced_generation.set(None);
+            if let Err(err) =
+                state
+                    .host
+                    .configure(&codec_string, description.as_deref(), sample_rate, channels)
             {
-                tracing::error!(codec = %codec_string, generation, error = %err, "failed to configure WebCodecs decoder");
-                send_error(out_tx, &err, generation);
+                tracing::error!(decoder_id, codec = %codec_string, generation, error = %err, "failed to configure WebCodecs decoder");
+                send_error(&state.out_tx, &err, generation);
             }
         }
         HostCmd::Decode {
+            decoder_id,
             data,
             pts_us,
             key,
             generation,
         } => {
-            if generation != current_generation.get() {
-                return false;
-            }
-            let result = host
-                .as_ref()
-                .ok_or_else(|| {
-                    DecodeError::backend(HostError::Api {
-                        op: "decode",
-                        detail: "decoder is not configured".to_owned(),
-                    })
-                })
-                .and_then(|host| host.decode(&data, pts_us, key, generation));
-            if let Err(err) = result {
-                tracing::error!(generation, pts_us, error = %err, "failed to queue WebCodecs chunk");
-                send_error(out_tx, &err, generation);
-            }
-        }
-        HostCmd::Reset { generation } => {
-            if generation < current_generation.get() {
-                return false;
-            }
-            current_generation.set(generation);
-            announced_generation.set(None);
-            if let Some(host) = host {
-                host.pending.borrow_mut().clear();
-                if let Err(err) = host.decoder.reset() {
-                    let err = api_error("reset", &err);
-                    tracing::error!(generation, error = %err, "failed to reset WebCodecs decoder");
-                    send_error(out_tx, &err, generation);
-                }
-            }
-        }
-        HostCmd::Flush { generation } => {
-            if generation != current_generation.get() {
-                return false;
-            }
-            let result = match host {
-                Some(host) => JsFuture::from(host.decoder.flush())
-                    .await
-                    .map(|_| ())
-                    .map_err(|err| api_error("flush", &err)),
-                None => Err(DecodeError::backend(HostError::Api {
-                    op: "flush",
-                    detail: "decoder is not configured".to_owned(),
-                })),
+            let Some(state) = decoders.get(&decoder_id) else {
+                tracing::warn!(
+                    decoder_id,
+                    generation,
+                    "ignoring decode for unknown WebCodecs decoder"
+                );
+                return;
             };
+            if generation != state.generation.get() {
+                return;
+            }
+            let result = state.host.decode(&data, pts_us, key, generation);
+            if let Err(err) = result {
+                tracing::error!(decoder_id, generation, pts_us, error = %err, "failed to queue WebCodecs chunk");
+                send_error(&state.out_tx, &err, generation);
+            }
+        }
+        HostCmd::Reset {
+            decoder_id,
+            generation,
+        } => {
+            let Some(state) = decoders.get_mut(&decoder_id) else {
+                tracing::warn!(
+                    decoder_id,
+                    generation,
+                    "ignoring reset for unknown WebCodecs decoder"
+                );
+                return;
+            };
+            if generation < state.generation.get() {
+                return;
+            }
+            state.generation.set(generation);
+            state.announced_generation.set(None);
+            state.host.pending.borrow_mut().clear();
+            if let Err(err) = state.host.decoder.reset() {
+                let err = api_error("reset", &err);
+                tracing::error!(decoder_id, generation, error = %err, "failed to reset WebCodecs decoder");
+                send_error(&state.out_tx, &err, generation);
+            }
+        }
+        HostCmd::Flush {
+            decoder_id,
+            generation,
+        } => {
+            let Some(state) = decoders.get(&decoder_id) else {
+                tracing::warn!(
+                    decoder_id,
+                    generation,
+                    "ignoring flush for unknown WebCodecs decoder"
+                );
+                return;
+            };
+            if generation != state.generation.get() {
+                return;
+            }
+            let result = JsFuture::from(state.host.decoder.flush())
+                .await
+                .map(|_| ())
+                .map_err(|err| api_error("flush", &err));
             match result {
                 Ok(()) => {
-                    let _ = out_tx.send(HostOut::Flushed { generation });
+                    let _ = state.out_tx.send(HostOut::Flushed { generation });
                 }
                 Err(err) => {
-                    tracing::error!(generation, error = %err, "failed to flush WebCodecs decoder");
-                    send_error(out_tx, &err, generation);
+                    tracing::error!(decoder_id, generation, error = %err, "failed to flush WebCodecs decoder");
+                    send_error(&state.out_tx, &err, generation);
                 }
             }
         }
-        HostCmd::Shutdown => return true,
+        HostCmd::Close { id } => {
+            if let Some(state) = decoders.remove(&id) {
+                close_decoder(id, state);
+            }
+        }
     }
-    false
+}
+
+fn on_open(
+    decoder_id: u64,
+    out_tx: mpsc::Sender<HostOut>,
+    decoders: &mut HashMap<u64, DecoderState>,
+) {
+    if decoders.contains_key(&decoder_id) {
+        let err = DecodeError::backend(HostError::Api {
+            op: "open",
+            detail: "decoder id is already registered".to_owned(),
+        });
+        send_error(&out_tx, &err, 0);
+        return;
+    }
+    let generation = Rc::new(Cell::new(0));
+    let announced_generation = Rc::new(Cell::new(None));
+    match DecoderHost::new(
+        decoder_id,
+        out_tx.clone(),
+        Rc::clone(&generation),
+        Rc::clone(&announced_generation),
+    ) {
+        Ok(host) => {
+            decoders.insert(
+                decoder_id,
+                DecoderState {
+                    host,
+                    out_tx,
+                    generation,
+                    announced_generation,
+                },
+            );
+            tracing::debug!(decoder_id, "opened WebCodecs decoder");
+        }
+        Err(err) => {
+            tracing::error!(decoder_id, error = %err, "failed to open WebCodecs decoder");
+            send_error(&out_tx, &err, 0);
+        }
+    }
+}
+
+fn close_decoder(decoder_id: u64, state: DecoderState) {
+    let DecoderState { host, .. } = state;
+    if let Err(err) = host.decoder.close() {
+        tracing::warn!(decoder_id, detail = %js_detail(&err), "failed to close WebCodecs decoder");
+    } else {
+        tracing::debug!(decoder_id, "closed WebCodecs decoder");
+    }
 }
 
 impl DecoderHost {
     fn new(
+        decoder_id: u64,
         out_tx: mpsc::Sender<HostOut>,
         generation: Rc<Cell<u64>>,
         announced_generation: Rc<Cell<Option<u64>>>,
@@ -197,7 +266,7 @@ impl DecoderHost {
         let error_callback = Closure::new(move |value: JsValue| {
             let generation = error_generation.get();
             let detail = js_detail(&value);
-            tracing::error!(generation, detail = %detail, "WebCodecs decoder callback failed");
+            tracing::error!(decoder_id, generation, detail = %detail, "WebCodecs decoder callback failed");
             let _ = error_tx.send(HostOut::Error { detail, generation });
         });
 
@@ -208,11 +277,11 @@ impl DecoderHost {
             let Some((input_pts_us, output_generation)) = output_pending.borrow_mut().pop_front()
             else {
                 data.close();
-                tracing::debug!(pts_us, "dropping unmatched WebCodecs output");
+                tracing::debug!(decoder_id, pts_us, "dropping unmatched WebCodecs output");
                 return;
             };
             if pts_us != Some(input_pts_us) {
-                tracing::debug!(input_pts_us, output_pts_us = ?pts_us, "WebCodecs adjusted output timestamp");
+                tracing::debug!(decoder_id, input_pts_us, output_pts_us = ?pts_us, "WebCodecs adjusted output timestamp");
             }
             let generation = generation.get();
             if output_generation != generation {
@@ -220,6 +289,7 @@ impl DecoderHost {
                 tracing::debug!(
                     output_generation,
                     generation,
+                    decoder_id,
                     "dropping stale WebCodecs output"
                 );
                 return;
@@ -243,7 +313,7 @@ impl DecoderHost {
                     let _ = out_tx.send(output);
                 }
                 Err(err) => {
-                    tracing::error!(generation, error = %err, "failed to copy WebCodecs AudioData");
+                    tracing::error!(decoder_id, generation, error = %err, "failed to copy WebCodecs AudioData");
                     send_error(&out_tx, &err, generation);
                 }
             }
@@ -420,4 +490,206 @@ fn send_error(out_tx: &mpsc::Sender<HostOut>, err: &DecodeError, generation: u64
         detail: err.to_string(),
         generation,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::time::{Duration, Instant};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::webcodecs::protocol::{HostCmd, HostOut};
+
+    fn open_host() -> (mpsc::Sender<HostCmd>, mpsc::Receiver<HostOut>) {
+        let cmd = spawn_host();
+        let (reply_tx, out) = mpsc::channel();
+        cmd.send(HostCmd::Open { id: 1, reply_tx })
+            .expect("BUG: host cmd channel closed at spawn");
+        (cmd, out)
+    }
+
+    #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+    async fn composed_mp3_reaches_eof_with_pcm() {
+        use symphonia::{
+            core::{
+                formats::{FormatOptions, probe::Hint},
+                io::{MediaSourceStream, MediaSourceStreamOptions},
+                meta::MetadataOptions,
+            },
+            default,
+        };
+
+        use crate::{
+            composed::{ComposedDecoder, DecoderRuntime},
+            demuxer::Demuxer,
+            traits::{Decoder, DecoderChunkOutcome},
+            webcodecs::codec::WebCodecsCodec,
+        };
+
+        crate::webcodecs::probe::spawn_webcodecs_probe();
+
+        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/test.mp3"
+        ));
+        let cursor = std::io::Cursor::new(TEST_MP3_BYTES.to_vec());
+        let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
+        let mut hint = Hint::new();
+        hint.with_extension("mp3");
+        let format_reader = default::get_probe()
+            .probe(
+                &hint,
+                mss,
+                FormatOptions::default(),
+                MetadataOptions::default(),
+            )
+            .expect("BUG: MP3 probe should succeed");
+        let demuxer =
+            crate::symphonia::SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
+                .expect("BUG: MP3 demuxer should build");
+        let track = demuxer.track_info().clone();
+        let codec = WebCodecsCodec::open(&track, false).expect("BUG: WebCodecs open");
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+
+        let mut total_frames: u64 = 0;
+        let mut outcomes: u32 = 0;
+        loop {
+            outcomes += 1;
+            assert!(outcomes < 100_000, "runaway next_chunk loop");
+            match decoder.next_chunk().expect("next_chunk") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    total_frames += chunk.frames() as u64;
+                }
+                DecoderChunkOutcome::Pending(_) => {
+                    kithara_platform::time::sleep(Duration::from_millis(1)).await;
+                }
+                DecoderChunkOutcome::Eof => break,
+            }
+        }
+        assert!(total_frames > 0, "no PCM through ComposedDecoder");
+    }
+
+    #[kithara::test(wasm, timeout(Duration::from_secs(60)))]
+    async fn real_mp3_frames_produce_pcm() {
+        use kithara_bufpool::PcmPool;
+        use symphonia::{
+            core::{
+                formats::{FormatOptions, probe::Hint},
+                io::{MediaSourceStream, MediaSourceStreamOptions},
+                meta::MetadataOptions,
+            },
+            default,
+        };
+
+        use crate::{
+            codec::FrameCodec,
+            demuxer::{DemuxOutcome, Demuxer},
+            symphonia::SymphoniaDemuxer,
+            webcodecs::codec::WebCodecsCodec,
+        };
+
+        crate::webcodecs::probe::spawn_webcodecs_probe();
+
+        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/test.mp3"
+        ));
+        let cursor = std::io::Cursor::new(TEST_MP3_BYTES.to_vec());
+        let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
+        let mut hint = Hint::new();
+        hint.with_extension("mp3");
+        let format_reader = default::get_probe()
+            .probe(
+                &hint,
+                mss,
+                FormatOptions::default(),
+                MetadataOptions::default(),
+            )
+            .expect("BUG: MP3 probe should succeed");
+        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
+            .expect("BUG: MP3 demuxer should build");
+        let track = demuxer.track_info().clone();
+        let mut codec = WebCodecsCodec::open(&track, false).expect("BUG: WebCodecs open");
+        let pool = PcmPool::default();
+        let mut buf = pool.get();
+
+        for step in 0..64_u32 {
+            let (data, pts) = match demuxer.next_frame().expect("demux") {
+                DemuxOutcome::Frame(frame) => (frame.data.to_vec(), frame.pts),
+                other => panic!("unexpected demux outcome: {other:?}"),
+            };
+            let frames = codec
+                .decode_frame(&data, pts, &[], &mut buf)
+                .expect("decode_frame");
+            tracing::warn!(step, frames, bytes = data.len(), "mp3 e2e probe step");
+            if frames > 0 {
+                return;
+            }
+            kithara_platform::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("no PCM from WebCodecs for 64 real mp3 frames");
+    }
+
+    #[kithara::test(wasm, timeout(Duration::from_secs(30)))]
+    async fn host_flushes_empty_configured_decoder() {
+        let (cmd, out) = open_host();
+        cmd.send(HostCmd::Configure {
+            decoder_id: 1,
+            codec_string: "mp3".to_owned(),
+            description: None,
+            sample_rate: 44_100,
+            channels: 2,
+            generation: 0,
+        })
+        .expect("BUG: host cmd channel closed at spawn");
+        cmd.send(HostCmd::Flush {
+            decoder_id: 1,
+            generation: 0,
+        })
+        .expect("BUG: host cmd channel closed after configure");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(output) = out.try_recv() {
+                assert!(
+                    matches!(output, HostOut::Flushed { generation: 0 }),
+                    "expected HostOut::Flushed, got {output:?}"
+                );
+                return;
+            }
+            assert!(
+                Instant::now() <= deadline,
+                "flush promise never resolved on an empty configured decoder"
+            );
+            kithara_platform::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    #[kithara::test(wasm, timeout(Duration::from_secs(30)))]
+    async fn host_replies_error_to_garbage_configure() {
+        let (cmd, out) = open_host();
+        cmd.send(HostCmd::Configure {
+            decoder_id: 1,
+            codec_string: "garbage/codec".to_owned(),
+            description: None,
+            sample_rate: 44_100,
+            channels: 2,
+            generation: 0,
+        })
+        .expect("BUG: host cmd channel closed at spawn");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(output) = out.try_recv() {
+                assert!(
+                    matches!(output, HostOut::Error { .. }),
+                    "expected HostOut::Error, got {output:?}"
+                );
+                return;
+            }
+            assert!(
+                Instant::now() <= deadline,
+                "host task never replied to invalid configure"
+            );
+            kithara_platform::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }

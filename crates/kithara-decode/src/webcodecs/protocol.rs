@@ -1,6 +1,10 @@
-#[derive(Debug)]
 pub(crate) enum HostCmd {
+    Open {
+        id: u64,
+        reply_tx: kithara_platform::sync::mpsc::Sender<HostOut>,
+    },
     Configure {
+        decoder_id: u64,
         codec_string: String,
         description: Option<Vec<u8>>,
         sample_rate: u32,
@@ -8,18 +12,23 @@ pub(crate) enum HostCmd {
         generation: u64,
     },
     Decode {
+        decoder_id: u64,
         data: Vec<u8>,
         pts_us: u64,
         key: bool,
         generation: u64,
     },
     Reset {
+        decoder_id: u64,
         generation: u64,
     },
     Flush {
+        decoder_id: u64,
         generation: u64,
     },
-    Shutdown,
+    Close {
+        id: u64,
+    },
 }
 
 #[derive(Debug)]

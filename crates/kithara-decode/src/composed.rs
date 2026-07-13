@@ -2,7 +2,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::{AudioCodec, BoxedEventSink, ReaderChunkSignal, ReaderSeekSignal};
+use kithara_stream::{
+    AudioCodec, BoxedEventSink, NotReadyCause, PendingReason, ReaderChunkSignal, ReaderSeekSignal,
+};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -13,6 +15,8 @@ use crate::{
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
+
+const ZERO_FRAME_BUDGET: u32 = 32;
 
 /// Generic decoder built by composition: a [`Demuxer`] feeds raw frames
 /// into a [`FrameCodec`] which produces PCM. One implementation, one
@@ -49,6 +53,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     /// chunk recomputes `floor(pts * sample_rate)` from a `Duration`
     /// nanosecond value.
     frame_offset: u64,
+    zero_frame_count: u32,
 }
 
 /// Runtime wiring for a [`ComposedDecoder`], separated from the
@@ -86,6 +91,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             frame_offset: 0,
             pending_seek_target: None,
             resync_frame_offset_to_pts: true,
+            zero_frame_count: 0,
         }
     }
 
@@ -178,10 +184,22 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             let mut frames =
                 self.codec
                     .decode_frame(frame.data, frame_pts, frame.packet_desc, &mut buf)?;
+            let zero_frame_budget_reached = if frames == 0 {
+                self.zero_frame_count = self.zero_frame_count.saturating_add(1);
+                self.zero_frame_count >= ZERO_FRAME_BUDGET
+            } else {
+                self.zero_frame_count = 0;
+                false
+            };
             let mut chunk_pts = frame_pts;
             if let Some(target) = self.pending_seek_target {
                 if frame_end <= target {
                     drop(buf);
+                    if zero_frame_budget_reached {
+                        return Ok(DecoderChunkOutcome::Pending(PendingReason::NotReady(
+                            NotReadyCause::SourcePending,
+                        )));
+                    }
                     continue;
                 }
                 // WHY: frame straddles target — trim leading samples (CONTEXT.md "Seek pre-roll and trim").
@@ -216,6 +234,11 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 self.pending_seek_target = None;
             }
             if frames == 0 {
+                if zero_frame_budget_reached {
+                    return Ok(DecoderChunkOutcome::Pending(PendingReason::NotReady(
+                        NotReadyCause::SourcePending,
+                    )));
+                }
                 continue;
             }
             let chunk = self.build_chunk(buf, frames, chunk_pts, source_bytes);
@@ -250,6 +273,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 preroll,
             } => {
                 self.codec.flush()?;
+                self.zero_frame_count = 0;
                 self.pending_seek_target = (landed_at < pos).then_some(pos);
                 self.frame_offset = frame_offset_for(landed_at, self.spec.sample_rate.get());
                 self.resync_frame_offset_to_pts = true;
@@ -262,6 +286,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             }
             DemuxSeekOutcome::PastEof { duration } => {
                 self.codec.flush()?;
+                self.zero_frame_count = 0;
                 Ok(DecoderSeekOutcome::PastEof { duration })
             }
         }
@@ -1499,6 +1524,31 @@ mod hook_tests {
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.next_chunk().unwrap();
         assert_eq!(log.lock().unwrap().chunks, vec![expected_signal]);
+    }
+
+    #[kithara::test]
+    fn zero_frame_codec_yields_pending_before_demux_eof() {
+        let outcomes = (0..=ZERO_FRAME_BUDGET)
+            .map(|index| StubOutcome::Frame {
+                data: vec![0; 4],
+                pts: Duration::from_millis(u64::from(index)),
+                duration: Duration::from_millis(1),
+            })
+            .collect();
+        let demuxer = StubDemuxer::with_outcomes(outcomes, Vec::new());
+        let codec = ConstFrameCodec::new(
+            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
+            0,
+        );
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+
+        let outcome = decoder.next_chunk().expect("zero-frame decode");
+
+        assert!(matches!(
+            outcome,
+            DecoderChunkOutcome::Pending(PendingReason::NotReady(NotReadyCause::SourcePending))
+        ));
+        assert_eq!(decoder.demuxer.next.len(), 1);
     }
 
     #[kithara::test]

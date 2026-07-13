@@ -211,22 +211,29 @@ contract, not a tunable, so it stays named and local to the Apple codec owner.
 
 ## WebCodecs host worker
 
-WebCodecs capability is an immutable init-time snapshot. The browser main
-thread probes the five compile-time codec configurations once through
-`AudioDecoder.isConfigSupported()` and publishes the completed table through a
-`OnceLock`. Until publication, `WebCodecsCodec::supports` returns `false`, so
-the synchronous factory uses the correct Symphonia path. Tracks are never
-re-probed and the snapshot is not mutable shared state.
+WebCodecs runtime initialization is main-thread owned. The doc-hidden FFI
+bootstrap entry creates one host worker and probes the five compile-time codec
+configurations through `AudioDecoder.isConfigSupported()`. The immutable host
+sender and completed support table are published through separate `OnceLock`s.
+Until the support snapshot is published, `WebCodecsCodec::supports` returns
+`false`, so the synchronous factory uses the correct Symphonia path. Opening a
+WebCodecs codec before runtime initialization is a typed contract error.
 
-The browser `AudioDecoder` is owned only by its dedicated host worker. The
-decode thread holds the command sender and output receiver, so JavaScript values
-never cross the Rust thread boundary. Every command and output belongs to a
-generation; reset advances the current generation, resets the decoder, and the
-host discards work from older generations before it can reach consumers.
+A worker spawned by a blocked parent worker does not execute: this holds for a
+parent blocked by spinning and by `Atomics.wait`. The decode scheduler worker is
+such a parked parent, so neither the codec nor the decode path may spawn the
+WebCodecs host. The host must be created by the main-thread bootstrap, whose
+event loop remains live. Its command loop uses `try_recv` plus a local timer;
+the synchronous per-decoder reply receiver uses the Atomics-backed
+`recv_timeout` path and does not require the sender's event loop.
 
-WebCodecs output callbacks require a live worker event loop. The worker entry
-keeps the worker alive, spawns the async command loop, and then returns so the
-browser can continue pumping decoder callbacks.
+The singleton host owns a map of decoder IDs to `AudioDecoder`, reply channel,
+pending input queue, and generation state. `Open` registers a codec and `Close`
+closes and removes it. JavaScript values never cross the Rust thread boundary.
+Every codec command and output belongs to that codec's generation; reset
+advances the generation, resets the decoder, and stale callbacks are discarded.
+
+Run this crate's local browser verification lane with `CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 cargo +nightly test --target wasm32-unknown-unknown -p kithara-decode --no-default-features --features symphonia,webcodecs,client-reqwest,tls-rustls --test webcodecs_browser`. The lane uses `wasm-bindgen-test-runner` in headless Chrome and requires a working ChromeDriver; it is not part of CI.
 
 | `AudioCodec` | WebCodecs codec string |
 | --- | --- |
@@ -240,6 +247,8 @@ AAC `description` is the raw `AudioSpecificConfig` from `TrackInfo::extra_data`,
 not an `esds` box or cookie. MP3 has no description. FLAC description is the
 `fLaC` marker followed by a final STREAMINFO metadata-block header and the
 34-byte STREAMINFO payload carried by `TrackInfo`.
+FLAC capability probing requires a synthetic STREAMINFO description; HE-AAC
+description probing is untested because no HE-AAC fixtures exist.
 
 The frame codec owns the current generation. A seek advances it, sends `Reset`,
 discards queued output, then sends `Configure` again because WebCodecs `reset()`
@@ -254,6 +263,13 @@ error rather than synthetic EOF. Seek clears EOF-drain state, and stale output
 or flush completion from older generations is discarded. WebCodecs AAC priming
 and algorithmic-delay characterization remain deferred at the `FrameCodec`
 defaults.
+
+A queue-based frame codec may absorb encoded input without producing PCM in the
+same call. `ComposedDecoder` bounds consecutive zero-frame codec calls and
+returns retry-later `Pending` before it can consume the demuxer to EOF. The
+audio pipeline re-polls, allowing the sender event loop to run; any positive PCM
+output and every seek reset the zero-frame budget. EOF drain remains owned by
+`needs_eof_drain` and the explicit `Flush`/`Flushed` protocol.
 
 ## Module layout
 

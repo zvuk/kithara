@@ -1,14 +1,13 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use kithara_bufpool::PcmBuf;
 use kithara_platform::{
-    sync::mpsc::{RecvTimeoutError, TryRecvError},
+    sync::mpsc::{self, RecvTimeoutError, TryRecvError},
     time::{Duration, Instant},
 };
 use kithara_stream::AudioCodec;
 
-use super::{
-    host::{HostHandle, spawn_host},
-    protocol::{HostCmd, HostOut},
-};
+use super::protocol::{HostCmd, HostOut};
 use crate::{
     codec::FrameCodec,
     demuxer::TrackInfo,
@@ -17,6 +16,8 @@ use crate::{
 };
 
 struct Consts;
+
+static NEXT_DECODER_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Consts {
     const DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
@@ -30,6 +31,8 @@ enum WebCodecsError {
     Backend { detail: String },
     #[error("WebCodecs host {channel} channel disconnected")]
     ChannelDisconnected { channel: &'static str },
+    #[error("WebCodecs runtime was not initialized on the browser main thread")]
+    RuntimeNotInitialized,
     #[error("WebCodecs flush timed out for generation {generation}")]
     FlushTimeout { generation: u64 },
     #[error(
@@ -49,8 +52,19 @@ struct CodecConfig {
     channels: u16,
 }
 
+struct PcmOut<'a> {
+    interleaved: &'a [f32],
+    frames: u32,
+    sample_rate: u32,
+    channels: u16,
+    pts_us: u64,
+    generation: u64,
+}
+
 pub(crate) struct WebCodecsCodec {
-    host: HostHandle,
+    decoder_id: u64,
+    cmd: mpsc::Sender<HostCmd>,
+    out: mpsc::Receiver<HostOut>,
     generation: u64,
     spec: PcmSpec,
     track_info: DecoderTrackInfo,
@@ -67,15 +81,19 @@ impl WebCodecsCodec {
             track.sample_rate,
             "webcodecs.track.sample_rate",
         )?;
-        let host = spawn_host();
-        send_configure(&host, &config, 0)?;
-        tracing::debug!(
-            codec = config.codec_string,
-            generation = 0,
-            "configured WebCodecs codec"
-        );
-        Ok(Self {
-            host,
+        let cmd = super::probe::host_sender()
+            .ok_or_else(|| DecodeError::backend(WebCodecsError::RuntimeNotInitialized))?;
+        let decoder_id = NEXT_DECODER_ID.fetch_add(1, Ordering::Relaxed);
+        let (reply_tx, out) = mpsc::channel();
+        cmd.send(HostCmd::Open {
+            id: decoder_id,
+            reply_tx,
+        })
+        .map_err(|_| channel_disconnected("command"))?;
+        let codec = Self {
+            decoder_id,
+            cmd,
+            out,
             generation: 0,
             spec,
             track_info: DecoderTrackInfo {
@@ -85,7 +103,15 @@ impl WebCodecsCodec {
             config,
             eof_draining: false,
             eof_flushed: false,
-        })
+        };
+        codec.send_configure()?;
+        tracing::debug!(
+            decoder_id,
+            codec = codec.config.codec_string,
+            generation = 0,
+            "configured WebCodecs codec"
+        );
+        Ok(codec)
     }
 
     #[must_use]
@@ -95,7 +121,6 @@ impl WebCodecsCodec {
 
     fn poll_output(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
         let first = match self
-            .host
             .out
             .recv_timeout(Instant::now() + Consts::OUTPUT_TIMEOUT)
         {
@@ -114,7 +139,7 @@ impl WebCodecsCodec {
         loop {
             let current = match output.take() {
                 Some(current) => current,
-                None => match self.host.out.try_recv() {
+                None => match self.out.try_recv() {
                     Ok(current) => current,
                     Err(TryRecvError::Empty) => {
                         out.clear();
@@ -136,15 +161,15 @@ impl WebCodecsCodec {
                     pts_us,
                     generation,
                 } if generation == self.generation => {
-                    return Self::write_pcm(
-                        out,
-                        &interleaved,
+                    let pcm = PcmOut {
+                        interleaved: &interleaved,
                         frames,
                         sample_rate,
                         channels,
                         pts_us,
                         generation,
-                    );
+                    };
+                    return self.write_pcm(out, &pcm);
                 }
                 HostOut::Configured {
                     sample_rate,
@@ -182,11 +207,12 @@ impl WebCodecsCodec {
     fn drain_output(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
         let deadline = Instant::now() + Consts::DRAIN_TIMEOUT;
         loop {
-            let output = match self.host.out.recv_timeout(deadline) {
+            let output = match self.out.recv_timeout(deadline) {
                 Ok(output) => output,
                 Err(RecvTimeoutError::Timeout) => {
                     tracing::warn!(
                         codec = self.config.codec_string,
+                        decoder_id = self.decoder_id,
                         generation = self.generation,
                         "timed out draining WebCodecs flush"
                     );
@@ -209,15 +235,15 @@ impl WebCodecsCodec {
                     pts_us,
                     generation,
                 } if generation == self.generation => {
-                    return Self::write_pcm(
-                        out,
-                        &interleaved,
+                    let pcm = PcmOut {
+                        interleaved: &interleaved,
                         frames,
                         sample_rate,
                         channels,
                         pts_us,
                         generation,
-                    );
+                    };
+                    return self.write_pcm(out, &pcm);
                 }
                 HostOut::Flushed { generation } if generation == self.generation => {
                     self.eof_flushed = true;
@@ -249,36 +275,29 @@ impl WebCodecsCodec {
         }
     }
 
-    fn write_pcm(
-        out: &mut PcmBuf,
-        interleaved: &[f32],
-        frames: u32,
-        sample_rate: u32,
-        channels: u16,
-        pts_us: u64,
-        generation: u64,
-    ) -> DecodeResult<u32> {
-        let expected = usize::try_from(frames)
+    fn write_pcm(&self, out: &mut PcmBuf, pcm: &PcmOut<'_>) -> DecodeResult<u32> {
+        let expected = usize::try_from(pcm.frames)
             .ok()
-            .and_then(|frames| frames.checked_mul(usize::from(channels)));
-        if expected != Some(interleaved.len()) {
+            .and_then(|frames| frames.checked_mul(usize::from(pcm.channels)));
+        if expected != Some(pcm.interleaved.len()) {
             return Err(DecodeError::backend(WebCodecsError::OutputShape {
-                samples: interleaved.len(),
-                frames,
-                channels,
+                samples: pcm.interleaved.len(),
+                frames: pcm.frames,
+                channels: pcm.channels,
             }));
         }
-        out.ensure_len(interleaved.len())?;
-        out.copy_from_slice(interleaved);
+        out.ensure_len(pcm.interleaved.len())?;
+        out.copy_from_slice(pcm.interleaved);
         tracing::debug!(
-            generation,
-            pts_us,
-            sample_rate,
-            channels,
-            frames,
+            generation = pcm.generation,
+            decoder_id = self.decoder_id,
+            pts_us = pcm.pts_us,
+            sample_rate = pcm.sample_rate,
+            channels = pcm.channels,
+            frames = pcm.frames,
             "received WebCodecs PCM"
         );
-        Ok(frames)
+        Ok(pcm.frames)
     }
 }
 
@@ -297,6 +316,7 @@ impl FrameCodec for WebCodecsCodec {
             }
             if !self.eof_draining {
                 self.send(HostCmd::Flush {
+                    decoder_id: self.decoder_id,
                     generation: self.generation,
                 })?;
                 self.eof_draining = true;
@@ -308,6 +328,7 @@ impl FrameCodec for WebCodecsCodec {
         self.eof_flushed = false;
         let pts_us = u64::try_from(pts.as_micros()).unwrap_or(u64::MAX);
         self.send(HostCmd::Decode {
+            decoder_id: self.decoder_id,
             data: frame_data.to_vec(),
             pts_us,
             key: true,
@@ -319,13 +340,15 @@ impl FrameCodec for WebCodecsCodec {
     fn flush(&mut self) -> DecodeResult<()> {
         self.generation = self.generation.wrapping_add(1);
         self.send(HostCmd::Reset {
+            decoder_id: self.decoder_id,
             generation: self.generation,
         })?;
-        while self.host.out.try_recv().is_ok() {}
+        while self.out.try_recv().is_ok() {}
         self.eof_draining = false;
         self.eof_flushed = false;
-        send_configure(&self.host, &self.config, self.generation)?;
+        self.send_configure()?;
         tracing::debug!(
+            decoder_id = self.decoder_id,
             codec = self.config.codec_string,
             generation = self.generation,
             "reset and reconfigured WebCodecs codec"
@@ -348,16 +371,28 @@ impl FrameCodec for WebCodecsCodec {
 
 impl Drop for WebCodecsCodec {
     fn drop(&mut self) {
-        let _ = self.host.cmd.send(HostCmd::Shutdown);
+        let _ = self.cmd.send(HostCmd::Close {
+            id: self.decoder_id,
+        });
     }
 }
 
 impl WebCodecsCodec {
     fn send(&self, command: HostCmd) -> DecodeResult<()> {
-        self.host
-            .cmd
+        self.cmd
             .send(command)
             .map_err(|_| channel_disconnected("command"))
+    }
+
+    fn send_configure(&self) -> DecodeResult<()> {
+        self.send(HostCmd::Configure {
+            decoder_id: self.decoder_id,
+            codec_string: self.config.codec_string.to_owned(),
+            description: self.config.description.clone(),
+            sample_rate: self.config.sample_rate,
+            channels: self.config.channels,
+            generation: self.generation,
+        })
     }
 }
 
@@ -401,18 +436,6 @@ fn flac_description(streaminfo: &[u8]) -> DecodeResult<Vec<u8>> {
     description.extend_from_slice(&[0x80, 0, 0, Consts::FLAC_STREAMINFO_LEN]);
     description.extend_from_slice(streaminfo);
     Ok(description)
-}
-
-fn send_configure(host: &HostHandle, config: &CodecConfig, generation: u64) -> DecodeResult<()> {
-    host.cmd
-        .send(HostCmd::Configure {
-            codec_string: config.codec_string.to_owned(),
-            description: config.description.clone(),
-            sample_rate: config.sample_rate,
-            channels: config.channels,
-            generation,
-        })
-        .map_err(|_| channel_disconnected("command"))
 }
 
 fn channel_disconnected(channel: &'static str) -> DecodeError {

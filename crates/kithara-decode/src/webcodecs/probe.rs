@@ -1,12 +1,21 @@
-use kithara_platform::sync::OnceLock;
+use js_sys::Uint8Array;
+use kithara_platform::sync::{OnceLock, mpsc};
 use kithara_stream::AudioCodec;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{AudioDecoder, AudioDecoderConfig, AudioDecoderSupport};
 
-use super::codec::codec_string;
+use super::{codec::codec_string, host::spawn_host, protocol::HostCmd};
 
-static SUPPORT: OnceLock<Support> = OnceLock::new();
+fn host_cmd() -> &'static OnceLock<mpsc::Sender<HostCmd>> {
+    static HOST_CMD: OnceLock<mpsc::Sender<HostCmd>> = OnceLock::new();
+    &HOST_CMD
+}
+
+fn support() -> &'static OnceLock<Support> {
+    static SUPPORT: OnceLock<Support> = OnceLock::new();
+    &SUPPORT
+}
 
 #[derive(Clone, Copy, Default)]
 struct Support {
@@ -18,6 +27,14 @@ struct Support {
 }
 
 impl Support {
+    /// Minimal 44.1 kHz, stereo, 16-bit FLAC STREAMINFO for capability probing.
+    const FLAC_PROBE_STREAMINFO: [u8; 34] = [
+        0x10, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        // sample rate (20b) | channels - 1 (3b) | bits per sample - 1 (5b) | samples (36b)
+        0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
     const CODECS: [AudioCodec; 5] = [
         AudioCodec::AacLc,
         AudioCodec::AacHe,
@@ -49,22 +66,33 @@ impl Support {
     }
 }
 
-/// Start the main-thread WebCodecs capability probe.
+/// Initialize the main-thread WebCodecs runtime and capability probe.
 #[doc(hidden)]
 pub fn spawn_webcodecs_probe() {
+    if host_cmd().get().is_some() {
+        tracing::debug!("WebCodecs host was already initialized");
+        return;
+    }
+    let _ = host_cmd().set(spawn_host());
     drop(kithara_platform::tokio::task::spawn(async {
-        let mut support = Support::default();
+        let mut snapshot = Support::default();
         for codec in Support::CODECS {
-            support.set(codec, probe(codec).await);
+            snapshot.set(codec, probe(codec).await);
         }
-        if SUPPORT.set(support).is_err() {
+        if support().set(snapshot).is_err() {
             tracing::debug!("WebCodecs capability snapshot was already published");
         }
     }));
 }
 
+pub(crate) fn host_sender() -> Option<mpsc::Sender<HostCmd>> {
+    host_cmd().get().cloned()
+}
+
 pub(crate) fn supported(codec: AudioCodec) -> bool {
-    SUPPORT.get().is_some_and(|support| support.supports(codec))
+    support()
+        .get()
+        .is_some_and(|support| support.supports(codec))
 }
 
 async fn probe(codec: AudioCodec) -> bool {
@@ -72,12 +100,17 @@ async fn probe(codec: AudioCodec) -> bool {
         return false;
     };
     let config = AudioDecoderConfig::new(codec_string, 2, 44_100);
+    if let Some(description) = probe_description(codec) {
+        config.set_description(&Uint8Array::from(description.as_slice()));
+    }
     let promise = AudioDecoder::is_config_supported(&config);
     let supported = match JsFuture::from(promise).await {
+        // The promise resolves to an AudioDecoderSupport DICTIONARY (a plain
+        // JS object with no prototype), so instanceof-based `dyn_into` always
+        // fails; cast unchecked and read the member.
         Ok(value) => value
-            .dyn_into::<AudioDecoderSupport>()
-            .ok()
-            .and_then(|support| support.get_supported())
+            .unchecked_into::<AudioDecoderSupport>()
+            .get_supported()
             .unwrap_or(false),
         Err(error) => {
             tracing::warn!(?codec, ?error, "WebCodecs capability probe failed");
@@ -86,4 +119,17 @@ async fn probe(codec: AudioCodec) -> bool {
     };
     tracing::debug!(?codec, supported, "probed WebCodecs capability");
     supported
+}
+
+fn probe_description(codec: AudioCodec) -> Option<Vec<u8>> {
+    match codec {
+        AudioCodec::Flac => {
+            let mut description = Vec::with_capacity(4 + 4 + Support::FLAC_PROBE_STREAMINFO.len());
+            description.extend_from_slice(b"fLaC");
+            description.extend_from_slice(&[0x80, 0, 0, 34]);
+            description.extend_from_slice(&Support::FLAC_PROBE_STREAMINFO);
+            Some(description)
+        }
+        _ => None,
+    }
 }
