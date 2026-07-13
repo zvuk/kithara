@@ -12,7 +12,7 @@ categories = ["multimedia::audio"]
 [features]
 default = ["stretch-signalsmith"]
 stretch-signalsmith = ["dep:bon", "dep:kithara-bufpool", "dep:signalsmith-stretch"]
-stretch-bungee = ["dep:bon", "dep:bungee-rs", "dep:kithara-bufpool"]
+stretch-bungee = ["dep:bon", "dep:bungee-rs", "dep:fast-interleave", "dep:kithara-bufpool"]
 
 [dependencies]
 bon = { workspace = true, optional = true }
@@ -25,6 +25,7 @@ kithara-bufpool = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 bungee-rs = { workspace = true, optional = true }
+fast-interleave = { workspace = true, optional = true }
 signalsmith-stretch = { workspace = true, optional = true }
 
 [lints]
