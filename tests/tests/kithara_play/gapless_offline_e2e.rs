@@ -10,6 +10,7 @@ use kithara::decode::DecoderBackend;
 use kithara::{
     assets::StoreOptions,
     audio::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
+    bufpool::PcmPool,
     decode::{
         DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
         PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
@@ -1030,21 +1031,23 @@ fn synthetic_interleaved_chunk(frames: Vec<f32>) -> PcmChunk {
         GAPLESS_CHANNELS,
         NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("test sample rate"),
     );
-    let mut chunk = PcmChunk::default();
-    chunk.meta = PcmMeta {
-        frames: u32::try_from(frames.len()).expect("fixture frame count fits u32"),
-        spec,
-        ..Default::default()
-    };
-    chunk
-        .samples
-        .reserve(frames.len() * usize::from(GAPLESS_CHANNELS));
+    let frame_count = frames.len();
+    let sample_count = frame_count * usize::from(GAPLESS_CHANNELS);
+    let mut samples = PcmPool::default().get();
+    samples.reserve(sample_count);
     for sample in frames {
         for _ in 0..GAPLESS_CHANNELS {
-            chunk.samples.push(sample);
+            samples.push(sample);
         }
     }
-    chunk
+    PcmChunk::new(
+        PcmMeta {
+            frames: u32::try_from(frame_count).expect("fixture frame count fits u32"),
+            spec,
+            ..Default::default()
+        },
+        samples,
+    )
 }
 
 fn left_frames_from_chunks(chunks: impl IntoIterator<Item = PcmChunk>) -> Vec<f32> {

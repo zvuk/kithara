@@ -1,6 +1,6 @@
 use std::{fmt, num::NonZeroU32};
 
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_bufpool::PcmBuf;
 use kithara_platform::{sync::Arc, time::Duration};
 
 use crate::gapless::{GaplessInfo, GaplessTailCompensation};
@@ -47,7 +47,7 @@ pub struct TrackMetadata {
 /// non-exhaustiveness, so the marker buys nothing.
 ///
 /// `Default` is intentionally absent — a zero sample rate is not a valid
-/// `PcmSpec`. Use `PcmMeta::default()` for EOF/failure sentinel chunks.
+/// `PcmSpec`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PcmSpec {
     pub sample_rate: NonZeroU32,
@@ -155,11 +155,7 @@ pub struct PcmMeta {
     pub source_bytes: u64,
 }
 
-/// Placeholder rate for `PcmMeta::default()` sentinel/marker chunks.
-///
-/// EOF, failure, and flush markers carry no audio; the rate is never consumed
-/// because these chunks are identified by `frames == 0` or `pcm.is_empty()`
-/// before any format-change comparison.
+/// Placeholder rate for partially constructed default metadata.
 const PLACEHOLDER_RATE: NonZeroU32 = match NonZeroU32::new(48_000) {
     Some(r) => r,
     None => unreachable!(),
@@ -185,7 +181,7 @@ impl Default for PcmMeta {
 /// PCM chunk containing interleaved audio samples with automatic pool recycling.
 ///
 /// The `samples` buffer is pool-backed via [`PcmBuf`]: when the chunk is dropped,
-/// the buffer returns to the global PCM pool for reuse instead of being deallocated.
+/// the buffer returns to its originating PCM pool for reuse instead of being deallocated.
 ///
 /// # Invariants
 /// - `samples.len() % channels == 0` (frame-aligned)
@@ -195,30 +191,6 @@ impl Default for PcmMeta {
 pub struct PcmChunk {
     pub samples: PcmBuf,
     pub meta: PcmMeta,
-}
-
-impl Default for PcmChunk {
-    fn default() -> Self {
-        Self {
-            samples: PcmPool::default().get(),
-            meta: PcmMeta::default(),
-        }
-    }
-}
-
-impl Clone for PcmChunk {
-    /// Clone creates a new pool-backed buffer with copied samples.
-    ///
-    /// Each clone gets its own [`PcmBuf`] from the global pool,
-    /// so both original and clone recycle independently on drop.
-    fn clone(&self) -> Self {
-        let mut new_samples = PcmPool::default().get();
-        new_samples.extend_from_slice(&self.samples);
-        Self {
-            samples: new_samples,
-            meta: self.meta,
-        }
-    }
 }
 
 impl PcmChunk {
@@ -254,6 +226,7 @@ impl AsRef<[f32]> for PcmChunk {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_bufpool::PcmPool;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -437,17 +410,6 @@ mod tests {
         let samples: &[f32] = &chunk.samples;
         assert_eq!(samples.len(), 4);
         assert_eq!(samples, &pcm[..]);
-    }
-
-    #[kithara::test]
-    fn test_pcm_chunk_clone() {
-        let spec = pcm_spec(2, 44100);
-        let pcm = vec![0.1, 0.2, 0.3, 0.4];
-        let chunk = test_chunk(spec, pcm);
-        let cloned = chunk.clone();
-
-        assert_eq!(cloned.spec(), chunk.spec());
-        assert_eq!(cloned.samples, chunk.samples);
     }
 
     #[kithara::test]
