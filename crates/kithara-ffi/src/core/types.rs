@@ -1,7 +1,7 @@
 use kithara_events::{
     AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass, DecodeErrorKind, DecoderBackend,
-    DecoderChangeCause, FrameDomain, PlaybackResamplerKind, ResamplerKind, TotalBytesSource,
-    TrackFailureKind, TrackId, TrackStatus as TS,
+    DecoderChangeCause, FrameDomain, KeyFailureStage, KeySource, PlaybackResamplerKind,
+    ResamplerKind, TotalBytesSource, TrackFailureKind, TrackId, TrackStatus as TS,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
@@ -638,6 +638,48 @@ impl From<TotalBytesSource> for FfiTotalBytesSource {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiKeyFailureStage {
+    Network,
+    BodyCollect,
+    Processor,
+    Missing,
+    Unknown,
+}
+
+impl From<KeyFailureStage> for FfiKeyFailureStage {
+    fn from(value: KeyFailureStage) -> Self {
+        match value {
+            KeyFailureStage::Network => Self::Network,
+            KeyFailureStage::BodyCollect => Self::BodyCollect,
+            KeyFailureStage::Processor => Self::Processor,
+            KeyFailureStage::Missing => Self::Missing,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiKeySource {
+    Network,
+    DiskCache,
+    MemCache,
+    Unknown,
+}
+
+impl From<KeySource> for FfiKeySource {
+    fn from(value: KeySource) -> Self {
+        match value {
+            KeySource::Network => Self::Network,
+            KeySource::DiskCache => Self::DiskCache,
+            KeySource::MemCache => Self::MemCache,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].
 #[derive(Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -846,6 +888,22 @@ pub enum FfiItemEvent {
     },
     FileCacheComplete {
         total_bytes: u64,
+    },
+    DrmKeyFetchFailed {
+        key_host: Option<String>,
+        stage: FfiKeyFailureStage,
+        detail: String,
+    },
+    DrmKeyAcquired {
+        key_host: Option<String>,
+        source: FfiKeySource,
+        bytes: u64,
+        latency_ms: Option<u64>,
+    },
+    DrmSegmentDecryptFailed {
+        variant: u32,
+        segment_index: u32,
+        detail: String,
     },
 }
 

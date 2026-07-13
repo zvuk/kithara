@@ -1,6 +1,7 @@
 use kithara::abr::AbrMode;
 use kithara_events::{
-    AbrEvent, AudioEvent, DecoderEvent, DownloaderEvent, Envelope, Event, FileEvent, HlsEvent,
+    AbrEvent, AudioEvent, DecoderEvent, DownloaderEvent, DrmEvent, Envelope, Event, FileEvent,
+    HlsEvent,
 };
 use kithara_platform::{
     CancelToken,
@@ -76,6 +77,12 @@ impl ItemEventBridge {
 
         if let Event::File(file_event) = event
             && let Some(event) = file_event_to_ffi(file_event)
+        {
+            observer.on_event(event);
+        }
+
+        if let Event::Drm(drm_event) = event
+            && let Some(event) = drm_event_to_ffi(drm_event)
         {
             observer.on_event(event);
         }
@@ -579,16 +586,55 @@ fn file_event_to_ffi(event: &FileEvent) -> Option<FfiItemEvent> {
     }
 }
 
+fn drm_event_to_ffi(event: &DrmEvent) -> Option<FfiItemEvent> {
+    match event {
+        DrmEvent::KeyFetchFailed {
+            key_host,
+            stage,
+            detail,
+        } => Some(FfiItemEvent::DrmKeyFetchFailed {
+            key_host: key_host.clone(),
+            stage: (*stage).into(),
+            detail: detail.clone(),
+        }),
+        DrmEvent::KeyAcquired {
+            key_host,
+            source,
+            bytes,
+            latency_ms,
+        } => Some(FfiItemEvent::DrmKeyAcquired {
+            key_host: key_host.clone(),
+            source: (*source).into(),
+            bytes: *bytes as u64,
+            latency_ms: *latency_ms,
+        }),
+        DrmEvent::SegmentDecryptFailed {
+            variant,
+            segment_index,
+            detail,
+        } => Some(FfiItemEvent::DrmSegmentDecryptFailed {
+            variant: *variant,
+            segment_index: *segment_index,
+            detail: detail.clone(),
+        }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
 
     use kithara_events::{
-        CancelReason, DownloaderEvent, Event, FileError, FileEvent, RequestId, TotalBytesSource,
+        CancelReason, DownloaderEvent, DrmEvent, Event, FileError, FileEvent, KeyFailureStage,
+        KeySource, RequestId, TotalBytesSource,
     };
 
-    use super::{ItemEventBridge, downloader_event_to_ffi, file_event_to_ffi};
-    use crate::types::{FfiCancelReason, FfiError, FfiItemEvent, FfiTotalBytesSource};
+    use super::{ItemEventBridge, downloader_event_to_ffi, drm_event_to_ffi, file_event_to_ffi};
+    use crate::types::{
+        FfiCancelReason, FfiError, FfiItemEvent, FfiKeyFailureStage, FfiKeySource,
+        FfiTotalBytesSource,
+    };
 
     fn request_id(value: u64) -> RequestId {
         match NonZeroU64::new(value) {
@@ -659,5 +705,61 @@ mod tests {
     #[kithara::test]
     fn file_end_of_stream_is_not_duplicated() {
         assert!(file_event_to_ffi(&FileEvent::EndOfStream).is_none());
+    }
+
+    #[kithara::test]
+    fn drm_key_acquired_maps_to_item_event() {
+        let event = DrmEvent::KeyAcquired {
+            key_host: Some("keys.example.com".into()),
+            source: KeySource::DiskCache,
+            bytes: 64,
+            latency_ms: Some(12),
+        };
+
+        assert!(matches!(
+            drm_event_to_ffi(&event),
+            Some(FfiItemEvent::DrmKeyAcquired {
+                key_host,
+                source: FfiKeySource::DiskCache,
+                bytes: 64,
+                latency_ms: Some(12),
+            }) if key_host.as_deref() == Some("keys.example.com")
+        ));
+    }
+
+    #[kithara::test]
+    fn drm_key_fetch_failed_maps_to_item_event() {
+        let event = DrmEvent::KeyFetchFailed {
+            key_host: Some("keys.example.com".into()),
+            stage: KeyFailureStage::Missing,
+            detail: "missing key".into(),
+        };
+
+        assert!(matches!(
+            drm_event_to_ffi(&event),
+            Some(FfiItemEvent::DrmKeyFetchFailed {
+                key_host,
+                stage: FfiKeyFailureStage::Missing,
+                detail,
+            }) if key_host.as_deref() == Some("keys.example.com") && detail == "missing key"
+        ));
+    }
+
+    #[kithara::test]
+    fn drm_segment_decrypt_failed_maps_to_item_event() {
+        let event = DrmEvent::SegmentDecryptFailed {
+            variant: 3,
+            segment_index: 17,
+            detail: "decrypt failed".into(),
+        };
+
+        assert!(matches!(
+            drm_event_to_ffi(&event),
+            Some(FfiItemEvent::DrmSegmentDecryptFailed {
+                variant: 3,
+                segment_index: 17,
+                detail,
+            }) if detail == "decrypt failed"
+        ));
     }
 }
