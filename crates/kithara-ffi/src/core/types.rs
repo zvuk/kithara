@@ -1,8 +1,8 @@
 use kithara_events::{
     AdvanceReason, AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass, DecodeErrorKind,
-    DecoderBackend, DecoderChangeCause, FrameDomain, KeyFailureStage, KeySource,
-    PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, TotalBytesSource, TrackFailureKind,
-    TrackId, TrackStatus as TS,
+    DecoderBackend, DecoderChangeCause, EvictReason, FrameDomain, KeyFailureStage, KeySource,
+    PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, RouteChangeReason, StretchBackendKind,
+    TotalBytesSource, TrackFailureKind, TrackId, TrackStatus as TS,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
@@ -315,6 +315,72 @@ impl From<QueueRepeatMode> for FfiRepeatMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiRouteChangeReason {
+    Unknown,
+    NewDeviceAvailable,
+    OldDeviceUnavailable,
+    CategoryChange,
+    Override,
+    WakeFromSleep,
+    NoSuitableRouteForCategory,
+    RouteConfigurationChange,
+}
+
+impl From<RouteChangeReason> for FfiRouteChangeReason {
+    fn from(value: RouteChangeReason) -> Self {
+        match value {
+            RouteChangeReason::NewDeviceAvailable => Self::NewDeviceAvailable,
+            RouteChangeReason::OldDeviceUnavailable => Self::OldDeviceUnavailable,
+            RouteChangeReason::CategoryChange => Self::CategoryChange,
+            RouteChangeReason::Override => Self::Override,
+            RouteChangeReason::WakeFromSleep => Self::WakeFromSleep,
+            RouteChangeReason::NoSuitableRouteForCategory => Self::NoSuitableRouteForCategory,
+            RouteChangeReason::RouteConfigurationChange => Self::RouteConfigurationChange,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiStretchBackendKind {
+    Signalsmith,
+    Bungee,
+    Unknown,
+}
+
+impl From<StretchBackendKind> for FfiStretchBackendKind {
+    fn from(value: StretchBackendKind) -> Self {
+        match value {
+            StretchBackendKind::Signalsmith => Self::Signalsmith,
+            StretchBackendKind::Bungee => Self::Bungee,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiEvictReason {
+    QuotaBytes,
+    QuotaAssets,
+    Displaced,
+    Unknown,
+}
+
+impl From<EvictReason> for FfiEvictReason {
+    fn from(value: EvictReason) -> Self {
+        match value {
+            EvictReason::QuotaBytes => Self::QuotaBytes,
+            EvictReason::QuotaAssets => Self::QuotaAssets,
+            EvictReason::Displaced => Self::Displaced,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// FFI-friendly time range (seconds-based).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -378,6 +444,23 @@ pub enum FfiPlayerEvent {
     RepeatModeChanged { mode: FfiRepeatMode },
     NextTrackReady { item_id: TrackId, index: u64 },
     CurrentItemAdvanced { item_id: Option<TrackId>, reason: FfiAdvanceReason },
+    EngineStarted,
+    EngineStopped,
+    CrossfadeCompleted,
+    CrossfadeCancelled,
+    MasterVolumeChanged { volume: f32 },
+    AudioRouteChanged { reason: FfiRouteChangeReason },
+    DjBpmDetected {
+        slot: u64,
+        bpm: f64,
+        confidence: Option<f32>,
+        first_beat_offset_seconds: f64,
+    },
+    DjKeylockChanged { on: bool },
+    DjStretchBackendChanged { kind: FfiStretchBackendKind },
+    AssetCommitted { asset_root: String, rel_path: String, final_len: Option<u64> },
+    AssetFailed { asset_root: String, rel_path: String, reason: String },
+    AssetEvicted { asset_root: String, reason: FfiEvictReason },
 }
 
 /// Transition style for a track switch.

@@ -1,5 +1,8 @@
 use kithara::play::{PlayerEvent, TimeControlStatus};
-use kithara_events::{Envelope, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{
+    AssetEvent, DjEvent, EngineEvent, Envelope, Event, EventReceiver, QueueEvent, SessionEvent,
+    TrackId, TrackStatus,
+};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -14,8 +17,8 @@ use crate::{
     observer::{ItemObserver, PlayerObserver},
     registry::ItemRegistry,
     types::{
-        FfiAdvanceReason, FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiRepeatMode, FfiTimeRange,
-        FfiTrackStatus,
+        FfiAdvanceReason, FfiEvictReason, FfiItemEvent, FfiItemStatus, FfiPlayerEvent,
+        FfiRepeatMode, FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeRange, FfiTrackStatus,
     },
 };
 
@@ -38,22 +41,44 @@ impl EventBridge {
         last_current: &Mutex<Option<TrackId>>,
         event: &Event,
     ) {
-        match event {
-            Event::Player(pe) => {
-                Self::route_player_event_to_item(items, queue, last_current, pe);
-                let Some(ffi_event) = Self::player_event_to_ffi(pe) else {
-                    return;
-                };
-                observer.on_event(ffi_event);
+        if let Event::Player(pe) = event {
+            Self::route_player_event_to_item(items, queue, last_current, pe);
+            let Some(ffi_event) = Self::player_event_to_ffi(pe) else {
+                return;
+            };
+            observer.on_event(ffi_event);
+            return;
+        }
+        if let Event::Queue(qe) = event {
+            if let QueueEvent::CurrentTrackChanged { id } = qe {
+                let mut prev = last_current.lock();
+                *prev = *id;
             }
-            Event::Queue(qe) => {
-                if let QueueEvent::CurrentTrackChanged { id } = qe {
-                    let mut prev = last_current.lock();
-                    *prev = *id;
-                }
-                Self::dispatch_queue_event(observer, items, qe);
-            }
-            _ => {}
+            Self::dispatch_queue_event(observer, items, qe);
+            return;
+        }
+        if let Event::Engine(engine_event) = event
+            && let Some(ffi_event) = engine_event_to_ffi(engine_event)
+        {
+            observer.on_event(ffi_event);
+            return;
+        }
+        if let Event::Session(session_event) = event
+            && let Some(ffi_event) = session_event_to_ffi(session_event)
+        {
+            observer.on_event(ffi_event);
+            return;
+        }
+        if let Event::Dj(dj_event) = event
+            && let Some(ffi_event) = dj_event_to_ffi(dj_event)
+        {
+            observer.on_event(ffi_event);
+            return;
+        }
+        if let Event::Asset(asset_event) = event
+            && let Some(ffi_event) = asset_event_to_ffi(asset_event)
+        {
+            observer.on_event(ffi_event);
         }
     }
 
@@ -390,10 +415,82 @@ impl Drop for EventBridge {
     }
 }
 
+fn engine_event_to_ffi(event: &EngineEvent) -> Option<FfiPlayerEvent> {
+    Some(match event {
+        EngineEvent::Started => FfiPlayerEvent::EngineStarted,
+        EngineEvent::Stopped => FfiPlayerEvent::EngineStopped,
+        EngineEvent::CrossfadeCompleted { .. } => FfiPlayerEvent::CrossfadeCompleted,
+        EngineEvent::CrossfadeCancelled => FfiPlayerEvent::CrossfadeCancelled,
+        EngineEvent::MasterVolumeChanged { volume } => {
+            FfiPlayerEvent::MasterVolumeChanged { volume: *volume }
+        }
+        _ => return None,
+    })
+}
+
+fn session_event_to_ffi(event: &SessionEvent) -> Option<FfiPlayerEvent> {
+    Some(match event {
+        SessionEvent::RouteChanged { reason, .. } => FfiPlayerEvent::AudioRouteChanged {
+            reason: FfiRouteChangeReason::from(*reason),
+        },
+        _ => return None,
+    })
+}
+
+fn dj_event_to_ffi(event: &DjEvent) -> Option<FfiPlayerEvent> {
+    Some(match event {
+        DjEvent::BpmDetected { slot, info } => FfiPlayerEvent::DjBpmDetected {
+            slot: slot.value(),
+            bpm: info.bpm,
+            confidence: info.confidence,
+            first_beat_offset_seconds: crate::types::duration_to_seconds(info.first_beat_offset),
+        },
+        DjEvent::KeylockChanged { on } => FfiPlayerEvent::DjKeylockChanged { on: *on },
+        DjEvent::StretchBackendChanged { kind } => FfiPlayerEvent::DjStretchBackendChanged {
+            kind: FfiStretchBackendKind::from(*kind),
+        },
+        _ => return None,
+    })
+}
+
+fn asset_event_to_ffi(event: &AssetEvent) -> Option<FfiPlayerEvent> {
+    Some(match event {
+        AssetEvent::Committed {
+            asset_root,
+            rel_path,
+            final_len,
+        } => FfiPlayerEvent::AssetCommitted {
+            asset_root: asset_root.clone(),
+            rel_path: rel_path.clone(),
+            final_len: *final_len,
+        },
+        AssetEvent::Failed {
+            asset_root,
+            rel_path,
+            reason,
+        } => FfiPlayerEvent::AssetFailed {
+            asset_root: asset_root.clone(),
+            rel_path: rel_path.clone(),
+            reason: reason.clone(),
+        },
+        AssetEvent::Evicted { asset_root, reason } => FfiPlayerEvent::AssetEvicted {
+            asset_root: asset_root.clone(),
+            reason: FfiEvictReason::from(*reason),
+        },
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use kithara_events::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackId};
-    use kithara_platform::sync::{Arc, Mutex};
+    use kithara_events::{
+        AdvanceReason, AssetEvent, BpmInfo, DjEvent, EngineEvent, EvictReason, QueueEvent,
+        QueueRepeatMode, RouteChangeReason, SessionEvent, SlotId, StretchBackendKind, TrackId,
+    };
+    use kithara_platform::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
     use super::*;
     use crate::{item::AudioPlayerItem, types::FfiItemConfig};
@@ -530,6 +627,123 @@ mod tests {
                 reason,
                 auto_skipped: true,
             }] if *id == item_id && reason == "network timeout"
+        ));
+    }
+
+    #[kithara::test]
+    fn engine_event_to_ffi_maps_master_volume_changed() {
+        assert!(matches!(
+            engine_event_to_ffi(&EngineEvent::MasterVolumeChanged { volume: 0.5 }),
+            Some(FfiPlayerEvent::MasterVolumeChanged { volume }) if volume == 0.5
+        ));
+    }
+
+    #[kithara::test]
+    fn engine_event_to_ffi_skips_internal_and_duplicate_crossfade_events() {
+        assert!(matches!(
+            engine_event_to_ffi(&EngineEvent::CrossfadeStarted {
+                from: SlotId::new(1),
+                to: SlotId::new(2),
+                duration: Duration::from_secs(1),
+            }),
+            None
+        ));
+        assert!(matches!(
+            engine_event_to_ffi(&EngineEvent::SlotAllocated {
+                slot: SlotId::new(3),
+            }),
+            None
+        ));
+    }
+
+    #[kithara::test]
+    fn route_change_reason_from_maps_known_value() {
+        assert_eq!(
+            FfiRouteChangeReason::from(RouteChangeReason::CategoryChange),
+            FfiRouteChangeReason::CategoryChange
+        );
+    }
+
+    #[kithara::test]
+    fn session_event_to_ffi_maps_route_changed_reason() {
+        assert!(matches!(
+            session_event_to_ffi(&SessionEvent::RouteChanged {
+                reason: RouteChangeReason::CategoryChange,
+                previous_route: Default::default(),
+            }),
+            Some(FfiPlayerEvent::AudioRouteChanged {
+                reason: FfiRouteChangeReason::CategoryChange,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn stretch_backend_kind_from_maps_bungee() {
+        assert_eq!(
+            FfiStretchBackendKind::from(StretchBackendKind::Bungee),
+            FfiStretchBackendKind::Bungee
+        );
+    }
+
+    #[kithara::test]
+    fn dj_event_to_ffi_skips_beat_tick() {
+        assert!(matches!(
+            dj_event_to_ffi(&DjEvent::BeatTick {
+                slot: SlotId::new(9),
+                beat_number: 4,
+                timestamp: Default::default(),
+            }),
+            None
+        ));
+    }
+
+    #[kithara::test]
+    fn dj_event_to_ffi_maps_bpm_detected_fields() {
+        assert!(matches!(
+            dj_event_to_ffi(&DjEvent::BpmDetected {
+                slot: SlotId::new(7),
+                info: BpmInfo::new(128.5, Some(0.8), Duration::from_millis(250)),
+            }),
+            Some(FfiPlayerEvent::DjBpmDetected {
+                slot: 7,
+                bpm: 128.5,
+                confidence: Some(0.8),
+                first_beat_offset_seconds: 0.25,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn dj_event_to_ffi_maps_stretch_backend_changed() {
+        assert!(matches!(
+            dj_event_to_ffi(&DjEvent::StretchBackendChanged {
+                kind: StretchBackendKind::Bungee,
+            }),
+            Some(FfiPlayerEvent::DjStretchBackendChanged {
+                kind: FfiStretchBackendKind::Bungee,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn evict_reason_from_maps_quota_bytes() {
+        assert_eq!(
+            FfiEvictReason::from(EvictReason::QuotaBytes),
+            FfiEvictReason::QuotaBytes
+        );
+    }
+
+    #[kithara::test]
+    fn asset_event_to_ffi_maps_evicted_reason() {
+        assert!(matches!(
+            asset_event_to_ffi(&AssetEvent::Evicted {
+                asset_root: "/tmp/cache".to_string(),
+                reason: EvictReason::QuotaBytes,
+            }),
+            Some(FfiPlayerEvent::AssetEvicted {
+                asset_root,
+                reason: FfiEvictReason::QuotaBytes,
+            }) if asset_root == "/tmp/cache"
         ));
     }
 }
