@@ -96,6 +96,7 @@ crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fast-interleave = { workspace = true }
+fieldwork = { workspace = true }
 hotpath = { workspace = true, optional = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }

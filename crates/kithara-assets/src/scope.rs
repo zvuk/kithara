@@ -32,6 +32,12 @@ impl AssetScope {
         &self.asset_root
     }
 
+    /// The underlying shared store, where per-resource operations live.
+    #[must_use]
+    pub fn store(&self) -> &AssetStore {
+        &self.store
+    }
+
     /// Delete this entire asset (all resources under its `asset_root`).
     ///
     /// # Errors
@@ -53,11 +59,6 @@ impl AssetScope {
     }
 
     /// The underlying shared store, where per-resource operations live.
-    #[must_use]
-    pub fn store(&self) -> &AssetStore {
-        &self.store
-    }
-
     pub(crate) fn with_layout(
         store: AssetStore,
         asset_root: Arc<str>,

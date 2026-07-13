@@ -56,7 +56,7 @@ pub(crate) struct SymphoniaDemuxer {
     /// the matching [`SymphoniaCodec::open_native`] path can build a
     /// decoder for codecs whose generic [`AudioCodec`] enum representation
     /// loses information (PCM bit-depth/endianness, ADPCM dialect).
-    native_params: AudioCodecParameters,
+    pub(crate) native_params: AudioCodecParameters,
     format_reader: Box<dyn FormatReader>,
     byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     /// Live byte cursor of the underlying media source. Populated by
@@ -158,19 +158,6 @@ impl SymphoniaDemuxer {
             resume_ts: 0,
             needs_resume: false,
         })
-    }
-
-    /// Native Symphonia codec parameters for the selected track.
-    ///
-    /// Exposed so the [`SymphoniaCodec`] wiring path can build a registry
-    /// decoder for PCM/ADPCM tracks where the generic `AudioCodec` enum
-    /// in [`TrackInfo`] does not carry enough information (bit-depth,
-    /// endianness, dialect).
-    ///
-    /// [`SymphoniaCodec`]: crate::codec::SymphoniaCodec
-    #[must_use]
-    pub(crate) fn native_params(&self) -> &AudioCodecParameters {
-        &self.native_params
     }
 
     /// Build a demuxer for a file-like source: probe the container if

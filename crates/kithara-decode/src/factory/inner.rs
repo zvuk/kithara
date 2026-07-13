@@ -705,7 +705,7 @@ where
     let codec_impl = if SymphoniaCodec::supports(codec) {
         SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?
     } else {
-        SymphoniaCodec::open_native(demuxer.native_params())?
+        SymphoniaCodec::open_native(&demuxer.native_params)?
     };
     let pool = config
         .pcm_pool
