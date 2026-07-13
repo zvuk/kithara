@@ -1,6 +1,8 @@
 #[cfg(feature = "lint")]
 pub mod arch;
 pub mod ast_grep;
+#[cfg(feature = "lint")]
+pub mod audit;
 pub mod common;
 pub mod ctx;
 pub mod format;
@@ -17,6 +19,7 @@ pub mod perf_compare;
 pub mod quality;
 pub mod scope;
 pub mod similarity;
+mod stages;
 #[cfg(feature = "lint")]
 pub mod style;
 pub mod test;
@@ -31,6 +34,9 @@ pub use ctx::Ctx;
 pub enum CoreCommand {
     /// Scaffold the workspace tooling config and lint baselines.
     Init(init::InitArgs),
+    #[cfg(feature = "lint")]
+    /// Run the scoped formatter, lint, typo, similarity, and orphan audit.
+    Audit(audit::AuditArgs),
     /// Format Rust, manifests, TOML, JSON, and Markdown through project tooling.
     Format(format::FormatArgs),
     /// Thin wrapper around `ast-grep scan` that bakes in the policy filter list.
@@ -74,6 +80,8 @@ pub enum CoreCommand {
 pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
     match cmd {
         CoreCommand::Init(args) => init::run(args, ctx),
+        #[cfg(feature = "lint")]
+        CoreCommand::Audit(args) => audit::run(args, ctx),
         CoreCommand::Format(args) => format::run(args, ctx),
         CoreCommand::AstGrep(args) => ast_grep::run(args, ctx),
         CoreCommand::Typos(args) => typos::run(args, ctx),

@@ -21,8 +21,8 @@ These are suitable for local pre-commit feedback.
 - `just lint-full`: fast lint plus xtask self-tests and quality scans.
 - `just health`: broad local health report; heavy or environment-sensitive
   stages may report SKIP.
-- Health owns the canonical argv for its xtask-backed stages and validates each
-  command shape in the `kithara-devtools` unit tests.
+- Audit and health consume one canonical argv source for their shared stages and
+  validate each xtask command shape in the `kithara-devtools` unit tests.
 
 ## Dependency And Surface Tools
 
