@@ -1,7 +1,8 @@
 use kithara_events::{
-    AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass, DecodeErrorKind, DecoderBackend,
-    DecoderChangeCause, FrameDomain, KeyFailureStage, KeySource, PlaybackResamplerKind,
-    ResamplerKind, TotalBytesSource, TrackFailureKind, TrackId, TrackStatus as TS,
+    AdvanceReason, AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass, DecodeErrorKind,
+    DecoderBackend, DecoderChangeCause, FrameDomain, KeyFailureStage, KeySource,
+    PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, TotalBytesSource, TrackFailureKind,
+    TrackId, TrackStatus as TS,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
@@ -262,6 +263,58 @@ impl From<kithara_events::TrackStatus> for FfiTrackStatus {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiAdvanceReason {
+    NaturalEof,
+    CrossfadePreArm,
+    UserSelect,
+    UserNext,
+    UserPrev,
+    TrackFailed,
+    RemovedCurrent,
+    Repeat,
+    Cancelled,
+    Unknown,
+}
+
+impl From<AdvanceReason> for FfiAdvanceReason {
+    fn from(value: AdvanceReason) -> Self {
+        match value {
+            AdvanceReason::NaturalEof => Self::NaturalEof,
+            AdvanceReason::CrossfadePreArm => Self::CrossfadePreArm,
+            AdvanceReason::UserSelect => Self::UserSelect,
+            AdvanceReason::UserNext => Self::UserNext,
+            AdvanceReason::UserPrev => Self::UserPrev,
+            AdvanceReason::TrackFailed => Self::TrackFailed,
+            AdvanceReason::RemovedCurrent => Self::RemovedCurrent,
+            AdvanceReason::Repeat => Self::Repeat,
+            AdvanceReason::Cancelled => Self::Cancelled,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiRepeatMode {
+    Off,
+    One,
+    All,
+    Unknown,
+}
+
+impl From<QueueRepeatMode> for FfiRepeatMode {
+    fn from(value: QueueRepeatMode) -> Self {
+        match value {
+            QueueRepeatMode::Off => Self::Off,
+            QueueRepeatMode::One => Self::One,
+            QueueRepeatMode::All => Self::All,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// FFI-friendly time range (seconds-based).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -319,6 +372,12 @@ pub enum FfiPlayerEvent {
     CrossfadeStarted { duration_seconds: f32 },
     /// The configured crossfade window changed at runtime.
     CrossfadeDurationChanged { seconds: f32 },
+    TrackAdded { item_id: TrackId, index: u64 },
+    TrackRemoved { item_id: TrackId },
+    TrackLoadFailed { item_id: TrackId, reason: String, auto_skipped: bool },
+    RepeatModeChanged { mode: FfiRepeatMode },
+    NextTrackReady { item_id: TrackId, index: u64 },
+    CurrentItemAdvanced { item_id: Option<TrackId>, reason: FfiAdvanceReason },
 }
 
 /// Transition style for a track switch.

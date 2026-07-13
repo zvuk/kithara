@@ -13,7 +13,10 @@ use kithara_queue::Queue;
 use crate::{
     observer::{ItemObserver, PlayerObserver},
     registry::ItemRegistry,
-    types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTimeRange, FfiTrackStatus},
+    types::{
+        FfiAdvanceReason, FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiRepeatMode, FfiTimeRange,
+        FfiTrackStatus,
+    },
 };
 
 pub(crate) struct EventBridge {
@@ -60,9 +63,24 @@ impl EventBridge {
         event: &QueueEvent,
     ) {
         match event {
+            QueueEvent::TrackAdded { id, index } => {
+                observer.on_event(FfiPlayerEvent::TrackAdded {
+                    item_id: *id,
+                    index: *index as u64,
+                });
+            }
+            QueueEvent::TrackRemoved { id } => {
+                observer.on_event(FfiPlayerEvent::TrackRemoved { item_id: *id });
+            }
             QueueEvent::CurrentTrackChanged { id } => {
                 let item_id = *id;
                 observer.on_event(FfiPlayerEvent::CurrentItemChanged { item_id });
+            }
+            QueueEvent::CurrentTrackAdvance { id, reason } => {
+                observer.on_event(FfiPlayerEvent::CurrentItemAdvanced {
+                    item_id: *id,
+                    reason: FfiAdvanceReason::from(*reason),
+                });
             }
             QueueEvent::TrackStatusChanged { id, status } => {
                 let Some(item) = items.lock().get(id).cloned() else {
@@ -79,6 +97,17 @@ impl EventBridge {
             QueueEvent::QueueEnded => {
                 observer.on_event(FfiPlayerEvent::QueueEnded);
             }
+            QueueEvent::TrackLoadFailed {
+                id,
+                reason,
+                auto_skipped,
+            } => {
+                observer.on_event(FfiPlayerEvent::TrackLoadFailed {
+                    item_id: *id,
+                    reason: reason.clone(),
+                    auto_skipped: *auto_skipped,
+                });
+            }
             QueueEvent::CrossfadeStarted { duration_seconds } => {
                 observer.on_event(FfiPlayerEvent::CrossfadeStarted {
                     duration_seconds: *duration_seconds,
@@ -86,6 +115,17 @@ impl EventBridge {
             }
             QueueEvent::CrossfadeDurationChanged { seconds } => {
                 observer.on_event(FfiPlayerEvent::CrossfadeDurationChanged { seconds: *seconds });
+            }
+            QueueEvent::RepeatModeChanged { mode } => {
+                observer.on_event(FfiPlayerEvent::RepeatModeChanged {
+                    mode: FfiRepeatMode::from(*mode),
+                });
+            }
+            QueueEvent::NextTrackReady { id, index } => {
+                observer.on_event(FfiPlayerEvent::NextTrackReady {
+                    item_id: *id,
+                    index: *index as u64,
+                });
             }
             _ => {}
         }
@@ -352,8 +392,28 @@ impl Drop for EventBridge {
 
 #[cfg(test)]
 mod tests {
+    use kithara_events::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackId};
+    use kithara_platform::sync::{Arc, Mutex};
+
     use super::*;
     use crate::{item::AudioPlayerItem, types::FfiItemConfig};
+
+    #[derive(Default)]
+    struct CollectingPlayerObserver {
+        events: Mutex<Vec<FfiPlayerEvent>>,
+    }
+
+    impl CollectingPlayerObserver {
+        fn take_events(&self) -> Vec<FfiPlayerEvent> {
+            std::mem::take(&mut *self.events.lock())
+        }
+    }
+
+    impl PlayerObserver for CollectingPlayerObserver {
+        fn on_event(&self, event: FfiPlayerEvent) {
+            self.events.lock().push(event);
+        }
+    }
 
     fn assert_send<T: Send>() {}
 
@@ -390,5 +450,86 @@ mod tests {
     #[kithara::test]
     fn loaded_ranges_empty_when_nothing_decoded() {
         assert!(EventBridge::loaded_ranges_from_frontier(0.0).is_empty());
+    }
+
+    #[kithara::test]
+    fn current_track_advance_emits_advanced_only() {
+        let observer_impl = Arc::new(CollectingPlayerObserver::default());
+        let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let item_id = TrackId::from(7_u64);
+
+        EventBridge::dispatch_queue_event(
+            &observer,
+            &items,
+            &QueueEvent::CurrentTrackAdvance {
+                id: Some(item_id),
+                reason: AdvanceReason::UserNext,
+            },
+        );
+
+        let events = observer_impl.take_events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            FfiPlayerEvent::CurrentItemAdvanced {
+                item_id: Some(id),
+                reason: FfiAdvanceReason::UserNext,
+            } if *id == item_id
+        ));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, FfiPlayerEvent::CurrentItemChanged { .. }))
+        );
+    }
+
+    #[kithara::test]
+    fn repeat_mode_changed_maps_to_ffi_repeat_mode() {
+        let observer_impl = Arc::new(CollectingPlayerObserver::default());
+        let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+
+        EventBridge::dispatch_queue_event(
+            &observer,
+            &items,
+            &QueueEvent::RepeatModeChanged {
+                mode: QueueRepeatMode::All,
+            },
+        );
+
+        assert!(matches!(
+            observer_impl.take_events().as_slice(),
+            [FfiPlayerEvent::RepeatModeChanged {
+                mode: FfiRepeatMode::All,
+            }]
+        ));
+    }
+
+    #[kithara::test]
+    fn track_load_failed_passes_reason_and_auto_skipped() {
+        let observer_impl = Arc::new(CollectingPlayerObserver::default());
+        let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let item_id = TrackId::from(11_u64);
+
+        EventBridge::dispatch_queue_event(
+            &observer,
+            &items,
+            &QueueEvent::TrackLoadFailed {
+                id: item_id,
+                reason: "network timeout".to_string(),
+                auto_skipped: true,
+            },
+        );
+
+        assert!(matches!(
+            observer_impl.take_events().as_slice(),
+            [FfiPlayerEvent::TrackLoadFailed {
+                item_id: id,
+                reason,
+                auto_skipped: true,
+            }] if *id == item_id && reason == "network timeout"
+        ));
     }
 }
