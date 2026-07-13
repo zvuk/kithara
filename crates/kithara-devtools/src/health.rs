@@ -122,6 +122,16 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
 }
 
 fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
+    build_stages_with_excludes(
+        &project.health.feature_powerset_exclude,
+        &project.health.workspace_exclude,
+    )
+}
+
+fn build_stages_with_excludes(
+    feature_powerset_exclude: &[String],
+    workspace_exclude: &[String],
+) -> Vec<Stage> {
     vec![
         Stage::new("format-check", "cargo", &["xtask", "format", "--check"]),
         Stage::new(
@@ -135,12 +145,7 @@ fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
             "cargo",
             &["clippy", "--workspace", "--", "-D", "warnings"],
         ),
-        Stage::new(
-            "ast-grep-advisory",
-            "cargo",
-            &["xtask", "ast-grep", "--mode=advisory"],
-        )
-        .advisory(),
+        Stage::new("ast-grep-advisory", "cargo", &["xtask", "ast-grep"]).advisory(),
         Stage::new("xtask-lint", "cargo", &["xtask", "lint"]),
         Stage::new("quality-report", "cargo", &["xtask", "quality", "report"]),
         Stage::new("typos", "cargo", &["xtask", "typos"]),
@@ -167,13 +172,13 @@ fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
                 "--workspace",
             ],
         )
-        .exclude_crates(&project.health.feature_powerset_exclude),
+        .exclude_crates(feature_powerset_exclude),
         Stage::new(
             "semver-checks",
             "cargo",
             &["semver-checks", "check-release", "--workspace"],
         )
-        .exclude_crates(&project.health.workspace_exclude),
+        .exclude_crates(workspace_exclude),
         Stage::new(
             "geiger",
             "cargo",
@@ -394,7 +399,10 @@ fn format_duration(d: Duration) -> String {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use clap::Subcommand;
+
     use super::*;
+    use crate::CoreCommand;
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -406,6 +414,24 @@ mod tests {
         ));
         fs::write(&path, content).expect("write tmp log");
         path
+    }
+
+    #[test]
+    fn health_xtask_stage_argv_is_parseable() {
+        let stages = build_stages_with_excludes(&[], &[]);
+        let command = CoreCommand::augment_subcommands(clap::Command::new("xtask"));
+
+        for stage in stages
+            .iter()
+            .filter(|stage| stage.args.first().is_some_and(|arg| arg == "xtask"))
+        {
+            let argv =
+                std::iter::once("xtask").chain(stage.args.iter().skip(1).map(String::as_str));
+            command
+                .clone()
+                .try_get_matches_from(argv)
+                .unwrap_or_else(|error| panic!("invalid health stage '{}': {error}", stage.name));
+        }
     }
 
     #[test]

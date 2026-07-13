@@ -253,7 +253,7 @@ e2e-resamplers ARGS="-E \"'test(track_plays_end_to_end_silvercomet)'\" --test-th
 # Argument parsing is in `cargo xtask scope`; filter list is in
 # `cargo xtask ast-grep`. This recipe is a thin orchestrator.
 #
-#   just audit                              # whole workspace, report only
+#   just audit                              # workspace checks; orphan sweep deferred to health
 #   just audit --autofix                    # apply every available autofix, then re-validate
 #   just audit kithara-queue                # crate by name
 #   just audit crates/kithara-abr/src       # path inside a crate
@@ -532,11 +532,13 @@ orphans *ARGS:
 # Excluded by design (run separately): mutants, coverage, dead,
 # `just test --lane=e2e`, `just test --lane=selenium`, wasm, bench, perf,
 # memory-check.
-# Install every external tool that `just health`, `just audit`, and the
-# standalone diagnostic recipes depend on. Idempotent — `cargo install --locked`
-# is a no-op when the binary is already current. `lockbud` is rebuilt from
-# source against the active toolchain to avoid `librustc_driver` mismatches.
+# Install core tools used by health, audit, and diagnostics. Platform and
+# optional tools are installed by their own recipes. Idempotent:
+# `cargo install --locked` is a no-op when the binary is already current.
+# `lockbud` is rebuilt from source against the active toolchain to avoid
+# `librustc_driver` mismatches.
 install-tools:
+    cargo install --locked ast-grep
     cargo install --locked cargo-deny
     cargo install --locked cargo-machete
     cargo install --locked cargo-shear
@@ -549,6 +551,7 @@ install-tools:
     cargo install --locked cargo-depgraph
     cargo install --locked cargo-llvm-cov
     cargo install --locked cargo-mutants
+    cargo install --locked cargo-nextest
     cargo install --locked cargo-geiger
     cargo install --locked cargo-sort
     cargo install --locked taplo-cli
@@ -615,6 +618,7 @@ mutants TARGET="" *ARGS:
         RESUME_FLAG="--resume"
         echo "==> resuming from previous run at $OUTPUT/mutants.out"
       fi
+      # kithara-devtools holds the xtask logic after the split.
       cargo mutants --workspace --test-workspace=true --baseline=skip \
         --test-tool=nextest --profile test-release \
         --exclude 'crates/kithara-test-utils/**' \
@@ -622,6 +626,7 @@ mutants TARGET="" *ARGS:
         --exclude 'tests/**' \
         --exclude 'crates/kithara-ffi/**' \
         --exclude 'crates/kithara-app/**' \
+        --exclude 'crates/kithara-devtools/**' \
         --exclude 'xtask/**' \
         --exclude-re 'src/.*test.*\.rs' \
         -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
