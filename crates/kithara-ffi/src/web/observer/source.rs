@@ -6,13 +6,12 @@ use kithara_platform::{
     time::{Duration, sleep},
     tokio::{sync::broadcast, task::spawn as task_spawn},
 };
-use kithara_play::PlayerEvent;
 use kithara_queue::Queue;
 use wasm_bindgen::JsValue;
 use web_sys::BroadcastChannel;
 
 use super::{encode::encode, encode_item::encode_item_event};
-use crate::types::{FfiAdvanceReason, FfiPlayerEvent, FfiRepeatMode, FfiTrackStatus};
+use crate::types::FfiPlayerEvent;
 
 /// `BroadcastChannel` name carrying structured player events from the
 /// worker to the main-thread [`router`](crate::web::observer::router).
@@ -72,7 +71,7 @@ async fn run(mut rx: EventReceiver) {
                 if let Some(ffi) = to_ffi(&event) {
                     let _ = channel.post_message(&encode(&ffi));
                 }
-                if let Some(item_ffi) = crate::core::convert::item_event_to_ffi(&event)
+                if let Ok(item_ffi) = crate::types::FfiItemEvent::try_from(&event)
                     && let Some(track) = meta.track
                 {
                     let msg = encode_item_event(&item_ffi);
@@ -113,71 +112,8 @@ fn mirror_current_track(event: &Event) {
 
 fn to_ffi(event: &Event) -> Option<FfiPlayerEvent> {
     match event {
-        Event::Player(pe) => player_event_to_ffi(pe),
-        Event::Queue(qe) => queue_event_to_ffi(qe),
-        _ => crate::core::convert::player_event_to_ffi(event),
+        Event::Player(pe) => FfiPlayerEvent::try_from(pe).ok(),
+        Event::Queue(qe) => FfiPlayerEvent::try_from(qe).ok(),
+        _ => FfiPlayerEvent::try_from(event).ok(),
     }
-}
-
-fn player_event_to_ffi(event: &PlayerEvent) -> Option<FfiPlayerEvent> {
-    Some(match event {
-        PlayerEvent::RateChanged { rate } => FfiPlayerEvent::RateChanged { rate: *rate },
-        PlayerEvent::StatusChanged { status } => FfiPlayerEvent::StatusChanged {
-            status: (*status).into(),
-        },
-        PlayerEvent::TimeControlStatusChanged { status, .. } => {
-            FfiPlayerEvent::TimeControlStatusChanged {
-                status: (*status).into(),
-            }
-        }
-        PlayerEvent::VolumeChanged { volume } => FfiPlayerEvent::VolumeChanged { volume: *volume },
-        PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
-        PlayerEvent::ItemDidPlayToEnd { .. } => FfiPlayerEvent::ItemDidPlayToEnd,
-        _ => return None,
-    })
-}
-
-fn queue_event_to_ffi(event: &QueueEvent) -> Option<FfiPlayerEvent> {
-    Some(match event {
-        QueueEvent::TrackAdded { id, index } => FfiPlayerEvent::TrackAdded {
-            item_id: *id,
-            index: *index as u64,
-        },
-        QueueEvent::TrackRemoved { id } => FfiPlayerEvent::TrackRemoved { item_id: *id },
-        QueueEvent::TrackStatusChanged { id, status } => FfiPlayerEvent::TrackStatusChanged {
-            item_id: *id,
-            status: FfiTrackStatus::from(status.clone()),
-        },
-        QueueEvent::CurrentTrackChanged { id } => {
-            FfiPlayerEvent::CurrentItemChanged { item_id: *id }
-        }
-        QueueEvent::CurrentTrackAdvance { id, reason } => FfiPlayerEvent::CurrentItemAdvanced {
-            item_id: *id,
-            reason: FfiAdvanceReason::from(*reason),
-        },
-        QueueEvent::QueueEnded => FfiPlayerEvent::QueueEnded,
-        QueueEvent::TrackLoadFailed {
-            id,
-            reason,
-            auto_skipped,
-        } => FfiPlayerEvent::TrackLoadFailed {
-            item_id: *id,
-            reason: reason.clone(),
-            auto_skipped: *auto_skipped,
-        },
-        QueueEvent::CrossfadeStarted { duration_seconds } => FfiPlayerEvent::CrossfadeStarted {
-            duration_seconds: *duration_seconds,
-        },
-        QueueEvent::CrossfadeDurationChanged { seconds } => {
-            FfiPlayerEvent::CrossfadeDurationChanged { seconds: *seconds }
-        }
-        QueueEvent::RepeatModeChanged { mode } => FfiPlayerEvent::RepeatModeChanged {
-            mode: FfiRepeatMode::from(*mode),
-        },
-        QueueEvent::NextTrackReady { id, index } => FfiPlayerEvent::NextTrackReady {
-            item_id: *id,
-            index: *index as u64,
-        },
-        _ => return None,
-    })
 }

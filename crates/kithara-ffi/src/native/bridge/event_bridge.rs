@@ -40,7 +40,7 @@ impl EventBridge {
     ) {
         if let Event::Player(pe) = event {
             Self::route_player_event_to_item(items, queue, last_current, pe);
-            let Some(ffi_event) = Self::player_event_to_ffi(pe) else {
+            let Some(ffi_event) = FfiPlayerEvent::try_from(pe).ok() else {
                 return;
             };
             observer.on_event(ffi_event);
@@ -54,7 +54,7 @@ impl EventBridge {
             Self::dispatch_queue_event(observer, items, qe);
             return;
         }
-        if let Some(ffi_event) = crate::core::convert::player_event_to_ffi(event) {
+        if let Ok(ffi_event) = FfiPlayerEvent::try_from(event) {
             observer.on_event(ffi_event);
         }
     }
@@ -199,32 +199,6 @@ impl EventBridge {
         } else {
             Vec::new()
         }
-    }
-
-    fn player_event_to_ffi(event: &PlayerEvent) -> Option<FfiPlayerEvent> {
-        Some(match event {
-            PlayerEvent::RateChanged { rate } => FfiPlayerEvent::RateChanged { rate: *rate },
-            PlayerEvent::StatusChanged { status } => FfiPlayerEvent::StatusChanged {
-                status: (*status).into(),
-            },
-            PlayerEvent::TimeControlStatusChanged { status, .. } => {
-                FfiPlayerEvent::TimeControlStatusChanged {
-                    status: (*status).into(),
-                }
-            }
-            PlayerEvent::VolumeChanged { volume } => {
-                FfiPlayerEvent::VolumeChanged { volume: *volume }
-            }
-            PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
-            PlayerEvent::ItemDidPlayToEnd { .. } => FfiPlayerEvent::ItemDidPlayToEnd,
-            PlayerEvent::ItemDidFail { item_id, .. } => FfiPlayerEvent::ItemDidFail {
-                item_id: item_id
-                    .as_ref()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .map(TrackId::from),
-            },
-            _ => return None,
-        })
     }
 
     /// Forward player-level signals (`ItemDidPlayToEnd`, `ItemDidFail`,
