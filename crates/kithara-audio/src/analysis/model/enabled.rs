@@ -1,17 +1,16 @@
-use kithara_platform::sync::{Arc, Mutex};
 use kithara_resampler::ResamplerBackend;
 use tracing::warn;
 
 use crate::analysis::{
     BeatAnalysisConfig,
-    beat::{BeatDetectorKind, GridParams, SharedBeatDetector, build_detector},
+    beat::{BeatDetectorKind, GridParams, build_detector},
 };
 
 const NN_MODEL_TAG: &str = "beat_this_small_v1";
 
-pub(crate) fn detector() -> Option<SharedBeatDetector> {
+pub(crate) fn detector() -> Option<Box<dyn crate::analysis::beat::BeatDetector>> {
     match build_detector(BeatDetectorKind::default()) {
-        Ok(detector) => Some(Arc::new(Mutex::new(detector))),
+        Ok(detector) => Some(detector),
         Err(e) => {
             warn!(?e, "beat detector init failed; beat analysis disabled");
             None

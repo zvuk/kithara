@@ -1,21 +1,22 @@
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmSpec};
-use kithara_platform::sync::Arc;
 use kithara_resampler::ResamplerBackend;
 
 use crate::{
     analysis::{
-        analyzer::{Analyzer, BeatAnalysisConfig, default_beat_detector},
-        beat::{BeatPass, BeatPassConfig, GridParams, SharedBeatDetector},
+        analyzer::{BeatAnalysisConfig, default_beat_detector},
+        beat::{BeatDetector, BeatPass, BeatPassConfig, GridParams},
     },
     waveform::BeatGrid,
 };
+
+pub(crate) type Detector = Box<dyn BeatDetector>;
 
 struct BeatConfig<B>
 where
     B: ResamplerBackend,
 {
-    detector: SharedBeatDetector,
+    detector: Option<Detector>,
     params: GridParams,
     resampler: BeatAnalysisConfig<B>,
 }
@@ -36,7 +37,7 @@ where
                 config.resampler.clone(),
                 pcm_pool.clone(),
             );
-            BeatPass::new(pass, Arc::clone(&config.detector))
+            BeatPass::new(pass)
         }))
     }
 
@@ -52,7 +53,7 @@ where
 
     pub(crate) fn with_default(&mut self, resampler: BeatAnalysisConfig<B>) {
         self.0 = default_beat_detector().map(|detector| BeatConfig {
-            detector,
+            detector: Some(detector),
             params: GridParams::default(),
             resampler,
         });
@@ -61,15 +62,19 @@ where
     #[cfg(test)]
     pub(crate) fn with_detector(
         &mut self,
-        detector: SharedBeatDetector,
+        detector: Detector,
         params: GridParams,
         resampler: BeatAnalysisConfig<B>,
     ) {
         self.0 = Some(BeatConfig {
-            detector,
+            detector: Some(detector),
             params,
             resampler,
         });
+    }
+
+    pub(crate) fn take_detector(&mut self) -> Option<Detector> {
+        self.0.as_mut().and_then(|config| config.detector.take())
     }
 }
 
@@ -99,17 +104,19 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn finish(self) -> Option<BeatGrid> {
-        self.0.and_then(Analyzer::finish)
+    pub(crate) fn finish(self, detector: Option<&mut Detector>) -> Option<BeatGrid> {
+        self.0
+            .zip(detector)
+            .and_then(|(analyzer, detector)| analyzer.finish(detector.as_mut()))
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_none()
     }
 
-    pub(crate) fn push(&mut self, chunk: &PcmChunk) {
-        if let Some(analyzer) = &mut self.0 {
-            analyzer.push(chunk);
+    pub(crate) fn push(&mut self, chunk: &PcmChunk, detector: Option<&mut Detector>) {
+        if let (Some(analyzer), Some(detector)) = (&mut self.0, detector) {
+            analyzer.push(chunk, detector.as_mut());
         }
     }
 }

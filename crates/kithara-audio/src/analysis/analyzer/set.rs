@@ -1,51 +1,9 @@
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_decode::PcmSpec;
 use kithara_resampler::ResamplerBackend;
-use num_traits::cast::AsPrimitive;
 
-use super::{config::BeatAnalysisConfig, track::TrackAnalysis};
+use super::{config::BeatAnalysisConfig, session::TrackAnalyzers};
 use crate::analysis::slots::{beat, waveform};
-
-#[derive(Default)]
-pub(crate) struct TrackAnalyzers<B>
-where
-    B: ResamplerBackend,
-{
-    beat: beat::Slot<B>,
-    waveform: waveform::Slot,
-    source_frames: u64,
-}
-
-impl<B> TrackAnalyzers<B>
-where
-    B: ResamplerBackend,
-{
-    pub(crate) fn finish_staged<F: FnMut(TrackAnalysis)>(self, mut emit: F) {
-        let source_frames = self.source_frames;
-        let waveform = waveform::finish(self.waveform);
-
-        if self.beat.is_empty() {
-            emit(TrackAnalysis::new(None, waveform, source_frames));
-            return;
-        }
-
-        emit(TrackAnalysis::new(None, waveform.clone(), source_frames));
-
-        emit(TrackAnalysis::new(
-            self.beat.finish(),
-            waveform,
-            source_frames,
-        ));
-    }
-
-    pub(crate) fn push(&mut self, chunk: &PcmChunk) {
-        let frames: u64 = chunk.frames().as_();
-        self.source_frames = self.source_frames.saturating_add(frames);
-
-        waveform::push(&mut self.waveform, chunk);
-        self.beat.push(chunk);
-    }
-}
 
 #[derive(Default)]
 pub struct AnalyzerBuilder<B>
@@ -68,6 +26,10 @@ where
             waveform: waveform::build(&self.waveform, spec),
             source_frames: 0,
         }
+    }
+
+    pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {
+        self.beat.take_detector()
     }
 
     #[must_use]
@@ -98,7 +60,7 @@ where
     #[cfg(all(test, feature = "analysis-beat"))]
     pub(crate) fn with_beat_detector(
         self,
-        detector: crate::analysis::beat::SharedBeatDetector,
+        detector: Box<dyn crate::analysis::beat::BeatDetector>,
         params: crate::analysis::beat::GridParams,
     ) -> Self
     where
@@ -136,14 +98,15 @@ mod tests {
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
-    use kithara_platform::sync::{Arc, Mutex};
+    use kithara_platform::sync::Arc;
     use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
     use unimock::{MockFn, Unimock, matching};
 
-    use super::{super::track::TrackAnalysis, AnalyzerBuilder, TrackAnalyzers};
-    use crate::analysis::beat::{
-        BeatDetector, BeatDetectorMock, GridParams, RawBeats, SharedBeatDetector,
+    use super::{
+        super::{session::TrackAnalyzers, track::TrackAnalysis},
+        AnalyzerBuilder,
     };
+    use crate::analysis::beat::{BeatDetector, BeatDetectorMock, GridParams, RawBeats};
 
     fn chunk(frames: usize, channels: u16) -> PcmChunk {
         let samples = vec![0.0_f32; frames * usize::from(channels)];
@@ -161,14 +124,23 @@ mod tests {
     }
 
     fn collect<B: kithara_resampler::ResamplerBackend>(
-        analyzers: TrackAnalyzers<B>,
+        mut analyzers: TrackAnalyzers<B>,
+        mut detector: Option<crate::analysis::slots::beat::Detector>,
     ) -> Vec<TrackAnalysis> {
-        let mut out = Vec::new();
-        analyzers.finish_staged(|a| out.push(a));
+        let source_frames = analyzers.source_frames();
+        let waveform = analyzers.finish_waveform();
+        let mut out = vec![TrackAnalysis::new(None, waveform.clone(), source_frames)];
+        if analyzers.has_beat() {
+            out.push(TrackAnalysis::new(
+                analyzers.finish_beat(detector.as_mut()),
+                waveform,
+                source_frames,
+            ));
+        }
         out
     }
 
-    fn beat_detector() -> SharedBeatDetector {
+    fn beat_detector() -> Box<dyn BeatDetector> {
         let raw = RawBeats {
             beats: Vec::new(),
             downbeats: (0..9u8).map(|n| f32::from(n) * 2.0).collect(),
@@ -178,7 +150,7 @@ mod tests {
                 .next_call(matching!(_))
                 .answers_arc(Arc::new(move |_, _| Ok(raw.clone()))),
         );
-        Arc::new(Mutex::new(Box::new(mock) as Box<dyn BeatDetector>))
+        Box::new(mock)
     }
 
     #[test]
@@ -190,9 +162,9 @@ mod tests {
         let mut analyzers = AnalyzerBuilder::<NoResamplerBackend>::default()
             .with_waveform(8)
             .build(spec);
-        analyzers.push(&chunk(64, 2));
+        analyzers.push(&chunk(64, 2), None);
 
-        let stages = collect(analyzers);
+        let stages = collect(analyzers, None);
         assert_eq!(stages.len(), 1, "waveform-only emits exactly once");
         assert!(stages[0].waveform().is_some());
         assert!(stages[0].beat().is_none());
@@ -204,13 +176,14 @@ mod tests {
             channels: 2,
             sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
         };
-        let mut analyzers = AnalyzerBuilder::<RubatoBackend>::default()
+        let mut builder = AnalyzerBuilder::<RubatoBackend>::default()
             .with_waveform(8)
-            .with_beat_detector(beat_detector(), GridParams::default())
-            .build(spec);
-        analyzers.push(&chunk(8192, 2));
+            .with_beat_detector(beat_detector(), GridParams::default());
+        let mut detector = builder.take_detector();
+        let mut analyzers = builder.build(spec);
+        analyzers.push(&chunk(8192, 2), detector.as_mut());
 
-        let stages = collect(analyzers);
+        let stages = collect(analyzers, detector);
         assert_eq!(
             stages.len(),
             2,

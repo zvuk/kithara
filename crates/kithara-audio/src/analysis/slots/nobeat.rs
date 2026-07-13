@@ -6,6 +6,8 @@ use kithara_resampler::ResamplerBackend;
 
 use crate::{analysis::BeatAnalysisConfig, waveform::BeatGrid};
 
+pub(crate) type Detector = ();
+
 pub(crate) struct Config<B>(PhantomData<B>);
 
 impl<B> Config<B>
@@ -23,6 +25,10 @@ where
     pub(crate) fn set_resampler(&mut self, _resampler: BeatAnalysisConfig<B>) {}
 
     pub(crate) fn with_default(&mut self, _resampler: BeatAnalysisConfig<B>) {}
+
+    pub(crate) fn take_detector(&mut self) -> Option<Detector> {
+        None
+    }
 }
 
 impl<B> Default for Config<B> {
@@ -43,7 +49,7 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn finish(self) -> Option<BeatGrid> {
+    pub(crate) fn finish(self, _detector: Option<&mut Detector>) -> Option<BeatGrid> {
         None
     }
 
@@ -51,5 +57,5 @@ where
         true
     }
 
-    pub(crate) fn push(&mut self, _chunk: &PcmChunk) {}
+    pub(crate) fn push(&mut self, _chunk: &PcmChunk, _detector: Option<&mut Detector>) {}
 }

@@ -2,7 +2,6 @@ mod analyzer;
 #[cfg(feature = "analysis-beat")]
 pub(crate) mod beat;
 mod model;
-mod run;
 mod slots;
 #[cfg(test)]
 mod tests;
@@ -10,6 +9,5 @@ mod tests;
 mod worker;
 
 pub use analyzer::{AnalyzerBuilder, BeatAnalysisConfig, TrackAnalysis};
-pub use run::analyze_reader;
 #[cfg(not(target_arch = "wasm32"))]
 pub use worker::AnalysisWorker;

@@ -3,7 +3,7 @@ use kithara_resampler::ResamplerBackend;
 use crate::analysis::BeatAnalysisConfig;
 
 #[cfg(feature = "analysis-beat")]
-pub(crate) fn detector() -> Option<crate::analysis::beat::SharedBeatDetector> {
+pub(crate) fn detector() -> Option<Box<dyn crate::analysis::beat::BeatDetector>> {
     None
 }
 
