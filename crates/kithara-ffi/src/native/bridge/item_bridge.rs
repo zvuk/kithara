@@ -68,6 +68,18 @@ impl ItemEventBridge {
             observer.on_event(event);
         }
 
+        if let Event::Downloader(downloader_event) = event
+            && let Some(event) = downloader_event_to_ffi(downloader_event)
+        {
+            observer.on_event(event);
+        }
+
+        if let Event::File(file_event) = event
+            && let Some(event) = file_event_to_ffi(file_event)
+        {
+            observer.on_event(event);
+        }
+
         if let Some(error) = Self::error_from_event(event) {
             state.lock().mark_failed();
             observer.on_event(FfiItemEvent::StatusChanged {
@@ -443,12 +455,147 @@ fn hls_event_to_ffi(event: &HlsEvent) -> Option<FfiItemEvent> {
     }
 }
 
+fn downloader_event_to_ffi(event: &DownloaderEvent) -> Option<FfiItemEvent> {
+    match event {
+        DownloaderEvent::RequestStarted {
+            request_id,
+            wait_in_queue,
+        } => Some(FfiItemEvent::DownloadStarted {
+            request_id: request_id.get(),
+            wait_in_queue_seconds: crate::types::duration_to_seconds(*wait_in_queue),
+        }),
+        DownloaderEvent::LoadSlow {
+            request_id,
+            elapsed,
+        } => Some(FfiItemEvent::DownloadSlow {
+            request_id: request_id.get(),
+            elapsed_seconds: crate::types::duration_to_seconds(*elapsed),
+        }),
+        DownloaderEvent::RequestCompleted {
+            request_id,
+            bytes_transferred,
+            duration,
+            bandwidth_bps,
+        } => Some(FfiItemEvent::DownloadCompleted {
+            request_id: request_id.get(),
+            bytes_transferred: *bytes_transferred,
+            duration_seconds: crate::types::duration_to_seconds(*duration),
+            bandwidth_bps: *bandwidth_bps,
+        }),
+        DownloaderEvent::RequestRetrying {
+            request_id,
+            attempt,
+            max_retries,
+            error,
+            backoff,
+        } => Some(FfiItemEvent::DownloadRetrying {
+            request_id: request_id.get(),
+            attempt: *attempt,
+            max_retries: *max_retries,
+            error: error.to_string(),
+            backoff_seconds: crate::types::duration_to_seconds(*backoff),
+        }),
+        DownloaderEvent::BodyStalled {
+            request_id,
+            consumed,
+            expected,
+            stall,
+        } => Some(FfiItemEvent::DownloadBodyStalled {
+            request_id: request_id.get(),
+            consumed: *consumed,
+            expected: *expected,
+            stall_seconds: crate::types::duration_to_seconds(*stall),
+        }),
+        DownloaderEvent::BodyResumed {
+            request_id,
+            resume_number,
+            from_offset,
+            honoured_range,
+        } => Some(FfiItemEvent::DownloadBodyResumed {
+            request_id: request_id.get(),
+            resume_number: *resume_number,
+            from_offset: *from_offset,
+            honoured_range: *honoured_range,
+        }),
+        DownloaderEvent::RetryExhausted {
+            request_id,
+            max_retries,
+            consumed,
+            error,
+        } => Some(FfiItemEvent::DownloadRetryExhausted {
+            request_id: request_id.get(),
+            max_retries: *max_retries,
+            consumed: *consumed,
+            error: error.to_string(),
+        }),
+        DownloaderEvent::FirstByte {
+            request_id,
+            ttfb,
+            status,
+            partial,
+        } => Some(FfiItemEvent::DownloadFirstByte {
+            request_id: request_id.get(),
+            ttfb_seconds: crate::types::duration_to_seconds(*ttfb),
+            status: *status,
+            partial: *partial,
+        }),
+        DownloaderEvent::RequestCancelled {
+            request_id,
+            reason,
+            bytes_transferred,
+        } => Some(FfiItemEvent::DownloadCancelled {
+            request_id: request_id.get(),
+            reason: (*reason).into(),
+            bytes_transferred: *bytes_transferred,
+        }),
+        _ => None,
+    }
+}
+
+fn file_event_to_ffi(event: &FileEvent) -> Option<FfiItemEvent> {
+    match event {
+        FileEvent::Opened {
+            codec,
+            container,
+            total_bytes,
+            cached,
+        } => Some(FfiItemEvent::FileOpened {
+            codec: codec.map(Into::into),
+            container: container.map(Into::into),
+            total_bytes: *total_bytes,
+            cached: *cached,
+        }),
+        FileEvent::TotalBytesResolved {
+            total_bytes,
+            source,
+        } => Some(FfiItemEvent::FileTotalBytesResolved {
+            total_bytes: *total_bytes,
+            source: (*source).into(),
+        }),
+        FileEvent::CacheComplete { total_bytes } => Some(FfiItemEvent::FileCacheComplete {
+            total_bytes: *total_bytes,
+        }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use kithara_events::{Event, FileError, FileEvent};
+    use std::num::NonZeroU64;
 
-    use super::ItemEventBridge;
-    use crate::types::FfiError;
+    use kithara_events::{
+        CancelReason, DownloaderEvent, Event, FileError, FileEvent, RequestId, TotalBytesSource,
+    };
+
+    use super::{ItemEventBridge, downloader_event_to_ffi, file_event_to_ffi};
+    use crate::types::{FfiCancelReason, FfiError, FfiItemEvent, FfiTotalBytesSource};
+
+    fn request_id(value: u64) -> RequestId {
+        match NonZeroU64::new(value) {
+            Some(id) => RequestId::new(id),
+            None => panic!("request id must be non-zero"),
+        }
+    }
 
     #[kithara::test]
     fn file_error_maps_to_item_failed() {
@@ -460,5 +607,57 @@ mod tests {
             error,
             Some(FfiError::ItemFailed { reason }) if reason == "io: boom"
         ));
+    }
+
+    #[kithara::test]
+    fn downloader_request_cancelled_maps_to_item_event() {
+        let request_id = request_id(7);
+        let event = DownloaderEvent::RequestCancelled {
+            request_id,
+            reason: CancelReason::PeerCancel,
+            bytes_transferred: 123,
+        };
+
+        assert!(matches!(
+            downloader_event_to_ffi(&event),
+            Some(FfiItemEvent::DownloadCancelled {
+                request_id: 7,
+                reason: FfiCancelReason::PeerCancel,
+                bytes_transferred: 123,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn downloader_request_failed_is_not_duplicated() {
+        let request_id = request_id(9);
+        let event = DownloaderEvent::RequestFailed {
+            request_id,
+            error: kithara_net::NetError::Network("boom".into()),
+            retryable: false,
+        };
+
+        assert!(downloader_event_to_ffi(&event).is_none());
+    }
+
+    #[kithara::test]
+    fn file_total_bytes_resolved_maps_to_item_event() {
+        let event = FileEvent::TotalBytesResolved {
+            total_bytes: 456,
+            source: TotalBytesSource::CommittedLen,
+        };
+
+        assert!(matches!(
+            file_event_to_ffi(&event),
+            Some(FfiItemEvent::FileTotalBytesResolved {
+                total_bytes: 456,
+                source: FfiTotalBytesSource::CommittedLen,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn file_end_of_stream_is_not_duplicated() {
+        assert!(file_event_to_ffi(&FileEvent::EndOfStream).is_none());
     }
 }

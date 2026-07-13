@@ -1,7 +1,7 @@
 use kithara_events::{
-    AudioCodecKind, ContainerKind, DecodeErrorClass, DecodeErrorKind, DecoderBackend,
-    DecoderChangeCause, FrameDomain, PlaybackResamplerKind, ResamplerKind, TrackFailureKind,
-    TrackId, TrackStatus as TS,
+    AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass, DecodeErrorKind, DecoderBackend,
+    DecoderChangeCause, FrameDomain, PlaybackResamplerKind, ResamplerKind, TotalBytesSource,
+    TrackFailureKind, TrackId, TrackStatus as TS,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
@@ -600,6 +600,44 @@ impl From<TrackFailureKind> for FfiTrackFailureKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiCancelReason {
+    EpochCancel,
+    PeerCancel,
+    DownloaderShutdown,
+    BeforeStart,
+}
+
+impl From<CancelReason> for FfiCancelReason {
+    fn from(value: CancelReason) -> Self {
+        match value {
+            CancelReason::EpochCancel => Self::EpochCancel,
+            CancelReason::PeerCancel => Self::PeerCancel,
+            CancelReason::DownloaderShutdown => Self::DownloaderShutdown,
+            CancelReason::BeforeStart => Self::BeforeStart,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiTotalBytesSource {
+    CommittedLen,
+    ContentLength,
+    Unknown,
+}
+
+impl From<TotalBytesSource> for FfiTotalBytesSource {
+    fn from(value: TotalBytesSource) -> Self {
+        match value {
+            TotalBytesSource::CommittedLen => Self::CommittedLen,
+            TotalBytesSource::ContentLength => Self::ContentLength,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].
 #[derive(Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -745,6 +783,69 @@ pub enum FfiItemEvent {
     },
     HlsCacheComplete {
         total_bytes: Option<u64>,
+    },
+    DownloadStarted {
+        request_id: u64,
+        wait_in_queue_seconds: f64,
+    },
+    DownloadSlow {
+        request_id: u64,
+        elapsed_seconds: f64,
+    },
+    DownloadCompleted {
+        request_id: u64,
+        bytes_transferred: u64,
+        duration_seconds: f64,
+        bandwidth_bps: u64,
+    },
+    DownloadRetrying {
+        request_id: u64,
+        attempt: u32,
+        max_retries: u32,
+        error: String,
+        backoff_seconds: f64,
+    },
+    DownloadBodyStalled {
+        request_id: u64,
+        consumed: u64,
+        expected: Option<u64>,
+        stall_seconds: f64,
+    },
+    DownloadBodyResumed {
+        request_id: u64,
+        resume_number: u32,
+        from_offset: u64,
+        honoured_range: bool,
+    },
+    DownloadRetryExhausted {
+        request_id: u64,
+        max_retries: u32,
+        consumed: u64,
+        error: String,
+    },
+    DownloadFirstByte {
+        request_id: u64,
+        ttfb_seconds: f64,
+        status: u16,
+        partial: bool,
+    },
+    DownloadCancelled {
+        request_id: u64,
+        reason: FfiCancelReason,
+        bytes_transferred: u64,
+    },
+    FileOpened {
+        codec: Option<FfiAudioCodecKind>,
+        container: Option<FfiContainerKind>,
+        total_bytes: Option<u64>,
+        cached: bool,
+    },
+    FileTotalBytesResolved {
+        total_bytes: u64,
+        source: FfiTotalBytesSource,
+    },
+    FileCacheComplete {
+        total_bytes: u64,
     },
 }
 
