@@ -9,6 +9,7 @@ mod hls_seek_middle_no_queue;
 mod hls_seek_middle_stress;
 mod hls_seek_past_end_terminates;
 mod local_seek_hang_iters;
+mod mixing;
 mod offline_harness_smoke;
 mod player_internal;
 mod player_processor_internal;

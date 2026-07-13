@@ -32,6 +32,7 @@ pub use blob::BlobError;
 pub use effects::timestretch::{StretchKind, TimeStretchProcessor};
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
+    limiter::{LimiterError, PeakLimiter},
     timestretch::StretchControls,
 };
 #[cfg(feature = "resample-glide")]

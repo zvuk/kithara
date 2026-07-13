@@ -8,7 +8,7 @@ use kithara::{
     assets::{AssetStoreBuilder, BytePool, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
     audio::generate_log_spaced_bands,
     net::{HttpClient, NetOptions},
-    play::{PlayerConfig, PlayerImpl, StretchControls},
+    play::{CrossfaderBus, PlayerConfig, PlayerImpl, StretchControls},
     stream::dl::{Downloader, DownloaderConfig},
 };
 #[cfg(not(feature = "tui"))]
@@ -17,7 +17,13 @@ use kithara_app::gui;
 use kithara_app::gui::GuiFrontend;
 #[cfg(feature = "tui")]
 use kithara_app::tui::TuiFrontend;
-use kithara_app::{baked, config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
+use kithara_app::{
+    baked,
+    config::AppConfig,
+    frontend::Frontend,
+    mix::{DeckMix, DeckStrip},
+    tracing_init::init_tracing,
+};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_queue::{Queue, QueueConfig};
 
@@ -36,6 +42,32 @@ struct Args {
     /// Enabled by default during testing phase.
     #[arg(long, default_value_t = true)]
     insecure: bool,
+
+    /// Number of independently mixed decks sharing one audio session (1, 2, or 4).
+    #[arg(long, default_value_t = 1)]
+    decks: usize,
+}
+
+/// Crossfader assignment for `index` within a `count`-deck mix: deck 0 → A,
+/// deck 1 → B, everything else (and single-deck mode) → `Bypass` (ordinary
+/// fader, no crossfade).
+fn deck_bus(index: usize, count: usize) -> CrossfaderBus {
+    match (count >= 2, index) {
+        (true, 0) => CrossfaderBus::A,
+        (true, 1) => CrossfaderBus::B,
+        _ => CrossfaderBus::Bypass,
+    }
+}
+
+/// Build a fresh deck player sharing the process audio session.
+fn build_deck_player(shutdown: &CancelToken, config: &AppConfig) -> Arc<PlayerImpl> {
+    let player_config = PlayerConfig::builder()
+        .cancel(shutdown.child())
+        .crossfade_duration(config.crossfade_seconds)
+        .eq_layout(generate_log_spaced_bands(config.eq_band_count))
+        .timestretch(StretchControls::new(1.0))
+        .build();
+    Arc::new(PlayerImpl::new(player_config))
 }
 
 /// Application UI mode.
@@ -96,6 +128,10 @@ fn main() -> AppResult {
 
     init_tracing_for_mode(mode)?;
 
+    if !matches!(args.decks, 1 | 2 | 4) {
+        return Err(format!("--decks must be 1, 2, or 4 (got {})", args.decks).into());
+    }
+
     // App master root held for the whole process: it goes into `AppConfig` and
     // every subsystem derives from `shutdown.child()`, so a frontend
     // `config.shutdown.cancel()` propagates down the shutdown subtree to all of
@@ -141,6 +177,18 @@ fn main() -> AppResult {
         .timestretch(Arc::clone(&timestretch))
         .build();
     let player = Arc::new(PlayerImpl::new(player_config));
+
+    // Deck 0 is the queue-driven primary player; any extra decks share the
+    // process audio session. The shared mix owns the desired session-input
+    // gains and commits them through the common `SessionMixer`.
+    let mut strips = vec![DeckStrip::new(Arc::clone(&player), deck_bus(0, args.decks))];
+    for index in 1..args.decks {
+        let deck = build_deck_player(&shutdown, &config);
+        strips.push(DeckStrip::new(deck, deck_bus(index, args.decks)));
+    }
+    let deck_mix = DeckMix::new(strips);
+    deck_mix.apply()?;
+
     let queue_config = QueueConfig::default()
         .with_player(player)
         .with_cancel(shutdown.child());

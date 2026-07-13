@@ -34,11 +34,12 @@ pub use impls::{
     PlaybackResamplerBackend,
     config::{ResourceConfig, ResourceSrc},
     engine::{EngineConfig, EngineImpl},
+    mix::apply_mix,
     player::{PlayerConfig, PlayerImpl, SelectTransition},
     player_node::PlayerNode,
     resource::Resource,
     session::{
-        AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionState,
+        AllocatedSlot, Cmd, CmdMsg, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionState,
         StartStreamFn, run_cmd,
     },
     shared_eq::SharedEq,
@@ -56,7 +57,7 @@ pub use traits::{
     dj,
     dj::{
         bpm::{BeatGrid, BpmInfo, GridSegment},
-        crossfade::{CrossfadeConfig, CrossfadeCurve},
+        crossfade::{CrossfadeConfig, CrossfadeCurve, CrossfaderBus, crossfader_gain},
         eq::Equalizer,
     },
     engine::Engine,

@@ -21,7 +21,7 @@ use tracing::{debug, info, warn};
 use super::{
     arena_registry::ArenaRegistry,
     player_processor::PlayerCmd,
-    session::{PlayerId, SessionDispatcher, session_client},
+    session::{PlayerId, PlayerLevel, SessionDispatcher, session_client},
     shared_eq::SharedEq,
     shared_player_state::SharedPlayerState,
 };
@@ -193,6 +193,25 @@ impl EngineImpl {
         };
         drop(slot_registry);
         result
+    }
+
+    pub(crate) fn session_dispatcher(&self) -> &Arc<dyn SessionDispatcher> {
+        &self.session
+    }
+
+    pub(crate) fn start_lock(&self) -> &Mutex<()> {
+        &self.start_lock
+    }
+
+    pub(crate) fn registered_player_id(&self) -> Option<PlayerId> {
+        *self.player_id.lock()
+    }
+
+    /// Store the desired gain without dispatching: the mixer batch already
+    /// actuated the graph.
+    pub(crate) fn commit_desired_master_volume(&self, level: f32) {
+        self.master_volume.store(level, Ordering::Relaxed);
+        self.emit(EngineEvent::MasterVolumeChanged { volume: level });
     }
 
     /// Process-wide session ducking mode.
@@ -400,11 +419,16 @@ impl Engine for EngineImpl {
 
     fn set_master_volume(&self, volume: f32) {
         let clamped = volume.clamp(0.0, 1.0);
-        self.master_volume.store(clamped, Ordering::Relaxed);
 
+        // Same lock the mixer uses: a store must not race a concurrent start
+        // into a desired/applied divergence.
+        let start = self.start_lock.lock();
+        self.master_volume.store(clamped, Ordering::Relaxed);
         if self.running.load(Ordering::Acquire)
             && let Some(player_id) = *self.player_id.lock()
-            && let Err(err) = self.session.set_player_master_volume(player_id, clamped)
+            && let Err(err) = self
+                .session
+                .set_player_master_volumes(vec![PlayerLevel::new(player_id, clamped)])
         {
             warn!(
                 ?err,
@@ -413,6 +437,7 @@ impl Engine for EngineImpl {
                 "failed to apply player master volume"
             );
         }
+        drop(start);
 
         self.emit(EngineEvent::MasterVolumeChanged { volume: clamped });
     }
@@ -496,9 +521,59 @@ pub(crate) fn ducking_test_lock() -> &'static Mutex<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicU64;
+
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{
+        super::session::{Cmd, Reply},
+        *,
+    };
+
+    struct SpyDispatcher {
+        batches: Mutex<Vec<Vec<PlayerLevel>>>,
+        next_id: AtomicU64,
+    }
+
+    impl SessionDispatcher for SpyDispatcher {
+        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+            match cmd {
+                Cmd::RegisterPlayer { .. } => {
+                    let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+                    Ok(Reply::PlayerRegistered(id))
+                }
+                Cmd::SetPlayerMasterVolumes { levels } => {
+                    self.batches.lock().push(levels);
+                    Ok(Reply::Ok)
+                }
+                _ => Ok(Reply::Ok),
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn single_master_volume_uses_one_batch_command() {
+        let spy = Arc::new(SpyDispatcher {
+            batches: Mutex::new(Vec::new()),
+            next_id: AtomicU64::new(0),
+        });
+        let config = EngineConfig::builder()
+            .session(spy.clone() as Arc<dyn SessionDispatcher>)
+            .build();
+        let engine = EngineImpl::new(config, EventBus::default());
+        engine.start().unwrap();
+
+        engine.set_master_volume(0.5);
+
+        let batches = spy.batches.lock();
+        assert_eq!(
+            batches.len(),
+            1,
+            "one batch command per master-volume update"
+        );
+        assert_eq!(batches[0].len(), 1, "single player yields one batch entry");
+        assert_eq!(batches[0][0].level, 0.5);
+    }
 
     #[kithara::test]
     fn engine_creates_worker() {

@@ -25,5 +25,5 @@ pub(crate) use host_web::{
     session_client, tick_and_poll_remote, warm_up_audio,
 };
 pub use state::{
-    AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionState, StartStreamFn, run_cmd,
+    AllocatedSlot, Cmd, CmdMsg, PlayerId, PlayerLevel, Reply, SessionState, StartStreamFn, run_cmd,
 };

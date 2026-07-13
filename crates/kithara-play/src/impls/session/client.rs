@@ -1,7 +1,7 @@
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
 
-use super::state::{AllocatedSlot, Cmd, PlayerId, Reply};
+use super::state::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply};
 use crate::{
     error::PlayError,
     types::{SessionDuckingMode, SlotId},
@@ -98,8 +98,11 @@ pub trait SessionDispatcher: Send + Sync + 'static {
         .map(|_| ())
     }
 
-    fn set_player_master_volume(&self, player_id: PlayerId, volume: f32) -> Result<(), PlayError> {
-        self.exec_ok(Cmd::SetPlayerMasterVolume { player_id, volume })
+    fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
+        if levels.is_empty() {
+            return Ok(());
+        }
+        self.exec_ok(Cmd::SetPlayerMasterVolumes { levels })
             .map(|_| ())
     }
 

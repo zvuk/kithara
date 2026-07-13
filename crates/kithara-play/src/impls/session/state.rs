@@ -4,7 +4,7 @@ use kithara_platform::sync::Arc;
 use firewheel::nodes::volume_pan::VolumePanNode;
 use firewheel::{
     FirewheelConfig, FirewheelCtx, Volume, backend::AudioBackend, channel_config::ChannelCount,
-    diff::Memo, error::UpdateError, node::NodeID,
+    diff::Memo, dsp::volume::amp_to_linear_volume_clamped, error::UpdateError, node::NodeID,
 };
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
@@ -13,12 +13,28 @@ use ringbuf::{HeapProd, HeapRb, traits::Split};
 use tracing::{debug, trace, warn};
 
 use super::super::{
-    master_eq_node::MasterEqNode, player_node::PlayerNode, player_processor::PlayerCmd,
-    shared_eq::SharedEq, shared_player_state::SharedPlayerState,
+    limiter_node::LimiterNode, master_eq_node::MasterEqNode, player_node::PlayerNode,
+    player_processor::PlayerCmd, shared_eq::SharedEq, shared_player_state::SharedPlayerState,
 };
 use crate::types::{SessionDuckingMode, SlotId};
 
 pub type PlayerId = u64;
+
+/// One player's session-input level in a batch update. `level` is a linear
+/// amplitude in `0.0..=1.0`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PlayerLevel {
+    pub player_id: PlayerId,
+    pub level: f32,
+}
+
+impl PlayerLevel {
+    #[must_use]
+    pub fn new(player_id: PlayerId, level: f32) -> Self {
+        Self { player_id, level }
+    }
+}
 
 /// Capacity of the per-slot player command ring buffer.
 pub const PLAYER_CMD_RINGBUF_CAPACITY: usize = 32;
@@ -81,6 +97,7 @@ pub struct SessionState<B: AudioBackend> {
     ctx: Option<FirewheelCtx<B>>,
     session_output_memo: Option<Memo<VolumePanNode>>,
     session_output_node_id: Option<NodeID>,
+    session_limiter_node_id: Option<NodeID>,
     next_player_id: PlayerId,
     session_ducking: SessionDuckingMode,
     /// Backend-specific stream starter baked in at engine-thread spawn
@@ -112,6 +129,7 @@ impl<B: AudioBackend> SessionState<B> {
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
+            session_limiter_node_id: None,
             stream_needs_restart: false,
         }
     }
@@ -157,9 +175,8 @@ pub enum Cmd {
         player_id: PlayerId,
         slot: SlotId,
     },
-    SetPlayerMasterVolume {
-        player_id: PlayerId,
-        volume: f32,
+    SetPlayerMasterVolumes {
+        levels: Vec<PlayerLevel>,
     },
     SetPlayerSlotVolume {
         player_id: PlayerId,
@@ -220,6 +237,12 @@ pub type AllocatedSlot = (
     Arc<SharedPlayerState>,
     SharedEq,
 );
+
+// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
+// squares its argument, so it must be converted rather than passed through.
+fn master_gain(level: f32) -> Volume {
+    Volume::Linear(amp_to_linear_volume_clamped(level, 0.0))
+}
 
 fn ducking_gain(mode: SessionDuckingMode) -> f32 {
     /// Gain applied during soft ducking.
@@ -319,12 +342,10 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        Cmd::SetPlayerMasterVolume { player_id, volume } => {
-            match set_player_master_volume(state, player_id, volume) {
-                Ok(()) => Reply::Ok,
-                Err(err) => Reply::Err(err),
-            }
-        }
+        Cmd::SetPlayerMasterVolumes { levels } => match set_player_master_volumes(state, &levels) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
         Cmd::SetPlayerSlotVolume {
             player_id,
             slot,
@@ -510,16 +531,25 @@ fn create_session_output<B: AudioBackend>(state: &mut SessionState<B>) -> Result
         VolumePanNode::from_volume(Volume::Linear(ducking_gain(state.session_ducking)));
     let session_memo = Memo::new(session_node);
     let session_id = fw_ctx.add_node(session_node, None);
+    let limiter_id = fw_ctx.add_node(LimiterNode, None);
     let graph_out = fw_ctx.graph_out_node_id();
     fw_ctx
-        .connect(session_id, graph_out, &[(0, 0), (1, 1)], false)
-        .map_err(|err| format!("connect session output to graph_out failed: {err}"))?;
+        .connect(session_id, limiter_id, &[(0, 0), (1, 1)], false)
+        .map_err(|err| format!("connect session output to limiter failed: {err}"))?;
+    fw_ctx
+        .connect(limiter_id, graph_out, &[(0, 0), (1, 1)], false)
+        .map_err(|err| format!("connect limiter to graph_out failed: {err}"))?;
     if let Err(err) = fw_ctx.update() {
         warn!("session graph update after output init failed: {err:?}");
     }
     state.session_output_node_id = Some(session_id);
     state.session_output_memo = Some(session_memo);
-    debug!(?session_id, "[KITHARA-ROUTE] session output graph ready");
+    state.session_limiter_node_id = Some(limiter_id);
+    debug!(
+        ?session_id,
+        ?limiter_id,
+        "[KITHARA-ROUTE] session output graph ready"
+    );
     Ok(())
 }
 
@@ -556,7 +586,7 @@ fn start_player<B: AudioBackend>(
     let master_eq_id = fw_ctx.add_node(master_eq, None);
 
     player.master_volume = master_volume.clamp(0.0, 1.0);
-    let master_vol = VolumePanNode::from_volume(Volume::Linear(player.master_volume));
+    let master_vol = VolumePanNode::from_volume(master_gain(player.master_volume));
     let master_vol_memo = Memo::new(master_vol);
     let master_vol_id = fw_ctx.add_node(master_vol, None);
 
@@ -663,6 +693,7 @@ fn shutdown_if_idle<B: AudioBackend>(state: &mut SessionState<B>) {
         state.ctx = None;
         state.session_output_node_id = None;
         state.session_output_memo = None;
+        state.session_limiter_node_id = None;
     }
 }
 
@@ -807,33 +838,56 @@ fn remove_slot_graph<B: AudioBackend>(
     }
 }
 
-fn set_player_master_volume<B: AudioBackend>(
+// Validates the whole request before mutating anything, so an invalid entry
+// leaves the batch untouched. Omitted players are unchanged.
+fn set_player_master_volumes<B: AudioBackend>(
     state: &mut SessionState<B>,
-    player_id: PlayerId,
-    volume: f32,
+    levels: &[PlayerLevel],
 ) -> Result<(), String> {
-    let idx = player_index(state, player_id)?;
-    let master_volume = volume.clamp(0.0, 1.0);
-    state.players[idx].master_volume = master_volume;
-    if !state.players[idx].started {
-        return Ok(());
+    let mut resolved: Vec<(usize, f32)> = Vec::with_capacity(levels.len());
+    for &PlayerLevel { player_id, level } in levels {
+        if !level.is_finite() || !(0.0..=1.0).contains(&level) {
+            return Err(format!(
+                "master volume {level} out of range for player {player_id}"
+            ));
+        }
+        let idx = player_index(state, player_id)?;
+        if resolved.iter().any(|&(seen, _)| seen == idx) {
+            return Err(format!(
+                "duplicate player in master volume batch: {player_id}"
+            ));
+        }
+        // Checked here so the apply pass below is infallible (all-or-nothing).
+        let player = &state.players[idx];
+        if player.started
+            && (state.ctx.is_none()
+                || player.master_vol_pan_node_id.is_none()
+                || player.master_vol_pan_memo.is_none())
+        {
+            return Err(format!(
+                "player {player_id} master vol graph is not initialised"
+            ));
+        }
+        resolved.push((idx, level));
     }
 
+    for &(idx, level) in &resolved {
+        apply_master_volume(state, idx, level);
+    }
+    Ok(())
+}
+
+fn apply_master_volume<B: AudioBackend>(state: &mut SessionState<B>, idx: usize, volume: f32) {
+    state.players[idx].master_volume = volume;
     let player = &mut state.players[idx];
-    match (
+    if let (Some(fw_ctx), Some(master_id), Some(memo)) = (
         &mut state.ctx,
         player.master_vol_pan_node_id,
         &mut player.master_vol_pan_memo,
     ) {
-        (None, _, _) => Err("session context is not initialised".into()),
-        (Some(_), None, _) => Err("player master vol node is not initialised".into()),
-        (Some(_), Some(_), None) => Err("player master vol memo is not initialised".into()),
-        (Some(fw_ctx), Some(master_id), Some(memo)) => {
-            memo.volume = Volume::Linear(master_volume);
-            let mut queue = fw_ctx.event_queue(master_id);
-            memo.update_memo(&mut queue);
-            Ok(())
-        }
+        memo.volume = master_gain(volume);
+        let mut queue = fw_ctx.event_queue(master_id);
+        memo.update_memo(&mut queue);
     }
 }
 
@@ -1242,5 +1296,177 @@ mod tests {
         );
         assert!(!state.stream_needs_restart);
         assert!(state.players[0].started);
+    }
+
+    fn start_player_cmd(state: &mut SessionState<RouteLossBackend>, player_id: PlayerId) {
+        assert!(matches!(
+            run_cmd(
+                &mut *state,
+                Cmd::StartPlayer {
+                    player_id,
+                    sample_rate: 44_100,
+                    master_volume: 1.0,
+                },
+            ),
+            Reply::Ok
+        ));
+    }
+
+    fn master_volume_of(state: &SessionState<RouteLossBackend>, player_id: PlayerId) -> f32 {
+        let idx = player_index(state, player_id).expect("player present");
+        state.players[idx].master_volume
+    }
+
+    #[kithara::test]
+    fn batch_master_volume_updates_one_two_and_four_together() {
+        let _route_loss_guard = lock_route_loss_probe();
+        ROUTE_LOSS.reset();
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let ids: Vec<PlayerId> = (0..4).map(|_| register_player(&mut state)).collect();
+        for &id in &ids {
+            start_player_cmd(&mut state, id);
+        }
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetPlayerMasterVolumes {
+                    levels: vec![PlayerLevel::new(ids[0], 0.1)],
+                },
+            ),
+            Reply::Ok
+        ));
+        assert_eq!(master_volume_of(&state, ids[0]), 0.1);
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetPlayerMasterVolumes {
+                    levels: vec![PlayerLevel::new(ids[1], 0.2), PlayerLevel::new(ids[2], 0.3)],
+                },
+            ),
+            Reply::Ok
+        ));
+        assert_eq!(master_volume_of(&state, ids[1]), 0.2);
+        assert_eq!(master_volume_of(&state, ids[2]), 0.3);
+        assert_eq!(master_volume_of(&state, ids[3]), 1.0);
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetPlayerMasterVolumes {
+                    levels: vec![
+                        PlayerLevel::new(ids[0], 0.4),
+                        PlayerLevel::new(ids[1], 0.5),
+                        PlayerLevel::new(ids[2], 0.6),
+                        PlayerLevel::new(ids[3], 0.7)
+                    ],
+                },
+            ),
+            Reply::Ok
+        ));
+        assert_eq!(master_volume_of(&state, ids[0]), 0.4);
+        assert_eq!(master_volume_of(&state, ids[3]), 0.7);
+    }
+
+    #[kithara::test]
+    fn batch_rejects_duplicate_player_without_mutation() {
+        let _route_loss_guard = lock_route_loss_probe();
+        ROUTE_LOSS.reset();
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let id = register_player(&mut state);
+        start_player_cmd(&mut state, id);
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetPlayerMasterVolumes {
+                    levels: vec![PlayerLevel::new(id, 0.3), PlayerLevel::new(id, 0.4)],
+                },
+            ),
+            Reply::Err(_)
+        ));
+        assert_eq!(master_volume_of(&state, id), 1.0);
+    }
+
+    #[kithara::test]
+    fn batch_rejects_invalid_level_without_mutation() {
+        let _route_loss_guard = lock_route_loss_probe();
+        ROUTE_LOSS.reset();
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let a = register_player(&mut state);
+        let b = register_player(&mut state);
+        start_player_cmd(&mut state, a);
+        start_player_cmd(&mut state, b);
+
+        for bad in [f32::NAN, f32::INFINITY, 1.5, -0.1] {
+            assert!(matches!(
+                run_cmd(
+                    &mut state,
+                    Cmd::SetPlayerMasterVolumes {
+                        levels: vec![PlayerLevel::new(a, 0.5), PlayerLevel::new(b, bad)],
+                    },
+                ),
+                Reply::Err(_)
+            ));
+            assert_eq!(
+                master_volume_of(&state, a),
+                1.0,
+                "level {bad} leaked a mutation"
+            );
+            assert_eq!(master_volume_of(&state, b), 1.0);
+        }
+    }
+
+    #[kithara::test]
+    fn batch_rejects_unknown_player_leaving_known_unchanged() {
+        let _route_loss_guard = lock_route_loss_probe();
+        ROUTE_LOSS.reset();
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let known = register_player(&mut state);
+        start_player_cmd(&mut state, known);
+        let unknown: PlayerId = known + 9_999;
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetPlayerMasterVolumes {
+                    levels: vec![PlayerLevel::new(known, 0.2), PlayerLevel::new(unknown, 0.3)],
+                },
+            ),
+            Reply::Err(_)
+        ));
+        assert_eq!(master_volume_of(&state, known), 1.0);
+    }
+
+    #[kithara::test]
+    fn session_output_has_exactly_one_limiter_rebuilt_on_route_recreate() {
+        let _route_loss_guard = lock_route_loss_probe();
+        ROUTE_LOSS.reset();
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let id = register_player(&mut state);
+        start_player_cmd(&mut state, id);
+        assert!(
+            state.session_limiter_node_id.is_some(),
+            "limiter node exists after start"
+        );
+
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::StopPlayer { player_id: id }),
+            Reply::Ok
+        ));
+        assert!(state.session_limiter_node_id.is_none());
+        assert!(state.session_output_node_id.is_none());
+
+        start_player_cmd(&mut state, id);
+        assert!(
+            state.session_limiter_node_id.is_some(),
+            "route recreate rebuilds the limiter node"
+        );
     }
 }

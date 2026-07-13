@@ -56,6 +56,18 @@ pub enum PlayError {
     #[error("invalid parameter value: {name}={value}")]
     InvalidParameter { name: String, value: f32 },
 
+    #[error("mix level {level} is not a finite value in 0.0..=1.0")]
+    MixLevel { level: f32 },
+
+    #[error("crossfader position {position} is not a finite value in 0.0..=1.0")]
+    MixPosition { position: f32 },
+
+    #[error("mix input player belongs to a different audio session")]
+    MixForeignSession,
+
+    #[error("mix input lists the same player more than once")]
+    MixDuplicatePlayer,
+
     #[error("end of resource")]
     Eof,
 

@@ -7,6 +7,7 @@ pub mod config;
 pub mod crossfade;
 pub mod events;
 pub mod frontend;
+pub mod mix;
 pub mod sources;
 pub mod state;
 pub mod theme;

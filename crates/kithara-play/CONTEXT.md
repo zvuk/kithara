@@ -168,6 +168,89 @@ core (`state.rs`, `client.rs`) carries zero `#[cfg]`; the structural gates are
 the four cfg lines around `mod host_native`, `mod host_web`, and their re-exports
 in `mod.rs`.
 
+## Session mixing
+
+`apply_mix(inputs)` is a free function over a set of players that share one audio
+session; there is no mixer object. Desired session-input gain stays owned by each
+`EngineImpl::master_volume`; applied graph gain stays owned by
+`SessionState::PlayerState`. The two are distinct and only cross through one
+command.
+
+`Cmd::SetPlayerMasterVolumes` is the single session gain mechanism. `run_cmd`
+validates the whole `levels` vector — every value finite and in `0.0..=1.0`,
+every player present, no player repeated — before mutating any stored volume or
+memo, so a rejected batch changes nothing. The singular `Engine::set_master_volume`
+funnels through the same batch with one entry.
+
+`apply_mix` handles the lazily-allocated `PlayerId`: an engine that has never
+started has no id, so it is left out of the dispatched subset and only its
+desired level is stored. The protocol is: take the session from the first input;
+validate levels, same-session (`Arc::ptr_eq`), and uniqueness; take every input's
+`start_lock` in a stable
+address order (so a batch cannot interleave with a concurrent `start`, and two
+overlapping batches cannot deadlock); dispatch one batch for the registered
+subset; only on success store every desired level and emit the master-volume
+event; release the locks. A subsequent `start` reads the stored desired level. On
+dispatch failure nothing is committed.
+
+The session graph places one peak limiter (`impls/limiter_node.rs`, wrapping
+`kithara_audio::PeakLimiter`) between the session-output ducking node and the
+graph output. There is exactly one per active session context; tearing the
+context down (last player stopped, route recreate) drops it, and rebuilding the
+session output recreates it with a fresh envelope. Player start/stop only
+connects or disconnects player master nodes and never touches the limiter.
+
+## Session mixing
+
+Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired*
+input level (`master_volume`, read by `start`). The session `SessionState` owns
+the *applied* graph gain (each `PlayerState.master_volume` and its
+`VolumePanNode` memo). The only transition between them is one batch command,
+`Cmd::SetPlayerMasterVolumes`, which validates the whole vector — every level
+finite and in `0.0..=1.0`, every player present, no player repeated — before
+mutating any stored volume or memo. Omitted players are unchanged; an invalid
+entry leaves the whole batch untouched. This is the single session gain path:
+the singular `EngineImpl::set_master_volume` funnels one entry through it.
+
+Session-input levels are linear **amplitudes**: a level of `0.5` halves the
+player's amplitude, and the sub-ceiling session output is the exact weighted sum
+`Σ levelᵢ · signalᵢ`. Firewheel's `Volume::Linear` is a fader taper (it squares
+its argument), so `master_gain` converts a level to that taper before it reaches
+the player's `VolumePanNode`. Feeding a level in directly would land `0.5` at
+`0.25` amplitude and, worse, turn the equal-power crossfader's `cos`/`sin`
+coefficients into `cos²`/`sin²` — no longer equal-power. Slot/content volume and
+session ducking keep their own existing taper; they are separate controls.
+
+`apply_mix` is a free function: it actuates the final levels of a set of players
+in one batch. The session is taken from the first input; it validates levels,
+same-session membership (`Arc::ptr_eq`), and per-batch uniqueness, then takes
+every input engine's `start_lock` in a stable address order — so a batch cannot interleave
+with a concurrent `start`, and two batches sharing players cannot deadlock. Only
+already-registered engines (those with a session `PlayerId`) enter the dispatched
+subset; a never-started engine has its desired level stored so its first `start`
+adopts it, without speculative registration. Desired levels are committed and the
+master-volume event emitted only after the dispatch succeeds.
+
+The crossfader is pure policy (`crossfader_gain`), not state: consumers fold
+`trim * mute * crossfader_gain * group_master` into each member level before
+calling `apply`. `group_master` is folded per member, never stored as
+process-wide state, so one logical group cannot change another group's master.
+
+The session graph carries exactly one peak limiter (`LimiterNode`, wrapping
+`kithara_audio::PeakLimiter`) at the final sum, after session ducking and before
+the graph output. It is created once per session context in
+`create_session_output`; recreating the context (route change, idle teardown)
+rebuilds it with a fresh envelope. Player start/stop only connects or
+disconnects player master nodes and never creates a per-player limiter.
+
+The limiter is built from fixed valid session constants (ceiling `0.98`, release
+`50 ms`) and a `NonZeroU32` stream rate, so its construction cannot fail;
+`LimiterProcessor` still holds an `Option<PeakLimiter>` because the audio-thread
+`process` may not construct or fail. On the unreachable `None` the node passes
+audio through unlimited rather than substituting a different configuration — a
+justified degraded mode (audible passthrough beats a hard failure on the
+real-time path), not a fallback that hides a state-resolution bug.
+
 ## Route Changes
 
 `PlayerNodeProcessor::new_stream` is the host-rate bridge. A platform route
