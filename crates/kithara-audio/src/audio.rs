@@ -1589,7 +1589,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
             .take()
             .unwrap_or_else(|| self.pcm_pool.get());
         interleaved.clear();
-        interleaved.resize(total_samples, 0.0);
+        interleaved.ensure_len(total_samples)?;
         debug_assert!(
             interleaved.capacity() >= total_samples,
             "Audio::read_planar scratch undersized: capacity={} < total_samples={total_samples}",
