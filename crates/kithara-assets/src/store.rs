@@ -7,7 +7,6 @@ use std::{fmt, num::NonZeroUsize, path::PathBuf};
 use bon::{Builder, bon};
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-#[cfg(feature = "events")]
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 
@@ -172,7 +171,6 @@ struct AssetStoreBuildArgs {
     cache_capacity: Option<NonZeroUsize>,
     cancel: Option<CancelToken>,
     evict_config: Option<EvictConfig>,
-    #[cfg(feature = "events")]
     event_bus: Option<EventBus>,
     flush_hub: Option<Arc<FlushHub>>,
     layout: Option<Arc<dyn AssetLayout>>,
@@ -195,7 +193,7 @@ impl AssetStoreBuilderFactory {
         cache_capacity: Option<NonZeroUsize>,
         cancel: Option<CancelToken>,
         evict_config: Option<EvictConfig>,
-        #[cfg(feature = "events")] event_bus: Option<EventBus>,
+        event_bus: Option<EventBus>,
         flush_hub: Option<Arc<FlushHub>>,
         layout: Option<Arc<dyn AssetLayout>>,
         mem_resource_capacity: Option<usize>,
@@ -206,7 +204,6 @@ impl AssetStoreBuilderFactory {
             cache_capacity,
             cancel,
             evict_config,
-            #[cfg(feature = "events")]
             event_bus,
             flush_hub,
             layout,
@@ -374,16 +371,7 @@ impl AssetStoreBuildArgs {
                 deleter,
                 cfg: evict_cfg,
                 cancel: cancel.clone(),
-                events: {
-                    #[cfg(feature = "events")]
-                    {
-                        crate::evict::evict_events::EventsHandle::new(self.event_bus.clone())
-                    }
-                    #[cfg(not(feature = "events"))]
-                    {
-                        crate::evict::evict_events::EventsHandle::new(None)
-                    }
-                },
+                events: crate::evict::evict_events::EventsHandle::new(self.event_bus.clone()),
                 pins: pins.clone(),
             },
         ));
@@ -401,16 +389,7 @@ impl AssetStoreBuildArgs {
             cached,
             cancel,
             byte_recorder,
-            {
-                #[cfg(feature = "events")]
-                {
-                    crate::lease::lease_events::EventsHandle::new(self.event_bus.clone())
-                }
-                #[cfg(not(feature = "events"))]
-                {
-                    crate::lease::lease_events::EventsHandle::new(None)
-                }
-            },
+            crate::lease::lease_events::EventsHandle::new(self.event_bus.clone()),
             pins,
         );
         (chain, base)
@@ -464,16 +443,7 @@ impl AssetStoreBuildArgs {
                 deleter,
                 cfg: evict_cfg,
                 cancel: cancel.clone(),
-                events: {
-                    #[cfg(feature = "events")]
-                    {
-                        crate::evict::evict_events::EventsHandle::new(self.event_bus.clone())
-                    }
-                    #[cfg(not(feature = "events"))]
-                    {
-                        crate::evict::evict_events::EventsHandle::new(None)
-                    }
-                },
+                events: crate::evict::evict_events::EventsHandle::new(self.event_bus.clone()),
                 pins: pins.clone(),
             },
         ));
@@ -499,16 +469,7 @@ impl AssetStoreBuildArgs {
             cached,
             cancel,
             None,
-            {
-                #[cfg(feature = "events")]
-                {
-                    crate::lease::lease_events::EventsHandle::new(self.event_bus.clone())
-                }
-                #[cfg(not(feature = "events"))]
-                {
-                    crate::lease::lease_events::EventsHandle::new(None)
-                }
-            },
+            crate::lease::lease_events::EventsHandle::new(self.event_bus.clone()),
             pins,
         )
     }
@@ -569,7 +530,6 @@ fn lazy_index_path(root_dir: &std::path::Path, name: &str) -> Option<PathBuf> {
 mod tests {
     use std::fs;
 
-    #[cfg(feature = "events")]
     use kithara_events::{AssetEvent, Event, EventBus, EvictReason};
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
@@ -601,14 +561,12 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "events")]
     fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
         std::iter::from_fn(|| events.try_recv().ok())
             .map(|envelope| envelope.event)
             .collect()
     }
 
-    #[cfg(feature = "events")]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn commit_publishes_asset_committed() {
         let bus = EventBus::new(8);
@@ -632,7 +590,6 @@ mod tests {
         )));
     }
 
-    #[cfg(feature = "events")]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn fail_publishes_asset_failed() {
         let bus = EventBus::new(8);
@@ -657,7 +614,7 @@ mod tests {
         )));
     }
 
-    #[cfg(all(feature = "events", not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn quota_eviction_publishes_asset_evicted() {
         let dir = tempdir().unwrap();

@@ -20,11 +20,7 @@ mod kithara {
     pub(crate) use kithara_test_macros::{mock, probe};
 }
 
-#[cfg(feature = "events")]
 #[path = "evict/events.rs"]
-pub(crate) mod evict_events;
-#[cfg(not(feature = "events"))]
-#[path = "evict/events_noop.rs"]
 pub(crate) mod evict_events;
 
 /// Trait for recording asset bytes for eviction tracking.

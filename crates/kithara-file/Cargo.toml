@@ -46,7 +46,7 @@ probe = []
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
-kithara-assets = { workspace = true, features = ["events"] }
+kithara-assets = { workspace = true }
 kithara-events = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }

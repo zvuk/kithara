@@ -31,11 +31,7 @@ use crate::{
 
 type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 
-#[cfg(feature = "events")]
 #[path = "lease/events.rs"]
-pub(crate) mod lease_events;
-#[cfg(not(feature = "events"))]
-#[path = "lease/events_noop.rs"]
 pub(crate) mod lease_events;
 
 /// Pin guard + removal channel + byte recorder resolved for one resource key.
