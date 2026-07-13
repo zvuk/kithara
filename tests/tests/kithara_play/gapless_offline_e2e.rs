@@ -1034,11 +1034,14 @@ fn synthetic_interleaved_chunk(frames: Vec<f32>) -> PcmChunk {
     let frame_count = frames.len();
     let sample_count = frame_count * usize::from(GAPLESS_CHANNELS);
     let mut samples = PcmPool::default().get();
-    samples.reserve(sample_count);
-    for sample in frames {
-        for _ in 0..GAPLESS_CHANNELS {
-            samples.push(sample);
-        }
+    samples
+        .ensure_len(sample_count)
+        .expect("synthetic interleaved fixture fits PCM pool budget");
+    for (frame, sample) in samples
+        .chunks_exact_mut(usize::from(GAPLESS_CHANNELS))
+        .zip(frames)
+    {
+        frame.fill(sample);
     }
     PcmChunk::new(
         PcmMeta {

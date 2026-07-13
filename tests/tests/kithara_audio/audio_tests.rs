@@ -5,7 +5,7 @@ use std::{fs::File, io::Write};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
-    bufpool::{PcmPool, SharedPool},
+    bufpool::PcmPool,
     decode::{GaplessMode, SilenceTrimParams},
     events::{AudioEvent, Event, EventReceiver, SeekEpoch, SeekLifecycleStage},
     file::{FileConfig, FileSrc},
@@ -94,7 +94,7 @@ async fn test_audio_new(#[case] sample_count: usize) {
 /// leaves it warmed.
 #[kithara::test(tokio)]
 async fn audio_new_warms_pcm_pool() {
-    let pool: PcmPool = SharedPool::<8, Vec<f32>>::new(128, 200_000);
+    let pool = PcmPool::new(128, 200_000);
     assert_eq!(
         pool.allocated_bytes(),
         0,

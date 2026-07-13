@@ -3323,7 +3323,9 @@ mod rebuilding_decoder_tests {
             let channels = usize::from(Consts::CHANNELS);
             let frames = Consts::ROUTE_CHUNK_FRAMES;
             let mut samples = PcmPool::default().get();
-            samples.resize(frames.saturating_mul(channels), 0.0);
+            samples
+                .ensure_len(frames.saturating_mul(channels))
+                .expect("route signal fixture fits PCM pool budget");
             for frame in 0..frames {
                 let absolute = self
                     .next_frame

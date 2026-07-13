@@ -28,7 +28,9 @@ A buffer's byte charge is acquired at first growth (`ensure_len`) and released o
 
 `ensure_len` is transactional: it reserves the budget delta **before** allocating (`try_reserve_exact`), reconciles the actual capacity against the reservation, and rolls back fully on any failure — a failed call leaves length, capacity, and budget untouched. Growth is amortized (doubling, falling back to the exact request when the budget cannot afford the double) so incremental `ensure_len` loops stay O(n).
 
-Raw `Vec` growth through `DerefMut` (`resize`, `extend_from_slice`, …) bypasses enforcement; such post-init growth past the cap is counted in `PoolStats::budget_overshoots` / `RegionStats::budget_overshoots` rather than blocked. Migrating the remaining raw-growth call sites and adding a static check is a documented follow-up together with the `PcmChunk::Default`/`Clone` ownership contract (both still allocate from the global PCM pool).
+On the PCM side `ensure_len` is the **only** way to grow. `PcmBuf` is a nominal guard that derefs to `[f32]`, not `Vec<f32>`, so the raw `Vec` growth mutators (`resize`, `reserve`, `extend`, `extend_from_slice`, `push`, …) do not exist on it — calling one is a compile error, not a runtime overshoot. Length still shrinks via the inherent `clear`/`truncate`/`drain`; capacity and slice access come through the deref. The two remaining escape hatches are deliberate: the `get_with`/`pre_warm` init closures receive the inner `&mut Vec<f32>` (charged after the closure, so an over-grow there is counted as a `budget_overshoots` rather than blocked), and `into_inner()` hands back an owned `Vec<f32>`.
+
+The byte side (`BytePool`, `SegmentBuf`) still derefs to `Vec<u8>` because its I/O consumers grow through `Read`-style `&mut Vec<u8>` sinks; there raw `DerefMut` growth past the cap remains observable via `PoolStats::budget_overshoots` / `RegionStats::budget_overshoots` rather than compile-blocked.
 
 ## Integration
 
