@@ -1,6 +1,7 @@
 use kithara_events::{
     AudioCodecKind, ContainerKind, DecodeErrorClass, DecodeErrorKind, DecoderBackend,
-    DecoderChangeCause, FrameDomain, ResamplerKind, TrackId, TrackStatus as TS,
+    DecoderChangeCause, FrameDomain, PlaybackResamplerKind, ResamplerKind, TrackFailureKind,
+    TrackId, TrackStatus as TS,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
@@ -559,6 +560,46 @@ impl From<ResamplerKind> for FfiResamplerKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiPlaybackResamplerKind {
+    Rubato,
+    Glide,
+    None,
+    Unknown,
+}
+
+impl From<PlaybackResamplerKind> for FfiPlaybackResamplerKind {
+    fn from(value: PlaybackResamplerKind) -> Self {
+        match value {
+            PlaybackResamplerKind::Rubato => Self::Rubato,
+            PlaybackResamplerKind::Glide => Self::Glide,
+            PlaybackResamplerKind::None => Self::None,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiTrackFailureKind {
+    Decode,
+    RecreateFailed { offset: u64 },
+    SourceCancelled,
+    Unknown,
+}
+
+impl From<TrackFailureKind> for FfiTrackFailureKind {
+    fn from(value: TrackFailureKind) -> Self {
+        match value {
+            TrackFailureKind::Decode => Self::Decode,
+            TrackFailureKind::RecreateFailed { offset } => Self::RecreateFailed { offset },
+            TrackFailureKind::SourceCancelled => Self::SourceCancelled,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].
 #[derive(Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -642,6 +683,68 @@ pub enum FfiItemEvent {
         output_rate: u32,
         channels: u16,
         bypassed: bool,
+    },
+    AudioFormatDetected {
+        channels: u16,
+        sample_rate: u32,
+    },
+    AudioFormatChanged {
+        old_channels: u16,
+        old_sample_rate: u32,
+        new_channels: u16,
+        new_sample_rate: u32,
+    },
+    SeekComplete {
+        position_seconds: f64,
+        epoch: u64,
+    },
+    SeekRejected {
+        epoch: u64,
+        target_seconds: f64,
+    },
+    DecoderReady {
+        base_offset: u64,
+        variant: Option<u32>,
+    },
+    TrackFailed {
+        reason: FfiTrackFailureKind,
+        epoch: u64,
+    },
+    UnderrunStarted {
+        position_ms: u64,
+        epoch: u64,
+    },
+    UnderrunEnded {
+        position_ms: u64,
+        epoch: u64,
+    },
+    BufferHealth {
+        buffered_ms: u64,
+        decoded_frontier_ms: u64,
+        epoch: u64,
+    },
+    EngineLoad {
+        load: f32,
+        ms_per_chunk: f32,
+        realtime_factor: f32,
+    },
+    PlaybackResamplerConfigured {
+        backend: FfiPlaybackResamplerKind,
+        host_sample_rate: u32,
+        source_sample_rate: u32,
+        active: bool,
+    },
+    HlsVariantSwitchFenced {
+        from_variant: u32,
+        to_variant: u32,
+        cross_codec: bool,
+    },
+    HlsVariantSwitchAcked {
+        variant: u32,
+        generation: u64,
+    },
+    HlsCacheComplete {
+        total_bytes: Option<u64>,
     },
 }
 

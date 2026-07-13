@@ -56,6 +56,18 @@ impl ItemEventBridge {
             observer.on_event(event);
         }
 
+        if let Event::Audio(audio_event) = event
+            && let Some(event) = audio_event_to_ffi(audio_event)
+        {
+            observer.on_event(event);
+        }
+
+        if let Event::Hls(hls_event) = event
+            && let Some(event) = hls_event_to_ffi(hls_event)
+        {
+            observer.on_event(event);
+        }
+
         if let Some(error) = Self::error_from_event(event) {
             state.lock().mark_failed();
             observer.on_event(FfiItemEvent::StatusChanged {
@@ -316,6 +328,116 @@ fn decoder_event_to_ffi(event: &DecoderEvent) -> Option<FfiItemEvent> {
             output_rate: *output_rate,
             channels: *channels,
             bypassed: *bypassed,
+        }),
+        _ => None,
+    }
+}
+
+fn audio_event_to_ffi(event: &AudioEvent) -> Option<FfiItemEvent> {
+    match event {
+        AudioEvent::FormatDetected { spec } => Some(FfiItemEvent::AudioFormatDetected {
+            channels: spec.channels,
+            sample_rate: spec.sample_rate,
+        }),
+        AudioEvent::FormatChanged { old, new } => Some(FfiItemEvent::AudioFormatChanged {
+            old_channels: old.channels,
+            old_sample_rate: old.sample_rate,
+            new_channels: new.channels,
+            new_sample_rate: new.sample_rate,
+        }),
+        AudioEvent::SeekComplete {
+            position,
+            seek_epoch,
+        } => Some(FfiItemEvent::SeekComplete {
+            position_seconds: crate::types::duration_to_seconds(*position),
+            epoch: *seek_epoch,
+        }),
+        AudioEvent::SeekRejected { epoch, target } => Some(FfiItemEvent::SeekRejected {
+            epoch: *epoch,
+            target_seconds: crate::types::duration_to_seconds(*target),
+        }),
+        AudioEvent::DecoderReady {
+            base_offset,
+            variant,
+        } => Some(FfiItemEvent::DecoderReady {
+            base_offset: *base_offset,
+            variant: *variant,
+        }),
+        AudioEvent::TrackFailed {
+            failure,
+            seek_epoch,
+        } => Some(FfiItemEvent::TrackFailed {
+            reason: failure.clone().into(),
+            epoch: *seek_epoch,
+        }),
+        AudioEvent::UnderrunStarted {
+            position_ms,
+            seek_epoch,
+        } => Some(FfiItemEvent::UnderrunStarted {
+            position_ms: *position_ms,
+            epoch: *seek_epoch,
+        }),
+        AudioEvent::UnderrunEnded {
+            position_ms,
+            seek_epoch,
+        } => Some(FfiItemEvent::UnderrunEnded {
+            position_ms: *position_ms,
+            epoch: *seek_epoch,
+        }),
+        AudioEvent::BufferHealth {
+            buffered_ms,
+            decoded_frontier_ms,
+            seek_epoch,
+        } => Some(FfiItemEvent::BufferHealth {
+            buffered_ms: *buffered_ms,
+            decoded_frontier_ms: *decoded_frontier_ms,
+            epoch: *seek_epoch,
+        }),
+        AudioEvent::EngineLoad {
+            load,
+            ms_per_chunk,
+            realtime_factor,
+        } => Some(FfiItemEvent::EngineLoad {
+            load: *load,
+            ms_per_chunk: *ms_per_chunk,
+            realtime_factor: *realtime_factor,
+        }),
+        AudioEvent::PlaybackResamplerConfigured {
+            backend,
+            host_sample_rate,
+            source_sample_rate,
+            active,
+        } => Some(FfiItemEvent::PlaybackResamplerConfigured {
+            backend: (*backend).into(),
+            host_sample_rate: *host_sample_rate,
+            source_sample_rate: *source_sample_rate,
+            active: *active,
+        }),
+        AudioEvent::EndOfStream => Some(FfiItemEvent::DidReachEnd),
+        _ => None,
+    }
+}
+
+fn hls_event_to_ffi(event: &HlsEvent) -> Option<FfiItemEvent> {
+    match event {
+        HlsEvent::VariantSwitchFenced {
+            from_variant,
+            to_variant,
+            cross_codec,
+        } => Some(FfiItemEvent::HlsVariantSwitchFenced {
+            from_variant: u32::try_from(*from_variant).unwrap_or(u32::MAX),
+            to_variant: u32::try_from(*to_variant).unwrap_or(u32::MAX),
+            cross_codec: *cross_codec,
+        }),
+        HlsEvent::VariantSwitchAcked {
+            variant,
+            generation,
+        } => Some(FfiItemEvent::HlsVariantSwitchAcked {
+            variant: u32::try_from(*variant).unwrap_or(u32::MAX),
+            generation: *generation,
+        }),
+        HlsEvent::CacheComplete { total_bytes } => Some(FfiItemEvent::HlsCacheComplete {
+            total_bytes: *total_bytes,
         }),
         _ => None,
     }
