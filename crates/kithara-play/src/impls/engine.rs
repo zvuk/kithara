@@ -244,10 +244,7 @@ impl EngineImpl {
         session: Arc<dyn SessionDispatcher>,
     ) -> Self {
         let max_slots = config.max_slots;
-        let resolved_pool = config
-            .pcm_pool
-            .clone()
-            .unwrap_or_default();
+        let resolved_pool = config.pcm_pool.clone().unwrap_or_default();
         let worker_cancel = CancelScope::new(config.cancel.clone()).token();
 
         Self {

@@ -459,10 +459,7 @@ where
     }
     let codec_impl =
         AppleCodec::open_with_config(&output_track, config.gapless, target_output_rate)?;
-    let pool = config
-        .pcm_pool
-        .clone()
-        .unwrap_or_default();
+    let pool = config.pcm_pool.clone().unwrap_or_default();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -717,10 +714,7 @@ where
     } else {
         SymphoniaCodec::open_native(demuxer.native_params())?
     };
-    let pool = config
-        .pcm_pool
-        .clone()
-        .unwrap_or_default();
+    let pool = config.pcm_pool.clone().unwrap_or_default();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -809,10 +803,7 @@ where
     let demuxer =
         Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone().unwrap_or_default())?;
     let codec = open_codec(demuxer.track_info())?;
-    let pool = config
-        .pcm_pool
-        .clone()
-        .unwrap_or_default();
+    let pool = config.pcm_pool.clone().unwrap_or_default();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,

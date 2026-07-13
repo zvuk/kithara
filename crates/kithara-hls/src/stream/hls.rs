@@ -81,10 +81,7 @@ impl StreamType for Hls {
         let invalidation_guard = store.subscribe_eviction(Arc::clone(&asset_root_arc), evict_tx);
         let scope = store.scope(asset_root_arc);
 
-        let byte_pool = config
-            .pool
-            .clone()
-            .unwrap_or_default();
+        let byte_pool = config.pool.clone().unwrap_or_default();
 
         let playhead = Arc::new(PlayheadState::new());
         let seek = Arc::new(SeekState::new());
