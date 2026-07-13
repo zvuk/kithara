@@ -245,6 +245,8 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         .map(|u| {
             let cfg = ResourceConfig::for_src(u)
                 .expect("valid URL")
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .downloader(downloader.clone())
                 .store(store.clone())
                 .build();
@@ -383,6 +385,8 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     let track_source = |url: &str| -> TrackSource {
         let cfg = ResourceConfig::for_src(url)
             .expect("valid URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .build();
@@ -472,6 +476,8 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     let track_source = |url: &str| -> TrackSource {
         let cfg = ResourceConfig::for_src(url)
             .expect("valid URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .build();

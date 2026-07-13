@@ -14,7 +14,7 @@ use bytes::Bytes;
 use kithara::{
     assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader, analysis::BeatAnalysisConfig},
-    bufpool::PcmPool,
+    bufpool::{BytePool, PcmPool},
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     prelude::ResourceConfig,
@@ -86,6 +86,8 @@ async fn waveform_and_player_share_one_get() {
     // Waveform analysis consumer (whole-file) of the shared store.
     let waveform_cfg = ResourceConfig::for_src(url.as_str())
         .expect("waveform url")
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .asset_store(Arc::clone(&store))
         .build();
 
@@ -97,7 +99,7 @@ async fn waveform_and_player_share_one_get() {
             .asset_store(Arc::clone(&store))
             .build(),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
+    .byte_pool(BytePool::default())
     .pcm_pool(PcmPool::default())
     .block_on_underrun(true)
     .build();

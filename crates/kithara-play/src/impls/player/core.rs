@@ -52,7 +52,7 @@ pub struct PlayerConfig {
     /// Master cancel token for this player.
     pub cancel: Option<CancelToken>,
     /// Raw byte buffer pool shared by resources created for this player.
-    pub byte_pool: Option<BytePool>,
+    pub byte_pool: BytePool,
     /// PCM buffer pool for audio-thread scratch buffers.
     pub pcm_pool: PcmPool,
     /// Pre-built audio session dispatcher.
@@ -390,9 +390,7 @@ impl PlayerImpl {
         config: crate::impls::config::ResourceConfig,
     ) -> crate::impls::config::ResourceConfig {
         let bus = config.bus.or_else(|| Some(self.core.bus.scoped()));
-        let byte_pool = config
-            .byte_pool
-            .or_else(|| self.core.config.byte_pool.clone());
+        let byte_pool = config.byte_pool.clone();
         // Give each prepared resource a fresh per-instance child so one
         // track's teardown never cancels a sibling. Derives from the
         // caller-provided parent (e.g. the app/queue master) or from this
@@ -409,7 +407,7 @@ impl PlayerImpl {
             bus,
             byte_pool,
             cancel,
-            pcm_pool: Some(self.core.engine.pcm_pool().clone()),
+            pcm_pool: self.core.engine.pcm_pool().clone(),
             worker: Some(self.core.engine.worker().clone()),
             host_sample_rate: std::num::NonZeroU32::new(self.core.engine.master_sample_rate()),
             decoder,
@@ -643,8 +641,12 @@ mod tests {
             gapless_mode: GaplessMode::Disabled,
             ..PlayerConfig::default()
         });
-        let mut config = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
-            .expect("BUG: valid resource config");
+        let mut config = crate::impls::config::ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: valid resource config");
 
         config = player.prepare_config(config);
 
@@ -659,8 +661,12 @@ mod tests {
     #[kithara::test]
     fn prepare_config_per_track_cancel_is_child_of_player_master() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        let mut rc = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
-            .expect("BUG: valid resource config");
+        let mut rc = crate::impls::config::ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: valid resource config");
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
@@ -681,8 +687,12 @@ mod tests {
             cancel: Some(parent_master.clone()),
             ..PlayerConfig::default()
         });
-        let mut rc = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
-            .expect("BUG: valid resource config");
+        let mut rc = crate::impls::config::ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: valid resource config");
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
@@ -799,7 +809,7 @@ mod tests {
             gapless_mode: GaplessMode::MediaOnly,
             max_slots: 2,
             sample_rate: 44_100,
-            byte_pool: None,
+            byte_pool: BytePool::default(),
             pcm_pool: PcmPool::default(),
             auto_advance_enabled: true,
             session: None,
@@ -813,6 +823,7 @@ mod tests {
     #[kithara::test]
     fn player_config_builder() {
         let config = PlayerConfig::builder()
+            .byte_pool(BytePool::default())
             .pcm_pool(PcmPool::default())
             .max_slots(8)
             .default_rate(0.5)

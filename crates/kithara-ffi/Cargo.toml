@@ -145,6 +145,7 @@ uuid = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-abr = { workspace = true, default-features = false }
+kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
 # The wasm worker reaches the shared DRM key-options, ABR-mode, and
 # key-processor types directly (native reaches the same types through the

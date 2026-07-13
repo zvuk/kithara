@@ -132,6 +132,8 @@ async fn create_delayed_gapless_hls_resource(
     let store = StoreOptions::new(cache_dir);
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(store)
         .build();
     config = player.prepare_config(config);

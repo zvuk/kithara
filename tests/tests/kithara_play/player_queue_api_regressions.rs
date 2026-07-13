@@ -135,6 +135,8 @@ async fn make_signal_resource(
     let url = server.sine(&spec, freq_hz).await;
     let mut config = ResourceConfig::for_src(url.as_str())
         .expect("valid signal fixture URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(StoreOptions::new(cache_dir))
         .build();
     config = player.prepare_config(config);

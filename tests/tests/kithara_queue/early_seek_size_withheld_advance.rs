@@ -19,6 +19,7 @@
 
 use kithara::{
     assets::StoreOptions,
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
     net::{HttpClient, NetOptions},
@@ -105,6 +106,8 @@ async fn build_hls_resource(
                 .build(),
         )
         .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .build();
     Resource::new(cfg).await.expect("create HLS resource")
 }

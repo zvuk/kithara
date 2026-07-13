@@ -411,6 +411,8 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     let store = StoreOptions::new(temp.path());
     let cfg = kithara::play::ResourceConfig::for_src(spec.url.as_str())
         .expect("valid track URL")
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .decoder(

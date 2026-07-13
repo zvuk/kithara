@@ -79,6 +79,8 @@ async fn hls_seek_middle_repeated_seeks_stress(
 
     let cfg = ResourceConfig::for_src(master.as_str())
         .expect("valid master URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .name("t0".to_string())
         .store(store)

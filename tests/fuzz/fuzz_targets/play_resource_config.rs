@@ -1,7 +1,10 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara::play::ResourceConfig;
+use kithara::{
+    bufpool::{BytePool, PcmPool},
+    play::ResourceConfig,
+};
 use libfuzzer_sys::fuzz_target;
 
 #[derive(Arbitrary, Debug)]
@@ -14,5 +17,5 @@ fuzz_target!(|input: Input| {
     raw.truncate(4 * 1024);
 
     let text = String::from_utf8_lossy(&raw);
-    let _ = ResourceConfig::new(text.as_ref());
+    let _ = ResourceConfig::new(text.as_ref(), BytePool::default(), PcmPool::default());
 });

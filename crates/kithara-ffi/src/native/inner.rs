@@ -604,6 +604,7 @@ fn build_source_for_item(
         .events(scoped.clone())
         .downloader(inner.downloader.clone())
         .byte_pool(inner.region.byte_pool())
+        .pcm_pool(inner.region.pcm_pool())
         .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();

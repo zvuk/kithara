@@ -355,6 +355,8 @@ async fn assert_no_barge_in(queue: &Queue, slow_id: TrackId) -> Result<(), Strin
 fn mk_cfg(url: &Url, downloader: &Downloader, store: &StoreOptions) -> ResourceConfig {
     ResourceConfig::for_src(url.as_str())
         .expect("valid fixture URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store.clone())
         .initial_abr_mode(AbrMode::Auto(None))

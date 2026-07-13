@@ -57,8 +57,12 @@ impl Loader {
     /// sample-rate / runtime / default bus are injected.
     pub(crate) fn build_config(&self, source: TrackSource) -> Result<ResourceConfig, QueueError> {
         let config = match source {
-            TrackSource::Uri(url) => ResourceConfig::new(&url)
-                .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
+            TrackSource::Uri(url) => ResourceConfig::new(
+                &url,
+                self.player.config().byte_pool.clone(),
+                self.player.config().pcm_pool.clone(),
+            )
+            .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
             TrackSource::Config(boxed) => *boxed,
         };
         Ok(self.player.prepare_config(config))
@@ -213,7 +217,7 @@ impl Loader {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_bufpool::Region;
+    use kithara_bufpool::{BytePool, PcmPool, Region};
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::time::Duration;
     use kithara_play::PlayerConfig;
@@ -281,7 +285,11 @@ mod tests {
         let Ok(builder) = ResourceConfig::for_src("https://example.com/a.mp3") else {
             panic!("valid url");
         };
-        let given = builder.preferred_peak_bitrate(321.0).build();
+        let given = builder
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .preferred_peak_bitrate(321.0)
+            .build();
         let Ok(returned) = loader.build_config(TrackSource::Config(Box::new(given))) else {
             panic!("build_config should succeed");
         };

@@ -869,6 +869,8 @@ async fn create_resource_with_encoding(
     let store = StoreOptions::new(cache_dir);
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(store)
         .build();
     config = player.prepare_config(config);
@@ -925,6 +927,8 @@ async fn create_apple_fused_resource(
     let store = StoreOptions::new(cache_dir);
     let config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

@@ -170,6 +170,8 @@ async fn run_one_attempt(
         }
     };
     let cfg = builder
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .initial_abr_mode(AbrMode::Auto(None))

@@ -283,6 +283,7 @@ fn install(record: &mut TrackRecord, generations: &AtomicU64, cancel: CancelToke
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -300,8 +301,12 @@ mod tests {
 
     #[kithara::test]
     fn track_source_from_resource_config() {
-        let cfg =
-            ResourceConfig::new("https://example.com/a.mp3").expect("BUG: hard-coded URL is valid");
+        let cfg = ResourceConfig::new(
+            "https://example.com/a.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: hard-coded URL is valid");
         let src: TrackSource = cfg.into();
         assert!(matches!(src, TrackSource::Config(_)));
         assert_eq!(src.uri(), None);

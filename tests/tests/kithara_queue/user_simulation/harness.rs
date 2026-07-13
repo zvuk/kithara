@@ -152,6 +152,8 @@ impl SimHarness {
         for spec in specs {
             let cfg = ResourceConfig::for_src(spec.url.as_str())
                 .expect("valid track URL")
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .downloader(downloader.clone())
                 .store(store.clone())
                 .decoder(

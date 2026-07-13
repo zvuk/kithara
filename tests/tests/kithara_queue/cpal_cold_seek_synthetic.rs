@@ -76,6 +76,8 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
 
     let cfg = ResourceConfig::for_src(master.as_str())
         .expect("valid master URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .decoder(

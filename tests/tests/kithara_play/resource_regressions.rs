@@ -118,6 +118,8 @@ fn resource_config(
                 .backend(backend)
                 .build(),
         )
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .build()
 }
 
@@ -1422,6 +1424,8 @@ async fn live_remote_resource_decodes_with_duration(
     );
     let config = ResourceConfig::for_src(url)
         .expect("valid URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(store)
         .downloader(downloader)
         .decoder(
@@ -1549,6 +1553,8 @@ async fn player_mp3_duration_matches_app_flow(
 
     let mut config = ResourceConfig::for_src(url)
         .unwrap()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -1648,6 +1654,8 @@ async fn local_resource_decodes_with_duration(
                 .backend(backend)
                 .build(),
         )
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .build();
 
     let mut resource = Resource::new(config)

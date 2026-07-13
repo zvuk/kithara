@@ -7,7 +7,7 @@
 
 use kithara::{
     audio::{Bucket, analysis::BeatAnalysisConfig},
-    bufpool::PcmPool,
+    bufpool::{BytePool, PcmPool},
     platform::{CancelToken, time::Duration},
     prelude::ResourceConfig,
 };
@@ -54,8 +54,8 @@ async fn run_analysis(
 async fn runner_silent_wav_yields_all_zero_envelope() {
     let server = TestServerHelper::new().await;
     let url = server.silence(&silence_wav_spec()).await;
-    let config =
-        ResourceConfig::new(url.as_str()).expect("silence URL must build a ResourceConfig");
+    let config = ResourceConfig::new(url.as_str(), BytePool::default(), PcmPool::default())
+        .expect("silence URL must build a ResourceConfig");
 
     // A silent 1s WAV must decode end to end and finalise to a native-resolution
     // envelope capped by the requested maximum. No frames are loud, so nothing
@@ -87,8 +87,8 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
 async fn runner_returns_nothing_when_cancelled_upfront() {
     let server = TestServerHelper::new().await;
     let url = server.silence(&silence_wav_spec()).await;
-    let config =
-        ResourceConfig::new(url.as_str()).expect("silence URL must build a ResourceConfig");
+    let config = ResourceConfig::new(url.as_str(), BytePool::default(), PcmPool::default())
+        .expect("silence URL must build a ResourceConfig");
 
     let master = CancelToken::never();
     master.cancel();

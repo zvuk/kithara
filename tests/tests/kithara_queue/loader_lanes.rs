@@ -123,6 +123,8 @@ fn build_queue_with_tick(
 fn mk_cfg(url: &Url, downloader: &Downloader, store: &StoreOptions) -> ResourceConfig {
     ResourceConfig::for_src(url.as_str())
         .expect("valid fixture URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store.clone())
         .build()
