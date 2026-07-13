@@ -2,7 +2,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     ops::Range,
-    path::{Path, PathBuf},
 };
 
 use anyhow::{Context as _, Result};
@@ -15,12 +14,13 @@ use syn::{
 use super::{
     Check, Context,
     derivable_support::{
-        cfg_tokens, field_declaration_start, impl_range, indent_attribute, line_start, merge_derive,
+        cfg_tokens, crate_manifest, deletion_range, field_declaration_start, impl_range,
+        indent_attribute, line_start, merge_derive, method_blocks,
     },
 };
 use crate::common::{
     exclude::{attrs_have_cfg_test, collect_cfg_test_ranges},
-    fix::{FixOutcome, SourceRewriter, expand_blocks},
+    fix::{FixOutcome, SourceRewriter},
     parse::{collect_scopes, self_ty_name},
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
@@ -428,28 +428,6 @@ fn complete_type<'a>(
     }
 }
 
-fn deletion_range(src: &str, range: Range<usize>) -> Range<usize> {
-    let line = line_start(src, range.start);
-    let start = if src[line..range.start]
-        .bytes()
-        .all(|byte| matches!(byte, b' ' | b'\t'))
-    {
-        line
-    } else {
-        range.start
-    };
-    let next = src[range.end..]
-        .find(|character: char| !character.is_whitespace())
-        .map_or(src.len(), |offset| range.end + offset);
-    let next_line = line_start(src, next);
-    let end = if src[range.end..next].contains('\n') && next_line >= range.end {
-        next_line
-    } else {
-        range.end
-    };
-    start..end
-}
-
 fn conversion_reason<'a>(
     src: &str,
     rel: &str,
@@ -664,19 +642,6 @@ fn direct_self_field(expr: &Expr) -> Option<String> {
         Member::Named(ident) => Some(ident.to_string()),
         Member::Unnamed(index) => Some(index.index.to_string()),
     }
-}
-
-fn method_blocks(src: &str, impl_block: &ItemImpl) -> Result<Vec<Range<usize>>, String> {
-    let scope = impl_block.brace_token.span.open().byte_range().end
-        ..impl_block.brace_token.span.close().byte_range().start;
-    let spans: Vec<_> = impl_block
-        .items
-        .iter()
-        .map(|item| item.span().byte_range())
-        .collect();
-    expand_blocks(src, scope, &spans)
-        .map(|blocks| blocks.into_iter().map(|block| block.bytes).collect())
-        .map_err(|error| format!("{error:?}"))
 }
 
 fn method_body_has_comment(src: &str, method: &ImplItemFn) -> bool {
@@ -1241,14 +1206,6 @@ fn is_reference_to(return_ty: &Type, target: &Type, mutable: bool) -> bool {
         return false;
     };
     reference.mutability.is_some() == mutable && reference.elem.as_ref() == target
-}
-
-fn crate_manifest(workspace_root: &Path, source: &Path) -> Option<PathBuf> {
-    source
-        .ancestors()
-        .take_while(|path| path.starts_with(workspace_root))
-        .map(|path| path.join("Cargo.toml"))
-        .find(|path| path.is_file())
 }
 
 #[cfg(test)]

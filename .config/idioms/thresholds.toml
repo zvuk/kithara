@@ -30,7 +30,8 @@ warn_streak = 4
 [derivable_delegation]
 enabled = true
 trait_min_methods = 2
-inherent_min_methods = 3
+inherent_min_methods = 2
+blocking_impl_attrs = ["async_trait", "uniffi::export", "wasm_bindgen"]
 
 [derivable_from]
 enabled = true

@@ -89,6 +89,8 @@ pub(crate) struct DerivableDelegationConfig {
     pub(crate) trait_min_methods: usize,
     #[serde(default = "default_inherent_delegation_methods")]
     pub(crate) inherent_min_methods: usize,
+    #[serde(default = "default_blocking_impl_attrs")]
+    pub(crate) blocking_impl_attrs: Vec<String>,
 }
 
 fn default_delegation_enabled() -> bool {
@@ -100,7 +102,15 @@ fn default_trait_delegation_methods() -> usize {
 }
 
 fn default_inherent_delegation_methods() -> usize {
-    3
+    2
+}
+
+fn default_blocking_impl_attrs() -> Vec<String> {
+    vec![
+        "async_trait".into(),
+        "uniffi::export".into(),
+        "wasm_bindgen".into(),
+    ]
 }
 
 impl Default for DerivableDelegationConfig {
@@ -109,6 +119,7 @@ impl Default for DerivableDelegationConfig {
             enabled: true,
             trait_min_methods: default_trait_delegation_methods(),
             inherent_min_methods: default_inherent_delegation_methods(),
+            blocking_impl_attrs: default_blocking_impl_attrs(),
         }
     }
 }

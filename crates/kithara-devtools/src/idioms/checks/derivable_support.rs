@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, ops::Range};
+use std::{
+    collections::BTreeMap,
+    fs,
+    ops::Range,
+    path::{Path as FsPath, PathBuf},
+};
 
 use anyhow::{Context as _, Result};
 use proc_macro2::Span;
@@ -11,7 +16,7 @@ use syn::{
 use super::Context;
 use crate::common::{
     exclude::{attrs_have_cfg_test, collect_cfg_test_ranges},
-    fix::{FixOutcome, SourceRewriter},
+    fix::{FixOutcome, SourceRewriter, block::BlockRange, expand_blocks},
     parse::{collect_scopes, self_ty_name},
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
@@ -794,6 +799,51 @@ pub(super) fn field_declaration_start(src: &str, field: &syn::Field) -> usize {
 
 pub(super) fn line_start(src: &str, at: usize) -> usize {
     src[..at].rfind('\n').map_or(0, |pos| pos + 1)
+}
+
+pub(super) fn deletion_range(src: &str, range: Range<usize>) -> Range<usize> {
+    let line = line_start(src, range.start);
+    let start = if src[line..range.start]
+        .bytes()
+        .all(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        line
+    } else {
+        range.start
+    };
+    let next = src[range.end..]
+        .find(|character: char| !character.is_whitespace())
+        .map_or(src.len(), |offset| range.end + offset);
+    let next_line = line_start(src, next);
+    let end = if src[range.end..next].contains('\n') && next_line >= range.end {
+        next_line
+    } else {
+        range.end
+    };
+    start..end
+}
+
+pub(super) fn item_blocks(src: &str, impl_block: &ItemImpl) -> Result<Vec<BlockRange>, String> {
+    let scope = impl_block.brace_token.span.open().byte_range().end
+        ..impl_block.brace_token.span.close().byte_range().start;
+    let spans: Vec<_> = impl_block
+        .items
+        .iter()
+        .map(|item| item.span().byte_range())
+        .collect();
+    expand_blocks(src, scope, &spans).map_err(|error| format!("{error:?}"))
+}
+
+pub(super) fn method_blocks(src: &str, impl_block: &ItemImpl) -> Result<Vec<Range<usize>>, String> {
+    item_blocks(src, impl_block).map(|blocks| blocks.into_iter().map(|block| block.bytes).collect())
+}
+
+pub(super) fn crate_manifest(workspace_root: &FsPath, source: &FsPath) -> Option<PathBuf> {
+    source
+        .ancestors()
+        .take_while(|path| path.starts_with(workspace_root))
+        .map(|path| path.join("Cargo.toml"))
+        .find(|path| path.is_file())
 }
 
 pub(super) fn indent_attribute(src: &str, at: usize, attribute: &str) -> String {
