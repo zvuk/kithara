@@ -2,22 +2,11 @@ use arc_swap::ArcSwap;
 use kithara_decode::PcmChunk;
 use kithara_events::{AudioEvent, DeferredBus};
 use kithara_platform::sync::Arc;
-#[cfg(test)]
-use kithara_stream::SourcePhase;
 use kithara_stream::{Activity, PlayheadWrite, SeekControl, SeekObserve, StreamType};
 
 pub(crate) use crate::pipeline::{
     decode::core::{DecodeCore, DecodeInit, DecoderFactory},
     stream::{offset::OffsetReader, shared::SharedStream},
-};
-#[cfg(test)]
-use crate::pipeline::{
-    rebuild::{DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateState},
-    seek::{SeekContext, SeekRequest},
-    track::{
-        ApplyingSeek, AtEof, AwaitingResume, Failed, RebuildingDecoder, RecreatingDecoder,
-        SeekRequested, TrackFailure, WaitState, WaitingForSource, WaitingReason,
-    },
 };
 use crate::{
     pipeline::{
@@ -226,21 +215,9 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 /// progress, and decoder recreation are all transient windows inside
 /// an otherwise-active track. Only `AtEof` (natural end) and `Failed`
 /// (terminal error) clear the flag.
-fn playing_for_state(state: &CurrentFsm) -> bool {
+pub(crate) fn playing_for_state(state: &CurrentFsm) -> bool {
     !matches!(state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_))
 }
-
-#[cfg(test)]
-#[path = "track/tests/rebuild.rs"]
-mod rebuilding_decoder_tests;
-
-#[cfg(test)]
-#[path = "track/tests/splice.rs"]
-mod splice_continuity_tests;
-
-#[cfg(test)]
-#[path = "track/tests/state.rs"]
-mod playing_flag_tests;
 
 #[cfg(test)]
 mod resolve_format_change_target_tests {

@@ -119,7 +119,8 @@ async fn waveform_and_player_share_one_get() {
         .borrow()
         .clone()
         .expect("analysis result present")
-        .waveform
+        .waveform()
+        .cloned()
         .expect("waveform analyzer fills its slot");
     let player_ok = player_drain.await.expect("player drain task");
 
