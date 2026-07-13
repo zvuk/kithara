@@ -1,4 +1,7 @@
-use kithara_events::{TrackId, TrackStatus as TS};
+use kithara_events::{
+    AudioCodecKind, ContainerKind, DecodeErrorClass, DecodeErrorKind, DecoderBackend,
+    DecoderChangeCause, FrameDomain, ResamplerKind, TrackId, TrackStatus as TS,
+};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 
@@ -342,6 +345,220 @@ impl From<FfiTransition> for kithara_queue::Transition {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiAudioCodecKind {
+    AacLc,
+    AacHe,
+    AacHeV2,
+    Mp3,
+    Flac,
+    Vorbis,
+    Opus,
+    Alac,
+    Pcm,
+    Adpcm,
+    Unknown,
+}
+
+impl From<AudioCodecKind> for FfiAudioCodecKind {
+    fn from(value: AudioCodecKind) -> Self {
+        match value {
+            AudioCodecKind::AacLc => Self::AacLc,
+            AudioCodecKind::AacHe => Self::AacHe,
+            AudioCodecKind::AacHeV2 => Self::AacHeV2,
+            AudioCodecKind::Mp3 => Self::Mp3,
+            AudioCodecKind::Flac => Self::Flac,
+            AudioCodecKind::Vorbis => Self::Vorbis,
+            AudioCodecKind::Opus => Self::Opus,
+            AudioCodecKind::Alac => Self::Alac,
+            AudioCodecKind::Pcm => Self::Pcm,
+            AudioCodecKind::Adpcm => Self::Adpcm,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiContainerKind {
+    Mp4,
+    Fmp4,
+    MpegTs,
+    MpegAudio,
+    Adts,
+    Flac,
+    Wav,
+    Ogg,
+    Caf,
+    Mkv,
+    Unknown,
+}
+
+impl From<ContainerKind> for FfiContainerKind {
+    fn from(value: ContainerKind) -> Self {
+        match value {
+            ContainerKind::Mp4 => Self::Mp4,
+            ContainerKind::Fmp4 => Self::Fmp4,
+            ContainerKind::MpegTs => Self::MpegTs,
+            ContainerKind::MpegAudio => Self::MpegAudio,
+            ContainerKind::Adts => Self::Adts,
+            ContainerKind::Flac => Self::Flac,
+            ContainerKind::Wav => Self::Wav,
+            ContainerKind::Ogg => Self::Ogg,
+            ContainerKind::Caf => Self::Caf,
+            ContainerKind::Mkv => Self::Mkv,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiDecoderBackend {
+    Symphonia,
+    Apple,
+    Android,
+    Unknown,
+}
+
+impl From<DecoderBackend> for FfiDecoderBackend {
+    fn from(value: DecoderBackend) -> Self {
+        match value {
+            DecoderBackend::Symphonia => Self::Symphonia,
+            DecoderBackend::Apple => Self::Apple,
+            DecoderBackend::Android => Self::Android,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiDecoderChangeCause {
+    Initial,
+    VariantSwitch,
+    FormatBoundary,
+    SeekRecreate,
+    Recovery,
+    HostRateChange,
+    Unknown,
+}
+
+impl From<DecoderChangeCause> for FfiDecoderChangeCause {
+    fn from(value: DecoderChangeCause) -> Self {
+        match value {
+            DecoderChangeCause::Initial => Self::Initial,
+            DecoderChangeCause::VariantSwitch => Self::VariantSwitch,
+            DecoderChangeCause::FormatBoundary => Self::FormatBoundary,
+            DecoderChangeCause::SeekRecreate => Self::SeekRecreate,
+            DecoderChangeCause::Recovery => Self::Recovery,
+            DecoderChangeCause::HostRateChange => Self::HostRateChange,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiDecodeErrorClass {
+    Interrupted,
+    VariantChange,
+    Other,
+    Unknown,
+}
+
+impl From<DecodeErrorClass> for FfiDecodeErrorClass {
+    fn from(value: DecodeErrorClass) -> Self {
+        match value {
+            DecodeErrorClass::Interrupted => Self::Interrupted,
+            DecodeErrorClass::VariantChange => Self::VariantChange,
+            DecodeErrorClass::Other => Self::Other,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiDecodeErrorKind {
+    Io,
+    UnsupportedCodec,
+    UnsupportedContainer,
+    InvalidData,
+    SeekFailed,
+    SeekOutOfRange,
+    Parse,
+    ProbeFailed,
+    BackendUnavailable,
+    InvalidSampleRate,
+    BackendStatus,
+    Interrupted,
+    Backend,
+    Unknown,
+}
+
+impl From<DecodeErrorKind> for FfiDecodeErrorKind {
+    fn from(value: DecodeErrorKind) -> Self {
+        match value {
+            DecodeErrorKind::Io => Self::Io,
+            DecodeErrorKind::UnsupportedCodec => Self::UnsupportedCodec,
+            DecodeErrorKind::UnsupportedContainer => Self::UnsupportedContainer,
+            DecodeErrorKind::InvalidData => Self::InvalidData,
+            DecodeErrorKind::SeekFailed => Self::SeekFailed,
+            DecodeErrorKind::SeekOutOfRange => Self::SeekOutOfRange,
+            DecodeErrorKind::Parse => Self::Parse,
+            DecodeErrorKind::ProbeFailed => Self::ProbeFailed,
+            DecodeErrorKind::BackendUnavailable => Self::BackendUnavailable,
+            DecodeErrorKind::InvalidSampleRate => Self::InvalidSampleRate,
+            DecodeErrorKind::BackendStatus => Self::BackendStatus,
+            DecodeErrorKind::Interrupted => Self::Interrupted,
+            DecodeErrorKind::Backend => Self::Backend,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiFrameDomain {
+    Source,
+    Output,
+    Unknown,
+}
+
+impl From<FrameDomain> for FfiFrameDomain {
+    fn from(value: FrameDomain) -> Self {
+        match value {
+            FrameDomain::Source => Self::Source,
+            FrameDomain::Output => Self::Output,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiResamplerKind {
+    Rubato,
+    Apple,
+    Glide,
+    None,
+    Unknown,
+}
+
+impl From<ResamplerKind> for FfiResamplerKind {
+    fn from(value: ResamplerKind) -> Self {
+        match value {
+            ResamplerKind::Rubato => Self::Rubato,
+            ResamplerKind::Apple => Self::Apple,
+            ResamplerKind::Glide => Self::Glide,
+            ResamplerKind::None => Self::None,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
 /// Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].
 #[derive(Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -384,6 +601,47 @@ pub enum FfiItemEvent {
     DidStall,
     Error {
         error: String,
+    },
+    /// Decoder configuration changed for the current item.
+    DecoderChanged {
+        backend: FfiDecoderBackend,
+        codec: Option<FfiAudioCodecKind>,
+        container: Option<FfiContainerKind>,
+        sample_rate: u32,
+        channels: u16,
+        bit_depth: Option<u16>,
+        bitrate: Option<u32>,
+        epoch: u64,
+        cause: FfiDecoderChangeCause,
+        variant: Option<u32>,
+        base_offset: u64,
+        duration_seconds: Option<f64>,
+        gapless_leading: u64,
+        gapless_trailing: u64,
+        has_gapless: bool,
+    },
+    /// Decoder reported a non-fatal or fatal decode error.
+    DecodeError {
+        class: FfiDecodeErrorClass,
+        kind: FfiDecodeErrorKind,
+        codec: Option<FfiAudioCodecKind>,
+        detail: String,
+    },
+    /// Decoder resolved gapless trim values for the current item.
+    GaplessResolved {
+        leading_frames: u64,
+        trailing_frames: u64,
+        domain: FfiFrameDomain,
+        codec: Option<FfiAudioCodecKind>,
+        sample_rate: u32,
+    },
+    /// Decoder-side resampler configuration changed for the current item.
+    ResamplerConfigured {
+        backend: FfiResamplerKind,
+        input_rate: u32,
+        output_rate: u32,
+        channels: u16,
+        bypassed: bool,
     },
 }
 

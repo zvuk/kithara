@@ -1,5 +1,7 @@
 use kithara::abr::AbrMode;
-use kithara_events::{AbrEvent, AudioEvent, DownloaderEvent, Envelope, Event, FileEvent, HlsEvent};
+use kithara_events::{
+    AbrEvent, AudioEvent, DecoderEvent, DownloaderEvent, Envelope, Event, FileEvent, HlsEvent,
+};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -47,6 +49,12 @@ impl ItemEventBridge {
         }
 
         Self::dispatch_variant_events(observer, event, variants);
+
+        if let Event::Decoder(decoder_event) = event
+            && let Some(event) = decoder_event_to_ffi(decoder_event)
+        {
+            observer.on_event(event);
+        }
 
         if let Some(error) = Self::error_from_event(event) {
             state.lock().mark_failed();
@@ -173,7 +181,6 @@ impl ItemEventBridge {
             _ => None,
         }
     }
-
     /// Spawn a task that translates resource events into item callbacks
     /// and refreshes the shared [`ItemView`] cache backing the item's
     /// synchronous getters (`duration_sec`, `is_live_stream`, …).
@@ -232,6 +239,85 @@ impl ItemEventBridge {
 impl Drop for ItemEventBridge {
     fn drop(&mut self) {
         self.cancel.cancel();
+    }
+}
+
+fn decoder_event_to_ffi(event: &DecoderEvent) -> Option<FfiItemEvent> {
+    match event {
+        DecoderEvent::DecoderChanged {
+            backend,
+            codec,
+            container,
+            sample_rate,
+            channels,
+            bit_depth,
+            bitrate,
+            epoch,
+            cause,
+            variant,
+            base_offset,
+            duration,
+            gapless,
+        } => {
+            let (gapless_leading, gapless_trailing, has_gapless) = gapless
+                .map(|span| (span.leading_frames, span.trailing_frames, true))
+                .unwrap_or((0, 0, false));
+            Some(FfiItemEvent::DecoderChanged {
+                backend: (*backend).into(),
+                codec: codec.map(Into::into),
+                container: container.map(Into::into),
+                sample_rate: *sample_rate,
+                channels: *channels,
+                bit_depth: *bit_depth,
+                bitrate: *bitrate,
+                epoch: *epoch,
+                cause: (*cause).into(),
+                variant: *variant,
+                base_offset: *base_offset,
+                duration_seconds: duration.map(crate::types::duration_to_seconds),
+                gapless_leading,
+                gapless_trailing,
+                has_gapless,
+            })
+        }
+        DecoderEvent::DecodeError {
+            class,
+            kind,
+            codec,
+            detail,
+        } => Some(FfiItemEvent::DecodeError {
+            class: (*class).into(),
+            kind: (*kind).into(),
+            codec: codec.map(Into::into),
+            detail: (*detail).to_string(),
+        }),
+        DecoderEvent::GaplessResolved {
+            leading_frames,
+            trailing_frames,
+            domain,
+            codec,
+            sample_rate,
+        } => Some(FfiItemEvent::GaplessResolved {
+            leading_frames: *leading_frames,
+            trailing_frames: *trailing_frames,
+            domain: (*domain).into(),
+            codec: codec.map(Into::into),
+            sample_rate: *sample_rate,
+        }),
+        DecoderEvent::ResamplerConfigured {
+            backend,
+            input_rate,
+            output_rate,
+            channels,
+            bypassed,
+        } => Some(FfiItemEvent::ResamplerConfigured {
+            backend: (*backend).into(),
+            input_rate: *input_rate,
+            output_rate: *output_rate,
+            channels: *channels,
+            bypassed: *bypassed,
+        }),
+        _ => None,
     }
 }
 
