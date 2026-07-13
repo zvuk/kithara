@@ -83,6 +83,10 @@ shear:
 ast-grep *ARGS:
     cargo xtask ast-grep {{ARGS}}
 
+# Opt-in advisory clippy sweep (extended nursery/pedantic perf lints, non-gating)
+audit-clippy *ARGS:
+    cargo xtask audit-clippy {{ARGS}}
+
 # Workspace linters: arch, style, idioms.
 #   just lint                       # all three
 #   just lint arch                  # only arch (or style / idioms)

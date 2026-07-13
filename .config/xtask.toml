@@ -5,6 +5,53 @@
 [project]
 name = "kithara"
 
+[audit_clippy]
+lints = [
+  "redundant_clone",
+  "needless_collect",
+  "iter_with_drain",
+  "drain_collect",
+  "iter_overeager_cloned",
+  "collection_is_never_read",
+  "assigning_clones",
+  "unnecessary_to_owned",
+  "inefficient_to_string",
+  "implicit_clone",
+  "format_push_string",
+  "format_collect",
+  "redundant_allocation",
+  "box_collection",
+  "rc_buffer",
+  "large_enum_variant",
+  "large_types_passed_by_value",
+  "large_stack_arrays",
+  "result_large_err",
+  "stable_sort_primitive",
+  "unnecessary_box_returns",
+  "zero_sized_map_values",
+  "map_entry",
+  "await_holding_lock",
+  "await_holding_refcell_ref",
+  "significant_drop_in_scrutinee",
+  "needless_pass_by_ref_mut",
+  "readonly_write_lock",
+  "mutex_integer",
+  "mutex_atomic",
+  "suboptimal_flops",
+  "imprecise_flops",
+  "naive_bytecount",
+  "map_flatten",
+  "string_lit_as_bytes",
+  "unused_peekable",
+  "unnecessary_struct_initialization",
+  "path_buf_push_overwrite",
+  "single_char_pattern",
+  "manual_memcpy",
+  "slow_vector_initialization",
+  "useless_vec",
+  "missing_const_for_fn",
+]
+
 [health]
 # Crates excluded from `cargo hack --feature-powerset` (too many features).
 feature_powerset_exclude = ["kithara-play", "kithara-app", "kithara-fuzz"]
