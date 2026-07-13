@@ -3,6 +3,7 @@
 use kithara::{
     abr::AbrHandle,
     assets::{FlushHub, FlushPolicy, StoreOptions},
+    audio::AudioDecoderConfig,
     decode::DecoderBackend,
     events::{AbrMode, VariantInfo},
     net::{HttpClient, NetOptions},
@@ -188,7 +189,11 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         panic!("expected an HLS config source for {PROD_TRACK}");
     };
     cfg.store = StoreOptions::new(temp.path());
-    cfg.decoder.backend = backend;
+    cfg.decoder = AudioDecoderConfig::builder()
+        .backend(backend)
+        .gapless_mode(cfg.decoder.gapless_mode())
+        .maybe_resampler(cfg.decoder.resampler().cloned())
+        .build();
     cfg.initial_abr_mode = AbrMode::manual(START_VARIANT);
     cfg.name = Some(TRACK_NAME.to_string());
 

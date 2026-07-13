@@ -14,43 +14,33 @@ pub enum FetchKind {
 #[derive(Debug, Clone)]
 pub struct Fetch<C> {
     /// The data chunk (ignored for non-`Data` kinds).
-    pub data: C,
+    data: C,
     /// Marker kind.
-    pub kind: FetchKind,
+    kind: FetchKind,
     /// Epoch for seek invalidation (0 if unused).
-    pub epoch: u64,
+    epoch: u64,
 }
 
 impl<C> Fetch<C> {
-    /// Create a fetch result from the legacy `is_eof: bool` shape.
-    ///
-    /// `is_eof = true` maps to `FetchKind::NaturalEof`; `false` to
-    /// `FetchKind::Data`. Prefer the explicit constructors below.
-    pub fn new(data: C, is_eof: bool, epoch: u64) -> Self {
-        let kind = if is_eof {
-            FetchKind::NaturalEof
-        } else {
-            FetchKind::Data
-        };
+    /// Create a fetch result with an explicit marker kind and seek epoch.
+    pub fn new(data: C, kind: FetchKind, epoch: u64) -> Self {
         Self { data, kind, epoch }
     }
 
-    /// Explicit data chunk.
-    pub fn data(data: C, epoch: u64) -> Self {
-        Self {
-            data,
-            epoch,
-            kind: FetchKind::Data,
-        }
+    pub(crate) fn data(&self) -> &C {
+        &self.data
     }
 
-    /// Explicit failure marker (distinct from natural EOF).
-    pub fn failure(data: C, epoch: u64) -> Self {
-        Self {
-            data,
-            epoch,
-            kind: FetchKind::Failure,
-        }
+    /// Return the marker kind.
+    #[must_use]
+    pub fn kind(&self) -> FetchKind {
+        self.kind
+    }
+
+    /// Return the seek epoch.
+    #[must_use]
+    pub fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Consume and return the inner data.
@@ -67,7 +57,7 @@ impl<C> Fetch<C> {
 
     /// True iff this is any terminal marker (natural EOF or failure).
     pub fn is_terminal(&self) -> bool {
-        !matches!(self.kind, FetchKind::Data)
+        self.is_eof() || self.kind == FetchKind::Failure
     }
 }
 
@@ -83,7 +73,7 @@ pub struct EpochValidator {
 impl EpochValidator {
     /// Check if a fetch result matches the current epoch.
     pub fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
-        item.epoch == self.epoch
+        item.epoch() == self.epoch
     }
 }
 
@@ -96,7 +86,7 @@ mod tests {
     #[kithara::test]
     fn epoch_validator_keeps_matching_chunks() {
         let mut validator = EpochValidator::default();
-        let item = Fetch::new(vec![1u8, 2, 3], false, 1);
+        let item = Fetch::new(vec![1u8, 2, 3], FetchKind::Data, 1);
         validator.epoch = 1;
         assert!(validator.is_valid(&item));
     }
@@ -104,10 +94,10 @@ mod tests {
     #[kithara::test]
     fn epoch_validator_rejects_stale_chunks_after_seek() {
         let mut validator = EpochValidator::default();
-        let stale = Fetch::new(vec![3u8], false, validator.epoch);
-        let first = Fetch::new(vec![1u8], false, validator.epoch);
+        let stale = Fetch::new(vec![3u8], FetchKind::Data, validator.epoch);
+        let first = Fetch::new(vec![1u8], FetchKind::Data, validator.epoch);
         validator.epoch = validator.epoch.wrapping_add(1);
-        let next = Fetch::new(vec![2u8], false, validator.epoch);
+        let next = Fetch::new(vec![2u8], FetchKind::Data, validator.epoch);
 
         assert!(!validator.is_valid(&first));
         assert!(!validator.is_valid(&stale));

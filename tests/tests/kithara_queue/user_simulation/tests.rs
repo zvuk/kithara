@@ -5,6 +5,7 @@ use std::fmt::Write;
 
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
+    audio::AudioDecoderConfig,
     decode::DecoderBackend,
     events::AbrMode,
     net::{HttpClient, NetOptions},
@@ -413,7 +414,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
         .downloader(downloader.clone())
         .store(store)
         .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
+            AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Symphonia)
                 .build(),
         )
@@ -657,7 +658,11 @@ fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource {
     match build_source(url, &ctx.config) {
         TrackSource::Config(mut cfg) => {
             cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder.backend = DecoderBackend::Symphonia;
+            cfg.decoder = AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .gapless_mode(cfg.decoder.gapless_mode())
+                .maybe_resampler(cfg.decoder.resampler().cloned())
+                .build();
             cfg.initial_abr_mode = AbrMode::Auto(None);
             TrackSource::Config(cfg)
         }

@@ -121,7 +121,7 @@ mod tests {
     use super::*;
     use crate::{
         pipeline::{
-            fetch::Fetch,
+            fetch::{Fetch, FetchKind},
             track::{TrackStep, WaitingReason},
         },
         renderer::{AudioWorkerSource, MockSource, PreloadGate, ServiceClass, ThreadWake},
@@ -517,7 +517,7 @@ mod tests {
 
             fn step_track(&mut self) -> TrackStep<PcmChunk> {
                 thread_sleep(Duration::from_millis(self.block_ms));
-                TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
+                TrackStep::Produced(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
             }
 
             fn seek_observe(&self) -> Arc<dyn SeekObserve> {

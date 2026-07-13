@@ -4,7 +4,7 @@ use kithara_stream::{SeekControl, SeekObserve, SeekState};
 
 use super::AudioWorkerSource;
 use crate::pipeline::{
-    fetch::Fetch,
+    fetch::{Fetch, FetchKind},
     track::{TrackStep, WaitingReason},
 };
 
@@ -71,6 +71,6 @@ impl AudioWorkerSource for MockSource {
             return TrackStep::Eof;
         }
         self.cursor += 1;
-        TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
+        TrackStep::Produced(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
     }
 }

@@ -43,7 +43,7 @@ pub use kithara_resampler::{
 };
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, DecoderResamplerSettings},
-    fetch::{EpochValidator, Fetch},
+    fetch::{EpochValidator, Fetch, FetchKind},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
 pub use renderer::{

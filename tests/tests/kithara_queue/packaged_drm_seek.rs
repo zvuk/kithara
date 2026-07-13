@@ -2,6 +2,7 @@
 
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
+    audio::AudioDecoderConfig,
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -155,7 +156,11 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     let source = match build_source(url.as_str(), &config) {
         TrackSource::Config(mut cfg) => {
             cfg.store = StoreOptions::new(temp.path());
-            cfg.decoder.backend = backend;
+            cfg.decoder = AudioDecoderConfig::builder()
+                .backend(backend)
+                .gapless_mode(cfg.decoder.gapless_mode())
+                .maybe_resampler(cfg.decoder.resampler().cloned())
+                .build();
             cfg.initial_abr_mode = abr;
             TrackSource::Config(cfg)
         }

@@ -142,7 +142,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::audio::{Fetch, ring::create_channels};
+    use crate::audio::{Fetch, FetchKind, ring::create_channels};
 
     #[kithara::test]
     fn output_available_event_fires_on_empty_to_nonempty_ring_transition() {
@@ -151,7 +151,7 @@ mod tests {
         let reader_wake = Arc::new(ThreadWake::default());
         let (mut tx, mut rx) = create_channels(2, &bus, &reader_wake);
 
-        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+        tx.try_push(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
             .expect("first push reaches ring");
         assert!(events.try_recv().is_err());
         tx.flush_wake_signals();
@@ -160,7 +160,7 @@ mod tests {
             Ok(Event::Audio(AudioEvent::OutputAvailable))
         ));
 
-        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+        tx.try_push(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
             .expect("second push reaches ring");
         tx.flush_wake_signals();
         assert!(events.try_recv().is_err());
@@ -168,7 +168,7 @@ mod tests {
         assert!(rx.try_pop().is_some());
         assert!(rx.try_pop().is_some());
 
-        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+        tx.try_push(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
             .expect("third push reaches empty ring");
         tx.flush_wake_signals();
         assert!(matches!(

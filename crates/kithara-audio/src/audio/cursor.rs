@@ -269,7 +269,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::audio::{Fetch, ThreadWake, connect, ring::RingParts};
+    use crate::audio::{Fetch, FetchKind, ThreadWake, connect, ring::RingParts};
 
     #[kithara::test]
     fn partial_resampled_chunk_position_caps_at_duration() {
@@ -292,7 +292,7 @@ mod tests {
         });
         ring.preloaded = true;
         data_tx
-            .try_push(Fetch::new(chunk, false, 0))
+            .try_push(Fetch::new(chunk, FetchKind::Data, 0))
             .expect("chunk reaches test ring");
 
         let playhead = PlayheadState::new();
@@ -336,7 +336,7 @@ mod tests {
         data_tx
             .try_push(Fetch::new(
                 timed_chunk(spec, 1, Duration::ZERO, Duration::from_millis(1)),
-                false,
+                FetchKind::Data,
                 0,
             ))
             .expect("chunk reaches test ring");

@@ -8,7 +8,7 @@ use kithara_stream::SeekObserve;
 use super::{AudioWorkerSource, EngineLoad, PreloadGate, ServiceClass};
 use crate::{
     pipeline::{
-        fetch::Fetch,
+        fetch::{Fetch, FetchKind},
         track::{TrackStep, WaitingReason},
     },
     runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
@@ -98,8 +98,8 @@ impl DecoderNode {
         if let Some(load) = self.engine_load.as_ref() {
             load.record(
                 busy,
-                fetch.data.frames(),
-                fetch.data.spec().sample_rate.get(),
+                fetch.data().frames(),
+                fetch.data().spec().sample_rate.get(),
             );
         }
     }
@@ -206,7 +206,7 @@ impl Node for DecoderNode {
 
             TrackStep::Eof => {
                 let epoch = self.source.decode_epoch();
-                let marker = Fetch::new(PcmChunk::default(), true, epoch);
+                let marker = Fetch::new(PcmChunk::default(), FetchKind::NaturalEof, epoch);
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
                     self.runtime.eof_sent = true;
@@ -219,7 +219,7 @@ impl Node for DecoderNode {
 
             TrackStep::Failed => {
                 let epoch = self.source.decode_epoch();
-                let marker = Fetch::failure(PcmChunk::default(), epoch);
+                let marker = Fetch::new(PcmChunk::default(), FetchKind::Failure, epoch);
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
                     if self.outlet.has_pending() {
@@ -285,10 +285,10 @@ mod tests {
         let (mut outlet, _inlet) = connect::<Fetch<PcmChunk>>(1, None);
 
         outlet
-            .try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .try_push(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
             .unwrap();
         outlet
-            .try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .try_push(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
             .unwrap();
         assert!(outlet.has_pending());
 
@@ -343,7 +343,7 @@ mod tests {
         let source = Box::new(Unimock::new(
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(chunk, 0))),
+                .returns(TrackStep::Produced(Fetch::new(chunk, FetchKind::Data, 0))),
         ));
 
         let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
@@ -386,7 +386,7 @@ mod tests {
             inlet
                 .try_pop()
                 .expect("producer pushed a terminal marker")
-                .kind
+                .kind()
         }
 
         let gate = Arc::new(PreloadGate::default());
@@ -474,9 +474,10 @@ mod tests {
 
         node.outlet.flush();
         let marker = inlet.try_pop().expect("producer pushed an EOF marker");
-        assert_eq!(marker.kind, FetchKind::NaturalEof);
+        assert_eq!(marker.kind(), FetchKind::NaturalEof);
         assert_eq!(
-            marker.epoch, 0,
+            marker.epoch(),
+            0,
             "EOF marker must carry the producer's decode epoch (0), not the live \
              seek epoch (1) the consumer already advanced"
         );
@@ -488,7 +489,7 @@ mod tests {
         let (mut outlet, mut inlet) = connect::<Fetch<PcmChunk>>(1, None);
 
         outlet
-            .try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .try_push(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
             .unwrap();
 
         let source = Box::new(Unimock::new((
@@ -496,7 +497,7 @@ mod tests {
                 .next_call(matching!())
                 .returns(TrackStep::Produced(Fetch::new(
                     PcmChunk::default(),
-                    false,
+                    FetchKind::Data,
                     0,
                 ))),
             MockAudioWorkerSource::step_track
@@ -559,7 +560,7 @@ mod tests {
                 .next_call(matching!())
                 .returns(TrackStep::Produced(Fetch::new(
                     PcmChunk::default(),
-                    false,
+                    FetchKind::Data,
                     0,
                 ))),
             MockAudioWorkerSource::step_track
@@ -569,7 +570,7 @@ mod tests {
                 .next_call(matching!())
                 .returns(TrackStep::Produced(Fetch::new(
                     PcmChunk::default(),
-                    false,
+                    FetchKind::Data,
                     0,
                 ))),
         )));
