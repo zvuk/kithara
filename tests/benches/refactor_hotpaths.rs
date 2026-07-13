@@ -106,7 +106,10 @@ fn build_resampler(source_rate: u32, target_rate: u32, frames: usize) -> Box<dyn
         .backend(RubatoBackend::new())
         .settings(settings)
         .build();
-    create_resampler(&config).unwrap_or_else(|err| panic!("bench resampler should build: {err}"))
+    Box::new(
+        create_resampler(&config)
+            .unwrap_or_else(|err| panic!("bench resampler should build: {err}")),
+    )
 }
 
 fn process_stereo(
