@@ -1,34 +1,39 @@
 use std::{
     any::Any,
-    io::{self, Read, Seek, SeekFrom},
+    io::SeekFrom,
     mem,
-    ops::Range,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
 use arc_swap::ArcSwap;
 use crossbeam_queue::ArrayQueue;
-use delegate::delegate;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, ErrorClass,
-    GaplessMode, InputRequirement, PcmChunk, PcmSpec, duration_for_frames,
+    GaplessMode, PcmChunk, PcmSpec, duration_for_frames,
 };
 use kithara_events::{AudioEvent, AudioFormat, DeferredBus, SeekLifecycleStage, SegmentLocation};
 use kithara_platform::{
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking_on},
 };
 use kithara_stream::{
-    Activity, ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadWrite, SeekControl,
-    SeekObserve, SourcePhase, SourceSeekAnchor, Stream, StreamType, WorkerWake,
+    Activity, ContainerFormat, MediaInfo, PendingReason, PlayheadWrite, SeekControl, SeekObserve,
+    SourcePhase, SourceSeekAnchor, StreamType, WorkerWake,
 };
 use kithara_test_utils::kithara;
 use tracing::{debug, info, trace, warn};
 
+pub(crate) use crate::pipeline::{
+    decode::core::{DecodeInit, DecoderFactory},
+    stream::{offset::OffsetReader, shared::SharedStream},
+};
 use crate::{
     pipeline::{
+        decode::gate::{
+            ReadinessGate, post_seek_anchor_offset, recreate_phase, source_phase_for_wait_context,
+        },
         fetch::Fetch,
         gapless::GaplessStage,
         track_fsm::{
@@ -36,199 +41,12 @@ use crate::{
             DecoderSession, Decoding, RebuildState, RebuildingDecoder, RecreateCause, RecreateNext,
             RecreateOutcome, RecreateState, RecreatingDecoder, ResumeState, SeekContext, SeekMode,
             SeekRequest, SeekRequested, Track, TrackFailure, TrackStep, WaitContext, WaitState,
-            WaitingForSource, WaitingReason, map_source_phase,
+            WaitingForSource, WaitingReason,
         },
     },
     renderer::{AudioWorkerSource, apply_effects, reset_effects},
     traits::AudioEffect,
 };
-
-/// Shared stream wrapper for format change detection.
-///
-/// Wraps Stream in `Arc<Mutex>` to allow:
-/// - Decoder to read via Read + Seek
-/// - `StreamAudioSource` to check `media_info()` for format changes
-pub(crate) struct SharedStream<T: StreamType> {
-    /// Construction-phase read mode, shared across clones. When set, `Read`
-    /// routes through the blocking off-RT [`Stream::read`] adapter (waits for
-    /// the seeked range to download, cancel-bounded by its own timeout)
-    /// instead of the non-blocking RT [`Stream::probe_read`]. `Audio::new`
-    /// arms it for the single up-front decoder build (with the init body
-    /// prefetched, the build read normally hits committed bytes; the blocking
-    /// adapter is the bounded safety net for residual lateness) and disarms it
-    /// before the worker is registered, so the RT decode loop the worker then
-    /// drives always uses `probe_read`. See the crate `CONTEXT.md`
-    /// "Construction reads".
-    blocking: Arc<AtomicBool>,
-    inner: Arc<Mutex<Stream<T>>>,
-}
-
-impl<T: StreamType> SharedStream<T> {
-    pub(crate) fn new(stream: Stream<T>) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(stream)),
-            blocking: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    /// Arm/disarm the construction-phase blocking read mode (see the
-    /// `blocking` field). Shared across all clones derived from this handle,
-    /// so arming before the decoder build and disarming before worker
-    /// registration is a staged construction → steady-state ownership
-    /// transfer — never a live toggle once the RT worker runs.
-    pub(crate) fn set_blocking(&self, on: bool) {
-        self.blocking.store(on, Ordering::Release);
-    }
-
-    delegate! {
-        to self.inner.lock() {
-            pub(crate) fn position(&self) -> u64;
-            /// Absolute byte cursor set — forwards to the inner source's
-            /// atomic, used post-seek when the audio FSM lands at a
-            /// known byte position.
-            pub(crate) fn set_position(&self, pos: u64);
-            pub(crate) fn len(&self) -> Option<u64>;
-            fn media_info(&self) -> Option<MediaInfo>;
-            pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            fn format_change_segment_range(&self) -> kithara_stream::StreamResult<Range<u64>>;
-            pub(crate) fn clear_variant_fence(&self);
-            pub(crate) fn has_variant_change_pending(&self) -> bool;
-            fn variant_change_target(&self) -> Option<usize>;
-            fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
-            /// Build a fresh reader-side event-sink instance from the inner source.
-            pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink>;
-            /// Pull a clone of the optional byte-map handle from the
-            /// inner source. Used by the decoder factory to activate the
-            /// segment-by-segment fMP4 path on HLS.
-            pub(crate) fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
-            /// Narrow mutating playhead handle.
-            pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
-            /// Narrow seek-control handle.
-            pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl>;
-            /// Narrow seek-observe handle.
-            pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve>;
-            /// Narrow activity handle.
-            pub(crate) fn activity(&self) -> Arc<dyn Activity>;
-            /// Overall source readiness at current position.
-            pub(crate) fn phase(&self) -> SourcePhase;
-            /// Point-in-time readiness for a specific byte range.
-            pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase;
-            /// The reader→peer wake handle — `Some` for segmented sources
-            /// (HLS) that push a downloader peer. The FSM arms it on the
-            /// produce core (seek-apply / finalize); the scheduler shell
-            /// flushes it off the forbid-blocking path.
-            pub(crate) fn peer_wake(&self) -> Option<Arc<kithara_stream::DeferredWake>>;
-            /// Install the audio worker's data-arrival wake on the inner
-            /// source. Segmented sources (HLS) fire it from their off-RT
-            /// write/settle sites; no-op for non-segmented sources. Set once,
-            /// after the worker exists.
-            pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>);
-            /// Real-time on-core seek (FSM recreate/boundary, decoder
-            /// `OffsetReader`): position math + cursor set, no `prime_seek_range`
-            /// spin on the forbid-blocking produce core. See [`Stream::probe_seek`].
-            pub(crate) fn probe_seek(&self, pos: SeekFrom) -> io::Result<u64>;
-        }
-    }
-}
-
-impl<T: StreamType> Clone for SharedStream<T> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-            blocking: Arc::clone(&self.blocking),
-        }
-    }
-}
-
-impl<T: StreamType> Read for SharedStream<T> {
-    /// Steady state (RT worker / `OffsetReader`): the non-blocking
-    /// [`Stream::probe_read`] — a not-ready range surfaces immediately so the
-    /// scheduler parks and re-ticks. During construction only (the `blocking`
-    /// flag armed by `Audio::new`), routes through the blocking off-RT
-    /// [`Stream::read`] adapter so the single up-front decoder build waits for
-    /// residual init lateness instead of erroring on the first not-ready probe.
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut stream = self.inner.lock();
-        if self.blocking.load(Ordering::Acquire) {
-            stream.read(buf)
-        } else {
-            stream.probe_read(buf)
-        }
-    }
-}
-
-impl<T: StreamType> Seek for SharedStream<T> {
-    delegate! {
-        to self.inner.lock() {
-            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
-        }
-    }
-}
-
-/// Reader that offsets all positions by a base offset.
-///
-/// When Symphonia seeks to position X, the real stream position is `base_offset + X`.
-/// This is needed when recreating a decoder after ABR variant switch:
-/// the new segment starts at `base_offset` in the virtual stream, but Symphonia
-/// expects positions starting from 0.
-pub(crate) struct OffsetReader<T: StreamType> {
-    shared: SharedStream<T>,
-    base_offset: u64,
-}
-
-impl<T: StreamType> OffsetReader<T> {
-    pub(crate) fn new(shared: SharedStream<T>, base_offset: u64) -> Self {
-        let _ = shared.probe_seek(SeekFrom::Start(base_offset));
-        Self {
-            shared,
-            base_offset,
-        }
-    }
-}
-
-impl<T: StreamType> Read for OffsetReader<T> {
-    delegate! {
-        to self.shared {
-            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
-        }
-    }
-}
-
-impl<T: StreamType> Seek for OffsetReader<T> {
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        // The decoder runs on the produce core, so seek through the real-time
-        // `probe_seek` (no `prime_seek_range` spin on the forbid path).
-        match pos {
-            SeekFrom::Start(p) => {
-                let abs = self.base_offset + p;
-                let real_pos = self.shared.probe_seek(SeekFrom::Start(abs))?;
-                Ok(real_pos.saturating_sub(self.base_offset))
-            }
-            SeekFrom::Current(delta) => {
-                let real_pos = self.shared.probe_seek(SeekFrom::Current(delta))?;
-                Ok(real_pos.saturating_sub(self.base_offset))
-            }
-            SeekFrom::End(delta) => {
-                let real_pos = self.shared.probe_seek(SeekFrom::End(delta))?;
-                Ok(real_pos.saturating_sub(self.base_offset))
-            }
-        }
-    }
-}
-
-/// Factory closure that creates a new decoder from stream, media info, and base offset.
-///
-/// Production: creates Symphonia `Decoder` via [`OffsetReader`].
-/// Tests: returns `MockDecoder` without real I/O.
-///
-/// Returns `Result<_, DecodeError>` so the caller can distinguish a
-/// **transient** failure (e.g. probe ran before the source buffered
-/// `[0..PROBE)` of a freshly-switched variant — `ErrorClass::Interrupted`)
-/// from a **hard** decoder/codec error. Transient errors must route to
-/// `wait_for_source_on_recreate`, not `Failed(RecreateFailed)`.
-pub(crate) type DecoderFactory<T> = Arc<
-    dyn Fn(SharedStream<T>, MediaInfo, u64) -> Result<Box<dyn Decoder>, DecodeError> + Send + Sync,
->;
 
 /// Audio source for Stream with format change detection.
 ///
@@ -293,13 +111,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     recreate_on_host_rate_change: bool,
     decoder_host_sample_rate: u32,
     last_spec: Option<PcmSpec>,
-    /// Reader→peer wake handle, resolved from [`Source::peer_wake`] at
-    /// construction. The FSM runs on the produce core, so it `arm`s this
-    /// (lock-free) at seek-apply / `finalize_seek_pending`; the scheduler shell
-    /// flushes it off the forbid path. Holding the handle directly (not via the
-    /// `SharedStream` mutex) keeps the arm out of the lock the FSM already holds
-    /// at every `clear_seek_pending` callsite. `None` for file streams.
-    peer_wake: Option<Arc<kithara_stream::DeferredWake>>,
+    readiness: ReadinessGate,
     /// `(seek_epoch, target)` of the most recent applied seek.
     /// `committed_position` lags `target` until the seek's first
     /// (trim-aligned) chunk is consumed: the decoder lands at the
@@ -320,18 +132,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     effects: Vec<Box<dyn AudioEffect>>,
     chunks_decoded: u64,
     total_samples: u64,
-}
-
-/// Initial decode state handed to [`StreamAudioSource::new`]: the freshly
-/// built `decoder`, the `decoder_factory` for later ABR/seek rebuilds, the
-/// optional `media_info`, and the `gapless_mode`.
-pub(crate) struct DecodeInit<T: StreamType> {
-    pub(crate) decoder: Box<dyn Decoder>,
-    pub(crate) decoder_factory: DecoderFactory<T>,
-    pub(crate) gapless_mode: GaplessMode,
-    pub(crate) host_sample_rate: Arc<AtomicU32>,
-    pub(crate) media_info: Option<MediaInfo>,
-    pub(crate) recreate_on_host_rate_change: bool,
 }
 
 struct DecoderRebuildJob<T: StreamType> {
@@ -405,9 +205,6 @@ struct SeekAttempt {
 
 // Construction, lifecycle, and state access
 impl<T: StreamType> StreamAudioSource<T> {
-    /// Default read-ahead size in bytes when segment range is unknown.
-    const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
-
     /// Bounded off-RT retire queue for decoders displaced on the produce core.
     const DECODER_RETIRE_CAPACITY: usize = 4;
 
@@ -430,6 +227,8 @@ impl<T: StreamType> StreamAudioSource<T> {
         runtime_handle: RuntimeHandle,
         worker_wake: Arc<dyn WorkerWake>,
     ) -> Self {
+        let gapless = init.build_gapless();
+        let decoder_host_sample_rate = init.decoder_host_sample_rate();
         let DecodeInit {
             decoder,
             decoder_factory,
@@ -438,14 +237,11 @@ impl<T: StreamType> StreamAudioSource<T> {
             host_sample_rate,
             recreate_on_host_rate_change,
         } = init;
-        let decoder_host_sample_rate = host_sample_rate.load(Ordering::Acquire);
         let playhead = shared_stream.playhead_write();
         let seek = shared_stream.seek_control();
         let seek_obs = shared_stream.seek_observe();
         let activity = shared_stream.activity();
-        let peer_wake = shared_stream.peer_wake();
-        let gapless =
-            GaplessStage::build(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
+        let readiness = ReadinessGate::new(shared_stream.peer_wake());
         let session = DecoderSession {
             decoder,
             base_offset: 0,
@@ -471,7 +267,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             activity,
             gapless_mode,
             gapless,
-            peer_wake,
+            readiness,
             eof_drain_inputs_exhausted,
             eof_drain_active: false,
             host_sample_rate,
@@ -1067,8 +863,14 @@ impl<T: StreamType> StreamAudioSource<T> {
                 request,
                 mode: seek_mode,
             };
-            let phase = self.source_phase_for_wait_context(&WaitContext::ApplySeek(applying));
-            let reason = self.source_park(phase).unwrap_or(WaitingReason::Waiting);
+            let phase = source_phase_for_wait_context(
+                &self.shared_stream,
+                &WaitContext::ApplySeek(applying),
+            );
+            let reason = self
+                .readiness
+                .source_park(&self.shared_stream, phase)
+                .unwrap_or(WaitingReason::Waiting);
             self.update_state(CurrentFsm::waiting(
                 WaitContext::ApplySeek(applying),
                 reason,
@@ -1127,7 +929,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             target: request.seek.target,
         });
         self.epoch.store(request.seek.epoch, Ordering::Release);
-        self.finalize_seek_pending(request.seek.epoch);
+        self.readiness
+            .finalize_seek_pending(self.seek.as_ref(), request.seek.epoch);
         self.update_state(CurrentFsm::decoding());
     }
 
@@ -1142,7 +945,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             epoch: request.seek.epoch,
             target: request.seek.target,
         });
-        self.finalize_seek_pending(request.seek.epoch);
+        self.readiness
+            .finalize_seek_pending(self.seek.as_ref(), request.seek.epoch);
         self.update_state(CurrentFsm::failed(TrackFailure::Decode(err)));
     }
 }
@@ -1938,7 +1742,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.seek.complete(epoch);
         // Seek applied on the produce core: arm the peer so it re-targets
         // fetches around the new reader position. The shell flushes it.
-        self.arm_peer_wake();
+        self.readiness.arm_peer_wake();
 
         let mode = match anchor_result {
             Ok(Some(anchor)) => SeekMode::Anchor(anchor),
@@ -1980,7 +1784,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             );
         }
         self.seek.complete(epoch);
-        self.finalize_seek_pending(epoch);
+        self.readiness
+            .finalize_seek_pending(self.seek.as_ref(), epoch);
         self.update_state(CurrentFsm::decoding());
         true
     }
@@ -2002,29 +1807,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             source_byte_offset: None,
         });
         self.seek.complete(epoch);
-        self.finalize_seek_pending(epoch);
+        self.readiness
+            .finalize_seek_pending(self.seek.as_ref(), epoch);
         self.epoch.store(epoch, Ordering::Release);
         self.update_state(CurrentFsm::at_eof());
-    }
-
-    /// Arm the reader→peer wake on the produce core (lock-free). The scheduler
-    /// shell flushes it off the forbid path, so the cross-thread `notify_one`
-    /// (a `kevent`) never fires on the RT core. No-op for file streams.
-    fn arm_peer_wake(&self) {
-        if let Some(ref wake) = self.peer_wake {
-            wake.arm();
-        }
-    }
-
-    fn boundary_end(&self, start: u64) -> u64 {
-        self.shared_stream.len().map_or_else(
-            || start.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES),
-            |len| {
-                start
-                    .saturating_add(Self::DEFAULT_READ_AHEAD_BYTES)
-                    .min(len)
-            },
-        )
     }
 
     /// Decode one chunk using the decode loop.
@@ -2095,100 +1881,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    /// Clear the seek-pending flag and wake the source's peer in one step.
-    ///
-    /// `SeekControl::clear_pending` only flips the atomic flag; it does
-    /// not wake anything. The HLS peer's `sync_abr_lock()` is invoked only
-    /// inside `poll_next`, so when every requested segment is cached and
-    /// the peer parks itself in `Poll::Pending`, the ABR lock acquired on
-    /// seek-initiate stays held indefinitely. Subsequent `set_mode(Manual)`
-    /// calls then hit `AbrReason::Locked` in `decide()` and silently fail
-    /// to commit.
-    ///
-    /// Arming the source's peer wake (`Source::peer_wake`) after every
-    /// seek-completion ensures the peer runs one more `poll_next` cycle, which
-    /// sees `is_seek_pending() == false` and releases the ABR lock through
-    /// `sync_abr_lock`.
-    fn finalize_seek_pending(&self, epoch: u64) {
-        self.seek.clear_pending(epoch);
-        self.arm_peer_wake();
-    }
-
-    fn post_seek_anchor_offset(&self, resume: &ResumeState) -> Option<u64> {
-        let offset = resume.anchor_offset?;
-        let Some(anchor_variant) = resume.anchor_variant_index else {
-            return Some(self.post_seek_gate_byte(offset));
-        };
-        let current_variant = self
-            .shared_stream
-            .abr_handle()
-            .and_then(|handle| handle.current_variant_index());
-        match current_variant {
-            Some(current) if current == anchor_variant => Some(self.post_seek_gate_byte(offset)),
-            _ => None,
-        }
-    }
-
-    /// Clamp the post-seek resume gate to the decoder's live read head.
-    ///
-    /// `anchor_offset` is the *segment start* of the seek-target segment. By
-    /// `AwaitingResume` the decoder has already been seeked to the target
-    /// *within* that segment, so `position()` (the decoder's next read) sits at
-    /// or past the anchor. Gating on the raw anchor waits on bytes the decoder
-    /// has already moved past; under a small / ephemeral cache those bytes get
-    /// evicted right after the seek consumed them and are never re-fetched (the
-    /// decoder never re-reads them), so the gate never clears and the worker
-    /// re-polls `WaitingForSource(PostSeek)` forever while the consumer parks on
-    /// `reader_wake`. Gating on `max(anchor, pos)` tracks the read head so the
-    /// resume gate (resolved by [`Self::source_is_ready_for_chunk`] to the
-    /// segment-clamped chunk-lookahead window) only waits on bytes the decoder
-    /// still needs.
-    fn post_seek_gate_byte(&self, anchor_offset: u64) -> u64 {
-        anchor_offset.max(self.shared_stream.position())
-    }
-
-    /// Decoder-construction input contract for the demuxer `recreate` will
-    /// rebuild, declared per-demuxer by the decode factory: an init-bearing
-    /// container (segment-aware fMP4) reports [`InputRequirement::InitOnly`] —
-    /// its init header (moov/esds/STREAMINFO) must be buffered before the
-    /// rebuilt demuxer can construct; a raw / mid-stream source reports
-    /// [`InputRequirement::Incremental`] — nothing is gated up front, the
-    /// demuxer reads and pends as bytes arrive. The contract names the *shape*;
-    /// byte-space *resolution* stays here (see [`Self::recreate_ready_range`])
-    /// because only the stream knows the ABR virtual-space byte shift.
-    fn recreate_input(&self, recreate: &RecreateState) -> InputRequirement {
-        let byte_map = self.shared_stream.byte_map();
-        kithara_decode::DecoderFactory::input_requirement(&recreate.media_info, byte_map.as_deref())
-    }
-
-    fn recreate_phase(&self, recreate: &RecreateState) -> SourcePhase {
-        self.shared_stream
-            .phase_at(self.recreate_ready_range(recreate))
-    }
-
-    /// Byte range whose readiness gates decoder recreation, shared by the gate
-    /// and the wait path so the two never disagree (a mismatch livelocks the
-    /// worker). The demuxer contract picks the shape; this layer resolves it in
-    /// virtual byte space. An init-bearing recreate gates on the init header via
-    /// [`format_change_segment_range`], which is `served_from`-aware: a
-    /// byte-shifted same-codec commit (init no longer addressable) and an
-    /// oversized init both degrade to the `[offset..offset+READ_AHEAD)` window.
-    /// An incremental recreate gates on that window directly. See the crate
-    /// `CONTEXT.md` "Recreate readiness gating".
-    ///
-    /// [`format_change_segment_range`]: kithara_stream::Stream::format_change_segment_range
-    fn recreate_ready_range(&self, recreate: &RecreateState) -> Range<u64> {
-        if matches!(self.recreate_input(recreate), InputRequirement::Incremental) {
-            return recreate.offset..self.boundary_end(recreate.offset);
-        }
-        if let Ok(init_range) = self.shared_stream.format_change_segment_range()
-            && init_range.end.saturating_sub(init_range.start) <= Self::DEFAULT_READ_AHEAD_BYTES
-        {
-            return init_range;
-        }
-        recreate.offset..self.boundary_end(recreate.offset)
-    }
-
     fn seek_anchor_stale(&self, mode: SeekMode) -> bool {
         let SeekMode::Anchor(anchor) = mode else {
             return false;
@@ -2200,178 +1892,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             .abr_handle()
             .and_then(|handle| handle.current_variant_index())
             .is_some_and(|current| current != anchor_variant)
-    }
-
-    /// Compute the upper bound of the byte range required for the
-    /// decoder to safely produce its first chunk after a seek landing
-    /// at `byte`: the end of the segment containing `byte` (segmented
-    /// sources) or the standard 32 KB look-ahead (raw sources). Always
-    /// clamped to `Source::len()` so we don't gate on phantom bytes
-    /// past EOF.
-    fn seek_landing_end(&self, byte: u64) -> u64 {
-        let segment_end = self
-            .shared_stream
-            .byte_map()
-            .and_then(|layout| layout.segment_at_byte(byte))
-            .map(|seg| seg.byte_range.end);
-        let end = segment_end.unwrap_or_else(|| self.boundary_end(byte));
-        self.shared_stream.len().map_or(end, |len| end.min(len))
-    }
-
-    /// Byte range whose readiness lets the decoder produce its next chunk from
-    /// `byte`: the 32 KB read-ahead window, clamped down to the next segment
-    /// boundary (segmented sources) and to `Source::len()`. The clamp to the
-    /// next segment boundary matters — a fixed 32 KB window straddles the
-    /// boundary into a not-yet-fetched next segment, so the gate would never
-    /// clear even though the decoder only needs the rest of the current
-    /// segment to emit a chunk. Exactly ON a boundary the window is empty
-    /// and therefore vacuously ready: that is deliberate — the demuxer may
-    /// still hold buffered input from the previous segment, and gating on
-    /// the (possibly withheld) next segment here would park the FSM before
-    /// it drains those frames (see `hls_seek_middle_stress_long`). A decode
-    /// attempt that finds no bytes parks through `DecodeStep::NotReady`.
-    fn chunk_lookahead_range(&self, byte: u64) -> Range<u64> {
-        let lookahead_end = byte.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
-        let check_end = self
-            .shared_stream
-            .byte_map()
-            .and_then(|layout| layout.segment_after_byte(byte))
-            .map_or(lookahead_end, |next| {
-                next.byte_range.start.min(lookahead_end)
-            });
-        let check_end = self
-            .shared_stream
-            .len()
-            .map_or(check_end, |len| check_end.min(len));
-        byte..check_end
-    }
-
-    /// Check whether the underlying source has data ready for a non-blocking
-    /// decode. Returns `true` for `Ready`, `Eof`, or `Seeking` phases.
-    fn source_is_ready(&self) -> bool {
-        self.source_ready_for_range(self.chunk_lookahead_range(self.shared_stream.position()))
-    }
-
-    /// Readiness of the chunk-lookahead window starting at `byte` — the
-    /// post-seek-resume companion to [`Self::source_is_ready`], which gates on
-    /// the same segment-clamped window but at the decoder's resume byte rather
-    /// than the live stream position.
-    fn source_is_ready_for_chunk(&self, byte: u64) -> bool {
-        self.source_ready_for_range(self.chunk_lookahead_range(byte))
-    }
-
-    /// Phase of the chunk-lookahead window at `byte`, so the post-seek wait
-    /// path blocks on exactly the window it later gates ready on.
-    fn source_phase_for_chunk(&self, byte: u64) -> SourcePhase {
-        self.shared_stream
-            .phase_at(self.chunk_lookahead_range(byte))
-    }
-
-    fn source_is_ready_for_apply_seek(&self, applying: ApplySeekState) -> bool {
-        match applying.mode {
-            SeekMode::Anchor(anchor) => self.source_is_ready_for_seek_landing(anchor.byte_offset),
-            SeekMode::Direct {
-                target_byte: Some(byte),
-            } => self.source_is_ready_for_seek_landing(byte),
-            SeekMode::Direct { target_byte: None } => self.source_is_ready(),
-        }
-    }
-
-    /// Readiness check for the byte range the decoder will read first
-    /// after a post-seek landing. Gates on the rest of the **segment**
-    /// containing the landing byte (a fixed 32 KB window would cross the
-    /// segment boundary into a not-yet-fetched next segment and never
-    /// clear, or — for a ~700 KB FLAC fmp4 chunk — starve the decoder on
-    /// the very next read while `wait_range` budget exceeds and the audio
-    /// worker's `PassOutcome::Waiting` ticks the `HangDetector`). For
-    /// sources without a segment layout (raw files), falls back to the
-    /// boundary window via [`Self::seek_landing_end`].
-    fn source_is_ready_for_seek_landing(&self, byte: u64) -> bool {
-        let end = self.seek_landing_end(byte);
-        self.source_ready_for_range(byte..end)
-    }
-
-    fn source_park(&self, phase: SourcePhase) -> Option<WaitingReason> {
-        let reason = map_source_phase(phase)?;
-        trace!(
-            ?phase,
-            ?reason,
-            pos = self.shared_stream.position(),
-            "source_park: parking on source phase"
-        );
-        self.arm_peer_wake();
-        Some(reason)
-    }
-
-    /// Companion to [`source_is_ready_for_seek_landing`] used by the
-    /// `WaitingForSource` branch — same byte range so the worker
-    /// blocks on the same window it later gates ready on.
-    fn source_phase_for_seek_landing(&self, byte: u64) -> SourcePhase {
-        let end = self.seek_landing_end(byte);
-        self.shared_stream.phase_at(byte..end)
-    }
-
-    fn source_phase_for_wait_context(&self, context: &WaitContext) -> SourcePhase {
-        match context {
-            WaitContext::ApplySeek(applying) => match applying.mode {
-                SeekMode::Anchor(anchor) => self.source_phase_for_seek_landing(anchor.byte_offset),
-                SeekMode::Direct {
-                    target_byte: Some(byte),
-                } => self.source_phase_for_seek_landing(byte),
-                SeekMode::Direct { target_byte: None } => self.shared_stream.phase(),
-            },
-            WaitContext::Recreation(recreate) => self.recreate_phase(recreate),
-            WaitContext::PostSeek(resume) => self.post_seek_anchor_offset(resume).map_or_else(
-                || self.shared_stream.phase(),
-                |byte| self.source_phase_for_chunk(byte),
-            ),
-            // Steady-state playback parks on the decoder's forward read-ahead
-            // window (see `source_phase_forward`), not the single-byte phase at
-            // `pos`: the decoder reads across the next segment boundary, so a
-            // single-byte gate reports `Ready` while the decoder is blocked on
-            // the withheld next segment, bouncing the worker straight back into
-            // `Decoding` and hot-spinning the decode loop.
-            WaitContext::Playback => self.source_phase_forward(),
-            WaitContext::Seek(_) => self.shared_stream.phase(),
-        }
-    }
-
-    /// Phase of the read-ahead window the decoder reads *through* during
-    /// steady-state playback: `[pos, pos + READ_AHEAD)`, clamped to the
-    /// stream length but — unlike [`source_is_ready`] — NOT clamped to the
-    /// next segment boundary. The decoder's container parser reads across
-    /// segment boundaries, so a boundary-clamped gate reports `Ready` while
-    /// the decoder is actually blocked on the (withheld) next segment. The
-    /// `WaitContext::Playback` wait path gates on this wider window so the
-    /// gate and the decoder's real read never disagree (a mismatch hot-spins
-    /// the worker; see crate `CONTEXT.md` "Playback readiness gating").
-    fn source_phase_forward(&self) -> SourcePhase {
-        let pos = self.shared_stream.position();
-        let end = pos.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
-        let end = self.shared_stream.len().map_or(end, |len| end.min(len));
-        self.shared_stream.phase_at(pos..end)
-    }
-
-    fn source_ready_for_range(&self, range: Range<u64>) -> bool {
-        let phase = self.shared_stream.phase_at(range);
-        if self.source_park(phase).is_some() {
-            return false;
-        }
-        matches!(
-            phase,
-            SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
-        )
-    }
-
-    fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
-        let phase = self.recreate_phase(recreate);
-        if self.source_park(phase).is_some() {
-            return false;
-        }
-        matches!(
-            phase,
-            SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
-        )
     }
 }
 
@@ -2656,7 +2176,8 @@ impl<T: StreamType> StreamAudioSource<T> {
                     None,
                 );
                 self.epoch.store(request.seek.epoch, Ordering::Release);
-                self.finalize_seek_pending(request.seek.epoch);
+                self.readiness
+                    .finalize_seek_pending(self.seek.as_ref(), request.seek.epoch);
                 TrackStep::StateChanged
             }
             Err(err) => {
@@ -2675,8 +2196,8 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// track, depending on the source phase. Owns the `RecreateState`
     /// (moved out of the FSM by the caller) — no `self.state` re-read.
     fn wait_for_source_on_recreate(&mut self, recreate: RecreateState) -> TrackStep<PcmChunk> {
-        let phase = self.recreate_phase(&recreate);
-        if let Some(reason) = self.source_park(phase) {
+        let phase = recreate_phase(&self.shared_stream, &recreate);
+        if let Some(reason) = self.readiness.source_park(&self.shared_stream, phase) {
             self.update_state(CurrentFsm::waiting(
                 WaitContext::Recreation(recreate),
                 reason,
@@ -2707,9 +2228,15 @@ impl Track<ApplyingSeek> {
             src.update_state(CurrentFsm::seek_requested(applying.request));
             return TrackStep::StateChanged;
         }
-        if !src.source_is_ready_for_apply_seek(applying) {
-            let phase = src.source_phase_for_wait_context(&WaitContext::ApplySeek(applying));
-            if let Some(reason) = src.source_park(phase) {
+        if !src
+            .readiness
+            .source_is_ready_for_apply_seek(&src.shared_stream, applying)
+        {
+            let phase = source_phase_for_wait_context(
+                &src.shared_stream,
+                &WaitContext::ApplySeek(applying),
+            );
+            if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
                 src.update_state(CurrentFsm::waiting(
                     WaitContext::ApplySeek(applying),
                     reason,
@@ -2730,7 +2257,8 @@ impl Track<ApplyingSeek> {
         };
         if applied {
             src.epoch.store(request.seek.epoch, Ordering::Release);
-            src.finalize_seek_pending(request.seek.epoch);
+            src.readiness
+                .finalize_seek_pending(src.seek.as_ref(), request.seek.epoch);
             src.gapless.notify_seek();
         }
         TrackStep::StateChanged
@@ -2740,17 +2268,18 @@ impl Track<ApplyingSeek> {
 impl Track<AwaitingResume> {
     fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
         let resume = self.into_inner();
-        let post_seek_offset = src.post_seek_anchor_offset(&resume);
+        let post_seek_offset = post_seek_anchor_offset(&src.shared_stream, &resume);
         let ready = post_seek_offset.map_or_else(
-            || src.source_is_ready(),
-            |byte| src.source_is_ready_for_chunk(byte),
+            || src.readiness.source_is_ready(&src.shared_stream),
+            |byte| {
+                src.readiness
+                    .source_is_ready_for_chunk(&src.shared_stream, byte)
+            },
         );
         if !ready {
-            let phase = post_seek_offset.map_or_else(
-                || src.shared_stream.phase(),
-                |byte| src.source_phase_for_chunk(byte),
-            );
-            if let Some(reason) = src.source_park(phase) {
+            let phase =
+                source_phase_for_wait_context(&src.shared_stream, &WaitContext::PostSeek(resume));
+            if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
                 src.update_state(CurrentFsm::waiting(WaitContext::PostSeek(resume), reason));
                 return TrackStep::Blocked(reason);
             }
@@ -2771,7 +2300,7 @@ impl Track<AwaitingResume> {
 impl Track<Decoding> {
     fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
         let () = self.into_inner();
-        if !src.source_is_ready() {
+        if !src.readiness.source_is_ready(&src.shared_stream) {
             if !src.seek_obs.is_pending()
                 && let FormatChangeDetection::Applicable {
                     target: new_info,
@@ -2787,7 +2316,7 @@ impl Track<Decoding> {
                 return TrackStep::StateChanged;
             }
             let phase = src.shared_stream.phase();
-            if let Some(reason) = src.source_park(phase) {
+            if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
                 src.update_state(CurrentFsm::waiting(WaitContext::Playback, reason));
                 return TrackStep::Blocked(reason);
             }
@@ -2824,7 +2353,10 @@ impl Track<Decoding> {
 impl Track<RecreatingDecoder> {
     fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
         let recreate = self.into_inner();
-        if !src.source_ready_for_recreate(&recreate) {
+        if !src
+            .readiness
+            .source_ready_for_recreate(&src.shared_stream, &recreate)
+        {
             return src.wait_for_source_on_recreate(recreate);
         }
         match src.prepare_rebuild(&recreate) {
@@ -2852,9 +2384,9 @@ impl Track<RebuildingDecoder> {
 impl Track<SeekRequested> {
     fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
         let request = self.into_inner();
-        if !src.source_is_ready() {
+        if !src.readiness.source_is_ready(&src.shared_stream) {
             let phase = src.shared_stream.phase();
-            if let Some(reason) = src.source_park(phase) {
+            if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
                 src.update_state(CurrentFsm::waiting(WaitContext::Seek(request), reason));
                 return TrackStep::Blocked(reason);
             }
@@ -2884,9 +2416,9 @@ impl Track<WaitingForSource> {
             src.update_state(CurrentFsm::seek_requested(applying.request));
             return TrackStep::StateChanged;
         }
-        let phase = src.source_phase_for_wait_context(&context);
+        let phase = source_phase_for_wait_context(&src.shared_stream, &context);
 
-        if let Some(reason) = src.source_park(phase) {
+        if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
             // Still waiting — restore the phase with its stored reason.
             src.update_state(CurrentFsm::waiting(context, stored_reason));
             return TrackStep::Blocked(reason);
@@ -2962,9 +2494,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         // cross-thread `kevent` the forbid-blocking core must not make, so it
         // lands here in the shell. Same `Arc<DeferredWake>` the reader drivers
         // and the FSM arm, so one flush covers both. `None` for file streams.
-        if let Some(ref wake) = self.peer_wake {
-            wake.flush();
-        }
+        self.readiness.flush_peer_wake();
     }
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {
@@ -3216,8 +2746,8 @@ mod rebuilding_decoder_tests {
     use kithara_storage::WaitOutcome;
     use kithara_stream::{
         Activity, AudioCodec, ChunkPosition, ContainerFormat, PlayheadRead, PlayheadState,
-        PrerollHint, ReadOutcome, SeekState, Source, SourceError, StreamError, StreamResult,
-        VariantControl,
+        PrerollHint, ReadOutcome, SeekState, Source, SourceError, Stream, StreamError,
+        StreamResult, VariantControl,
     };
     use kithara_test_utils::kithara;
 
@@ -4094,7 +3624,7 @@ mod splice_continuity_tests {
     use kithara_stream::{
         Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
         PlayheadState, PlayheadWrite, ReadOutcome, SeekState, SegmentDescriptor, Source,
-        SourceError, SourceSeekAnchor, StreamError, StreamResult, VariantControl,
+        SourceError, SourceSeekAnchor, Stream, StreamError, StreamResult, VariantControl,
     };
     use kithara_test_utils::kithara;
 
