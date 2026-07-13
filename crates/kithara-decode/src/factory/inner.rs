@@ -462,7 +462,7 @@ where
     let pool = config
         .pcm_pool
         .clone()
-        .unwrap_or_else(|| PcmPool::default().clone());
+        .unwrap_or_default();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -720,7 +720,7 @@ where
     let pool = config
         .pcm_pool
         .clone()
-        .unwrap_or_else(|| PcmPool::default().clone());
+        .unwrap_or_default();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -812,7 +812,7 @@ where
     let pool = config
         .pcm_pool
         .clone()
-        .unwrap_or_else(|| PcmPool::default().clone());
+        .unwrap_or_default();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,

@@ -247,7 +247,7 @@ impl EngineImpl {
         let resolved_pool = config
             .pcm_pool
             .clone()
-            .unwrap_or_else(|| PcmPool::default().clone());
+            .unwrap_or_default();
         let worker_cancel = CancelScope::new(config.cancel.clone()).token();
 
         Self {

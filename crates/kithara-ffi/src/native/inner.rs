@@ -514,7 +514,7 @@ impl NativeInner {
             headers: Some(rule_headers),
             query_params: None,
             domains: vec!["*".to_string()],
-            salt: Some(salt.clone()),
+            salt: Some(salt),
         };
         self.setup_hls_aes_with_rule(rule);
     }
