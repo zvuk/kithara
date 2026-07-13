@@ -135,7 +135,7 @@ impl TrackAnalysisCache {
     pub(crate) fn put(&mut self, key: AnalysisKey, analysis: TrackAnalysis) {
         // An analysis with no meaningful slots would be served forever as
         // emptiness on later hits; skip memoizing it in either tier.
-        if analysis.waveform.is_none() && analysis.beat.is_none() {
+        if analysis.waveform().is_none() && analysis.beat().is_none() {
             return;
         }
         self.store_disk(&key, &analysis);
@@ -228,16 +228,8 @@ fn analysis_to_bytes(
     analysis: &TrackAnalysis,
     fingerprint: &str,
 ) -> Result<Vec<u8>, AnalysisBytesError> {
-    let waveform = analysis
-        .waveform
-        .as_ref()
-        .map(Vec::<u8>::from)
-        .unwrap_or_default();
-    let beat = analysis
-        .beat
-        .as_ref()
-        .map(Vec::<u8>::from)
-        .unwrap_or_default();
+    let waveform = analysis.waveform().map(Vec::<u8>::from).unwrap_or_default();
+    let beat = analysis.beat().map(Vec::<u8>::from).unwrap_or_default();
     let mut out =
         Vec::with_capacity(4 + 4 + fingerprint.len() + 8 + waveform.len() + 8 + beat.len() + 8);
     out.extend_from_slice(&Consts::ANALYSIS_BYTES_VERSION.to_le_bytes());
@@ -247,7 +239,7 @@ fn analysis_to_bytes(
     out.extend_from_slice(fingerprint.as_bytes());
     write_section(&mut out, &waveform)?;
     write_section(&mut out, &beat)?;
-    out.extend_from_slice(&analysis.source_frames.to_le_bytes());
+    out.extend_from_slice(&analysis.source_frames().to_le_bytes());
     Ok(out)
 }
 
@@ -276,17 +268,15 @@ fn analysis_from_bytes(
         return Err(AnalysisBytesError::Corrupt);
     }
 
-    let mut analysis = TrackAnalysis::default();
-    if !waveform_bytes.is_empty() {
-        analysis.waveform =
-            Some(Waveform::try_from(waveform_bytes).map_err(|_| AnalysisBytesError::Corrupt)?);
-    }
-    if !beat_bytes.is_empty() {
-        analysis.beat =
-            Some(BeatGrid::try_from(beat_bytes).map_err(|_| AnalysisBytesError::Corrupt)?);
-    }
-    analysis.source_frames = source_frames;
-    Ok(analysis)
+    let waveform = (!waveform_bytes.is_empty())
+        .then(|| Waveform::try_from(waveform_bytes))
+        .transpose()
+        .map_err(|_| AnalysisBytesError::Corrupt)?;
+    let beat = (!beat_bytes.is_empty())
+        .then(|| BeatGrid::try_from(beat_bytes))
+        .transpose()
+        .map_err(|_| AnalysisBytesError::Corrupt)?;
+    Ok(TrackAnalysis::new(beat, waveform, source_frames))
 }
 
 fn write_section(out: &mut Vec<u8>, section: &[u8]) -> Result<(), AnalysisBytesError> {
@@ -372,17 +362,11 @@ mod tests {
     }
 
     fn full_analysis() -> TrackAnalysis {
-        let mut analysis = TrackAnalysis::default();
-        analysis.waveform = Some(wave());
-        analysis.beat = Some(grid());
-        analysis.source_frames = 1_234_567;
-        analysis
+        TrackAnalysis::new(Some(grid()), Some(wave()), 1_234_567)
     }
 
     fn wave_only() -> TrackAnalysis {
-        let mut analysis = TrackAnalysis::default();
-        analysis.waveform = Some(wave());
-        analysis
+        TrackAnalysis::new(None, Some(wave()), 0)
     }
 
     fn store_in(dir: &Path) -> Arc<AssetStore> {
@@ -403,12 +387,13 @@ mod tests {
         let bytes = analysis_to_bytes(&analysis, FP).expect("encodes");
         let back = analysis_from_bytes(&bytes, FP).expect("decodes");
         assert_eq!(
-            back.waveform.expect("waveform survives").buckets(),
+            back.waveform().expect("waveform survives").buckets(),
             wave().buckets()
         );
-        assert_eq!(back.beat.expect("beat grid survives"), grid());
+        assert_eq!(back.beat().expect("beat grid survives"), &grid());
         assert_eq!(
-            back.source_frames, 1_234_567,
+            back.source_frames(),
+            1_234_567,
             "source_frames must survive the round-trip"
         );
     }
@@ -417,18 +402,17 @@ mod tests {
     fn codec_round_trips_without_beat() {
         let bytes = analysis_to_bytes(&wave_only(), FP).expect("encodes");
         let back = analysis_from_bytes(&bytes, FP).expect("decodes");
-        assert!(back.waveform.is_some());
-        assert!(back.beat.is_none(), "absent beat must stay absent");
+        assert!(back.waveform().is_some());
+        assert!(back.beat().is_none(), "absent beat must stay absent");
     }
 
     #[kithara::test]
     fn codec_round_trips_beat_only() {
-        let mut analysis = TrackAnalysis::default();
-        analysis.beat = Some(grid());
+        let analysis = TrackAnalysis::new(Some(grid()), None, 0);
         let bytes = analysis_to_bytes(&analysis, FP).expect("encodes");
         let back = analysis_from_bytes(&bytes, FP).expect("decodes");
-        assert!(back.waveform.is_none());
-        assert_eq!(back.beat.expect("beat grid survives"), grid());
+        assert!(back.waveform().is_none());
+        assert_eq!(back.beat().expect("beat grid survives"), &grid());
     }
 
     #[kithara::test]
@@ -491,8 +475,8 @@ mod tests {
         assert!(cache.get(&key).is_none());
         cache.put(key.clone(), full_analysis());
         let cached = cache.get(&key).expect("analysis must be cached");
-        assert_eq!(cached.waveform.expect("waveform cached").len(), 1);
-        assert!(cached.beat.is_some(), "beat grid rides along");
+        assert_eq!(cached.waveform().expect("waveform cached").len(), 1);
+        assert!(cached.beat().is_some(), "beat grid rides along");
     }
 
     #[kithara::test]
@@ -537,8 +521,8 @@ mod tests {
         // A new cache with an empty memory tier must still find the blob.
         let mut reader = cache_over(&store);
         let cached = reader.get(&key).expect("disk analysis must load");
-        assert_eq!(cached.waveform.expect("waveform persisted").len(), 1);
-        assert_eq!(cached.beat.expect("beat grid persisted"), grid());
+        assert_eq!(cached.waveform().expect("waveform persisted").len(), 1);
+        assert_eq!(cached.beat().expect("beat grid persisted"), &grid());
     }
 
     #[kithara::test]

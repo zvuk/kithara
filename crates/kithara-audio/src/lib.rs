@@ -55,4 +55,4 @@ pub use traits::{
 };
 #[cfg(feature = "analysis-waveform")]
 pub use waveform::WaveformAnalyzer;
-pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, Waveform};
+pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, bucket::Waveform};

@@ -205,9 +205,9 @@ impl canvas::Program<Message> for WaveformCanvas {
                 let (lo, hi) = self.view.pixel_buckets(x, w, n);
                 let mut peak = [0.0_f32; 3];
                 for b in &buckets[lo..hi] {
-                    peak[0] = peak[0].max(b.low);
-                    peak[1] = peak[1].max(b.mid);
-                    peak[2] = peak[2].max(b.high);
+                    peak[0] = peak[0].max(b.low());
+                    peak[1] = peak[1].max(b.mid());
+                    peak[2] = peak[2].max(b.high());
                 }
                 let played = (x + 0.5) <= head_x;
                 for (value, base) in peak.iter().zip(bands.iter()) {

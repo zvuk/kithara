@@ -20,21 +20,21 @@ impl Consts {
 pub struct BeatAnalysisConfig<B> {
     /// Mono resampler input block size in frames.
     #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
-    pub block_frames: usize,
+    block_frames: usize,
     /// Detector input sample rate in Hz.
     #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]
-    pub target_rate: u32,
+    target_rate: u32,
     /// Quality used by the configured beat-resampler backend.
     #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
-    pub resampler_quality: ResamplerQuality,
+    resampler_quality: ResamplerQuality,
     /// Standalone mono resampler backend used before detector windows.
-    pub resampler_backend: B,
+    resampler_backend: B,
     /// Maximum NN detector window length in seconds.
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
-    pub detector_window_seconds: u32,
+    detector_window_seconds: u32,
     /// Seconds carried from the end of one detector window into the next.
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
-    pub detector_overlap_seconds: u32,
+    detector_overlap_seconds: u32,
 }
 
 impl<B> BeatAnalysisConfig<B>
@@ -42,8 +42,38 @@ where
     B: ResamplerBackend,
 {
     #[must_use]
+    pub fn block_frames(&self) -> usize {
+        self.block_frames
+    }
+
+    #[must_use]
     pub fn cache_tag(&self) -> Option<String> {
         super::nn::tag(self)
+    }
+
+    #[must_use]
+    pub fn detector_overlap_seconds(&self) -> u32 {
+        self.detector_overlap_seconds
+    }
+
+    #[must_use]
+    pub fn detector_window_seconds(&self) -> u32 {
+        self.detector_window_seconds
+    }
+
+    #[must_use]
+    pub fn resampler_backend(&self) -> &B {
+        &self.resampler_backend
+    }
+
+    #[must_use]
+    pub fn resampler_quality(&self) -> ResamplerQuality {
+        self.resampler_quality
+    }
+
+    #[must_use]
+    pub fn target_rate(&self) -> u32 {
+        self.target_rate
     }
 
     fn resampler_backend_name(&self) -> &'static str {

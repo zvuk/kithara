@@ -10,13 +10,13 @@ use crate::{
 #[non_exhaustive]
 pub struct BeatGrid {
     /// Beat positions in source frames, ascending.
-    pub beats: Vec<u64>,
+    beats: Vec<u64>,
     /// Downbeat (bar start) positions in source frames, ascending.
-    pub downbeats: Vec<u64>,
+    downbeats: Vec<u64>,
     /// Piecewise-constant stretch segments, sorted and non-overlapping.
-    pub segments: Vec<GridSegment>,
+    segments: Vec<GridSegment>,
     /// Stable-window tempo of the track, beats per minute.
-    pub bpm: f64,
+    bpm: f64,
 }
 
 /// Wire/disk format version for the [`BeatGrid`] blob. Bump when the
@@ -33,6 +33,26 @@ impl BeatGrid {
             segments,
             bpm,
         }
+    }
+
+    #[must_use]
+    pub fn beats(&self) -> &[u64] {
+        &self.beats
+    }
+
+    #[must_use]
+    pub fn bpm(&self) -> f64 {
+        self.bpm
+    }
+
+    #[must_use]
+    pub fn downbeats(&self) -> &[u64] {
+        &self.downbeats
+    }
+
+    #[must_use]
+    pub fn segments(&self) -> &[GridSegment] {
+        &self.segments
     }
 }
 
@@ -72,12 +92,7 @@ impl Blob for BeatGrid {
                 read_finite(r)?,
             ));
         }
-        Ok(Self {
-            beats,
-            downbeats,
-            segments,
-            bpm,
-        })
+        Ok(Self::new(bpm, beats, downbeats, segments))
     }
 
     fn encode(&self, w: &mut Writer<'_>) {
@@ -89,9 +104,9 @@ impl Blob for BeatGrid {
         w.write_frames(&self.downbeats);
         w.write_len(self.segments.len());
         for segment in &self.segments {
-            w.write_u64(segment.start_frame);
-            w.write_u64(segment.end_frame);
-            w.write_f64(segment.ratio_correction);
+            w.write_u64(segment.start_frame());
+            w.write_u64(segment.end_frame());
+            w.write_f64(segment.ratio_correction());
         }
     }
 }
@@ -114,15 +129,15 @@ mod bytes_tests {
     use crate::region::GridSegment;
 
     fn sample() -> BeatGrid {
-        BeatGrid {
-            bpm: 123.5,
-            beats: vec![0, 22_050, 44_100, 66_150],
-            downbeats: vec![0, 88_200],
-            segments: vec![
+        BeatGrid::new(
+            123.5,
+            vec![0, 22_050, 44_100, 66_150],
+            vec![0, 88_200],
+            vec![
                 GridSegment::new(0, 88_200, 1.02),
                 GridSegment::new(88_200, 176_400, 0.98),
             ],
-        }
+        )
     }
 
     #[kithara::test]
@@ -135,12 +150,7 @@ mod bytes_tests {
 
     #[kithara::test]
     fn degraded_grid_round_trips() {
-        let grid = BeatGrid {
-            bpm: 0.0,
-            beats: Vec::new(),
-            downbeats: Vec::new(),
-            segments: Vec::new(),
-        };
+        let grid = BeatGrid::new(0.0, Vec::new(), Vec::new(), Vec::new());
         let bytes = Vec::<u8>::from(&grid);
         let back = BeatGrid::try_from(bytes.as_slice()).expect("empty blob round-trips");
         assert_eq!(back, grid);

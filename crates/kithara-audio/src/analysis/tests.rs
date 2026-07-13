@@ -219,8 +219,8 @@ mod run {
         let out = stages(&mut reader, &waveform_only(), &CancelToken::root());
         assert_eq!(out.len(), 1, "waveform-only emits once");
         let got = out[0]
-            .waveform
-            .clone()
+            .waveform()
+            .cloned()
             .expect("waveform analyzer fills its slot");
         assert_eq!(
             Vec::<u8>::from(&got),
@@ -279,15 +279,15 @@ mod run {
             "beat pass emits a fast stage then a complete one"
         );
         let grid = out[1]
-            .beat
-            .clone()
+            .beat()
+            .cloned()
             .expect("beat slot fills its slot in the complete stage");
         assert!(
-            (grid.bpm - 120.0).abs() < 1e-6,
+            (grid.bpm() - 120.0).abs() < 1e-6,
             "2 s bars are 120 bpm, got {}",
-            grid.bpm
+            grid.bpm()
         );
-        assert_eq!(grid.downbeats[1], u64::from(SR) * 2, "source frames");
+        assert_eq!(grid.downbeats()[1], u64::from(SR) * 2, "source frames");
     }
 
     #[cfg(feature = "analysis-waveform")]
@@ -296,7 +296,7 @@ mod run {
         let samples = sine(8192);
         let mut reader = FakeReader::chunked_with_pending(&samples, 2);
         let out = stages(&mut reader, &waveform_only(), &CancelToken::root());
-        assert!(out.len() == 1 && out[0].waveform.is_some());
+        assert!(out.len() == 1 && out[0].waveform().is_some());
     }
 }
 
@@ -324,7 +324,7 @@ mod worker {
             worker.child_token(),
         );
         rx.changed().await.expect("worker sends a result");
-        assert!(rx.borrow().as_ref().is_some_and(|a| a.waveform.is_some()));
+        assert!(rx.borrow().as_ref().is_some_and(|a| a.waveform().is_some()));
     }
 
     #[kithara::test(tokio)]

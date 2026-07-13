@@ -1,7 +1,9 @@
 mod analyzer;
 #[cfg(feature = "analysis-beat")]
 pub(crate) mod beat;
+mod model;
 mod run;
+mod slots;
 #[cfg(test)]
 mod tests;
 #[cfg(not(target_arch = "wasm32"))]

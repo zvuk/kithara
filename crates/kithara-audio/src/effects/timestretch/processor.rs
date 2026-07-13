@@ -261,9 +261,9 @@ impl AudioEffect for TimeStretchProcessor {
         while consumed < frames {
             let (region, crossed) = self.region_for(frame);
             let left = u64::try_from(frames - consumed).unwrap_or(u64::MAX);
-            let span = region.end.saturating_sub(frame).min(left).max(1);
+            let span = region.end().saturating_sub(frame).min(left).max(1);
             let sub = usize::try_from(span).unwrap_or(frames - consumed);
-            self.apply_stretch(base * region.correction, crossed);
+            self.apply_stretch(base * region.correction(), crossed);
             let needed = self.scratch.len() + self.backend.max_output_samples(sub);
             if self.scratch.capacity() < needed {
                 self.scratch.reserve(needed - self.scratch.len());

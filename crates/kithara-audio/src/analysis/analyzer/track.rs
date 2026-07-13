@@ -1,7 +1,7 @@
 #[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_decode::PcmChunk;
 
-use crate::waveform::{BeatGrid, Waveform};
+use crate::waveform::{BeatGrid, bucket::Waveform};
 
 /// Streaming per-track analyzer contract: fed every decoded chunk once, then
 /// consumed to yield its own artifact.
@@ -16,14 +16,40 @@ pub(crate) trait Analyzer: Send {
     fn push(&mut self, chunk: &PcmChunk);
 }
 
-/// The output of one analysis pass
+/// The output of one analysis pass.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct TrackAnalysis {
     /// Cleaned beat grid (source frames).
-    pub beat: Option<BeatGrid>,
+    beat: Option<BeatGrid>,
     /// Track waveform.
-    pub waveform: Option<Waveform>,
+    waveform: Option<Waveform>,
     /// Total decoded source frames: the denominator for `BeatGrid` frame to fraction.
-    pub source_frames: u64,
+    source_frames: u64,
+}
+
+impl TrackAnalysis {
+    #[must_use]
+    pub fn new(beat: Option<BeatGrid>, waveform: Option<Waveform>, source_frames: u64) -> Self {
+        Self {
+            beat,
+            waveform,
+            source_frames,
+        }
+    }
+
+    #[must_use]
+    pub fn beat(&self) -> Option<&BeatGrid> {
+        self.beat.as_ref()
+    }
+
+    #[must_use]
+    pub fn source_frames(&self) -> u64 {
+        self.source_frames
+    }
+
+    #[must_use]
+    pub fn waveform(&self) -> Option<&Waveform> {
+        self.waveform.as_ref()
+    }
 }

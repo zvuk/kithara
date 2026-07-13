@@ -1,7 +1,7 @@
 use kithara_decode::PcmChunk;
 
-use super::track_analysis::Analyzer;
-use crate::waveform::{AnalysisParams, Waveform, WaveformAnalyzer};
+use super::track::Analyzer;
+use crate::waveform::{AnalysisParams, WaveformAnalyzer};
 
 pub(crate) struct WaveformPass {
     inner: WaveformAnalyzer,
@@ -18,9 +18,9 @@ impl WaveformPass {
 }
 
 impl Analyzer for WaveformPass {
-    type Output = Waveform;
+    type Output = crate::waveform::bucket::Waveform;
 
-    fn finish(self) -> Waveform {
+    fn finish(self) -> Self::Output {
         self.inner.finalize(self.buckets)
     }
 

@@ -1,15 +1,17 @@
 mod config;
 mod nn;
 mod set;
-mod track_analysis;
+mod track;
 #[cfg(feature = "analysis-waveform")]
-mod waveform_pass;
+mod waveform;
 
 pub use config::BeatAnalysisConfig;
+#[cfg(feature = "analysis-beat")]
+pub(crate) use nn::detector as default_beat_detector;
 pub use set::AnalyzerBuilder;
 pub(crate) use set::TrackAnalyzers;
-#[cfg(feature = "analysis-beat")]
-pub(crate) use track_analysis::Analyzer;
-pub use track_analysis::TrackAnalysis;
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
+pub(crate) use track::Analyzer;
+pub use track::TrackAnalysis;
 #[cfg(feature = "analysis-waveform")]
-pub(crate) use waveform_pass::WaveformPass;
+pub(crate) use waveform::WaveformPass;
