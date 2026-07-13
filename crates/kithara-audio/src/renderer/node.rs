@@ -9,7 +9,7 @@ use super::{AudioWorkerSource, EngineLoad, PreloadGate, ServiceClass};
 use crate::{
     pipeline::{
         fetch::Fetch,
-        track_fsm::{TrackStep, WaitingReason},
+        track::{TrackStep, WaitingReason},
     },
     runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
 };

@@ -12,17 +12,16 @@ use crate::pipeline::{
         format::{FormatDecision, detect},
         gate::ReadinessGate,
     },
+    rebuild::{RecreateCause, RecreateNext, RecreateState},
     seek::{
         anchor,
         emit::{emit, land_eof, location, update_len},
         recover::SeekRecovery,
         skip::estimate_target_byte,
+        state::{ApplySeekState, ResumeState, SeekMode, SeekRequest},
     },
     stream::shared::SharedStream,
-    track_fsm::{
-        ApplySeekState, RecreateCause, RecreateNext, RecreateState, ResumeState, SeekMode,
-        SeekRequest, WaitContext, WaitingReason,
-    },
+    track::{WaitContext, WaitingReason},
 };
 
 pub(crate) struct SeekEngine {

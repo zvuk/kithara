@@ -2,8 +2,9 @@ use kithara_decode::{DecodeError, ErrorClass};
 use kithara_stream::{MediaInfo, SeekObserve, StreamType};
 
 use crate::pipeline::{
+    rebuild::state::{RebuildState, RecreateOutcome, RecreateState},
+    seek::{SeekContext, SeekRequest},
     stream::shared::SharedStream,
-    track_fsm::{RebuildState, RecreateOutcome, RecreateState, SeekContext, SeekRequest},
 };
 
 pub(crate) fn classify(error: &DecodeError) -> RecreateOutcome {
@@ -36,30 +37,6 @@ pub(crate) fn observed_seek(seek: &dyn SeekObserve, min_epoch: u64) -> Option<Se
         },
         emit_request: false,
     })
-}
-
-pub(crate) fn record_seek_preempt(
-    rebuild: &mut RebuildState,
-    seek: &dyn SeekObserve,
-    decode_epoch: u64,
-) {
-    if !seek.take_preempt() {
-        return;
-    }
-    let epoch = seek.epoch();
-    let min_epoch = rebuild
-        .superseded_seek
-        .map_or(rebuild.started_seek_epoch, |request| request.seek.epoch);
-    if epoch <= min_epoch || epoch <= decode_epoch {
-        return;
-    }
-    let Some(target) = seek.target() else {
-        return;
-    };
-    rebuild.superseded_seek = Some(SeekRequest {
-        seek: SeekContext { target, epoch },
-        emit_request: false,
-    });
 }
 
 fn variant_superseded<T: StreamType>(stream: &SharedStream<T>, recreate: &RecreateState) -> bool {

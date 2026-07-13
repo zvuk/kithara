@@ -35,11 +35,11 @@ use crate::{
     effects::timestretch::StretchControls,
     pipeline::{
         config::{AudioConfig, AudioDecoderConfig, create_effects},
+        consumer::ConsumerPhase,
         fetch::{EpochValidator, Fetch, FetchKind},
         parts::SourceParts,
         rebuild::port::RebuildRuntime,
         source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
-        track_fsm::ConsumerPhase,
     },
     renderer::{
         AudioWorkerHandle, EngineLoad, PreloadGate, ServiceClass, ThreadWake, TrackId,

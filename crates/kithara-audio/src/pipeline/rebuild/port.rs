@@ -13,11 +13,14 @@ use tracing::warn;
 
 use crate::pipeline::{
     decode::core::DecoderFactory,
-    rebuild::policy::classify,
-    stream::shared::SharedStream,
-    track_fsm::{
-        DecoderRebuildComplete, RecreateCause, RecreateNext, RecreateOutcome, RecreateState,
+    rebuild::{
+        policy::classify,
+        state::{
+            DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
+            RecreateState,
+        },
     },
+    stream::shared::SharedStream,
 };
 
 struct JobDeps<T: StreamType> {
@@ -73,19 +76,21 @@ impl<T: StreamType> RebuildPort<T> {
     pub(crate) fn prepare(
         &mut self,
         stream: &SharedStream<T>,
-        recreate: &RecreateState,
-    ) -> Result<(u64, Arc<ArrayQueue<DecoderRebuildComplete>>), RecreateOutcome> {
+        recreate: RecreateState,
+        started_seek_epoch: u64,
+    ) -> Result<RebuildState, (RecreateState, RecreateOutcome)> {
         if recreate.cause == RecreateCause::FormatBoundary
             && matches!(recreate.next, RecreateNext::Decode)
         {
             stream.clear_variant_fence();
-            stream
-                .probe_seek(SeekFrom::Start(recreate.offset))
-                .map_err(|error| classify(&kithara_decode::DecodeError::from(error)))?;
+            if let Err(error) = stream.probe_seek(SeekFrom::Start(recreate.offset)) {
+                let outcome = classify(&kithara_decode::DecodeError::from(error));
+                return Err((recreate, outcome));
+            }
         } else {
             stream.clear_variant_fence();
             if stream.probe_seek(SeekFrom::Start(recreate.offset)).is_err() {
-                return Err(RecreateOutcome::SoftFailed);
+                return Err((recreate, RecreateOutcome::SoftFailed));
             }
             stream.clear_variant_fence();
         }
@@ -98,7 +103,13 @@ impl<T: StreamType> RebuildPort<T> {
             offset: recreate.offset,
             ticket,
         });
-        Ok((ticket, self.completion()))
+        Ok(RebuildState {
+            completion: self.completion(),
+            superseded_seek: None,
+            recreate,
+            started_seek_epoch,
+            ticket,
+        })
     }
 
     pub(crate) fn completion(&self) -> Arc<ArrayQueue<DecoderRebuildComplete>> {

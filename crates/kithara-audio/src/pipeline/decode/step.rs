@@ -11,7 +11,7 @@ use crate::pipeline::{
     fetch::Fetch,
     gapless::visible_duration,
     seek::skip::apply as apply_skip,
-    track_fsm::{TrackFailure, WaitingReason},
+    track::{TrackFailure, WaitingReason},
 };
 
 struct Consts;

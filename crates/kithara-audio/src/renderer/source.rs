@@ -2,7 +2,7 @@ use kithara_decode::PcmChunk;
 use kithara_platform::sync::Arc;
 use kithara_stream::SeekObserve;
 
-use crate::{pipeline::track_fsm, traits::AudioEffect};
+use crate::{pipeline::track, traits::AudioEffect};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -47,7 +47,7 @@ pub trait AudioWorkerSource: Send + 'static {
     /// - `Blocked` — the source is not ready; the caller should wait for a wake.
     /// - `Eof` — end of stream (may transition out via seek-after-EOF).
     /// - `Failed` — terminal failure.
-    fn step_track(&mut self) -> track_fsm::TrackStep<Self::Chunk>;
+    fn step_track(&mut self) -> track::TrackStep<Self::Chunk>;
 
     /// One-time worker-thread warmup, called from the scheduler shell when the
     /// node registers. Pre-touches the produce-core read path so lazy global

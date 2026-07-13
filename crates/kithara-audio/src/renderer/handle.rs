@@ -122,7 +122,7 @@ mod tests {
     use crate::{
         pipeline::{
             fetch::Fetch,
-            track_fsm::{TrackStep, WaitingReason},
+            track::{TrackStep, WaitingReason},
         },
         renderer::{AudioWorkerSource, MockSource, PreloadGate, ServiceClass, ThreadWake},
         runtime::{AtomicServiceClass, connect},

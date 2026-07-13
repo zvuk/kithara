@@ -20,13 +20,22 @@ use crate::{
         decode::{drain::EofDrain, resume::ResumeCursor},
         fetch::Fetch,
         gapless::GaplessStage,
-        seek::{SeekEngine, emit::commit_outcome},
+        rebuild::RecreateState,
+        seek::{ResumeState, SeekEngine, emit::commit_outcome},
         stream::shared::SharedStream,
-        track_fsm::{DecoderSession, RecreateState, ResumeState, TrackFailure, WaitingReason},
+        track::{TrackFailure, WaitingReason},
     },
     renderer::{apply_effects, reset_effects},
     traits::AudioEffect,
 };
+
+/// Decoder and its associated metadata, installed as an atomic unit.
+pub(crate) struct DecoderSession {
+    pub(crate) decoder: Box<dyn Decoder>,
+    pub(crate) media_info: Option<MediaInfo>,
+    pub(crate) base_offset: u64,
+    pub(crate) installed_at_seek_epoch: u64,
+}
 
 /// Factory closure that creates a new decoder from stream, media info, and base offset.
 ///

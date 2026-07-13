@@ -6,11 +6,10 @@ use kithara_stream::{DeferredWake, SeekControl, SourcePhase, StreamType};
 use tracing::trace;
 
 use crate::pipeline::{
+    rebuild::RecreateState,
+    seek::{ApplySeekState, ResumeState, SeekMode},
     stream::shared::SharedStream,
-    track_fsm::{
-        ApplySeekState, RecreateState, ResumeState, SeekMode, WaitContext, WaitingReason,
-        map_source_phase,
-    },
+    track::{WaitContext, WaitingReason, map_source_phase},
 };
 
 const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;

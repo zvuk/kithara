@@ -5,7 +5,7 @@ use kithara_stream::{SeekControl, SeekObserve, SeekState};
 use super::AudioWorkerSource;
 use crate::pipeline::{
     fetch::Fetch,
-    track_fsm::{TrackStep, WaitingReason},
+    track::{TrackStep, WaitingReason},
 };
 
 pub(crate) struct MockSource {
