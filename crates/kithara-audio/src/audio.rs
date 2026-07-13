@@ -36,6 +36,8 @@ use crate::{
     pipeline::{
         config::{AudioConfig, AudioDecoderConfig, create_effects},
         fetch::{EpochValidator, Fetch, FetchKind},
+        parts::SourceParts,
+        rebuild::port::RebuildRuntime,
         source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
@@ -1189,22 +1191,25 @@ where
             |w| (w, false),
         );
         let worker_wake: Arc<dyn WorkerWake> = Arc::new(WorkerWakeBridge(worker.clone()));
-        let audio_source = StreamAudioSource::new(
-            shared_stream,
-            DecodeInit {
-                decoder,
-                decoder_factory,
-                gapless_mode,
-                host_sample_rate,
-                media_info: initial_media_info,
-                recreate_on_host_rate_change,
-            },
+        let decode = DecodeInit {
+            decoder,
+            decoder_factory,
+            gapless_mode,
+            host_sample_rate,
+            media_info: initial_media_info,
+            recreate_on_host_rate_change,
+        }
+        .into_parts(effects, shared_stream.seek_observe().epoch());
+        let parts = SourceParts::new(
+            &shared_stream,
+            decode,
             epoch,
-            effects,
-            runtime_handle,
-            Arc::clone(&worker_wake),
-        )
-        .with_emit(emit);
+            RebuildRuntime {
+                handle: runtime_handle,
+                wake: Arc::clone(&worker_wake),
+            },
+        );
+        let audio_source = StreamAudioSource::new(shared_stream, parts).with_emit(emit);
 
         bus.publish(AudioEvent::DecoderReady {
             base_offset: 0,
