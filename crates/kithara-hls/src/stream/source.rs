@@ -111,6 +111,7 @@ impl Source for HlsSource {
             fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>);
         }
     }
+
     fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
         Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
     }

@@ -159,6 +159,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
             fn current_variant_index(&self) -> Option<usize>;
         }
     }
+
     fn duration(&self) -> Option<Duration> {
         self.duration
     }

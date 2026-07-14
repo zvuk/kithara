@@ -377,6 +377,7 @@ impl<S> Audio<S> {
             pub fn position(&self) -> Duration;
         }
     }
+
     fn emit_audio_event(&self, event: AudioEvent) {
         self.bus.publish(event);
     }

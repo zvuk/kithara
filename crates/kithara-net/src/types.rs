@@ -61,6 +61,7 @@ impl Headers {
             pub fn iter(&self) -> impl Iterator<Item = (&str, &str)>;
         }
     }
+
     pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
         self.inner.insert(key.into(), value.into());
     }

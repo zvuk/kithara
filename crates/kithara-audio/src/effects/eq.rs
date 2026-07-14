@@ -415,6 +415,7 @@ impl IsolatorEq {
             pub fn target_gain(&self, band: usize) -> Option<f32>;
         }
     }
+
     /// Process a single sample through the crossover EQ.
     ///
     /// Gain smoothing advances automatically every [`Consts::SMOOTH_BLOCK_SIZE`] calls.

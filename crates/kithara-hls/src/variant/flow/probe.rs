@@ -176,6 +176,7 @@ impl HlsVariant {
             fn finish_size_demand(&self, demand: SizeDemand);
         }
     }
+
     fn finish_size_probe(
         &self,
         demand: SizeDemand,

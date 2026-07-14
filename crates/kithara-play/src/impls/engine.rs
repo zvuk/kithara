@@ -302,6 +302,7 @@ impl Engine for EngineImpl {
             fn max_slots(&self) -> usize;
         }
     }
+
     fn allocate_slot(&self) -> Result<SlotId, PlayError> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);

@@ -170,6 +170,7 @@ impl Resource {
             pub fn spec(&self) -> PcmSpec;
         }
     }
+
     /// Create a resource from any `PcmReader`.
     ///
     /// This is the single construction primitive: the stream-backed

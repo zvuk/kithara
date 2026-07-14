@@ -109,6 +109,7 @@ impl PlayerResource {
             pub(crate) fn set_service_class(&self, class: ServiceClass);
         }
     }
+
     fn fill_scratch(&mut self, target_frames: usize) -> bool {
         let mut eof_reached = self.eof_seen;
 

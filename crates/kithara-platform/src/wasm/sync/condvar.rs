@@ -15,6 +15,7 @@ impl Condvar {
             pub fn notify_one(&self);
         }
     }
+
     #[inline]
     pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
         MutexGuard(self.0.wait_sync(guard.0))

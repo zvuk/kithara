@@ -95,6 +95,7 @@ impl HlsVariant {
             pub(crate) fn init_size(&self) -> u64;
         }
     }
+
     /// Committed on-disk length of the (separately fetched) init segment, as
     /// [`committed_final_len`](Self::committed_final_len) for media.
     pub(super) fn init_committed_final_len(&self) -> Option<u64> {

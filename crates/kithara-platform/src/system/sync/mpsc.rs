@@ -44,6 +44,7 @@ impl<T> Receiver<T> {
             pub fn try_recv(&self) -> Result<T, TryRecvError>;
         }
     }
+
     /// Block until a value arrives.
     ///
     /// # Errors

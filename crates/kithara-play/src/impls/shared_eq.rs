@@ -31,6 +31,7 @@ impl SharedEq {
             pub(crate) fn len(&self) -> usize;
         }
     }
+
     pub(crate) fn reset(&self) {
         for gain in &*self.gains {
             gain.store(0.0, Ordering::Relaxed);

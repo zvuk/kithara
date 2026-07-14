@@ -284,6 +284,7 @@ impl Layout {
             pub(super) fn segment_byte_offset(&self, idx: u32) -> Option<u64>;
         }
     }
+
     pub(super) fn clear_init_seed(&self) {
         let _w = self.write_lock.lock();
         let mut frame = (**self.frame.load()).clone();

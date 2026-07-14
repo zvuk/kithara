@@ -96,6 +96,7 @@ impl SizeSignal {
             pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool;
         }
     }
+
     /// Signal the gate, then re-tick the audio worker. Used where newly readable
     /// bytes land or a settle/commit makes a range resolvable: per-chunk write,
     /// committed-by-race, cache-hit dispatch, terminal settle, and the

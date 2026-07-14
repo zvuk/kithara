@@ -4199,12 +4199,18 @@ mod splice_continuity_tests {
             }))
         }
 
-        fn init_segment_range(&self) -> Range<u64> {
-            self.active_layout().init_range.clone()
-        }
-
-        fn len(&self) -> Option<u64> {
-            Some(u64::try_from(self.active_layout().blob.len()).expect("blob length fits u64"))
+        delegate! {
+            to self {
+                #[expr($.init_range.clone())]
+                #[call(active_layout)]
+                fn init_segment_range(&self) -> Range<u64>;
+                #[expr(Some(u64::try_from($.blob.len()).expect("blob length fits u64")))]
+                #[call(active_layout)]
+                fn len(&self) -> Option<u64>;
+                #[expr(u32::try_from($.segments.len()).ok())]
+                #[call(active_layout)]
+                fn segment_count(&self) -> Option<u32>;
+            }
         }
 
         fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
@@ -4245,10 +4251,6 @@ mod splice_continuity_tests {
                 *self.warmup_landing.lock() = Some(segment.clone());
             }
             found
-        }
-
-        fn segment_count(&self) -> Option<u32> {
-            u32::try_from(self.active_layout().segments.len()).ok()
         }
     }
 

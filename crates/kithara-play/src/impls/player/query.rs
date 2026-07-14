@@ -68,9 +68,17 @@ impl PlayerImpl {
             .and_then(|eq| eq.gain(band))
     }
 
-    /// Returns `true` if the player is in playing state.
-    pub fn is_playing(&self) -> bool {
-        self.playback_snapshot().is_some_and(|s| s.playing)
+    delegate::delegate! {
+        to self {
+            /// Returns `true` if the player is in playing state.
+            #[expr($.is_some_and(|s| s.playing))]
+            #[call(playback_snapshot)]
+            pub fn is_playing(&self) -> bool;
+            /// Current playback position in seconds.
+            #[expr(Some($?.position))]
+            #[call(playback_snapshot)]
+            pub fn position_seconds(&self) -> Option<f64>;
+        }
     }
 
     /// Single coherent read of the active slot's live playback scalars.
@@ -81,11 +89,6 @@ impl PlayerImpl {
     pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
         let slot_id = self.slot()?;
         Some(self.core.engine.slot_shared_state(slot_id)?.snapshot())
-    }
-
-    /// Current playback position in seconds.
-    pub fn position_seconds(&self) -> Option<f64> {
-        Some(self.playback_snapshot()?.position)
     }
 
     /// Reset EQ gains to 0 dB for all bands.

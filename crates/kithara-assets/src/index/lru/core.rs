@@ -262,6 +262,7 @@ impl LruState {
             pub(crate) fn remove(&mut self, asset_root: &str) -> bool;
         }
     }
+
     /// Touch an asset in-memory.
     pub(crate) fn touch(&mut self, asset_root: &str, bytes_hint: Option<u64>) -> bool {
         self.clock = self.clock.saturating_add(1);

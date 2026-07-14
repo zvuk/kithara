@@ -65,6 +65,7 @@ impl RubatoEngine {
             pub(super) fn reset(&mut self);
         }
     }
+
     fn new_async(
         quality: ResamplerQuality,
         source_rate: u32,

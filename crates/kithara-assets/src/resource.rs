@@ -55,6 +55,7 @@ impl WriteSide for BaseWriter {
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
     }
+
     fn raw_write_handle(&self) -> RawWriteHandle {
         let storage = self.0.clone();
         RawWriteHandle::new(move |offset, data| storage.write_at(offset, data))
@@ -76,6 +77,7 @@ impl ReadSide for BaseReader {
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
         }
     }
+
     fn reactivate(self) -> StorageResult<BaseWriter> {
         self.0.reactivate()?;
         Ok(BaseWriter(self.0))

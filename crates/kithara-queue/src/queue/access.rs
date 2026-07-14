@@ -37,37 +37,42 @@ impl Queue {
         if idx < self.len() { Some(idx) } else { None }
     }
 
-    /// Live variant metadata of the currently playing adaptive item.
-    /// Pulled from the player's stashed ABR handle on every call so a
-    /// renderer can poll for the up-to-date label after every frame
-    /// without depending on event delivery.
-    #[must_use]
-    pub fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
-        self.current_abr_handle()?.current_variant()
-    }
-
-    /// Whether the queue is empty.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.lock_tracks().is_empty()
-    }
-
-    /// Current shuffle state.
-    #[must_use]
-    pub fn is_shuffle_enabled(&self) -> bool {
-        self.lock_navigation().is_shuffle_enabled()
-    }
-
-    /// Number of tracks currently in the queue.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.lock_tracks().len()
-    }
-
-    /// Current repeat mode.
-    #[must_use]
-    pub fn repeat_mode(&self) -> RepeatMode {
-        self.lock_navigation().repeat_mode()
+    delegate::delegate! {
+        to self {
+            /// Live variant metadata of the currently playing adaptive item.
+            /// Pulled from the player's stashed ABR handle on every call so a
+            /// renderer can poll for the up-to-date label after every frame
+            /// without depending on event delivery.
+            #[must_use]
+            #[expr($?.current_variant())]
+            #[call(current_abr_handle)]
+            pub fn current_variant(&self) -> Option<kithara_events::VariantInfo>;
+            /// Whether the queue is empty.
+            #[must_use]
+            #[expr($.is_empty())]
+            #[call(lock_tracks)]
+            pub fn is_empty(&self) -> bool;
+            /// Current shuffle state.
+            #[must_use]
+            #[expr($.is_shuffle_enabled())]
+            #[call(lock_navigation)]
+            pub fn is_shuffle_enabled(&self) -> bool;
+            /// Number of tracks currently in the queue.
+            #[must_use]
+            #[expr($.len())]
+            #[call(lock_tracks)]
+            pub fn len(&self) -> usize;
+            /// Current repeat mode.
+            #[must_use]
+            #[expr($.repeat_mode())]
+            #[call(lock_navigation)]
+            pub fn repeat_mode(&self) -> RepeatMode;
+            /// Snapshot of all track entries, in queue order.
+            #[must_use]
+            #[expr($.iter().map(TrackRecord::entry).collect())]
+            #[call(lock_tracks)]
+            pub fn tracks(&self) -> Vec<TrackEntry>;
+        }
     }
 
     /// Set repeat mode.
@@ -102,11 +107,5 @@ impl Queue {
     #[must_use]
     pub fn track_source(&self, id: TrackId) -> Option<TrackSource> {
         self.tracks.source(id)
-    }
-
-    /// Snapshot of all track entries, in queue order.
-    #[must_use]
-    pub fn tracks(&self) -> Vec<TrackEntry> {
-        self.lock_tracks().iter().map(TrackRecord::entry).collect()
     }
 }

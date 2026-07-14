@@ -384,6 +384,7 @@ where
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
     }
+
     fn reader(&self) -> LeaseReader<W::Reader, L> {
         LeaseReader {
             inner: self.inner.reader(),

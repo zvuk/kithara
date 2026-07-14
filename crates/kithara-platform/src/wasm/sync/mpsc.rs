@@ -31,12 +31,17 @@ impl<T> Clone for Sender<T> {
 pub struct Receiver<T>(wasm_safe_thread::mpsc::Receiver<T>);
 
 impl<T> Receiver<T> {
-    /// Iterate over received values, blocking until all senders disconnect.
-    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
-        std::iter::from_fn(move || self.recv().ok())
-    }
-
     delegate::delegate! {
+        to self {
+            /// Iterate over received values, blocking until all senders disconnect.
+            #[expr(std::iter::from_fn(move || $.ok()))]
+            #[call(recv)]
+            pub fn iter(&self) -> impl Iterator<Item = T> + '_;
+            /// Iterate over currently-available values without blocking.
+            #[expr(std::iter::from_fn(move || $.ok()))]
+            #[call(try_recv)]
+            pub fn try_iter(&self) -> impl Iterator<Item = T> + '_;
+        }
         to self.0 {
             /// Block until a value arrives.
             ///
@@ -71,9 +76,5 @@ impl<T> Receiver<T> {
             /// Returns [`TryRecvError`] if no value is available or senders are dropped.
             pub fn try_recv(&self) -> Result<T, TryRecvError>;
         }
-    }
-    /// Iterate over currently-available values without blocking.
-    pub fn try_iter(&self) -> impl Iterator<Item = T> + '_ {
-        std::iter::from_fn(move || self.try_recv().ok())
     }
 }

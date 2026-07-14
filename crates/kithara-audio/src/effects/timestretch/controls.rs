@@ -68,6 +68,7 @@ impl StretchControls {
             pub fn set_region_plan(&self, plan: Option<Arc<RegionPlan>>);
         }
     }
+
     /// Set the playback speed.
     pub fn set_speed(&self, speed: f32) {
         self.speed.store(speed, Ordering::Relaxed);

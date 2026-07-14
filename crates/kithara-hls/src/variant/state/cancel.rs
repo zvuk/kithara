@@ -29,6 +29,7 @@ impl CancelEpoch {
             pub(super) fn handle(&self) -> CancelToken;
         }
     }
+
     /// Rotate to a fresh child of `master` on re-activation.
     pub(super) fn rearm(&self) {
         let fresh = self.master.child();

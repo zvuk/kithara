@@ -363,10 +363,12 @@ where
     delegate::delegate! {
         to self.inner {
             fn raw_write_handle(&self) -> RawWriteHandle;
-            #[expr(self.build_reader($))]
-            fn reader(&self) -> ProcessedReader<W::Reader>;
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
+    }
+
+    fn reader(&self) -> ProcessedReader<W::Reader> {
+        self.build_reader(self.inner.reader())
     }
 }
 
@@ -409,10 +411,12 @@ where
 {
     type Writer = ProcessedWriter<R::Writer>;
 
+    fn contains_range(&self, range: Range<u64>) -> bool {
+        self.is_readable() && self.inner.contains_range(range)
+    }
+
     delegate::delegate! {
         to self.inner {
-            #[expr(self.is_readable() && $)]
-            fn contains_range(&self, range: Range<u64>) -> bool;
             fn len(&self) -> Option<u64>;
             fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
             fn path(&self) -> Option<&Path>;
@@ -420,6 +424,7 @@ where
             fn status(&self) -> ResourceStatus;
         }
     }
+
     fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer>> {
         let inner = self.inner.reactivate()?;
         let ready = self.processor.is_none();

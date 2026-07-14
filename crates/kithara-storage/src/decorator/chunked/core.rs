@@ -141,16 +141,40 @@ impl<D: DriverIo> AtomicChunked<D> {
         }
     }
 
-    /// Returns `true` if the resource has been committed with zero length.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == Some(0)
-    }
-
-    /// Committed length, if known.
-    #[must_use]
-    pub fn len(&self) -> Option<u64> {
-        self.read_view().len()
+    delegate::delegate! {
+        to self {
+            /// Returns `true` if the resource has been committed with zero length.
+            #[must_use]
+            #[expr($ == Some(0))]
+            #[call(len)]
+            pub fn is_empty(&self) -> bool;
+            /// Committed length, if known.
+            #[must_use]
+            #[expr($.len())]
+            #[call(read_view)]
+            pub fn len(&self) -> Option<u64>;
+            /// Current runtime status.
+            #[expr($.status())]
+            #[call(read_view)]
+            pub fn status(&self) -> ResourceStatus;
+        }
+        to self.inner.load() {
+            /// Reactivate the inner for continued writing.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled or the backend cannot reopen.
+            #[call(reactivate_in_place)]
+            pub fn reactivate(&self) -> StorageResult<()>;
+            /// Mint a cheap read-only view without holding the inner lock during
+            /// subsequent (possibly blocking) reads.
+            #[call(reader)]
+            fn read_view(&self) -> ResourceReader<D>;
+            /// Write data at the given offset.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the write fails.
+            pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+        }
     }
 
     /// First gap in available data starting at `from`, up to `limit`.
@@ -230,25 +254,6 @@ impl<D: DriverIo> AtomicChunked<D> {
         Some(&self.canonical_path)
     }
 
-    delegate::delegate! {
-        to self.inner.load() {
-            /// Reactivate the inner for continued writing.
-            ///
-            /// # Errors
-            /// Returns error if the resource is cancelled or the backend cannot reopen.
-            #[call(reactivate_in_place)]
-            pub fn reactivate(&self) -> StorageResult<()>;
-            /// Mint a cheap read-only view without holding the inner lock during
-            /// subsequent (possibly blocking) reads.
-            #[call(reader)]
-            fn read_view(&self) -> ResourceReader<D>;
-            /// Write data at the given offset.
-            ///
-            /// # Errors
-            /// Returns error if the resource is cancelled, failed, or the write fails.
-            pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-        }
-    }
     /// Read data at the given offset into `buf`.
     ///
     /// # Errors
@@ -274,11 +279,6 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// Returns error if the resource is cancelled, failed, or the read fails.
     pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
         self.read_view().read_into(buf)
-    }
-
-    /// Current runtime status.
-    pub fn status(&self) -> ResourceStatus {
-        self.read_view().status()
     }
 
     /// Wait until the given byte range is available.

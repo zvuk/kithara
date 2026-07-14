@@ -113,6 +113,7 @@ impl AbrHandle {
             pub fn mode(&self) -> Option<AbrMode>;
         }
     }
+
     /// Lock ABR (used during seek).
     pub fn lock(&self) {
         if let Some(state) = self.inner.state.as_ref() {

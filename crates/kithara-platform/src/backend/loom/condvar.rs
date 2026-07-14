@@ -13,6 +13,7 @@ impl Condvar {
             pub fn notify_one(&self);
         }
     }
+
     #[inline]
     #[must_use]
     pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {

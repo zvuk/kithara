@@ -713,6 +713,7 @@ impl PlayerNodeProcessor {
             pub fn track_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack>;
         }
     }
+
     /// Pop one notification from the processor → main-thread channel.
     pub fn try_pop_notification(&self) -> Option<PlayerNotification> {
         self.shared_state.notification_rx.lock().try_pop()

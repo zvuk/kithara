@@ -250,6 +250,7 @@ impl Assets for MemAssetStore {
             fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
         }
     }
+
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,

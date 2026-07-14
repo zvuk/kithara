@@ -231,6 +231,7 @@ impl<T: StreamType> Stream<T> {
             pub fn variant_control(&self) -> Option<Arc<dyn VariantControl>>;
         }
     }
+
     /// Clear the variant fence, allowing reads from the next variant.
     /// No-op for non-adaptive sources.
     pub fn clear_variant_fence(&mut self) {

@@ -100,6 +100,7 @@ impl ProducerHandle {
             pub fn notify(&self) -> &Notify;
         }
     }
+
     /// Producer cancel token (fires when the last consumer detaches).
     #[must_use]
     pub fn producer_cancel(&self) -> CancelToken {

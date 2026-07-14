@@ -82,6 +82,7 @@ impl Resampler for RubatoResampler {
             fn reset(&mut self);
         }
     }
+
     fn mode(&self) -> ResamplerMode {
         self.mode
     }

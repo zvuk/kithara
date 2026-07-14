@@ -101,6 +101,7 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
     }
+
     fn reader(&self) -> CachedReader<W::Reader> {
         CachedReader {
             pinned: Arc::clone(&self.pinned),
@@ -573,14 +574,10 @@ where
         self.inner.delete_asset(asset_root)
     }
 
-    delegate::delegate! {
-        to self.inner {
-            fn capabilities(&self) -> Capabilities;
-            fn root_dir(&self) -> &Path;
-            #[expr(self.open_index_resource(CacheKey::LruIndex, || $))]
-            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-        }
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+        self.open_index_resource(CacheKey::LruIndex, || self.inner.open_lru_index_resource())
     }
+
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         self.open_index_resource(CacheKey::PinsIndex, || {
             self.inner.open_pins_index_resource()
@@ -684,6 +681,13 @@ where
         }
 
         self.inner.resource_state(key)
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn capabilities(&self) -> Capabilities;
+            fn root_dir(&self) -> &Path;
+        }
     }
 }
 
@@ -805,6 +809,7 @@ mod tests {
                 fn root_dir(&self) -> &Path;
             }
         }
+
         fn open_resource_with_ctx(
             &self,
             key: &ResourceKey,

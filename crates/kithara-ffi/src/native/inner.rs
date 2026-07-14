@@ -278,6 +278,7 @@ impl NativeInner {
             pub(crate) fn volume(&self) -> f32;
         }
     }
+
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
         let entry = self.queue.current()?;
         self.items.lock().get(&entry.id).cloned()

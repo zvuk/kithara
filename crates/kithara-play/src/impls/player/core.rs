@@ -266,6 +266,7 @@ impl PlayerImpl {
             pub fn worker(&self) -> &AudioWorkerHandle;
         }
     }
+
     /// Drop the resource at `index` so the auto-advance prefetch path
     /// (`arm_next`) cannot plant it into the audio thread.
     ///
@@ -585,20 +586,17 @@ impl Drop for PlayerImpl {
 }
 
 impl crate::traits::dj::eq::Equalizer for PlayerImpl {
-    fn band_count(&self) -> usize {
-        self.eq_band_count()
-    }
-
-    fn gain(&self, band: usize) -> Option<f32> {
-        self.eq_gain(band)
-    }
-
-    fn reset(&self) -> Result<(), PlayError> {
-        self.reset_eq()
-    }
-
-    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        self.set_eq_gain(band, gain_db)
+    delegate::delegate! {
+        to self {
+            #[call(eq_band_count)]
+            fn band_count(&self) -> usize;
+            #[call(eq_gain)]
+            fn gain(&self, band: usize) -> Option<f32>;
+            #[call(reset_eq)]
+            fn reset(&self) -> Result<(), PlayError>;
+            #[call(set_eq_gain)]
+            fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError>;
+        }
     }
 }
 

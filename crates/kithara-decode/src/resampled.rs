@@ -360,6 +360,7 @@ where
             fn update_byte_len(&self, len: u64);
         }
     }
+
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             match self.decoder.next_chunk()? {

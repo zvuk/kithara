@@ -274,6 +274,7 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
             fn track_info(&self) -> crate::DecoderTrackInfo;
         }
     }
+
     fn duration(&self) -> Option<Duration> {
         self.duration
     }

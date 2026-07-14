@@ -72,6 +72,7 @@ impl<T> Outlet<T> {
             pub(crate) fn take_pending(&mut self) -> Option<T>;
         }
     }
+
     /// Whether both the ring buffer and the overflow slot are full.
     ///
     /// When `true`, the next [`try_push`](Self::try_push) is guaranteed to

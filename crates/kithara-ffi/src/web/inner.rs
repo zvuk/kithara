@@ -147,6 +147,7 @@ impl WasmInner {
             fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError>;
         }
     }
+
     pub(crate) fn eq_band_count(&self) -> u32 {
         let n = self.eq_gains.len();
         u32::try_from(n).unwrap_or_else(|_| {

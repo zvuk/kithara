@@ -95,9 +95,19 @@ impl From<&PlayerPhase> for PlayerPhaseKind {
 }
 
 impl PlayerPhase {
-    /// The ABR handle of the resource currently in the processor, if any.
-    pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.abr_handle_ref().cloned()
+    delegate::delegate! {
+        to self {
+            /// The ABR handle of the resource currently in the processor, if any.
+            #[expr($.cloned())]
+            #[call(abr_handle_ref)]
+            pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            #[call(into)]
+            pub(crate) fn kind(&self) -> PlayerPhaseKind;
+            /// The active slot, if any phase currently holds one.
+            #[expr($.copied())]
+            #[call(slot_ref)]
+            pub(crate) fn slot(&self) -> Option<SlotId>;
+        }
     }
 
     /// Borrow of the active ABR handle slot. Returning a reference makes this
@@ -110,10 +120,6 @@ impl PlayerPhase {
             | Self::Paused { abr_handle, .. }
             | Self::Stopped { abr_handle, .. } => abr_handle.as_ref(),
         }
-    }
-
-    pub(crate) fn kind(&self) -> PlayerPhaseKind {
-        self.into()
     }
 
     /// Shared read access to the armed-next slot, if any.
@@ -145,11 +151,6 @@ impl PlayerPhase {
             | Self::Stopped { abr_handle, .. } => *abr_handle = handle,
             Self::Idle => {}
         }
-    }
-
-    /// The active slot, if any phase currently holds one.
-    pub(crate) fn slot(&self) -> Option<SlotId> {
-        self.slot_ref().copied()
     }
 
     /// Borrow of the active slot. Returning a reference makes this a true

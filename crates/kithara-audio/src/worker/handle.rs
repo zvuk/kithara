@@ -81,6 +81,7 @@ impl AudioWorkerHandle {
             pub fn wake(&self);
         }
     }
+
     /// Spawn a new shared worker thread bound to the given [`CancelToken`] and
     /// return a handle. Production callers (e.g. `EngineImpl`) pass a
     /// `child()` of the player master so worker shutdown participates in

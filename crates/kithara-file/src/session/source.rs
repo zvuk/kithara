@@ -167,6 +167,7 @@ impl kithara_stream::Source for FileSource {
             fn set_position(&self, pos: u64);
         }
     }
+
     fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {
         self.inner.segment_index.get()?;
         Some(Arc::new(FileByteMap {

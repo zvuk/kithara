@@ -990,6 +990,7 @@ impl FlashInner {
             pub(in crate::flash) fn async_active_count(&self) -> usize;
         }
     }
+
     pub(in crate::flash) fn advance_log(&self) -> Vec<u64> {
         self.core.lock().sched.advance_log.clone()
     }

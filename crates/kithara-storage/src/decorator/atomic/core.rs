@@ -64,6 +64,7 @@ impl<D: DriverIo> Atomic<D> {
             pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
         }
     }
+
     /// Returns `true` if the resource has been committed with zero length.
     #[must_use]
     pub fn is_empty(&self) -> bool {

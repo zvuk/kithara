@@ -177,6 +177,7 @@ impl<D: DriverIo> Resource<Active, D> {
             pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
     }
+
     /// Mint a cloneable read-only view over the in-flight resource (readers may
     /// observe the committed prefix while the writer keeps appending).
     #[must_use]

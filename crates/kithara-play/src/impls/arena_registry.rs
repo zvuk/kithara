@@ -45,6 +45,7 @@ where
             pub(crate) fn len(&self) -> usize;
         }
     }
+
     pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,

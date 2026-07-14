@@ -71,10 +71,19 @@ impl Segment {
         }
     }
 
-    /// Route byte length: `size().get()`. The route length is stable virtual
-    /// geometry; the completeness gate is `size().is_exact()`.
-    pub(crate) fn len(&self) -> u64 {
-        self.size().get()
+    delegate::delegate! {
+        to self {
+            /// Route byte length: `size().get()`. The route length is stable virtual
+            /// geometry; the completeness gate is `size().is_exact()`.
+            #[expr($.get())]
+            #[call(size)]
+            pub(crate) fn len(&self) -> u64;
+            /// Read byte length: exact committed/probed length when known, otherwise
+            /// the route length so descriptors remain addressable before commit.
+            #[expr($.read_len())]
+            #[call(size)]
+            pub(crate) fn read_len(&self) -> u64;
+        }
     }
 
     /// Open the slot's resource and copy `range` into `dst`. Routes through the
@@ -87,12 +96,6 @@ impl Segment {
         dst: &mut [u8],
     ) -> StreamResult<Option<usize>> {
         self.resource(scope).read_at(range, dst)
-    }
-
-    /// Read byte length: exact committed/probed length when known, otherwise
-    /// the route length so descriptors remain addressable before commit.
-    pub(crate) fn read_len(&self) -> u64 {
-        self.size().read_len()
     }
 
     /// Narrow disk handle for this slot, built from the variant's shared scope

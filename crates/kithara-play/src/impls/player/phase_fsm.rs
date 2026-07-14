@@ -148,6 +148,7 @@ impl PlayerImpl {
             pub(crate) fn require_active_slot(&self) -> Result<SlotId, TransitionError>;
         }
     }
+
     /// Send a command to the current slot's processor.
     ///
     /// Absorbs the internal [`TransitionError::WrongPhase`] (no slot) into the

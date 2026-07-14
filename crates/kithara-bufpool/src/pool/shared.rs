@@ -90,6 +90,7 @@ where
             pub fn stats(&self) -> PoolStats;
         }
     }
+
     /// Wrap an externally-owned value into a [`PooledOwned`] guard.
     ///
     /// The returned guard automatically returns the value to this pool on drop,
