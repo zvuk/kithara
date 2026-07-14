@@ -1049,18 +1049,6 @@ fn add_field_attributes(
     let start = field_declaration_start(src, field);
     let indent = leading_indent(&src[start..]);
     let mut text = String::new();
-    let mut comments = BTreeSet::new();
-    for conversion in [methods.get, methods.get_mut, methods.with]
-        .into_iter()
-        .flatten()
-    {
-        for comment in method_comments(src, &conversion.raw, &indent) {
-            comments.insert(comment);
-        }
-    }
-    for comment in comments {
-        text.push_str(&comment);
-    }
     let config = match mode {
         FieldworkMode::Concise { default_visibility } => {
             concise_field_config(methods, default_visibility)
@@ -1302,47 +1290,6 @@ fn visibility_text(visibility: &Visibility) -> String {
             .replace(" ::", "::")
             .replace(":: ", "::"),
     }
-}
-
-fn method_comments(src: &str, raw: &RawAccessor<'_>, indent: &str) -> Vec<String> {
-    let mut comments = Vec::new();
-    if let Some(block) = &raw.block {
-        let method = raw.method.span().byte_range();
-        for range in [block.start..method.start, method.end..block.end] {
-            if let Some(fragment) = src.get(range)
-                && (fragment.contains("//") || fragment.contains("/*"))
-            {
-                comments.push(reindent(fragment, indent));
-            }
-        }
-    }
-    for attr in &raw.method.attrs {
-        if attr.path().is_ident("doc")
-            && let Some(fragment) = src.get(attr.span().byte_range())
-        {
-            comments.push(reindent(fragment, indent));
-        }
-    }
-    comments
-}
-
-fn reindent(fragment: &str, indent: &str) -> String {
-    let lines: Vec<_> = fragment.lines().collect();
-    let start = lines
-        .iter()
-        .position(|line| !line.trim().is_empty())
-        .unwrap_or(lines.len());
-    let end = lines
-        .iter()
-        .rposition(|line| !line.trim().is_empty())
-        .map_or(start, |index| index + 1);
-    let mut output = String::new();
-    for line in &lines[start..end] {
-        output.push_str(indent);
-        output.push_str(line.trim_start());
-        output.push('\n');
-    }
-    output
 }
 
 fn leading_indent(src: &str) -> String {
@@ -1956,21 +1903,44 @@ mod tests {
     }
 
     #[test]
-    fn comments_visibility_and_existing_derive_are_preserved() -> Result<()> {
-        let source = "// Struct comment.\n#[derive(Debug)]\nstruct User {\n    name: String,\n}\nimpl User {\n    /// Getter comment.\n    fn name(&self) -> &str { &self.name }\n}\n";
+    fn field_doc_is_unchanged_when_documented_getter_converts() -> Result<()> {
+        let source = "// Struct comment.\n#[derive(Debug)]\nstruct User {\n    /// Stored user name.\n    name: String,\n}\nimpl User {\n    /// Returns the user name.\n    fn name(&self) -> &str { &self.name }\n}\n";
         let (fixed, outcome, _) = fix(source)?;
         assert_eq!(outcome.changes, ["name"]);
-        assert!(fixed.contains("// Struct comment.\n#[derive(Debug, fieldwork::Fieldwork)]"));
-        assert!(fixed.contains("#[fieldwork(get, vis = \"\")]"));
-        assert!(fixed.contains("/// Getter comment.\n    name: String"));
-        assert!(!fixed.contains("#[field("));
-        assert!(!fixed.contains("fn name"));
+        assert_eq!(
+            fixed,
+            "// Struct comment.\n#[derive(Debug, fieldwork::Fieldwork)]\n#[fieldwork(get, vis = \"\")]\nstruct User {\n    /// Stored user name.\n    name: String,\n}\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn documented_getter_does_not_add_a_field_doc() -> Result<()> {
+        let source = "struct User {\n    name: String,\n}\nimpl User {\n    /// Returns the user name.\n    pub fn name(&self) -> &str { &self.name }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+        assert_eq!(outcome.changes, ["name"]);
+        assert_eq!(
+            fixed,
+            "#[derive(fieldwork::Fieldwork)]\n#[fieldwork(get)]\nstruct User {\n    name: String,\n}\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn documented_getters_do_not_append_to_the_field_doc() -> Result<()> {
+        let source = "struct User {\n    /// Stored user name.\n    name: String,\n}\nimpl User {\n    /// Returns the user name.\n    pub fn name(&self) -> &str { &self.name }\n\n    /// Returns the mutable user name.\n    pub fn name_mut(&mut self) -> &mut str { &mut self.name }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+        assert_eq!(outcome.changes, ["name", "name_mut"]);
+        assert_eq!(
+            fixed,
+            "#[derive(fieldwork::Fieldwork)]\n#[fieldwork(get)]\nstruct User {\n    /// Stored user name.\n    #[field(get_mut)]\n    name: String,\n}\n"
+        );
         Ok(())
     }
 
     #[test]
     fn fix_is_idempotent() -> Result<()> {
-        let source = "struct User {\n    name: String,\n}\nimpl User { pub fn name(&self) -> &str { &self.name } }\n";
+        let source = "struct User {\n    /// Stored user name.\n    name: String,\n}\nimpl User {\n    /// Returns the user name.\n    pub fn name(&self) -> &str { &self.name }\n}\n";
         let (fixed, first, _) = fix(source)?;
         assert_eq!(first.writes, 1);
         let (again, second, _) = fix(&fixed)?;
@@ -1994,12 +1964,12 @@ mod tests {
     }
 
     #[test]
-    fn must_use_getter_converts_and_drops_the_attribute() -> Result<()> {
+    fn must_use_getter_converts_and_drops_method_attributes() -> Result<()> {
         let source = "struct User {\n    name: String,\n}\nimpl User {\n    /// The name.\n    #[must_use]\n    pub fn name(&self) -> &str { &self.name }\n}\n";
         let (fixed, outcome, _) = fix(source)?;
         assert_eq!(outcome.changes, ["name"]);
         assert!(!fixed.contains("must_use"));
-        assert!(fixed.contains("/// The name."));
+        assert!(!fixed.contains("/// The name."));
         assert!(!fixed.contains("fn name"));
         Ok(())
     }
@@ -2030,13 +2000,13 @@ mod tests {
     }
 
     #[test]
-    fn option_wrapping_with_setter_enables_option_set_some() -> Result<()> {
-        let source = "struct Config<C> {\n    cancel: Option<C>,\n    enabled: bool,\n}\nimpl<C> Config<C> {\n    pub fn with_cancel(mut self, token: C) -> Self { self.cancel = Some(token); self }\n}\n";
+    fn option_set_some_keeps_only_the_field_doc() -> Result<()> {
+        let source = "struct Violation {\n    /// Optional long-form explanation (Summary / Why / Bad / Good /\n    /// Suppress block) shown in `--verbose` output and markdown reports.\n    /// `None` keeps the compact one-line render.\n    pub(crate) explanation: Option<&'static str>,\n    rule: &'static str,\n}\nimpl Violation {\n    /// Attach the long-form Summary / Why / Bad / Good / Suppress block\n    /// to this violation. Shown in `--verbose` and markdown report\n    /// renderers; the compact one-line form keeps using `message`.\n    #[must_use]\n    pub fn with_explanation(mut self, explanation: &'static str) -> Self { self.explanation = Some(explanation); self }\n}\n";
         let (fixed, outcome, _) = fix(source)?;
-        assert_eq!(outcome.changes, ["with_cancel"]);
+        assert_eq!(outcome.changes, ["with_explanation"]);
         assert_eq!(
             fixed,
-            "#[derive(fieldwork::Fieldwork)]\n#[fieldwork(opt_in, with)]\nstruct Config<C> {\n    #[field(with, option_set_some)]\n    cancel: Option<C>,\n    enabled: bool,\n}\n"
+            "#[derive(fieldwork::Fieldwork)]\n#[fieldwork(opt_in, with)]\nstruct Violation {\n    /// Optional long-form explanation (Summary / Why / Bad / Good /\n    /// Suppress block) shown in `--verbose` output and markdown reports.\n    /// `None` keeps the compact one-line render.\n    #[field(with, option_set_some)]\n    pub(crate) explanation: Option<&'static str>,\n    rule: &'static str,\n}\n"
         );
         Ok(())
     }
