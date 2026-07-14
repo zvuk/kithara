@@ -4613,6 +4613,7 @@ dependencies = [
  "delegate",
  "derive_more",
  "fdk-aac",
+ "fieldwork",
  "hotpath",
  "jni 0.22.4",
  "kithara-apple",

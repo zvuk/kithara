@@ -236,6 +236,8 @@ pub(crate) type DecoderFactory<T> = Arc<
 /// The old decoder naturally decodes all data from the current segment.
 /// When it encounters new segment data (different format), it errors or returns EOF.
 /// At that point, we seek to the segment boundary and recreate the decoder.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub(crate) struct StreamAudioSource<T: StreamType> {
     /// Explicit FSM state — single source of truth for track phase.
     pub(crate) state: CurrentFsm,
@@ -281,6 +283,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// flushes via [`flush_deferred`](AudioWorkerSource::flush_deferred) and on
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
+    #[field(with, option_set_some, vis = "pub(crate)")]
     emit: Option<DeferredBus<AudioEvent>>,
     /// Incremental end-of-stream effect drain. Allocated at source construction;
     /// true EOF only flips booleans and pulls one tail chunk per pass.
@@ -489,10 +492,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    pub(crate) fn with_emit(mut self, emit: DeferredBus<AudioEvent>) -> Self {
-        self.emit = Some(emit);
-        self
-    }
     /// Publish the current FSM phase to the shared activity flag and assign
     /// the new state.
     ///
