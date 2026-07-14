@@ -1,15 +1,14 @@
 mod analyzer;
 mod detector;
-#[cfg(feature = "beat-nn")]
-mod detector_factory;
-#[cfg(feature = "beat-nn")]
-mod detector_kind;
+#[path = "../grid/mod.rs"]
 mod grid;
+mod pass;
 
-pub(crate) use analyzer::{BeatPass, SharedBeatDetector};
-#[cfg(test)]
-pub(crate) use detector::{BeatDetector, BeatDetectorMock, RawBeats};
-pub(crate) use grid::GridParams;
-
+pub(crate) use analyzer::BeatPassConfig;
+pub(crate) use detector::BeatDetector;
 #[cfg(feature = "beat-nn")]
-pub(crate) use self::{detector_factory::build_detector, detector_kind::BeatDetectorKind};
+pub(crate) use detector::backend::{BeatDetectorKind, build_detector};
+#[cfg(test)]
+pub(crate) use detector::{BeatDetectorMock, RawBeats};
+pub(crate) use grid::GridParams;
+pub(crate) use pass::BeatPass;

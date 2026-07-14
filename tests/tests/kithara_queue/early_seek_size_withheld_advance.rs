@@ -76,8 +76,8 @@ impl Harness {
     fn new() -> Self {
         let session = Arc::new(OfflineSession::new_manual());
         let mut config = PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .build();
         config.sample_rate = SAMPLE_RATE;

@@ -696,7 +696,7 @@ impl PlayerTrack {
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use kithara_audio::PcmReader;
+    use kithara_audio::{PcmControl, PcmRead, PcmSession};
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
@@ -766,7 +766,7 @@ mod tests {
         }
     }
 
-    impl PcmReader for MisreportedDurationReader {
+    impl PcmSession for MisreportedDurationReader {
         fn duration(&self) -> Option<Duration> {
             Some(Duration::from_secs(10))
         }
@@ -778,7 +778,9 @@ mod tests {
         fn metadata(&self) -> &TrackMetadata {
             &self.metadata
         }
+    }
 
+    impl PcmRead for MisreportedDurationReader {
         fn position(&self) -> Duration {
             let frames =
                 u64::try_from(self.position_frames).expect("test mock position non-negative");
@@ -832,6 +834,12 @@ mod tests {
             })
         }
 
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    impl PcmControl for MisreportedDurationReader {
         fn seek(
             &mut self,
             position: Duration,
@@ -841,10 +849,6 @@ mod tests {
                 target: position,
                 landed_at: position,
             })
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
         }
     }
 
@@ -887,21 +891,9 @@ mod tests {
         frontier_ns: Arc<AtomicU64>,
     }
 
-    impl PcmReader for LiveFrontierReader {
+    impl PcmRead for LiveFrontierReader {
         fn decoded_frontier(&self) -> Duration {
             Duration::from_nanos(self.frontier_ns.load(Ordering::Relaxed))
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(180))
-        }
-
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.metadata
         }
 
         fn position(&self) -> Duration {
@@ -926,6 +918,26 @@ mod tests {
             })
         }
 
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    impl PcmSession for LiveFrontierReader {
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(180))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.metadata
+        }
+    }
+
+    impl PcmControl for LiveFrontierReader {
         fn seek(
             &mut self,
             position: Duration,
@@ -934,10 +946,6 @@ mod tests {
                 target: position,
                 landed_at: position,
             })
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
         }
     }
 

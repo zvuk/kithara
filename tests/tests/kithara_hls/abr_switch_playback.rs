@@ -755,7 +755,7 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     tracing("kithara_audio=info,kithara_hls=info")
 )]
 async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
-    use kithara::{audio::PcmReader, decode::PcmChunk};
+    use kithara::{audio::PcmRead, decode::PcmChunk};
 
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
@@ -778,7 +778,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     async fn next_chunk(audio: &mut Audio<Stream<Hls>>) -> Option<PcmChunk> {
         loop {
             let _ = audio.preload();
-            match PcmReader::next_chunk(audio) {
+            match PcmRead::next_chunk(audio) {
                 Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
                 Ok(ChunkOutcome::Eof { .. }) => return None,
                 Ok(ChunkOutcome::Pending { .. }) => {}

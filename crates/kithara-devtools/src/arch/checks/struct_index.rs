@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::Path,
 };
 
@@ -7,8 +7,8 @@ use anyhow::Result;
 use glob::Pattern;
 use quote::ToTokens;
 use syn::{
-    Block, Expr, ExprCall, ExprMethodCall, ExprStruct, Fields, ImplItem, Item, ItemImpl, Pat, Stmt,
-    Type, Visibility, visit::Visit,
+    BinOp, Block, Expr, ExprAssign, ExprBinary, ExprCall, ExprMethodCall, ExprStruct, Fields,
+    ImplItem, Item, ItemImpl, Member, Pat, Stmt, Type, Visibility, visit::Visit,
 };
 
 use crate::common::{
@@ -55,6 +55,8 @@ pub(crate) struct WorkspaceStructIndex {
     /// trait impls (so `#[derive]`-generated and hand-written `impl Default`
     /// don't count).
     pub(crate) impl_method_counts: BTreeMap<String, usize>,
+    /// Crate name → names of fields used as assignment targets.
+    pub(crate) assigned_fields: HashMap<String, HashSet<String>>,
     pub(crate) literals: BTreeMap<String, Vec<LiteralSite>>,
     pub(crate) structs: BTreeMap<String, StructInfo>,
     pub(crate) suppressions: HashMap<String, Suppressions>,
@@ -78,6 +80,7 @@ pub(crate) fn build_index(
         let rel_str = rel.to_string_lossy().replace('\\', "/");
         idx.suppressions
             .insert(rel_str.clone(), Suppressions::parse(&src));
+        collect_assigned_fields(&file, &rel_str, &mut idx);
         collect_in_items(&file.items, &rel_str, &mut idx);
     }
     Ok(idx)
@@ -152,6 +155,15 @@ fn inspect_fn(fn_name: &str, block: &Block, idx: &mut WorkspaceStructIndex) {
     visitor.visit_block(block);
 }
 
+pub(crate) fn crate_name_from_rel(rel: &str) -> Option<&str> {
+    let mut components = rel.split('/');
+    if components.next() == Some("crates") {
+        components.next()
+    } else {
+        None
+    }
+}
+
 fn leading_destructure_name(pat: &Pat) -> Option<String> {
     match pat {
         Pat::Struct(ps) => ps.path.segments.last().map(|s| s.ident.to_string()),
@@ -167,6 +179,59 @@ fn self_ty_name(ty: &Type) -> Option<String> {
     None
 }
 
+struct AssignedFieldVisitor<'a> {
+    fields: &'a mut HashSet<String>,
+}
+
+impl AssignedFieldVisitor<'_> {
+    fn record_assignment(&mut self, expr: &Expr) {
+        let Expr::Field(field) = expr else {
+            return;
+        };
+        let Member::Named(field_name) = &field.member else {
+            return;
+        };
+        self.fields.insert(field_name.to_string());
+    }
+}
+
+impl<'ast> Visit<'ast> for AssignedFieldVisitor<'_> {
+    fn visit_expr_assign(&mut self, n: &'ast ExprAssign) {
+        self.record_assignment(&n.left);
+        syn::visit::visit_expr_assign(self, n);
+    }
+
+    fn visit_expr_binary(&mut self, n: &'ast ExprBinary) {
+        if matches!(
+            n.op,
+            BinOp::AddAssign(_)
+                | BinOp::SubAssign(_)
+                | BinOp::MulAssign(_)
+                | BinOp::DivAssign(_)
+                | BinOp::RemAssign(_)
+                | BinOp::BitXorAssign(_)
+                | BinOp::BitAndAssign(_)
+                | BinOp::BitOrAssign(_)
+                | BinOp::ShlAssign(_)
+                | BinOp::ShrAssign(_)
+        ) {
+            self.record_assignment(&n.left);
+        }
+        syn::visit::visit_expr_binary(self, n);
+    }
+}
+
+fn collect_assigned_fields(file: &syn::File, rel: &str, idx: &mut WorkspaceStructIndex) {
+    let Some(crate_name) = crate_name_from_rel(rel) else {
+        return;
+    };
+    let fields = idx
+        .assigned_fields
+        .entry(crate_name.to_string())
+        .or_default();
+    AssignedFieldVisitor { fields }.visit_file(file);
+}
+
 struct LiteralVisitor<'a> {
     idx: &'a mut WorkspaceStructIndex,
 }
@@ -179,8 +244,8 @@ impl LiteralVisitor<'_> {
         let mut field_exprs: BTreeMap<String, String> = BTreeMap::new();
         for fv in &es.fields {
             let key = match &fv.member {
-                syn::Member::Named(id) => id.to_string(),
-                syn::Member::Unnamed(_) => continue,
+                Member::Named(id) => id.to_string(),
+                Member::Unnamed(_) => continue,
             };
             field_exprs.insert(key, render_expr(&fv.expr));
         }
@@ -294,10 +359,12 @@ pub(crate) fn unique_consumer(sites: &[LiteralSite]) -> Option<&str> {
 
 #[cfg(test)]
 pub(crate) fn build_index_from_source(src: &str) -> WorkspaceStructIndex {
+    const REL: &str = "crates/fixture/src/lib.rs";
     let file: syn::File = syn::parse_str(src).expect("valid Rust source");
     let mut idx = WorkspaceStructIndex::default();
     idx.suppressions
-        .insert("fixture.rs".to_string(), Suppressions::parse(src));
-    collect_in_items(&file.items, "fixture.rs", &mut idx);
+        .insert(REL.to_string(), Suppressions::parse(src));
+    collect_assigned_fields(&file, REL, &mut idx);
+    collect_in_items(&file.items, REL, &mut idx);
     idx
 }

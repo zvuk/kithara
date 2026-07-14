@@ -45,13 +45,13 @@ pub(super) fn view_status_bar(state: &Kithara) -> Element<'static, Message> {
 
 /// Audio-engine cost readout shown inline in the status bar.
 fn engine_load_view(load: EngineLoadSnapshot, p: GuiPalette) -> Element<'static, Message> {
-    let pct = (load.load * 100.0).clamp(0.0, 999.0);
+    let pct = (load.load() * 100.0).clamp(0.0, 999.0);
     row![
         status_text("load".to_string(), p),
-        text(format!("{pct:.0}% \u{00b7} {:.1}ms", load.ms))
+        text(format!("{pct:.0}% \u{00b7} {:.1}ms", load.ms()))
             .size(studio_type::MONO_SM)
             .font(fonts::mono(Weight::Semibold))
-            .color(load_color(load.load, p)),
+            .color(load_color(load.load(), p)),
     ]
     .align_y(Alignment::Center)
     .spacing(gap::INLINE)

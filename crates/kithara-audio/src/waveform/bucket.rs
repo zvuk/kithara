@@ -16,9 +16,31 @@ const BUCKET_BYTES: usize = 12;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct Bucket {
-    pub high: f32,
-    pub low: f32,
-    pub mid: f32,
+    high: f32,
+    low: f32,
+    mid: f32,
+}
+
+impl Bucket {
+    #[must_use]
+    pub fn new(low: f32, mid: f32, high: f32) -> Self {
+        Self { high, low, mid }
+    }
+
+    #[must_use]
+    pub fn high(&self) -> f32 {
+        self.high
+    }
+
+    #[must_use]
+    pub fn low(&self) -> f32 {
+        self.low
+    }
+
+    #[must_use]
+    pub fn mid(&self) -> f32 {
+        self.mid
+    }
 }
 
 /// A track's analysed waveform: per-bucket band heights in `[0, 1]`, indexed by
@@ -90,7 +112,7 @@ impl Blob for Waveform {
             if !(ok(low) && ok(mid) && ok(high)) {
                 return Err(BlobError::Corrupt);
             }
-            buckets.push(Bucket { high, low, mid });
+            buckets.push(Bucket::new(low, mid, high));
         }
         Ok(Self::from(buckets))
     }
@@ -98,9 +120,9 @@ impl Blob for Waveform {
     fn encode(&self, w: &mut Writer<'_>) {
         w.reserve(self.0.len() * BUCKET_BYTES);
         for b in self.0.iter() {
-            w.write_f32(b.low);
-            w.write_f32(b.mid);
-            w.write_f32(b.high);
+            w.write_f32(b.low());
+            w.write_f32(b.mid());
+            w.write_f32(b.high());
         }
     }
 }
@@ -113,18 +135,7 @@ mod bytes_tests {
     use crate::blob::BlobError;
 
     fn sample() -> Waveform {
-        Waveform::from(vec![
-            Bucket {
-                low: 0.1,
-                mid: 0.2,
-                high: 0.3,
-            },
-            Bucket {
-                low: 0.0,
-                mid: 1.0,
-                high: 0.5,
-            },
-        ])
+        Waveform::from(vec![Bucket::new(0.1, 0.2, 0.3), Bucket::new(0.0, 1.0, 0.5)])
     }
 
     #[kithara::test]

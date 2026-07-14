@@ -1,9 +1,8 @@
 use thiserror::Error;
 
-#[cfg(test)]
-mod kithara {
-    pub(crate) use kithara_test_macros::mock;
-}
+#[cfg(feature = "beat-nn")]
+#[path = "backend.rs"]
+pub(super) mod backend;
 
 /// Raw detector output: beat / downbeat positions in seconds from track
 /// start.
@@ -30,7 +29,7 @@ pub(crate) enum BeatDetectError {
 }
 
 /// Swappable beat/downbeat detector over one mono analysis window.
-#[cfg_attr(test, kithara::mock(api = [BeatDetectorMock]))]
+#[cfg_attr(test, kithara_test_macros::mock(api = [BeatDetectorMock]))]
 pub(crate) trait BeatDetector: Send {
     /// # Errors
     /// [`BeatDetectError::Detect`] when the backend fails on this input.

@@ -64,7 +64,8 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
         .await
         .expect("silent WAV must decode to a finalised analysis");
     let waveform = analysis
-        .waveform
+        .waveform()
+        .cloned()
         .expect("the registered waveform analyzer must fill its slot");
 
     assert!(

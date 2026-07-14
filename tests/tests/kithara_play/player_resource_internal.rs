@@ -11,7 +11,9 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
-    audio::{DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
+    audio::{
+        DecodeError, PcmControl, PcmRead, PcmSession, PendingReason, ReadOutcome, SeekOutcome,
+    },
     bufpool::PcmPool,
     decode::{PcmSpec, TrackMetadata},
     events::EventBus,
@@ -49,7 +51,7 @@ impl PendingReader {
     }
 }
 
-impl PcmReader for PendingReader {
+impl PcmRead for PendingReader {
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Ok(ReadOutcome::Pending {
             reason: PendingReason::Buffering,
@@ -67,13 +69,6 @@ impl PcmReader for PendingReader {
         })
     }
 
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
-
     fn spec(&self) -> PcmSpec {
         self.spec
     }
@@ -81,7 +76,9 @@ impl PcmReader for PendingReader {
     fn position(&self) -> Duration {
         Duration::ZERO
     }
+}
 
+impl PcmSession for PendingReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(1))
     }
@@ -92,6 +89,15 @@ impl PcmReader for PendingReader {
 
     fn event_bus(&self) -> &EventBus {
         &self.bus
+    }
+}
+
+impl PcmControl for PendingReader {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
     }
 }
 
@@ -119,7 +125,7 @@ impl PositionReader {
     }
 }
 
-impl PcmReader for PositionReader {
+impl PcmRead for PositionReader {
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         let channels = self.spec.channels as usize;
         let frames = buf.len() / channels;
@@ -166,15 +172,6 @@ impl PcmReader for PositionReader {
         })
     }
 
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let frame = (position.as_secs_f64() * self.spec.sample_rate.get() as f64) as u64;
-        self.frame_idx = frame.min(self.total_frames);
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
-
     fn spec(&self) -> PcmSpec {
         self.spec
     }
@@ -182,7 +179,9 @@ impl PcmReader for PositionReader {
     fn position(&self) -> Duration {
         Duration::from_secs_f64(self.frame_idx as f64 / self.spec.sample_rate.get() as f64)
     }
+}
 
+impl PcmSession for PositionReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs_f64(
             self.total_frames as f64 / self.spec.sample_rate.get() as f64,
@@ -195,6 +194,17 @@ impl PcmReader for PositionReader {
 
     fn event_bus(&self) -> &EventBus {
         &self.bus
+    }
+}
+
+impl PcmControl for PositionReader {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        let frame = (position.as_secs_f64() * self.spec.sample_rate.get() as f64) as u64;
+        self.frame_idx = frame.min(self.total_frames);
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
     }
 }
 
@@ -353,7 +363,7 @@ impl FailingReader {
     }
 }
 
-impl PcmReader for FailingReader {
+impl PcmRead for FailingReader {
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Err(DecodeError::InvalidData {
             detail: "mock: decoder failed mid-stream",
@@ -367,18 +377,15 @@ impl PcmReader for FailingReader {
             detail: "mock: decoder failed mid-stream",
         })
     }
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
     fn spec(&self) -> PcmSpec {
         self.spec
     }
     fn position(&self) -> Duration {
         Duration::ZERO
     }
+}
+
+impl PcmSession for FailingReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(169))
     }
@@ -387,6 +394,15 @@ impl PcmReader for FailingReader {
     }
     fn event_bus(&self) -> &EventBus {
         &self.bus
+    }
+}
+
+impl PcmControl for FailingReader {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
     }
 }
 

@@ -4,9 +4,9 @@
 #[non_exhaustive]
 pub struct GridSegment {
     /// `nominal_bar / fitted_bar`; 1.0 = the region already sits on the grid.
-    pub ratio_correction: f64,
-    pub end_frame: u64,
-    pub start_frame: u64,
+    ratio_correction: f64,
+    end_frame: u64,
+    start_frame: u64,
 }
 
 impl GridSegment {
@@ -18,6 +18,21 @@ impl GridSegment {
             end_frame,
             start_frame,
         }
+    }
+
+    #[must_use]
+    pub fn end_frame(&self) -> u64 {
+        self.end_frame
+    }
+
+    #[must_use]
+    pub fn ratio_correction(&self) -> f64 {
+        self.ratio_correction
+    }
+
+    #[must_use]
+    pub fn start_frame(&self) -> u64 {
+        self.start_frame
     }
 }
 
@@ -52,16 +67,16 @@ impl RegionPlan {
     /// Returns a [`RegionPlanError`] naming the first offending segment.
     pub fn new(segments: Vec<GridSegment>) -> Result<Self, RegionPlanError> {
         for (index, s) in segments.iter().enumerate() {
-            if s.start_frame >= s.end_frame {
+            if s.start_frame() >= s.end_frame() {
                 return Err(RegionPlanError::Inverted { index });
             }
-            if !s.ratio_correction.is_finite() || s.ratio_correction <= 0.0 {
+            if !s.ratio_correction().is_finite() || s.ratio_correction() <= 0.0 {
                 return Err(RegionPlanError::Ratio {
                     index,
-                    ratio: s.ratio_correction,
+                    ratio: s.ratio_correction(),
                 });
             }
-            if index > 0 && segments[index - 1].end_frame > s.start_frame {
+            if index > 0 && segments[index - 1].end_frame() > s.start_frame() {
                 return Err(RegionPlanError::Overlap { index });
             }
         }
@@ -72,25 +87,22 @@ impl RegionPlan {
     /// between segments (correction `1.0`).
     #[must_use]
     pub fn region_at(&self, frame: u64) -> ActiveRegion {
-        let idx = self.segments.partition_point(|s| s.end_frame <= frame);
+        let idx = self.segments.partition_point(|s| s.end_frame() <= frame);
         match self.segments.get(idx) {
-            Some(s) if s.start_frame <= frame => ActiveRegion {
-                start: s.start_frame,
-                end: s.end_frame,
-                correction: s.ratio_correction,
-            },
-            Some(s) => ActiveRegion {
-                start: idx
-                    .checked_sub(1)
-                    .map_or(0, |prev| self.segments[prev].end_frame),
-                end: s.start_frame,
-                correction: 1.0,
-            },
-            None => ActiveRegion {
-                start: self.segments.last().map_or(0, |s| s.end_frame),
-                end: u64::MAX,
-                correction: 1.0,
-            },
+            Some(s) if s.start_frame() <= frame => {
+                ActiveRegion::new(s.start_frame(), s.end_frame(), s.ratio_correction())
+            }
+            Some(s) => ActiveRegion::new(
+                idx.checked_sub(1)
+                    .map_or(0, |prev| self.segments[prev].end_frame()),
+                s.start_frame(),
+                1.0,
+            ),
+            None => ActiveRegion::new(
+                self.segments.last().map_or(0, GridSegment::end_frame),
+                u64::MAX,
+                1.0,
+            ),
         }
     }
 }
@@ -100,9 +112,9 @@ impl RegionPlan {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct ActiveRegion {
-    pub correction: f64,
-    pub end: u64,
-    pub start: u64,
+    correction: f64,
+    end: u64,
+    start: u64,
 }
 
 impl ActiveRegion {
@@ -112,6 +124,30 @@ impl ActiveRegion {
         end: u64::MAX,
         correction: 1.0,
     };
+
+    #[must_use]
+    pub fn new(start: u64, end: u64, correction: f64) -> Self {
+        Self {
+            correction,
+            end,
+            start,
+        }
+    }
+
+    #[must_use]
+    pub fn correction(&self) -> f64 {
+        self.correction
+    }
+
+    #[must_use]
+    pub fn end(&self) -> u64 {
+        self.end
+    }
+
+    #[must_use]
+    pub fn start(&self) -> u64 {
+        self.start
+    }
 
     #[must_use]
     pub fn contains(&self, frame: u64) -> bool {
@@ -156,8 +192,8 @@ mod tests {
         ];
         for (frame, start, end, correction) in cases {
             let region = plan.region_at(frame);
-            assert_eq!((region.start, region.end), (start, end));
-            assert!((region.correction - correction).abs() < f64::EPSILON);
+            assert_eq!((region.start(), region.end()), (start, end));
+            assert!((region.correction() - correction).abs() < f64::EPSILON);
             assert!(region.contains(frame));
         }
     }

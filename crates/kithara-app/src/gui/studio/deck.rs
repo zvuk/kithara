@@ -166,7 +166,7 @@ fn waveform_cluster(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
         .ui_state
         .analysis
         .as_ref()
-        .and_then(|analysis| analysis.waveform.as_ref())
+        .and_then(|analysis| analysis.waveform())
         .filter(|wave| !wave.is_empty());
 
     let canvas: Element<'_, Message> = wave.map_or_else(
