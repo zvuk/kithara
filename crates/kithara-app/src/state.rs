@@ -121,10 +121,10 @@ impl UiState {
         let (beats, downbeats) = analysis
             .as_ref()
             .and_then(|a| {
-                a.beat.as_ref().filter(|_| a.source_frames > 0).map(|grid| {
+                a.beat().filter(|_| a.source_frames() > 0).map(|grid| {
                     (
-                        frames_to_fractions(&grid.beats, a.source_frames),
-                        frames_to_fractions(&grid.downbeats, a.source_frames),
+                        frames_to_fractions(grid.beats(), a.source_frames()),
+                        frames_to_fractions(grid.downbeats(), a.source_frames()),
                     )
                 })
             })

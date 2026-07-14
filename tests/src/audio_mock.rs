@@ -15,7 +15,7 @@ use std::{
 };
 
 use kithara::{
-    audio::{PcmReader, PendingReason, ReadOutcome, SeekOutcome},
+    audio::{PcmControl, PcmRead, PcmSession, PendingReason, ReadOutcome, SeekOutcome},
     decode::{DecodeError, PcmSpec, TrackMetadata},
     events::EventBus,
     platform::time::Duration,
@@ -85,7 +85,7 @@ impl TestPcmReader {
     }
 }
 
-impl PcmReader for TestPcmReader {
+impl PcmSession for TestPcmReader {
     fn duration(&self) -> Option<Duration> {
         Some(self.frames_to_duration(self.total_frames))
     }
@@ -97,7 +97,9 @@ impl PcmReader for TestPcmReader {
     fn metadata(&self) -> &TrackMetadata {
         &self.metadata
     }
+}
 
+impl PcmRead for TestPcmReader {
     fn position(&self) -> Duration {
         self.frames_to_duration(self.position_frames)
     }
@@ -177,6 +179,12 @@ impl PcmReader for TestPcmReader {
         })
     }
 
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
+impl PcmControl for TestPcmReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let target = position;
         let frame = (position.as_secs_f64() * f64::from(self.spec.sample_rate.get())) as u64;
@@ -188,10 +196,6 @@ impl PcmReader for TestPcmReader {
             return Ok(SeekOutcome::PastEof { target, duration });
         }
         Ok(SeekOutcome::Landed { target, landed_at })
-    }
-
-    fn spec(&self) -> PcmSpec {
-        self.spec
     }
 }
 
@@ -223,11 +227,7 @@ impl SampleRateTrackingReader {
     }
 }
 
-impl PcmReader for SampleRateTrackingReader {
-    fn decoded_frontier(&self) -> Duration {
-        Duration::ZERO
-    }
-
+impl PcmSession for SampleRateTrackingReader {
     fn duration(&self) -> Option<Duration> {
         Some(self.duration)
     }
@@ -238,6 +238,12 @@ impl PcmReader for SampleRateTrackingReader {
 
     fn metadata(&self) -> &TrackMetadata {
         &self.metadata
+    }
+}
+
+impl PcmRead for SampleRateTrackingReader {
+    fn decoded_frontier(&self) -> Duration {
+        Duration::ZERO
     }
 
     fn position(&self) -> Duration {
@@ -261,6 +267,12 @@ impl PcmReader for SampleRateTrackingReader {
         })
     }
 
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
+impl PcmControl for SampleRateTrackingReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {
             target: position,
@@ -271,10 +283,6 @@ impl PcmReader for SampleRateTrackingReader {
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         self.recorded_host_rate
             .store(sample_rate.get(), Ordering::Relaxed);
-    }
-
-    fn spec(&self) -> PcmSpec {
-        self.spec
     }
 }
 
@@ -300,7 +308,7 @@ impl SeekTrackingReader {
     }
 }
 
-impl PcmReader for SeekTrackingReader {
+impl PcmSession for SeekTrackingReader {
     fn duration(&self) -> Option<Duration> {
         None
     }
@@ -312,7 +320,9 @@ impl PcmReader for SeekTrackingReader {
     fn metadata(&self) -> &TrackMetadata {
         &self.metadata
     }
+}
 
+impl PcmRead for SeekTrackingReader {
     fn position(&self) -> Duration {
         Duration::ZERO
     }
@@ -334,6 +344,12 @@ impl PcmReader for SeekTrackingReader {
         })
     }
 
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
+impl PcmControl for SeekTrackingReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let ms = u64::try_from(position.as_millis()).expect("test seek fits in u64");
         self.seek_log
@@ -344,10 +360,6 @@ impl PcmReader for SeekTrackingReader {
             target: position,
             landed_at: position,
         })
-    }
-
-    fn spec(&self) -> PcmSpec {
-        self.spec
     }
 }
 
@@ -372,7 +384,7 @@ impl MisreportedDurationReader {
     }
 }
 
-impl PcmReader for MisreportedDurationReader {
+impl PcmSession for MisreportedDurationReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(10))
     }
@@ -384,7 +396,9 @@ impl PcmReader for MisreportedDurationReader {
     fn metadata(&self) -> &TrackMetadata {
         &self.metadata
     }
+}
 
+impl PcmRead for MisreportedDurationReader {
     fn position(&self) -> Duration {
         let frames = u64::try_from(self.position_frames).expect("test mock position non-negative");
         Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate.get()))
@@ -434,15 +448,17 @@ impl PcmReader for MisreportedDurationReader {
         })
     }
 
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
+impl PcmControl for MisreportedDurationReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {
             target: position,
             landed_at: position,
         })
-    }
-
-    fn spec(&self) -> PcmSpec {
-        self.spec
     }
 }
 
@@ -465,11 +481,7 @@ impl LiveFrontierReader {
     }
 }
 
-impl PcmReader for LiveFrontierReader {
-    fn decoded_frontier(&self) -> Duration {
-        Duration::from_nanos(self.frontier_ns.load(Ordering::Relaxed))
-    }
-
+impl PcmSession for LiveFrontierReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(180))
     }
@@ -480,6 +492,12 @@ impl PcmReader for LiveFrontierReader {
 
     fn metadata(&self) -> &TrackMetadata {
         &self.metadata
+    }
+}
+
+impl PcmRead for LiveFrontierReader {
+    fn decoded_frontier(&self) -> Duration {
+        Duration::from_nanos(self.frontier_ns.load(Ordering::Relaxed))
     }
 
     fn position(&self) -> Duration {
@@ -501,14 +519,16 @@ impl PcmReader for LiveFrontierReader {
         })
     }
 
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
+impl PcmControl for LiveFrontierReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {
             target: position,
             landed_at: position,
         })
-    }
-
-    fn spec(&self) -> PcmSpec {
-        self.spec
     }
 }

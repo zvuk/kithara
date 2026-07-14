@@ -172,7 +172,7 @@ mod tests {
             .unwrap()
             .build_file_config();
 
-        assert_eq!(config.hint.as_deref(), Some("mp3"));
+        assert_eq!(config.hint(), Some("mp3"));
     }
 
     #[kithara::test]
@@ -181,7 +181,7 @@ mod tests {
             .unwrap()
             .build_file_config();
 
-        assert_eq!(config.hint, None);
+        assert_eq!(config.hint(), None);
     }
 
     #[kithara::test(native)]
@@ -223,7 +223,7 @@ mod tests {
             .events(EventBus::new(32))
             .build();
         let audio_config = config.build_file_config();
-        assert!(audio_config.stream.bus.is_some());
+        assert!(audio_config.stream().bus.is_some());
     }
 
     #[kithara::test]
@@ -235,7 +235,7 @@ mod tests {
             .events(EventBus::new(32))
             .build();
         let audio_config = config.build_hls_config().unwrap();
-        assert!(audio_config.stream.bus.is_some());
+        assert!(audio_config.stream().bus.is_some());
     }
 
     #[kithara::test]
@@ -258,11 +258,10 @@ mod tests {
 
         assert_eq!(
             audio_config
-                .decoder
-                .resampler
-                .as_ref()
+                .decoder()
+                .resampler()
                 .expect("resampler config")
-                .options
+                .options()
                 .chunk_size,
             2_048
         );
@@ -287,11 +286,10 @@ mod tests {
 
         assert_eq!(
             audio_config
-                .decoder
-                .resampler
-                .as_ref()
+                .decoder()
+                .resampler()
                 .expect("resampler config")
-                .backend
+                .backend()
                 .name(),
             PlaybackResamplerBackend::default().name()
         );
@@ -378,7 +376,7 @@ mod tests {
             .worker(worker.clone())
             .build();
         let audio_config = config.build_file_config();
-        assert!(audio_config.worker.is_some());
+        assert!(audio_config.worker().is_some());
         worker.shutdown();
     }
 
@@ -392,7 +390,7 @@ mod tests {
             .worker(worker.clone())
             .build();
         let audio_config = config.build_hls_config().unwrap();
-        assert!(audio_config.worker.is_some());
+        assert!(audio_config.worker().is_some());
         worker.shutdown();
     }
 
@@ -401,7 +399,8 @@ mod tests {
         let config = test_config("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
         let audio_config = config.build_file_config();
         assert_eq!(
-            audio_config.hint, None,
+            audio_config.hint(),
+            None,
             "URL without file extension must produce hint=None"
         );
     }
@@ -416,7 +415,7 @@ mod tests {
         let config = test_config(url).unwrap();
         let audio_config = config.build_file_config();
         assert_eq!(
-            audio_config.hint.as_deref(),
+            audio_config.hint(),
             expected,
             "hint mismatch for URL: {url}"
         );

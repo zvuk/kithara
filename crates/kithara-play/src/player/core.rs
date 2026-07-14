@@ -292,7 +292,7 @@ mod tests {
 
         config = player.prepare_config(config);
 
-        assert_eq!(config.decoder.gapless_mode, GaplessMode::Disabled);
+        assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
         assert!(
             config.cancel.is_some(),
             "prepare_config must inject a per-track cancel child"

@@ -5,6 +5,7 @@ mod offline_player_harness;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
     assets::StoreOptions,
+    audio::AudioDecoderConfig,
     decode::DecoderBackend,
     hls::{AbrMode, KeyOptions},
     net::Headers,
@@ -42,8 +43,12 @@ fn app_track_source(
             .and_then(|rule| rule.headers.clone())
             .map(Headers::from)
     });
-    let mut decoder = kithara::play::default_resource_decoder_config();
-    decoder.backend = backend;
+    let decoder_defaults = kithara::play::default_resource_decoder_config();
+    let decoder = AudioDecoderConfig::builder()
+        .backend(backend)
+        .gapless_mode(decoder_defaults.gapless_mode())
+        .maybe_resampler(decoder_defaults.resampler().cloned())
+        .build();
     let builder = builder
         .downloader(config.downloader.clone())
         .flush_hub(config.flush_hub.clone())

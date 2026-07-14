@@ -61,8 +61,8 @@ fn make_chunk(pool: &PcmPool, pcm: &[f32]) -> PcmChunk {
     let mut samples = pool.get();
     samples
         .ensure_len(pcm.len())
-        .unwrap_or_else(|_| panic!("PCM pool budget exhausted"));
-    samples.copy_from_slice(pcm);
+        .unwrap_or_else(|error| panic!("bench PCM allocation failed: {error}"));
+    samples.clone_from_slice(pcm);
     PcmChunk::new(
         PcmMeta {
             spec,

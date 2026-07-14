@@ -196,11 +196,15 @@ fn region_lookup_covers_segments_and_gaps() {
     ];
     for (frame, start, end, correction) in cases {
         let r = plan.region_at(frame);
-        assert_eq!((r.start, r.end), (start, end), "bounds at frame {frame}");
+        assert_eq!(
+            (r.start(), r.end()),
+            (start, end),
+            "bounds at frame {frame}"
+        );
         assert!(
-            (r.correction - correction).abs() < 1e-12,
+            (r.correction() - correction).abs() < 1e-12,
             "correction at frame {frame}: got {}, want {correction}",
-            r.correction
+            r.correction()
         );
         assert!(r.contains(frame));
     }

@@ -101,8 +101,12 @@ async fn audio_new_warms_pcm_pool() {
         "precondition: a fresh pool is cold"
     );
 
-    let (_cache, _tmp, mut config) = test_wav_config(1000);
-    config.pcm_pool = pool.clone();
+    let (_cache, _tmp, config) = test_wav_config(1000);
+    let config = AudioConfig::<kithara::file::File>::for_stream(config.stream().clone())
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .hint(config.hint().unwrap().to_owned())
+        .pcm_pool(pool.clone())
+        .build();
 
     let _audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
@@ -141,9 +145,9 @@ fn test_audio_config_with_media_info() {
         .media_info(info.clone())
         .build();
 
-    assert!(config.media_info.is_some());
+    assert!(config.media_info().is_some());
     assert_eq!(
-        config.media_info.unwrap().container,
+        config.media_info().unwrap().container,
         Some(ContainerFormat::Wav)
     );
 }
@@ -167,7 +171,7 @@ fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
         )
         .build();
 
-    assert_eq!(config.decoder.gapless_mode, mode);
+    assert_eq!(config.decoder().gapless_mode(), mode);
 }
 
 #[kithara::test(tokio)]

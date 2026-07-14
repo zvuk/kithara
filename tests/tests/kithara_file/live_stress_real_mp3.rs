@@ -2,7 +2,7 @@ use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 
 use kithara::{
     assets::{StorageBackend, StoreOptions},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::PcmChunk,
     events::{DownloaderEvent, Event, FileEvent},
     file::{File, FileConfig},
@@ -86,7 +86,7 @@ fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveSnapshot {
 
 fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) -> Option<PcmChunk> {
     loop {
-        match PcmReader::next_chunk(audio) {
+        match PcmRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}

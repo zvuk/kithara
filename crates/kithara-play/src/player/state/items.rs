@@ -160,7 +160,7 @@ impl ItemQueue {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{PcmReader, ReadOutcome, SeekOutcome};
+    use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
     use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
     use kithara_events::{Event, PlayerEvent};
     use kithara_platform::time::Duration;
@@ -183,7 +183,7 @@ mod tests {
         }
     }
 
-    impl PcmReader for EofReader {
+    impl PcmSession for EofReader {
         fn duration(&self) -> Option<Duration> {
             None
         }
@@ -195,7 +195,9 @@ mod tests {
         fn metadata(&self) -> &TrackMetadata {
             &self.metadata
         }
+    }
 
+    impl PcmRead for EofReader {
         fn position(&self) -> Duration {
             Duration::ZERO
         }
@@ -215,15 +217,17 @@ mod tests {
             })
         }
 
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    impl PcmControl for EofReader {
         fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
             Ok(SeekOutcome::Landed {
                 target: position,
                 landed_at: position,
             })
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
         }
     }
 

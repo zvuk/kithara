@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use kithara_audio::AudioDecoderConfig;
 use kithara_platform::sync::Arc;
 
 use super::super::core::PlayerImpl;
@@ -21,8 +22,11 @@ impl ConfigPrep<'_> {
         let stretch = Some(Arc::clone(&self.player.core.timestretch));
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
-        let mut decoder = config.decoder.clone();
-        decoder.gapless_mode = self.player.core.gapless_mode;
+        let decoder = AudioDecoderConfig::builder()
+            .backend(config.decoder.backend())
+            .gapless_mode(self.player.core.gapless_mode)
+            .maybe_resampler(config.decoder.resampler().cloned())
+            .build();
         ResourceConfig {
             bus,
             cancel,
