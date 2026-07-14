@@ -4,8 +4,8 @@ use anyhow::{Context as _, Result};
 use proc_macro2::{Delimiter, TokenTree};
 use quote::{ToTokens, quote};
 use syn::{
-    Expr, ExprAwait, ExprField, ExprMethodCall, FnArg, Ident, ImplItem, ItemImpl, ItemUse, Member,
-    Pat, Stmt, UseTree, parse_quote,
+    Expr, ExprAwait, ExprField, ExprMethodCall, FnArg, GenericParam, Ident, ImplItem, ItemImpl,
+    ItemUse, Member, Pat, Stmt, UseTree, parse_quote,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -907,6 +907,15 @@ fn raw_string_literal(value: &str) -> Option<String> {
 }
 
 fn forward_spec(src: &str, method: &syn::ImplItemFn) -> Option<ForwardSpec> {
+    if method
+        .sig
+        .generics
+        .params
+        .iter()
+        .any(|param| matches!(param, GenericParam::Type(_) | GenericParam::Const(_)))
+    {
+        return None;
+    }
     let [Stmt::Expr(expr, _)] = method.block.stmts.as_slice() else {
         return None;
     };
@@ -1398,17 +1407,50 @@ mod tests {
 
     #[test]
     fn inherent_impl_is_fixed_and_idempotent() -> Result<()> {
-        let source = "impl Wrapper {\n    pub fn read(&self, b: Buf) -> Read { self.inner.read(b) }\n    fn close(&self) { self.inner.close() }\n    fn flush<T>(&self, value: T) -> T { self.inner.flush(value) }\n}\n";
+        let source = "impl Wrapper {\n    pub fn read(&self, b: Buf) -> Read { self.inner.read(b) }\n    fn close(&self) { self.inner.close() }\n    fn flush<T>(&self, value: T) -> T { self.inner.flush(value) }\n    fn take<const N: usize>(&self, value: [u8; N]) { self.inner.take(value) }\n}\n";
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("delegate::delegate!"));
         assert!(fixed.contains("to self.inner"));
         assert!(!fixed.contains("self.inner.read(b)"));
         assert!(!fixed.contains("self.inner.close()"));
-        assert!(!fixed.contains("self.inner.flush(value)"));
+        assert!(fixed.contains("fn flush<T>(&self, value: T) -> T { self.inner.flush(value) }"));
+        assert!(
+            fixed.contains(
+                "fn take<const N: usize>(&self, value: [u8; N]) { self.inner.take(value) }"
+            )
+        );
         let (again, second) = fix_source(&fixed)?;
         assert_eq!(again, fixed);
         assert_eq!(second.writes, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn generic_into_forwarder_stays_manual() -> Result<()> {
+        let source = "impl Wrapper {\n    fn len(&self) -> usize { self.inner.len() }\n    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) { self.inner.insert(key.into(), value.into()); }\n    fn clear(&mut self) { self.inner.clear() }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("delegate::delegate!"));
+        assert!(!fixed.contains("self.inner.len()"));
+        assert!(!fixed.contains("self.inner.clear()"));
+        assert!(fixed.contains(
+            "pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) { self.inner.insert(key.into(), value.into()); }"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn lifetime_generic_forwarder_is_fixed() -> Result<()> {
+        let source =
+            "impl Wrapper {\n    fn get<'a>(&'a self) -> &'a str { self.inner.get() }\n}\n";
+        let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("delegate::delegate!"));
+        assert!(fixed.contains("fn get < 'a > (& 'a self) -> & 'a str;"));
+        assert!(!fixed.contains("self.inner.get()"));
         Ok(())
     }
 
