@@ -39,7 +39,7 @@ async fn zvuk_drm_master_playlist_trace() {
 
     let source = match build_source(url, &ctx.config) {
         TrackSource::Config(mut cfg) => {
-            cfg.store = StoreOptions::new(cache.path());
+            *cfg.store_mut() = StoreOptions::new(cache.path());
             TrackSource::Config(cfg)
         }
         other => other,

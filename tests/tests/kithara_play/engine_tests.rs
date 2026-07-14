@@ -1,11 +1,9 @@
-use std::sync::{Mutex as StdMutex, OnceLock};
-
 use kithara::{
     self,
+    bufpool::PcmPool,
     events::EventBus,
     play::{
-        Engine, EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId,
-        traits::dj::crossfade::CrossfadeConfig,
+        Cmd, EngineConfig, EngineImpl, PlayError, Reply, SessionDuckingMode, SessionHandle, SlotId,
     },
 };
 
@@ -15,22 +13,14 @@ fn slot_id(value: u64) -> SlotId {
 
 fn make_engine() -> EngineImpl {
     EngineImpl::new(
-        EngineConfig::builder()
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
+        EngineConfig::builder().pcm_pool(PcmPool::default()).build(),
         EventBus::default(),
     )
-}
-
-fn session_ducking_lock() -> &'static StdMutex<()> {
-    static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| StdMutex::new(()))
 }
 
 #[derive(Clone, Copy)]
 enum EngineInitialScenario {
     ActiveSlotsEmpty,
-    NotCrossfading,
     NotRunning,
     SlotState,
 }
@@ -44,45 +34,38 @@ enum NotRunningErrorScenario {
 
 #[kithara::test]
 fn engine_config_defaults() {
-    let config = EngineConfig::builder()
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build();
-    assert_eq!(config.channels, 2);
-    assert_eq!(config.eq_layout.len(), 10);
-    assert_eq!(config.max_slots, 4);
-    assert_eq!(config.sample_rate, 44100);
+    let engine = make_engine();
+    assert_eq!(engine.max_slots(), 4);
+    assert_eq!(engine.master_sample_rate(), 44100);
 }
 
 #[kithara::test]
 fn engine_config_builder() {
     let config = EngineConfig::builder()
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .max_slots(8)
         .sample_rate(48000)
         .channels(1)
         .eq_layout(kithara::audio::generate_log_spaced_bands(5))
+        .pcm_pool(PcmPool::default())
         .build();
-    assert_eq!(config.max_slots, 8);
-    assert_eq!(config.sample_rate, 48000);
-    assert_eq!(config.channels, 1);
-    assert_eq!(config.eq_layout.len(), 5);
+    let engine = EngineImpl::new(config, EventBus::default());
+    assert_eq!(engine.max_slots(), 8);
+    assert_eq!(engine.master_sample_rate(), 48000);
 }
 
 #[kithara::test]
 #[case(EngineInitialScenario::NotRunning)]
 #[case(EngineInitialScenario::SlotState)]
 #[case(EngineInitialScenario::ActiveSlotsEmpty)]
-#[case(EngineInitialScenario::NotCrossfading)]
 fn engine_initial_state(#[case] scenario: EngineInitialScenario) {
     let engine = make_engine();
     match scenario {
         EngineInitialScenario::NotRunning => assert!(!engine.is_running()),
         EngineInitialScenario::SlotState => {
-            assert_eq!(engine.slot_count(), 0);
+            assert_eq!(engine.active_slots().len(), 0);
             assert_eq!(engine.max_slots(), 4);
         }
         EngineInitialScenario::ActiveSlotsEmpty => assert!(engine.active_slots().is_empty()),
-        EngineInitialScenario::NotCrossfading => assert!(!engine.is_crossfading()),
     }
 }
 
@@ -96,33 +79,6 @@ fn engine_subscribe_works() {
 fn engine_master_volume_default() {
     let engine = make_engine();
     assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
-}
-
-#[kithara::test]
-fn engine_set_master_volume() {
-    let engine = make_engine();
-    engine.set_master_volume(0.5);
-    assert!((engine.master_volume() - 0.5).abs() < f32::EPSILON);
-}
-
-#[kithara::test]
-fn engine_set_master_volume_clamps() {
-    let engine = make_engine();
-    engine.set_master_volume(2.0);
-    assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
-    engine.set_master_volume(-0.5);
-    assert!(engine.master_volume().abs() < f32::EPSILON);
-}
-
-#[kithara::test]
-fn engine_set_master_volume_emits_event() {
-    let engine = make_engine();
-    let mut rx = engine.subscribe();
-    engine.set_master_volume(0.75);
-    let event = rx.try_recv().map(|env| env.event).unwrap();
-    assert!(
-        matches!(event, kithara::events::Event::Engine(EngineEvent::MasterVolumeChanged { volume }) if (volume - 0.75).abs() < f32::EPSILON)
-    );
 }
 
 #[kithara::test]
@@ -140,57 +96,52 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
 }
 
 #[kithara::test]
-fn engine_crossfade_stub_returns_not_ready() {
-    let engine = make_engine();
-    let err = engine
-        .crossfade(slot_id(1), slot_id(2), CrossfadeConfig::default())
-        .unwrap_err();
-    assert!(matches!(err, PlayError::NotReady));
-}
-
-#[kithara::test]
-fn engine_cancel_crossfade_stub_returns_no_crossfade() {
-    let engine = make_engine();
-    let err = engine.cancel_crossfade().unwrap_err();
-    assert!(matches!(err, PlayError::NoCrossfade));
-}
-
-#[kithara::test]
 fn engine_master_sample_rate_returns_config_when_stopped() {
     let config = EngineConfig::builder()
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .sample_rate(48000)
+        .pcm_pool(PcmPool::default())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
 }
 
-#[kithara::test]
-fn engine_master_channels_returns_config() {
-    let engine = make_engine();
-    assert_eq!(engine.master_channels(), 2);
+fn set_ducking(session: &SessionHandle, mode: SessionDuckingMode) {
+    session
+        .exec_ok(Cmd::SetSessionDucking { mode })
+        .expect("set ducking");
+}
+
+fn ducking(session: &SessionHandle) -> SessionDuckingMode {
+    match session.exec_ok(Cmd::SessionDucking).expect("ducking") {
+        Reply::SessionDucking(mode) => mode,
+        _ => panic!("unexpected ducking reply"),
+    }
 }
 
 #[kithara::test]
 fn engine_session_ducking_roundtrip() {
-    let _lock = session_ducking_lock().lock().unwrap();
-    EngineImpl::set_session_ducking(SessionDuckingMode::Soft).unwrap();
-    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Soft);
-    EngineImpl::set_session_ducking(SessionDuckingMode::Hard).unwrap();
-    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Hard);
-    EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
-    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Off);
+    let session = SessionHandle::spawn_native();
+    set_ducking(&session, SessionDuckingMode::Soft);
+    assert_eq!(ducking(&session), SessionDuckingMode::Soft);
+    set_ducking(&session, SessionDuckingMode::Hard);
+    assert_eq!(ducking(&session), SessionDuckingMode::Hard);
+    set_ducking(&session, SessionDuckingMode::Off);
+    assert_eq!(ducking(&session), SessionDuckingMode::Off);
 }
 
 #[kithara::test]
-fn engine_instances_share_session_ducking() {
-    let _lock = session_ducking_lock().lock().unwrap();
-    let _a = make_engine();
-    let _b = make_engine();
+fn injected_engine_instances_share_session_ducking() {
+    let session = SessionHandle::spawn_native();
+    let config = EngineConfig::builder()
+        .session(session.dispatcher())
+        .pcm_pool(PcmPool::default())
+        .build();
+    let _a = EngineImpl::new(config.clone(), EventBus::default());
+    let _b = EngineImpl::new(config, EventBus::default());
 
-    EngineImpl::set_session_ducking(SessionDuckingMode::Soft).unwrap();
-    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Soft);
+    set_ducking(&session, SessionDuckingMode::Soft);
+    assert_eq!(ducking(&session), SessionDuckingMode::Soft);
 
-    EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
-    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Off);
+    set_ducking(&session, SessionDuckingMode::Off);
+    assert_eq!(ducking(&session), SessionDuckingMode::Off);
 }

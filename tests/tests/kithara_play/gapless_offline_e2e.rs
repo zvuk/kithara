@@ -20,7 +20,7 @@ use kithara::{
         sync::Arc,
         time::{self, Duration, Instant},
     },
-    play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig},
+    play::{PlayerEvent, Resource, ResourceConfig},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -31,7 +31,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-use super::offline_player_harness::OfflinePlayerHarness;
+use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 use crate::gapless_common::{
     AAC_FRAME_SAMPLES, AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_FRAMES,
     AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS, AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS,
@@ -104,9 +104,7 @@ fn expected_total_decoded_frames() -> usize {
 async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -166,9 +164,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     let server = TestServerHelper::new().await;
     let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -258,9 +254,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let stitch_frame = crate::gapless_common::generated_aac_elst_visible_frames();
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -381,9 +375,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
     );
 
     let probe_harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -440,9 +432,7 @@ async fn render_apple_fused_deficit_seam(
 ) -> AppleFusedSeamRender {
     let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -519,9 +509,7 @@ async fn render_apple_fused_deficit_seam(
 async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .gapless_mode(GaplessMode::Disabled)
             .build(),
@@ -575,9 +563,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
 ) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -620,9 +606,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
 ) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -720,9 +704,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
 async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -870,9 +852,9 @@ async fn create_resource_with_encoding(
     let store = StoreOptions::new(cache_dir);
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(PcmPool::default())
         .store(store)
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     config = player.prepare_config(config);
     let mut resource = Resource::new(config)
@@ -928,8 +910,6 @@ async fn create_apple_fused_resource(
     let store = StoreOptions::new(cache_dir);
     let config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(PcmPool::default())
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -962,9 +942,7 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
     );
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .gapless_mode(GaplessMode::Disabled)
             .build(),
@@ -1036,12 +1014,10 @@ fn synthetic_interleaved_chunk(frames: Vec<f32>) -> PcmChunk {
     let mut samples = PcmPool::default().get();
     samples
         .ensure_len(sample_count)
-        .expect("synthetic interleaved fixture fits PCM pool budget");
-    for (frame, sample) in samples
-        .chunks_exact_mut(usize::from(GAPLESS_CHANNELS))
-        .zip(frames)
-    {
-        frame.fill(sample);
+        .expect("synthetic chunk exceeds PCM pool budget");
+    for (frame, sample) in frames.into_iter().enumerate() {
+        let offset = frame * usize::from(GAPLESS_CHANNELS);
+        samples[offset..offset + usize::from(GAPLESS_CHANNELS)].fill(sample);
     }
     PcmChunk::new(
         PcmMeta {

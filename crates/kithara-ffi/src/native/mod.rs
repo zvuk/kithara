@@ -10,6 +10,7 @@ pub(crate) mod layout;
 pub mod logging;
 mod runtime;
 pub mod salt;
+pub(crate) mod session;
 
 pub(crate) use bridge::{event_bridge, item_bridge};
 pub(crate) use inner::Inner;

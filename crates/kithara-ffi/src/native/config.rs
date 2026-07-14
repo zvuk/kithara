@@ -14,12 +14,12 @@ pub(crate) fn configure_resource(
     layout: Option<&Arc<dyn AssetLayout>>,
 ) {
     if let Some(ref dir) = store.cache_dir {
-        config.store.backend = StorageBackend::Disk {
+        config.store_mut().backend = StorageBackend::Disk {
             root: PathBuf::from(dir),
         };
     }
     if let Some(layout) = layout {
-        config.store.layout = Some(Arc::clone(layout));
+        config.store_mut().layout = Some(Arc::clone(layout));
     }
 }
 
@@ -31,21 +31,25 @@ mod tests {
     use super::*;
     use crate::{layout::FfiAssetLayout, native::layout::resolve_layout};
 
+    fn resource_config() -> ResourceConfig {
+        ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("valid test URL")
+    }
+
     #[kithara::test]
     fn configure_resource_applies_explicit_cache_dir() {
         let store = StoreOptions {
             cache_dir: Some("/tmp/kithara-ffi-config-test".to_owned()),
             layout: None,
         };
-        let mut config = ResourceConfig::new(
-            "https://example.com/song.mp3",
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .unwrap();
+        let mut config = resource_config();
         configure_resource(&mut config, &store, None);
         assert_eq!(
-            config.store.backend,
+            config.store().backend.clone(),
             StorageBackend::Disk {
                 root: PathBuf::from("/tmp/kithara-ffi-config-test")
             }
@@ -55,30 +59,20 @@ mod tests {
     #[kithara::test]
     fn configure_resource_preserves_default_when_unset() {
         let store = StoreOptions::default();
-        let mut config = ResourceConfig::new(
-            "https://example.com/song.mp3",
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .unwrap();
-        let original = config.store.backend.clone();
+        let mut config = resource_config();
+        let original = config.store().backend.clone();
         configure_resource(&mut config, &store, None);
-        assert_eq!(config.store.backend, original);
+        assert_eq!(config.store().backend, original);
     }
 
     #[kithara::test]
     fn omitted_layout_leaves_store_layout_none() {
         let store = StoreOptions::default();
-        let mut config = ResourceConfig::new(
-            "https://example.com/song.mp3",
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .unwrap();
+        let mut config = resource_config();
         let resolved = resolve_layout(store.layout.as_ref());
         configure_resource(&mut config, &store, resolved.as_ref());
         assert!(
-            config.store.layout.is_none(),
+            config.store().layout.is_none(),
             "None layout must leave store layout untouched (DefaultLayout)"
         );
     }
@@ -95,16 +89,15 @@ mod tests {
             cache_dir: None,
             layout: Some(Arc::new(FlatLayout)),
         };
-        let mut config = ResourceConfig::new(
-            "https://example.com/song.mp3",
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .unwrap();
+        let mut config = resource_config();
         let resolved = resolve_layout(store.layout.as_ref());
         configure_resource(&mut config, &store, resolved.as_ref());
 
-        let layout = config.store.layout.expect("custom layout must reach store");
+        let layout = config
+            .store()
+            .layout
+            .clone()
+            .expect("custom layout must reach store");
         let url = Url::parse("https://example.com/song.mp3").unwrap();
         let rel = layout.rel_path(&url);
         assert_eq!(rel, "flat/track.mp3");

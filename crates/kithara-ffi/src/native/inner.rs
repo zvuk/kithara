@@ -159,7 +159,8 @@ pub(crate) struct NativeInner {
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
     queue: Arc<Queue>,
-    /// App-wide owner of byte and PCM pools for this player instance.
+    /// App-wide byte pool shared by `NSURLSession` copies, cache processors,
+    /// and resource probes.
     region: Region,
     /// Master cancel token for this FFI player instance. Propagated
     /// into [`PlayerConfig::cancel`] so the audio worker, downloader,
@@ -207,6 +208,7 @@ impl NativeInner {
             .cancel(cancel.child())
             .byte_pool(region.byte_pool())
             .pcm_pool(region.pcm_pool())
+            .session(super::session::handle().dispatcher())
             .build();
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::default().with_player(player);

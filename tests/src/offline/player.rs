@@ -3,30 +3,24 @@ use std::sync::atomic::Ordering;
 use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};
 use kithara::{
     audio::PcmReader,
-    platform::sync::{Arc, Mutex},
+    platform::sync::Arc,
     play::{
-        PlayerNode, Resource,
-        impls::{
-            player_processor::PlayerCmd, player_resource::PlayerResource,
-            player_track::TrackTransition, shared_player_state::SharedPlayerState,
-        },
+        PlayerNode, Resource, SharedEq, TrackTransition,
+        bridge::{PlaybackShared, PlayerCmd, SlotControl, slot_channels},
+        rt::track::PlayerResource,
     },
 };
-use ringbuf::{
-    HeapRb,
-    traits::{Producer, Split},
-};
+use ringbuf::traits::{Consumer, Producer};
 
 use super::backend::{OfflineBackend, OfflineConfig};
 
 pub struct OfflinePlayer {
-    shared_state: Arc<SharedPlayerState>,
+    playback: Arc<PlaybackShared>,
     ctx: FirewheelCtx<OfflineBackend>,
-    cmd_tx: ringbuf::HeapProd<PlayerCmd>,
+    control: SlotControl,
 }
 
 impl OfflinePlayer {
-    const CMD_RINGBUF_CAPACITY: usize = 64;
     const OFFLINE_BLOCK_FRAMES: u32 = 512;
 
     /// Create an offline player with stereo output at the given sample rate.
@@ -49,14 +43,10 @@ impl OfflinePlayer {
         ctx.start_stream(stream_config)
             .expect("BUG: start offline stream");
 
-        let shared_state = Arc::new(SharedPlayerState::new());
-        let (cmd_tx, cmd_rx) = HeapRb::new(Self::CMD_RINGBUF_CAPACITY).split();
+        let (inputs, control) = slot_channels(SharedEq::new(0));
+        let playback = Arc::clone(&control.playback);
 
-        let player_node = PlayerNode::with_channel(
-            cmd_rx,
-            Arc::clone(&shared_state),
-            kithara::bufpool::PcmPool::default().clone(),
-        );
+        let player_node = PlayerNode::new(inputs, kithara::bufpool::PcmPool::default().clone());
         let node_id = ctx.add_node(player_node, None);
         let graph_out = ctx.graph_out_node_id();
         ctx.connect(node_id, graph_out, &[(0, 0), (1, 1)], false)
@@ -64,9 +54,9 @@ impl OfflinePlayer {
         ctx.update().expect("BUG: initial graph update");
 
         Self {
-            shared_state,
+            playback,
             ctx,
-            cmd_tx,
+            control,
         }
     }
 
@@ -82,29 +72,31 @@ impl OfflinePlayer {
             Arc::clone(&src),
             &kithara::bufpool::PcmPool::default(),
         );
-        self.cmd_tx
+        self.control
+            .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: Arc::new(Mutex::new(pr)),
-                src: Arc::clone(&src),
+                resource: Box::new(pr),
                 item_id: None,
             })
             .expect("BUG: send LoadTrack");
-        self.cmd_tx
+        self.control
+            .cmd_tx
             .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(src)))
             .expect("BUG: send FadeIn");
-        self.cmd_tx
+        self.control
+            .cmd_tx
             .try_push(PlayerCmd::SetPaused(false))
             .expect("BUG: send SetPaused");
     }
 
     /// Current playback position in seconds.
     pub fn position(&self) -> f64 {
-        self.shared_state.position.load(Ordering::Relaxed)
+        self.playback.position.load(Ordering::Relaxed)
     }
 
     /// Number of times `process()` was called.
     pub fn process_count(&self) -> u64 {
-        self.shared_state.process_count.load(Ordering::Relaxed)
+        self.playback.process_count.load(Ordering::Relaxed)
     }
 
     /// Render `frames` of audio. Returns interleaved stereo output.
@@ -126,10 +118,9 @@ impl OfflinePlayer {
     ///
     /// Panics if the command channel is full.
     pub fn seek(&mut self, seconds: f64, seek_epoch: u64) {
-        self.shared_state
-            .seek_epoch
-            .store(seek_epoch, Ordering::SeqCst);
-        self.cmd_tx
+        self.playback.seek_epoch.store(seek_epoch, Ordering::SeqCst);
+        self.control
+            .cmd_tx
             .try_push(PlayerCmd::Seek {
                 seconds,
                 seek_epoch,
@@ -143,13 +134,10 @@ impl OfflinePlayer {
     /// cleanly (notification arrives within the observation window) and
     /// a pipeline stuck in a recreate-loop (no terminal notification —
     /// position stays pinned at the seek target).
-    pub fn take_notification_kinds(&self) -> Vec<NotificationKind> {
-        use ringbuf::traits::Consumer;
-
-        let mut rx = self.shared_state.notification_rx.lock();
+    pub fn take_notification_kinds(&mut self) -> Vec<NotificationKind> {
         let mut out = Vec::new();
-        while let Some(n) = rx.try_pop() {
-            use kithara::play::impls::player_notification::PlayerNotification as N;
+        while let Some(n) = self.control.notif_rx.try_pop() {
+            use kithara::play::PlayerNotification as N;
             out.push(match n {
                 N::Loaded { .. } => NotificationKind::Loaded,
                 N::Unloaded { .. } => NotificationKind::Unloaded,
@@ -162,6 +150,7 @@ impl OfflinePlayer {
                 N::FadingOut { .. } => NotificationKind::FadingOut,
             });
         }
+        while self.control.trash_rx.try_pop().is_some() {}
         out
     }
 }

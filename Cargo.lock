@@ -4858,6 +4858,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64",
+ "bon",
  "bytes",
  "cbc",
  "console_error_panic_hook",

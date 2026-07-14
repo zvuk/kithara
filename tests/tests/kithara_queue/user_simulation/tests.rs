@@ -5,7 +5,6 @@ use std::fmt::Write;
 
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
-    audio::AudioDecoderConfig,
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::AbrMode,
@@ -23,7 +22,7 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_app::config::AppConfig;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::EncryptionRequest, kithara,
     offline::OfflineSession, temp_dir,
@@ -417,7 +416,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
         .downloader(downloader.clone())
         .store(store)
         .decoder(
-            AudioDecoderConfig::builder()
+            kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Symphonia)
                 .build(),
         )
@@ -660,19 +659,14 @@ const PROD_DRM_TRACK_ALT: &str =
 /// the binary uses. The resolver picks up baked credentials and the
 /// `zvuk-prod` keyserver provider.
 fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource {
-    match build_source(url, &ctx.config) {
-        TrackSource::Config(mut cfg) => {
-            cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder = AudioDecoderConfig::builder()
-                .backend(DecoderBackend::Symphonia)
-                .gapless_mode(cfg.decoder.gapless_mode())
-                .maybe_resampler(cfg.decoder.resampler().cloned())
-                .build();
-            cfg.initial_abr_mode = AbrMode::Auto(None);
-            TrackSource::Config(cfg)
-        }
-        other => other,
-    }
+    crate::kithara_queue::app_track_source(
+        url,
+        &ctx.config,
+        StoreOptions::new(ctx.cache.path()),
+        DecoderBackend::Symphonia,
+        AbrMode::Auto(None),
+        None,
+    )
 }
 
 struct ProdCtx {

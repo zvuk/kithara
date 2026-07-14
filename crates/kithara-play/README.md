@@ -12,61 +12,45 @@
 
 # kithara-play
 
-The player engine behind kithara. A trait-first API modelled on Apple's
-AVPlayer, with multi-slot mixing, sample-accurate crossfade, and pro-audio
-features. Ships default implementations (`EngineImpl`,
-`PlayerImpl`, `Resource`); the core traits are mockable via `unimock` (the
-`mock` feature).
+The playback orchestration crate behind Kithara. It provides concrete player,
+engine, resource, session, and real-time rendering surfaces for queue, FFI, app,
+and test-harness crates. Enable `mock` for the `Equalizer` unimock helper.
 
 ## Usage
 
 ```rust
-use kithara_play::{Engine, Player, CrossfadeConfig};
+use kithara_play::{ResourceConfig, default_resource_decoder_config};
 
-engine.start()?;
-let slot_a = engine.allocate_slot()?;
-
-player.replace_current_item(Some(item));
-player.play();
-
-let id = player.add_periodic_time_observer(interval, Box::new(|time| {
-    println!("position: {time:?}");
-}));
-
-// Crossfade into a second slot
-let slot_b = engine.allocate_slot()?;
-engine.crossfade(slot_a, slot_b, CrossfadeConfig::default())?;
-
-engine.release_slot(slot_a)?;
-engine.stop()?;
+let decoder = default_resource_decoder_config();
+let resource = ResourceConfig::for_src("https://example.com/track.m3u8")?
+    .decoder(decoder)
+    .build();
 ```
 
-## Core Traits
+`ResourceConfig` fields are crate-private. Configure resources with its `bon`
+builder and inspect caller-facing values through getters such as `source()`,
+`store()`, and `bus()`. Decoder backend, gapless, and resampler settings belong
+to the single `decoder` field.
 
-An `Engine` manages multiple playback slots; each slot drives one `Player` over
-a `PlayerItem`. The engine owns master output and crossfade; a per-slot
-`Equalizer` shapes the sound.
+## Core Surface
 
-<table>
-<tr><th>Trait</th><th>AVPlayer analogue</th><th>Role</th></tr>
-<tr><td><code>Player</code></td><td><code>AVPlayer</code></td><td><code>play</code>, <code>pause</code>, <code>seek</code>, <code>rate</code>, <code>volume</code>, <code>replace_current_item</code>, time observers</td></tr>
-<tr><td><code>PlayerItem</code></td><td><code>AVPlayerItem</code></td><td>status, current time, duration, loaded ranges, seek, buffering</td></tr>
-<tr><td><code>QueuePlayer</code></td><td><code>AVQueuePlayer</code></td><td><code>items</code>, <code>advance_to_next_item</code>, <code>insert</code>, <code>remove</code></td></tr>
-<tr><td><code>Engine</code></td><td>—</td><td>Lifecycle, slot arena, master output, <code>crossfade</code></td></tr>
-<tr><td><code>Equalizer</code></td><td>—</td><td>N-band parametric EQ with per-band gain</td></tr>
-</table>
-
-`Player` and `QueuePlayer` take `Box<dyn Fn>` time-observer callbacks, so they
-are integration-tested rather than `unimock`ed.
+- `EngineImpl` owns session dispatch, slot registration, master output state,
+  and the shared decode worker.
+- `PlayerImpl` owns playlist and parameter state, transport flow, status, and
+  item handover.
+- `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
+- `PlayerNode` is the public real-time audio graph node.
+- `Equalizer` is the remaining mockable trait surface.
 
 ## Orientation
 
 - **Lifecycle:** start the engine, allocate a slot, attach a player item, play,
   then release the slot and stop the engine.
-- **Crossfade:** `Engine::crossfade(from, to, config)` fades between two slots
-  via `CrossfadeConfig` / `CrossfadeCurve`.
-- **Tempo & key-lock:** driven by the shared `StretchControls` handle in
-  `PlayerConfig.timestretch`; speed, key-lock, and backend apply live, mid-track.
+- **Configuration:** `PlayerConfig`, `EngineConfig`, and `ResourceConfig` expose
+  builders while their fields remain crate-private.
+- **Tempo and key-lock:** a shared `StretchControls` handle is supplied through
+  `PlayerConfig::builder().timestretch(...)`; speed, key-lock, and backend apply
+  live, mid-track.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
   `engine.subscribe()` (`PlayerEvent`, `ItemEvent`, `EngineEvent`,
   `SessionEvent`, `DjEvent`).
@@ -77,6 +61,10 @@ are integration-tested rather than `unimock`ed.
   the master cancel lives at the consumer-crate top.
 
 File and HLS pipelines are unconditional; cpal output is the default backend.
-Enable `mock` for trait-level `unimock` testing.
+Enable `mock` for `EqualizerMock`.
+
+The role-first source tree is organized as `api/`, `bridge/`, `engine/`,
+`player/{state,flow}/`, `resource/`, `rt/{track}/`, `session/{web}/`, plus the
+target-gated `wasm` surface.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

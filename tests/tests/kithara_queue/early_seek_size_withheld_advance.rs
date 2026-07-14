@@ -19,7 +19,7 @@
 
 use kithara::{
     assets::StoreOptions,
-    bufpool::{BytePool, PcmPool},
+    bufpool::Region,
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
     net::{HttpClient, NetOptions},
@@ -75,13 +75,14 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let session = Arc::new(OfflineSession::new_manual());
-        let mut config = PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+        let region = Region::default();
+        let config = PlayerConfig::builder()
             .crossfade_duration(0.0)
+            .sample_rate(SAMPLE_RATE)
+            .byte_pool(region.byte_pool())
+            .pcm_pool(region.pcm_pool())
+            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build();
-        config.sample_rate = SAMPLE_RATE;
-        config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
         let player = Arc::new(PlayerImpl::new(config));
         Self { player, session }
     }
@@ -95,6 +96,7 @@ async fn build_hls_resource(
     master: &url::Url,
     downloader: &Downloader,
     store: &StoreOptions,
+    player: &PlayerImpl,
 ) -> Resource {
     let cfg = ResourceConfig::for_src(master.as_str())
         .expect("valid master URL")
@@ -106,8 +108,8 @@ async fn build_hls_resource(
                 .build(),
         )
         .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     Resource::new(cfg).await.expect("create HLS resource")
 }
@@ -189,17 +191,20 @@ async fn run_case(mode: GateMode) {
     );
 
     let harness = Harness::new();
-    let mut queue_config = QueueConfig::default().with_player(Arc::clone(&harness.player));
-    queue_config.should_autoplay = false;
-    let queue = Queue::new(queue_config);
+    let queue = Queue::new(
+        QueueConfig::builder()
+            .should_autoplay(false)
+            .build()
+            .with_player(Arc::clone(&harness.player)),
+    );
     let mut rx = harness.player.subscribe();
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward
     // auto-advance has somewhere to land (observable as current_index 0 -> 1).
-    let target = build_hls_resource(&master, &downloader, &store).await;
+    let target = build_hls_resource(&master, &downloader, &store, &harness.player).await;
     let target_src = target.src().clone();
     let id0 = queue.insert_loaded_for_test(target);
-    let next = build_hls_resource(&master, &downloader, &store).await;
+    let next = build_hls_resource(&master, &downloader, &store, &harness.player).await;
     let _id1 = queue.insert_loaded_for_test(next);
 
     queue.select(id0, Transition::None).expect("select track 0");

@@ -9,7 +9,7 @@ use kithara::{
         WriteSide, asset_root_for_url,
     },
     audio::{BeatGrid, Waveform},
-    prelude::{PlaybackResamplerBackend, ResourceConfig, ResourceSrc},
+    prelude::{ResourceConfig, ResourceSrc},
 };
 use kithara_platform::sync::Arc;
 use kithara_queue::TrackSource;
@@ -48,11 +48,8 @@ impl AnalysisKey {
 /// cross-session identity.
 pub(crate) fn source_key(source: &TrackSource) -> Option<AnalysisKey> {
     match source {
-        TrackSource::Uri(src) => key_for_src(
-            &ResourceConfig::<PlaybackResamplerBackend>::parse_src(src).ok()?,
-            None,
-        ),
-        TrackSource::Config(cfg) => key_for_src(&cfg.src, cfg.name.as_deref()),
+        TrackSource::Uri(src) => key_for_src(&ResourceConfig::parse_src(src).ok()?, None),
+        TrackSource::Config(cfg) => key_for_src(cfg.source(), cfg.name()),
         _ => None,
     }
 }

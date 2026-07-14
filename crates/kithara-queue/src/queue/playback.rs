@@ -106,8 +106,8 @@ impl Queue {
 
     fn handle_item_did_fail(&self, src: &Arc<str>) {
         let snap = self.player.playback_snapshot();
-        let pos = snap.map_or(0.0, |s| s.position);
-        let dur = snap.map_or(0.0, |s| s.duration);
+        let pos = snap.map_or(0.0, |s| s.position());
+        let dur = snap.map_or(0.0, |s| s.duration());
         debug!(%src, pos, dur, "ItemDidFail received — track aborted mid-stream");
         if self.current().is_none() {
             self.bus.publish(QueueEvent::QueueEnded);
@@ -150,8 +150,8 @@ impl Queue {
     /// pos/dur tolerance heuristic to filter spurious events.
     fn handle_item_did_play_to_end(&self, src: &Arc<str>) {
         let snap = self.player.playback_snapshot();
-        let pos = snap.map_or(0.0, |s| s.position);
-        let dur = snap.map_or(0.0, |s| s.duration);
+        let pos = snap.map_or(0.0, |s| s.position());
+        let dur = snap.map_or(0.0, |s| s.duration());
         debug!(%src, pos, dur, "ItemDidPlayToEnd received");
         if self.current().is_none() {
             self.bus.publish(QueueEvent::QueueEnded);
@@ -364,7 +364,7 @@ impl Queue {
         self.lock_tracks().iter().find_map(|record| {
             let matches = match &record.source {
                 TrackSource::Uri(uri) => uri == src,
-                TrackSource::Config(config) => config.src.to_string() == src,
+                TrackSource::Config(config) => config.source().to_string() == src,
             };
             matches.then_some(record.id)
         })
