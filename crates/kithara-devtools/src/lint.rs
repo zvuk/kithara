@@ -22,7 +22,7 @@ pub struct LintArgs {
     #[arg(long = "allow-dirty", global = true)]
     pub allow_dirty: bool,
     /// When no subcommand is given, apply each namespace's autofix where
-    /// available (currently style only). Forwarded as `--fix` to style.
+    /// available. Forwarded as `--fix` to style and idioms.
     #[arg(long, global = true)]
     pub fix: bool,
 }
@@ -66,6 +66,8 @@ fn run_all(crates: &[String], paths: &[PathBuf], fix: bool, allow_dirty: bool) -
         config_dir: ".config/idioms".into(),
         crates: crates.to_vec(),
         paths: paths.to_vec(),
+        fix,
+        allow_dirty,
         ..idioms::IdiomsArgs::default()
     };
 

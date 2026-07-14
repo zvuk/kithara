@@ -173,7 +173,8 @@ impl HlsPeer {
             });
         }
 
-        if let Some(waker) = self.pending_waker.lock().take() {
+        let pending_waker = self.pending_waker.lock().take();
+        if let Some(waker) = pending_waker {
             waker.wake();
         }
 

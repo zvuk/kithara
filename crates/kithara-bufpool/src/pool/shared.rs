@@ -89,10 +89,19 @@ impl<const SHARDS: usize, T> SharedPool<SHARDS, T>
 where
     T: Reuse,
 {
-    /// Current number of tracked bytes across all live buffers.
-    #[must_use]
-    pub fn allocated_bytes(&self) -> usize {
-        self.0.allocated_bytes()
+    delegate::delegate! {
+        to self.0 {
+            /// Current number of tracked bytes across all live buffers.
+            #[must_use]
+            pub fn allocated_bytes(&self) -> usize;
+            /// Return a value to the pool for reuse.
+            ///
+            /// See [`Pool::recycle()`] for details.
+            pub fn recycle(&self, value: T);
+            /// Get pool hit/miss statistics.
+            #[must_use]
+            pub fn stats(&self) -> PoolStats;
+        }
     }
 
     /// Wrap a value into a [`PooledOwned`] guard without charging budget.
@@ -108,19 +117,6 @@ where
     pub fn attach(&self, value: T) -> PooledOwned<SHARDS, T> {
         let shard_idx = Pool::<SHARDS, T>::shard_index();
         PooledOwned::wrap(Arc::clone(&self.0), value, shard_idx)
-    }
-
-    /// Return a value to the pool for reuse.
-    ///
-    /// See [`Pool::recycle()`] for details.
-    pub fn recycle(&self, value: T) {
-        self.0.recycle(value);
-    }
-
-    /// Get pool hit/miss statistics.
-    #[must_use]
-    pub fn stats(&self) -> PoolStats {
-        self.0.stats()
     }
 }
 

@@ -52,7 +52,7 @@ apple-fused-src = ["kithara/apple-fused-src"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia"] }
+kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia", "stretch-signalsmith", "stretch-bungee"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 # Crypto (for HLS encryption tests)
@@ -206,6 +206,10 @@ required-features = ["perf"]
 
 [[bench]]
 name = "refactor_hotpaths"
+harness = false
+
+[[bench]]
+name = "perf_audit"
 harness = false
 
 [[bench]]

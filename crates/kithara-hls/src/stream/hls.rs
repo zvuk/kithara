@@ -191,7 +191,7 @@ impl StreamType for Hls {
                 )
             })
             .collect();
-        let variants = Arc::new(variants);
+        let variants: Arc<[Arc<HlsVariant>]> = variants.into();
 
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {

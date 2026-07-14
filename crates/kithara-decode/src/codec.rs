@@ -54,6 +54,13 @@ pub(crate) trait FrameCodec: Send + 'static {
         out: &mut PcmBuf,
     ) -> DecodeResult<u32>;
 
+    /// Presentation time of the PCM produced by the most recent non-empty
+    /// [`Self::decode_frame`] call. Queue codecs override this when output lags
+    /// the packet supplied to that call.
+    fn decoded_pts(&self, input_pts: Duration) -> Duration {
+        input_pts
+    }
+
     /// Decoder-side algorithmic delay in PCM frames for `codec` — the
     /// silent lead-in this concrete decoder emits **in addition to**
     /// the encoder-declared priming. LAME-convention MP3 decoders
@@ -88,6 +95,14 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// default; Apple `AudioConverter` overrides with per-codec values.
     fn priming(&self, _codec: AudioCodec) -> CodecPriming {
         CodecPriming::default()
+    }
+
+    /// Whether demux EOF must drive empty-frame decode calls until the codec
+    /// returns zero frames. The default preserves the fused sample-rate
+    /// conversion contract: only a codec whose output rate differs from the
+    /// source rate needs an explicit tail drain.
+    fn needs_eof_drain(&self, source_sample_rate: u32) -> bool {
+        self.spec().sample_rate.get() != source_sample_rate
     }
 
     /// PCM output specification.

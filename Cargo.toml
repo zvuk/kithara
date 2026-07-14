@@ -262,7 +262,7 @@ crossterm = "0.29"
 dashmap = "6.2.1"
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
 delegate = "0.13"
-derive_more = { version = "2.1", features = ["from"] }
+derive_more = { version = "2.1", features = ["deref", "display", "from"] }
 dhat = "0.3"
 fallible-iterator = "0.3"
 
@@ -271,6 +271,7 @@ fast-interleave = "0.1"
 fdk-aac = "0.8.0"
 fdk-aac-sys = "0.5.0"
 ffmpeg-next = "8.1.0"
+fieldwork = "0.5"
 firewheel = { version = "0.10.0", default-features = false, features = ["std", "tracing"] }
 firewheel-web-audio = { version = "0.4.0", default-features = false }
 futures = "0.3.32"
@@ -368,7 +369,7 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 wasm-bindgen-test = "0.3"
 wasm_safe_thread = "0.1.1"
-web-sys = { version = "0.3", features = ["Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageEvent", "Window"] }
+web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioSampleFormat", "Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageEvent", "Window"] }
 web-time = "1.1"
 wreq = "5"
 wreq-util = "2"

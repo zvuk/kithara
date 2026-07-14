@@ -258,17 +258,32 @@ impl NativeInner {
         Ok(())
     }
 
-    pub(crate) fn crossfade_duration(&self) -> f32 {
-        self.queue.crossfade_duration()
+    delegate::delegate! {
+        to self.queue {
+            pub(crate) fn crossfade_duration(&self) -> f32;
+            #[expr($.unwrap_or(0.0))]
+            #[call(position_seconds)]
+            pub(crate) fn current_time(&self) -> f64;
+            pub(crate) fn is_muted(&self) -> bool;
+            pub(crate) fn pause(&self);
+            pub(crate) fn play(&self);
+            #[call(default_rate)]
+            pub(crate) fn playing_rate(&self) -> f32;
+            pub(crate) fn rate(&self) -> f32;
+            #[expr($.map_err(FfiError::from))]
+            pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
+            pub(crate) fn set_crossfade_duration(&self, seconds: f32);
+            pub(crate) fn set_muted(&self, muted: bool);
+            #[call(set_default_rate)]
+            pub(crate) fn set_playing_rate(&self, rate: f32);
+            pub(crate) fn set_volume(&self, volume: f32);
+            pub(crate) fn volume(&self) -> f32;
+        }
     }
 
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
         let entry = self.queue.current()?;
         self.items.lock().get(&entry.id).cloned()
-    }
-
-    pub(crate) fn current_time(&self) -> f64 {
-        self.queue.position_seconds().unwrap_or(0.0)
     }
 
     pub(crate) fn eq_band_count(&self) -> u32 {
@@ -305,10 +320,6 @@ impl NativeInner {
         Ok(())
     }
 
-    pub(crate) fn is_muted(&self) -> bool {
-        self.queue.is_muted()
-    }
-
     pub(crate) fn item_count(&self) -> u32 {
         let len = self.queue.len();
         u32::try_from(len).unwrap_or_else(|_| {
@@ -335,22 +346,6 @@ impl NativeInner {
                     description: other.to_string(),
                 },
             })
-    }
-
-    pub(crate) fn pause(&self) {
-        self.queue.pause();
-    }
-
-    pub(crate) fn play(&self) {
-        self.queue.play();
-    }
-
-    pub(crate) fn playing_rate(&self) -> f32 {
-        self.queue.default_rate()
-    }
-
-    pub(crate) fn rate(&self) -> f32 {
-        self.queue.rate()
     }
 
     pub(crate) fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
@@ -415,10 +410,6 @@ impl NativeInner {
         Ok(())
     }
 
-    pub(crate) fn reset_eq(&self) -> Result<(), FfiError> {
-        self.queue.reset_eq().map_err(FfiError::from)
-    }
-
     pub(crate) fn seek(
         &self,
         to_seconds: f64,
@@ -466,18 +457,10 @@ impl NativeInner {
         }
     }
 
-    pub(crate) fn set_crossfade_duration(&self, seconds: f32) {
-        self.queue.set_crossfade_duration(seconds);
-    }
-
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
         self.queue
             .set_eq_gain(band as usize, gain_db)
             .map_err(FfiError::from)
-    }
-
-    pub(crate) fn set_muted(&self, muted: bool) {
-        self.queue.set_muted(muted);
     }
 
     pub(crate) fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
@@ -499,14 +482,6 @@ impl NativeInner {
         drop(eb);
     }
 
-    pub(crate) fn set_playing_rate(&self, rate: f32) {
-        self.queue.set_default_rate(rate);
-    }
-
-    pub(crate) fn set_volume(&self, volume: f32) {
-        self.queue.set_volume(volume);
-    }
-
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
         let salt = salt::drm_lowercase_hex_salt();
         let mut rule_headers = HashMap::new();
@@ -516,7 +491,7 @@ impl NativeInner {
             headers: Some(rule_headers),
             query_params: None,
             domains: vec!["*".to_string()],
-            salt: Some(salt.clone()),
+            salt: Some(salt),
         };
         self.setup_hls_aes_with_rule(rule);
     }
@@ -575,10 +550,6 @@ impl NativeInner {
         if let Some(handle) = self.queue.current_abr_handle() {
             handle.set_max_bandwidth_bps(updated.effective_cap());
         }
-    }
-
-    pub(crate) fn volume(&self) -> f32 {
-        self.queue.volume()
     }
 }
 

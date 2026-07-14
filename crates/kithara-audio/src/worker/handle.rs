@@ -65,24 +65,21 @@ impl AudioWorkerHandle {
         id
     }
 
-    /// Request graceful shutdown and cancel the worker.
-    pub fn shutdown(&self) {
-        self.inner.shutdown();
-    }
-
-    /// Remove a track by ID.
-    pub(crate) fn unregister_track(&self, track_id: TrackId) {
-        self.inner.unregister(track_id);
-    }
-
-    /// Wake the worker so it re-ticks the decoder now. Called by the RT
-    /// consumer after it drains a chunk (ring-space freed) and — via
-    /// [`WorkerWakeBridge`] — by the HLS readiness gate from the downloader
-    /// thread when segment bytes are written/committed, so an underran worker
-    /// re-ticks on data arrival instead of on its 10 ms scheduler poll.
-    /// Wait-free: an atomic bump + `unpark`, safe from any thread.
-    pub fn wake(&self) {
-        self.inner.wake();
+    delegate::delegate! {
+        to self.inner {
+            /// Request graceful shutdown and cancel the worker.
+            pub fn shutdown(&self);
+            /// Remove a track by ID.
+            #[call(unregister)]
+            pub(crate) fn unregister_track(&self, track_id: TrackId);
+            /// Wake the worker so it re-ticks the decoder now. Called by the RT
+            /// consumer after it drains a chunk (ring-space freed) and — via
+            /// [`WorkerWakeBridge`] — by the HLS readiness gate from the downloader
+            /// thread when segment bytes are written/committed, so an underran worker
+            /// re-ticks on data arrival instead of on its 10 ms scheduler poll.
+            /// Wait-free: an atomic bump + `unpark`, safe from any thread.
+            pub fn wake(&self);
+        }
     }
 
     /// Spawn a new shared worker thread bound to the given [`CancelToken`] and

@@ -1,4 +1,4 @@
-use std::{fmt, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 use kithara_bufpool::PcmBuf;
 use kithara_platform::{sync::Arc, time::Duration};
@@ -48,16 +48,11 @@ pub struct TrackMetadata {
 ///
 /// `Default` is intentionally absent — a zero sample rate is not a valid
 /// `PcmSpec`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq)]
+#[display("{sample_rate} Hz, {channels} channels")]
 pub struct PcmSpec {
     pub sample_rate: NonZeroU32,
     pub channels: u16,
-}
-
-impl fmt::Display for PcmSpec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} Hz, {} channels", self.sample_rate, self.channels)
-    }
 }
 
 impl PcmSpec {

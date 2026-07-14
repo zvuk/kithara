@@ -149,12 +149,15 @@ enum EnsureCursor {
 }
 
 impl Demuxer for Fmp4SegmentDemuxer {
-    fn current_segment_index(&self) -> Option<u32> {
-        self.cursor.as_ref().map(|c| c.segment_index)
-    }
-
-    fn current_variant_index(&self) -> Option<usize> {
-        self.cursor.as_ref().map(|c| c.variant_index)
+    delegate::delegate! {
+        to self.cursor {
+            #[expr($.map(|c| c.segment_index))]
+            #[call(as_ref)]
+            fn current_segment_index(&self) -> Option<u32>;
+            #[expr($.map(|c| c.variant_index))]
+            #[call(as_ref)]
+            fn current_variant_index(&self) -> Option<usize>;
+        }
     }
 
     fn duration(&self) -> Option<Duration> {

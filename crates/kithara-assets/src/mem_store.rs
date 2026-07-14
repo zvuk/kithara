@@ -240,8 +240,11 @@ impl Assets for MemAssetStore {
         Capabilities::CACHE | Capabilities::PROCESSING
     }
 
-    fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
-        self.deleter.delete_asset(asset_root)
+    delegate::delegate! {
+        to self.deleter {
+            fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
+            fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
+        }
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
@@ -278,10 +281,6 @@ impl Assets for MemAssetStore {
         Err(IoError::new(ErrorKind::NotFound, "resource missing").into())
     }
 
-    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        self.deleter.remove_resource(key)
-    }
-
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
         if key.rel_path().is_some_and(str::is_empty) {
             return Err(AssetsError::InvalidKey);
@@ -304,7 +303,7 @@ mod tests {
     use crate::acquisition::{AcquisitionResult, ReadSide, WriteSide};
 
     fn make_mem_store() -> MemAssetStore {
-        MemAssetStore::new(CancelToken::never(), None, &crate::BytePool::default())
+        MemAssetStore::new(CancelToken::never(), None, &BytePool::default())
     }
 
     fn pending(acq: AcquisitionResult<BaseWriter, BaseReader>) -> BaseWriter {

@@ -32,59 +32,43 @@ impl<D: DriverIo> Atomic<D> {
         Self { inner }
     }
 
-    /// Whether the given range is fully covered by available data.
-    #[must_use]
-    pub fn contains_range(&self, range: Range<u64>) -> bool {
-        self.inner.contains_range(range)
+    delegate::delegate! {
+        to self.inner {
+            /// Whether the given range is fully covered by available data.
+            #[must_use]
+            pub fn contains_range(&self, range: Range<u64>) -> bool;
+            /// Committed length, if known.
+            #[must_use]
+            pub fn len(&self) -> Option<u64>;
+            /// Backing file path, if any.
+            #[must_use]
+            pub fn path(&self) -> Option<&Path>;
+            /// Read data at the given offset into `buf`.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the read fails.
+            pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            /// Read the entire resource into a caller buffer; returns bytes read.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the read fails.
+            pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize>;
+            /// Current runtime status.
+            #[must_use]
+            pub fn status(&self) -> ResourceStatus;
+            /// Wait until the given byte range is available.
+            ///
+            /// # Errors
+            /// Returns error if the range is invalid, the resource is cancelled, or the
+            /// resource has failed.
+            pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+        }
     }
 
     /// Returns `true` if the resource has been committed with zero length.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == Some(0)
-    }
-
-    /// Committed length, if known.
-    #[must_use]
-    pub fn len(&self) -> Option<u64> {
-        self.inner.len()
-    }
-
-    /// Backing file path, if any.
-    #[must_use]
-    pub fn path(&self) -> Option<&Path> {
-        self.inner.path()
-    }
-
-    /// Read data at the given offset into `buf`.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.inner.read_at(offset, buf)
-    }
-
-    /// Read the entire resource into a caller buffer; returns bytes read.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
-        self.inner.read_into(buf)
-    }
-
-    /// Current runtime status.
-    #[must_use]
-    pub fn status(&self) -> ResourceStatus {
-        self.inner.status()
-    }
-
-    /// Wait until the given byte range is available.
-    ///
-    /// # Errors
-    /// Returns error if the range is invalid, the resource is cancelled, or the
-    /// resource has failed.
-    pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        self.inner.wait_range(range)
     }
 
     /// Write the whole payload atomically (best-effort durability: atomic rename

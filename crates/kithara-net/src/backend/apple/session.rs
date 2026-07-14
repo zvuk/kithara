@@ -230,20 +230,14 @@ impl From<Retained<NSURLSessionDataTask>> for AppleTask {
 }
 
 impl AppleTask {
-    pub(super) fn cancel(&self) {
-        self.task.cancel();
-    }
-
-    pub(super) fn id(&self) -> TaskId {
-        self.task.taskIdentifier()
-    }
-
-    pub(super) fn resume(&self) {
-        self.task.resume();
-    }
-
-    pub(super) fn suspend(&self) {
-        self.task.suspend();
+    delegate::delegate! {
+        to self.task {
+            pub(super) fn cancel(&self);
+            #[call(taskIdentifier)]
+            pub(super) fn id(&self) -> TaskId;
+            pub(super) fn resume(&self);
+            pub(super) fn suspend(&self);
+        }
     }
 }
 

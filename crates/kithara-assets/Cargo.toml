@@ -34,6 +34,7 @@ bitflags = { workspace = true }
 bon = { workspace = true }
 dashmap = { workspace = true }
 delegate = { workspace = true }
+fieldwork = { workspace = true }
 hex = { workspace = true }
 lru = { workspace = true }
 rangemap = { workspace = true }

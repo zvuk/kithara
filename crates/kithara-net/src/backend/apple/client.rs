@@ -1,4 +1,4 @@
-use std::num::NonZeroU16;
+use std::{fmt::Write, num::NonZeroU16};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -128,10 +128,12 @@ impl RawAppleNet {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct AppleNet {
     net: Arc<RetryNet<RawAppleNet, DefaultRetryPolicy>>,
     connection_metrics: ConnectionMetrics,
+    #[field(get)]
     options: NetOptions,
 }
 
@@ -157,54 +159,39 @@ impl AppleNet {
         self.connection_metrics.connection_count()
     }
 
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
-    pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
-        self.net.get_bytes(url, headers).await
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
-    pub async fn get_range(
-        &self,
-        url: Url,
-        range: RangeSpec,
-        headers: Option<Headers>,
-    ) -> NetResult<ByteStream> {
-        self.net.get_range(url, range, headers).await
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
-    pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
-        self.net.head(url, headers).await
-    }
-
-    #[must_use]
-    pub fn options(&self) -> &NetOptions {
-        &self.options
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
-    pub async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> NetResult<Bytes> {
-        self.net.post_bytes(url, body, headers).await
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
-    pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<ByteStream> {
-        self.net.stream(url, headers).await
+    delegate::delegate! {
+        to self.net {
+            /// # Errors
+            ///
+            /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
+            pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes>;
+            /// # Errors
+            ///
+            /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
+            pub async fn get_range(
+                &self,
+                url: Url,
+                range: RangeSpec,
+                headers: Option<Headers>,
+            ) -> NetResult<ByteStream>;
+            /// # Errors
+            ///
+            /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
+            pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers>;
+            /// # Errors
+            ///
+            /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
+            pub async fn post_bytes(
+                &self,
+                url: Url,
+                body: Bytes,
+                headers: Option<Headers>,
+            ) -> NetResult<Bytes>;
+            /// # Errors
+            ///
+            /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
+            pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<ByteStream>;
+        }
     }
 }
 
@@ -355,6 +342,6 @@ fn truncate_error_body(mut body: String) -> String {
         .nth(MAX_ERROR_BODY_CHARS)
         .map_or(body.len(), |(index, _)| index);
     body.truncate(cut_at);
-    body.push_str(&format!("...(truncated, {total} chars total)"));
+    let _ = write!(body, "...(truncated, {total} chars total)");
     body
 }

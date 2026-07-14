@@ -281,7 +281,7 @@ impl WindowedBeats {
 
     fn push(
         &mut self,
-        samples: impl Iterator<Item = f32>,
+        samples: impl ExactSizeIterator<Item = f32>,
         detector: &mut dyn BeatDetector,
     ) -> Result<(), BeatDetectError> {
         append_iter(&mut self.buffer, samples)?;
@@ -313,13 +313,14 @@ fn frames_for_seconds(sample_rate: u32, seconds: u32) -> usize {
 
 fn append_iter(
     dst: &mut PcmBuf,
-    samples: impl Iterator<Item = f32>,
+    samples: impl ExactSizeIterator<Item = f32>,
 ) -> Result<(), BeatDetectError> {
-    for sample in samples {
-        let old_len = dst.len();
-        dst.ensure_len(old_len.saturating_add(1))
-            .map_err(|_| BeatDetectError::Buffer)?;
-        dst[old_len] = sample;
+    let count = samples.len();
+    let old_len = dst.len();
+    dst.ensure_len(old_len + count)
+        .map_err(|_| BeatDetectError::Buffer)?;
+    for (i, sample) in samples.enumerate() {
+        dst[old_len + i] = sample;
     }
     Ok(())
 }

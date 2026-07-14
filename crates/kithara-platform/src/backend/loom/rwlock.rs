@@ -10,14 +10,15 @@ impl<T> RwLock<T> {
         Self(backend::RwLock::new(value))
     }
 
-    #[inline]
-    pub fn read(&self) -> RwLockReadGuard<'_, T> {
-        RwLockReadGuard(self.0.read())
-    }
-
-    #[inline]
-    pub fn write(&self) -> RwLockWriteGuard<'_, T> {
-        RwLockWriteGuard(self.0.write())
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            #[expr(RwLockReadGuard($))]
+            pub fn read(&self) -> RwLockReadGuard<'_, T>;
+            #[inline]
+            #[expr(RwLockWriteGuard($))]
+            pub fn write(&self) -> RwLockWriteGuard<'_, T>;
+        }
     }
 }
 

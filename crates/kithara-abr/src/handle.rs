@@ -94,16 +94,24 @@ impl AbrHandle {
         }
     }
 
-    /// `true` while the active variant is flagged non-delivering — see
-    /// [`AbrState::is_escaping`].
-    #[must_use]
-    pub fn is_escaping(&self) -> bool {
-        self.inner.state.as_ref().is_some_and(|s| s.is_escaping())
-    }
-
-    #[must_use]
-    pub fn is_locked(&self) -> bool {
-        self.inner.state.as_ref().is_some_and(|s| s.is_locked())
+    delegate::delegate! {
+        to self.inner.state {
+            /// `true` while the active variant is flagged non-delivering — see
+            /// [`AbrState::is_escaping`].
+            #[must_use]
+            #[expr($.is_some_and(|s| s.is_escaping()))]
+            #[call(as_ref)]
+            pub fn is_escaping(&self) -> bool;
+            #[must_use]
+            #[expr($.is_some_and(|s| s.is_locked()))]
+            #[call(as_ref)]
+            pub fn is_locked(&self) -> bool;
+            /// Current ABR mode (Auto / Manual). `None` for peers without state.
+            #[must_use]
+            #[expr($.map(|s| s.mode()))]
+            #[call(as_ref)]
+            pub fn mode(&self) -> Option<AbrMode>;
+        }
     }
 
     /// Lock ABR (used during seek).
@@ -124,12 +132,6 @@ impl AbrHandle {
         if let Some(state) = self.inner.state.as_ref() {
             state.mark_escape();
         }
-    }
-
-    /// Current ABR mode (Auto / Manual). `None` for peers without state.
-    #[must_use]
-    pub fn mode(&self) -> Option<AbrMode> {
-        self.inner.state.as_ref().map(|s| s.mode())
     }
 
     /// Side-effects after HLS scheduler committed a variant switch:
