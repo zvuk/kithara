@@ -1,5 +1,7 @@
 use iced::{Task, window};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use kithara::events::{DjEvent, StretchBackendKind};
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara::prelude::StretchKind;
 
 use super::{app::Kithara, frontend::window_settings, message::Message, widgets::Viewport};
@@ -97,11 +99,23 @@ pub(crate) fn handle(state: &mut Kithara, msg: &DjMsg) -> Task<Message> {
             // Applies live, mid-track (shared controls read each chunk).
             let deck = state.controller.deck();
             deck.set_keylock(!deck.keylock());
+            state
+                .controller
+                .queue()
+                .bus()
+                .publish(DjEvent::KeylockChanged { on: deck.keylock() });
         }
         #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
         DjMsg::SelectBackend(backend) => {
             // Applies live, mid-track (shared controls read each chunk).
             state.controller.deck().set_backend(*backend);
+            state
+                .controller
+                .queue()
+                .bus()
+                .publish(DjEvent::StretchBackendChanged {
+                    kind: stretch_backend_kind(*backend),
+                });
         }
     }
 
@@ -111,6 +125,14 @@ pub(crate) fn handle(state: &mut Kithara, msg: &DjMsg) -> Task<Message> {
         .queue()
         .set_rate(state.dj.timestretch.speed());
     Task::none()
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+fn stretch_backend_kind(kind: StretchKind) -> StretchBackendKind {
+    match kind {
+        StretchKind::Signalsmith => StretchBackendKind::Signalsmith,
+        _ => StretchBackendKind::Unknown,
+    }
 }
 
 /// Swap the live window for the other mode. The new window opens before

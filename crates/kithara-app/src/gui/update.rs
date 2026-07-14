@@ -73,10 +73,10 @@ fn handle_toggle_play_pause(state: &Kithara) {
 }
 
 fn handle_next(state: &Kithara) {
-    let _ = state
-        .controller
-        .queue()
-        .advance_to_next(Transition::Crossfade);
+    let _ = state.controller.queue().advance_to_next(
+        Transition::Crossfade,
+        kithara::events::AdvanceReason::UserNext,
+    );
 }
 
 fn handle_prev(state: &Kithara) {

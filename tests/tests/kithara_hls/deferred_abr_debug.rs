@@ -41,7 +41,7 @@ async fn debug_sequential_read(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     let events_handle = tokio::task::spawn(async move {
-        while let Ok(event) = events_rx.recv().await {
+        while let Ok(event) = events_rx.recv().await.map(|env| env.event) {
             info!("HLS Event: {:?}", event);
         }
     });

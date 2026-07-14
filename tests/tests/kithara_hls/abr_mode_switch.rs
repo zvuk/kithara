@@ -141,7 +141,7 @@ impl EventCollector {
         use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
         let mut rx = self.rx.lock();
         loop {
-            let ev = match rx.try_recv() {
+            let ev = match rx.try_recv().map(|env| env.event) {
                 Ok(ev) => ev,
                 Err(TryRecvError::Lagged(_)) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
@@ -609,7 +609,7 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     let mut release_rx = bus.subscribe();
     drop(spawn(async move {
         loop {
-            match release_rx.recv().await {
+            match release_rx.recv().await.map(|env| env.event) {
                 Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
                     release_gate.release();
                     break;
@@ -1905,7 +1905,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     let mut applied_rx = bus.subscribe();
     spawn(async move {
         loop {
-            match applied_rx.recv().await {
+            match applied_rx.recv().await.map(|env| env.event) {
                 Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
                     applied_bg.lock().push(to.get());
                 }

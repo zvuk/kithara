@@ -1,6 +1,8 @@
 use std::num::NonZeroUsize;
 
-use kithara_events::{DownloaderEvent, Event, EventBus, TrackId, TrackStatus};
+use kithara_events::{
+    DownloaderEvent, Envelope, Event, EventBus, ScopeLabel, TrackId, TrackStatus,
+};
 use kithara_platform::{
     CancelToken,
     sync::Arc,
@@ -55,8 +57,12 @@ impl Loader {
     ///
     /// Both paths finish with `PlayerImpl::prepare_config` so worker /
     /// sample-rate / runtime / default bus are injected.
-    pub(crate) fn build_config(&self, source: TrackSource) -> Result<ResourceConfig, QueueError> {
-        let config = match source {
+    pub(crate) fn build_config(
+        &self,
+        id: TrackId,
+        source: TrackSource,
+    ) -> Result<ResourceConfig, QueueError> {
+        let mut config = match source {
             TrackSource::Uri(url) => ResourceConfig::new(
                 &url,
                 self.player.byte_pool().clone(),
@@ -65,6 +71,12 @@ impl Loader {
             .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
             TrackSource::Config(boxed) => *boxed,
         };
+        if config.bus().is_none() {
+            config.set_bus(self.player.bus().scoped_labeled(ScopeLabel {
+                track: Some(id),
+                ..ScopeLabel::default()
+            }));
+        }
         Ok(self.player.prepare_config(config))
     }
 
@@ -121,7 +133,7 @@ impl Loader {
         id: TrackId,
         source: TrackSource,
     ) -> Result<(ResourceConfig, CancelToken), QueueError> {
-        let config = self.build_config(source)?;
+        let config = self.build_config(id, source)?;
         let Some(cancel) = config.cancel().cloned() else {
             return Err(QueueError::Resource(format!(
                 "track {id:?}: resource config missing per-track cancel"
@@ -203,7 +215,7 @@ impl Loader {
             None => return std::future::pending().await,
         };
         let mut marked = false;
-        while let Ok(ev) = rx.recv().await {
+        while let Ok(Envelope { event: ev, .. }) = rx.recv().await {
             if !marked && matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow { .. })) {
                 tracks.set_status(id, TrackStatus::Slow);
                 marked = true;
@@ -290,7 +302,8 @@ mod tests {
             .pcm_pool(PcmPool::default())
             .preferred_peak_bitrate(321.0)
             .build();
-        let Ok(returned) = loader.build_config(TrackSource::Config(Box::new(given))) else {
+        let Ok(returned) = loader.build_config(TrackId(1), TrackSource::Config(Box::new(given)))
+        else {
             panic!("build_config should succeed");
         };
         assert!(
@@ -300,9 +313,29 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
+    async fn build_config_labels_default_bus_with_track_id() {
+        let fixture = LoaderFixtureSpec::default().build();
+        let mut rx = fixture.bus.subscribe();
+        let Ok(config) = fixture.loader.build_config(
+            TrackId(42),
+            TrackSource::Uri("https://example.com/a.mp3".into()),
+        ) else {
+            panic!("build_config should succeed");
+        };
+        let Some(bus) = config.bus() else {
+            panic!("build_config must inject a per-track bus");
+        };
+        bus.publish(QueueEvent::QueueEnded);
+        let Ok(envelope) = rx.try_recv() else {
+            panic!("scoped publish must reach the root subscriber");
+        };
+        assert_eq!(envelope.meta.track, Some(TrackId(42)));
+    }
+
+    #[kithara::test(tokio)]
     async fn build_config_invalid_uri_errors() {
         let loader = LoaderFixtureSpec::default().build().loader;
-        let Err(err) = loader.build_config(TrackSource::Uri("not-a-url".into())) else {
+        let Err(err) = loader.build_config(TrackId(1), TrackSource::Uri("not-a-url".into())) else {
             panic!("should reject relative path");
         };
         assert!(matches!(err, QueueError::InvalidUrl(_)));
@@ -368,14 +401,22 @@ mod tests {
         let mut saw_failed = false;
         for _ in 0..8 {
             match time::timeout(Duration::from_millis(200), rx.recv()).await {
-                Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged {
-                    id: TrackId(42),
-                    status: TrackStatus::Loading,
-                }))) => panic!("invalid config must not emit Loading"),
-                Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged {
-                    id: TrackId(42),
-                    status: TrackStatus::Failed(_),
-                }))) => saw_failed = true,
+                Ok(Ok(Envelope {
+                    event:
+                        Event::Queue(QueueEvent::TrackStatusChanged {
+                            id: TrackId(42),
+                            status: TrackStatus::Loading,
+                        }),
+                    ..
+                })) => panic!("invalid config must not emit Loading"),
+                Ok(Ok(Envelope {
+                    event:
+                        Event::Queue(QueueEvent::TrackStatusChanged {
+                            id: TrackId(42),
+                            status: TrackStatus::Failed(_),
+                        }),
+                    ..
+                })) => saw_failed = true,
                 Ok(Ok(_)) => {}
                 Ok(Err(_)) | Err(_) => break,
             }

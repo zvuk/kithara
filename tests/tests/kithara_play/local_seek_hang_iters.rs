@@ -127,7 +127,7 @@ async fn render_and_collect(
 /// receiver would otherwise wedge later `try_recv` reads.
 fn drain_events(events: &mut EventReceiver) {
     loop {
-        match events.try_recv() {
+        match events.try_recv().map(|env| env.event) {
             Ok(_) => continue,
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             Err(TryRecvError::Lagged(_)) => continue,
@@ -192,7 +192,7 @@ async fn render_until_audio(
 
         let mut advanced = false;
         loop {
-            match events.try_recv() {
+            match events.try_recv().map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     if u128::from(position_ms) > min_position_ms {
                         advanced = true;

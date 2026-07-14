@@ -5,6 +5,8 @@ use std::{cmp, hash, ops};
 use kithara_platform::{sync::Arc, time::Duration};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
+use crate::SlotId;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PlayerStatus {
@@ -39,21 +41,6 @@ pub enum ItemStatus {
     Unknown,
     ReadyToPlay,
     Failed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SlotId(u64);
-
-impl SlotId {
-    #[must_use]
-    pub fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    #[must_use]
-    pub fn value(self) -> u64 {
-        self.0
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -273,8 +260,27 @@ pub enum RouteChangeReason {
 #[non_exhaustive]
 pub struct BpmInfo {
     pub first_beat_offset: Duration,
-    pub confidence: f32,
+    pub confidence: Option<f32>,
     pub bpm: f64,
+}
+
+impl BpmInfo {
+    #[must_use]
+    pub fn new(bpm: f64, confidence: Option<f32>, first_beat_offset: Duration) -> Self {
+        Self {
+            first_beat_offset,
+            confidence,
+            bpm,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StretchBackendKind {
+    Signalsmith,
+    Bungee,
+    Unknown,
 }
 
 #[derive(Clone, Debug)]
@@ -289,6 +295,10 @@ pub enum PlayerEvent {
     },
     RateChanged {
         rate: f32,
+    },
+    PlaybackStarted {
+        src: Arc<str>,
+        item_id: Option<Arc<str>>,
     },
     VolumeChanged {
         volume: f32,
@@ -332,18 +342,8 @@ pub enum PlayerEvent {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum ItemEvent {
-    StatusChanged { status: ItemStatus },
-    DurationChanged { duration: MediaTime },
-    LoadedTimeRangesChanged { ranges: Vec<TimeRange> },
     PlaybackLikelyToKeepUp,
-    PlaybackUnlikelyToKeepUp,
-    PlaybackBufferEmpty,
-    PlaybackBufferFull,
-    DidPlayToEnd,
-    FailedToPlayToEnd { error: String },
     PlaybackStalled,
-    TimeJumped,
-    SeekCompleted { success: bool },
 }
 
 #[derive(Clone, Debug)]
@@ -405,6 +405,12 @@ pub enum DjEvent {
         slot: SlotId,
         beat_number: u64,
         timestamp: MediaTime,
+    },
+    KeylockChanged {
+        on: bool,
+    },
+    StretchBackendChanged {
+        kind: StretchBackendKind,
     },
     BpmSyncEngaged {
         leader: SlotId,

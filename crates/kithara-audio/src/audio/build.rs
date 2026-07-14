@@ -9,14 +9,14 @@ use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{
     Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig, GaplessMode, PcmChunk, PcmSpec,
 };
-use kithara_events::{AudioEvent, EventBus};
+use kithara_events::{DecoderChangeCause, Event, EventBus, FrameDomain};
 use kithara_platform::{
     CancelScope, CancelToken,
     sync::Arc,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
 };
 use kithara_resampler::ResamplerBackend;
-use kithara_stream::{MediaInfo, Stream, StreamType, WorkerWake};
+use kithara_stream::{MediaInfo, PlayheadRead, Stream, StreamType, WorkerWake};
 use portable_atomic::AtomicF32;
 use tracing::{debug, info, warn};
 
@@ -27,7 +27,10 @@ use super::{
     TrackRegistration, WorkerWakeBridge,
     core::{Audio, AudioParts, Controls, Session, WorkerLease},
     create_effects,
-    event::AudioEvents,
+    event::{
+        AudioEvents, DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
+        decoder_resampler_event, playback_resampler_event,
+    },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
 };
 
@@ -67,6 +70,16 @@ where
         let target_sample_rate = NonZeroU32::new(self.host_sample_rate.load(Ordering::Acquire));
         self.decoder.build_resampler_config(target_sample_rate)
     }
+
+    fn backend(&self) -> kithara_decode::DecoderBackend {
+        self.decoder.backend()
+    }
+
+    fn playback_resampler_backend(&self) -> &'static str {
+        self.decoder
+            .resampler()
+            .map_or("none", |resampler| resampler.backend().name())
+    }
 }
 
 struct FactoryDeps<B> {
@@ -89,17 +102,18 @@ where
 }
 
 struct StreamSourceRegistration<'a, T: StreamType> {
-    bus: &'a EventBus,
     cancel: &'a CancelToken,
     decoder: Box<dyn Decoder>,
+    decoder_backend: kithara_decode::DecoderBackend,
     decoder_factory: StreamDecoderFactory<T>,
     effects: Vec<Box<dyn AudioEffect>>,
-    emit: kithara_events::DeferredBus<AudioEvent>,
+    emit: Arc<kithara_events::DeferredBus<Event>>,
     engine_load: Option<Arc<EngineLoad>>,
     epoch: Arc<AtomicU64>,
     gapless_mode: GaplessMode,
     host_sample_rate: Arc<AtomicU32>,
     initial_media_info: Option<MediaInfo>,
+    playback_resampler_backend: &'static str,
     pcm_buffer_chunks: usize,
     preload_chunks: NonZeroUsize,
     recreate_on_host_rate_change: bool,
@@ -180,7 +194,7 @@ where
         );
 
         shared_stream.set_blocking(true);
-        let gapless_mode = decoder.gapless_mode;
+        let gapless_mode = decoder.gapless_mode();
         let deps = DecoderDeps::new(
             decoder,
             pcm_pool.clone(),
@@ -198,7 +212,9 @@ where
         let decoder = decoder?;
 
         let initial_spec = decoder.spec();
-        playhead.set_duration(decoder.duration().or_else(|| playhead.duration()));
+        let initial_track_info = decoder.track_info();
+        let total_duration = decoder.duration().or_else(|| playhead.duration());
+        playhead.set_duration(total_duration);
         let metadata = decoder.metadata();
         let epoch = Arc::new(AtomicU64::new(0));
         let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
@@ -207,18 +223,20 @@ where
 
         let abr_handle = shared_stream.abr_handle();
         let peer_wake = shared_stream.peer_wake();
+        let emit = AudioEvents::deferred(&bus);
         let registered = register_stream_audio_source(StreamSourceRegistration {
-            bus: &bus,
             cancel: &cancel,
             decoder,
+            decoder_backend: deps.backend(),
             decoder_factory: create_decoder_factory(&deps, &epoch, &byte_len),
             effects,
-            emit: AudioEvents::deferred(&bus),
+            emit: Arc::clone(&emit),
             engine_load,
-            epoch,
+            epoch: Arc::clone(&epoch),
             gapless_mode,
-            host_sample_rate,
-            initial_media_info,
+            host_sample_rate: Arc::clone(&host_sample_rate),
+            initial_media_info: initial_media_info.clone(),
+            playback_resampler_backend: deps.playback_resampler_backend(),
             pcm_buffer_chunks,
             preload_chunks,
             recreate_on_host_rate_change: deps.recreates_on_host_rate_change(),
@@ -226,6 +244,15 @@ where
             shared_stream,
             worker: config_worker,
         });
+        publish_initial_decoder_events(
+            &bus,
+            &deps,
+            &host_sample_rate,
+            initial_media_info.as_ref(),
+            initial_spec,
+            &initial_track_info,
+            total_duration,
+        )?;
 
         let ring = RingConsumer::new(RingParts {
             pcm_rx: registered.data_rx,
@@ -259,7 +286,7 @@ where
             },
             pcm_pool,
             spec: initial_spec,
-            bus,
+            emit,
             marker: PhantomData,
         }))
     }
@@ -277,22 +304,69 @@ where
     }
 }
 
+fn publish_initial_decoder_events<B>(
+    bus: &EventBus,
+    deps: &DecoderDeps<B>,
+    host_sample_rate: &Arc<AtomicU32>,
+    initial_media_info: Option<&MediaInfo>,
+    initial_spec: PcmSpec,
+    initial_track_info: &kithara_decode::DecoderTrackInfo,
+    total_duration: Option<kithara_platform::time::Duration>,
+) -> Result<(), DecodeError>
+where
+    B: ResamplerBackend,
+{
+    bus.publish(decoder_changed_event(DecoderChangedEventData {
+        backend: deps.backend(),
+        media_info: initial_media_info,
+        spec: initial_spec,
+        track_info: initial_track_info,
+        epoch: 0,
+        cause: DecoderChangeCause::Initial,
+        base_offset: 0,
+        duration: total_duration,
+    }));
+    if let Some(event) = decoder_gapless_event(
+        initial_media_info,
+        initial_spec,
+        initial_track_info,
+        FrameDomain::Output,
+    ) {
+        bus.publish(event);
+    }
+    if let Some(event) = decoder_resampler_event(
+        deps.resampler_config()?.as_ref(),
+        initial_spec,
+        initial_media_info.and_then(|info| info.sample_rate),
+    ) {
+        bus.publish(event);
+    }
+    if let Some(host_rate) = NonZeroU32::new(host_sample_rate.load(Ordering::Acquire))
+        && let Some(resampler) = deps.decoder.resampler()
+        && let Some(event) = playback_resampler_event(
+            resampler.backend(),
+            host_rate.get(),
+            initial_media_info.and_then(|info| info.sample_rate),
+        )
+    {
+        bus.publish(event);
+    }
+    Ok(())
+}
+
 fn register_stream_audio_source<T>(
     registration: StreamSourceRegistration<'_, T>,
 ) -> RegisteredStreamSource
 where
     T: StreamType,
 {
-    let initial_variant = registration
-        .initial_media_info
-        .as_ref()
-        .and_then(|info| info.variant_index);
     let wake_stream = registration.shared_stream.clone();
+    let playhead = registration.shared_stream.playhead_write();
     let preload_gate = Arc::new(super::PreloadGate::default());
     let reader_wake = Arc::new(ThreadWake::default());
     let (data_tx, data_rx) = create_channels(
         registration.pcm_buffer_chunks,
-        registration.bus,
+        Arc::clone(&registration.emit),
         &reader_wake,
     );
     let (trash_tx, trash_inlet) = create_trash_channel(registration.pcm_buffer_chunks);
@@ -309,9 +383,11 @@ where
     let decode = DecodeInit {
         decoder: registration.decoder,
         decoder_factory: registration.decoder_factory,
+        decoder_backend: registration.decoder_backend,
         gapless_mode: registration.gapless_mode,
         host_sample_rate: registration.host_sample_rate.clone(),
         media_info: registration.initial_media_info,
+        playback_resampler_backend: registration.playback_resampler_backend,
         recreate_on_host_rate_change: registration.recreate_on_host_rate_change,
     }
     .into_parts(
@@ -327,12 +403,8 @@ where
             wake: worker_wake.clone(),
         },
     );
-    let source =
-        StreamAudioSource::new(registration.shared_stream, parts).with_emit(registration.emit);
-    registration.bus.publish(AudioEvent::DecoderReady {
-        base_offset: 0,
-        variant: initial_variant,
-    });
+    let source = StreamAudioSource::new(registration.shared_stream, parts)
+        .with_emit(Arc::clone(&registration.emit));
 
     let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
     let track_id = worker.register_track(TrackRegistration {
@@ -341,6 +413,8 @@ where
         outlet: data_tx,
         preload_gate: preload_gate.clone(),
         preload_chunks: registration.preload_chunks.get(),
+        playhead: playhead as Arc<dyn PlayheadRead>,
+        emit: registration.emit,
         service_class: service_class.clone(),
         engine_load: registration.engine_load,
     });
@@ -376,7 +450,7 @@ where
             .map_or(0, |length| length.saturating_sub(base_offset));
         deps.byte_len.store(byte_len, Ordering::Release);
         let config = DecoderConfig::builder()
-            .backend(deps.decoder.decoder.backend)
+            .backend(deps.decoder.decoder.backend())
             .byte_len_handle(Arc::clone(&deps.byte_len))
             .pcm_pool(deps.decoder.pcm_pool.clone())
             .byte_pool(deps.decoder.byte_pool.clone())
@@ -410,7 +484,7 @@ where
     B: ResamplerBackend,
 {
     let config = DecoderConfig::builder()
-        .backend(deps.decoder.backend)
+        .backend(deps.decoder.backend())
         .byte_len_handle(Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0))))
         .pcm_pool(deps.pcm_pool.clone())
         .byte_pool(deps.byte_pool.clone())

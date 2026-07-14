@@ -206,7 +206,7 @@ async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp
     let mut buf = [0.0_f32; 1024];
 
     loop {
-        while let Ok(ev) = events_rx.try_recv() {
+        while let Ok(ev) = events_rx.try_recv().map(|env| env.event) {
             match ev {
                 Event::Audio(AudioEvent::FormatDetected { .. }) => {
                     got_format = true;

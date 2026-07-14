@@ -8,6 +8,7 @@ use kithara_test_utils::kithara;
 
 use super::{
     ConsumerPhase, DecodeError, PendingReason, ReadOutcome,
+    event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
 };
 
@@ -60,6 +61,7 @@ impl ChunkCursor {
     pub(super) fn read(
         &mut self,
         ring: &mut RingConsumer,
+        events: &mut AudioEvents,
         playhead: &dyn PlayheadWrite,
         recv: RecvCtx<'_>,
         buf: &mut [f32],
@@ -97,7 +99,16 @@ impl ChunkCursor {
             if written >= buf.len() {
                 break;
             }
-            if !ring.fill(self, recv) {
+            let was_playing = ring.phase == ConsumerPhase::Playing;
+            let filled = ring.fill(self, recv);
+            events.fill_result(
+                filled,
+                was_playing,
+                ring.phase.is_terminal(),
+                playhead.position(),
+                ring.validator.epoch,
+            );
+            if !filled {
                 break;
             }
         }
@@ -127,6 +138,7 @@ impl ChunkCursor {
     pub(super) fn read_planar<'a>(
         &mut self,
         ring: &mut RingConsumer,
+        events: &mut AudioEvents,
         playhead: &dyn PlayheadWrite,
         recv: RecvCtx<'_>,
         output: &'a mut [&'a mut [f32]],
@@ -145,7 +157,7 @@ impl ChunkCursor {
         interleaved.clear();
         interleaved.ensure_len(total_samples)?;
 
-        let result = self.read(ring, playhead, recv, &mut interleaved[..]);
+        let result = self.read(ring, events, playhead, recv, &mut interleaved[..]);
         let result = match result {
             Ok(mut read) => {
                 if let ReadOutcome::Frames { count, position } = read.outcome {
@@ -299,10 +311,12 @@ mod tests {
         playhead.set_duration(Some(duration));
         let pool = PcmPool::default().clone();
         let mut cursor = ChunkCursor::new(&pool, spec);
+        let mut events = AudioEvents::test();
         let mut buf = vec![0.0; 200];
         let read = cursor
             .read(
                 &mut ring,
+                &mut events,
                 &playhead,
                 RecvCtx {
                     cancel: None,
@@ -341,11 +355,13 @@ mod tests {
             .expect("chunk reaches test ring");
         let pool = PcmPool::default().clone();
         let mut cursor = ChunkCursor::new(&pool, spec);
+        let mut events = AudioEvents::test();
         let mut output = [0.0];
 
         let read = cursor
             .read(
                 &mut ring,
+                &mut events,
                 &PlayheadState::new(),
                 RecvCtx {
                     cancel: None,

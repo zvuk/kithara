@@ -143,7 +143,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
 
     let terminal = kithara::platform::time::timeout(Consts::ERROR_DEADLINE, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::File(FileEvent::Error { .. })) => return true,
                 Ok(_) => {}
                 Err(_) => return false,

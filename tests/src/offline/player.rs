@@ -142,12 +142,12 @@ impl OfflinePlayer {
                 N::Loaded { .. } => NotificationKind::Loaded,
                 N::Unloaded { .. } => NotificationKind::Unloaded,
                 N::HandoverRequested => NotificationKind::HandoverRequested,
-                N::PlaybackStarted => NotificationKind::PlaybackStarted,
+                N::PlaybackStarted { .. } => NotificationKind::PlaybackStarted,
                 N::PlaybackStopped { .. } => NotificationKind::PlaybackStopped,
                 N::Requested => NotificationKind::Requested,
                 N::Changed { .. } => NotificationKind::Changed,
-                N::FadingIn => NotificationKind::FadingIn,
-                N::FadingOut => NotificationKind::FadingOut,
+                N::FadingIn { .. } => NotificationKind::FadingIn,
+                N::FadingOut { .. } => NotificationKind::FadingOut,
             });
         }
         while self.control.trash_rx.try_pop().is_some() {}

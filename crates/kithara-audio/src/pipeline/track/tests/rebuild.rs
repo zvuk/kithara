@@ -6,8 +6,11 @@ use std::{
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{
-    DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessMode, PcmChunk, PcmMeta,
-    PcmSpec, duration_for_frames, frames_for_duration,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessMode,
+    PcmChunk, PcmMeta, PcmSpec, duration_for_frames, frames_for_duration,
+};
+use kithara_events::{
+    AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus, TrackFailureKind,
 };
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -88,6 +91,35 @@ impl Decoder for TestDecoder {
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         Ok(DecoderSeekOutcome::Landed {
             landed_at: pos,
+            landed_frame: 0,
+            landed_byte: None,
+            preroll: PrerollHint::NotNeeded,
+        })
+    }
+
+    fn spec(&self) -> PcmSpec {
+        PcmSpec::new(2, NonZeroU32::MIN)
+    }
+
+    fn update_byte_len(&self, _len: u64) {}
+}
+
+struct FailingDecoder;
+
+impl Decoder for FailingDecoder {
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(60))
+    }
+
+    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        Err(DecodeError::InvalidData {
+            detail: "fixture decode failure",
+        })
+    }
+
+    fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        Ok(DecoderSeekOutcome::Landed {
+            landed_at: position,
             landed_frame: 0,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
@@ -418,9 +450,11 @@ async fn test_source(variant: u32) -> RebuildFixture {
     let decode = DecodeInit {
         decoder: Box::new(TestDecoder::new(1, drops.clone())),
         decoder_factory,
+        decoder_backend: kithara_decode::DecoderBackend::default(),
         gapless_mode: GaplessMode::Disabled,
         host_sample_rate: Arc::new(AtomicU32::new(Consts::SAMPLE_RATE)),
         media_info: Some(media_info(0)),
+        playback_resampler_backend: "none",
         recreate_on_host_rate_change: true,
     }
     .into_parts(Vec::new(), shared_stream.seek_observe().epoch());
@@ -470,9 +504,11 @@ async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
     let decode = DecodeInit {
         decoder: Box::new(RouteSignalDecoder::new(1, Consts::SAMPLE_RATE, drops)),
         decoder_factory,
+        decoder_backend: kithara_decode::DecoderBackend::default(),
         gapless_mode: GaplessMode::Disabled,
         host_sample_rate: host_sample_rate.clone(),
         media_info: Some(media_info(0)),
+        playback_resampler_backend: "none",
         recreate_on_host_rate_change: true,
     }
     .into_parts(Vec::new(), shared_stream.seek_observe().epoch());
@@ -604,6 +640,60 @@ async fn rebuilding_decoder_completion_installs_once() {
 
     source.flush_deferred();
     assert_eq!(drops.lock().as_slice(), &[1]);
+}
+
+#[kithara::test(tokio)]
+async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
+    let RebuildFixture {
+        drops, mut source, ..
+    } = test_source(1).await;
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe();
+    source = source.with_emit(Arc::new(DeferredBus::new(bus, 16)));
+    enter_rebuilding(&mut source, 7, recreate_state(1));
+    push_completion_with_drops(&source, 7, 2, drops);
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    source.flush_deferred();
+
+    assert!(matches!(
+        events.try_recv().map(|envelope| envelope.event),
+        Ok(Event::Decoder(DecoderEvent::DecoderChanged {
+            cause: DecoderChangeCause::FormatBoundary,
+            ..
+        }))
+    ));
+}
+
+#[kithara::test(tokio)]
+async fn decode_error_precedes_track_failure_on_event_bus() {
+    let RebuildFixture { mut source, .. } = test_source(0).await;
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe();
+    source = source.with_emit(Arc::new(DeferredBus::new(bus, 16)));
+    let old = source
+        .decode
+        .install(Box::new(FailingDecoder), media_info(0), 0, 0);
+    source.retired.retire(old);
+
+    assert!(matches!(source.step_track(), TrackStep::Failed));
+    assert!(events.try_recv().is_err());
+    source.flush_deferred();
+
+    assert!(matches!(
+        events.try_recv().map(|envelope| envelope.event),
+        Ok(Event::Decoder(DecoderEvent::DecodeError {
+            detail: "fixture decode failure",
+            ..
+        }))
+    ));
+    assert!(matches!(
+        events.try_recv().map(|envelope| envelope.event),
+        Ok(Event::Audio(AudioEvent::TrackFailed {
+            failure: TrackFailureKind::Decode,
+            seek_epoch: 0,
+        }))
+    ));
 }
 
 #[kithara::test(tokio)]

@@ -56,7 +56,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
     spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
+        while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
             let ev_str = format!("{:?}", ev);
             if ev_str.contains("VariantApplied") {
                 switches_bg.fetch_add(1, Ordering::Relaxed);

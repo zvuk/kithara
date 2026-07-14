@@ -1,12 +1,12 @@
 use std::ops::Deref;
 
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 
 use super::super::{
     core::PlayerImpl,
     state::{PendingNext, PendingNextState},
 };
-use crate::{bridge::PlayerCmd, error::PlayError};
+use crate::{api::EngineEvent, bridge::PlayerCmd, error::PlayError};
 
 /// Outcome of resolving an arm request under the short phase lock, acted on
 /// outside the lock to avoid holding it across `send_to_slot`.
@@ -151,7 +151,8 @@ impl Handover<'_> {
             return Ok(());
         };
 
-        self.start_playback(activated.src);
+        self.start_playback(Arc::clone(&activated.src));
+        self.publish_crossfade_started();
         self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.current_index();
         if index != current_index {
@@ -179,8 +180,28 @@ impl Handover<'_> {
         let preserve_active_current = current_index_hint
             .is_some_and(|index| pending.state.activated() && pending.index == index);
         if !preserve_active_current {
+            if pending.state.activated() {
+                self.core
+                    .engine
+                    .bus()
+                    .publish(EngineEvent::CrossfadeCancelled);
+            }
             let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: pending.src });
         }
+    }
+
+    fn publish_crossfade_started(&self) {
+        let Some(slot) = self.slot() else {
+            return;
+        };
+        self.core
+            .engine
+            .bus()
+            .publish(EngineEvent::CrossfadeStarted {
+                from: slot,
+                to: slot,
+                duration: Duration::from_secs_f32(self.crossfade_duration().max(0.0)),
+            });
     }
 }
 
@@ -210,7 +231,7 @@ impl PlayerImpl {
 #[cfg(test)]
 mod tests {
     use kithara_bufpool::{BytePool, PcmPool};
-    use kithara_events::{Event, PlayerEvent};
+    use kithara_events::{EngineEvent, Envelope, Event, PlayerEvent};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -251,8 +272,18 @@ mod tests {
 
         assert!(matches!(
             rx.try_recv(),
-            Ok(Event::Player(PlayerEvent::CurrentItemChanged))
+            Ok(Envelope {
+                event: Event::Engine(EngineEvent::CrossfadeStarted { .. }),
+                ..
+            })
         ));
         assert_eq!(player.duration_seconds(), Some(162.0));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Envelope {
+                event: Event::Player(PlayerEvent::CurrentItemChanged),
+                ..
+            })
+        ));
     }
 }

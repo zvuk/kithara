@@ -235,7 +235,7 @@ async fn run_case(mode: GateMode) {
     for _ in 0..OBSERVE_BLOCKS {
         let _ = queue.tick();
         let _ = harness.render(BLOCK_FRAMES);
-        while let Ok(ev) = rx.try_recv() {
+        while let Ok(ev) = rx.try_recv().map(|env| env.event) {
             if let kithara::events::Event::Player(pe) = ev {
                 match pe {
                     PlayerEvent::ItemDidFail { ref src, .. } if *src == target_src => {

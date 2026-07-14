@@ -91,7 +91,9 @@ async fn seek_during_active_decode_completes_without_hang() {
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
-        }))) = time::timeout(remaining, events.recv()).await
+        }))) = time::timeout(remaining, events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
         {
             observed_epoch = Some(seek_epoch);
             break;
@@ -103,7 +105,10 @@ async fn seek_during_active_decode_completes_without_hang() {
     let mut saw_complete = false;
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match time::timeout(remaining, events.recv()).await {
+        match time::timeout(remaining, events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. })))
                 if seek_epoch == expected_epoch =>
             {
@@ -168,7 +173,9 @@ async fn rapid_seeks_via_timeline_all_complete() {
                 stage: SeekLifecycleStage::SeekRequest,
                 seek_epoch,
                 ..
-            }))) = time::timeout(remaining, events.recv()).await
+            }))) = time::timeout(remaining, events.recv())
+                .await
+                .map(|r| r.map(|env| env.event))
             {
                 captured = Some(seek_epoch);
                 break;
@@ -211,7 +218,10 @@ async fn rapid_seeks_via_timeline_all_complete() {
             Err(error) => panic!("decode error while draining seek completions: {error}"),
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match time::timeout(remaining, events.recv()).await {
+        match time::timeout(remaining, events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
                 last_complete = Some(seek_epoch);
                 if seek_epoch >= highest_expected {

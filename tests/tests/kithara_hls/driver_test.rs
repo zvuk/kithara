@@ -126,7 +126,7 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelT
     let switches_clone = variant_switches.clone();
 
     spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
+        while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
             match ev {
                 Event::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
                     info!("Variant switch: {} -> {}", from, to);

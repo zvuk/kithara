@@ -31,6 +31,9 @@ use crate::{
 
 type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 
+#[path = "lease/events.rs"]
+pub(crate) mod lease_events;
+
 /// Pin guard + removal channel + byte recorder resolved for one resource key.
 type LeaseBindings = (LeaseGuard, Option<RemoveFn>, Option<Arc<dyn ByteRecorder>>);
 
@@ -86,6 +89,7 @@ where
     live: Arc<LiveRegistry>,
     cancel: CancelToken,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
+    event_bus: lease_events::EventsHandle,
     /// Shared pins index — same instance held by `EvictAssets` and
     /// `DiskAssetDeleter`. Mutations (`add` / `remove`) flush
     /// immediately via the index's internal best-effort persistence.
@@ -120,10 +124,6 @@ impl<A> LeaseAssets<A>
 where
     A: Assets,
 {
-    pub(crate) fn new(inner: Arc<A>, cancel: CancelToken, pins: PinsIndex) -> Self {
-        Self::with_byte_recorder(inner, cancel, None, pins)
-    }
-
     fn is_active(&self) -> bool {
         self.inner
             .capabilities()
@@ -196,11 +196,13 @@ where
         inner: Arc<A>,
         cancel: CancelToken,
         byte_recorder: Option<Arc<dyn ByteRecorder>>,
+        event_bus: lease_events::EventsHandle,
         pins: PinsIndex,
     ) -> Self {
         Self {
             byte_recorder,
             cancel,
+            event_bus,
             inner,
             pins,
             live: Arc::new(DashMap::new()),
@@ -215,6 +217,7 @@ where
 /// committed in the meantime (checked via the shared [`LiveResource`] mirror).
 struct WriterCleanup {
     drop_token: Option<Arc<()>>,
+    events: lease_events::EventsHandle,
     live: Option<Arc<LiveResource>>,
     remove: Option<RemoveFn>,
     resource_key: Option<ResourceKey>,
@@ -268,6 +271,7 @@ pub struct LeaseWriter<W: WriteSide, L> {
 pub struct LeaseReader<R: ReadSide, L> {
     lease: L,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
+    events: lease_events::EventsHandle,
     live: Option<Arc<LiveResource>>,
     remove: Option<RemoveFn>,
     resource_key: Option<ResourceKey>,
@@ -284,6 +288,7 @@ where
             inner: self.inner.clone(),
             lease: self.lease.clone(),
             byte_recorder: self.byte_recorder.clone(),
+            events: self.events.clone(),
             remove: self.remove.clone(),
             live: self.live.clone(),
             resource_key: self.resource_key.clone(),
@@ -355,11 +360,15 @@ where
         {
             recorder.record_bytes(asset_root, metadata.len());
         }
+        self.cleanup
+            .events
+            .publish_committed(self.cleanup.resource_key.as_ref(), final_len);
         self.cleanup.disarm();
         Ok(LeaseReader {
             inner: reader_inner,
             lease: self._lease.clone(),
             byte_recorder: self.byte_recorder.clone(),
+            events: self.cleanup.events.clone(),
             remove: self.cleanup.remove.clone(),
             live: self.cleanup.live.clone(),
             resource_key: self.cleanup.resource_key.clone(),
@@ -369,8 +378,11 @@ where
     fn fail(mut self, reason: String) {
         self.inner.fail(reason.clone());
         if let Some(live) = &self.cleanup.live {
-            live.set(AssetResourceState::Failed(reason));
+            live.set(AssetResourceState::Failed(reason.clone()));
         }
+        self.cleanup
+            .events
+            .publish_failed(self.cleanup.resource_key.as_ref(), &reason);
         // Explicit failure is a *terminal, observable* `Failed` state — disarm
         // the abandon-cleanup so the resource is not removed out from under a
         // `resource_state` query. Only a writer dropped WITHOUT commit/fail
@@ -390,6 +402,7 @@ where
             inner: self.inner.reader(),
             lease: self._lease.clone(),
             byte_recorder: self.byte_recorder.clone(),
+            events: self.cleanup.events.clone(),
             remove: self.cleanup.remove.clone(),
             live: self.cleanup.live.clone(),
             resource_key: self.cleanup.resource_key.clone(),
@@ -417,6 +430,7 @@ where
                 remove: self.remove,
                 resource_key: self.resource_key,
                 drop_token: Some(Arc::new(())),
+                events: self.events,
                 live: self.live,
                 armed: true,
             },
@@ -528,6 +542,7 @@ where
             inner,
             lease,
             byte_recorder,
+            events: self.event_bus.clone(),
             remove,
             live: Some(live),
             resource_key: Some(key.clone()),
@@ -549,6 +564,7 @@ where
                 remove,
                 resource_key: Some(key.clone()),
                 drop_token: Some(Arc::new(())),
+                events: self.event_bus.clone(),
                 live: Some(live),
                 armed: true,
             },
@@ -622,7 +638,13 @@ mod tests {
             &crate::BytePool::default(),
         ));
         let pins = make_pins_disk(dir);
-        LeaseAssets::new(disk, CancelToken::never(), pins)
+        LeaseAssets::with_byte_recorder(
+            disk,
+            CancelToken::never(),
+            None,
+            lease_events::EventsHandle::new(None),
+            pins,
+        )
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {

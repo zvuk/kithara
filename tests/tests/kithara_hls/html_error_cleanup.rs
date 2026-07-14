@@ -177,7 +177,7 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     // fires within the virtual timeout; its absence proves no retry was scheduled.
     let retried = time::timeout(Duration::from_secs(3), async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,
                 Ok(_) => {}
                 Err(_) => break false,

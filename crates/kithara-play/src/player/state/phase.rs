@@ -1,7 +1,11 @@
 use kithara_platform::sync::Arc;
 
 use super::super::core::PlayerImpl;
-use crate::{api::SlotId, bridge::PlayerCmd, error::PlayError};
+use crate::{
+    api::{PlayerEvent, SlotId, TimeControlStatus, WaitingReason},
+    bridge::PlayerCmd,
+    error::PlayError,
+};
 
 /// Internal phase-transition error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,6 +283,17 @@ impl PlayerPhase {
 }
 
 impl PlayerImpl {
+    fn publish_time_control_status(
+        &self,
+        status: TimeControlStatus,
+        reason: Option<WaitingReason>,
+    ) {
+        self.core
+            .engine
+            .bus()
+            .publish(PlayerEvent::TimeControlStatusChanged { status, reason });
+    }
+
     delegate::delegate! {
         to self.phase.lock() {
             /// Discriminant of the current phase under a short lock.
@@ -297,21 +312,25 @@ impl PlayerImpl {
     /// when the phase already holds a slot keeps the existing payload.
     pub(crate) fn enter_loading_with_slot(&self, slot: SlotId) {
         self.phase.lock().enter_loading_with_slot(slot);
+        self.publish_time_control_status(TimeControlStatus::WaitingToPlay, None);
     }
 
     /// Move an active (slot-holding) phase into `Paused`. No-op from `Idle`.
     pub(crate) fn enter_paused(&self) {
         self.phase.lock().enter_paused();
+        self.publish_time_control_status(TimeControlStatus::Paused, None);
     }
 
     /// Move an active (slot-holding) phase into `Playing`. No-op from `Idle`.
     pub(crate) fn enter_playing(&self) {
         self.phase.lock().enter_playing();
+        self.publish_time_control_status(TimeControlStatus::Playing, None);
     }
 
     /// Move the player into `Stopped`, preserving the slot/ABR handle.
     pub(crate) fn enter_stopped(&self) {
         self.phase.lock().enter_stopped();
+        self.publish_time_control_status(TimeControlStatus::Paused, None);
     }
 
     /// Send a command to the current slot's processor.

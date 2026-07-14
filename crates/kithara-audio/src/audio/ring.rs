@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicU64;
 
 use kithara_abr::AbrHandle;
 use kithara_decode::PcmChunk;
-use kithara_events::EventBus;
+use kithara_events::{DeferredBus, Event};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_test_utils::kithara;
 
@@ -10,7 +10,7 @@ use super::{
     AudioWorkerHandle, ConsumerPhase, EpochValidator, Fetch, Inlet, Outlet, ThreadWake, WakeSignal,
     connect,
     cursor::ChunkCursor,
-    event::{AudioEvents, ReaderOutputWake},
+    event::ReaderOutputWake,
     park::{receive_is_nonblocking, wait_for_fetch},
 };
 
@@ -253,13 +253,10 @@ impl RingConsumer {
 
 pub(super) fn create_channels(
     pcm_buffer_chunks: usize,
-    bus: &EventBus,
+    emit: Arc<DeferredBus<Event>>,
     reader_wake: &Arc<ThreadWake>,
 ) -> (Outlet<Fetch<PcmChunk>>, Inlet<Fetch<PcmChunk>>) {
-    let wake: Arc<dyn WakeSignal> = Arc::new(ReaderOutputWake::new(
-        Arc::clone(reader_wake),
-        AudioEvents::deferred(bus),
-    ));
+    let wake: Arc<dyn WakeSignal> = Arc::new(ReaderOutputWake::new(Arc::clone(reader_wake), emit));
     connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
 }
 
@@ -303,6 +300,7 @@ mod tests {
     struct RingFixture {
         ring: RingConsumer,
         cursor: ChunkCursor,
+        events: crate::audio::event::AudioEvents,
         data_tx: Outlet<Fetch<PcmChunk>>,
         playhead: Arc<PlayheadState>,
         _trash_rx: Inlet<PcmChunk>,
@@ -324,6 +322,7 @@ mod tests {
             Self {
                 ring,
                 cursor: ChunkCursor::new(&pool, PcmMeta::default().spec),
+                events: crate::audio::event::AudioEvents::test(),
                 data_tx,
                 playhead: Arc::new(PlayheadState::new()),
                 _trash_rx: trash_rx,
@@ -439,6 +438,7 @@ mod tests {
             .cursor
             .read(
                 &mut fixture.ring,
+                &mut fixture.events,
                 fixture.playhead.as_ref(),
                 empty_ctx(),
                 &mut buf,
@@ -468,6 +468,7 @@ mod tests {
             .cursor
             .read(
                 &mut fixture.ring,
+                &mut fixture.events,
                 fixture.playhead.as_ref(),
                 empty_ctx(),
                 &mut buf,

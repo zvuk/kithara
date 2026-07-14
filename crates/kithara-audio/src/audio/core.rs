@@ -40,7 +40,7 @@ pub(super) struct AudioParts<S> {
     pub(super) controls: Controls,
     pub(super) pcm_pool: PcmPool,
     pub(super) spec: PcmSpec,
-    pub(super) bus: EventBus,
+    pub(super) emit: Arc<kithara_events::DeferredBus<kithara_events::Event>>,
     pub(super) marker: PhantomData<S>,
 }
 
@@ -88,7 +88,7 @@ impl<S> From<AudioParts<S>> for Audio<S> {
             lease: parts.lease,
             ring: parts.ring,
             cursor: ChunkCursor::new(&parts.pcm_pool, parts.spec),
-            events: AudioEvents::new(parts.bus),
+            events: AudioEvents::new(parts.emit),
             session: parts.session,
             controls: parts.controls,
             _marker: parts.marker,
@@ -153,7 +153,16 @@ impl<S> Audio<S> {
 
     pub(crate) fn fill_buffer(&mut self) -> bool {
         let recv = recv_ctx(&self.session, &self.lease);
-        self.ring.fill(&mut self.cursor, recv)
+        let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
+        let filled = self.ring.fill(&mut self.cursor, recv);
+        self.events.fill_result(
+            filled,
+            was_playing,
+            self.ring.phase.is_terminal(),
+            self.session.playhead.position(),
+            self.ring.validator.epoch,
+        );
+        filled
     }
 
     /// Reads interleaved PCM samples into `buf`.
@@ -163,9 +172,13 @@ impl<S> Audio<S> {
     /// Returns [`DecodeError`] when the producer reports a failure or closes early.
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         let recv = recv_ctx(&self.session, &self.lease);
-        let read = self
-            .cursor
-            .read(&mut self.ring, self.session.playhead.as_ref(), recv, buf)?;
+        let read = self.cursor.read(
+            &mut self.ring,
+            &mut self.events,
+            self.session.playhead.as_ref(),
+            recv,
+            buf,
+        )?;
         Ok(self
             .events
             .commit_read(&self.session, self.ring.validator.epoch, read))
@@ -179,7 +192,7 @@ impl<S> Audio<S> {
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let epoch = self.session.seek.begin(position);
         self.session.seek.mark_pending(epoch);
-        self.events.emit(AudioEvent::SeekLifecycle {
+        self.events.publish(AudioEvent::SeekLifecycle {
             seek_epoch: epoch,
             stage: SeekLifecycleStage::SeekRequest,
             location: SegmentLocation::default(),
@@ -188,6 +201,7 @@ impl<S> Audio<S> {
             wake.notify_now();
         }
         self.session.preload_gate.rearm();
+        self.events.reset_underrun();
         self.ring.begin_seek_epoch(epoch, &mut self.cursor);
         wake_worker(self.lease.worker.as_ref());
 
@@ -228,8 +242,18 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
         let chunk = if let Some(chunk) = self.ring.current_chunk.take() {
             Some(chunk)
         } else {
-            self.ring
-                .recv_valid_chunk(recv_ctx(&self.session, &self.lease))
+            let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
+            let chunk = self
+                .ring
+                .recv_valid_chunk(recv_ctx(&self.session, &self.lease));
+            self.events.fill_result(
+                chunk.is_some(),
+                was_playing,
+                self.ring.phase.is_terminal(),
+                self.session.playhead.position(),
+                self.ring.validator.epoch,
+            );
+            chunk
         };
         let Some(chunk) = chunk else {
             return chunk_outcome(self.ring.phase, self.position());
@@ -253,6 +277,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
     ) -> Result<ReadOutcome, DecodeError> {
         let read = self.cursor.read_planar(
             &mut self.ring,
+            &mut self.events,
             self.session.playhead.as_ref(),
             recv_ctx(&self.session, &self.lease),
             output,
@@ -408,6 +433,8 @@ mod tests {
             let seek_obs: Arc<dyn SeekObserve> = seek_state;
             let playhead: Arc<dyn PlayheadWrite> = Arc::new(PlayheadState::new());
             let pcm_pool = PcmPool::default().clone();
+            let bus = EventBus::default();
+            let emit = AudioEvents::deferred(&bus);
             Self {
                 audio: Audio::from(AudioParts {
                     lease: WorkerLease {
@@ -434,7 +461,7 @@ mod tests {
                     },
                     pcm_pool,
                     spec: PcmMeta::default().spec,
-                    bus: EventBus::default(),
+                    emit,
                     marker: PhantomData,
                 }),
             }

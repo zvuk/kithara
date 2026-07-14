@@ -82,6 +82,14 @@ impl ResumeCursor {
         self.decoder_rate
     }
 
+    pub(crate) fn host_rate(&self) -> u32 {
+        self.host_rate.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn recreates_on_route(&self) -> bool {
+        self.recreate_on_route
+    }
+
     pub(crate) fn route_change<T: StreamType>(
         &mut self,
         ctx: &RouteCtx<'_, T>,

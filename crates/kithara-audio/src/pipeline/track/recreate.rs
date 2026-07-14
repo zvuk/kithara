@@ -1,5 +1,5 @@
 use kithara_decode::PcmChunk;
-use kithara_events::AudioEvent;
+use kithara_events::{AudioEvent, DecoderChangeCause, DecoderEvent, FrameDomain};
 use kithara_stream::{SourcePhase, StreamType};
 use tracing::{debug, warn};
 
@@ -8,20 +8,78 @@ use super::{
     TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason, fsm::apply_seek_transition,
     rebuild::start_recreating_decoder,
 };
-use crate::pipeline::{
-    decode::{
-        format::{FormatDecision, detect},
-        gate::recreate_phase,
-        resume::seek_position,
+use crate::{
+    audio::event::{
+        DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
+        map_playback_resampler_kind, map_resampler_kind,
     },
-    rebuild::{
-        DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
-        RecreateState,
-        policy::{classify, observed_seek, superseded},
+    pipeline::{
+        decode::{
+            format::{FormatDecision, detect},
+            gate::recreate_phase,
+            resume::seek_position,
+        },
+        rebuild::{
+            DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
+            RecreateState,
+            policy::{classify, observed_seek, superseded},
+        },
+        seek::{ResumeState, SeekRequest, engine::SeekTransition},
+        source::StreamAudioSource,
     },
-    seek::{ResumeState, SeekRequest, engine::SeekTransition},
-    source::StreamAudioSource,
 };
+
+fn decoder_change_cause(cause: RecreateCause) -> DecoderChangeCause {
+    match cause {
+        RecreateCause::FormatBoundary => DecoderChangeCause::FormatBoundary,
+        RecreateCause::RouteChange => DecoderChangeCause::HostRateChange,
+        RecreateCause::VariantSwitch => DecoderChangeCause::VariantSwitch,
+    }
+}
+
+fn decoder_resampler_event<T: StreamType>(
+    src: &StreamAudioSource<T>,
+    media_info: &kithara_stream::MediaInfo,
+    spec: kithara_decode::PcmSpec,
+) -> Option<DecoderEvent> {
+    if !src.resume.recreates_on_route() {
+        return None;
+    }
+    let output_rate = src.resume.host_rate();
+    if output_rate == 0 {
+        return None;
+    }
+    let input_rate = media_info
+        .sample_rate
+        .or_else(|| (spec.sample_rate.get() == output_rate).then_some(spec.sample_rate.get()))?;
+    Some(DecoderEvent::ResamplerConfigured {
+        backend: map_resampler_kind(src.playback_resampler_backend),
+        input_rate,
+        output_rate,
+        channels: spec.channels,
+        bypassed: input_rate == output_rate,
+    })
+}
+
+fn playback_resampler_event<T: StreamType>(
+    src: &StreamAudioSource<T>,
+    media_info: &kithara_stream::MediaInfo,
+    spec: kithara_decode::PcmSpec,
+) -> Option<AudioEvent> {
+    let host_sample_rate = src.resume.host_rate();
+    if host_sample_rate == 0 {
+        return None;
+    }
+    let source_sample_rate = media_info.sample_rate.or_else(|| {
+        (spec.sample_rate.get() == host_sample_rate).then_some(spec.sample_rate.get())
+    })?;
+    Some(AudioEvent::PlaybackResamplerConfigured {
+        backend: map_playback_resampler_kind(src.playback_resampler_backend),
+        host_sample_rate,
+        source_sample_rate,
+        active: host_sample_rate != source_sample_rate && src.playback_resampler_backend != "none",
+    })
+}
 
 fn finish_route_change_after_recreate<T: StreamType>(
     src: &mut StreamAudioSource<T>,
@@ -177,6 +235,8 @@ pub(super) fn finish_rebuild<T: StreamType>(
         Err(outcome) => return finish_recreate_outcome(src, recreate, outcome),
     };
     let duration = decoder.duration();
+    let spec = decoder.spec();
+    let track_info = decoder.track_info();
     let old = src.decode.install(
         decoder,
         recreate.media_info.clone(),
@@ -190,10 +250,33 @@ pub(super) fn finish_rebuild<T: StreamType>(
         "Decoder recreated successfully"
     );
     if let Some(ref emit) = src.emit {
-        emit.enqueue(AudioEvent::DecoderReady {
-            base_offset: recreate.offset,
-            variant: recreate.media_info.variant_index,
-        });
+        emit.enqueue(
+            decoder_changed_event(DecoderChangedEventData {
+                backend: src.decoder_backend,
+                media_info: Some(&recreate.media_info),
+                spec,
+                track_info: &track_info,
+                epoch: src.seek_obs.epoch(),
+                cause: decoder_change_cause(recreate.cause),
+                base_offset: recreate.offset,
+                duration,
+            })
+            .into(),
+        );
+        if let Some(event) = decoder_gapless_event(
+            Some(&recreate.media_info),
+            spec,
+            &track_info,
+            FrameDomain::Output,
+        ) {
+            emit.enqueue(kithara_events::Event::from(event));
+        }
+        if let Some(event) = decoder_resampler_event(src, &recreate.media_info, spec) {
+            emit.enqueue(kithara_events::Event::from(event));
+        }
+        if let Some(event) = playback_resampler_event(src, &recreate.media_info, spec) {
+            emit.enqueue(kithara_events::Event::from(event));
+        }
     }
     let outcome = if recreate_resumes_decode_head(&recreate) {
         finish_format_boundary_rebuild(src)
@@ -262,18 +345,21 @@ fn finish_apply_seek_after_recreate<T: StreamType>(
             src.seek_engine
                 .record_resume_target(request.seek.epoch, request.seek.target);
             if let Some(ref emit) = src.emit {
-                emit.enqueue(AudioEvent::SeekLifecycle {
-                    stage: kithara_events::SeekLifecycleStage::SeekApplied,
-                    seek_epoch: request.seek.epoch,
-                    location: kithara_events::SegmentLocation::new(
-                        src.shared_stream
-                            .abr_handle()
-                            .and_then(|handle| handle.current_variant_index()),
-                        None,
-                        None,
-                        None,
-                    ),
-                });
+                emit.enqueue(
+                    AudioEvent::SeekLifecycle {
+                        stage: kithara_events::SeekLifecycleStage::SeekApplied,
+                        seek_epoch: request.seek.epoch,
+                        location: kithara_events::SegmentLocation::new(
+                            src.shared_stream
+                                .abr_handle()
+                                .and_then(|handle| handle.current_variant_index()),
+                            None,
+                            None,
+                            None,
+                        ),
+                    }
+                    .into(),
+                );
             }
             apply_seek_transition(
                 src,

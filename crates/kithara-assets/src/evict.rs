@@ -20,6 +20,9 @@ mod kithara {
     pub(crate) use kithara_test_macros::{mock, probe};
 }
 
+#[path = "evict/events.rs"]
+pub(crate) mod evict_events;
+
 /// Trait for recording asset bytes for eviction tracking.
 #[kithara::mock(api = ByteRecorderMock)]
 pub(crate) trait ByteRecorder: Send + Sync {
@@ -54,6 +57,7 @@ where
     seen: Arc<DashSet<String>>,
     cancel: CancelToken,
     cfg: EvictConfig,
+    events: evict_events::EventsHandle,
     /// Shared LRU index — same instance held by `DiskAssetDeleter` so
     /// LRU bookkeeping and disk-side deletion stay in sync.
     lru: LruIndex,
@@ -78,6 +82,7 @@ pub(crate) struct EvictDeps {
     pub(crate) deleter: Arc<dyn AssetDeleter>,
     pub(crate) cancel: CancelToken,
     pub(crate) cfg: EvictConfig,
+    pub(crate) events: evict_events::EventsHandle,
     pub(crate) lru: LruIndex,
     pub(crate) pins: PinsIndex,
 }
@@ -93,6 +98,7 @@ where
         let EvictDeps {
             cfg,
             cancel,
+            events,
             lru,
             pins,
             deleter,
@@ -101,6 +107,7 @@ where
             inner,
             cfg,
             cancel,
+            events,
             lru,
             pins,
             deleter,
@@ -139,7 +146,9 @@ where
             tracing::debug!(asset_root = %cand, "Skipping pinned asset");
             return;
         }
-        log_eviction_outcome(cand, self.deleter.delete_asset(cand));
+        let result = self.deleter.delete_asset(cand);
+        self.events.publish_evicted_bytes(result.is_ok(), cand);
+        log_eviction_outcome(cand, result);
     }
 
     fn is_active(&self) -> bool {
@@ -170,7 +179,8 @@ where
             if pinned.contains(&cand) {
                 continue;
             }
-            let _ = self.deleter.delete_asset(&cand);
+            let result = self.deleter.delete_asset(&cand);
+            self.events.publish_evicted_assets(result.is_ok(), &cand);
         }
     }
 

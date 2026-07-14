@@ -50,7 +50,7 @@ async fn test_hls_session_creation(
         // State-wait: block until session creation actually publishes its first
         // event (no idle-timeout drain). One delivered event proves events flow.
         let mut event_count = 0;
-        if let Ok(event) = events_rx.recv().await {
+        if let Ok(event) = events_rx.recv().await.map(|env| env.event) {
             event_count += 1;
             info!("Event {}: {:?}", event_count, event);
         }
@@ -121,7 +121,7 @@ async fn test_hls_session_events_consumption(
     // pacing window. Session creation publishes events; `recv()` returns when one
     // lands (or `Err` if the bus closes). The `timeout(5s)` test attribute bounds
     // this so a real hang still fails fast.
-    match events_rx.recv().await {
+    match events_rx.recv().await.map(|env| env.event) {
         Ok(event) => {
             info!("Received event: {:?}", event);
         }

@@ -115,6 +115,7 @@ pub fn test_key_store(
     KeyStore::new(
         create_test_peer_handle(),
         assets.scope(),
+        kithara::events::EventBus::new(8),
         None,
         key_registry,
         kithara::bufpool::BytePool::default(),

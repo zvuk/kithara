@@ -1,8 +1,10 @@
 use std::{ops::Deref, sync::atomic::Ordering};
 
+use kithara_platform::sync::Arc;
+
 use super::super::core::PlayerImpl;
 use crate::{
-    api::PlayerEvent,
+    api::{EngineEvent, PlayerEvent},
     bridge::{PlayerNotification, TrackPlaybackStopReason},
 };
 
@@ -26,6 +28,12 @@ impl Deref for Notifier<'_> {
 
 impl Notifier<'_> {
     fn dispatch_notification(&self, notification: PlayerNotification) {
+        let emitted = player_events_from_notification(self, &notification);
+        let emitted_any = !emitted.is_empty();
+        for event in emitted {
+            self.core.engine.bus().publish(event);
+        }
+
         match notification.clone() {
             PlayerNotification::Requested => {
                 self.handle_track_requested();
@@ -42,7 +50,7 @@ impl Notifier<'_> {
             _ => {
                 if let Some(event) = player_event_from_notification(notification.clone()) {
                     self.core.engine.bus().publish(event);
-                } else {
+                } else if !emitted_any {
                     tracing::trace!(
                         src = ?notification.src(),
                         ?notification,
@@ -164,6 +172,45 @@ pub(crate) fn player_event_from_notification(
         } => Some(PlayerEvent::ItemDidFail { src, item_id }),
         _ => None,
     }
+}
+
+fn player_events_from_notification(
+    player: &PlayerImpl,
+    notification: &PlayerNotification,
+) -> Vec<kithara_events::Event> {
+    let mut events = Vec::new();
+    match notification {
+        PlayerNotification::PlaybackStarted { src, item_id } => {
+            events.push(
+                PlayerEvent::PlaybackStarted {
+                    src: Arc::clone(src),
+                    item_id: item_id.clone(),
+                }
+                .into(),
+            );
+        }
+        PlayerNotification::PlaybackStopped {
+            reason: TrackPlaybackStopReason::Stop,
+            ..
+        } => {
+            let phase = player.phase.lock();
+            if phase
+                .pending()
+                .is_some_and(|pending| pending.state.activated())
+                && let Some(slot) = phase.slot()
+            {
+                events.push(
+                    EngineEvent::CrossfadeCompleted {
+                        from: slot,
+                        to: slot,
+                    }
+                    .into(),
+                );
+            }
+        }
+        _ => {}
+    }
+    events
 }
 
 #[cfg(test)]

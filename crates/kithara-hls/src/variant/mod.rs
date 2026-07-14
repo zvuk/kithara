@@ -40,12 +40,11 @@ mod seqlock;
 #[path = "flow/size.rs"]
 mod size;
 
+#[cfg(test)]
+pub(crate) use self::core::VariantParts;
 pub(crate) use self::core::{HlsVariant, PlanCtx, SegmentActivateParams, VariantParams};
 #[cfg(test)]
-pub(in crate::variant) use self::{
-    core::{VariantParts, segment_placeholder_size},
-    probe::SizeDemand,
-};
+pub(in crate::variant) use self::{core::segment_placeholder_size, probe::SizeDemand};
 
 #[cfg(test)]
 mod tests;

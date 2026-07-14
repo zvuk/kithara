@@ -5,7 +5,7 @@ use std::path::Path;
 use kithara::{
     assets::StoreOptions,
     audio::generate_log_spaced_bands,
-    events::{AbrEvent, Event, EventReceiver},
+    events::{AbrEvent, AdvanceReason, Event, EventReceiver},
     hls::AbrMode,
     platform::{
         sync::Arc,
@@ -1548,7 +1548,7 @@ fn drive_app_layer_crossfade_advance(queue: &Queue, auto_advanced_index: &mut Op
         let current = queue.current_index().unwrap_or(0);
         if *auto_advanced_index != Some(current) && current + 1 < queue.len() {
             *auto_advanced_index = Some(current);
-            let _ = queue.advance_to_next(Transition::Crossfade);
+            let _ = queue.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
         }
     }
 }
@@ -1559,7 +1559,7 @@ fn drain_variant_applied_events(
     record: bool,
 ) {
     loop {
-        match events.try_recv() {
+        match events.try_recv().map(|env| env.event) {
             Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
                 let target = to.get();
                 if record && (target == 1 || committed_variant.is_none()) {

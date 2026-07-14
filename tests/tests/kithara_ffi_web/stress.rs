@@ -1040,7 +1040,7 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
         let _ = read_with_yield_limit(&mut audio, &mut buf, 50).await;
 
         loop {
-            match events_rx.try_recv() {
+            match events_rx.try_recv().map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::SeekLifecycle {
                     stage: SeekLifecycleStage::SeekRequest,
                     seek_epoch,

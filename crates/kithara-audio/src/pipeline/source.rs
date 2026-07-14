@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use kithara_decode::PcmChunk;
-use kithara_events::{AudioEvent, DeferredBus};
+use kithara_events::{AudioEvent, DeferredBus, Event, TrackFailureKind};
 use kithara_platform::sync::Arc;
 use kithara_stream::{Activity, PlayheadWrite, SeekControl, SeekObserve, StreamType};
 
@@ -31,11 +31,13 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// Explicit FSM state — single source of truth for track phase.
     pub(crate) state: CurrentFsm,
     pub(crate) decode: DecodeCore,
+    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     /// Narrow activity handle — set/query the `PLAYING` flag.
     pub(crate) activity: Arc<dyn Activity>,
     pub(crate) seek_engine: SeekEngine,
     /// Narrow mutating playhead handle — committed position and total duration.
     pub(crate) playhead: Arc<dyn PlayheadWrite>,
+    pub(crate) playback_resampler_backend: &'static str,
     /// Narrow seek-control handle — begin / complete / clear-pending.
     pub(crate) seek: Arc<dyn SeekControl>,
     /// Narrow seek-observe handle — read seek state without mutation.
@@ -60,7 +62,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
     #[field(with, option_set_some, vis = "pub(crate)")]
-    pub(crate) emit: Option<DeferredBus<AudioEvent>>,
+    pub(crate) emit: Option<Arc<DeferredBus<Event>>>,
     pub(crate) readiness: ReadinessGate,
     /// `(seek_epoch, target)` of the most recent applied seek.
     /// `committed_position` lags `target` until the seek's first
@@ -88,7 +90,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         let SourceParts {
             activity,
             decode,
+            decoder_backend,
             playhead,
+            playback_resampler_backend,
             readiness,
             rebuild,
             resume,
@@ -100,9 +104,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         Self {
             shared_stream,
             decode,
+            decoder_backend,
             rebuild,
             seek_engine,
             playhead,
+            playback_resampler_backend,
             seek,
             seek_obs,
             activity,
@@ -127,6 +133,17 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// mid-seek windows is deliberate, because the listener is still
     /// attached to this track.
     pub(crate) fn update_state(&mut self, new: CurrentFsm) {
+        if let CurrentFsm::Failed(handle) = &new
+            && let Some(ref emit) = self.emit
+        {
+            emit.enqueue(
+                AudioEvent::TrackFailed {
+                    failure: map_track_failure_kind(handle.data()),
+                    seek_epoch: self.seek_obs.epoch(),
+                }
+                .into(),
+            );
+        }
         self.activity.set_playing(playing_for_state(&new));
         self.state = new;
     }
@@ -216,6 +233,16 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 /// (terminal error) clear the flag.
 pub(crate) fn playing_for_state(state: &CurrentFsm) -> bool {
     !matches!(state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_))
+}
+
+fn map_track_failure_kind(failure: &track::TrackFailure) -> TrackFailureKind {
+    match failure {
+        track::TrackFailure::Decode(_) => TrackFailureKind::Decode,
+        track::TrackFailure::RecreateFailed { offset } => {
+            TrackFailureKind::RecreateFailed { offset: *offset }
+        }
+        track::TrackFailure::SourceCancelled => TrackFailureKind::SourceCancelled,
+    }
 }
 
 #[cfg(test)]

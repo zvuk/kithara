@@ -1,20 +1,27 @@
 #![forbid(unsafe_code)]
 
 use dashmap::DashMap;
-use kithara_platform::{sync::Arc, tokio::sync::broadcast};
+use kithara_platform::{
+    sync::{Arc, OnceLock},
+    time::Instant,
+    tokio::sync::broadcast,
+};
+use portable_atomic::{AtomicU64, Ordering};
 use smallvec::SmallVec;
 
 use crate::{
-    Event,
+    Envelope, Event, EventMeta, ScopeLabel,
     scope::{BusScope, next_bus_id},
 };
+
+static EVENT_TIME_BASE: OnceLock<Instant> = OnceLock::new();
 
 /// Default capacity for each per-scope broadcast channel.
 pub const DEFAULT_EVENT_BUS_CAPACITY: usize = 1024;
 
 /// Shared state for a bus hierarchy.
-struct BusRegistry {
-    topics: DashMap<u64, broadcast::Sender<Event>>,
+pub(crate) struct BusRegistry {
+    topics: DashMap<u64, broadcast::Sender<Envelope>>,
     capacity: usize,
 }
 
@@ -28,21 +35,25 @@ struct BusRegistry {
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct EventBus {
-    registry: Arc<BusRegistry>,
+    pub(crate) registry: Arc<BusRegistry>,
     #[field(get)]
-    scope: BusScope,
+    pub(crate) scope: BusScope,
+    pub(crate) label: ScopeLabel,
+    next_seq: Arc<AtomicU64>,
     /// Cached senders for self + ancestors, matching scope path order.
     /// Eliminates `DashMap` lookups on the hot publish path.
-    senders: SmallVec<[broadcast::Sender<Event>; 4]>,
+    senders: SmallVec<[broadcast::Sender<Envelope>; 4]>,
 }
 
 impl EventBus {
     /// Create a root bus with the given channel capacity.
     #[must_use]
     pub fn new(capacity: usize) -> Self {
+        EVENT_TIME_BASE.get_or_init(Instant::now);
         let cap = capacity.max(1);
         let id = next_bus_id();
         let (tx, _) = broadcast::channel(cap);
+        let next_seq = Arc::new(AtomicU64::new(0));
         let registry = Arc::new(BusRegistry {
             topics: DashMap::new(),
             capacity: cap,
@@ -52,6 +63,8 @@ impl EventBus {
         senders.push(tx);
         Self {
             registry,
+            label: ScopeLabel::default(),
+            next_seq,
             senders,
             scope: BusScope::root(id),
         }
@@ -68,7 +81,20 @@ impl EventBus {
     /// Accepts any type that converts `Into<Event>`, so you can pass
     /// sub-enum values directly: `bus.publish(HlsEvent::EndOfStream)`.
     pub fn publish<E: Into<Event>>(&self, event: E) {
-        let event = event.into();
+        let event = Envelope {
+            meta: EventMeta {
+                origin: self.scope.id(),
+                seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
+                ts_micros: ts_micros(),
+                deck: self.label.deck,
+                track: self.label.track,
+            },
+            event: event.into(),
+        };
+        self.publish_envelope(event);
+    }
+
+    pub(crate) fn publish_envelope(&self, event: Envelope) {
         let len = self.senders.len();
         if len == 1 {
             self.senders[0].send(event).ok();
@@ -80,12 +106,21 @@ impl EventBus {
         self.senders[len - 1].send(event).ok();
     }
 
+    pub(crate) fn next_seq_counter(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.next_seq)
+    }
     /// Create a child scope sharing the same topic registry.
     ///
     /// Events published to the child are visible to all ancestors.
     /// Subscribing to the child only receives events from its subtree.
     #[must_use]
     pub fn scoped(&self) -> Self {
+        self.scoped_labeled(ScopeLabel::default())
+    }
+
+    /// Create a child scope with optional deck/track overrides.
+    #[must_use]
+    pub fn scoped_labeled(&self, label: ScopeLabel) -> Self {
         let id = next_bus_id();
         let (tx, _) = broadcast::channel(self.registry.capacity);
         self.registry.topics.insert(id, tx.clone());
@@ -95,6 +130,8 @@ impl EventBus {
         senders.extend(self.senders.iter().cloned());
         Self {
             scope,
+            label: self.label.merged_with(label),
+            next_seq: Arc::clone(&self.next_seq),
             senders,
             registry: Arc::clone(&self.registry),
         }
@@ -109,6 +146,14 @@ impl EventBus {
     pub fn subscribe(&self) -> crate::EventReceiver {
         crate::EventReceiver::new(self.senders[0].subscribe())
     }
+}
+
+pub(crate) fn ts_micros() -> u64 {
+    let micros = EVENT_TIME_BASE
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_micros();
+    u64::try_from(micros).unwrap_or(u64::MAX)
 }
 
 impl Drop for EventBus {
@@ -141,11 +186,11 @@ mod tests {
 
     use super::*;
     #[cfg(feature = "file")]
-    use crate::{FileError, FileEvent};
+    use crate::{BusEvent, FileError, FileEvent, SlotId, TrackId};
 
     #[cfg(feature = "file")]
-    fn assert_file_event(event: &Event, expected: &FileEvent) {
-        match event {
+    fn assert_file_event(event: &Envelope, expected: &FileEvent) {
+        match &event.event {
             Event::File(actual) => assert_eq!(actual, expected),
             other => panic!("expected file event, got {other:?}"),
         }
@@ -315,5 +360,71 @@ mod tests {
             assert!(root.registry.topics.contains_key(&child_id));
         }
         assert!(!root.registry.topics.contains_key(&child_id));
+    }
+
+    #[cfg(feature = "file")]
+    #[kithara::test(tokio)]
+    async fn envelope_meta_stamps_scope_seq_and_time() {
+        let root = EventBus::new(16);
+        let child_a = root.scoped_labeled(ScopeLabel {
+            track: Some(TrackId(7)),
+            ..ScopeLabel::default()
+        });
+        let child_b = root.scoped();
+        let mut rx = root.subscribe();
+
+        child_a.publish(FileEvent::EndOfStream);
+        child_b.publish(FileEvent::EndOfStream);
+
+        let first = rx.recv().await.unwrap();
+        let second = rx.recv().await.unwrap();
+        assert_ne!(first.meta.origin, second.meta.origin);
+        assert_eq!(first.meta.track, Some(TrackId(7)));
+        assert_eq!(second.meta.track, None);
+        assert!(first.meta.seq < second.meta.seq);
+        assert!(first.meta.ts_micros <= second.meta.ts_micros);
+    }
+
+    #[kithara::test]
+    fn scoped_labeled_inherits_and_overrides() {
+        let root = EventBus::new(16);
+        let child = root.scoped_labeled(ScopeLabel {
+            deck: Some(SlotId::new(1)),
+            track: Some(TrackId(11)),
+        });
+        let grandchild = child.scoped_labeled(ScopeLabel {
+            deck: None,
+            track: Some(TrackId(12)),
+        });
+
+        assert_eq!(child.label.deck, Some(SlotId::new(1)));
+        assert_eq!(child.label.track, Some(TrackId(11)));
+        assert_eq!(grandchild.label.deck, Some(SlotId::new(1)));
+        assert_eq!(grandchild.label.track, Some(TrackId(12)));
+    }
+
+    #[cfg(feature = "file")]
+    #[kithara::test(tokio)]
+    async fn overflow_event_publishes_exact_drop_count() {
+        let bus = EventBus::new(16);
+        let deferred = crate::DeferredBus::new(bus.clone(), 2);
+        let mut rx = bus.subscribe();
+
+        deferred.enqueue(FileEvent::EndOfStream);
+        deferred.enqueue(FileEvent::EndOfStream);
+        deferred.enqueue(FileEvent::EndOfStream);
+        deferred.enqueue(FileEvent::EndOfStream);
+        deferred.flush();
+
+        let _ = rx.recv().await.unwrap();
+        let _ = rx.recv().await.unwrap();
+        let overflow = rx.recv().await.unwrap();
+        match overflow.event {
+            Event::Bus(BusEvent::Overflow { scope, dropped }) => {
+                assert_eq!(scope, bus.id());
+                assert_eq!(dropped, 2);
+            }
+            other => panic!("expected overflow event, got {other:?}"),
+        }
     }
 }

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_decode::DecodeError;
-use kithara_events::{AudioEvent, DeferredBus, SeekLifecycleStage};
+use kithara_events::{DeferredBus, Event, SeekLifecycleStage};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{PlayheadWrite, SeekControl, SeekObserve, SourceSeekAnchor, StreamType};
 use tracing::{trace, warn};
@@ -31,7 +31,7 @@ pub(crate) struct SeekEngine {
 
 pub(crate) struct SeekApplyCtx<'a, T: StreamType> {
     pub(crate) decode: &'a mut DecodeCore,
-    pub(crate) emit: Option<&'a DeferredBus<AudioEvent>>,
+    pub(crate) emit: Option<&'a DeferredBus<Event>>,
     pub(crate) playhead: &'a dyn PlayheadWrite,
     pub(crate) readiness: &'a ReadinessGate,
     pub(crate) seek: &'a dyn SeekControl,

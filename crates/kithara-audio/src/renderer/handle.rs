@@ -108,12 +108,13 @@ mod tests {
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmMeta};
+    use kithara_events::{DeferredBus, Event, EventBus};
     use kithara_platform::{
         sync::Arc,
         thread::sleep as thread_sleep,
         time::{Duration, Instant, timeout as platform_timeout},
     };
-    use kithara_stream::{SeekObserve, SeekState};
+    use kithara_stream::{PlayheadRead, PlayheadState, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -177,6 +178,8 @@ mod tests {
             preload_chunks,
             source: Box::new(source),
             preload_gate: Arc::clone(&preload_gate),
+            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadRead>,
+            emit: Arc::new(DeferredBus::<Event>::new(EventBus::new(8), 8)),
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::Audible)),
             engine_load: None,
         };

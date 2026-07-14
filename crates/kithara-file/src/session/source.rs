@@ -84,6 +84,12 @@ impl FileSource {
         if let Some(codec) = cached_codec {
             let _ = inner.content_type_info.set(MediaInfo::from(codec));
         }
+        let total_bytes = inner.asset.reader.len();
+        inner.publish_opened(
+            total_bytes,
+            true,
+            total_bytes.map(|_| kithara_events::TotalBytesSource::CommittedLen),
+        );
         Self {
             coord,
             inner,

@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use kithara_assets::{
     AssetStore, AssetStoreBuilder, BytePool, EvictConfig, ResourceKey, StorageBackend, StoreOptions,
 };
-use kithara_events::{EventBus, VariantInfo};
+use kithara_events::{DeferredBus, EventBus, HlsError as EventHlsError, HlsEvent, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelScope, CancelToken,
@@ -28,7 +28,7 @@ use crate::{
     peer::HlsPeer,
     playlist::{
         KeyStore, MasterPlaylist, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState,
-        load_variant_playlists,
+        load_variant_playlists, resolve_init_decrypt_ctx, resolve_variant_decrypt_contexts,
     },
     signal::SizeSignal,
     variant::{HlsVariant, PlanCtx, VariantParams},
@@ -99,7 +99,7 @@ impl StreamType for Hls {
             byte_pool,
         );
 
-        let (master, media_playlists) = load_playlists(&stream_peer, &config).await?;
+        let (master, media_playlists) = load_playlists(&stream_peer, &bus, &config).await?;
 
         // Size the private per-stream LRU handle cache to the variant's
         // segment count when the caller left it at the default, so random
@@ -126,6 +126,7 @@ impl StreamType for Hls {
         let key_store = KeyStore::with_options(
             stream_peer.peer_handle(),
             stream_peer.scope(),
+            bus.clone(),
             config.headers.clone(),
             config.keys.clone(),
             stream_peer.byte_pool(),
@@ -160,8 +161,10 @@ impl StreamType for Hls {
         // re-ticks on data arrival, not on its 10 ms scheduler poll. Built once
         // here and cloned down into every consumer.
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
+        let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
         let plan_ctx = PlanCtx {
+            bus: bus.clone(),
             look_ahead_bytes,
             look_ahead_segments,
             master_cancel: cancel.clone(),
@@ -177,8 +180,8 @@ impl StreamType for Hls {
             .iter()
             .enumerate()
             .map(|(idx, mp)| {
-                let init_decrypt_ctx = key_store.resolve_init_decrypt_ctx(mp);
-                let decrypt_contexts = key_store.resolve_variant_decrypt_contexts(mp);
+                let init_decrypt_ctx = resolve_init_decrypt_ctx(&key_store, mp);
+                let decrypt_contexts = resolve_variant_decrypt_contexts(&key_store, mp);
                 FromWithParams::build(
                     &playlist_state,
                     VariantParams {
@@ -199,6 +202,7 @@ impl StreamType for Hls {
                 cancel: cancel.clone(),
                 scope: stream_peer.scope(),
                 headers: config.headers.clone(),
+                emit: Arc::clone(&emit),
             },
             playhead,
             seek,
@@ -207,7 +211,7 @@ impl StreamType for Hls {
             Arc::clone(&playlist_state),
         ));
 
-        let mut source = HlsSource::new(Arc::clone(&coord), bus.clone(), stream_scope);
+        let mut source = HlsSource::new(Arc::clone(&coord), emit, stream_scope);
 
         hls_peer.activate(
             coord,
@@ -234,6 +238,7 @@ impl StreamType for Hls {
 /// playlist (master order).
 async fn load_playlists(
     stream_peer: &StreamPeer,
+    bus: &EventBus,
     config: &HlsConfig,
 ) -> Result<(ParsedMaster, Vec<MediaPlaylist>), SourceError> {
     let playlist_cache = PlaylistCache::new(
@@ -252,7 +257,11 @@ async fn load_playlists(
         config.url.clone(),
     )
     .load()
-    .await?;
+    .await
+    .map_err(|err| {
+        publish_playlist_error(bus, &err);
+        SourceError::from(err)
+    })?;
 
     let media_playlists = load_variant_playlists(
         &playlist_cache,
@@ -261,9 +270,21 @@ async fn load_playlists(
         &master_key,
         &master.variants,
     )
-    .await?;
+    .await
+    .map_err(|err| {
+        publish_playlist_error(bus, &err);
+        SourceError::from(err)
+    })?;
 
     Ok((master, media_playlists))
+}
+
+fn publish_playlist_error(bus: &EventBus, err: &crate::HlsError) {
+    if let crate::HlsError::PlaylistParse(detail) = err {
+        bus.publish(HlsEvent::Error {
+            error: EventHlsError::Playlist(detail.clone()),
+        });
+    }
 }
 
 /// Default transport when the caller injects none: a private `Downloader`

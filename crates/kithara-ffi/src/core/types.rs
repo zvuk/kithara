@@ -1,4 +1,9 @@
-use kithara_events::{TrackId, TrackStatus as TS};
+use kithara_events::{
+    AdvanceReason, AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass, DecodeErrorKind,
+    DecoderBackend, DecoderChangeCause, EvictReason, FrameDomain, KeyFailureStage, KeySource,
+    PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, RouteChangeReason, StretchBackendKind,
+    TotalBytesSource, TrackFailureKind, TrackId, TrackStatus as TS,
+};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 
@@ -264,6 +269,124 @@ impl From<kithara_events::TrackStatus> for FfiTrackStatus {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiAdvanceReason {
+    NaturalEof,
+    CrossfadePreArm,
+    UserSelect,
+    UserNext,
+    UserPrev,
+    TrackFailed,
+    RemovedCurrent,
+    Repeat,
+    Cancelled,
+    Unknown,
+}
+
+impl From<AdvanceReason> for FfiAdvanceReason {
+    fn from(value: AdvanceReason) -> Self {
+        match value {
+            AdvanceReason::NaturalEof => Self::NaturalEof,
+            AdvanceReason::CrossfadePreArm => Self::CrossfadePreArm,
+            AdvanceReason::UserSelect => Self::UserSelect,
+            AdvanceReason::UserNext => Self::UserNext,
+            AdvanceReason::UserPrev => Self::UserPrev,
+            AdvanceReason::TrackFailed => Self::TrackFailed,
+            AdvanceReason::RemovedCurrent => Self::RemovedCurrent,
+            AdvanceReason::Repeat => Self::Repeat,
+            AdvanceReason::Cancelled => Self::Cancelled,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiRepeatMode {
+    Off,
+    One,
+    All,
+    Unknown,
+}
+
+impl From<QueueRepeatMode> for FfiRepeatMode {
+    fn from(value: QueueRepeatMode) -> Self {
+        match value {
+            QueueRepeatMode::Off => Self::Off,
+            QueueRepeatMode::One => Self::One,
+            QueueRepeatMode::All => Self::All,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiRouteChangeReason {
+    Unknown,
+    NewDeviceAvailable,
+    OldDeviceUnavailable,
+    CategoryChange,
+    Override,
+    WakeFromSleep,
+    NoSuitableRouteForCategory,
+    RouteConfigurationChange,
+}
+
+impl From<RouteChangeReason> for FfiRouteChangeReason {
+    fn from(value: RouteChangeReason) -> Self {
+        match value {
+            RouteChangeReason::NewDeviceAvailable => Self::NewDeviceAvailable,
+            RouteChangeReason::OldDeviceUnavailable => Self::OldDeviceUnavailable,
+            RouteChangeReason::CategoryChange => Self::CategoryChange,
+            RouteChangeReason::Override => Self::Override,
+            RouteChangeReason::WakeFromSleep => Self::WakeFromSleep,
+            RouteChangeReason::NoSuitableRouteForCategory => Self::NoSuitableRouteForCategory,
+            RouteChangeReason::RouteConfigurationChange => Self::RouteConfigurationChange,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiStretchBackendKind {
+    Signalsmith,
+    Bungee,
+    Unknown,
+}
+
+impl From<StretchBackendKind> for FfiStretchBackendKind {
+    fn from(value: StretchBackendKind) -> Self {
+        match value {
+            StretchBackendKind::Signalsmith => Self::Signalsmith,
+            StretchBackendKind::Bungee => Self::Bungee,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiEvictReason {
+    QuotaBytes,
+    QuotaAssets,
+    Displaced,
+    Unknown,
+}
+
+impl From<EvictReason> for FfiEvictReason {
+    fn from(value: EvictReason) -> Self {
+        match value {
+            EvictReason::QuotaBytes => Self::QuotaBytes,
+            EvictReason::QuotaAssets => Self::QuotaAssets,
+            EvictReason::Displaced => Self::Displaced,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// FFI-friendly time range (seconds-based).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -321,6 +444,29 @@ pub enum FfiPlayerEvent {
     CrossfadeStarted { duration_seconds: f32 },
     /// The configured crossfade window changed at runtime.
     CrossfadeDurationChanged { seconds: f32 },
+    TrackAdded { item_id: TrackId, index: u64 },
+    TrackRemoved { item_id: TrackId },
+    TrackLoadFailed { item_id: TrackId, reason: String, auto_skipped: bool },
+    RepeatModeChanged { mode: FfiRepeatMode },
+    NextTrackReady { item_id: TrackId, index: u64 },
+    CurrentItemAdvanced { item_id: Option<TrackId>, reason: FfiAdvanceReason },
+    EngineStarted,
+    EngineStopped,
+    CrossfadeCompleted,
+    CrossfadeCancelled,
+    MasterVolumeChanged { volume: f32 },
+    AudioRouteChanged { reason: FfiRouteChangeReason },
+    DjBpmDetected {
+        slot: u64,
+        bpm: f64,
+        confidence: Option<f32>,
+        first_beat_offset_seconds: f64,
+    },
+    DjKeylockChanged { on: bool },
+    DjStretchBackendChanged { kind: FfiStretchBackendKind },
+    AssetCommitted { asset_root: String, rel_path: String, final_len: Option<u64> },
+    AssetFailed { asset_root: String, rel_path: String, reason: String },
+    AssetEvicted { asset_root: String, reason: FfiEvictReason },
 }
 
 /// Transition style for a track switch.
@@ -344,6 +490,340 @@ impl From<FfiTransition> for kithara_queue::Transition {
             FfiTransition::None => Self::None,
             FfiTransition::Crossfade => Self::Crossfade,
             FfiTransition::CrossfadeWith { seconds } => Self::CrossfadeWith { seconds },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiAudioCodecKind {
+    AacLc,
+    AacHe,
+    AacHeV2,
+    Mp3,
+    Flac,
+    Vorbis,
+    Opus,
+    Alac,
+    Pcm,
+    Adpcm,
+    Unknown,
+}
+
+impl From<AudioCodecKind> for FfiAudioCodecKind {
+    fn from(value: AudioCodecKind) -> Self {
+        match value {
+            AudioCodecKind::AacLc => Self::AacLc,
+            AudioCodecKind::AacHe => Self::AacHe,
+            AudioCodecKind::AacHeV2 => Self::AacHeV2,
+            AudioCodecKind::Mp3 => Self::Mp3,
+            AudioCodecKind::Flac => Self::Flac,
+            AudioCodecKind::Vorbis => Self::Vorbis,
+            AudioCodecKind::Opus => Self::Opus,
+            AudioCodecKind::Alac => Self::Alac,
+            AudioCodecKind::Pcm => Self::Pcm,
+            AudioCodecKind::Adpcm => Self::Adpcm,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiContainerKind {
+    Mp4,
+    Fmp4,
+    MpegTs,
+    MpegAudio,
+    Adts,
+    Flac,
+    Wav,
+    Ogg,
+    Caf,
+    Mkv,
+    Unknown,
+}
+
+impl From<ContainerKind> for FfiContainerKind {
+    fn from(value: ContainerKind) -> Self {
+        match value {
+            ContainerKind::Mp4 => Self::Mp4,
+            ContainerKind::Fmp4 => Self::Fmp4,
+            ContainerKind::MpegTs => Self::MpegTs,
+            ContainerKind::MpegAudio => Self::MpegAudio,
+            ContainerKind::Adts => Self::Adts,
+            ContainerKind::Flac => Self::Flac,
+            ContainerKind::Wav => Self::Wav,
+            ContainerKind::Ogg => Self::Ogg,
+            ContainerKind::Caf => Self::Caf,
+            ContainerKind::Mkv => Self::Mkv,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiDecoderBackend {
+    Symphonia,
+    Apple,
+    Android,
+    Unknown,
+}
+
+impl From<DecoderBackend> for FfiDecoderBackend {
+    fn from(value: DecoderBackend) -> Self {
+        match value {
+            DecoderBackend::Symphonia => Self::Symphonia,
+            DecoderBackend::Apple => Self::Apple,
+            DecoderBackend::Android => Self::Android,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiDecoderChangeCause {
+    Initial,
+    VariantSwitch,
+    FormatBoundary,
+    SeekRecreate,
+    Recovery,
+    HostRateChange,
+    Unknown,
+}
+
+impl From<DecoderChangeCause> for FfiDecoderChangeCause {
+    fn from(value: DecoderChangeCause) -> Self {
+        match value {
+            DecoderChangeCause::Initial => Self::Initial,
+            DecoderChangeCause::VariantSwitch => Self::VariantSwitch,
+            DecoderChangeCause::FormatBoundary => Self::FormatBoundary,
+            DecoderChangeCause::SeekRecreate => Self::SeekRecreate,
+            DecoderChangeCause::Recovery => Self::Recovery,
+            DecoderChangeCause::HostRateChange => Self::HostRateChange,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiDecodeErrorClass {
+    Interrupted,
+    VariantChange,
+    Other,
+    Unknown,
+}
+
+impl From<DecodeErrorClass> for FfiDecodeErrorClass {
+    fn from(value: DecodeErrorClass) -> Self {
+        match value {
+            DecodeErrorClass::Interrupted => Self::Interrupted,
+            DecodeErrorClass::VariantChange => Self::VariantChange,
+            DecodeErrorClass::Other => Self::Other,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiDecodeErrorKind {
+    Io,
+    UnsupportedCodec,
+    UnsupportedContainer,
+    InvalidData,
+    SeekFailed,
+    SeekOutOfRange,
+    Parse,
+    ProbeFailed,
+    BackendUnavailable,
+    InvalidSampleRate,
+    BackendStatus,
+    Interrupted,
+    Backend,
+    Unknown,
+}
+
+impl From<DecodeErrorKind> for FfiDecodeErrorKind {
+    fn from(value: DecodeErrorKind) -> Self {
+        match value {
+            DecodeErrorKind::Io => Self::Io,
+            DecodeErrorKind::UnsupportedCodec => Self::UnsupportedCodec,
+            DecodeErrorKind::UnsupportedContainer => Self::UnsupportedContainer,
+            DecodeErrorKind::InvalidData => Self::InvalidData,
+            DecodeErrorKind::SeekFailed => Self::SeekFailed,
+            DecodeErrorKind::SeekOutOfRange => Self::SeekOutOfRange,
+            DecodeErrorKind::Parse => Self::Parse,
+            DecodeErrorKind::ProbeFailed => Self::ProbeFailed,
+            DecodeErrorKind::BackendUnavailable => Self::BackendUnavailable,
+            DecodeErrorKind::InvalidSampleRate => Self::InvalidSampleRate,
+            DecodeErrorKind::BackendStatus => Self::BackendStatus,
+            DecodeErrorKind::Interrupted => Self::Interrupted,
+            DecodeErrorKind::Backend => Self::Backend,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiFrameDomain {
+    Source,
+    Output,
+    Unknown,
+}
+
+impl From<FrameDomain> for FfiFrameDomain {
+    fn from(value: FrameDomain) -> Self {
+        match value {
+            FrameDomain::Source => Self::Source,
+            FrameDomain::Output => Self::Output,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiResamplerKind {
+    Rubato,
+    Apple,
+    Glide,
+    None,
+    Unknown,
+}
+
+impl From<ResamplerKind> for FfiResamplerKind {
+    fn from(value: ResamplerKind) -> Self {
+        match value {
+            ResamplerKind::Rubato => Self::Rubato,
+            ResamplerKind::Apple => Self::Apple,
+            ResamplerKind::Glide => Self::Glide,
+            ResamplerKind::None => Self::None,
+            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiPlaybackResamplerKind {
+    Rubato,
+    Glide,
+    None,
+    Unknown,
+}
+
+impl From<PlaybackResamplerKind> for FfiPlaybackResamplerKind {
+    fn from(value: PlaybackResamplerKind) -> Self {
+        match value {
+            PlaybackResamplerKind::Rubato => Self::Rubato,
+            PlaybackResamplerKind::Glide => Self::Glide,
+            PlaybackResamplerKind::None => Self::None,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiTrackFailureKind {
+    Decode,
+    RecreateFailed { offset: u64 },
+    SourceCancelled,
+    Unknown,
+}
+
+impl From<TrackFailureKind> for FfiTrackFailureKind {
+    fn from(value: TrackFailureKind) -> Self {
+        match value {
+            TrackFailureKind::Decode => Self::Decode,
+            TrackFailureKind::RecreateFailed { offset } => Self::RecreateFailed { offset },
+            TrackFailureKind::SourceCancelled => Self::SourceCancelled,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiCancelReason {
+    EpochCancel,
+    PeerCancel,
+    DownloaderShutdown,
+    BeforeStart,
+}
+
+impl From<CancelReason> for FfiCancelReason {
+    fn from(value: CancelReason) -> Self {
+        match value {
+            CancelReason::EpochCancel => Self::EpochCancel,
+            CancelReason::PeerCancel => Self::PeerCancel,
+            CancelReason::DownloaderShutdown => Self::DownloaderShutdown,
+            CancelReason::BeforeStart => Self::BeforeStart,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiTotalBytesSource {
+    CommittedLen,
+    ContentLength,
+    Unknown,
+}
+
+impl From<TotalBytesSource> for FfiTotalBytesSource {
+    fn from(value: TotalBytesSource) -> Self {
+        match value {
+            TotalBytesSource::CommittedLen => Self::CommittedLen,
+            TotalBytesSource::ContentLength => Self::ContentLength,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiKeyFailureStage {
+    Network,
+    BodyCollect,
+    Processor,
+    Missing,
+    Unknown,
+}
+
+impl From<KeyFailureStage> for FfiKeyFailureStage {
+    fn from(value: KeyFailureStage) -> Self {
+        match value {
+            KeyFailureStage::Network => Self::Network,
+            KeyFailureStage::BodyCollect => Self::BodyCollect,
+            KeyFailureStage::Processor => Self::Processor,
+            KeyFailureStage::Missing => Self::Missing,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiKeySource {
+    Network,
+    DiskCache,
+    MemCache,
+    Unknown,
+}
+
+impl From<KeySource> for FfiKeySource {
+    fn from(value: KeySource) -> Self {
+        match value {
+            KeySource::Network => Self::Network,
+            KeySource::DiskCache => Self::DiskCache,
+            KeySource::MemCache => Self::MemCache,
+            _ => Self::Unknown,
         }
     }
 }
@@ -390,6 +870,188 @@ pub enum FfiItemEvent {
     DidStall,
     Error {
         error: String,
+    },
+    /// Decoder configuration changed for the current item.
+    DecoderChanged {
+        backend: FfiDecoderBackend,
+        codec: Option<FfiAudioCodecKind>,
+        container: Option<FfiContainerKind>,
+        sample_rate: u32,
+        channels: u16,
+        bit_depth: Option<u16>,
+        bitrate: Option<u32>,
+        epoch: u64,
+        cause: FfiDecoderChangeCause,
+        variant: Option<u32>,
+        base_offset: u64,
+        duration_seconds: Option<f64>,
+        gapless_leading: u64,
+        gapless_trailing: u64,
+        has_gapless: bool,
+    },
+    /// Decoder reported a non-fatal or fatal decode error.
+    DecodeError {
+        class: FfiDecodeErrorClass,
+        kind: FfiDecodeErrorKind,
+        codec: Option<FfiAudioCodecKind>,
+        detail: String,
+    },
+    /// Decoder resolved gapless trim values for the current item.
+    GaplessResolved {
+        leading_frames: u64,
+        trailing_frames: u64,
+        domain: FfiFrameDomain,
+        codec: Option<FfiAudioCodecKind>,
+        sample_rate: u32,
+    },
+    /// Decoder-side resampler configuration changed for the current item.
+    ResamplerConfigured {
+        backend: FfiResamplerKind,
+        input_rate: u32,
+        output_rate: u32,
+        channels: u16,
+        bypassed: bool,
+    },
+    AudioFormatDetected {
+        channels: u16,
+        sample_rate: u32,
+    },
+    AudioFormatChanged {
+        old_channels: u16,
+        old_sample_rate: u32,
+        new_channels: u16,
+        new_sample_rate: u32,
+    },
+    SeekComplete {
+        position_seconds: f64,
+        epoch: u64,
+    },
+    SeekRejected {
+        epoch: u64,
+        target_seconds: f64,
+    },
+    DecoderReady {
+        base_offset: u64,
+        variant: Option<u32>,
+    },
+    TrackFailed {
+        reason: FfiTrackFailureKind,
+        epoch: u64,
+    },
+    UnderrunStarted {
+        position_ms: u64,
+        epoch: u64,
+    },
+    UnderrunEnded {
+        position_ms: u64,
+        epoch: u64,
+    },
+    BufferHealth {
+        buffered_ms: u64,
+        decoded_frontier_ms: u64,
+        epoch: u64,
+    },
+    EngineLoad {
+        load: f32,
+        ms_per_chunk: f32,
+        realtime_factor: f32,
+    },
+    PlaybackResamplerConfigured {
+        backend: FfiPlaybackResamplerKind,
+        host_sample_rate: u32,
+        source_sample_rate: u32,
+        active: bool,
+    },
+    HlsVariantSwitchFenced {
+        from_variant: u32,
+        to_variant: u32,
+        cross_codec: bool,
+    },
+    HlsVariantSwitchAcked {
+        variant: u32,
+        generation: u64,
+    },
+    HlsCacheComplete {
+        total_bytes: Option<u64>,
+    },
+    DownloadStarted {
+        request_id: u64,
+        wait_in_queue_seconds: f64,
+    },
+    DownloadSlow {
+        request_id: u64,
+        elapsed_seconds: f64,
+    },
+    DownloadCompleted {
+        request_id: u64,
+        bytes_transferred: u64,
+        duration_seconds: f64,
+        bandwidth_bps: u64,
+    },
+    DownloadRetrying {
+        request_id: u64,
+        attempt: u32,
+        max_retries: u32,
+        error: String,
+        backoff_seconds: f64,
+    },
+    DownloadBodyStalled {
+        request_id: u64,
+        consumed: u64,
+        expected: Option<u64>,
+        stall_seconds: f64,
+    },
+    DownloadBodyResumed {
+        request_id: u64,
+        resume_number: u32,
+        from_offset: u64,
+        honoured_range: bool,
+    },
+    DownloadRetryExhausted {
+        request_id: u64,
+        max_retries: u32,
+        consumed: u64,
+        error: String,
+    },
+    DownloadFirstByte {
+        request_id: u64,
+        ttfb_seconds: f64,
+        status: u16,
+        partial: bool,
+    },
+    DownloadCancelled {
+        request_id: u64,
+        reason: FfiCancelReason,
+        bytes_transferred: u64,
+    },
+    FileOpened {
+        codec: Option<FfiAudioCodecKind>,
+        container: Option<FfiContainerKind>,
+        total_bytes: Option<u64>,
+        cached: bool,
+    },
+    FileTotalBytesResolved {
+        total_bytes: u64,
+        source: FfiTotalBytesSource,
+    },
+    FileCacheComplete {
+        total_bytes: u64,
+    },
+    DrmKeyFetchFailed {
+        key_host: Option<String>,
+        stage: FfiKeyFailureStage,
+        detail: String,
+    },
+    DrmKeyAcquired {
+        key_host: Option<String>,
+        source: FfiKeySource,
+        bytes: u64,
+        latency_ms: Option<u64>,
+    },
+    DrmSegmentDecryptFailed {
+        variant: u32,
+        segment_index: u32,
+        detail: String,
     },
 }
 

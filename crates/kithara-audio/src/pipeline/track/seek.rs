@@ -50,7 +50,7 @@ impl Track<SeekRequested> {
             request,
             &SeekApplyCtx {
                 decode: &mut src.decode,
-                emit: src.emit.as_ref(),
+                emit: src.emit.as_deref(),
                 playhead: src.playhead.as_ref(),
                 readiness: &src.readiness,
                 seek: src.seek.as_ref(),
@@ -128,7 +128,7 @@ impl Track<ApplyingSeek> {
             applying,
             SeekApplyCtx {
                 decode: &mut src.decode,
-                emit: src.emit.as_ref(),
+                emit: src.emit.as_deref(),
                 playhead: src.playhead.as_ref(),
                 readiness: &src.readiness,
                 seek: src.seek.as_ref(),

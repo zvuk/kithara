@@ -17,7 +17,9 @@ use crate::pipeline::{
 pub(crate) struct SourceParts<T: StreamType> {
     pub(crate) activity: Arc<dyn Activity>,
     pub(crate) decode: DecodeCore,
+    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     pub(crate) playhead: Arc<dyn PlayheadWrite>,
+    pub(crate) playback_resampler_backend: &'static str,
     pub(crate) readiness: ReadinessGate,
     pub(crate) rebuild: RebuildPort<T>,
     pub(crate) resume: ResumeCursor,
@@ -39,11 +41,15 @@ impl<T: StreamType> SourceParts<T> {
             host_sample_rate,
             recreate_on_host_rate_change,
             decoder_host_sample_rate,
+            decoder_backend,
+            playback_resampler_backend,
         } = decode;
         Self {
             activity: stream.activity(),
             decode: core,
+            decoder_backend,
             playhead: stream.playhead_write(),
+            playback_resampler_backend,
             readiness: ReadinessGate::new(stream.peer_wake()),
             rebuild: RebuildPort::new(factory, rebuild),
             resume: ResumeCursor::new(

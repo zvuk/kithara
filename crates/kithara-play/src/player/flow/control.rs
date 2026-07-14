@@ -1,5 +1,10 @@
+use kithara_events::RouteDescription;
+
 use super::super::core::PlayerImpl;
-use crate::{api::SlotId, error::PlayError};
+use crate::{
+    api::{RouteChangeReason, SessionEvent, SlotId},
+    error::PlayError,
+};
 
 impl PlayerImpl {
     /// Ensure we have an active slot, allocating one if needed.
@@ -17,7 +22,12 @@ impl PlayerImpl {
     /// Notify the audio host that the platform route changed and the
     /// native output stream must be recreated if playback is active.
     pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-        self.core.engine.invalidate_audio_route(reason)
+        self.core.engine.invalidate_audio_route(reason)?;
+        self.core.engine.bus().publish(SessionEvent::RouteChanged {
+            reason: RouteChangeReason::Unknown,
+            previous_route: RouteDescription::default(),
+        });
+        Ok(())
     }
 
     /// Reset EQ gains to 0 dB for all bands.

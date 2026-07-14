@@ -1,5 +1,5 @@
 use kithara_decode::{PcmChunk, PcmSpec};
-use kithara_events::{AudioEvent, AudioFormat, DeferredBus};
+use kithara_events::{AudioEvent, AudioFormat, DeferredBus, Event};
 use kithara_stream::PlayheadWrite;
 
 use crate::traits::AudioEffect;
@@ -43,16 +43,22 @@ impl EofDrain {
         &mut self,
         chunk: &PcmChunk,
         playhead: &dyn PlayheadWrite,
-        emit: Option<&DeferredBus<AudioEvent>>,
+        emit: Option<&DeferredBus<Event>>,
     ) {
         self.chunks += 1;
         self.samples += chunk.samples.len() as u64;
         playhead.set_decoded_frontier(chunk.meta.end_timestamp);
         if self.chunks == 1 {
             if let Some(emit) = emit {
-                emit.enqueue(AudioEvent::FormatDetected {
-                    spec: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate.get()),
-                });
+                emit.enqueue(
+                    AudioEvent::FormatDetected {
+                        spec: AudioFormat::new(
+                            chunk.spec().channels,
+                            chunk.spec().sample_rate.get(),
+                        ),
+                    }
+                    .into(),
+                );
             }
             self.spec = Some(chunk.spec());
         }
@@ -60,10 +66,16 @@ impl EofDrain {
             && old != chunk.spec()
         {
             if let Some(emit) = emit {
-                emit.enqueue(AudioEvent::FormatChanged {
-                    old: AudioFormat::new(old.channels, old.sample_rate.get()),
-                    new: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate.get()),
-                });
+                emit.enqueue(
+                    AudioEvent::FormatChanged {
+                        old: AudioFormat::new(old.channels, old.sample_rate.get()),
+                        new: AudioFormat::new(
+                            chunk.spec().channels,
+                            chunk.spec().sample_rate.get(),
+                        ),
+                    }
+                    .into(),
+                );
             }
             self.spec = Some(chunk.spec());
         }

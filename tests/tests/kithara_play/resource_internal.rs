@@ -137,6 +137,7 @@ async fn test_resource_subscribe_receives_events() {
 
     let event = time::timeout(Duration::from_millis(200), rx.recv())
         .await
+        .map(|r| r.map(|env| env.event))
         .unwrap()
         .unwrap();
 

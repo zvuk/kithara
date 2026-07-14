@@ -191,9 +191,16 @@ impl PlayerTrack {
             TrackState::Preloading => PlayerNotification::Loaded {
                 src: Arc::clone(self.src()),
             },
-            TrackState::FadingIn => PlayerNotification::FadingIn,
-            TrackState::FadingOut => PlayerNotification::FadingOut,
-            TrackState::Playing => PlayerNotification::PlaybackStarted,
+            TrackState::FadingIn => PlayerNotification::FadingIn {
+                src: Arc::clone(self.src()),
+            },
+            TrackState::FadingOut => PlayerNotification::FadingOut {
+                src: Arc::clone(self.src()),
+            },
+            TrackState::Playing => PlayerNotification::PlaybackStarted {
+                src: Arc::clone(self.src()),
+                item_id: self.item_id.clone(),
+            },
             TrackState::Finished => PlayerNotification::PlaybackStopped {
                 src: Arc::clone(self.src()),
                 item_id: self.item_id.clone(),

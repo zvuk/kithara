@@ -9,7 +9,7 @@ use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessMode,
     PcmChunk,
 };
-use kithara_events::{AudioEvent, DeferredBus};
+use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
 use kithara_stream::{MediaInfo, PlayheadWrite, SeekObserve, StreamType};
 use kithara_test_utils::kithara;
@@ -50,9 +50,11 @@ pub(crate) type DecoderFactory<T> = Arc<
 pub(crate) struct DecodeInit<T: StreamType> {
     pub(crate) decoder: Box<dyn Decoder>,
     pub(crate) decoder_factory: DecoderFactory<T>,
+    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     pub(crate) gapless_mode: GaplessMode,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) media_info: Option<MediaInfo>,
+    pub(crate) playback_resampler_backend: &'static str,
     pub(crate) recreate_on_host_rate_change: bool,
 }
 
@@ -62,6 +64,8 @@ pub(crate) struct DecodeParts<T: StreamType> {
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) recreate_on_host_rate_change: bool,
     pub(crate) decoder_host_sample_rate: u32,
+    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
+    pub(crate) playback_resampler_backend: &'static str,
 }
 
 impl<T: StreamType> DecodeInit<T> {
@@ -87,9 +91,11 @@ impl<T: StreamType> DecodeInit<T> {
         let Self {
             decoder,
             decoder_factory,
+            decoder_backend,
             gapless_mode,
             host_sample_rate,
             media_info,
+            playback_resampler_backend,
             recreate_on_host_rate_change,
         } = self;
         DecodeParts {
@@ -108,6 +114,8 @@ impl<T: StreamType> DecodeInit<T> {
             host_sample_rate,
             recreate_on_host_rate_change,
             decoder_host_sample_rate,
+            decoder_backend,
+            playback_resampler_backend,
         }
     }
 }
@@ -121,7 +129,7 @@ pub(crate) struct DecodeCore {
 }
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
-    pub(crate) emit: Option<&'a DeferredBus<AudioEvent>>,
+    pub(crate) emit: Option<&'a DeferredBus<Event>>,
     pub(crate) playhead: &'a dyn PlayheadWrite,
     pub(crate) resume: Option<&'a mut ResumeState>,
     pub(crate) cursor: &'a mut ResumeCursor,
@@ -187,7 +195,7 @@ impl DecodeCore {
         &mut self,
         chunk: &PcmChunk,
         playhead: &dyn PlayheadWrite,
-        emit: Option<&DeferredBus<AudioEvent>>,
+        emit: Option<&DeferredBus<Event>>,
     ) {
         self.drain.track(chunk, playhead, emit);
     }

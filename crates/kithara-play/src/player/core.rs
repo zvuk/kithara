@@ -258,7 +258,7 @@ mod tests {
     use kithara_audio::{StretchControls, generate_log_spaced_bands};
     use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::GaplessMode;
-    use kithara_events::Event;
+    use kithara_events::{Envelope, Event};
     use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
 
@@ -489,15 +489,24 @@ mod tests {
         let e3 = rx.try_recv();
         assert!(matches!(
             e1,
-            Ok(Event::Player(PlayerEvent::VolumeChanged { .. }))
+            Ok(Envelope {
+                event: Event::Player(PlayerEvent::VolumeChanged { .. }),
+                ..
+            })
         ));
         assert!(matches!(
             e2,
-            Ok(Event::Player(PlayerEvent::MuteChanged { .. }))
+            Ok(Envelope {
+                event: Event::Player(PlayerEvent::MuteChanged { .. }),
+                ..
+            })
         ));
         assert!(matches!(
             e3,
-            Ok(Event::Player(PlayerEvent::RateChanged { .. }))
+            Ok(Envelope {
+                event: Event::Player(PlayerEvent::RateChanged { .. }),
+                ..
+            })
         ));
     }
 
@@ -597,7 +606,10 @@ mod tests {
         let e = rx.try_recv();
         assert!(matches!(
             e,
-            Ok(Event::Player(PlayerEvent::RateChanged { .. }))
+            Ok(Envelope {
+                event: Event::Player(PlayerEvent::RateChanged { .. }),
+                ..
+            })
         ));
     }
 

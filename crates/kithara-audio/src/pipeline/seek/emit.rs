@@ -1,5 +1,5 @@
 use kithara_decode::DecoderSeekOutcome;
-use kithara_events::{AudioEvent, DeferredBus, SeekLifecycleStage, SegmentLocation};
+use kithara_events::{AudioEvent, DeferredBus, Event, SeekLifecycleStage, SegmentLocation};
 use kithara_platform::time::Duration;
 use kithara_stream::{PlayheadWrite, SeekObserve, StreamType};
 
@@ -109,17 +109,20 @@ pub(crate) fn location<T: StreamType>(stream: &SharedStream<T>) -> SegmentLocati
 }
 
 pub(crate) fn emit(
-    bus: Option<&DeferredBus<AudioEvent>>,
+    bus: Option<&DeferredBus<Event>>,
     stage: SeekLifecycleStage,
     epoch: u64,
     location: SegmentLocation,
 ) {
     if let Some(bus) = bus {
-        bus.enqueue(AudioEvent::SeekLifecycle {
-            stage,
-            seek_epoch: epoch,
-            location,
-        });
+        bus.enqueue(
+            AudioEvent::SeekLifecycle {
+                stage,
+                seek_epoch: epoch,
+                location,
+            }
+            .into(),
+        );
     }
 }
 

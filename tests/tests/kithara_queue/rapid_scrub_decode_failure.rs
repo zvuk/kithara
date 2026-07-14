@@ -64,7 +64,10 @@ async fn wait_for_status(
     }
     let start = Instant::now();
     while start.elapsed() < budget {
-        match timeout(Duration::from_millis(200), rx.recv()).await {
+        match timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
@@ -117,7 +120,10 @@ async fn observe_scrub_outcome(
             };
         }
         let recv_budget = remaining.min(Duration::from_millis(200));
-        match timeout(recv_budget, rx.recv()).await {
+        match timeout(recv_budget, rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Player(PlayerEvent::ItemDidFail { src, .. })))
                 if src.as_ref() == target_src =>
             {
@@ -151,7 +157,7 @@ async fn wait_for_playback_progress(
     use kithara::platform::tokio::sync::broadcast::error::RecvError;
     let fut = async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     let pos_secs = position_ms as f64 / 1000.0;
                     if pos_secs > baseline_secs {

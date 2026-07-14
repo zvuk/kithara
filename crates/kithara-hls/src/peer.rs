@@ -140,6 +140,7 @@ impl HlsPeer {
             .map_or(0, |(idx, _, _)| idx);
         if let Some(active) = coord.active() {
             let plan_ctx = PlanCtx {
+                bus: active.event_bus(),
                 prefetch_budget,
                 look_ahead_bytes,
                 size_probe_method,
@@ -569,6 +570,7 @@ impl HlsTrackState {
 
     fn plan_ctx(&self) -> PlanCtx {
         PlanCtx {
+            bus: self.coord.emit.bus().clone(),
             master_cancel: self.coord.cancel.clone(),
             scope: self.coord.scope.clone(),
             headers: self.coord.headers.clone(),

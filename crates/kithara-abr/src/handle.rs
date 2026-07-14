@@ -260,8 +260,8 @@ impl Drop for HandleInner {
 #[cfg(test)]
 mod tests {
     use kithara_events::{
-        AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus, VariantDuration,
-        VariantIndex, VariantInfo,
+        AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Envelope, Event, EventBus,
+        VariantDuration, VariantIndex, VariantInfo,
     };
     use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
@@ -458,16 +458,17 @@ mod tests {
         };
         handle.notify_commit(decision, 0, Duration::ZERO, Instant::now());
 
-        let found = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| {
-            if let Event::Abr(AbrEvent::VariantApplied { from, to, reason }) = event {
-                assert_eq!(from, VariantIndex::new(0));
-                assert_eq!(to, VariantIndex::new(2));
-                assert_eq!(reason, AbrReason::UpSwitch);
-                Some(())
-            } else {
-                None
-            }
-        });
+        let found =
+            std::iter::from_fn(|| rx.try_recv().ok()).find_map(|Envelope { event, .. }| {
+                if let Event::Abr(AbrEvent::VariantApplied { from, to, reason }) = event {
+                    assert_eq!(from, VariantIndex::new(0));
+                    assert_eq!(to, VariantIndex::new(2));
+                    assert_eq!(reason, AbrReason::UpSwitch);
+                    Some(())
+                } else {
+                    None
+                }
+            });
         assert!(found.is_some(), "expected VariantApplied event on the bus");
     }
 }

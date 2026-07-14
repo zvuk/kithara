@@ -7,7 +7,10 @@ use kithara::{
     audio::{Audio, AudioConfig, ReadOutcome},
     bufpool::PcmPool,
     decode::{GaplessMode, SilenceTrimParams},
-    events::{AudioEvent, Event, EventReceiver, SeekEpoch, SeekLifecycleStage},
+    events::{
+        AudioEvent, DecoderBackend, DecoderChangeCause, DecoderEvent, Event, EventBus,
+        EventReceiver, SeekEpoch, SeekLifecycleStage,
+    },
     file::{FileConfig, FileSrc},
     platform::time::{self, Duration, Instant},
     stream::{ContainerFormat, MediaInfo, Stream},
@@ -43,7 +46,9 @@ async fn await_seek_request_epoch(events: &mut EventReceiver, budget: Duration) 
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
-        }))) = time::timeout(remaining, events.recv()).await
+        }))) = time::timeout(remaining, events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
         {
             return seek_epoch;
         }
@@ -86,6 +91,40 @@ async fn test_audio_new(#[case] sample_count: usize) {
     let _audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
         .unwrap();
+}
+
+#[kithara::test(tokio)]
+async fn test_audio_new_publishes_initial_decoder_changed() {
+    let (_cache, _tmp, config) = test_wav_config(1000);
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe();
+    let config = AudioConfig::<kithara::file::File>::for_stream(config.stream().clone())
+        .byte_pool(config.byte_pool().clone())
+        .pcm_pool(config.pcm_pool().clone())
+        .maybe_hint(config.hint().map(str::to_owned))
+        .events(bus)
+        .build();
+
+    let audio = Audio::<Stream<kithara::file::File>>::new(config)
+        .await
+        .unwrap();
+    let expected_backend = DecoderBackend::Symphonia;
+
+    match events.try_recv().map(|env| env.event) {
+        Ok(Event::Decoder(DecoderEvent::DecoderChanged {
+            backend,
+            sample_rate,
+            channels,
+            cause,
+            ..
+        })) => {
+            assert_eq!(backend, expected_backend);
+            assert_eq!(sample_rate, audio.spec().sample_rate.get());
+            assert_eq!(channels, audio.spec().channels);
+            assert_eq!(cause, DecoderChangeCause::Initial);
+        }
+        other => panic!("expected initial DecoderChanged event, got {other:?}"),
+    }
 }
 
 /// `Audio::new` pre-warms its PCM pool so the decode hot path and the
@@ -284,7 +323,9 @@ async fn test_audio_playback_progress_uses_output_commit() {
             total_ms,
             seek_epoch,
             ..
-        }))) = time::timeout(Duration::from_millis(40), events.recv()).await
+        }))) = time::timeout(Duration::from_millis(40), events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
         {
             assert!(position_ms > 0);
             assert!(total_ms.is_some());
@@ -315,7 +356,9 @@ async fn test_seek_emits_matching_playback_progress() {
     let mut matched_epoch = None;
     while Instant::now() < deadline {
         if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
-            time::timeout(Duration::from_millis(40), events.recv()).await
+            time::timeout(Duration::from_millis(40), events.recv())
+                .await
+                .map(|r| r.map(|env| env.event))
             && seek_epoch == expected_epoch
         {
             matched_epoch = Some(seek_epoch);
@@ -338,7 +381,7 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     let expected_epoch = await_seek_request_epoch(&mut events, Duration::from_secs(1)).await;
 
     let mut saw_seek_complete_before_read = false;
-    while let Ok(event) = events.try_recv() {
+    while let Ok(event) = events.try_recv().map(|env| env.event) {
         if matches!(event, Event::Audio(AudioEvent::SeekComplete { .. })) {
             saw_seek_complete_before_read = true;
             break;
@@ -360,7 +403,10 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     let mut saw_seek_complete = false;
     let mut saw_output_committed = false;
     while Instant::now() < deadline {
-        match time::timeout(Duration::from_millis(40), events.recv()).await {
+        match time::timeout(Duration::from_millis(40), events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
                 stage: SeekLifecycleStage::OutputCommitted,
                 seek_epoch,

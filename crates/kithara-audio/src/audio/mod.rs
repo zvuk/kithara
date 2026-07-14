@@ -1,7 +1,7 @@
 mod build;
 mod core;
 mod cursor;
-mod event;
+pub(crate) mod event;
 mod park;
 mod ring;
 

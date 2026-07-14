@@ -4,10 +4,17 @@
 use crate::AbrEvent;
 #[cfg(feature = "app")]
 use crate::AppEvent;
+#[cfg(feature = "asset")]
+use crate::AssetEvent;
 #[cfg(feature = "audio")]
 use crate::AudioEvent;
+use crate::BusEvent;
+#[cfg(feature = "decoder")]
+use crate::DecoderEvent;
 #[cfg(feature = "downloader")]
 use crate::DownloaderEvent;
+#[cfg(feature = "drm")]
+use crate::DrmEvent;
 #[cfg(feature = "file")]
 use crate::FileEvent;
 #[cfg(feature = "hls")]
@@ -24,6 +31,8 @@ use crate::{DjEvent, EngineEvent, ItemEvent, PlayerEvent, SessionEvent};
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum Event {
+    /// Bus-level synthetic event.
+    Bus(BusEvent),
     /// Unified downloader event (soft-timeout, progress, completion,
     /// error). Published by the downloader layer on the peer's bus.
     #[cfg(feature = "downloader")]
@@ -37,6 +46,9 @@ pub enum Event {
     /// Audio pipeline event.
     #[cfg(feature = "audio")]
     Audio(AudioEvent),
+    /// Decoder lifecycle event.
+    #[cfg(feature = "decoder")]
+    Decoder(DecoderEvent),
     /// Player state event.
     #[cfg(feature = "player")]
     Player(PlayerEvent),
@@ -55,12 +67,24 @@ pub enum Event {
     /// Application lifecycle event.
     #[cfg(feature = "app")]
     App(AppEvent),
+    /// Asset cache event.
+    #[cfg(feature = "asset")]
+    Asset(AssetEvent),
     /// Queue-level event (track added/removed/status/current/ended).
     #[cfg(feature = "queue")]
     Queue(QueueEvent),
+    /// DRM lifecycle event.
+    #[cfg(feature = "drm")]
+    Drm(DrmEvent),
     /// ABR controller event.
     #[cfg(feature = "abr")]
     Abr(AbrEvent),
+}
+
+impl From<BusEvent> for Event {
+    fn from(e: BusEvent) -> Self {
+        Self::Bus(e)
+    }
 }
 
 #[cfg(feature = "downloader")]
@@ -88,6 +112,13 @@ impl From<FileEvent> for Event {
 impl From<AudioEvent> for Event {
     fn from(e: AudioEvent) -> Self {
         Self::Audio(e)
+    }
+}
+
+#[cfg(feature = "decoder")]
+impl From<DecoderEvent> for Event {
+    fn from(e: DecoderEvent) -> Self {
+        Self::Decoder(e)
     }
 }
 
@@ -133,10 +164,24 @@ impl From<AppEvent> for Event {
     }
 }
 
+#[cfg(feature = "asset")]
+impl From<AssetEvent> for Event {
+    fn from(e: AssetEvent) -> Self {
+        Self::Asset(e)
+    }
+}
+
 #[cfg(feature = "queue")]
 impl From<QueueEvent> for Event {
     fn from(e: QueueEvent) -> Self {
         Self::Queue(e)
+    }
+}
+
+#[cfg(feature = "drm")]
+impl From<DrmEvent> for Event {
+    fn from(e: DrmEvent) -> Self {
+        Self::Drm(e)
     }
 }
 
@@ -196,5 +241,62 @@ mod tests {
     fn audio_event_into_event() {
         let event: Event = AudioEvent::EndOfStream.into();
         assert!(matches!(event, Event::Audio(AudioEvent::EndOfStream)));
+    }
+
+    #[cfg(feature = "decoder")]
+    #[kithara::test]
+    fn decoder_event_into_event() {
+        let event: Event = DecoderEvent::DecodeError {
+            class: crate::DecodeErrorClass::Other,
+            kind: crate::DecodeErrorKind::InvalidData,
+            codec: None,
+            detail: "invalid data",
+        }
+        .into();
+        assert!(matches!(
+            event,
+            Event::Decoder(DecoderEvent::DecodeError {
+                class: crate::DecodeErrorClass::Other,
+                kind: crate::DecodeErrorKind::InvalidData,
+                codec: None,
+                detail: "invalid data",
+            })
+        ));
+    }
+
+    #[cfg(feature = "asset")]
+    #[kithara::test]
+    fn asset_event_into_event() {
+        let event: Event = AssetEvent::Evicted {
+            asset_root: "root".to_string(),
+            reason: crate::EvictReason::Displaced,
+        }
+        .into();
+        assert!(matches!(
+            event,
+            Event::Asset(AssetEvent::Evicted {
+                asset_root,
+                reason: crate::EvictReason::Displaced,
+            }) if asset_root == "root"
+        ));
+    }
+
+    #[cfg(feature = "drm")]
+    #[kithara::test]
+    fn drm_event_into_event() {
+        let event: Event = DrmEvent::KeyFetchFailed {
+            key_host: Some("example.com".to_string()),
+            stage: crate::KeyFailureStage::Network,
+            detail: "network failed".to_string(),
+        }
+        .into();
+        assert!(matches!(
+            event,
+            Event::Drm(DrmEvent::KeyFetchFailed {
+                key_host: Some(host),
+                stage: crate::KeyFailureStage::Network,
+                detail,
+            }) if host == "example.com" && detail == "network failed"
+        ));
     }
 }

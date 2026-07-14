@@ -214,7 +214,7 @@ fn spawn_live_stats_task(
     let events_task = spawn(async move {
         loop {
             let event = match events.recv().await {
-                Ok(event) => event,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
@@ -442,7 +442,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     let events_task = spawn(async move {
         loop {
             let event = match events.recv().await {
-                Ok(event) => event,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
@@ -869,7 +869,7 @@ async fn live_stress_real_stream_seek_read_cache(
         let events_task = spawn(async move {
             loop {
                 let event = match events.recv().await {
-                    Ok(event) => event,
+                    Ok(env) => env.event,
                     Err(RecvError::Lagged(_)) => continue,
                     Err(RecvError::Closed) => break,
                 };

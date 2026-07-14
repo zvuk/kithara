@@ -5,6 +5,14 @@ use kithara_play::{EngineLoadSnapshot, PlayError, PlayerStatus};
 use super::Queue;
 
 impl Queue {
+    pub fn set_crossfade_duration(&self, seconds: f32) {
+        self.player.set_crossfade_duration(seconds);
+        self.bus
+            .publish(kithara_events::QueueEvent::CrossfadeDurationChanged {
+                seconds: self.player.crossfade_duration(),
+            });
+    }
+
     delegate! {
         to self.player {
             /// Whether playback is active.
@@ -13,8 +21,6 @@ impl Queue {
             /// Current crossfade duration in seconds.
             #[must_use]
             pub fn crossfade_duration(&self) -> f32;
-            /// Set the crossfade duration.
-            pub fn set_crossfade_duration(&self, seconds: f32);
             /// Live engine playback rate (player-reported, 0.0 when paused).
             #[must_use]
             pub fn rate(&self) -> f32;

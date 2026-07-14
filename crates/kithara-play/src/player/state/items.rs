@@ -162,7 +162,7 @@ mod tests {
 
     use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
     use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
-    use kithara_events::{Event, PlayerEvent};
+    use kithara_events::{Envelope, Event, PlayerEvent};
     use kithara_platform::time::Duration;
 
     use super::*;
@@ -257,7 +257,10 @@ mod tests {
 
         assert!(matches!(
             events.try_recv(),
-            Ok(Event::Player(PlayerEvent::CurrentItemChanged))
+            Ok(Envelope {
+                event: Event::Player(PlayerEvent::CurrentItemChanged),
+                ..
+            })
         ));
         assert!(events.try_recv().is_err());
     }

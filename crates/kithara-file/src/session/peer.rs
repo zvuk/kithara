@@ -7,7 +7,7 @@ use std::{
 
 use kithara_abr::Abr;
 use kithara_assets::{ProducerHandle, ReadSide, WriteSide};
-use kithara_events::{FileError, FileEvent};
+use kithara_events::{FileError, FileEvent, TotalBytesSource};
 use kithara_net::{Headers, NetError, RangeSpec, Retryability};
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::ResourceStatus;
@@ -16,7 +16,7 @@ use kithara_stream::{
     dl::{FetchCmd, Peer, RequestPriority, reject_html_response},
 };
 
-use super::inner::{FileInner, FilePhase};
+use crate::session::inner::{FileInner, FilePhase};
 
 /// File-track Peer: gap-driven downloader over a single remote file.
 ///
@@ -186,12 +186,17 @@ impl FileInner {
     /// the partial body length, so the resource's full size is
     /// `resume_from + content_length`.
     fn capture_content_metadata(&self, headers: &Headers, resume_from: u64) {
+        let previous_total = self.source.coord.total_bytes();
         let content_length = headers
             .get("content-length")
             .or_else(|| headers.get("Content-Length"))
             .and_then(|v| v.parse::<u64>().ok());
         if let Some(len) = content_length {
-            self.source.coord.set_total_bytes(Some(resume_from + len));
+            let total_bytes = resume_from + len;
+            self.source.coord.set_total_bytes(Some(total_bytes));
+            if previous_total != Some(total_bytes) {
+                self.publish_total_bytes_resolved(total_bytes, TotalBytesSource::ContentLength);
+            }
         }
         let info = headers
             .get("content-type")
@@ -200,6 +205,7 @@ impl FileInner {
         if let Some(i) = info {
             let _ = self.content_type_info.set(i);
         }
+        self.publish_opened(self.source.coord.total_bytes(), false, None);
     }
 
     /// Apply the result of a streaming fetch to the resource.
@@ -270,5 +276,101 @@ impl FileInner {
             .or_else(|| self.source.coord.total_bytes())
             .unwrap_or(u64::MAX);
         self.asset.reader.next_gap(0, upper).map(|gap| gap.start)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_assets::{AcquisitionResult, AssetStoreBuilder, StorageBackend};
+    use kithara_events::{Envelope, Event, EventBus};
+    use kithara_platform::{CancelToken, sync::Arc};
+    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_test_utils::kithara;
+    use url::Url;
+
+    use super::*;
+    use crate::coord::FileCoord;
+
+    fn make_inner() -> Arc<FileInner> {
+        let store = Arc::new(
+            AssetStoreBuilder::default()
+                .backend(StorageBackend::Memory)
+                .cancel(CancelToken::never())
+                .build(),
+        );
+        let key = store.scope("test").key("remote.dat");
+        let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
+            panic!("fresh acquire must be Pending");
+        };
+        let coord = Arc::new(FileCoord::new(
+            Arc::new(PlayheadState::new()),
+            Arc::new(SeekState::new()),
+        ));
+        let bus = EventBus::new(16);
+        Arc::new(FileInner::new(
+            crate::session::inner::FileSourceCtx {
+                coord,
+                cancel: CancelToken::never(),
+                bus,
+            },
+            crate::session::inner::FileAssetCtx {
+                backend: store,
+                reader: writer.reader(),
+                writer: Mutex::new(Some(writer)),
+                headers: None,
+                raw: None,
+                key,
+                url: Url::parse("http://127.0.0.1/test.mp3").expect("test url"),
+            },
+            FilePhase::Init,
+            None,
+        ))
+    }
+
+    #[kithara::test]
+    fn remote_capture_metadata_publishes_opened() {
+        let inner = make_inner();
+        let mut rx = inner.source.bus.subscribe();
+        let mut headers = Headers::new();
+        headers.insert("content-type", "audio/mpeg");
+        headers.insert("content-length", "12");
+
+        inner.capture_content_metadata(&headers, 0);
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Envelope {
+                event: Event::File(FileEvent::TotalBytesResolved { .. }),
+                ..
+            })
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Envelope {
+                event: Event::File(FileEvent::Opened {
+                    cached: false,
+                    total_bytes: Some(12),
+                    ..
+                }),
+                ..
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn complete_phase_publishes_cache_complete() {
+        let inner = make_inner();
+        let mut rx = inner.source.bus.subscribe();
+        inner.source.coord.set_total_bytes(Some(12));
+
+        inner.set_phase(FilePhase::Complete);
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Envelope {
+                event: Event::File(FileEvent::CacheComplete { total_bytes: 12 }),
+                ..
+            })
+        ));
     }
 }

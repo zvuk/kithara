@@ -1,50 +1,27 @@
-use core::sync::atomic::{AtomicU64, Ordering};
+use crate::TrackId;
 
-/// Monotonic identifier for a track across the entire process.
-///
-/// Allocated from a single global counter so [`Queue`](crate::queue) and
-/// FFI items share one address space — the value `audioId` reports
-/// over the FFI boundary is exactly the value the queue uses
-/// internally. Stable across removals: removing a track and adding a
-/// new one yields a fresh id.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    derive_more::Display,
-    derive_more::From,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-)]
-pub struct TrackId(pub u64);
-
-impl From<TrackId> for u64 {
-    fn from(id: TrackId) -> Self {
-        id.0
-    }
+/// Why queue navigation advanced away from the previous current track.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AdvanceReason {
+    NaturalEof,
+    CrossfadePreArm,
+    UserSelect,
+    UserNext,
+    UserPrev,
+    TrackFailed,
+    RemovedCurrent,
+    Repeat,
+    Cancelled,
 }
 
-impl TrackId {
-    /// Allocate the next monotonic id from the process-wide counter.
-    ///
-    /// This is the single allocation site: the FFI item layer reserves
-    /// an id at construction so caller-visible `audioId` is stable from
-    /// day one, and `Queue::insert` consumes that same id without
-    /// re-allocating. The counter starts at `0` and is never reset.
-    #[must_use]
-    pub fn allocate() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-
-    /// Raw id value.
-    #[must_use]
-    pub fn as_u64(self) -> u64 {
-        self.0
-    }
+/// Queue repeat mode mirrored into the event surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum QueueRepeatMode {
+    Off,
+    One,
+    All,
 }
 
 /// Loading lifecycle of a track in the queue.
@@ -84,10 +61,25 @@ pub enum QueueEvent {
     TrackStatusChanged { id: TrackId, status: TrackStatus },
     /// The currently playing track changed.
     CurrentTrackChanged { id: Option<TrackId> },
+    /// Why the current track advanced.
+    CurrentTrackAdvance {
+        id: Option<TrackId>,
+        reason: AdvanceReason,
+    },
     /// Queue reached the end and is not repeating.
     QueueEnded,
+    /// The current track failed to load or continue, and the queue may have skipped it.
+    TrackLoadFailed {
+        id: TrackId,
+        reason: String,
+        auto_skipped: bool,
+    },
     /// The crossfade duration was updated at runtime.
     CrossfadeDurationChanged { seconds: f32 },
+    /// Repeat mode changed.
+    RepeatModeChanged { mode: QueueRepeatMode },
+    /// A successor finished loading and is ready for navigation / handover.
+    NextTrackReady { id: TrackId, index: usize },
     /// A crossfade between tracks just started. Emitted when
     /// [`Queue::select`](https://docs.rs/kithara-queue) triggers the engine
     /// to fade from a currently-playing track to the newly selected one.

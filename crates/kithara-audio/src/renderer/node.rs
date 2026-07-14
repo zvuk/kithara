@@ -1,9 +1,10 @@
 use kithara_decode::PcmChunk;
+use kithara_events::{AudioEvent, DeferredBus, Event};
 use kithara_platform::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use kithara_stream::SeekObserve;
+use kithara_stream::{PlayheadRead, SeekObserve};
 
 use super::{AudioWorkerSource, EngineLoad, PreloadGate, ServiceClass};
 use crate::{
@@ -26,6 +27,8 @@ pub(crate) struct TrackRegistration {
     /// pooled buffer is freed/recycled on the worker thread rather than on
     /// the audio thread. See `crates/kithara-audio/CONTEXT.md`.
     pub(crate) trash_inlet: Inlet<PcmChunk>,
+    pub(crate) playhead: Arc<dyn PlayheadRead>,
+    pub(crate) emit: Arc<DeferredBus<Event>>,
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
     pub(crate) outlet: Outlet<Fetch<PcmChunk>>,
     pub(crate) preload_chunks: usize,
@@ -42,6 +45,8 @@ pub(crate) struct DecoderRuntime {
     pub(crate) preloaded: bool,
     pub(crate) seek_epoch: u64,
     pub(crate) chunks_sent: usize,
+    pub(crate) last_buffer_health_emit: Option<Instant>,
+    pub(crate) last_engine_load_emit: Option<Instant>,
 }
 
 /// A node that decodes audio chunks.
@@ -66,6 +71,8 @@ pub(crate) struct DecoderNode {
     /// before the produce core, so the pooled buffers are freed/recycled on
     /// this worker thread, never on the audio thread.
     trash_inlet: Inlet<PcmChunk>,
+    playhead: Arc<dyn PlayheadRead>,
+    emit: Arc<DeferredBus<Event>>,
     /// Live engine cost meter. When present, each produced chunk records the
     /// tick's decode+effects wall time against the audio it yielded.
     engine_load: Option<Arc<EngineLoad>>,
@@ -74,6 +81,9 @@ pub(crate) struct DecoderNode {
 }
 
 impl DecoderNode {
+    const BUFFER_HEALTH_EMIT_MIN: Duration = Duration::from_millis(250);
+    const ENGINE_LOAD_EMIT_MIN: Duration = Duration::from_millis(500);
+
     fn complete_preload(&mut self) {
         if !self.runtime.preloaded {
             self.preload_gate.signal_epoch(self.runtime.seek_epoch);
@@ -98,6 +108,61 @@ impl DecoderNode {
         if let (Some(load), Fetch::Data { data, .. }) = (self.engine_load.as_ref(), fetch) {
             load.record(busy, data.frames(), data.spec().sample_rate.get());
         }
+    }
+
+    fn maybe_emit_buffer_health(&mut self, now: Instant) {
+        if self
+            .runtime
+            .last_buffer_health_emit
+            .is_some_and(|last| now.duration_since(last) < Self::BUFFER_HEALTH_EMIT_MIN)
+        {
+            return;
+        }
+        self.runtime.last_buffer_health_emit = Some(now);
+        let position = self.playhead.position();
+        let decoded_frontier = self.playhead.decoded_frontier();
+        let decoded_frontier_ms = decoded_frontier.as_millis().try_into().unwrap_or(u64::MAX);
+        let buffered_ms = decoded_frontier
+            .saturating_sub(position)
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        self.emit.enqueue(
+            AudioEvent::BufferHealth {
+                buffered_ms,
+                decoded_frontier_ms,
+                seek_epoch: self.runtime.seek_epoch,
+            }
+            .into(),
+        );
+    }
+
+    fn maybe_emit_engine_load(&mut self, now: Instant) {
+        let Some(load) = self.engine_load.as_ref() else {
+            return;
+        };
+        if self
+            .runtime
+            .last_engine_load_emit
+            .is_some_and(|last| now.duration_since(last) < Self::ENGINE_LOAD_EMIT_MIN)
+        {
+            return;
+        }
+        self.runtime.last_engine_load_emit = Some(now);
+        let snapshot = load.snapshot();
+        self.emit.enqueue(
+            AudioEvent::EngineLoad {
+                load: snapshot.load(),
+                ms_per_chunk: snapshot.ms(),
+                realtime_factor: snapshot.realtime(),
+            }
+            .into(),
+        );
+    }
+
+    fn maybe_emit_worker_telemetry(&mut self, now: Instant) {
+        self.maybe_emit_buffer_health(now);
+        self.maybe_emit_engine_load(now);
     }
 
     /// Reset preload state when a new seek epoch arrives.
@@ -140,6 +205,8 @@ impl From<TrackRegistration> for DecoderNode {
             source: reg.source,
             outlet: reg.outlet,
             trash_inlet: reg.trash_inlet,
+            playhead: reg.playhead,
+            emit: reg.emit,
             service_class: reg.service_class,
             preload_gate: reg.preload_gate,
             preload_chunks: reg.preload_chunks,
@@ -179,7 +246,7 @@ impl Node for DecoderNode {
         }
 
         let start = Instant::now();
-        match self.source.step_track() {
+        let result = match self.source.step_track() {
             TrackStep::Produced(fetch) => {
                 self.record_load(start.elapsed(), &fetch);
                 self.runtime.eof_sent = false;
@@ -231,7 +298,9 @@ impl Node for DecoderNode {
                     TickResult::Waiting
                 }
             }
-        }
+        };
+        self.maybe_emit_worker_telemetry(Instant::now());
+        result
     }
 
     fn warm_up(&mut self) {
@@ -243,8 +312,9 @@ impl Node for DecoderNode {
 mod tests {
     use kithara_bufpool::PcmPool;
     use kithara_decode::PcmMeta;
+    use kithara_events::{AudioEvent, Event, EventBus};
     use kithara_platform::time::Duration;
-    use kithara_stream::{SeekControl, SeekObserve, SeekState};
+    use kithara_stream::{PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -274,6 +344,8 @@ mod tests {
             outlet,
             trash_inlet,
             preload_gate,
+            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadRead>,
+            emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             preload_chunks: 1,
             engine_load: None,
@@ -350,6 +422,8 @@ mod tests {
             trash_inlet,
             seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             preload_gate: Arc::new(PreloadGate::default()),
+            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadRead>,
+            emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             preload_chunks: 1,
             engine_load: Some(Arc::clone(&meter)),
@@ -361,6 +435,58 @@ mod tests {
             meter.snapshot().is_active(),
             "engine meter records on a Produced tick: {:?}",
             meter.snapshot()
+        );
+    }
+
+    #[kithara::test]
+    fn worker_telemetry_throttles_immediate_repeats() {
+        let (outlet, _inlet) = connect::<Fetch<PcmChunk>>(4, None);
+        let source = Box::new(Unimock::new(()));
+        let gate = Arc::new(PreloadGate::default());
+        let seek = Arc::new(SeekState::new());
+        let playhead = Arc::new(PlayheadState::new());
+        playhead.set_position(Duration::from_millis(100));
+        playhead.set_decoded_frontier(Duration::from_millis(350));
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let emit = Arc::new(DeferredBus::new(bus, 8));
+        let meter = Arc::new(EngineLoad::default());
+        meter.record(Duration::from_millis(5), 4_410, 44_100);
+
+        let mut node = DecoderNode {
+            seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
+            source,
+            outlet,
+            trash_inlet: connect::<PcmChunk>(4, None).1,
+            preload_gate: gate,
+            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadRead>,
+            emit: Arc::clone(&emit),
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
+            preload_chunks: 1,
+            engine_load: Some(meter),
+            runtime: DecoderRuntime::default(),
+        };
+
+        let now = kithara_platform::time::Instant::now();
+        node.maybe_emit_worker_telemetry(now);
+        node.maybe_emit_worker_telemetry(now);
+        emit.flush();
+
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(Event::Audio(AudioEvent::BufferHealth {
+                buffered_ms: 250,
+                decoded_frontier_ms: 350,
+                seek_epoch: 0,
+            }))
+        ));
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(Event::Audio(AudioEvent::EngineLoad { .. }))
+        ));
+        assert!(
+            events.try_recv().is_err(),
+            "second immediate tick stays throttled"
         );
     }
 

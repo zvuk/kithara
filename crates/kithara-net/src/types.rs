@@ -5,6 +5,8 @@ use bon::Builder;
 use kithara_bufpool::BytePool;
 use kithara_platform::{time::Duration, traits::FromWithParams};
 
+use crate::observe::Observer;
+
 bitflags! {
     /// HTTP `Accept-Encoding` algorithms the client advertises and is
     /// willing to decode. Reqwest auto-adds the corresponding
@@ -186,6 +188,7 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
+    pub observer: Option<Observer>,
 }
 
 impl Default for NetOptions {
@@ -206,6 +209,7 @@ impl FromWithParams<Self, BytePool> for NetOptions {
             .body_queue_resume_at(options.body_queue_resume_at)
             .byte_pool(byte_pool)
             .impersonate(options.impersonate)
+            .maybe_observer(options.observer)
             .build()
     }
 }

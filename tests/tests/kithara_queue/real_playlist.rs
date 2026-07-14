@@ -4,7 +4,7 @@ use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{AbrMode, AdvanceReason, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -123,7 +123,7 @@ async fn wait_for_status(
     let res = timeout(deadline, async {
         loop {
             let ev = match rx.recv().await {
-                Ok(ev) => ev,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             };
@@ -563,7 +563,7 @@ where
     use kithara::platform::tokio::sync::broadcast::error::RecvError;
     let res = timeout(deadline, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Queue(ev)) if pred(&ev) => return Some(ev),
                 Ok(_) => continue,
                 Err(RecvError::Lagged(_)) => continue,
@@ -667,7 +667,8 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     .await
     .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = ctx.queue.crossfade_duration();
-    ctx.queue.advance_to_next(Transition::Crossfade);
+    ctx.queue
+        .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
     let started = wait_for_queue_event(
         &mut rx,
         |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),

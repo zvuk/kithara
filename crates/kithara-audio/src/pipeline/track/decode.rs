@@ -109,7 +109,7 @@ pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> Deco
         step::tick(
             &mut src.decode,
             DecodeCtx {
-                emit: src.emit.as_ref(),
+                emit: src.emit.as_deref(),
                 playhead: src.playhead.as_ref(),
                 resume,
                 cursor: &mut src.resume,

@@ -337,7 +337,7 @@ async fn wait_for_seek_landed(
     }
     let landed = timeout(budget, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     if ((position_ms as f64 / 1000.0) - target).abs() < 1.0 {
                         return Ok(());
@@ -409,7 +409,7 @@ async fn wait_for_post_seek_advance(
     }
     let advanced = timeout(budget, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     let p = position_ms as f64 / 1000.0;
                     if (p - target) >= min_advance {

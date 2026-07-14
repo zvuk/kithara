@@ -1,17 +1,22 @@
 use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass, PcmChunk};
-use kithara_events::{AudioEvent, SeekLifecycleStage, SegmentLocation};
+use kithara_events::{AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation};
 use kithara_stream::{PendingReason, StreamType};
 use kithara_test_utils::kithara;
 
-use crate::pipeline::{
-    decode::{
-        core::{DecodeAction, DecodeCore, DecodeCtx},
-        format::{FormatDecision, detect, handle_variant_change},
+use crate::{
+    audio::event::{
+        decode_error_detail, map_audio_codec_kind, map_decode_error_class, map_decode_error_kind,
     },
-    fetch::Fetch,
-    gapless::visible_duration,
-    seek::skip::apply as apply_skip,
-    track::{TrackFailure, WaitingReason},
+    pipeline::{
+        decode::{
+            core::{DecodeAction, DecodeCore, DecodeCtx},
+            format::{FormatDecision, detect, handle_variant_change},
+        },
+        fetch::Fetch,
+        gapless::visible_duration,
+        seek::skip::apply as apply_skip,
+        track::{TrackFailure, WaitingReason},
+    },
 };
 
 struct Consts;
@@ -85,7 +90,7 @@ pub(crate) fn tick<T: StreamType>(
                     return produced(chunk, epoch, &mut ctx);
                 }
                 if let Some(emit) = ctx.emit {
-                    emit.enqueue(AudioEvent::EndOfStream);
+                    emit.enqueue(AudioEvent::EndOfStream.into());
                 }
                 return DecodeAction::Eof;
             }
@@ -93,7 +98,25 @@ pub(crate) fn tick<T: StreamType>(
                 return variant_change(core, &ctx, &error);
             }
             Err(error) if error.classify() == ErrorClass::Interrupted => {}
-            Err(error) => return DecodeAction::Failed(TrackFailure::Decode(error)),
+            Err(error) => {
+                if let Some(emit) = ctx.emit {
+                    emit.enqueue(
+                        DecoderEvent::DecodeError {
+                            class: map_decode_error_class(error.classify()),
+                            kind: map_decode_error_kind(&error),
+                            codec: core
+                                .session()
+                                .media_info
+                                .as_ref()
+                                .and_then(|info| info.codec)
+                                .map(map_audio_codec_kind),
+                            detail: decode_error_detail(&error),
+                        }
+                        .into(),
+                    );
+                }
+                return DecodeAction::Failed(TrackFailure::Decode(error));
+            }
         }
     }
 }
@@ -109,16 +132,19 @@ pub(crate) fn produced<T: StreamType>(
         .is_some_and(|resume| resume.seek.epoch == epoch)
         && let Some(emit) = ctx.emit
     {
-        emit.enqueue(AudioEvent::SeekLifecycle {
-            stage: SeekLifecycleStage::DecodeStarted,
-            seek_epoch: epoch,
-            location: SegmentLocation::new(
-                chunk.meta.variant_index,
-                chunk.meta.segment_index,
-                None,
-                None,
-            ),
-        });
+        emit.enqueue(
+            AudioEvent::SeekLifecycle {
+                stage: SeekLifecycleStage::DecodeStarted,
+                seek_epoch: epoch,
+                location: SegmentLocation::new(
+                    chunk.meta.variant_index,
+                    chunk.meta.segment_index,
+                    None,
+                    None,
+                ),
+            }
+            .into(),
+        );
     }
     ctx.cursor.record(&chunk, epoch);
     DecodeAction::Produced(Fetch::data(chunk, epoch))

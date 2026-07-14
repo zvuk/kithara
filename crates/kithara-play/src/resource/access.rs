@@ -11,6 +11,11 @@ impl<B: Default> ResourceConfig<B> {
         self.bus.as_ref()
     }
 
+    /// Replace the event bus attached to this resource.
+    pub fn set_bus(&mut self, bus: EventBus) {
+        self.bus = Some(bus);
+    }
+
     /// Optional cache-disambiguating resource name.
     #[must_use]
     pub fn name(&self) -> Option<&str> {

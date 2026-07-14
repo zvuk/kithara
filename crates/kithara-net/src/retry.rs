@@ -16,6 +16,7 @@ mod kithara {
 use crate::{
     ByteStream,
     error::{NetError, Retryability},
+    observe::Observer,
     traits::Net,
     types::{Headers, RangeSpec, RetryPolicy},
 };
@@ -46,14 +47,16 @@ impl DefaultRetryPolicy {
 pub struct RetryNet<N, P> {
     cancel: CancelToken,
     inner: N,
+    observer: Option<Observer>,
     retry_policy: P,
 }
 
 impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
-    pub fn new(inner: N, retry_policy: P, cancel: CancelToken) -> Self {
+    pub fn new(inner: N, retry_policy: P, cancel: CancelToken, observer: Option<Observer>) -> Self {
         Self {
             cancel,
             inner,
+            observer,
             retry_policy,
         }
     }
@@ -71,6 +74,9 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
             };
             if self.retry_policy.should_retry(&error, attempt) {
                 let delay = self.retry_policy.delay_for_attempt(attempt);
+                if let Some(observer) = self.observer.as_ref() {
+                    observer.0.retrying(attempt + 1, max, &error, delay);
+                }
                 tokio::select! {
                     biased;
                     () = self.cancel.cancelled() => return Err(NetError::Cancelled),
@@ -87,6 +93,9 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
             // pass-through (no retries were promised, none were exhausted).
             return Err(
                 if max > 0 && error.retryability() == Retryability::Transient {
+                    if let Some(observer) = self.observer.as_ref() {
+                        observer.0.retry_exhausted(max, 0, &error);
+                    }
                     NetError::RetryExhausted {
                         max_retries: max,
                         source: Box::new(error),
@@ -210,7 +219,12 @@ mod tests {
     }
 
     fn retry_net(mock: Unimock, policy: RetryPolicy) -> RetryNet<Unimock, DefaultRetryPolicy> {
-        RetryNet::new(mock, DefaultRetryPolicy::new(policy), CancelToken::never())
+        RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancelToken::never(),
+            None,
+        )
     }
 
     fn retry_net_default(mock: Unimock) -> RetryNet<Unimock, DefaultRetryPolicy> {
@@ -537,7 +551,7 @@ mod tests {
             max_retries: 3,
         };
         let cancel = CancelToken::never();
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone());
+        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone(), None);
 
         let url = test_url();
         let result = retry_net.get_bytes(url, None);

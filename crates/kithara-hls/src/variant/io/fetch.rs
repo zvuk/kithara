@@ -52,6 +52,7 @@ impl HlsVariant {
             writer,
             cancel: cancel.clone(),
             signal: signal.clone(),
+            bus: self.profile.bus.clone(),
         };
         // Capture the slot's CAS cell before the claim moves into `on_complete`
         // so the slow hook can flag this in-flight fetch when it crosses the

@@ -78,7 +78,7 @@ pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
 
 fn emit_event<T: StreamType>(src: &StreamAudioSource<T>, event: AudioEvent) {
     if let Some(ref emit) = src.emit {
-        emit.enqueue(event);
+        emit.enqueue(event.into());
     }
 }
 

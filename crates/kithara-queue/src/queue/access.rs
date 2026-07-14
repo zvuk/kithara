@@ -1,4 +1,4 @@
-use kithara_events::{EventReceiver, TrackId};
+use kithara_events::{EventReceiver, QueueEvent, QueueRepeatMode, TrackId};
 
 use super::Queue;
 use crate::{
@@ -78,6 +78,9 @@ impl Queue {
     /// Set repeat mode.
     pub fn set_repeat(&self, mode: RepeatMode) {
         self.lock_navigation_mut().set_repeat(mode);
+        self.bus.publish(QueueEvent::RepeatModeChanged {
+            mode: map_repeat_mode(mode),
+        });
     }
 
     /// Enable or disable shuffle.
@@ -107,5 +110,13 @@ impl Queue {
     #[must_use]
     pub fn track_source(&self, id: TrackId) -> Option<TrackSource> {
         self.tracks.source(id)
+    }
+}
+
+fn map_repeat_mode(mode: RepeatMode) -> QueueRepeatMode {
+    match mode {
+        RepeatMode::Off => QueueRepeatMode::Off,
+        RepeatMode::One => QueueRepeatMode::One,
+        RepeatMode::All => QueueRepeatMode::All,
     }
 }

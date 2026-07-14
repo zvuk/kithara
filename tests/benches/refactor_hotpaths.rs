@@ -322,6 +322,8 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                         .byte_pool(BytePool::default())
                         .pcm_pool(PcmPool::default())
                         .hint(("mp3").to_string())
+                        .byte_pool(BytePool::default())
+                        .pcm_pool(PcmPool::default())
                         .build();
                     let mut audio = Audio::<Stream<File>>::new(config)
                         .await

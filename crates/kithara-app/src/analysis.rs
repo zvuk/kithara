@@ -4,7 +4,7 @@ use kithara::{
     assets::AssetStore,
     audio::analysis::BeatAnalysisConfig,
     bufpool::PcmPool,
-    events::{Event, EventReceiver, TrackId},
+    events::{Envelope, Event, EventReceiver, TrackId},
     prelude::{PlaybackResamplerBackend, ResourceConfig},
 };
 use kithara_platform::{
@@ -58,7 +58,7 @@ pub(crate) async fn listen(
             () = cancel.cancelled() => break,
             () = driver.drive(&queue, &state, &config) => {}
             event = rx.recv() => match event {
-                Ok(event) => {
+                Ok(Envelope { event, .. }) => {
                     let track_changed =
                         matches!(event, Event::Queue(QueueEvent::CurrentTrackChanged { .. }));
                     let tracks_changed = matches!(

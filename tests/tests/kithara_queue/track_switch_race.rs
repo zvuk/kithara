@@ -189,7 +189,10 @@ where
         if remaining.is_zero() {
             return None;
         }
-        match kithara::platform::time::timeout(remaining, rx.recv()).await {
+        match kithara::platform::time::timeout(remaining, rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Queue(ev))) if pred(&ev) => return Some(ev),
             Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
             Ok(Err(RecvError::Closed)) | Err(_) => return None,
@@ -472,7 +475,7 @@ async fn supersede_while_loading_cancels_slow_track() {
 fn drain_event_backlog(rx: &mut EventReceiver) {
     use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
     loop {
-        match rx.try_recv() {
+        match rx.try_recv().map(|env| env.event) {
             Ok(_) => {}
             Err(TryRecvError::Lagged(_)) => continue,
             Err(_) => break,

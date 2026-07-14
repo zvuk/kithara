@@ -5,8 +5,8 @@ use kithara::{
     assets::StoreOptions,
     decode::DecoderBackend,
     events::{
-        AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId,
-        TrackStatus, VariantInfo,
+        AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
+        TrackId, TrackStatus, VariantInfo,
     },
     net::{HttpClient, NetOptions},
     platform::{
@@ -475,7 +475,11 @@ impl SimHarness {
 
     async fn do_select_next(&mut self) {
         let mut rx = self.queue.subscribe();
-        if self.queue.advance_to_next(Transition::None).is_some() {
+        if self
+            .queue
+            .advance_to_next(Transition::None, AdvanceReason::UserNext)
+            .is_some()
+        {
             self.await_current_changed(&mut rx).await;
             self.last_known_codec = self.current_codec();
         }
@@ -948,7 +952,7 @@ impl SimHarness {
 fn drain_playback_progress(rx: &mut EventReceiver) -> bool {
     let mut saw_progress = false;
     loop {
-        match rx.try_recv() {
+        match rx.try_recv().map(|env| env.event) {
             Ok(Event::Audio(AudioEvent::PlaybackProgress { .. })) => saw_progress = true,
             Ok(_) => {}
             Err(TryRecvError::Lagged(_)) => continue,
@@ -966,7 +970,7 @@ fn drain_playback_progress(rx: &mut EventReceiver) -> bool {
 async fn recv_event(rx: &mut EventReceiver) -> Result<Option<Event>, String> {
     use kithara::platform::tokio::sync::broadcast::error::RecvError;
     match rx.recv().await {
-        Ok(ev) => Ok(Some(ev)),
+        Ok(env) => Ok(Some(env.event)),
         Err(RecvError::Lagged(_)) => Ok(None),
         Err(RecvError::Closed) => Err("event bus closed".to_string()),
     }
