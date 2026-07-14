@@ -59,6 +59,7 @@ android = ["kithara-decode/android", "resample-rubato"]
 # Enable the Symphonia software decoder path. Disable to build with
 # only the hardware backend (apple or android) and no software fallback.
 symphonia = ["kithara-decode/symphonia"]
+webcodecs = ["kithara-decode/webcodecs"]
 # Enable libfdk-aac for HE-AAC v1/v2 decode. Symphonia's stock AAC
 # decoder is LC-only; without this feature, HE-AAC v2 streams fail to
 # play through the software fallback.
@@ -94,7 +95,9 @@ biquad = { workspace = true }
 bon = { workspace = true }
 crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
+derive_more = { workspace = true }
 fast-interleave = { workspace = true }
+fieldwork = { workspace = true }
 hotpath = { workspace = true, optional = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }

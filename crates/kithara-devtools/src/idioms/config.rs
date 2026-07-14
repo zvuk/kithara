@@ -32,6 +32,16 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) const_group_enum_shape: ConstGroupEnumShapeConfig,
     #[serde(default)]
+    pub(crate) derivable_delegation: DerivableDelegationConfig,
+    #[serde(default)]
+    pub(crate) derivable_display: DerivableConfig,
+    #[serde(default)]
+    pub(crate) derivable_deref: DerivableConfig,
+    #[serde(default)]
+    pub(crate) derivable_from: DerivableConfig,
+    #[serde(default)]
+    pub(crate) derivable_getter: DerivableGetterConfig,
+    #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]
     pub(crate) function_branch_density: FunctionBranchDensityConfig,
@@ -55,6 +65,102 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) pointwise_loop: PointwiseLoopConfig,
     #[serde(default)]
     pub(crate) retry_fallback: RetryFallbackConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DerivableConfig {
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+}
+
+impl Default for DerivableConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DerivableGetterConfig {
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+    #[serde(default = "default_qualified_deref_remaps")]
+    pub(crate) qualified_deref_remaps: Vec<QualifiedDerefRemap>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QualifiedDerefRemap {
+    pub(crate) field_type: String,
+    pub(crate) scoped_name: String,
+}
+
+fn default_qualified_deref_remaps() -> Vec<QualifiedDerefRemap> {
+    vec![QualifiedDerefRemap {
+        field_type: "PathBuf".into(),
+        scoped_name: "Path".into(),
+    }]
+}
+
+impl Default for DerivableGetterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            qualified_deref_remaps: default_qualified_deref_remaps(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DerivableDelegationConfig {
+    #[serde(default = "default_delegation_enabled")]
+    pub(crate) enabled: bool,
+    #[serde(default = "default_trait_delegation_methods")]
+    pub(crate) trait_min_methods: usize,
+    #[serde(default = "default_inherent_delegation_methods")]
+    pub(crate) inherent_min_methods: usize,
+    #[serde(default = "default_blocking_impl_attrs")]
+    pub(crate) blocking_impl_attrs: Vec<String>,
+    #[serde(default = "default_keep_manual_method_attrs")]
+    pub(crate) keep_manual_method_attrs: Vec<String>,
+}
+
+fn default_delegation_enabled() -> bool {
+    true
+}
+
+fn default_trait_delegation_methods() -> usize {
+    2
+}
+
+fn default_inherent_delegation_methods() -> usize {
+    2
+}
+
+fn default_blocking_impl_attrs() -> Vec<String> {
+    vec![
+        "async_trait".into(),
+        "uniffi::export".into(),
+        "wasm_bindgen".into(),
+    ]
+}
+
+fn default_keep_manual_method_attrs() -> Vec<String> {
+    Vec::new()
+}
+
+impl Default for DerivableDelegationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            trait_min_methods: default_trait_delegation_methods(),
+            inherent_min_methods: default_inherent_delegation_methods(),
+            blocking_impl_attrs: default_blocking_impl_attrs(),
+            keep_manual_method_attrs: default_keep_manual_method_attrs(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -497,4 +603,22 @@ where
     let text = fs::read_to_string(path)
         .with_context(|| format!("read idioms config: {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parse idioms config: {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keep_manual_method_attrs_defaults_to_empty() -> Result<()> {
+        let configured: DerivableDelegationConfig = toml::from_str("")?;
+
+        assert!(configured.keep_manual_method_attrs.is_empty());
+        assert!(
+            DerivableDelegationConfig::default()
+                .keep_manual_method_attrs
+                .is_empty()
+        );
+        Ok(())
+    }
 }

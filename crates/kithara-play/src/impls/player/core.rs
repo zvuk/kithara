@@ -228,12 +228,41 @@ impl PlayerImpl {
         self.core.auto_advance_enabled.load(Ordering::Relaxed)
     }
 
-    /// Root event bus for this player.
-    ///
-    /// Use `bus().scoped()` to create a child scope for a resource.
-    #[must_use]
-    pub fn bus(&self) -> &EventBus {
-        &self.core.bus
+    delegate::delegate! {
+        to self.core {
+            /// Root event bus for this player.
+            ///
+            /// Use `bus().scoped()` to create a child scope for a resource.
+            #[must_use]
+            #[field(&bus)]
+            pub fn bus(&self) -> &EventBus;
+            /// Get player configuration.
+            #[field(&config)]
+            pub fn config(&self) -> &PlayerConfig;
+            /// Get a reference to the underlying engine.
+            #[field(&engine)]
+            pub fn engine(&self) -> &EngineImpl;
+        }
+        to self.core.engine {
+            /// Runtime handle captured by this player's engine.
+            ///
+            /// Use when building a shared
+            /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
+            /// land on the same runtime the audio engine observes, then pass the
+            /// downloader through
+            /// [`ResourceConfig::with_downloader`](crate::impls::config::ResourceConfig::with_downloader).
+            #[must_use]
+            pub fn runtime(&self) -> Option<&RuntimeHandle>;
+            /// Pump audio backend/runtime state.
+            pub fn tick(&self) -> Result<(), PlayError>;
+            /// Shared audio worker handle for this player's engine.
+            ///
+            /// Clone and pass to
+            /// [`ResourceConfig::with_worker`](crate::impls::config::ResourceConfig::with_worker)
+            /// so resources loaded into this player share a single decode thread.
+            #[must_use]
+            pub fn worker(&self) -> &AudioWorkerHandle;
+        }
     }
 
     /// Drop the resource at `index` so the auto-advance prefetch path
@@ -253,11 +282,6 @@ impl PlayerImpl {
         }
     }
 
-    /// Get player configuration.
-    pub fn config(&self) -> &PlayerConfig {
-        &self.core.config
-    }
-
     /// Get crossfade duration in seconds.
     pub fn crossfade_duration(&self) -> f32 {
         self.core.crossfade_duration.load(Ordering::Relaxed)
@@ -271,11 +295,6 @@ impl PlayerImpl {
     /// Default playback rate used by `play()` and `select_item()`.
     pub fn default_rate(&self) -> f32 {
         self.core.default_rate.load(Ordering::Relaxed)
-    }
-
-    /// Get a reference to the underlying engine.
-    pub fn engine(&self) -> &EngineImpl {
-        &self.core.engine
     }
 
     /// Live cost snapshot of the audio engine (decode + effects).
@@ -330,7 +349,6 @@ impl PlayerImpl {
         });
         Ok(())
     }
-
     /// Returns `true` if the player is muted.
     pub fn is_muted(&self) -> bool {
         self.core.muted.load(Ordering::Relaxed)
@@ -487,18 +505,6 @@ impl PlayerImpl {
         debug!(count, "slots reserved");
     }
 
-    /// Runtime handle captured by this player's engine.
-    ///
-    /// Use when building a shared
-    /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
-    /// land on the same runtime the audio engine observes, then pass the
-    /// downloader through
-    /// [`ResourceConfig::with_downloader`](crate::impls::config::ResourceConfig::with_downloader).
-    #[must_use]
-    pub fn runtime(&self) -> Option<&RuntimeHandle> {
-        self.core.engine.runtime()
-    }
-
     /// Get ducking mode for this player's engine session.
     pub fn session_ducking(&self) -> SessionDuckingMode {
         EngineImpl::session_ducking()
@@ -576,24 +582,9 @@ impl PlayerImpl {
         self.core.bus.subscribe()
     }
 
-    /// Pump audio backend/runtime state.
-    pub fn tick(&self) -> Result<(), PlayError> {
-        self.core.engine.tick()
-    }
-
     /// Get current volume (0.0..=1.0).
     pub fn volume(&self) -> f32 {
         self.core.volume.load(Ordering::Relaxed)
-    }
-
-    /// Shared audio worker handle for this player's engine.
-    ///
-    /// Clone and pass to
-    /// [`ResourceConfig::with_worker`](crate::impls::config::ResourceConfig::with_worker)
-    /// so resources loaded into this player share a single decode thread.
-    #[must_use]
-    pub fn worker(&self) -> &AudioWorkerHandle {
-        self.core.engine.worker()
     }
 }
 
@@ -604,20 +595,17 @@ impl Drop for PlayerImpl {
 }
 
 impl crate::traits::dj::eq::Equalizer for PlayerImpl {
-    fn band_count(&self) -> usize {
-        self.eq_band_count()
-    }
-
-    fn gain(&self, band: usize) -> Option<f32> {
-        self.eq_gain(band)
-    }
-
-    fn reset(&self) -> Result<(), PlayError> {
-        self.reset_eq()
-    }
-
-    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        self.set_eq_gain(band, gain_db)
+    delegate::delegate! {
+        to self {
+            #[call(eq_band_count)]
+            fn band_count(&self) -> usize;
+            #[call(eq_gain)]
+            fn gain(&self, band: usize) -> Option<f32>;
+            #[call(reset_eq)]
+            fn reset(&self) -> Result<(), PlayError>;
+            #[call(set_eq_gain)]
+            fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError>;
+        }
     }
 }
 

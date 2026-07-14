@@ -33,6 +33,7 @@ bitflags = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
 delegate = { workspace = true }
+derive_more = { workspace = true }
 futures = { workspace = true }
 hotpath = { workspace = true, optional = true }
 thiserror = { workspace = true }

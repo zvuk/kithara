@@ -311,7 +311,7 @@ mod tests {
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),
             controller.register(&peer),
-            Arc::new(vec![variant]),
+            Arc::from(vec![variant]),
             playlist,
         ))
     }

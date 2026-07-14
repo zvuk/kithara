@@ -84,6 +84,7 @@ tls-native = [
 # Enable the Symphonia software decoder path. Disable to compile with
 # only a hardware backend (apple/android) and no software fallback.
 symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia", "kithara-queue?/symphonia"]
+webcodecs = ["kithara-audio/webcodecs", "kithara-decode/webcodecs", "kithara-queue?/webcodecs"]
 # libfdk-aac override for HE-AAC v1/v2 streams. Symphonia ships an
 # LC-only AAC decoder; without this feature, HE-AAC v2 (parametric
 # stereo + SBR) streams fail in the software pipeline.

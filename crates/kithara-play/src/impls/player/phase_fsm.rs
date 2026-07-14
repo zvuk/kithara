@@ -157,17 +157,19 @@ impl PlayerImpl {
         self.publish_time_control_status(TimeControlStatus::Paused, None);
     }
 
-    /// Discriminant of the current phase under a short lock.
-    pub(crate) fn phase_kind(&self) -> PlayerPhaseKind {
-        self.phase.lock().kind()
-    }
-
-    /// Phase gate: the active slot, or [`TransitionError::WrongPhase`] when
-    /// the player holds no slot (phases `Idle` / `Stopped`-without-slot).
-    /// This is the single internal phase predicate; public wrappers absorb
-    /// `WrongPhase` to preserve the pre-split no-op / typed-error contracts.
-    pub(crate) fn require_active_slot(&self) -> Result<SlotId, TransitionError> {
-        self.phase.lock().slot().ok_or(TransitionError::WrongPhase)
+    delegate::delegate! {
+        to self.phase.lock() {
+            /// Discriminant of the current phase under a short lock.
+            #[call(kind)]
+            pub(crate) fn phase_kind(&self) -> PlayerPhaseKind;
+            /// Phase gate: the active slot, or [`TransitionError::WrongPhase`] when
+            /// the player holds no slot (phases `Idle` / `Stopped`-without-slot).
+            /// This is the single internal phase predicate; public wrappers absorb
+            /// `WrongPhase` to preserve the pre-split no-op / typed-error contracts.
+            #[expr($.ok_or(TransitionError::WrongPhase))]
+            #[call(slot)]
+            pub(crate) fn require_active_slot(&self) -> Result<SlotId, TransitionError>;
+        }
     }
 
     /// Send a command to the current slot's processor.

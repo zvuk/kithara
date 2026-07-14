@@ -225,7 +225,8 @@ fn eprint_failing(v: &Violation) {
 pub fn render_markdown(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) -> String {
     let mut out = String::new();
     out.push_str("# Architectural Audit\n\n");
-    out.push_str(&format!(
+    let _ = write!(
+        out,
         "- checks run: {}\n- deny violations: {}\n- warn violations: {}\n- new (since baseline): {}\n- regressions: {}\n- improvements: {}\n\n",
         ran.len(),
         report.deny_count(),
@@ -233,7 +234,7 @@ pub fn render_markdown(report: &Report, ran: &[&'static str], diff: &RatchetDiff
         diff.new_violations.len(),
         diff.regressions.len(),
         diff.improvements.len(),
-    ));
+    );
 
     let mut by_check: BTreeMap<&str, Vec<&_>> = BTreeMap::new();
     for v in &report.violations {
@@ -241,14 +242,11 @@ pub fn render_markdown(report: &Report, ran: &[&'static str], diff: &RatchetDiff
     }
 
     for (check, vs) in by_check {
-        out.push_str(&format!("## {check}\n\n"));
+        let _ = write!(out, "## {check}\n\n");
         out.push_str("| severity | key | message |\n");
         out.push_str("| --- | --- | --- |\n");
         for v in vs {
-            out.push_str(&format!(
-                "| {} | `{}` | {} |\n",
-                v.severity, v.key, v.message,
-            ));
+            let _ = writeln!(out, "| {} | `{}` | {} |", v.severity, v.key, v.message,);
         }
         out.push('\n');
     }
@@ -258,10 +256,11 @@ pub fn render_markdown(report: &Report, ran: &[&'static str], diff: &RatchetDiff
         out.push_str("| check | key | from | to |\n");
         out.push_str("| --- | --- | ---: | ---: |\n");
         for imp in &diff.improvements {
-            out.push_str(&format!(
-                "| {} | `{}` | {} | {} |\n",
+            let _ = writeln!(
+                out,
+                "| {} | `{}` | {} | {} |",
                 imp.check, imp.key, imp.from, imp.to,
-            ));
+            );
         }
         out.push('\n');
     }

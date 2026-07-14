@@ -57,7 +57,7 @@ pub(crate) struct HlsCoordEnv {
     pub(crate) signal: SizeSignal,
 }
 
-/// Thin router over a fixed `Vec<Arc<HlsVariant>>`. Every `Source`-side
+/// Thin router over a fixed slice of [`HlsVariant`] handles. Every `Source`-side
 /// reader op is delegated to `self.active()` (the variant whose index
 /// `AbrState::current_variant_index` resolves to). The coord owns only
 /// what is genuinely cross-variant: the ABR handle (single source of
@@ -66,7 +66,7 @@ pub(crate) struct HlsCoordEnv {
 /// references it hands to variants and to peer `PlanCtx`-builders.
 pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
-    pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
+    pub(crate) variants: Arc<[Arc<HlsVariant>]>,
     pub(crate) scope: AssetScope,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
@@ -129,7 +129,7 @@ impl HlsCoord {
         playhead: Arc<PlayheadState>,
         seek: Arc<SeekState>,
         abr: AbrHandle,
-        variants: Arc<Vec<Arc<HlsVariant>>>,
+        variants: Arc<[Arc<HlsVariant>]>,
         playlist_state: Arc<PlaylistState>,
     ) -> Self {
         assert!(
@@ -833,20 +833,25 @@ impl ByteMap for HlsCoord {
         self.seek_time_anchor(position)
     }
 
-    fn init_segment_range(&self) -> Range<u64> {
-        self.active().map(|v| v.init_byte_range()).unwrap_or(0..0)
-    }
-
-    fn len(&self) -> Option<u64> {
-        self.active()?.stream_len()
+    delegate! {
+        to self {
+            #[expr($.map(|v| v.init_byte_range()).unwrap_or(0..0))]
+            #[call(active)]
+            fn init_segment_range(&self) -> Range<u64>;
+            #[expr($?.stream_len())]
+            #[call(active)]
+            fn len(&self) -> Option<u64>;
+            #[expr($.descriptor_at_byte(byte))]
+            #[call(variant_serving)]
+            fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor>;
+            #[expr(Some($?.num_segments()))]
+            #[call(active)]
+            fn segment_count(&self) -> Option<u32>;
+        }
     }
 
     fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
         self.active()?.descriptor_after_byte(byte)
-    }
-
-    fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        self.variant_serving(byte).descriptor_at_byte(byte)
     }
 
     fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
@@ -855,10 +860,6 @@ impl ByteMap for HlsCoord {
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         self.active()?.descriptor_at_time(t)
-    }
-
-    fn segment_count(&self) -> Option<u32> {
-        Some(self.active()?.num_segments())
     }
 }
 
@@ -941,7 +942,7 @@ mod tests {
                 }],
             },
         ]));
-        let variants = Arc::new(vec![
+        let variants: Arc<[Arc<HlsVariant>]> = Arc::from(vec![
             VariantParts {
                 init: None,
                 segments: vec![Segment::Media(MediaSegment {

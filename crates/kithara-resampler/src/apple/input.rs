@@ -10,11 +10,13 @@ use smallvec::SmallVec;
 
 use crate::ResamplerError;
 
+#[derive(fieldwork::Fieldwork)]
 pub(super) struct AppleResamplerInputState {
     staged: SmallVec<[PcmBuf; 8]>,
     channels: usize,
     frames: usize,
     offset: usize,
+    #[field(get(copy, vis = "pub(super)"))]
     consumed: usize,
     eos: bool,
 }
@@ -50,10 +52,6 @@ impl AppleResamplerInputState {
         self.offset = 0;
         self.consumed = 0;
         self.eos = false;
-    }
-
-    pub(super) fn consumed(&self) -> usize {
-        self.consumed
     }
 
     fn remaining(&self) -> usize {

@@ -43,7 +43,8 @@ pub enum ItemStatus {
     Failed,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 pub struct MediaTime {
     timescale: i32,
     value: i64,
@@ -101,16 +102,6 @@ impl MediaTime {
         }
         let value_f64: f64 = self.value.as_();
         value_f64 / f64::from(self.timescale)
-    }
-
-    #[must_use]
-    pub fn timescale(&self) -> i32 {
-        self.timescale
-    }
-
-    #[must_use]
-    pub fn value(&self) -> i64 {
-        self.value
     }
 
     #[must_use]

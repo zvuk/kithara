@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rten::{Model as RtenGraph, NodeId, Value as RtenValue};
+use rten::{Model as RtenGraph, NodeId, ValueOrView, ValueView};
 use rten_tensor::{AsView, Layout};
 
 use crate::api::BeatError;
@@ -17,7 +17,7 @@ pub(crate) struct RtenModel {
     input_map: HashMap<String, NodeId>,
     model: RtenGraph,
     output_ids: Vec<NodeId>,
-    output_names: Vec<(NodeId, String)>,
+    output_names: HashMap<NodeId, String>,
 }
 
 /// Load a model from ONNX bytes; `name` tags load errors.
@@ -40,7 +40,7 @@ impl TryFrom<(&'static str, &[u8])> for RtenModel {
             })
             .collect();
 
-        let output_names: Vec<(NodeId, String)> = model
+        let output_names: HashMap<NodeId, String> = model
             .output_ids()
             .iter()
             .filter_map(|&id| {
@@ -67,7 +67,7 @@ impl RtenModel {
         &mut self,
         inputs: &[(&str, &Tensor)],
     ) -> Result<HashMap<String, Tensor>, BeatError> {
-        let rten_inputs: Vec<(NodeId, RtenValue)> = inputs
+        let rten_inputs: Vec<(NodeId, ValueOrView<'_>)> = inputs
             .iter()
             .map(|(name, tensor)| {
                 let node_id = self
@@ -76,33 +76,27 @@ impl RtenModel {
                     .ok_or_else(|| BeatError::Inference {
                         reason: format!("rten: unknown input name '{name}'"),
                     })?;
-                let value = RtenValue::from_shape(tensor.shape.as_slice(), tensor.data.clone())
+                let value = ValueView::from_shape(tensor.shape.as_slice(), tensor.data.as_slice())
                     .map_err(|e| BeatError::Inference {
                         reason: format!("rten: failed to create input tensor '{name}': {e}"),
                     })?;
-                Ok((*node_id, value))
+                Ok((*node_id, value.into()))
             })
             .collect::<Result<Vec<_>, BeatError>>()?;
 
-        let inputs_with_views: Vec<_> = rten_inputs
-            .iter()
-            .map(|(id, val)| (*id, val.into()))
-            .collect();
-
         let outputs = self
             .model
-            .run(inputs_with_views, &self.output_ids, None)
+            .run(rten_inputs, &self.output_ids, None)
             .map_err(|e| BeatError::Inference {
                 reason: format!("rten: model run failed: {e}"),
             })?;
 
-        let mut result = HashMap::new();
+        let mut result = HashMap::with_capacity(self.output_ids.len());
         for (&id, value) in self.output_ids.iter().zip(outputs) {
             let name = self
                 .output_names
-                .iter()
-                .find(|(nid, _)| *nid == id)
-                .map_or_else(|| format!("output_{id:?}"), |(_, n)| n.clone());
+                .get(&id)
+                .map_or_else(|| format!("output_{id:?}"), Clone::clone);
 
             let rten_tensor = value
                 .into_tensor::<f32>()

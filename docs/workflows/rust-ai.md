@@ -27,6 +27,8 @@ handoff, integration, or a workflow decision.
 - `docs/guides/red-flags.md`: expanding the `AGENTS.md` red-flag gate.
 - `docs/guides/rust-shape.md`: Rust idioms, standard traits, loops, errors, and
   ownership shape.
+- `docs/guides/performance.md`: hot-path antipatterns, allocation discipline, and
+  optimization how-to.
 - `docs/guides/architecture-shape.md`: owners, `Arc`, atomics, channels, call
   flow, and god objects.
 - `docs/guides/review-validation.md`: tests, review discipline, PR readiness, and

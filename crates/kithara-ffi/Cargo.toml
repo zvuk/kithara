@@ -113,6 +113,8 @@ kithara-events = { workspace = true }
 # both targets. The native arm pulls a host backend below; the wasm arm pulls
 # the web-audio backend in the wasm32 target block.
 kithara-platform = { workspace = true }
+
+delegate = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -150,8 +152,8 @@ kithara-drm = { workspace = true }
 # key-processor types directly (native reaches the same types through the
 # `kithara` facade and a native-only `kithara-drm` dep).
 kithara-hls = { workspace = true, default-features = false }
-kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia"] }
-kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia"] }
+kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia", "webcodecs"] }
+kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia", "webcodecs"] }
 kithara-test-macros = { workspace = true }
 
 bytes = { workspace = true }

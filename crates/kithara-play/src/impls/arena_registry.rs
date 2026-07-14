@@ -30,12 +30,20 @@ where
         self.values.get(idx)
     }
 
-    pub(crate) fn get_by_index(&self, idx: Index) -> Option<&V> {
-        self.values.get(idx)
-    }
-
-    pub(crate) fn get_by_index_mut(&mut self, idx: Index) -> Option<&mut V> {
-        self.values.get_mut(idx)
+    delegate::delegate! {
+        to self.values {
+            #[call(get)]
+            pub(crate) fn get_by_index(&self, idx: Index) -> Option<&V>;
+            #[call(get_mut)]
+            pub(crate) fn get_by_index_mut(&mut self, idx: Index) -> Option<&mut V>;
+            pub(crate) fn iter(&self) -> impl Iterator<Item = (Index, &V)>;
+            pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (Index, &mut V)>;
+        }
+        to self.by_key {
+            #[call(iter)]
+            pub(crate) fn iter_keys(&self) -> impl Iterator<Item = (&K, &Index)>;
+            pub(crate) fn len(&self) -> usize;
+        }
     }
 
     pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
@@ -56,22 +64,6 @@ where
         let idx = self.values.insert(value);
         self.by_index.insert(idx, key.clone());
         self.by_key.insert(key, idx);
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (Index, &V)> {
-        self.values.iter()
-    }
-
-    pub(crate) fn iter_keys(&self) -> impl Iterator<Item = (&K, &Index)> {
-        self.by_key.iter()
-    }
-
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (Index, &mut V)> {
-        self.values.iter_mut()
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.by_key.len()
     }
 
     pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<V>

@@ -42,10 +42,13 @@ type RawByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
 ///
 /// Implements [`Stream`] by delegating to the inner body, so it can be
 /// passed directly to any consumer that expects a byte stream.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct ByteStream {
     /// Response headers from the HTTP request that produced this stream.
     pub headers: Headers,
     inner: RawByteStream,
+    #[field(get = is_partial)]
     partial: bool,
 }
 
@@ -60,12 +63,6 @@ impl ByteStream {
     #[must_use]
     pub fn into_inner(self) -> RawByteStream {
         self.inner
-    }
-
-    /// Whether this stream was produced by an HTTP partial-content response.
-    #[must_use]
-    pub fn is_partial(&self) -> bool {
-        self.partial
     }
 
     /// Create a new `ByteStream` and record whether the response was partial.

@@ -36,6 +36,8 @@ kithara-platform = { workspace = true }
 crossbeam-queue = { workspace = true }
 dashmap = { workspace = true }
 delegate = { workspace = true }
+derive_more = { workspace = true }
+fieldwork = { workspace = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 smallvec = { workspace = true }

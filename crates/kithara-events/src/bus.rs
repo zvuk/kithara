@@ -32,9 +32,11 @@ pub(crate) struct BusRegistry {
 /// publisher's channel and all ancestor channels (topic-based routing).
 /// Subscribers only receive events from their scope's subtree — zero
 /// wasted recv/filter work.
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct EventBus {
     pub(crate) registry: Arc<BusRegistry>,
+    #[field(get)]
     pub(crate) scope: BusScope,
     pub(crate) label: ScopeLabel,
     next_seq: Arc<AtomicU64>,
@@ -104,16 +106,9 @@ impl EventBus {
         self.senders[len - 1].send(event).ok();
     }
 
-    /// This bus's scope.
-    #[must_use]
-    pub fn scope(&self) -> &BusScope {
-        &self.scope
-    }
-
     pub(crate) fn next_seq_counter(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.next_seq)
     }
-
     /// Create a child scope sharing the same topic registry.
     ///
     /// Events published to the child are visible to all ancestors.

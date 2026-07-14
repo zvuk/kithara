@@ -390,8 +390,11 @@ where
         self.cleanup.disarm();
     }
 
-    fn raw_write_handle(&self) -> RawWriteHandle {
-        self.inner.raw_write_handle()
+    delegate::delegate! {
+        to self.inner {
+            fn raw_write_handle(&self) -> RawWriteHandle;
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+        }
     }
 
     fn reader(&self) -> LeaseReader<W::Reader, L> {
@@ -404,10 +407,6 @@ where
             live: self.cleanup.live.clone(),
             resource_key: self.cleanup.resource_key.clone(),
         }
-    }
-
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.write_at(offset, data)
     }
 }
 

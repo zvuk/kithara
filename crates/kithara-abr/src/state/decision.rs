@@ -45,16 +45,17 @@ impl AbrDecision {
         !matches!(self, Self::Stay { .. })
     }
 
-    /// The reason recorded for this decision.
-    #[must_use]
-    pub fn reason(&self) -> AbrReason {
-        self.into()
-    }
-
-    /// The variant this decision lands on (`current` for [`Self::Stay`]).
-    #[must_use]
-    pub fn target(&self) -> VariantIndex {
-        self.into()
+    delegate::delegate! {
+        to self {
+            /// The reason recorded for this decision.
+            #[must_use]
+            #[call(into)]
+            pub fn reason(&self) -> AbrReason;
+            /// The variant this decision lands on (`current` for [`Self::Stay`]).
+            #[must_use]
+            #[call(into)]
+            pub fn target(&self) -> VariantIndex;
+        }
     }
 }
 

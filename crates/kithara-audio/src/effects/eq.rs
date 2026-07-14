@@ -402,10 +402,18 @@ impl IsolatorEq {
         }
     }
 
-    /// Number of bands.
-    #[must_use]
-    pub fn band_count(&self) -> usize {
-        self.gains.len()
+    delegate::delegate! {
+        to self.gains {
+            /// Number of bands.
+            #[must_use]
+            #[call(len)]
+            pub fn band_count(&self) -> usize;
+            /// Current target gain for a band (dB).
+            #[must_use]
+            #[expr($.map(|s| s.target_db))]
+            #[call(get)]
+            pub fn target_gain(&self, band: usize) -> Option<f32>;
+        }
     }
 
     /// Process a single sample through the crossover EQ.
@@ -552,12 +560,6 @@ impl IsolatorEq {
             state.set_target(gain_db);
         }
         self.refresh_fastpath_cache();
-    }
-
-    /// Current target gain for a band (dB).
-    #[must_use]
-    pub fn target_gain(&self, band: usize) -> Option<f32> {
-        self.gains.get(band).map(|s| s.target_db)
     }
 
     /// Re-initialise for a new sample rate (e.g. after stream change).

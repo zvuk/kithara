@@ -46,61 +46,40 @@ impl WriteSide for BaseWriter {
         Ok(BaseReader(self.0))
     }
 
-    fn fail(self, reason: String) {
-        self.0.fail(reason);
+    delegate::delegate! {
+        to self.0 {
+            fn fail(self, reason: String);
+            #[expr(BaseReader($))]
+            #[call(clone)]
+            fn reader(&self) -> BaseReader;
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+        }
     }
 
     fn raw_write_handle(&self) -> RawWriteHandle {
         let storage = self.0.clone();
         RawWriteHandle::new(move |offset, data| storage.write_at(offset, data))
     }
-
-    fn reader(&self) -> BaseReader {
-        BaseReader(self.0.clone())
-    }
-
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.0.write_at(offset, data)
-    }
 }
 
 impl ReadSide for BaseReader {
     type Writer = BaseWriter;
 
-    fn contains_range(&self, range: Range<u64>) -> bool {
-        self.0.contains_range(range)
-    }
-
-    fn len(&self) -> Option<u64> {
-        self.0.len()
-    }
-
-    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
-        self.0.next_gap(from, limit)
-    }
-
-    fn path(&self) -> Option<&Path> {
-        self.0.path()
+    delegate::delegate! {
+        to self.0 {
+            fn contains_range(&self, range: Range<u64>) -> bool;
+            fn len(&self) -> Option<u64>;
+            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+            fn path(&self) -> Option<&Path>;
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn status(&self) -> ResourceStatus;
+            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+        }
     }
 
     fn reactivate(self) -> StorageResult<BaseWriter> {
         self.0.reactivate()?;
         Ok(BaseWriter(self.0))
-    }
-
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.0.read_at(offset, buf)
-    }
-
-    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.0.read_inflight_at(offset, buf)
-    }
-
-    fn status(&self) -> ResourceStatus {
-        self.0.status()
-    }
-
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        self.0.wait_range(range)
     }
 }

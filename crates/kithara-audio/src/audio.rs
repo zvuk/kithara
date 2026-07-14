@@ -322,6 +322,8 @@ impl WakeSignal for ReaderOutputWake {
 ///
 /// Provides a simple interface for reading decoded PCM audio, compatible
 /// with cpal and rodio backends. See the crate `README.md` "Usage".
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct Audio<S> {
     /// Narrow mutating playhead handle — committed position and total duration.
     pub(crate) playhead: Arc<dyn PlayheadWrite>,
@@ -345,6 +347,7 @@ pub struct Audio<S> {
     pub(crate) current_chunk: Option<PcmChunk>,
 
     /// Current audio specification (updated from chunks).
+    #[field(get, copy)]
     pub(crate) spec: PcmSpec,
 
     /// How many frames of `current_chunk` have been served to the
@@ -438,6 +441,7 @@ pub struct Audio<S> {
     _marker: PhantomData<S>,
 
     /// Track metadata (title, artist, album, artwork).
+    #[field(get)]
     metadata: TrackMetadata,
 
     /// Offline-consumer opt-in: a ring underrun blocks (engine-aware park)
@@ -449,6 +453,7 @@ pub struct Audio<S> {
     is_standalone_worker: bool,
 
     /// Whether `preload()` has been called (enables non-blocking mode).
+    #[field(get = is_preloaded)]
     preloaded: bool,
 }
 
@@ -562,12 +567,19 @@ impl<S> Audio<S> {
         }
     }
 
-    /// Get total duration of the audio stream.
-    ///
-    /// Returns `None` for streaming sources where duration is unknown.
-    #[must_use]
-    pub fn duration(&self) -> Option<Duration> {
-        self.playhead.duration()
+    delegate! {
+        to self.playhead {
+            /// Get total duration of the audio stream.
+            ///
+            /// Returns `None` for streaming sources where duration is unknown.
+            #[must_use]
+            pub fn duration(&self) -> Option<Duration>;
+            /// Get current playback position.
+            ///
+            /// Calculated from samples read since last seek plus the seek base.
+            #[must_use]
+            pub fn position(&self) -> Duration;
+        }
     }
 
     fn emit_audio_event(&self, event: AudioEvent) {
@@ -668,28 +680,6 @@ impl<S> Audio<S> {
             self.consumer_phase = ConsumerPhase::Playing;
         }
         true
-    }
-
-    /// Whether non-blocking recv is active.
-    ///
-    /// Returns `false` after `seek()` until `preload()` is called again.
-    #[must_use]
-    pub fn is_preloaded(&self) -> bool {
-        self.preloaded
-    }
-
-    /// Get track metadata (title, artist, album, artwork).
-    #[must_use]
-    pub fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-
-    /// Get current playback position.
-    ///
-    /// Calculated from samples read since last seek plus the seek base.
-    #[must_use]
-    pub fn position(&self) -> Duration {
-        self.playhead.position()
     }
 
     /// Enable non-blocking mode for `read()` and prime the first chunk.
@@ -1080,16 +1070,6 @@ impl<S> Audio<S> {
         }
     }
 
-    /// Subscribe to audio events.
-    ///
-    /// Get current audio specification.
-    ///
-    /// Returns sample rate and channel count for audio output setup.
-    #[must_use]
-    pub fn spec(&self) -> PcmSpec {
-        self.spec
-    }
-
     fn use_nonblocking_recv(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         {
@@ -1332,7 +1312,7 @@ where
         })?;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
-        let byte_pool = byte_pool.unwrap_or_else(|| BytePool::default().clone());
+        let byte_pool = byte_pool.unwrap_or_default();
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let initial_byte_len = stream.len().unwrap_or(0);
@@ -1347,7 +1327,7 @@ where
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
 
-        let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
+        let pool = pool.get_or_insert_default();
         let warm_channels = warm_channels_from_media_info(initial_media_info.as_ref());
         Self::warm_pcm_pool(pool, warm_channels, pcm_buffer_chunks);
         // The single up-front build reads through the blocking off-RT
@@ -1580,7 +1560,7 @@ where
                 .maybe_hooks(stream.take_reader_event_sink())
                 .maybe_resampler(resampler)
                 .build();
-            let source = OffsetReader::new(stream.clone(), base_offset);
+            let source = OffsetReader::new(stream, base_offset);
             match DecoderFactory::create_from_media_info(source, &info, config) {
                 Ok(d) => {
                     d.update_byte_len(byte_len);
@@ -1978,17 +1958,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
     delegate! {
         to self.playhead {
             fn duration(&self) -> Option<Duration>;
-        }
-    }
-
-    delegate! {
-        to self.playhead {
             fn position(&self) -> Duration;
-        }
-    }
-
-    delegate! {
-        to self.playhead {
             fn decoded_frontier(&self) -> Duration;
         }
     }

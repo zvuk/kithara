@@ -2,6 +2,12 @@ use kithara_platform::thread::assert_main_thread;
 
 use crate::impls::session;
 
+/// Start the main-thread WebCodecs capability probe.
+pub fn spawn_webcodecs_probe() {
+    assert_main_thread("spawn_webcodecs_probe");
+    kithara_decode::spawn_webcodecs_probe();
+}
+
 /// Ensure the main-thread session client exists in `Local` mode.
 ///
 /// Must be called on the main thread **before** [`init_worker_session`]
