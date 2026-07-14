@@ -63,8 +63,12 @@ impl Loader {
         source: TrackSource,
     ) -> Result<ResourceConfig, QueueError> {
         let mut config = match source {
-            TrackSource::Uri(url) => ResourceConfig::new(&url)
-                .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
+            TrackSource::Uri(url) => ResourceConfig::new(
+                &url,
+                self.player.config().byte_pool.clone(),
+                self.player.config().pcm_pool.clone(),
+            )
+            .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
             TrackSource::Config(boxed) => *boxed,
         };
         if config.bus.is_none() {
@@ -225,6 +229,7 @@ impl Loader {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use kithara_bufpool::{BytePool, PcmPool, Region};
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::time::Duration;
     use kithara_play::PlayerConfig;
@@ -268,7 +273,13 @@ mod tests {
 
     impl LoaderFixtureSpec {
         fn build(self) -> LoaderFixture {
-            let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+            let region = Region::default();
+            let player = Arc::new(PlayerImpl::new(
+                PlayerConfig::builder()
+                    .byte_pool(region.byte_pool())
+                    .pcm_pool(region.pcm_pool())
+                    .build(),
+            ));
             let bus = player.bus().clone();
             let tracks = Arc::new(Tracks::new(bus.clone()));
             let loader = Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks)));
@@ -286,7 +297,11 @@ mod tests {
         let Ok(builder) = ResourceConfig::for_src("https://example.com/a.mp3") else {
             panic!("valid url");
         };
-        let given = builder.preferred_peak_bitrate(321.0).build();
+        let given = builder
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .preferred_peak_bitrate(321.0)
+            .build();
         let Ok(returned) = loader.build_config(TrackId(1), TrackSource::Config(Box::new(given)))
         else {
             panic!("build_config should succeed");

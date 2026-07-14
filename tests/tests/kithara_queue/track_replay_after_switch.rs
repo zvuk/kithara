@@ -123,6 +123,8 @@ fn build_queue_with_tick_cf(
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .crossfade_duration(crossfade_seconds)
             .build(),
@@ -212,6 +214,8 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(url.as_str())
             .expect("valid fixture URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))
@@ -318,6 +322,8 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(url.as_str())
             .expect("valid fixture URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))

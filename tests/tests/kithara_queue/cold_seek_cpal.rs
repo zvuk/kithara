@@ -102,7 +102,12 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
             .build(),
     );
 
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     queue.set_volume(kithara_integration_tests::e2e::volume());
 

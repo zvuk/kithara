@@ -81,7 +81,7 @@ impl StreamType for Hls {
         let invalidation_guard = store.subscribe_eviction(Arc::clone(&asset_root_arc), evict_tx);
         let scope = store.scope(asset_root_arc);
 
-        let byte_pool = config.pool.clone().unwrap_or_default();
+        let byte_pool = config.pool.clone();
 
         let playhead = Arc::new(PlayheadState::new());
         let seek = Arc::new(SeekState::new());
@@ -310,7 +310,7 @@ fn build_asset_store(config: &HlsConfig, cancel: CancelToken) -> AssetStore {
         .backend(config.store.backend.clone())
         .evict_config(EvictConfig::from(&config.store))
         .maybe_layout(config.store.layout.clone())
-        .maybe_pool(config.pool.clone())
+        .pool(config.pool.clone())
         .maybe_cache_capacity(config.store.cache_capacity)
         .maybe_flush_hub(config.store.flush_hub.clone())
         .build()
@@ -324,7 +324,7 @@ fn build_asset_store(config: &HlsConfig, cancel: CancelToken) -> AssetStore {
 #[must_use]
 pub fn build_shared_asset_store(
     store: &StoreOptions,
-    pool: Option<BytePool>,
+    pool: BytePool,
     cancel: CancelToken,
 ) -> Arc<AssetStore> {
     Arc::new(
@@ -333,7 +333,7 @@ pub fn build_shared_asset_store(
             .backend(store.backend.clone())
             .evict_config(EvictConfig::from(store))
             .maybe_layout(store.layout.clone())
-            .maybe_pool(pool)
+            .pool(pool)
             .maybe_cache_capacity(store.cache_capacity)
             .maybe_flush_hub(store.flush_hub.clone())
             .build(),

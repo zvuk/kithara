@@ -57,6 +57,8 @@ async fn create_hls_audio(
     // Park on ring underrun instead of surfacing Pending, so the blocking
     // readers never spin against the virtual clock.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();

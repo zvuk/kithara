@@ -2,7 +2,6 @@
 
 use std::path::Path;
 
-use kithara_bufpool::BytePool;
 use kithara_platform::sync::Arc;
 
 use crate::{
@@ -46,7 +45,7 @@ impl DriverIo for MemDriver {
         // the budget — `ensure_len` charges the pool on growth and only `put`
         // (on drop) releases it — eventually exhausting the budget and stalling
         // later allocations. Shrink `state.len` to the committed length.
-        state.buf = BytePool::default().get();
+        state.buf = state.pool.get();
         state.len = end;
         drop(state);
         Ok(())
@@ -229,6 +228,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: Some(b"hello world".to_vec()),
             capacity: 0,
+            ..MemOptions::default()
         })
         .expect("open with initial data must succeed");
 
@@ -261,6 +261,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: None,
             capacity: 0,
+            ..MemOptions::default()
         })
         .expect("open must succeed");
         driver
@@ -306,6 +307,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: None,
             capacity: 0,
+            ..MemOptions::default()
         })
         .expect("open empty must succeed");
 
@@ -326,6 +328,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: None,
             capacity: 0,
+            ..MemOptions::default()
         })
         .expect("open empty must succeed");
 
@@ -389,6 +392,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: Some(Vec::new()),
             capacity: 0,
+            ..MemOptions::default()
         })
         .expect("open with empty initial data must succeed");
         assert_eq!(driver.committed_len(), None);
@@ -397,6 +401,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: None,
             capacity: 0,
+            ..MemOptions::default()
         })
         .expect("open empty must succeed");
         driver.commit(Some(0)).expect("commit(0) must succeed");

@@ -242,6 +242,8 @@ impl Harness {
         let store = StoreOptions::new(temp_dir.path());
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .session(OfflineSession::arc_auto())
                 .build(),
         ));
@@ -259,6 +261,8 @@ impl Harness {
 
         let mut cfg = ResourceConfig::for_src(master.as_str())
             .expect("valid URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader)
             .store(store)
             .build();

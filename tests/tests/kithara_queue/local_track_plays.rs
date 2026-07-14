@@ -184,6 +184,8 @@ fn build_queue_with_tick(
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -271,6 +273,8 @@ async fn local_track_plays_end_to_end(
 
     let cfg = ResourceConfig::for_src(url.as_str())
         .expect("valid fixture URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .decoder(
@@ -481,6 +485,8 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .map(|u| {
             let cfg = ResourceConfig::for_src(u.as_str())
                 .expect("valid fixture URL")
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .downloader(downloader.clone())
                 .store(store.clone())
                 .decoder(

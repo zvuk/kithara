@@ -14,6 +14,7 @@ use bytes::Bytes;
 use kithara::{
     assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader, analysis::BeatAnalysisConfig},
+    bufpool::{BytePool, PcmPool},
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     prelude::ResourceConfig,
@@ -85,6 +86,8 @@ async fn waveform_and_player_share_one_get() {
     // Waveform analysis consumer (whole-file) of the shared store.
     let waveform_cfg = ResourceConfig::for_src(url.as_str())
         .expect("waveform url")
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .asset_store(Arc::clone(&store))
         .build();
 
@@ -96,13 +99,19 @@ async fn waveform_and_player_share_one_get() {
             .asset_store(Arc::clone(&store))
             .build(),
     )
+    .byte_pool(BytePool::default())
+    .pcm_pool(PcmPool::default())
     .block_on_underrun(true)
     .build();
 
     // Run both concurrently so they cooperate on one download.
     let master = CancelToken::never();
-    let mut runner =
-        TrackAnalysisRunner::new(&master, WAVEFORM_BUCKETS, BeatAnalysisConfig::default());
+    let mut runner = TrackAnalysisRunner::new(
+        &master,
+        WAVEFORM_BUCKETS,
+        BeatAnalysisConfig::default(),
+        PcmPool::default(),
+    );
     let mut analysis_rx = runner.analyze(waveform_cfg);
 
     let mut player = Audio::<Stream<File>>::new(player_cfg)

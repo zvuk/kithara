@@ -41,6 +41,8 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
         ..SilenceTrimParams::default()
     };
     let player_config = PlayerConfig::builder()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .crossfade_duration(0.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
@@ -115,6 +117,8 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
         ..SilenceTrimParams::default()
     };
     let player_config = PlayerConfig::builder()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .crossfade_duration(1.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
@@ -262,6 +266,8 @@ async fn create_gapless_hls_resource(
     let store = StoreOptions::new(cache_dir);
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(store)
         .build();
     config = player.prepare_config(config);

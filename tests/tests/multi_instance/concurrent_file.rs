@@ -19,6 +19,8 @@ async fn create_file_audio(url: url::Url, cache_dir: &Path) -> Audio<Stream<File
         .store(StoreOptions::new(cache_dir))
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint(("mp3").to_string())
         .build();
     Audio::<Stream<File>>::new(config)

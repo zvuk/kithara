@@ -9,7 +9,7 @@ use kithara_audio::{
     AudioWorkerHandle, EngineLoad, EngineLoadSnapshot, EqBandConfig, StretchControls,
     generate_log_spaced_bands,
 };
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -52,8 +52,10 @@ pub struct PlayerConfig {
     pub bus: Option<EventBus>,
     /// Master cancel token for this player.
     pub cancel: Option<CancelToken>,
+    /// Raw byte buffer pool shared by resources created for this player.
+    pub byte_pool: BytePool,
     /// PCM buffer pool for audio-thread scratch buffers.
-    pub pcm_pool: Option<PcmPool>,
+    pub pcm_pool: PcmPool,
     /// Pre-built audio session dispatcher.
     pub session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout. Default: 10-band log-spaced.
@@ -81,6 +83,16 @@ pub struct PlayerConfig {
     pub max_slots: usize,
 }
 
+#[cfg(test)]
+impl Default for PlayerConfig {
+    fn default() -> Self {
+        Self::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .build()
+    }
+}
+
 impl fmt::Debug for PlayerConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlayerConfig")
@@ -93,12 +105,6 @@ impl fmt::Debug for PlayerConfig {
             .field("max_slots", &self.max_slots)
             .field("pcm_pool", &self.pcm_pool)
             .finish_non_exhaustive()
-    }
-}
-
-impl Default for PlayerConfig {
-    fn default() -> Self {
-        Self::builder().build()
     }
 }
 
@@ -137,7 +143,6 @@ pub(crate) struct PlayerCore {
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
-    pub(crate) pcm_pool: PcmPool,
     pub(crate) config: PlayerConfig,
 }
 
@@ -165,7 +170,7 @@ impl PlayerImpl {
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig) -> Self {
-        let resolved_pool = config.pcm_pool.clone().unwrap_or_default();
+        let resolved_pool = config.pcm_pool.clone();
 
         let bus = config.bus.clone().unwrap_or_default();
 
@@ -175,21 +180,20 @@ impl PlayerImpl {
         let cancel = CancelScope::new(config.cancel.clone()).token();
         config.cancel = Some(cancel.clone());
 
-        let engine_config = EngineConfig {
-            eq_layout: config.eq_layout.clone(),
-            max_slots: config.max_slots,
-            sample_rate: config.sample_rate,
-            pcm_pool: Some(resolved_pool.clone()),
-            session: config.session.clone(),
-            cancel: Some(cancel.clone()),
-            ..EngineConfig::default()
-        };
+        let engine_config = EngineConfig::builder()
+            .cancel(cancel.clone())
+            .pcm_pool(resolved_pool.clone())
+            .maybe_session(config.session.clone())
+            .eq_layout(config.eq_layout.clone())
+            .sample_rate(config.sample_rate)
+            .max_slots(config.max_slots)
+            .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
         if config.abr.is_none() {
             config.abr = Some(AbrController::new(AbrSettings::default(), cancel.child()));
         }
 
-        Self::new_with_engine(config, resolved_pool, bus, engine)
+        Self::new_with_engine(config, bus, engine)
     }
 
     /// Advance to the next item in the queue.
@@ -359,12 +363,7 @@ impl PlayerImpl {
         self.core.items.lock().len()
     }
 
-    pub(crate) fn new_with_engine(
-        config: PlayerConfig,
-        resolved_pool: PcmPool,
-        bus: EventBus,
-        engine: EngineImpl,
-    ) -> Self {
+    pub(crate) fn new_with_engine(config: PlayerConfig, bus: EventBus, engine: EngineImpl) -> Self {
         let cancel = config
             .cancel
             .clone()
@@ -385,7 +384,6 @@ impl PlayerImpl {
             cancel,
             bus,
             status: Mutex::default(),
-            pcm_pool: resolved_pool,
             config,
             items: Mutex::default(),
             engine,
@@ -417,6 +415,7 @@ impl PlayerImpl {
         config: crate::impls::config::ResourceConfig,
     ) -> crate::impls::config::ResourceConfig {
         let bus = config.bus.or_else(|| Some(self.core.bus.scoped()));
+        let byte_pool = config.byte_pool.clone();
         // Give each prepared resource a fresh per-instance child so one
         // track's teardown never cancels a sibling. Derives from the
         // caller-provided parent (e.g. the app/queue master) or from this
@@ -431,7 +430,9 @@ impl PlayerImpl {
         decoder.gapless_mode = self.core.config.gapless_mode;
         crate::impls::config::ResourceConfig {
             bus,
+            byte_pool,
             cancel,
+            pcm_pool: self.core.engine.pcm_pool().clone(),
             worker: Some(self.core.engine.worker().clone()),
             host_sample_rate: std::num::NonZeroU32::new(self.core.engine.master_sample_rate()),
             decoder,
@@ -635,8 +636,12 @@ mod tests {
             gapless_mode: GaplessMode::Disabled,
             ..PlayerConfig::default()
         });
-        let mut config = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
-            .expect("BUG: valid resource config");
+        let mut config = crate::impls::config::ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: valid resource config");
 
         config = player.prepare_config(config);
 
@@ -651,8 +656,12 @@ mod tests {
     #[kithara::test]
     fn prepare_config_per_track_cancel_is_child_of_player_master() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        let mut rc = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
-            .expect("BUG: valid resource config");
+        let mut rc = crate::impls::config::ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: valid resource config");
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
@@ -673,8 +682,12 @@ mod tests {
             cancel: Some(parent_master.clone()),
             ..PlayerConfig::default()
         });
-        let mut rc = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
-            .expect("BUG: valid resource config");
+        let mut rc = crate::impls::config::ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: valid resource config");
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
@@ -791,7 +804,8 @@ mod tests {
             gapless_mode: GaplessMode::MediaOnly,
             max_slots: 2,
             sample_rate: 44_100,
-            pcm_pool: None,
+            byte_pool: BytePool::default(),
+            pcm_pool: PcmPool::default(),
             auto_advance_enabled: true,
             session: None,
             cancel: None,
@@ -804,6 +818,8 @@ mod tests {
     #[kithara::test]
     fn player_config_builder() {
         let config = PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .max_slots(8)
             .default_rate(0.5)
             .crossfade_duration(2.5)

@@ -46,6 +46,8 @@ async fn stress_random_seek_read_synthetic_wav() {
         .store(StoreOptions::new(cache.path()))
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint("wav".to_string())
         .build();
     let mut audio = Audio::<Stream<File>>::new(config)

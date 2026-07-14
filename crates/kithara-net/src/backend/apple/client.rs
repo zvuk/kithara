@@ -232,7 +232,7 @@ impl AppleNet {
             .compression(self.options.compression)
             .inactivity_timeout(self.options.inactivity_timeout)
             .impersonate(self.options.impersonate)
-            .maybe_byte_pool(self.options.byte_pool.clone())
+            .byte_pool(self.options.byte_pool.clone())
             .retry_policy(self.options.retry_policy.clone())
             .is_insecure(self.options.is_insecure)
             .body_queue_capacity(self.options.body_queue_capacity)

@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
+use kithara_bufpool::Region;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 use kithara_play::{PlayerConfig, PlayerImpl};
@@ -133,7 +134,12 @@ impl Queue {
         // use falls back to a fresh root (the documented safety net).
         let cancel = CancelScope::new(config_cancel).token();
         let player = player.unwrap_or_else(|| {
-            let config = PlayerConfig::builder().cancel(cancel.clone()).build();
+            let region = Region::default();
+            let config = PlayerConfig::builder()
+                .cancel(cancel.clone())
+                .byte_pool(region.byte_pool())
+                .pcm_pool(region.pcm_pool())
+                .build();
             Arc::new(PlayerImpl::new(config))
         });
         player.set_auto_advance_enabled(false);

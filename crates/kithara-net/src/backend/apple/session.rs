@@ -75,10 +75,7 @@ impl AppleSession {
     pub(crate) fn new(options: &NetOptions, connection_metrics: ConnectionMetrics) -> Self {
         let shared = shared_session(options);
         let accept_encoding = accept_encoding_value(options.compression);
-        let byte_pool = options
-            .byte_pool
-            .clone()
-            .unwrap_or_else(|| BytePool::default().clone());
+        let byte_pool = options.byte_pool.clone();
 
         Self {
             accept_encoding,

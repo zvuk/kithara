@@ -9,7 +9,7 @@ use kithara::{
         AnalysisParams, Audio, AudioConfig, AudioEffect, ReadOutcome, StretchControls,
         WaveformAnalyzer,
     },
-    bufpool::PcmPool,
+    bufpool::{BytePool, PcmPool},
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
     platform::{
@@ -59,7 +59,10 @@ fn make_chunk(pool: &PcmPool, pcm: &[f32]) -> PcmChunk {
         NonZeroU32::new(Consts::SAMPLE_RATE).unwrap_or_else(|| panic!("bench sample rate")),
     );
     let mut samples = pool.get();
-    samples.extend_from_slice(pcm);
+    samples
+        .ensure_len(pcm.len())
+        .expect("PCM pool budget exhausted");
+    samples.copy_from_slice(pcm);
     PcmChunk::new(
         PcmMeta {
             spec,
@@ -90,6 +93,8 @@ fn bench_gapless_trim(c: &mut Criterion) {
                 let config =
                     AudioConfig::<File>::for_stream(FileConfig::new(file_path.clone().into()))
                         .hint("mp3".to_string())
+                        .byte_pool(BytePool::default())
+                        .pcm_pool(PcmPool::default())
                         .build();
                 let mut audio = Audio::<Stream<File>>::new(config)
                     .await

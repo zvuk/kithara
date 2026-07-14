@@ -19,6 +19,8 @@ fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
         event_bus: None,
     };
     AudioConfig::<MemStream>::for_stream(stream)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint("wav".to_string())
         .build()
 }
@@ -246,6 +248,8 @@ async fn truncated_wav_surfaces_decode_error_or_eof() {
         source: Some(source),
         event_bus: None,
     })
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
     .hint("wav".to_string())
     .build();
 

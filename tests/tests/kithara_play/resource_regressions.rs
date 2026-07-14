@@ -118,6 +118,8 @@ fn resource_config(
                 .backend(backend)
                 .build(),
         )
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .build()
 }
 
@@ -177,6 +179,8 @@ async fn warm_hls_worker(
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .worker(worker)
         .decoder(
@@ -234,6 +238,8 @@ async fn warm_hls_worker_without_seek(
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .worker(worker)
         .decoder(
@@ -315,6 +321,8 @@ async fn open_packaged_hls_audio(
 ) -> Audio<Stream<Hls>> {
     let config =
         AudioConfig::<Hls>::for_stream(HlsConfig::for_url(url.clone()).store(store).build())
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(backend)
@@ -540,7 +548,12 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
 
     let hls_server = open_audio_hls_server().await;
     let (ok_url, bad_url) = mp3_endpoints().await;
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    );
     let worker = player.worker().clone();
     let store = store_options(&temp_dir, ephemeral);
     let hls_url = hls_server.url("/master.m3u8");
@@ -945,7 +958,12 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
 
     let hls_server = open_audio_hls_server().await;
     let (ok_url, _) = mp3_endpoints().await;
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    );
     let worker = player.worker().clone();
     let store = store_options(&temp_dir, ephemeral);
     let hls_url = hls_server.url("/master.m3u8");
@@ -1030,6 +1048,8 @@ async fn stress_offline_crossfade_no_gaps() {
         async move {
             let file_cfg = FileConfig::new(FileSrc::Local(p));
             let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .hint("mp3".to_string())
                 .worker(w)
                 .build();
@@ -1046,6 +1066,8 @@ async fn stress_offline_crossfade_no_gaps() {
             let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
             let cfg = HlsConfig::for_url(u).store(s).build();
             let audio_config = AudioConfig::<Hls>::for_stream(cfg)
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .media_info(wav_info)
                 .worker(w)
                 .build();
@@ -1402,6 +1424,8 @@ async fn live_remote_resource_decodes_with_duration(
     );
     let config = ResourceConfig::for_src(url)
         .expect("valid URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(store)
         .downloader(downloader)
         .decoder(
@@ -1519,11 +1543,18 @@ async fn player_mp3_duration_matches_app_flow(
 
     let store = store_options(&temp_dir, true);
 
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    );
     player.reserve_slots(1);
 
     let mut config = ResourceConfig::for_src(url)
         .unwrap()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -1623,6 +1654,8 @@ async fn local_resource_decodes_with_duration(
                 .backend(backend)
                 .build(),
         )
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .build();
 
     let mut resource = Resource::new(config)

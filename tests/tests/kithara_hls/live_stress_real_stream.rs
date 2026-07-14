@@ -196,6 +196,8 @@ async fn build_live_audio(
         .build();
     Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .block_on_underrun(true)
             .build(),
     )
@@ -330,6 +332,8 @@ async fn live_real_drm_playback_smoke() {
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .block_on_underrun(true)
             .build(),
     )
@@ -417,6 +421,8 @@ async fn live_ephemeral_revisit_sequence_regression(
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -747,6 +753,8 @@ async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: 
 
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .block_on_underrun(true)
             .build(),
     )
@@ -845,6 +853,8 @@ async fn live_stress_real_stream_seek_read_cache(
 
         let mut audio = Audio::<Stream<Hls>>::new(
             AudioConfig::<Hls>::for_stream(hls_config)
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .block_on_underrun(true)
                 .build(),
         )
@@ -1162,6 +1172,8 @@ async fn live_ephemeral_small_cache_playback(#[case] path: &str, #[case] label: 
 
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .block_on_underrun(true)
             .build(),
     )
@@ -1256,6 +1268,8 @@ async fn live_ephemeral_small_cache_seek_stress(
             .build();
 
         let config = AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(backend)

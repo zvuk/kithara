@@ -2195,7 +2195,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     fo.saturating_add(u64::from(frames)),
                     chunk.meta.spec.sample_rate.get(),
                 ));
-                DecodeStep::Produced(Fetch::new(chunk, false, current_epoch))
+                DecodeStep::Produced(Fetch::data(chunk, current_epoch))
             }
             Ok(DecoderChunkOutcome::Eof) => {
                 self.update_state(CurrentFsm::at_eof());
@@ -3369,6 +3369,13 @@ mod rebuilding_decoder_tests {
 
     use super::*;
 
+    fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
+        let Fetch::Data { data, .. } = fetch else {
+            panic!("TrackStep::Produced must carry PCM data");
+        };
+        data
+    }
+
     struct Consts;
 
     impl Consts {
@@ -3494,7 +3501,9 @@ mod rebuilding_decoder_tests {
             let channels = usize::from(Consts::CHANNELS);
             let frames = Consts::ROUTE_CHUNK_FRAMES;
             let mut samples = PcmPool::default().get();
-            samples.resize(frames.saturating_mul(channels), 0.0);
+            samples
+                .ensure_len(frames.saturating_mul(channels))
+                .expect("route signal fixture fits PCM pool budget");
             for frame in 0..frames {
                 let absolute = self
                     .next_frame
@@ -3875,7 +3884,7 @@ mod rebuilding_decoder_tests {
         loop {
             run_pending_rebuild_inline(source);
             match source.step_track() {
-                TrackStep::Produced(fetch) => return fetch.into_inner(),
+                TrackStep::Produced(fetch) => return produced_data(fetch),
                 TrackStep::StateChanged => {
                     if matches!(
                         &source.state,
@@ -4327,7 +4336,7 @@ mod splice_continuity_tests {
         sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     };
 
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::{DecoderConfig, DecoderFactory as DecodeFactory};
     use kithara_platform::{
         sync::{Arc, Mutex},
@@ -4342,6 +4351,13 @@ mod splice_continuity_tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
+        let Fetch::Data { data, .. } = fetch else {
+            panic!("TrackStep::Produced must carry PCM data");
+        };
+        data
+    }
 
     struct Consts;
 
@@ -4685,6 +4701,8 @@ mod splice_continuity_tests {
         byte_len.store(stream.len().unwrap_or(0), Ordering::Release);
         DecoderConfig::builder()
             .backend(backend)
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .byte_len_handle(byte_len)
             .maybe_byte_map(stream.byte_map())
             .gapless(false)
@@ -4721,6 +4739,8 @@ mod splice_continuity_tests {
                 let config: DecoderConfig<kithara_resampler::NoResamplerBackend> =
                     DecoderConfig::builder()
                         .backend(backend)
+                        .byte_pool(BytePool::default())
+                        .pcm_pool(PcmPool::default())
                         .byte_len_handle(Arc::clone(&factory_byte_len))
                         .maybe_byte_map(stream.byte_map())
                         .gapless(false)
@@ -4812,7 +4832,7 @@ mod splice_continuity_tests {
             run_pending_rebuild_inline(&mut source);
             match source.step_track() {
                 TrackStep::Produced(fetch) => {
-                    let chunk = fetch.into_inner();
+                    let chunk = produced_data(fetch);
                     append_left_channel(&mut left, &chunk);
                     source.playhead.advance(&ChunkPosition::from(&chunk.meta));
                     if !switched
@@ -4886,7 +4906,7 @@ mod splice_continuity_tests {
             run_pending_rebuild_inline(&mut source);
             match source.step_track() {
                 TrackStep::Produced(fetch) => {
-                    let chunk = fetch.into_inner();
+                    let chunk = produced_data(fetch);
                     append_left_channel(&mut left, &chunk);
                     source.playhead.advance(&ChunkPosition::from(&chunk.meta));
                     if !recreated

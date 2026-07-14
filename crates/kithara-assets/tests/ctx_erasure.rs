@@ -74,7 +74,7 @@ fn reference_transform(seed: u8, input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(input.len());
     for (idx, chunk) in input.chunks(CHUNK_SIZE).enumerate() {
         let Ok(idx_mod) = u8::try_from(idx % 256) else {
-            unreachable!("idx % 256 always fits in u8")
+            unreachable!("idx % 256 always fits in u8");
         };
         let key = seed.wrapping_add(idx_mod);
         out.extend(chunk.iter().map(|&b| b ^ key));

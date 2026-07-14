@@ -225,7 +225,8 @@ impl PlayerImpl {
         }
 
         let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.core.pcm_pool);
+        let player_resource =
+            PlayerResource::new(resource, Arc::clone(&src), self.core.engine.pcm_pool());
         let arc_resource = Arc::new(Mutex::new(player_resource));
         drop(items);
 

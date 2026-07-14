@@ -455,6 +455,8 @@ mod tests {
         // file layer uses for its asset root.
         let cfg = ResourceConfig::for_src("https://h.example/a.mp3?token=1")
             .expect("valid url")
+            .byte_pool(::kithara::bufpool::BytePool::default())
+            .pcm_pool(::kithara::bufpool::PcmPool::default())
             .build();
         let from_cfg =
             source_key(&TrackSource::Config(Box::new(cfg))).expect("config source is keyable");

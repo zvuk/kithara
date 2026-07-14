@@ -176,6 +176,7 @@ mod tests {
             MemOptions {
                 initial_data: None,
                 capacity: 0,
+                ..MemOptions::default()
             },
         )
         .expect("open mem must succeed")
@@ -210,6 +211,7 @@ mod tests {
             MemOptions {
                 initial_data: Some(b"hello world".to_vec()),
                 capacity: 0,
+                ..MemOptions::default()
             },
         )
         .expect("BUG: MemDriver::open with initial_data is infallible");
@@ -249,6 +251,7 @@ mod tests {
             MemOptions {
                 initial_data: Some(b"hello world".to_vec()),
                 capacity: 0,
+                ..MemOptions::default()
             },
         )
         .expect("BUG: MemDriver::open with initial_data is infallible");
