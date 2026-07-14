@@ -2,7 +2,7 @@ use std::{io::Write, num::NonZeroUsize};
 
 use kithara::{
     assets::{StorageBackend, StoreOptions},
-    audio::{Audio, AudioConfig, PcmRead, ReadOutcome},
+    audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
