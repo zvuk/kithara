@@ -7,8 +7,8 @@ use std::{
 use anyhow::{Context as _, Result};
 use quote::ToTokens;
 use syn::{
-    Attribute, Expr, Fields, FnArg, ImplItem, ImplItemFn, ItemImpl, ItemStruct, Member,
-    PathArguments, ReturnType, Stmt, Type, Visibility, parse_quote, spanned::Spanned,
+    Attribute, Expr, Fields, FnArg, ImplItem, ImplItemFn, Item, ItemImpl, ItemStruct, Member,
+    PathArguments, ReturnType, Stmt, Type, UseTree, Visibility, parse_quote, spanned::Spanned,
 };
 
 use super::{
@@ -18,12 +18,17 @@ use super::{
         indent_attribute, line_start, merge_derive, method_blocks,
     },
 };
-use crate::common::{
-    exclude::{attrs_have_cfg_test, collect_cfg_test_ranges},
-    fix::{FixOutcome, SourceRewriter},
-    parse::{collect_scopes, self_ty_name},
-    violation::Violation,
-    walker::{relative_to, workspace_rs_files_scoped},
+#[cfg(test)]
+use crate::idioms::config::DerivableGetterConfig;
+use crate::{
+    common::{
+        exclude::{attrs_have_cfg_test, collect_cfg_test_ranges},
+        fix::{FixOutcome, SourceRewriter},
+        parse::{collect_scopes, self_ty_name},
+        violation::Violation,
+        walker::{relative_to, workspace_rs_files_scoped},
+    },
+    idioms::config::QualifiedDerefRemap,
 };
 
 pub(crate) const ID: &str = "derivable_getter";
@@ -36,7 +41,8 @@ impl Check for DerivableGetter {
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        if !ctx.config.thresholds.derivable_getter.enabled {
+        let cfg = &ctx.config.thresholds.derivable_getter;
+        if !cfg.enabled {
             return Ok(Vec::new());
         }
         let redundant =
@@ -52,7 +58,7 @@ impl Check for DerivableGetter {
             let rel = relative_to(ctx.workspace_root, &path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            let analysis = analyze(&src, &file, &rel, &redundant);
+            let analysis = analyze(&src, &file, &rel, &redundant, &cfg.qualified_deref_remaps);
             for finding in analysis.findings {
                 let detail = finding.skip.map_or_else(
                     || {
@@ -86,7 +92,8 @@ impl Check for DerivableGetter {
     }
 
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
-        if !ctx.config.thresholds.derivable_getter.enabled {
+        let cfg = &ctx.config.thresholds.derivable_getter;
+        if !cfg.enabled {
             return Ok(FixOutcome::default());
         }
         let redundant =
@@ -103,7 +110,7 @@ impl Check for DerivableGetter {
             let rel = relative_to(ctx.workspace_root, &path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            let analysis = analyze(&src, &file, &rel, &redundant);
+            let analysis = analyze(&src, &file, &rel, &redundant, &cfg.qualified_deref_remaps);
             for finding in &analysis.findings {
                 if let Some(reason) = &finding.skip {
                     outcome.skipped.push(format!(
@@ -248,8 +255,10 @@ struct Completion<'a, 'out> {
     findings: &'out mut Vec<Finding>,
     insertions: &'out mut BTreeMap<usize, Vec<String>>,
     mod_prefix: &'a str,
+    qualified_deref_remaps: &'a [QualifiedDerefRemap],
     redundant: &'a BTreeSet<String>,
     rel: &'a str,
+    scoped_names: &'a BTreeSet<String>,
     src: &'a str,
 }
 
@@ -261,12 +270,19 @@ struct FieldMethods<'a> {
     with: Option<&'a Converted<'a>>,
 }
 
-fn analyze(src: &str, file: &syn::File, rel: &str, redundant: &BTreeSet<String>) -> FileAnalysis {
+fn analyze(
+    src: &str,
+    file: &syn::File,
+    rel: &str,
+    redundant: &BTreeSet<String>,
+    qualified_deref_remaps: &[QualifiedDerefRemap],
+) -> FileAnalysis {
     let mut findings = Vec::new();
     let mut insertions = BTreeMap::<usize, Vec<String>>::new();
     let mut edits = Vec::new();
     let mut cfg_test_ranges = Vec::new();
     collect_cfg_test_ranges(&file.items, &mut cfg_test_ranges);
+    let import_scopes = qualified_deref_import_scopes(file, qualified_deref_remaps);
 
     for scope in collect_scopes(file) {
         let mut by_type = BTreeMap::<String, Vec<RawAccessor<'_>>>::new();
@@ -324,6 +340,11 @@ fn analyze(src: &str, file: &syn::File, rel: &str, redundant: &BTreeSet<String>)
         } else {
             format!("{}::", scope.path.join("::"))
         };
+        let scoped_names = import_scopes
+            .iter()
+            .filter(|(_, scopes)| scopes.contains(&scope.path))
+            .map(|(name, _)| name.clone())
+            .collect();
         for (type_name, raw) in by_type {
             let local = scope
                 .structs
@@ -338,8 +359,10 @@ fn analyze(src: &str, file: &syn::File, rel: &str, redundant: &BTreeSet<String>)
                 findings: &mut findings,
                 insertions: &mut insertions,
                 mod_prefix: &mod_prefix,
+                qualified_deref_remaps,
                 redundant,
                 rel,
+                scoped_names: &scoped_names,
                 src,
             };
             complete_type(&mut completion, local, raw);
@@ -363,17 +386,10 @@ fn complete_type<'a>(
     let mut claimed = BTreeSet::new();
     let mut converted = Vec::new();
     for accessor in raw {
-        let result = conversion_reason(
-            completion.src,
-            completion.rel,
-            completion.mod_prefix,
-            strukt,
-            &accessor,
-            completion.redundant,
-            &claimed,
-        );
+        let result = conversion_reason(completion, strukt, &accessor, &claimed);
         let (plan, skip) = match result {
-            Ok(plan) => (Some(plan), None),
+            Ok(plan) => qualification_guard_reason(completion, strukt, &accessor, plan)
+                .map_or((Some(plan), None), |reason| (None, Some(reason))),
             Err(reason) => (None, Some(reason.to_owned())),
         };
         completion.findings.push(Finding {
@@ -446,12 +462,9 @@ fn complete_type<'a>(
 }
 
 fn conversion_reason<'a>(
-    src: &str,
-    rel: &str,
-    mod_prefix: &str,
+    completion: &Completion<'_, '_>,
     strukt: Option<&ItemStruct>,
     accessor: &RawAccessor<'a>,
-    redundant: &BTreeSet<String>,
     claimed: &BTreeSet<(String, AccessorKind)>,
 ) -> Result<MethodPlan, &'static str> {
     let Some(strukt) = strukt else {
@@ -483,7 +496,7 @@ fn conversion_reason<'a>(
     {
         return Err("method has a non-droppable attribute");
     }
-    if method_body_has_comment(src, accessor.method) {
+    if method_body_has_comment(completion.src, accessor.method) {
         return Err("method body contains a comment");
     }
     if accessor.block_error.is_some() {
@@ -493,10 +506,10 @@ fn conversion_reason<'a>(
         return Err("field already has a convertible accessor of this kind");
     }
     let key = format!(
-        "{rel}::{mod_prefix}{}::{}",
-        accessor.type_name, accessor.method.sig.ident
+        "{}::{}{}::{}",
+        completion.rel, completion.mod_prefix, accessor.type_name, accessor.method.sig.ident
     );
-    if redundant.contains(&key) {
+    if completion.redundant.contains(&key) {
         return Err("redundant_accessors owns this method for deletion");
     }
     let Some(field) = struct_field(strukt, &accessor.field) else {
@@ -508,16 +521,119 @@ fn conversion_reason<'a>(
     if field.attrs.iter().any(|attr| attr.path().is_ident("cfg")) {
         return Err("field has conditional compilation");
     }
-    if !field_is_line_aligned(src, field) {
+    if !field_is_line_aligned(completion.src, field) {
         return Err("field declaration is not line-aligned");
     }
+    let remap = qualified_deref_remap_in_scope(
+        &field.ty,
+        completion.qualified_deref_remaps,
+        completion.scoped_names,
+    );
     plan_method(
         &field.ty,
         accessor.return_ty,
         accessor.value_ty,
         accessor.kind,
         accessor.body,
+        remap.is_some(),
     )
+}
+
+fn qualification_guard_reason(
+    completion: &Completion<'_, '_>,
+    strukt: Option<&ItemStruct>,
+    accessor: &RawAccessor<'_>,
+    plan: MethodPlan,
+) -> Option<String> {
+    if plan.adjustment != Adjustment::Default
+        || !matches!(accessor.kind, AccessorKind::Get | AccessorKind::GetMut)
+    {
+        return None;
+    }
+    let field = struct_field(strukt?, &accessor.field)?;
+    let remap = qualified_deref_remap_in_scope(
+        &field.ty,
+        completion.qualified_deref_remaps,
+        completion.scoped_names,
+    )?;
+    Some(format!(
+        "fieldwork fully qualifies the imported {} deref target",
+        remap.scoped_name
+    ))
+}
+
+fn qualified_deref_remap_in_scope<'a>(
+    ty: &Type,
+    remaps: &'a [QualifiedDerefRemap],
+    scoped_names: &BTreeSet<String>,
+) -> Option<&'a QualifiedDerefRemap> {
+    let Type::Path(path) = ty else { return None };
+    let field_type = &path.path.segments.last()?.ident;
+    remaps.iter().find(|remap| {
+        field_type == remap.field_type.as_str() && scoped_names.contains(&remap.scoped_name)
+    })
+}
+
+fn qualified_deref_import_scopes(
+    file: &syn::File,
+    remaps: &[QualifiedDerefRemap],
+) -> BTreeMap<String, BTreeSet<Vec<String>>> {
+    remaps
+        .iter()
+        .map(|remap| {
+            (
+                remap.scoped_name.clone(),
+                import_scopes(file, &remap.scoped_name),
+            )
+        })
+        .collect()
+}
+
+fn import_scopes(file: &syn::File, scoped_name: &str) -> BTreeSet<Vec<String>> {
+    let mut scopes = BTreeSet::new();
+    collect_import_scopes(&file.items, &mut Vec::new(), scoped_name, &mut scopes);
+    scopes
+}
+
+fn collect_import_scopes(
+    items: &[Item],
+    path: &mut Vec<String>,
+    scoped_name: &str,
+    scopes: &mut BTreeSet<Vec<String>>,
+) {
+    if items
+        .iter()
+        .any(|item| matches!(item, Item::Use(item_use) if use_tree_imports_name(&item_use.tree, &mut Vec::new(), scoped_name)))
+    {
+        scopes.insert(path.clone());
+    }
+    for item in items {
+        if let Item::Mod(module) = item
+            && let Some((_, items)) = &module.content
+        {
+            path.push(module.ident.to_string());
+            collect_import_scopes(items, path, scoped_name, scopes);
+            path.pop();
+        }
+    }
+}
+
+fn use_tree_imports_name(tree: &UseTree, prefix: &mut Vec<String>, scoped_name: &str) -> bool {
+    match tree {
+        UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            let imports = use_tree_imports_name(&path.tree, prefix, scoped_name);
+            prefix.pop();
+            imports
+        }
+        UseTree::Name(name) => name.ident == scoped_name,
+        UseTree::Rename(rename) => rename.rename == scoped_name,
+        UseTree::Glob(_) => prefix == &["std", "path"],
+        UseTree::Group(group) => group
+            .items
+            .iter()
+            .any(|item| use_tree_imports_name(item, prefix, scoped_name)),
+    }
 }
 
 fn field_is_line_aligned(src: &str, field: &syn::Field) -> bool {
@@ -539,6 +655,7 @@ fn plan_method(
     value_ty: Option<&Type>,
     kind: AccessorKind,
     body: BodyKind,
+    path_in_scope: bool,
 ) -> Result<MethodPlan, &'static str> {
     if kind == AccessorKind::With {
         if body == BodyKind::Assign && value_ty == Some(field_ty) && is_self_type(return_ty) {
@@ -569,8 +686,8 @@ fn plan_method(
     }
 
     let default = match kind {
-        AccessorKind::Get => Some(get_return_type(field_ty, true, true)),
-        AccessorKind::GetMut => get_mut_return_type(field_ty, true),
+        AccessorKind::Get => Some(get_return_type(field_ty, true, true, path_in_scope)),
+        AccessorKind::GetMut => get_mut_return_type(field_ty, true, path_in_scope),
         AccessorKind::With => unreachable!(),
     };
     if default.as_ref().is_some_and(|ty| ty == return_ty) {
@@ -586,7 +703,7 @@ fn plan_method(
         });
     }
     if kind == AccessorKind::Get && is_copy_type(field_ty) {
-        let copy_false = get_return_type(field_ty, false, true);
+        let copy_false = get_return_type(field_ty, false, true, path_in_scope);
         if &copy_false == return_ty {
             return Ok(MethodPlan {
                 adjustment: Adjustment::CopyFalse,
@@ -594,12 +711,13 @@ fn plan_method(
             });
         }
     }
-    if auto_deref_target(field_ty, kind).is_some()
-        || option_inner(field_ty).is_some_and(|inner| auto_deref_target(inner, kind).is_some())
+    if auto_deref_target(field_ty, kind, path_in_scope).is_some()
+        || option_inner(field_ty)
+            .is_some_and(|inner| auto_deref_target(inner, kind, path_in_scope).is_some())
     {
         let deref_false = match kind {
-            AccessorKind::Get => Some(get_return_type(field_ty, true, false)),
-            AccessorKind::GetMut => get_mut_return_type(field_ty, false),
+            AccessorKind::Get => Some(get_return_type(field_ty, true, false, path_in_scope)),
+            AccessorKind::GetMut => get_mut_return_type(field_ty, false, path_in_scope),
             AccessorKind::With => unreachable!(),
         };
         if deref_false.as_ref().is_some_and(|ty| ty == return_ty) {
@@ -1302,7 +1420,7 @@ fn option_inner(ty: &Type) -> Option<&Type> {
     })
 }
 
-fn get_return_type(field_ty: &Type, copy: bool, deref: bool) -> Type {
+fn get_return_type(field_ty: &Type, copy: bool, deref: bool, path_in_scope: bool) -> Type {
     if copy && (is_copy_type(field_ty) || option_inner(field_ty).is_some_and(is_copy_type)) {
         return field_ty.clone();
     }
@@ -1311,45 +1429,49 @@ fn get_return_type(field_ty: &Type, copy: bool, deref: bool) -> Type {
             return parse_quote!(&#field_ty);
         }
         let target = if deref {
-            auto_deref_target(inner, AccessorKind::Get).unwrap_or_else(|| inner.clone())
+            auto_deref_target(inner, AccessorKind::Get, path_in_scope)
+                .unwrap_or_else(|| inner.clone())
         } else {
             inner.clone()
         };
         return parse_quote!(Option<&#target>);
     }
     let target = if deref {
-        auto_deref_target(field_ty, AccessorKind::Get).unwrap_or_else(|| field_ty.clone())
+        auto_deref_target(field_ty, AccessorKind::Get, path_in_scope)
+            .unwrap_or_else(|| field_ty.clone())
     } else {
         field_ty.clone()
     };
     parse_quote!(&#target)
 }
 
-fn get_mut_return_type(field_ty: &Type, deref: bool) -> Option<Type> {
+fn get_mut_return_type(field_ty: &Type, deref: bool, path_in_scope: bool) -> Option<Type> {
     if let Some(inner) = option_inner(field_ty) {
         if matches!(inner, Type::Reference(_)) {
             return None;
         }
         let target = if deref {
-            auto_deref_target(inner, AccessorKind::GetMut).unwrap_or_else(|| inner.clone())
+            auto_deref_target(inner, AccessorKind::GetMut, path_in_scope)
+                .unwrap_or_else(|| inner.clone())
         } else {
             inner.clone()
         };
         return Some(parse_quote!(Option<&mut #target>));
     }
     let target = if deref {
-        auto_deref_target(field_ty, AccessorKind::GetMut).unwrap_or_else(|| field_ty.clone())
+        auto_deref_target(field_ty, AccessorKind::GetMut, path_in_scope)
+            .unwrap_or_else(|| field_ty.clone())
     } else {
         field_ty.clone()
     };
     Some(parse_quote!(&mut #target))
 }
 
-fn auto_deref_target(ty: &Type, kind: AccessorKind) -> Option<Type> {
+fn auto_deref_target(ty: &Type, kind: AccessorKind, path_in_scope: bool) -> Option<Type> {
     let mut current = ty.clone();
     let mut changed = false;
     for _ in 0..8 {
-        let Some(next) = deref_once(&current, kind) else {
+        let Some(next) = deref_once(&current, kind, path_in_scope) else {
             break;
         };
         current = next;
@@ -1358,7 +1480,7 @@ fn auto_deref_target(ty: &Type, kind: AccessorKind) -> Option<Type> {
     changed.then_some(current)
 }
 
-fn deref_once(ty: &Type, kind: AccessorKind) -> Option<Type> {
+fn deref_once(ty: &Type, kind: AccessorKind, path_in_scope: bool) -> Option<Type> {
     match ty {
         Type::Reference(reference) if reference.mutability.is_some() => {
             return Some(reference.elem.as_ref().clone());
@@ -1374,7 +1496,8 @@ fn deref_once(ty: &Type, kind: AccessorKind) -> Option<Type> {
     let segment = path.path.segments.last()?;
     match segment.ident.to_string().as_str() {
         "String" => Some(parse_quote!(str)),
-        "PathBuf" => Some(parse_quote!(Path)),
+        "PathBuf" if path_in_scope => Some(parse_quote!(Path)),
+        "PathBuf" => Some(parse_quote!(std::path::Path)),
         "OsString" => Some(parse_quote!(OsStr)),
         "Vec" => first_type_argument(segment).map(|inner| parse_quote!([#inner])),
         "Box" => first_type_argument(segment).cloned(),
@@ -1420,8 +1543,18 @@ fn fix_source(
     source: &str,
     redundant: &BTreeSet<String>,
 ) -> Result<(String, FixOutcome, Vec<Finding>)> {
+    let config = DerivableGetterConfig::default();
+    fix_source_with_remaps(source, redundant, &config.qualified_deref_remaps)
+}
+
+#[cfg(test)]
+fn fix_source_with_remaps(
+    source: &str,
+    redundant: &BTreeSet<String>,
+    qualified_deref_remaps: &[QualifiedDerefRemap],
+) -> Result<(String, FixOutcome, Vec<Finding>)> {
     let file = syn::parse_file(source)?;
-    let analysis = analyze(source, &file, "test.rs", redundant);
+    let analysis = analyze(source, &file, "test.rs", redundant, qualified_deref_remaps);
     let mut outcome = FixOutcome::default();
     for finding in &analysis.findings {
         if let Some(reason) = &finding.skip {
@@ -1448,11 +1581,174 @@ mod tests {
         fix_source(source, &BTreeSet::new())
     }
 
+    fn fix_with_remaps(
+        source: &str,
+        qualified_deref_remaps: &[QualifiedDerefRemap],
+    ) -> Result<(String, FixOutcome, Vec<Finding>)> {
+        fix_source_with_remaps(source, &BTreeSet::new(), qualified_deref_remaps)
+    }
+
     fn count(source: &str) -> usize {
         let file = syn::parse_file(source).expect("valid Rust source");
-        analyze(source, &file, "test.rs", &BTreeSet::new())
-            .findings
-            .len()
+        let config = DerivableGetterConfig::default();
+        analyze(
+            source,
+            &file,
+            "test.rs",
+            &BTreeSet::new(),
+            &config.qualified_deref_remaps,
+        )
+        .findings
+        .len()
+    }
+
+    #[test]
+    fn pathbuf_getter_stays_manual_when_path_is_imported() -> Result<()> {
+        let source = "use std::path::Path;\nuse std::path::PathBuf;\n\nstruct S {\n    p: PathBuf,\n}\nimpl S {\n    pub fn p(&self) -> &Path { &self.p }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+
+        assert_eq!(fixed, source);
+        assert!(outcome.changes.is_empty());
+        assert_eq!(
+            outcome.skipped,
+            ["fieldwork fully qualifies the imported Path deref target"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pathbuf_getter_converts_when_path_is_not_imported() -> Result<()> {
+        let source = "use std::path::PathBuf;\n\nstruct S {\n    p: PathBuf,\n}\nimpl S {\n    pub fn p(&self) -> &std::path::Path { &self.p }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+
+        assert_eq!(outcome.changes, ["p"]);
+        assert!(outcome.skipped.is_empty());
+        assert!(fixed.contains("#[fieldwork(get)]"));
+        assert!(!fixed.contains("fn p"));
+        Ok(())
+    }
+
+    #[test]
+    fn disk_asset_store_pathbuf_getter_stays_manual() -> Result<()> {
+        let source = "use std::path::{Path, PathBuf};\n\nstruct DiskAssetStore {\n    root_dir: PathBuf,\n}\nimpl DiskAssetStore {\n    pub fn root_dir(&self) -> &Path { &self.root_dir }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+
+        assert_eq!(fixed, source);
+        assert!(outcome.changes.is_empty());
+        assert_eq!(
+            outcome.skipped,
+            ["fieldwork fully qualifies the imported Path deref target"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pathbuf_getter_stays_manual_with_std_path_glob() -> Result<()> {
+        let source = "use std::path::*;\n\nstruct S {\n    p: PathBuf,\n}\nimpl S {\n    pub fn p(&self) -> &Path { &self.p }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+
+        assert_eq!(fixed, source);
+        assert!(outcome.changes.is_empty());
+        assert_eq!(
+            outcome.skipped,
+            ["fieldwork fully qualifies the imported Path deref target"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pathbuf_get_mut_stays_manual_when_path_is_imported() -> Result<()> {
+        let source = "use std::path::{Path, PathBuf};\n\nstruct S {\n    p: PathBuf,\n}\nimpl S {\n    pub fn p_mut(&mut self) -> &mut Path { &mut self.p }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+
+        assert_eq!(fixed, source);
+        assert!(outcome.changes.is_empty());
+        assert_eq!(
+            outcome.skipped,
+            ["fieldwork fully qualifies the imported Path deref target"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn custom_qualified_deref_remap_replaces_the_default_guard() -> Result<()> {
+        let source = "use custom::MyRef;\nuse std::path::Path;\n\nstruct S {\n    custom: custom::MyBuf,\n    path: std::path::PathBuf,\n}\nimpl S {\n    pub fn custom(&self) -> &custom::MyBuf { &self.custom }\n    pub fn path(&self) -> &std::path::Path { &self.path }\n}\n";
+        let remaps = [QualifiedDerefRemap {
+            field_type: "MyBuf".into(),
+            scoped_name: "MyRef".into(),
+        }];
+        let (fixed, outcome, _) = fix_with_remaps(source, &remaps)?;
+
+        assert_eq!(outcome.changes, ["path"]);
+        assert_eq!(
+            outcome.skipped,
+            ["fieldwork fully qualifies the imported MyRef deref target"]
+        );
+        assert!(fixed.contains("fn custom"));
+        assert!(!fixed.contains("fn path"));
+        Ok(())
+    }
+
+    #[test]
+    fn empty_qualified_deref_remaps_disable_the_guard() -> Result<()> {
+        let source = "use std::path::Path;\n\nstruct S {\n    path: std::path::PathBuf,\n}\nimpl S {\n    pub fn path(&self) -> &std::path::Path { &self.path }\n}\n";
+        let (fixed, outcome, _) = fix_with_remaps(source, &[])?;
+
+        assert_eq!(outcome.changes, ["path"]);
+        assert!(outcome.skipped.is_empty());
+        assert!(!fixed.contains("fn path"));
+        Ok(())
+    }
+
+    #[test]
+    fn type_generic_pathbuf_getter_converts_when_path_is_not_imported() -> Result<()> {
+        let source = "use std::path::PathBuf;\n\nstruct Foo<D: Trait> {\n    path: PathBuf,\n    driver: D,\n}\nimpl<D: Trait> Foo<D> {\n    pub fn path(&self) -> &std::path::Path { &self.path }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+
+        assert_eq!(outcome.changes, ["path"]);
+        assert!(outcome.skipped.is_empty());
+        assert!(fixed.contains("#[derive(fieldwork::Fieldwork)]"));
+        assert!(!fixed.contains("fn path"));
+        Ok(())
+    }
+
+    #[test]
+    fn const_generic_scalar_getter_converts() -> Result<()> {
+        let source = "struct Foo<const N: usize> {\n    count: u64,\n    values: [u8; N],\n}\nimpl<const N: usize> Foo<N> {\n    pub fn count(&self) -> u64 { self.count }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+
+        assert_eq!(outcome.changes, ["count"]);
+        assert!(outcome.skipped.is_empty());
+        assert!(fixed.contains("#[derive(fieldwork::Fieldwork)]"));
+        assert!(!fixed.contains("fn count"));
+        Ok(())
+    }
+
+    #[test]
+    fn lifetime_generic_struct_converts() -> Result<()> {
+        let source = "struct Foo<'a> {\n    x: &'a str,\n}\nimpl<'a> Foo<'a> {\n    pub fn x(&self) -> &'a str { self.x }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+
+        assert_eq!(outcome.changes, ["x"]);
+        assert!(fixed.contains("#[derive(fieldwork::Fieldwork)]"));
+        assert!(fixed.contains("#[fieldwork(get)]"));
+        assert!(!fixed.contains("fn x"));
+        Ok(())
+    }
+
+    #[test]
+    fn non_path_getters_convert_when_path_is_imported() -> Result<()> {
+        let source = "use std::path::Path;\n\nstruct Foo {\n    name: String,\n    values: Vec<u8>,\n    count: u64,\n}\nimpl Foo {\n    pub fn name(&self) -> &str { &self.name }\n    pub fn values(&self) -> &[u8] { &self.values }\n    pub fn count(&self) -> u64 { self.count }\n}\n";
+        let (fixed, outcome, _) = fix(source)?;
+
+        assert_eq!(outcome.changes, ["name", "values", "count"]);
+        assert!(outcome.skipped.is_empty());
+        assert!(fixed.contains("#[derive(fieldwork::Fieldwork)]"));
+        assert!(fixed.contains("#[fieldwork(get)]"));
+        assert!(!fixed.contains("fn name"));
+        assert!(!fixed.contains("fn values"));
+        assert!(!fixed.contains("fn count"));
+        Ok(())
     }
 
     #[test]

@@ -40,7 +40,7 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_from: DerivableConfig,
     #[serde(default)]
-    pub(crate) derivable_getter: DerivableConfig,
+    pub(crate) derivable_getter: DerivableGetterConfig,
     #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]
@@ -77,6 +77,38 @@ pub(crate) struct DerivableConfig {
 impl Default for DerivableConfig {
     fn default() -> Self {
         Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DerivableGetterConfig {
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+    #[serde(default = "default_qualified_deref_remaps")]
+    pub(crate) qualified_deref_remaps: Vec<QualifiedDerefRemap>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QualifiedDerefRemap {
+    pub(crate) field_type: String,
+    pub(crate) scoped_name: String,
+}
+
+fn default_qualified_deref_remaps() -> Vec<QualifiedDerefRemap> {
+    vec![QualifiedDerefRemap {
+        field_type: "PathBuf".into(),
+        scoped_name: "Path".into(),
+    }]
+}
+
+impl Default for DerivableGetterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            qualified_deref_remaps: default_qualified_deref_remaps(),
+        }
     }
 }
 

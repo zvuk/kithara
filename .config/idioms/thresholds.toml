@@ -45,6 +45,7 @@ enabled = true
 
 [derivable_getter]
 enabled = true
+qualified_deref_remaps = [{ field_type = "PathBuf", scoped_name = "Path" }]
 
 [retry_fallback]
 # retry_fallback flags retry/fallback vocabulary (max_retries, should_retry,
