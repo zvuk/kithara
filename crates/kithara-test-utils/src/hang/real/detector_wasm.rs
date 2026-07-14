@@ -21,10 +21,13 @@ use super::{
 /// Like native it carries a [`diagnostic`](Self::diagnostic) (stuck location,
 /// last-progress location, spin depth) in the report, so the console line says
 /// *where* the worklet stalled, not just that it did.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub struct HangDetector<C: HangDump = NoContext> {
     label: &'static str,
     timeout: Duration,
     ctx: Option<C>,
+    #[field(with, option_set_some)]
     dump_dir: Option<PathBuf>,
     /// Source location of the most recent reset — the last observed progress.
     last_progress: Option<(&'static str, u32)>,
@@ -205,11 +208,5 @@ impl<C: HangDump> HangDetector<C> {
     pub fn tick_with_from<F: FnOnce() -> C>(&mut self, ctx_fn: F, file: &'static str, line: u32) {
         self.ctx = Some(ctx_fn());
         self.tick_from(file, line);
-    }
-
-    #[must_use]
-    pub fn with_dump_dir(mut self, dir: PathBuf) -> Self {
-        self.dump_dir = Some(dir);
-        self
     }
 }

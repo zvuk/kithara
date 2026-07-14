@@ -109,7 +109,7 @@ fn run_loop<N: Node, O: SchedulerObserver>(
         let report = produce_pass(&mut slots, &slots_order, &mut observer);
 
         let before = slots.len();
-        slots.retain(|slot| !slot.is_removable());
+        slots.retain(|slot| !slot.is_terminal);
         needs_reorder |= slots.len() < before;
 
         report_outcome(&mut observer, report);

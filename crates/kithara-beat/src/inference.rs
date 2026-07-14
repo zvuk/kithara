@@ -109,7 +109,7 @@ fn extract_output(
     Err(BeatError::Inference {
         reason: format!(
             "model missing output '{primary}' (also tried '{fallback}'); available: {:?}",
-            outputs.keys().collect::<Vec<_>>()
+            outputs.keys()
         ),
     })
 }

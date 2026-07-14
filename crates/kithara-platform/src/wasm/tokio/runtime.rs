@@ -16,13 +16,8 @@ impl Handle {
 }
 
 /// Error type kept for API compatibility (never actually returned on wasm32).
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display)]
+#[display("no tokio runtime on wasm32")]
 pub struct TryCurrentError;
-
-impl std::fmt::Display for TryCurrentError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "no tokio runtime on wasm32")
-    }
-}
 
 impl std::error::Error for TryCurrentError {}

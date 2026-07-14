@@ -49,22 +49,14 @@ struct CallbackCtx {
 /// arbitrary `Read + Seek` source via `audio_file_open_with_callbacks`.
 pub(crate) struct AppleAudioFile {
     handle: AudioFile<CallbackCtx>,
-    data_format: AudioStreamBasicDescription,
-    packet_count: Option<u64>,
-    max_packet_size: u32,
+    pub(super) data_format: AudioStreamBasicDescription,
+    pub(super) packet_count: Option<u64>,
+    pub(super) max_packet_size: u32,
 }
 
 impl AppleAudioFile {
-    pub(crate) fn data_format(&self) -> AudioStreamBasicDescription {
-        self.data_format
-    }
-
     pub(crate) fn magic_cookie(&self) -> Option<Vec<u8>> {
         read_magic_cookie(&self.handle)
-    }
-
-    pub(crate) fn max_packet_size(&self) -> u32 {
-        self.max_packet_size
     }
 
     /// Open a complete local `source` as an audio file. `hint` is one of the
@@ -176,10 +168,6 @@ impl AppleAudioFile {
             None => SizeMode::Unknown,
         };
         Self::open_inner(source, hint, size, false)
-    }
-
-    pub(crate) fn packet_count(&self) -> Option<u64> {
-        self.packet_count
     }
 
     /// Probe the source length via a seek-to-end, restoring the cursor to the

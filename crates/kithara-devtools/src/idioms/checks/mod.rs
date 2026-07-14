@@ -8,9 +8,10 @@
 use std::path::Path;
 
 use anyhow::Result;
+use cargo_metadata::Metadata;
 
 use super::config::IdiomsConfig;
-use crate::common::{scope::Scope, violation::Violation};
+use crate::common::{fix::FixOutcome, scope::Scope, violation::Violation};
 
 pub(crate) mod accumulator_loops;
 pub(crate) mod arc_mutex_collection;
@@ -18,6 +19,12 @@ pub(crate) mod await_under_guard;
 pub(crate) mod box_concrete_type;
 pub(crate) mod branch_chains;
 pub(crate) mod const_group_enum_shape;
+pub(crate) mod derivable_delegation;
+pub(crate) mod derivable_deref;
+pub(crate) mod derivable_display;
+pub(crate) mod derivable_from;
+pub(crate) mod derivable_getter;
+mod derivable_support;
 pub(crate) mod fat_loop_body;
 pub(crate) mod function_branch_density;
 pub(crate) mod guard_cascade;
@@ -33,6 +40,7 @@ pub(crate) mod retry_fallback;
 
 pub(crate) struct Context<'a> {
     pub(crate) config: &'a IdiomsConfig,
+    pub(crate) metadata: &'a Metadata,
     pub(crate) workspace_root: &'a Path,
     pub(crate) scope: &'a Scope,
 }
@@ -40,12 +48,21 @@ pub(crate) struct Context<'a> {
 pub(crate) trait Check {
     fn id(&self) -> &'static str;
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
+
+    fn fix(&self, _ctx: &Context<'_>) -> Result<FixOutcome> {
+        Ok(FixOutcome::default())
+    }
 }
 
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(branch_chains::BranchChains),
         Box::new(guard_cascade::GuardCascade),
+        Box::new(derivable_delegation::DerivableDelegation),
+        Box::new(derivable_from::DerivableFrom),
+        Box::new(derivable_deref::DerivableDeref),
+        Box::new(derivable_display::DerivableDisplay),
+        Box::new(derivable_getter::DerivableGetter),
         Box::new(accumulator_loops::AccumulatorLoops),
         Box::new(multi_accumulator_loop::MultiAccumulatorLoop),
         Box::new(parallel_loops::ParallelLoops),

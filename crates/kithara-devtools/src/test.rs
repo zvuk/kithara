@@ -336,8 +336,9 @@ mod tests {
 
     use super::*;
     use crate::common::project::{
-        HealthConfig, LintExcludeConfig, OrphansConfig, PerfConfig, ProjectIdentity, QualityConfig,
-        TestFlashConfig, TestNetBackendConfig, TestNoBlockConfig, WorkspaceScan,
+        AuditClippyConfig, HealthConfig, LintExcludeConfig, OrphansConfig, PerfConfig,
+        ProjectIdentity, QualityConfig, TestFlashConfig, TestNetBackendConfig, TestNoBlockConfig,
+        WorkspaceScan,
     };
 
     fn args_of(cmd: &Command) -> Vec<String> {
@@ -395,6 +396,7 @@ mod tests {
             project: ProjectIdentity {
                 name: "demo".to_owned(),
             },
+            audit_clippy: AuditClippyConfig::default(),
             health: HealthConfig::default(),
             test: TestCommandConfig {
                 lanes,

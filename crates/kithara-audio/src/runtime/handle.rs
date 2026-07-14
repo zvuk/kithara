@@ -22,12 +22,6 @@ pub(crate) struct Slot<N> {
     pub(crate) is_terminal: bool,
 }
 
-impl<N: Node> Slot<N> {
-    pub(crate) fn is_removable(&self) -> bool {
-        self.is_terminal
-    }
-}
-
 pub(crate) struct SchedulerHandle<N> {
     inner: Arc<SchedulerInner<N>>,
 }

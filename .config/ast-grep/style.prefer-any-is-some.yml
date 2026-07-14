@@ -1,0 +1,15 @@
+id: style.prefer-any-is-some
+message: Use `.any(p)` instead of `.find(p).is_some()`.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  pattern: $X.find($P).is_some()
+fix: $X.any($P)

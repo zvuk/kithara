@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, fmt::Write, fs, path::Path};
 
 use anyhow::{Context, Result};
 
@@ -18,7 +18,7 @@ pub(crate) fn render_report(
     summaries: &BTreeMap<(String, String), ProfileSummary>,
 ) -> String {
     let mut out = String::new();
-    out.push_str(&format!("# Test-suite perf report - {}\n\n", slow.run_id));
+    let _ = write!(out, "# Test-suite perf report - {}\n\n", slow.run_id);
     let mut class_totals: BTreeMap<&str, f64> = BTreeMap::new();
     let (mut total_on, mut total_off) = (0.0, 0.0);
     for summary in summaries.values() {
@@ -29,15 +29,16 @@ pub(crate) fn render_report(
         }
     }
     out.push_str("## Totals across profiled tests\n\n");
-    out.push_str(&format!(
+    let _ = write!(
+        out,
         "- on-CPU: {:.0}ms, off-CPU (waiting): {:.0}ms\n\n",
         total_on, total_off
-    ));
+    );
     out.push_str("| wait class | total ms |\n|---|---|\n");
     let mut classes: Vec<_> = class_totals.into_iter().collect();
     classes.sort_by(|a, b| b.1.total_cmp(&a.1));
     for (class, ms) in classes {
-        out.push_str(&format!("| {class} | {ms:.0} |\n"));
+        let _ = writeln!(out, "| {class} | {ms:.0} |");
     }
     let iso: BTreeMap<(String, String), &IsolatedRun> = isolated
         .iter()
@@ -46,38 +47,42 @@ pub(crate) fn render_report(
     out.push_str("\n## Top-20 cards\n");
     for test in slow.tests.iter().take(20) {
         let key = (test.suite.clone(), test.name.clone());
-        out.push_str(&format!("\n### {} {}\n\n", test.suite, test.name));
+        let _ = write!(out, "\n### {} {}\n\n", test.suite, test.name);
         for (lane, stat) in &test.lanes {
-            out.push_str(&format!(
-                "- {lane}: median {:.0}ms (min {:.0} / max {:.0}, {} reps{})\n",
+            let _ = writeln!(
+                out,
+                "- {lane}: median {:.0}ms (min {:.0} / max {:.0}, {} reps{})",
                 stat.median_ms,
                 stat.min_ms,
                 stat.max_ms,
                 stat.repeats,
                 if stat.failed > 0 { ", FAILURES" } else { "" }
-            ));
+            );
         }
         if let Some(run) = iso.get(&key) {
-            out.push_str(&format!(
-                "- isolated: {:.1}s exit={:?}{}\n",
+            let _ = writeln!(
+                out,
+                "- isolated: {:.1}s exit={:?}{}",
                 run.secs,
                 run.exit_code,
                 if run.timed_out { " TIMED OUT" } else { "" }
-            ));
+            );
         }
         if let Some(summary) = summaries.get(&key) {
-            out.push_str(&format!(
-                "- on-CPU {:.0}ms / off-CPU {:.0}ms\n",
+            let _ = writeln!(
+                out,
+                "- on-CPU {:.0}ms / off-CPU {:.0}ms",
                 summary.on_cpu_ms, summary.off_cpu_ms
-            ));
+            );
             for wait in summary.waits.iter().take(5) {
-                out.push_str(&format!(
-                    "  - wait {} {:.0}ms @ {}\n",
+                let _ = writeln!(
+                    out,
+                    "  - wait {} {:.0}ms @ {}",
                     wait.class, wait.ms, wait.attributed
-                ));
+                );
             }
             for frame in summary.cpu.iter().take(5) {
-                out.push_str(&format!("  - cpu {:.0}ms @ {}\n", frame.ms, frame.frame));
+                let _ = writeln!(out, "  - cpu {:.0}ms @ {}", frame.ms, frame.frame);
             }
         } else {
             out.push_str("- (no profile captured)\n");
@@ -85,10 +90,11 @@ pub(crate) fn render_report(
     }
     out.push_str("\n## Ranked candidates\n\n| rank score | test |\n|---|---|\n");
     for test in &slow.tests {
-        out.push_str(&format!(
-            "| {:.0} | {} {} |\n",
+        let _ = writeln!(
+            out,
+            "| {:.0} | {} {} |",
             test.rank_score, test.suite, test.name
-        ));
+        );
     }
     out
 }

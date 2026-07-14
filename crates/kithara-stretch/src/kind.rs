@@ -1,11 +1,10 @@
-use std::fmt;
-
 /// Stretch backend selection. Variants exist only when their backend is
 /// compiled in (this module itself requires at least one `stretch-*`
 /// feature on a native target). Selecting an absent backend is
 /// un-representable rather than a runtime error.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
+#[display("{self:?}")]
 pub enum StretchKind {
     /// `signalsmith-stretch` (C++). Feature `stretch-signalsmith`.
     #[cfg(feature = "stretch-signalsmith")]
@@ -67,12 +66,6 @@ impl Default for StretchKind {
 
 /// UI label = the variant name (`Signalsmith` / `Bungee`), via `Debug`, so
 /// the selector needs no per-variant `cfg` arm.
-impl fmt::Display for StretchKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
 #[cfg(test)]
 #[path = "kind_tests.rs"]
 mod tests;

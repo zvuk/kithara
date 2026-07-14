@@ -32,9 +32,10 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 /// pass it via [`TrackSource::Config`](crate::TrackSource::Config).
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) uses the
 /// [`ResourceConfig::new`](kithara_play::ResourceConfig::new) defaults.
-#[derive(Clone, Builder)]
+#[derive(Clone, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[fieldwork(opt_in, with)]
 pub struct QueueConfig {
     /// Max concurrent background prefetch loads. Default: 3.
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
@@ -44,9 +45,11 @@ pub struct QueueConfig {
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
+    #[field(with, option_set_some)]
     pub cancel: Option<CancelToken>,
 
     /// Externally-owned player. `None` means Queue builds a default.
+    #[field(with, option_set_some)]
     pub player: Option<Arc<PlayerImpl>>,
 
     /// Whether the queue auto-advances to the next track at EOF.
@@ -81,21 +84,6 @@ impl QueueConfig {
     // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Thread an app-wide master cancel so the queue subtree derives from
-    /// a single owner instead of minting its own root.
-    #[must_use]
-    pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
-        self.cancel = Some(cancel);
-        self
-    }
-
-    /// Replace the [`PlayerImpl`] instance.
-    #[must_use]
-    pub fn with_player(mut self, player: Arc<PlayerImpl>) -> Self {
-        self.player = Some(player);
-        self
     }
 }
 

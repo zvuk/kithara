@@ -20,7 +20,9 @@ pub(crate) trait TrackPhase: sealed::Sealed + Sized {
 /// Phantom-typed handle for a single FSM phase. Owns the phase's data;
 /// transitions consume `self` and produce the next phase. Stored,
 /// type-erased, in [`CurrentFsm`].
+#[derive(fieldwork::Fieldwork)]
 pub(crate) struct Track<S: TrackPhase> {
+    #[field(get(vis = "pub(crate)"))]
     data: S::Data,
     _phase: PhantomData<S>,
 }
@@ -31,10 +33,6 @@ impl<S: TrackPhase> Track<S> {
             data,
             _phase: PhantomData,
         }
-    }
-
-    pub(crate) fn data(&self) -> &S::Data {
-        &self.data
     }
 
     pub(crate) fn data_mut(&mut self) -> &mut S::Data {

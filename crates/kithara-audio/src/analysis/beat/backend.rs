@@ -1,11 +1,10 @@
-use std::fmt;
-
 use kithara_beat::{BEAT_MODEL_BYTES, BeatThis, MEL_MODEL_BYTES};
 
 use super::{BeatDetectError, BeatDetector, RawBeats};
 
 /// Beat detector selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
+#[display("{self:?}")]
 pub(crate) enum BeatDetectorKind {
     /// `kithara-beat` NN (`beat_this` port). Feature `beat-nn`.
     NnBeatThis,
@@ -24,12 +23,6 @@ impl BeatDetectorKind {
 impl Default for BeatDetectorKind {
     fn default() -> Self {
         Self::first()
-    }
-}
-
-impl fmt::Display for BeatDetectorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
     }
 }
 

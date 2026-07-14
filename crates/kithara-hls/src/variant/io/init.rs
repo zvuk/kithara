@@ -71,17 +71,29 @@ impl HlsVariant {
         }))
     }
 
-    /// Whether this variant declares a separately fetched `#EXT-X-MAP` init,
-    /// regardless of whether its size is yet known.
-    pub(crate) fn has_init(&self) -> bool {
-        self.segments.init.is_some()
-    }
-
-    /// Borrow the init slot — the fetch path matches on it, reading the init
-    /// `Segment`'s `url` / `content` / `resource_id` and claiming its state
-    /// atom. `None` for a variant with no separate init.
-    pub(super) fn init(&self) -> Option<&Segment> {
-        self.segments.init.as_ref()
+    delegate::delegate! {
+        to self.segments.init {
+            /// Whether this variant declares a separately fetched `#EXT-X-MAP` init,
+            /// regardless of whether its size is yet known.
+            #[call(is_some)]
+            pub(crate) fn has_init(&self) -> bool;
+            /// Borrow the init slot — the fetch path matches on it, reading the init
+            /// `Segment`'s `url` / `content` / `resource_id` and claiming its state
+            /// atom. `None` for a variant with no separate init.
+            #[call(as_ref)]
+            pub(super) fn init(&self) -> Option<&Segment>;
+            /// Narrow disk handle for the variant's separately fetched init segment,
+            /// or `None` for a variant with no `#EXT-X-MAP` init.
+            #[expr(Some($?.resource(&self.segments.scope)))]
+            #[call(as_ref)]
+            fn init_handle(&self) -> Option<ResourceHandle>;
+            #[expr($.map_or(0, Segment::len))]
+            #[call(as_ref)]
+            pub(super) fn init_route_size(&self) -> u64;
+            #[expr($.map_or(0, Segment::read_len))]
+            #[call(as_ref)]
+            pub(crate) fn init_size(&self) -> u64;
+        }
     }
 
     /// Committed on-disk length of the (separately fetched) init segment, as
@@ -116,12 +128,6 @@ impl HlsVariant {
             .is_some_and(|seg| seg.state().is_failed())
     }
 
-    /// Narrow disk handle for the variant's separately fetched init segment,
-    /// or `None` for a variant with no `#EXT-X-MAP` init.
-    fn init_handle(&self) -> Option<ResourceHandle> {
-        Some(self.segments.init.as_ref()?.resource(&self.segments.scope))
-    }
-
     /// Read `range` of the init segment into `dst` via the [`Segment`]
     /// cascade. `Ok(None)` when there is no init or its bytes are not on disk
     /// yet.
@@ -148,14 +154,6 @@ impl HlsVariant {
     #[cfg(test)]
     pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
         Some(self.segments.init.as_ref()?.resource_id().clone())
-    }
-
-    pub(super) fn init_route_size(&self) -> u64 {
-        self.segments.init.as_ref().map_or(0, Segment::len)
-    }
-
-    pub(crate) fn init_size(&self) -> u64 {
-        self.segments.init.as_ref().map_or(0, Segment::read_len)
     }
 
     /// Flip the init slot to `Missing`, clearing the Layout seed when the

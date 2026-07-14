@@ -9,24 +9,12 @@ use kithara_stream::dl::Downloader;
 use url::Url;
 
 /// Source of a file stream: either a remote URL or a local path.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, derive_more::From, PartialEq, Eq)]
 pub enum FileSrc {
     /// Remote file accessed via HTTP(S).
     Remote(Url),
     /// Local file accessed directly from disk.
     Local(PathBuf),
-}
-
-impl From<Url> for FileSrc {
-    fn from(url: Url) -> Self {
-        Self::Remote(url)
-    }
-}
-
-impl From<PathBuf> for FileSrc {
-    fn from(path: PathBuf) -> Self {
-        Self::Local(path)
-    }
 }
 
 /// Configuration for file streaming.

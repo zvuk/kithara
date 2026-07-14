@@ -28,9 +28,15 @@ impl IsolatorEq {
         }
     }
 
-    #[must_use]
-    pub fn band_count(&self) -> usize {
-        self.gains.len()
+    delegate::delegate! {
+        to self.gains {
+            #[must_use]
+            #[call(len)]
+            pub fn band_count(&self) -> usize;
+            #[must_use]
+            #[call(target)]
+            pub fn target_gain(&self, band: usize) -> Option<f32>;
+        }
     }
 
     #[inline]
@@ -65,11 +71,6 @@ impl IsolatorEq {
 
     pub fn set_gain(&mut self, band: usize, gain_db: f32) {
         self.gains.set(band, gain_db);
-    }
-
-    #[must_use]
-    pub fn target_gain(&self, band: usize) -> Option<f32> {
-        self.gains.target(band)
     }
 
     pub fn update_sample_rate(&mut self, sample_rate: u32) {

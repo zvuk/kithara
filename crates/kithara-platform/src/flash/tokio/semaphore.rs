@@ -21,14 +21,9 @@ use crate::{
 /// distinct type from `tokio`'s (whose field is private); callers only `map_err`
 /// it. Never constructed on the flash path (no `close()`); present so the flash
 /// surface matches the real `tokio` Semaphore the native/wasm backends expose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
+#[display("semaphore closed")]
 pub struct AcquireError;
-
-impl std::fmt::Display for AcquireError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("semaphore closed")
-    }
-}
 
 impl std::error::Error for AcquireError {}
 
