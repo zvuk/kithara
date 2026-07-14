@@ -93,11 +93,11 @@ impl ProducerHandle {
         to self.slot {
             /// Aggregate demand watermark across all live consumers.
             #[must_use]
-            pub fn max_watermark (& self) -> u64;
+            pub fn max_watermark(&self) -> u64;
             /// Producer wake notify (woken on attach / read-advance).
             #[must_use]
             #[field(&notify)]
-            pub fn notify (& self) -> & Notify;
+            pub fn notify(&self) -> &Notify;
         }
     }
     /// Producer cancel token (fires when the last consumer detaches).

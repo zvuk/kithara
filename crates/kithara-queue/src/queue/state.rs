@@ -166,39 +166,18 @@ impl Queue {
         }
     }
 
-    delegate::delegate! {
-        to self.navigation {
-            #[expr($
-                        .unwrap_or_else(PoisonError::into_inner))]
-            #[call(lock)]
-            pub (super) fn lock_navigation (& self) -> std :: sync :: MutexGuard < '_ , NavigationState >;
-            #[expr($
-                        .unwrap_or_else(PoisonError::into_inner))]
-            #[call(lock)]
-            pub (super) fn lock_navigation_mut (& self) -> std :: sync :: MutexGuard < '_ , NavigationState >;
-        }
-        to self.tracks {
-            #[call(lock)]
-            pub (super) fn lock_tracks (& self) -> std :: sync :: MutexGuard < '_ , Vec < TrackRecord > >;
-            #[call(lock)]
-            pub (super) fn lock_tracks_mut (& self) -> std :: sync :: MutexGuard < '_ , Vec < TrackRecord > >;
-            pub (super) fn set_status (& self , id : TrackId , status : kithara_events :: TrackStatus);
-        }
-        to self.crossfade_armed_for {
-            #[call(load)]
-            pub (super) fn read_armed_for (& self) -> CrossfadeArm;
-            #[call(take_if_matches)]
-            pub (super) fn take_armed_for_if_matches (& self , id : TrackId) -> bool;
-            #[call(store)]
-            pub (super) fn write_armed_for (& self , arm : CrossfadeArm);
-        }
-        to self.cached_position {
-            #[call(load)]
-            pub (super) fn read_cached_position (& self) -> CachedPosition;
-            #[call(store)]
-            pub (super) fn write_cached_position (& self , pos : CachedPosition);
-        }
+    pub(super) fn lock_navigation(&self) -> std::sync::MutexGuard<'_, NavigationState> {
+        self.navigation
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
+
+    pub(super) fn lock_navigation_mut(&self) -> std::sync::MutexGuard<'_, NavigationState> {
+        self.navigation
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub(in crate::queue) fn lock_pending_select_mut(
         &self,
     ) -> std::sync::MutexGuard<'_, SelectPhase> {
@@ -215,6 +194,30 @@ impl Queue {
         self.select_apply
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    delegate::delegate! {
+        to self.tracks {
+            #[call(lock)]
+            pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>>;
+            #[call(lock)]
+            pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>>;
+            pub(super) fn set_status(&self, id: TrackId, status: kithara_events::TrackStatus);
+        }
+        to self.crossfade_armed_for {
+            #[call(load)]
+            pub(super) fn read_armed_for(&self) -> CrossfadeArm;
+            #[call(take_if_matches)]
+            pub(super) fn take_armed_for_if_matches(&self, id: TrackId) -> bool;
+            #[call(store)]
+            pub(super) fn write_armed_for(&self, arm: CrossfadeArm);
+        }
+        to self.cached_position {
+            #[call(load)]
+            pub(super) fn read_cached_position(&self) -> CachedPosition;
+            #[call(store)]
+            pub(super) fn write_cached_position(&self, pos: CachedPosition);
+        }
     }
 }
 

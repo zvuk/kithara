@@ -83,17 +83,17 @@ impl SizeSignal {
         to self.ready {
             /// Pre-park snapshot of the gate generation (seqlock guard for the off-RT
             /// `wait_range` loop). Pass-through to [`WaitGate::current`].
-            pub (crate) fn current (& self) -> u64;
+            pub(crate) fn current(&self) -> u64;
             /// Signal only the gate. Used at the coord's RT-reachable transitions
             /// (fence clear, seek reset, cancel waker) that flip a blocked reader's
             /// predicate without producing new bytes — the audio worker re-discovers the
             /// state on its next scheduler poll, so it is deliberately not re-ticked.
             #[call(signal)]
-            pub (crate) fn fire_ready_only (& self);
+            pub(crate) fn fire_ready_only(&self);
             /// Park on the gate until its generation advances past `since` or `timeout`
             /// elapses. Returns `true` on a signal, `false` on timeout. Pass-through to
             /// [`WaitGate::wait_timeout`].
-            pub (crate) fn wait_timeout (& self , since : u64 , timeout : Duration) -> bool;
+            pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool;
         }
     }
     /// Signal the gate, then re-tick the audio worker. Used where newly readable

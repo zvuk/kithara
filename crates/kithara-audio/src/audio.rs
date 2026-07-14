@@ -369,12 +369,12 @@ impl<S> Audio<S> {
             ///
             /// Returns `None` for streaming sources where duration is unknown.
             #[must_use]
-            pub fn duration (& self) -> Option < Duration >;
+            pub fn duration(&self) -> Option<Duration>;
             /// Get current playback position.
             ///
             /// Calculated from samples read since last seek plus the seek base.
             #[must_use]
-            pub fn position (& self) -> Duration;
+            pub fn position(&self) -> Duration;
         }
     }
     fn emit_audio_event(&self, event: AudioEvent) {

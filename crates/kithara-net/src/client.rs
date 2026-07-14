@@ -295,23 +295,33 @@ impl HttpClient {
             /// # Errors
             ///
             /// Returns [`NetError`] on HTTP failure, timeout, or network error.
-            pub async fn get_bytes (& self , url : Url , headers : Option < Headers >) -> NetResult < Bytes >;
+            pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes>;
             /// # Errors
             ///
             /// Returns [`NetError`] on HTTP failure or network error.
-            pub async fn get_range (& self , url : Url , range : RangeSpec , headers : Option < Headers > ,) -> NetResult < crate :: ByteStream >;
+            pub async fn get_range(
+                &self,
+                url: Url,
+                range: RangeSpec,
+                headers: Option<Headers>,
+            ) -> NetResult<crate::ByteStream>;
             /// # Errors
             ///
             /// Returns [`NetError`] on HTTP failure or network error.
-            pub async fn head (& self , url : Url , headers : Option < Headers >) -> NetResult < Headers >;
+            pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers>;
             /// # Errors
             ///
             /// Returns [`NetError`] on HTTP failure, timeout, or network error.
-            pub async fn post_bytes (& self , url : Url , body : Bytes , headers : Option < Headers > ,) -> NetResult < Bytes >;
+            pub async fn post_bytes(
+                &self,
+                url: Url,
+                body: Bytes,
+                headers: Option<Headers>,
+            ) -> NetResult<Bytes>;
             /// # Errors
             ///
             /// Returns [`NetError`] on HTTP failure or network error.
-            pub async fn stream (& self , url : Url , headers : Option < Headers >) -> NetResult < crate :: ByteStream >;
+            pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream>;
         }
     }
 }

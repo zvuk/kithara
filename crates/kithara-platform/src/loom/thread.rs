@@ -22,9 +22,9 @@ impl<T> JoinHandle<T> {
 
     delegate::delegate! {
         to self.inner {
-            pub fn join (self) -> std :: thread :: Result < T >;
+            pub fn join(self) -> std::thread::Result<T>;
             #[must_use]
-            pub fn thread (& self) -> & Thread;
+            pub fn thread(&self) -> &Thread;
         }
     }
 }

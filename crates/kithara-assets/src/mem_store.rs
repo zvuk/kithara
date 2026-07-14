@@ -238,16 +238,16 @@ impl Assets for MemAssetStore {
 
     delegate::delegate! {
         to self.deleter {
-            fn delete_asset (& self , asset_root : & str) -> AssetsResult < () >;
-            fn remove_resource (& self , key : & ResourceKey) -> AssetsResult < () >;
+            fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
+            fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }
         to self.cancel {
             #[expr(Ok(StorageResource::from(MemResource::new($))))]
             #[call(clone)]
-            fn open_lru_index_resource (& self) -> AssetsResult < Self :: IndexRes >;
+            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             #[expr(Ok(StorageResource::from(MemResource::new($))))]
             #[call(clone)]
-            fn open_pins_index_resource (& self) -> AssetsResult < Self :: IndexRes >;
+            fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
         }
     }
     fn open_resource_with_ctx(

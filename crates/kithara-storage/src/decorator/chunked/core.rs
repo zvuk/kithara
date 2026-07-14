@@ -237,16 +237,16 @@ impl<D: DriverIo> AtomicChunked<D> {
             /// # Errors
             /// Returns error if the resource is cancelled or the backend cannot reopen.
             #[call(reactivate_in_place)]
-            pub fn reactivate (& self) -> StorageResult < () >;
+            pub fn reactivate(&self) -> StorageResult<()>;
             /// Mint a cheap read-only view without holding the inner lock during
             /// subsequent (possibly blocking) reads.
             #[call(reader)]
-            fn read_view (& self) -> ResourceReader < D >;
+            fn read_view(&self) -> ResourceReader<D>;
             /// Write data at the given offset.
             ///
             /// # Errors
             /// Returns error if the resource is cancelled, failed, or the write fails.
-            pub fn write_at (& self , offset : u64 , data : & [u8]) -> StorageResult < () >;
+            pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
     }
     /// Read data at the given offset into `buf`.

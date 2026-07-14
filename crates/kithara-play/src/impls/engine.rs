@@ -291,15 +291,15 @@ impl Engine for EngineImpl {
     delegate::delegate! {
         to self.active_slots.lock() {
             #[call(clone)]
-            fn active_slots (& self) -> Vec < SlotId >;
+            fn active_slots(&self) -> Vec<SlotId>;
             #[call(len)]
-            fn slot_count (& self) -> usize;
+            fn slot_count(&self) -> usize;
         }
         to self.config {
             #[field(channels)]
-            fn master_channels (& self) -> u16;
+            fn master_channels(&self) -> u16;
             #[field]
-            fn max_slots (& self) -> usize;
+            fn max_slots(&self) -> usize;
         }
     }
     fn allocate_slot(&self) -> Result<SlotId, PlayError> {

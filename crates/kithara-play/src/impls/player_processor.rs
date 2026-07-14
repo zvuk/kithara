@@ -703,14 +703,14 @@ impl PlayerNodeProcessor {
             /// Look up a track by its source identifier.
             #[must_use]
             #[call(get)]
-            pub fn track (& self , src : & Arc < str >) -> Option < & PlayerTrack >;
+            pub fn track(&self, src: &Arc<str>) -> Option<&PlayerTrack>;
             /// Number of tracks currently held in the processor arena.
             #[must_use]
             #[call(len)]
-            pub fn track_count (& self) -> usize;
+            pub fn track_count(&self) -> usize;
             /// Look up a track by its source identifier (mutable).
             #[call(get_mut)]
-            pub fn track_mut (& mut self , src : & Arc < str >) -> Option < & mut PlayerTrack >;
+            pub fn track_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack>;
         }
     }
     /// Pop one notification from the processor → main-thread channel.

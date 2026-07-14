@@ -47,9 +47,9 @@ impl HlsVariant {
 
     delegate::delegate! {
         to self.flow.cancel_epoch {
-            pub (crate) fn cancel (& self);
+            pub(crate) fn cancel(&self);
             #[call(handle)]
-            pub (crate) fn cancel_handle (& self) -> CancelToken;
+            pub(crate) fn cancel_handle(&self) -> CancelToken;
             /// Replace the cancel token with a fresh child of `master_cancel`.
             /// Called on every re-activation path ([`Self::reset_to_full_range`]
             /// and [`Self::activate_at_segment_with_shift`]) so a variant that
@@ -61,7 +61,7 @@ impl HlsVariant {
             /// In-flight clones held by prior fetches stay cancelled (correct —
             /// they belong to the previous epoch and must not write).
             #[call(rearm)]
-            pub (crate) fn rearm_cancel (& self);
+            pub(crate) fn rearm_cancel(&self);
         }
     }
 }

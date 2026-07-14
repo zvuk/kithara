@@ -54,11 +54,11 @@ impl Headers {
     delegate::delegate! {
         to self.inner {
             #[expr($.map(String::as_str))]
-            pub fn get (& self , key : & str) -> Option < & str >;
+            pub fn get(&self, key: &str) -> Option<&str>;
             #[must_use]
-            pub fn is_empty (& self) -> bool;
+            pub fn is_empty(&self) -> bool;
             #[expr($.map(|(k, v)| (k.as_str(), v.as_str())))]
-            pub fn iter (& self) -> impl Iterator < Item = (& str , & str) >;
+            pub fn iter(&self) -> impl Iterator<Item = (&str, &str)>;
         }
     }
     pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {

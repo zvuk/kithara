@@ -56,13 +56,13 @@ impl RubatoEngine {
 
     delegate::delegate! {
         to self.inner {
-            pub (super) fn input_frames_max (& self) -> usize;
-            pub (super) fn input_frames_next (& self) -> usize;
-            pub (super) fn output_delay (& self) -> usize;
-            pub (super) fn output_frames_max (& self) -> usize;
-            pub (super) fn output_frames_next (& self) -> usize;
-            pub (super) fn resample_ratio (& self) -> f64;
-            pub (super) fn reset (& mut self);
+            pub(super) fn input_frames_max(&self) -> usize;
+            pub(super) fn input_frames_next(&self) -> usize;
+            pub(super) fn output_delay(&self) -> usize;
+            pub(super) fn output_frames_max(&self) -> usize;
+            pub(super) fn output_frames_next(&self) -> usize;
+            pub(super) fn resample_ratio(&self) -> f64;
+            pub(super) fn reset(&mut self);
         }
     }
     fn new_async(

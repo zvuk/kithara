@@ -15,11 +15,11 @@ impl<T> RwLock<T> {
             #[inline]
             #[expr(RwLockReadGuard($))]
             #[call(lock_sync_read)]
-            pub fn read (& self) -> RwLockReadGuard < '_ , T >;
+            pub fn read(&self) -> RwLockReadGuard<'_, T>;
             #[inline]
             #[expr(RwLockWriteGuard($))]
             #[call(lock_sync_write)]
-            pub fn write (& self) -> RwLockWriteGuard < '_ , T >;
+            pub fn write(&self) -> RwLockWriteGuard<'_, T>;
         }
     }
 }

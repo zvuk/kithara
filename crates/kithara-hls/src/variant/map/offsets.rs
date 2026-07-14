@@ -273,11 +273,15 @@ impl Layout {
 
     delegate::delegate! {
         to self.frame.load() {
-            pub (super) fn bisect_left (& self , byte : u64) -> usize;
+            pub(super) fn bisect_left(&self, byte: u64) -> usize;
             #[call(find_virtual)]
-            pub (super) fn find_at_offset (& self , byte_virtual : u64 , segments : & [Segment] ,) -> Option < (u32 , u64 , u64) >;
-            pub (super) fn find_natural (& self , byte : u64 , segments : & [Segment]) -> Option < (u32 , u64 , u64) >;
-            pub (super) fn segment_byte_offset (& self , idx : u32) -> Option < u64 >;
+            pub(super) fn find_at_offset(
+                &self,
+                byte_virtual: u64,
+                segments: &[Segment],
+            ) -> Option<(u32, u64, u64)>;
+            pub(super) fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)>;
+            pub(super) fn segment_byte_offset(&self, idx: u32) -> Option<u64>;
         }
     }
     pub(super) fn clear_init_seed(&self) {

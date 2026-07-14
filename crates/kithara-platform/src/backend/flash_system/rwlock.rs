@@ -14,10 +14,10 @@ impl<T> RwLock<T> {
         to self.0 {
             #[inline]
             #[expr(RwLockReadGuard($))]
-            pub (crate) fn read (& self) -> RwLockReadGuard < '_ , T >;
+            pub(crate) fn read(&self) -> RwLockReadGuard<'_, T>;
             #[inline]
             #[expr(RwLockWriteGuard($))]
-            pub (crate) fn write (& self) -> RwLockWriteGuard < '_ , T >;
+            pub(crate) fn write(&self) -> RwLockWriteGuard<'_, T>;
         }
     }
 }

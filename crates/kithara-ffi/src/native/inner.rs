@@ -258,32 +258,24 @@ impl NativeInner {
 
     delegate::delegate! {
         to self.queue {
-            pub (crate) fn crossfade_duration (& self) -> f32;
+            pub(crate) fn crossfade_duration(&self) -> f32;
             #[expr($.unwrap_or(0.0))]
             #[call(position_seconds)]
-            pub (crate) fn current_time (& self) -> f64;
-            pub (crate) fn is_muted (& self) -> bool;
-            #[expr($
-                        .map_err(|err| match err {
-                            QueueError::Play(err) => FfiError::from(err),
-                            other => FfiError::Internal {
-                                description: other.to_string(),
-                            },
-                        }))]
-            pub (crate) fn notify_audio_route_changed (& self , reason : & str) -> Result < () , FfiError >;
-            pub (crate) fn pause (& self);
-            pub (crate) fn play (& self);
+            pub(crate) fn current_time(&self) -> f64;
+            pub(crate) fn is_muted(&self) -> bool;
+            pub(crate) fn pause(&self);
+            pub(crate) fn play(&self);
             #[call(default_rate)]
-            pub (crate) fn playing_rate (& self) -> f32;
-            pub (crate) fn rate (& self) -> f32;
+            pub(crate) fn playing_rate(&self) -> f32;
+            pub(crate) fn rate(&self) -> f32;
             #[expr($.map_err(FfiError::from))]
-            pub (crate) fn reset_eq (& self) -> Result < () , FfiError >;
-            pub (crate) fn set_crossfade_duration (& self , seconds : f32);
-            pub (crate) fn set_muted (& self , muted : bool);
+            pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
+            pub(crate) fn set_crossfade_duration(&self, seconds: f32);
+            pub(crate) fn set_muted(&self, muted: bool);
             #[call(set_default_rate)]
-            pub (crate) fn set_playing_rate (& self , rate : f32);
-            pub (crate) fn set_volume (& self , volume : f32);
-            pub (crate) fn volume (& self) -> f32;
+            pub(crate) fn set_playing_rate(&self, rate: f32);
+            pub(crate) fn set_volume(&self, volume: f32);
+            pub(crate) fn volume(&self) -> f32;
         }
     }
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
@@ -340,6 +332,17 @@ impl NativeInner {
             .iter()
             .filter_map(|t| items.get(&t.id).cloned())
             .collect()
+    }
+
+    pub(crate) fn notify_audio_route_changed(&self, reason: &str) -> Result<(), FfiError> {
+        self.queue
+            .notify_audio_route_changed(reason)
+            .map_err(|err| match err {
+                QueueError::Play(err) => FfiError::from(err),
+                other => FfiError::Internal {
+                    description: other.to_string(),
+                },
+            })
     }
 
     pub(crate) fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {

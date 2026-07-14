@@ -76,53 +76,55 @@ impl HlsVariant {
             /// Whether this variant declares a separately fetched `#EXT-X-MAP` init,
             /// regardless of whether its size is yet known.
             #[call(is_some)]
-            pub (crate) fn has_init (& self) -> bool;
+            pub(crate) fn has_init(&self) -> bool;
             /// Borrow the init slot — the fetch path matches on it, reading the init
             /// `Segment`'s `url` / `content` / `resource_id` and claiming its state
             /// atom. `None` for a variant with no separate init.
             #[call(as_ref)]
-            pub (super) fn init (& self) -> Option < & Segment >;
-            /// Committed on-disk length of the (separately fetched) init segment, as
-            /// [`committed_final_len`](Self::committed_final_len) for media.
-            #[expr($?
-                        .committed_len(&self.segments.scope))]
-            #[call(as_ref)]
-            pub (super) fn init_committed_final_len (& self) -> Option < u64 >;
-            #[expr($
-                        .is_some_and(|seg| seg.state().is_downloading()))]
-            #[call(as_ref)]
-            pub (super) fn init_downloading (& self) -> bool;
-            /// Whether the declared init settled terminally (`Failed`).
-            #[expr($
-                        .is_some_and(|seg| seg.state().is_failed()))]
-            #[call(as_ref)]
-            pub (crate) fn init_failed (& self) -> bool;
+            pub(super) fn init(&self) -> Option<&Segment>;
             /// Narrow disk handle for the variant's separately fetched init segment,
             /// or `None` for a variant with no `#EXT-X-MAP` init.
             #[expr(Some($?.resource(&self.segments.scope)))]
             #[call(as_ref)]
-            fn init_handle (& self) -> Option < ResourceHandle >;
+            fn init_handle(&self) -> Option<ResourceHandle>;
             #[expr($.map_or(0, Segment::len))]
             #[call(as_ref)]
-            pub (super) fn init_route_size (& self) -> u64;
+            pub(super) fn init_route_size(&self) -> u64;
             #[expr($.map_or(0, Segment::read_len))]
             #[call(as_ref)]
-            pub (crate) fn init_size (& self) -> u64;
-            /// Whether the next dispatch should issue the separate init fetch
-            /// (CMAF `EXT-X-MAP`) — true only if the variant advertises a
-            /// non-zero init segment that hasn't been loaded yet.
-            #[expr($
-                        .is_some_and(|seg| !seg.state().is_loaded()))]
-            #[call(as_ref)]
-            pub (super) fn needs_init_fetch (& self) -> bool;
+            pub(crate) fn init_size(&self) -> u64;
         }
     }
+    /// Committed on-disk length of the (separately fetched) init segment, as
+    /// [`committed_final_len`](Self::committed_final_len) for media.
+    pub(super) fn init_committed_final_len(&self) -> Option<u64> {
+        self.segments
+            .init
+            .as_ref()?
+            .committed_len(&self.segments.scope)
+    }
+
     /// Whether every byte in `range` is present on disk for the init segment.
     pub(super) fn init_contains(&self, range: Range<u64>) -> bool {
         self.segments
             .init
             .as_ref()
             .is_some_and(|seg| seg.size().is_exact() && seg.contains(&self.segments.scope, range))
+    }
+
+    pub(super) fn init_downloading(&self) -> bool {
+        self.segments
+            .init
+            .as_ref()
+            .is_some_and(|seg| seg.state().is_downloading())
+    }
+
+    /// Whether the declared init settled terminally (`Failed`).
+    pub(crate) fn init_failed(&self) -> bool {
+        self.segments
+            .init
+            .as_ref()
+            .is_some_and(|seg| seg.state().is_failed())
     }
 
     /// Read `range` of the init segment into `dst` via the [`Segment`]
@@ -163,5 +165,15 @@ impl HlsVariant {
         if had_init {
             self.layout.clear_init_seed();
         }
+    }
+
+    /// Whether the next dispatch should issue the separate init fetch
+    /// (CMAF `EXT-X-MAP`) — true only if the variant advertises a
+    /// non-zero init segment that hasn't been loaded yet.
+    pub(super) fn needs_init_fetch(&self) -> bool {
+        self.segments
+            .init
+            .as_ref()
+            .is_some_and(|seg| !seg.state().is_loaded())
     }
 }

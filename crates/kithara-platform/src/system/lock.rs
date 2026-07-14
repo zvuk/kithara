@@ -14,9 +14,9 @@ impl<T> Mutex<T> {
     delegate::delegate! {
         to self.0 {
             #[expr(MutexGuard($))]
-            pub (crate) fn lock (& self) -> MutexGuard < '_ , T >;
+            pub(crate) fn lock(&self) -> MutexGuard<'_, T>;
             #[expr($.map(MutexGuard).ok_or(NotAvailable))]
-            pub (crate) fn try_lock (& self) -> Result < MutexGuard < '_ , T > , NotAvailable >;
+            pub(crate) fn try_lock(&self) -> Result<MutexGuard<'_, T>, NotAvailable>;
         }
     }
 }

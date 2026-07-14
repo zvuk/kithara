@@ -407,12 +407,12 @@ impl IsolatorEq {
             /// Number of bands.
             #[must_use]
             #[call(len)]
-            pub fn band_count (& self) -> usize;
+            pub fn band_count(&self) -> usize;
             /// Current target gain for a band (dB).
             #[must_use]
             #[expr($.map(|s| s.target_db))]
             #[call(get)]
-            pub fn target_gain (& self , band : usize) -> Option < f32 >;
+            pub fn target_gain(&self, band: usize) -> Option<f32>;
         }
     }
     /// Process a single sample through the crossover EQ.

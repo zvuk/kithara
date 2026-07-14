@@ -44,13 +44,13 @@ impl<T> Receiver<T> {
             ///
             /// Returns [`RecvError`] if all senders have been dropped.
             #[call(recv_sync)]
-            pub fn recv (& self) -> Result < T , RecvError >;
+            pub fn recv(&self) -> Result<T, RecvError>;
             /// Await a value asynchronously (WASM only).
             ///
             /// # Errors
             ///
             /// Returns [`RecvError`] if all senders have been dropped.
-            pub async fn recv_async (& self) -> Result < T , RecvError >;
+            pub async fn recv_async(&self) -> Result<T, RecvError>;
             /// Block until a value arrives or `deadline` elapses.
             ///
             /// On worker threads this parks via `Atomics.wait`; on the browser main
@@ -63,13 +63,13 @@ impl<T> Receiver<T> {
             /// `deadline`, or [`RecvTimeoutError::Disconnected`] if all senders are
             /// dropped.
             #[call(recv_sync_timeout)]
-            pub fn recv_timeout (& self , deadline : Instant) -> Result < T , RecvTimeoutError >;
+            pub fn recv_timeout(&self, deadline: Instant) -> Result<T, RecvTimeoutError>;
             /// Try to receive without blocking.
             ///
             /// # Errors
             ///
             /// Returns [`TryRecvError`] if no value is available or senders are dropped.
-            pub fn try_recv (& self) -> Result < T , TryRecvError >;
+            pub fn try_recv(&self) -> Result<T, TryRecvError>;
         }
     }
     /// Iterate over currently-available values without blocking.

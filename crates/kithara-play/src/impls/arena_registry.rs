@@ -33,16 +33,16 @@ where
     delegate::delegate! {
         to self.values {
             #[call(get)]
-            pub (crate) fn get_by_index (& self , idx : Index) -> Option < & V >;
+            pub(crate) fn get_by_index(&self, idx: Index) -> Option<&V>;
             #[call(get_mut)]
-            pub (crate) fn get_by_index_mut (& mut self , idx : Index) -> Option < & mut V >;
-            pub (crate) fn iter (& self) -> impl Iterator < Item = (Index , & V) >;
-            pub (crate) fn iter_mut (& mut self) -> impl Iterator < Item = (Index , & mut V) >;
+            pub(crate) fn get_by_index_mut(&mut self, idx: Index) -> Option<&mut V>;
+            pub(crate) fn iter(&self) -> impl Iterator<Item = (Index, &V)>;
+            pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (Index, &mut V)>;
         }
         to self.by_key {
             #[call(iter)]
-            pub (crate) fn iter_keys (& self) -> impl Iterator < Item = (& K , & Index) >;
-            pub (crate) fn len (& self) -> usize;
+            pub(crate) fn iter_keys(&self) -> impl Iterator<Item = (&K, &Index)>;
+            pub(crate) fn len(&self) -> usize;
         }
     }
     pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>

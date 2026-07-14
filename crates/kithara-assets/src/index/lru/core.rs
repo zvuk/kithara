@@ -256,10 +256,10 @@ impl LruState {
 
     delegate::delegate! {
         to self.by_root {
-            pub (crate) fn len (& self) -> usize;
+            pub(crate) fn len(&self) -> usize;
             /// Returns `true` if the entry was present and removed.
             #[expr($.is_some())]
-            pub (crate) fn remove (& mut self , asset_root : & str) -> bool;
+            pub(crate) fn remove(&mut self, asset_root: &str) -> bool;
         }
     }
     /// Touch an asset in-memory.

@@ -235,11 +235,11 @@ impl From<Retained<NSURLSessionDataTask>> for AppleTask {
 impl AppleTask {
     delegate::delegate! {
         to self.task {
-            pub (super) fn cancel (& self);
+            pub(super) fn cancel(&self);
             #[call(taskIdentifier)]
-            pub (super) fn id (& self) -> TaskId;
-            pub (super) fn resume (& self);
-            pub (super) fn suspend (& self);
+            pub(super) fn id(&self) -> TaskId;
+            pub(super) fn resume(&self);
+            pub(super) fn suspend(&self);
         }
     }
 }

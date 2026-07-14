@@ -234,18 +234,18 @@ impl PlayerImpl {
             /// Use `bus().scoped()` to create a child scope for a resource.
             #[must_use]
             #[field(&bus)]
-            pub fn bus (& self) -> & EventBus;
+            pub fn bus(&self) -> &EventBus;
             /// Get player configuration.
             #[field(&config)]
-            pub fn config (& self) -> & PlayerConfig;
+            pub fn config(&self) -> &PlayerConfig;
             /// Get a reference to the underlying engine.
             #[field(&engine)]
-            pub fn engine (& self) -> & EngineImpl;
+            pub fn engine(&self) -> &EngineImpl;
         }
         to self.core.engine {
             /// Notify the audio host that the platform route changed and the
             /// native output stream must be recreated if playback is active.
-            pub fn invalidate_audio_route (& self , reason : & str) -> Result < () , PlayError >;
+            pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError>;
             /// Runtime handle captured by this player's engine.
             ///
             /// Use when building a shared
@@ -254,16 +254,16 @@ impl PlayerImpl {
             /// downloader through
             /// [`ResourceConfig::with_downloader`](crate::impls::config::ResourceConfig::with_downloader).
             #[must_use]
-            pub fn runtime (& self) -> Option < & RuntimeHandle >;
+            pub fn runtime(&self) -> Option<&RuntimeHandle>;
             /// Pump audio backend/runtime state.
-            pub fn tick (& self) -> Result < () , PlayError >;
+            pub fn tick(&self) -> Result<(), PlayError>;
             /// Shared audio worker handle for this player's engine.
             ///
             /// Clone and pass to
             /// [`ResourceConfig::with_worker`](crate::impls::config::ResourceConfig::with_worker)
             /// so resources loaded into this player share a single decode thread.
             #[must_use]
-            pub fn worker (& self) -> & AudioWorkerHandle;
+            pub fn worker(&self) -> &AudioWorkerHandle;
         }
     }
     /// Drop the resource at `index` so the auto-advance prefetch path

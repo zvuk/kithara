@@ -153,10 +153,10 @@ impl Demuxer for Fmp4SegmentDemuxer {
         to self.cursor {
             #[expr($.map(|c| c.segment_index))]
             #[call(as_ref)]
-            fn current_segment_index (& self) -> Option < u32 >;
+            fn current_segment_index(&self) -> Option<u32>;
             #[expr($.map(|c| c.variant_index))]
             #[call(as_ref)]
-            fn current_variant_index (& self) -> Option < usize >;
+            fn current_variant_index(&self) -> Option<usize>;
         }
     }
     fn duration(&self) -> Option<Duration> {

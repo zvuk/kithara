@@ -34,14 +34,14 @@ impl CancelScope {
     delegate::delegate! {
         to self.token {
             /// Cancel this scope's subtree (the node from which inner children derive).
-            pub fn cancel (& self);
+            pub fn cancel(&self);
             #[must_use]
-            pub fn is_cancelled (& self) -> bool;
+            pub fn is_cancelled(&self) -> bool;
             /// The scope's token. Clone it for the subsystem's own subtree (`.child()`
             /// for per-task/per-fetch tokens).
             #[must_use]
             #[call(clone)]
-            pub fn token (& self) -> CancelToken;
+            pub fn token(&self) -> CancelToken;
         }
     }
 }

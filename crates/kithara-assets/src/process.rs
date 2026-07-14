@@ -362,10 +362,10 @@ where
 
     delegate::delegate! {
         to self.inner {
-            fn raw_write_handle (& self) -> RawWriteHandle;
+            fn raw_write_handle(&self) -> RawWriteHandle;
             #[expr(self.build_reader($))]
-            fn reader (& self) -> ProcessedReader < W :: Reader >;
-            fn write_at (& self , offset : u64 , data : & [u8]) -> StorageResult < () >;
+            fn reader(&self) -> ProcessedReader<W::Reader>;
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
     }
 }
@@ -412,12 +412,12 @@ where
     delegate::delegate! {
         to self.inner {
             #[expr(self.is_readable() && $)]
-            fn contains_range (& self , range : Range < u64 >) -> bool;
-            fn len (& self) -> Option < u64 >;
-            fn next_gap (& self , from : u64 , limit : u64) -> Option < Range < u64 > >;
-            fn path (& self) -> Option < & Path >;
-            fn read_inflight_at (& self , offset : u64 , buf : & mut [u8]) -> StorageResult < usize >;
-            fn status (& self) -> ResourceStatus;
+            fn contains_range(&self, range: Range<u64>) -> bool;
+            fn len(&self) -> Option<u64>;
+            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+            fn path(&self) -> Option<&Path>;
+            fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn status(&self) -> ResourceStatus;
         }
     }
     fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer>> {

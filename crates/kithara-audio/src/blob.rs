@@ -100,22 +100,15 @@ impl<'a> Reader<'a> {
         Self { bytes, cursor: 0 }
     }
 
-    delegate::delegate! {
-        to self.bytes {
-            /// Succeed only if the whole blob was consumed.
-            #[expr(if self.cursor == $ {
-                        Ok(())
-                    } else {
-                        Err(BlobError::Corrupt)
-                    })]
-            #[call(len)]
-            pub (crate) fn finish (& self) -> Result < () , BlobError >;
-            /// Bytes not yet consumed.
-            #[expr($ - self.cursor)]
-            #[call(len)]
-            pub (crate) fn remaining (& self) -> usize;
+    /// Succeed only if the whole blob was consumed.
+    pub(crate) fn finish(&self) -> Result<(), BlobError> {
+        if self.cursor == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(BlobError::Corrupt)
         }
     }
+
     pub(crate) fn read_array<const N: usize>(&mut self) -> Result<[u8; N], BlobError> {
         let end = self.cursor.checked_add(N).ok_or(BlobError::Corrupt)?;
         let chunk = self.bytes.get(self.cursor..end).ok_or(BlobError::Corrupt)?;
@@ -154,6 +147,11 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn read_u64(&mut self) -> Result<u64, BlobError> {
         Ok(u64::from_le_bytes(self.read_array::<8>()?))
+    }
+
+    /// Bytes not yet consumed.
+    pub(crate) fn remaining(&self) -> usize {
+        self.bytes.len() - self.cursor
     }
 }
 

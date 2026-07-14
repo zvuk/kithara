@@ -55,11 +55,11 @@ impl DeferredWake {
             /// Future the peer's waker-forwarding task awaits. Resolves on the next
             /// [`flush`](Self::flush) / [`notify_now`](Self::notify_now); tokio's
             /// stored-permit semantics mean a wake delivered between awaits is not lost.
-            pub fn notified (& self) -> impl Future < Output = () > + '_;
+            pub fn notified(&self) -> impl Future<Output = ()> + '_;
             /// Immediate wake for off-core callers (an off-worker seek prime, the ABR
             /// controller) — never reached from the RT produce core.
             #[call(notify_one)]
-            pub fn notify_now (& self);
+            pub fn notify_now(&self);
         }
     }
 }

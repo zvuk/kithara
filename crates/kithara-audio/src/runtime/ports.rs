@@ -62,14 +62,14 @@ impl<T> Outlet<T> {
         to self.overflow {
             /// Whether an item is currently parked in the overflow slot.
             #[call(is_some)]
-            pub (crate) fn has_pending (& self) -> bool;
+            pub(crate) fn has_pending(&self) -> bool;
             /// Discard the parked overflow item, returning it to the caller.
             ///
             /// Useful when a producer needs to invalidate previously enqueued data
             /// (e.g. on a seek epoch change) without waiting for the consumer to
             /// drain the ring.
             #[call(take)]
-            pub (crate) fn take_pending (& mut self) -> Option < T >;
+            pub(crate) fn take_pending(&mut self) -> Option<T>;
         }
     }
     /// Whether both the ring buffer and the overflow slot are full.
@@ -149,9 +149,9 @@ impl<T> Inlet<T> {
         to self.consumer {
             /// Check if the inlet is empty.
             #[cfg(test)]
-            pub (crate) fn is_empty (& self) -> bool;
+            pub(crate) fn is_empty(&self) -> bool;
             /// Pop an item from the inlet. Returns `None` if empty.
-            pub (crate) fn try_pop (& mut self) -> Option < T >;
+            pub(crate) fn try_pop(&mut self) -> Option<T>;
         }
     }
 }

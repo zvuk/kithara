@@ -71,34 +71,18 @@ impl AbrHandle {
         self.variants().into_iter().find(|v| v.variant_index == idx)
     }
 
-    delegate::delegate! {
-        to self.inner.state {
-            /// Current variant index — `None` for peers without state. Unwrapped to
-            /// `usize` at this public boundary: consumers in `kithara-audio` /
-            /// `kithara-stream` carry their own (unrelated) index space, so the
-            /// typed [`VariantIndex`] stops here.
-            #[must_use]
-            #[expr($
-                        .map(|s| s.current_variant_index().get()))]
-            #[call(as_ref)]
-            pub fn current_variant_index (& self) -> Option < usize >;
-            /// `true` while the active variant is flagged non-delivering — see
-            /// [`AbrState::is_escaping`].
-            #[must_use]
-            #[expr($.is_some_and(|s| s.is_escaping()))]
-            #[call(as_ref)]
-            pub fn is_escaping (& self) -> bool;
-            #[must_use]
-            #[expr($.is_some_and(|s| s.is_locked()))]
-            #[call(as_ref)]
-            pub fn is_locked (& self) -> bool;
-            /// Current ABR mode (Auto / Manual). `None` for peers without state.
-            #[must_use]
-            #[expr($.map(|s| s.mode()))]
-            #[call(as_ref)]
-            pub fn mode (& self) -> Option < AbrMode >;
-        }
+    /// Current variant index — `None` for peers without state. Unwrapped to
+    /// `usize` at this public boundary: consumers in `kithara-audio` /
+    /// `kithara-stream` carry their own (unrelated) index space, so the
+    /// typed [`VariantIndex`] stops here.
+    #[must_use]
+    pub fn current_variant_index(&self) -> Option<usize> {
+        self.inner
+            .state
+            .as_ref()
+            .map(|s| s.current_variant_index().get())
     }
+
     /// Drop any unobserved boundary-commit decision — see
     /// [`AbrState::invalidate_pending`]. Called by `kithara-hls` on a
     /// new seek epoch so a pre-seek up-switch chosen against stale
@@ -110,6 +94,25 @@ impl AbrHandle {
         }
     }
 
+    delegate::delegate! {
+        to self.inner.state {
+            /// `true` while the active variant is flagged non-delivering — see
+            /// [`AbrState::is_escaping`].
+            #[must_use]
+            #[expr($.is_some_and(|s| s.is_escaping()))]
+            #[call(as_ref)]
+            pub fn is_escaping(&self) -> bool;
+            #[must_use]
+            #[expr($.is_some_and(|s| s.is_locked()))]
+            #[call(as_ref)]
+            pub fn is_locked(&self) -> bool;
+            /// Current ABR mode (Auto / Manual). `None` for peers without state.
+            #[must_use]
+            #[expr($.map(|s| s.mode()))]
+            #[call(as_ref)]
+            pub fn mode(&self) -> Option<AbrMode>;
+        }
+    }
     /// Lock ABR (used during seek).
     pub fn lock(&self) {
         if let Some(state) = self.inner.state.as_ref() {

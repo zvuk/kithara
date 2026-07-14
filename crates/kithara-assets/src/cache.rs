@@ -96,9 +96,9 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
 
     delegate::delegate! {
         to self.inner {
-            fn fail (self , reason : String);
-            fn raw_write_handle (& self) -> RawWriteHandle;
-            fn write_at (& self , offset : u64 , data : & [u8]) -> StorageResult < () >;
+            fn fail(self, reason: String);
+            fn raw_write_handle(&self) -> RawWriteHandle;
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
     }
     fn reader(&self) -> CachedReader<W::Reader> {
@@ -578,13 +578,15 @@ where
             fn capabilities(&self) -> Capabilities;
             fn root_dir(&self) -> &Path;
             #[expr(self.open_index_resource(CacheKey::LruIndex, || $))]
-            fn open_lru_index_resource (& self) -> AssetsResult < Self :: IndexRes >;
-            #[expr(self.open_index_resource(CacheKey::PinsIndex, || {
-                        $
-                    }))]
-            fn open_pins_index_resource (& self) -> AssetsResult < Self :: IndexRes >;
+            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
         }
     }
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+        self.open_index_resource(CacheKey::PinsIndex, || {
+            self.inner.open_pins_index_resource()
+        })
+    }
+
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
@@ -795,12 +797,12 @@ mod tests {
 
         delegate::delegate! {
             to self.inner {
-                fn capabilities (& self) -> Capabilities;
-                fn delete_asset (& self , asset_root : & str) -> AssetsResult < () >;
-                fn open_lru_index_resource (& self) -> AssetsResult < Self :: IndexRes >;
-                fn open_pins_index_resource (& self) -> AssetsResult < Self :: IndexRes >;
-                fn resource_state (& self , key : & ResourceKey) -> AssetsResult < AssetResourceState >;
-                fn root_dir (& self) -> & Path;
+                fn capabilities(&self) -> Capabilities;
+                fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
+                fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+                fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+                fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
+                fn root_dir(&self) -> &Path;
             }
         }
         fn open_resource_with_ctx(

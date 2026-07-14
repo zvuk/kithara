@@ -33,15 +33,15 @@ impl<T> Receiver<T> {
     delegate::delegate! {
         to self.0 {
             /// Iterate over received values, blocking until all senders disconnect.
-            pub fn iter (& self) -> impl Iterator < Item = T > + '_;
+            pub fn iter(&self) -> impl Iterator<Item = T> + '_;
             /// Iterate over currently-available values without blocking.
-            pub fn try_iter (& self) -> impl Iterator < Item = T > + '_;
+            pub fn try_iter(&self) -> impl Iterator<Item = T> + '_;
             /// Try to receive without blocking.
             ///
             /// # Errors
             ///
             /// Returns [`TryRecvError`] if no value is available or senders are dropped.
-            pub fn try_recv (& self) -> Result < T , TryRecvError >;
+            pub fn try_recv(&self) -> Result<T, TryRecvError>;
         }
     }
     /// Block until a value arrives.

@@ -213,49 +213,22 @@ impl<T: StreamType> Stream<T> {
             pub fn set_position(&self, pos: u64);
             /// Narrow activity handle — set/query the `PLAYING` flag.
             #[must_use]
-            pub fn activity (& self) -> Arc < dyn Activity >;
-            /// Header byte range for decoder recreate after a format change.
-            ///
-            /// # Errors
-            ///
-            /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS sources
-            /// or HLS variants activated with `served_from > 0` (init prefix
-            /// unreachable via Stream reads).
-            #[expr($.map_or(
-                        Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
-                        |vc| vc.format_change_segment_range(),
-                    ))]
-            #[call(variant_control)]
-            pub fn format_change_segment_range (& self) -> StreamResult < Range < u64 > >;
-            /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
-            /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
-            #[must_use]
-            #[expr($
-                        .is_some_and(|vc| vc.has_variant_change_pending()))]
-            #[call(variant_control)]
-            pub fn has_variant_change_pending (& self) -> bool;
+            pub fn activity(&self) -> Arc<dyn Activity>;
             /// Narrow mutating playhead handle — position + duration.
             #[must_use]
-            pub fn playhead_write (& self) -> Arc < dyn PlayheadWrite >;
+            pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
             /// Get current read position.
-            pub fn position (& self) -> u64;
+            pub fn position(&self) -> u64;
             /// Narrow seek-control handle — begin / complete / `mark_pending`.
             #[must_use]
-            pub fn seek_control (& self) -> Arc < dyn SeekControl >;
+            pub fn seek_control(&self) -> Arc<dyn SeekControl>;
             /// Narrow seek-observe handle — read seek state without mutation.
             #[must_use]
-            pub fn seek_observe (& self) -> Arc < dyn SeekObserve >;
-            /// Target variant index of the pending fence, `None` when no fence
-            /// is up (or the source is non-adaptive).
-            #[must_use]
-            #[expr($
-                        .and_then(|vc| vc.variant_change_target()))]
-            #[call(variant_control)]
-            pub fn variant_change_target (& self) -> Option < usize >;
+            pub fn seek_observe(&self) -> Arc<dyn SeekObserve>;
             /// Optional HLS-only variant-coordination handle — `Some` for adaptive
             /// sources (HLS), `None` otherwise.
             #[must_use]
-            pub fn variant_control (& self) -> Option < Arc < dyn VariantControl > >;
+            pub fn variant_control(&self) -> Option<Arc<dyn VariantControl>>;
         }
     }
     /// Clear the variant fence, allowing reads from the next variant.
@@ -264,6 +237,29 @@ impl<T: StreamType> Stream<T> {
         if let Some(vc) = self.source.variant_control() {
             vc.clear_variant_fence();
         }
+    }
+
+    /// Header byte range for decoder recreate after a format change.
+    ///
+    /// # Errors
+    ///
+    /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS sources
+    /// or HLS variants activated with `served_from > 0` (init prefix
+    /// unreachable via Stream reads).
+    pub fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        self.source.variant_control().map_or(
+            Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
+            |vc| vc.format_change_segment_range(),
+        )
+    }
+
+    /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
+    /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
+    #[must_use]
+    pub fn has_variant_change_pending(&self) -> bool {
+        self.source
+            .variant_control()
+            .is_some_and(|vc| vc.has_variant_change_pending())
     }
 
     pub fn is_empty(&self) -> Option<bool> {
@@ -290,6 +286,15 @@ impl<T: StreamType> Stream<T> {
     /// Get shared reference to inner source.
     pub fn source(&self) -> &T::Source {
         &self.source
+    }
+
+    /// Target variant index of the pending fence, `None` when no fence
+    /// is up (or the source is non-adaptive).
+    #[must_use]
+    pub fn variant_change_target(&self) -> Option<usize> {
+        self.source
+            .variant_control()
+            .and_then(|vc| vc.variant_change_target())
     }
 }
 
@@ -787,18 +792,17 @@ mod tests {
             self.position.fetch_add(n, Ordering::AcqRel);
         }
 
-        delegate::delegate! {
-            to self.data {
-                #[expr(Some(Arc::new(ScriptByteMap {
-                                anchor: self.anchor,
-                                len: $ as u64,
-                            })))]
-                #[call(len)]
-                fn byte_map (& self) -> Option < Arc < dyn crate :: ByteMap > >;
-                #[expr(Some($ as u64))]
-                fn len (& self) -> Option < u64 >;
-            }
+        fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>> {
+            Some(Arc::new(ScriptByteMap {
+                anchor: self.anchor,
+                len: self.data.len() as u64,
+            }))
         }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.data.len() as u64)
+        }
+
         fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
             self.peer_wake.clone()
         }

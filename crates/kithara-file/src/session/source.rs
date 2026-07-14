@@ -156,15 +156,15 @@ impl kithara_stream::Source for FileSource {
     delegate::delegate! {
         to self.coord {
             #[call(activity_handle)]
-            fn activity (& self) -> Arc < dyn Activity >;
+            fn activity(&self) -> Arc<dyn Activity>;
             #[call(advance_position)]
-            fn advance (& self , n : u64);
-            fn playhead_read (& self) -> Arc < dyn PlayheadRead >;
-            fn playhead_write (& self) -> Arc < dyn PlayheadWrite >;
-            fn position (& self) -> u64;
-            fn seek_control (& self) -> Arc < dyn SeekControl >;
-            fn seek_observe (& self) -> Arc < dyn SeekObserve >;
-            fn set_position (& self , pos : u64);
+            fn advance(&self, n: u64);
+            fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
+            fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+            fn position(&self) -> u64;
+            fn seek_control(&self) -> Arc<dyn SeekControl>;
+            fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+            fn set_position(&self, pos: u64);
         }
     }
     fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {

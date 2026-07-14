@@ -161,9 +161,9 @@ impl FetchClaim<Loaded> {
     delegate::delegate! {
         to self.data {
             #[field]
-            pub (crate) fn final_len (& self) -> u64;
+            pub(crate) fn final_len(&self) -> u64;
             #[field]
-            pub (crate) fn planned (& self) -> PlannedFetch;
+            pub(crate) fn planned(&self) -> PlannedFetch;
         }
     }
 }

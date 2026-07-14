@@ -101,14 +101,14 @@ impl Source for HlsSource {
                 range: Range<u64>,
                 timeout: Option<Duration>,
             ) -> StreamResult<WaitOutcome>;
-            fn activity (& self) -> Arc < dyn Activity >;
+            fn activity(&self) -> Arc<dyn Activity>;
             #[expr(Some($))]
-            fn media_info (& self) -> Option < MediaInfo >;
-            fn playhead_read (& self) -> Arc < dyn PlayheadRead >;
-            fn playhead_write (& self) -> Arc < dyn PlayheadWrite >;
-            fn seek_control (& self) -> Arc < dyn SeekControl >;
-            fn seek_observe (& self) -> Arc < dyn SeekObserve >;
-            fn set_worker_wake (& self , wake : Arc < dyn kithara_stream :: WorkerWake >);
+            fn media_info(&self) -> Option<MediaInfo>;
+            fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
+            fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+            fn seek_control(&self) -> Arc<dyn SeekControl>;
+            fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+            fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>);
         }
     }
     fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {

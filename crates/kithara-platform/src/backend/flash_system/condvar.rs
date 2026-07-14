@@ -10,9 +10,9 @@ impl Condvar {
     delegate::delegate! {
         to self.0 {
             #[inline]
-            pub (crate) fn notify_all (& self);
+            pub(crate) fn notify_all(&self);
             #[inline]
-            pub (crate) fn notify_one (& self);
+            pub(crate) fn notify_one(&self);
         }
     }
     #[inline]

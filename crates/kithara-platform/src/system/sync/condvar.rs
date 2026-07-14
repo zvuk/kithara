@@ -11,9 +11,9 @@ impl Condvar {
     delegate::delegate! {
         to self.0 {
             #[inline]
-            pub fn notify_all (& self);
+            pub fn notify_all(&self);
             #[inline]
-            pub fn notify_one (& self);
+            pub fn notify_one(&self);
         }
     }
     #[inline]

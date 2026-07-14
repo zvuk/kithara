@@ -169,11 +169,11 @@ impl HlsVariant {
     delegate::delegate! {
         to self.seek.size_demand.lock() {
             #[call(pop_dispatchable)]
-            fn dispatchable_size_demand (& self) -> Option < SizeDemand >;
+            fn dispatchable_size_demand(&self) -> Option<SizeDemand>;
             #[call(enqueue)]
-            pub (super) fn enqueue_size_demand (& self , demand : SizeDemand);
+            pub(super) fn enqueue_size_demand(&self, demand: SizeDemand);
             #[call(finish)]
-            fn finish_size_demand (& self , demand : SizeDemand);
+            fn finish_size_demand(&self, demand: SizeDemand);
         }
     }
     fn finish_size_probe(

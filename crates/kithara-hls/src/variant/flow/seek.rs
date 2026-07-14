@@ -10,9 +10,9 @@ impl HlsVariant {
     delegate::delegate! {
         to self.seek.alias {
             #[call(clear)]
-            pub (super) fn clear_seek_alias (& self);
+            pub(super) fn clear_seek_alias(&self);
             #[call(set)]
-            pub (super) fn set_seek_alias (& self , anchor : u64 , segment : u32);
+            pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32);
         }
     }
     pub(super) fn clear_seek_alias_if_moved(&self, pos: u64) {

@@ -16,10 +16,10 @@ impl<T> Mutex<T> {
         to self.0 {
             #[inline]
             #[expr(MutexGuard($))]
-            pub (crate) fn lock (& self) -> MutexGuard < '_ , T >;
+            pub(crate) fn lock(&self) -> MutexGuard<'_, T>;
             #[inline]
             #[expr($.map(MutexGuard).ok_or(NotAvailable))]
-            pub (crate) fn try_lock (& self) -> Result < MutexGuard < '_ , T > , NotAvailable >;
+            pub(crate) fn try_lock(&self) -> Result<MutexGuard<'_, T>, NotAvailable>;
         }
     }
 }

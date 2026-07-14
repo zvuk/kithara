@@ -981,13 +981,13 @@ impl FlashInner {
             /// Test-only: number of currently RUNNING participants.
             #[expr($.registry.active)]
             #[call(lock)]
-            pub (in crate :: flash) fn active_count (& self) -> usize;
+            pub(in crate::flash) fn active_count(&self) -> usize;
             /// Test-only: number of async tasks the engine currently counts as
             /// non-quiescent (runnable or running). A task woken but not yet re-polled MUST
             /// be counted here, or the clock can advance past it.
             #[expr($.registry.active_async)]
             #[call(lock)]
-            pub (in crate :: flash) fn async_active_count (& self) -> usize;
+            pub(in crate::flash) fn async_active_count(&self) -> usize;
         }
     }
     pub(in crate::flash) fn advance_log(&self) -> Vec<u64> {

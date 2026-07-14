@@ -80,14 +80,14 @@ where
         to self.0 {
             /// Current number of tracked bytes across all live buffers.
             #[must_use]
-            pub fn allocated_bytes (& self) -> usize;
+            pub fn allocated_bytes(&self) -> usize;
             /// Return a value to the pool for reuse.
             ///
             /// See [`Pool::recycle()`] for details.
-            pub fn recycle (& self , value : T);
+            pub fn recycle(&self, value: T);
             /// Get pool hit/miss statistics.
             #[must_use]
-            pub fn stats (& self) -> PoolStats;
+            pub fn stats(&self) -> PoolStats;
         }
     }
     /// Wrap an externally-owned value into a [`PooledOwned`] guard.

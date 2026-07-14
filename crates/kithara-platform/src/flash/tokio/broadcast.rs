@@ -184,19 +184,19 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Sender<T> {
-    delegate::delegate! {
-        to self.inner {
-            /// Number of live receivers.
-            #[must_use]
-            pub fn receiver_count (& self) -> usize;
-            /// Subscribe a new receiver to subsequently-sent messages.
-            #[must_use]
-            #[expr(Receiver {
-                        inner: $,
-                        shared: Arc::clone(&self.shared),
-                        pending: None,
-                    })]
-            pub fn subscribe (& self) -> Receiver < T >;
+    /// Number of live receivers.
+    #[must_use]
+    pub fn receiver_count(&self) -> usize {
+        self.inner.receiver_count()
+    }
+
+    /// Subscribe a new receiver to subsequently-sent messages.
+    #[must_use]
+    pub fn subscribe(&self) -> Receiver<T> {
+        Receiver {
+            inner: self.inner.subscribe(),
+            shared: Arc::clone(&self.shared),
+            pending: None,
         }
     }
 }
