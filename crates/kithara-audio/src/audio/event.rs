@@ -19,22 +19,22 @@ impl Consts {
 }
 
 pub(super) struct AudioEvents {
-    emit: Arc<DeferredBus<Event>>,
+    bus: EventBus,
     last_progress_emit: Option<(u64, u64)>,
     underrun_active: bool,
 }
 
 impl AudioEvents {
-    pub(super) fn new(emit: Arc<DeferredBus<Event>>) -> Self {
+    pub(super) fn new(bus: EventBus) -> Self {
         Self {
-            emit,
+            bus,
             last_progress_emit: None,
             underrun_active: false,
         }
     }
 
     pub(super) fn bus(&self) -> &EventBus {
-        self.emit.bus()
+        &self.bus
     }
 
     pub(super) fn deferred(bus: &EventBus) -> Arc<DeferredBus<Event>> {
@@ -42,11 +42,7 @@ impl AudioEvents {
     }
 
     pub(super) fn publish(&self, event: AudioEvent) {
-        self.emit.bus().publish(event);
-    }
-
-    fn emit(&self, event: AudioEvent) {
-        self.emit.enqueue(event.into());
+        self.bus.publish(event);
     }
 
     pub(super) fn progress(&mut self, playhead: &dyn PlayheadWrite, epoch: u64) {
@@ -62,7 +58,7 @@ impl AudioEvents {
         let total_ms = playhead.duration().map(clamp_millis);
         let decoded_ms = clamp_millis(playhead.decoded_frontier());
         let buffered_ms = Some(total_ms.map_or(decoded_ms, |total| decoded_ms.min(total)));
-        self.emit(AudioEvent::PlaybackProgress {
+        self.publish(AudioEvent::PlaybackProgress {
             position_ms,
             total_ms,
             buffered_ms,
@@ -86,12 +82,12 @@ impl AudioEvents {
 
         let variant = meta.as_ref().and_then(|value| value.variant_index);
         let segment_index = meta.as_ref().and_then(|value| value.segment_index);
-        self.emit(AudioEvent::SeekLifecycle {
+        self.publish(AudioEvent::SeekLifecycle {
             seek_epoch,
             stage: SeekLifecycleStage::OutputCommitted,
             location: SegmentLocation::new(variant, segment_index, None, None),
         });
-        self.emit(AudioEvent::SeekComplete {
+        self.publish(AudioEvent::SeekComplete {
             seek_epoch,
             position,
         });
@@ -131,14 +127,14 @@ impl AudioEvents {
         if filled {
             if self.underrun_active {
                 self.underrun_active = false;
-                self.emit(AudioEvent::UnderrunEnded {
+                self.publish(AudioEvent::UnderrunEnded {
                     position_ms: clamp_millis(position),
                     seek_epoch: epoch,
                 });
             }
         } else if was_playing && !self.underrun_active {
             self.underrun_active = true;
-            self.emit(AudioEvent::UnderrunStarted {
+            self.publish(AudioEvent::UnderrunStarted {
                 position_ms: clamp_millis(position),
                 seek_epoch: epoch,
             });
@@ -151,9 +147,7 @@ impl AudioEvents {
 
     #[cfg(test)]
     pub(super) fn test() -> Self {
-        let bus = EventBus::new(16);
-        let emit = Self::deferred(&bus);
-        Self::new(emit)
+        Self::new(EventBus::new(16))
     }
 }
 
@@ -393,6 +387,7 @@ mod tests {
     use kithara_decode::{PcmChunk, PcmMeta};
     use kithara_events::{AudioEvent, Event, EventBus};
     use kithara_platform::sync::Arc;
+    use kithara_stream::{SeekControl, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -400,6 +395,34 @@ mod tests {
 
     fn empty_chunk() -> PcmChunk {
         PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+    }
+
+    #[kithara::test]
+    fn post_seek_output_publishes_without_worker_flush() {
+        let bus = EventBus::new(8);
+        let mut receiver = bus.subscribe();
+        let events = AudioEvents::new(bus.clone());
+        let seek = SeekState::new();
+        let position = Duration::from_millis(500);
+        let epoch = seek.begin(position);
+        seek.mark_pending(epoch);
+
+        events.post_seek_output(&seek, epoch, None, position);
+
+        assert!(matches!(
+            receiver.try_recv().map(|envelope| envelope.event),
+            Ok(Event::Audio(AudioEvent::SeekLifecycle {
+                seek_epoch,
+                stage: SeekLifecycleStage::OutputCommitted,
+                ..
+            })) if seek_epoch == epoch
+        ));
+        assert!(matches!(
+            receiver.try_recv().map(|envelope| envelope.event),
+            Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))
+                if seek_epoch == epoch
+        ));
+        assert_eq!(seek.pending_epoch(), None);
     }
 
     #[kithara::test]
@@ -440,13 +463,11 @@ mod tests {
     fn underrun_edges_emit_once_per_starvation_window() {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
-        let emit = AudioEvents::deferred(&bus);
-        let mut events = AudioEvents::new(Arc::clone(&emit));
+        let mut events = AudioEvents::new(bus.clone());
         let position = Duration::from_millis(321);
 
         events.fill_result(false, true, false, position, 0);
         events.fill_result(false, true, false, position, 0);
-        emit.flush();
 
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
@@ -458,7 +479,6 @@ mod tests {
         assert!(receiver.try_recv().is_err());
 
         events.fill_result(true, true, false, position, 0);
-        emit.flush();
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
             Ok(Event::Audio(AudioEvent::UnderrunEnded {

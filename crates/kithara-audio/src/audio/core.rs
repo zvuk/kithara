@@ -88,7 +88,7 @@ impl<S> From<AudioParts<S>> for Audio<S> {
             lease: parts.lease,
             ring: parts.ring,
             cursor: ChunkCursor::new(&parts.pcm_pool, parts.spec),
-            events: AudioEvents::new(parts.emit),
+            events: AudioEvents::new(parts.emit.bus().clone()),
             session: parts.session,
             controls: parts.controls,
             _marker: parts.marker,
