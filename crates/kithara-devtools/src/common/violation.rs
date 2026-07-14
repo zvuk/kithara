@@ -15,7 +15,8 @@ impl fmt::Display for Severity {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub struct Violation {
     pub check: &'static str,
     pub severity: Severity,
@@ -24,6 +25,10 @@ pub struct Violation {
     /// Optional long-form explanation (Summary / Why / Bad / Good /
     /// Suppress block) shown in `--verbose` output and markdown reports.
     /// `None` keeps the compact one-line render.
+    /// Attach the long-form Summary / Why / Bad / Good / Suppress block
+    /// renderers; the compact one-line form keeps using `message`.
+    /// to this violation. Shown in `--verbose` and markdown report
+    #[field(with, option_set_some)]
     pub(crate) explanation: Option<&'static str>,
 }
 
@@ -44,15 +49,6 @@ impl Violation {
         M: Into<String>,
     {
         build(Severity::Warn, check, key, message)
-    }
-
-    /// Attach the long-form Summary / Why / Bad / Good / Suppress block
-    /// to this violation. Shown in `--verbose` and markdown report
-    /// renderers; the compact one-line form keeps using `message`.
-    #[must_use]
-    pub fn with_explanation(mut self, explanation: &'static str) -> Self {
-        self.explanation = Some(explanation);
-        self
     }
 }
 

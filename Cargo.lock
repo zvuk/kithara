@@ -4644,6 +4644,7 @@ dependencies = [
  "anyhow",
  "cargo_metadata 0.23.1",
  "clap",
+ "fieldwork",
  "glob",
  "kithara-workspace-hack",
  "proc-macro2",
