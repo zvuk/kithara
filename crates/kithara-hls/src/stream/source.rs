@@ -88,55 +88,6 @@ impl Source for HlsSource {
         self.peer_handle.as_ref().map(|h| h.abr().clone())
     }
 
-    fn activity(&self) -> Arc<dyn Activity> {
-        self.coord.activity()
-    }
-
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
-    }
-
-    fn media_info(&self) -> Option<MediaInfo> {
-        Some(self.coord.media_info())
-    }
-
-    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
-        self.peer_wake.clone()
-    }
-
-    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-        self.coord.playhead_read()
-    }
-
-    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        self.coord.playhead_write()
-    }
-
-    fn seek_control(&self) -> Arc<dyn SeekControl> {
-        self.coord.seek_control()
-    }
-
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        self.coord.seek_observe()
-    }
-
-    fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>) {
-        self.coord.set_worker_wake(wake);
-    }
-
-    fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {
-        let sink = HlsReaderEventSink::new(
-            self.bus.clone(),
-            Arc::clone(&self.coord),
-            self.coord.seek_epoch_handle(),
-        );
-        Some(Box::new(sink))
-    }
-
-    fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn kithara_stream::VariantControl>)
-    }
-
     delegate! {
         to self.coord {
             fn len(&self) -> Option<u64>;
@@ -150,6 +101,34 @@ impl Source for HlsSource {
                 range: Range<u64>,
                 timeout: Option<Duration>,
             ) -> StreamResult<WaitOutcome>;
+            fn activity (& self) -> Arc < dyn Activity >;
+            #[expr(Some($))]
+            fn media_info (& self) -> Option < MediaInfo >;
+            fn playhead_read (& self) -> Arc < dyn PlayheadRead >;
+            fn playhead_write (& self) -> Arc < dyn PlayheadWrite >;
+            fn seek_control (& self) -> Arc < dyn SeekControl >;
+            fn seek_observe (& self) -> Arc < dyn SeekObserve >;
+            fn set_worker_wake (& self , wake : Arc < dyn kithara_stream :: WorkerWake >);
         }
+    }
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
+    }
+
+    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
+        self.peer_wake.clone()
+    }
+
+    fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {
+        let sink = HlsReaderEventSink::new(
+            self.bus.clone(),
+            Arc::clone(&self.coord),
+            self.coord.seek_epoch_handle(),
+        );
+        Some(Box::new(sink))
+    }
+
+    fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn kithara_stream::VariantControl>)
     }
 }

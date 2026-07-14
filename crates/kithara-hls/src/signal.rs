@@ -79,12 +79,23 @@ impl SizeSignal {
         }
     }
 
-    /// Pre-park snapshot of the gate generation (seqlock guard for the off-RT
-    /// `wait_range` loop). Pass-through to [`WaitGate::current`].
-    pub(crate) fn current(&self) -> u64 {
-        self.ready.current()
+    delegate::delegate! {
+        to self.ready {
+            /// Pre-park snapshot of the gate generation (seqlock guard for the off-RT
+            /// `wait_range` loop). Pass-through to [`WaitGate::current`].
+            pub (crate) fn current (& self) -> u64;
+            /// Signal only the gate. Used at the coord's RT-reachable transitions
+            /// (fence clear, seek reset, cancel waker) that flip a blocked reader's
+            /// predicate without producing new bytes — the audio worker re-discovers the
+            /// state on its next scheduler poll, so it is deliberately not re-ticked.
+            #[call(signal)]
+            pub (crate) fn fire_ready_only (& self);
+            /// Park on the gate until its generation advances past `since` or `timeout`
+            /// elapses. Returns `true` on a signal, `false` on timeout. Pass-through to
+            /// [`WaitGate::wait_timeout`].
+            pub (crate) fn wait_timeout (& self , since : u64 , timeout : Duration) -> bool;
+        }
     }
-
     /// Signal the gate, then re-tick the audio worker. Used where newly readable
     /// bytes land or a settle/commit makes a range resolvable: per-chunk write,
     /// committed-by-race, cache-hit dispatch, terminal settle, and the
@@ -94,14 +105,6 @@ impl SizeSignal {
     pub(crate) fn fire(&self) {
         self.ready.signal();
         wake_worker(&self.worker_wake);
-    }
-
-    /// Signal only the gate. Used at the coord's RT-reachable transitions
-    /// (fence clear, seek reset, cancel waker) that flip a blocked reader's
-    /// predicate without producing new bytes — the audio worker re-discovers the
-    /// state on its next scheduler poll, so it is deliberately not re-ticked.
-    pub(crate) fn fire_ready_only(&self) {
-        self.ready.signal();
     }
 
     /// Re-vend the underlying readiness gate. Used by the cancel waker, which
@@ -122,13 +125,6 @@ impl SizeSignal {
     /// read it lock-free thereafter.
     pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
         let _ = self.worker_wake.set(wake);
-    }
-
-    /// Park on the gate until its generation advances past `since` or `timeout`
-    /// elapses. Returns `true` on a signal, `false` on timeout. Pass-through to
-    /// [`WaitGate::wait_timeout`].
-    pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool {
-        self.ready.wait_timeout(since, timeout)
     }
 
     /// Wake the HLS peer's `poll_next` so it re-runs `reconcile_escape` against

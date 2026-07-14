@@ -230,14 +230,25 @@ impl<D: DriverIo> AtomicChunked<D> {
         Some(&self.canonical_path)
     }
 
-    /// Reactivate the inner for continued writing.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled or the backend cannot reopen.
-    pub fn reactivate(&self) -> StorageResult<()> {
-        self.inner.load().reactivate_in_place()
+    delegate::delegate! {
+        to self.inner.load() {
+            /// Reactivate the inner for continued writing.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled or the backend cannot reopen.
+            #[call(reactivate_in_place)]
+            pub fn reactivate (& self) -> StorageResult < () >;
+            /// Mint a cheap read-only view without holding the inner lock during
+            /// subsequent (possibly blocking) reads.
+            #[call(reader)]
+            fn read_view (& self) -> ResourceReader < D >;
+            /// Write data at the given offset.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the write fails.
+            pub fn write_at (& self , offset : u64 , data : & [u8]) -> StorageResult < () >;
+        }
     }
-
     /// Read data at the given offset into `buf`.
     ///
     /// # Errors
@@ -265,12 +276,6 @@ impl<D: DriverIo> AtomicChunked<D> {
         self.read_view().read_into(buf)
     }
 
-    /// Mint a cheap read-only view without holding the inner lock during
-    /// subsequent (possibly blocking) reads.
-    fn read_view(&self) -> ResourceReader<D> {
-        self.inner.load().reader()
-    }
-
     /// Current runtime status.
     pub fn status(&self) -> ResourceStatus {
         self.read_view().status()
@@ -283,14 +288,6 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// resource has failed.
     pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         self.read_view().wait_range(range)
-    }
-
-    /// Write data at the given offset.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the write fails.
-    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.load().write_at(offset, data)
     }
 }
 

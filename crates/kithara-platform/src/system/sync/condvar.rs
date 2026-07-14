@@ -8,16 +8,14 @@ use crate::common::time::Instant;
 pub struct Condvar(ParkingLotCondvar);
 
 impl Condvar {
-    #[inline]
-    pub fn notify_all(&self) {
-        self.0.notify_all();
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            pub fn notify_all (& self);
+            #[inline]
+            pub fn notify_one (& self);
+        }
     }
-
-    #[inline]
-    pub fn notify_one(&self) {
-        self.0.notify_one();
-    }
-
     #[inline]
     #[track_caller]
     pub fn wait<'a, T>(&self, mut guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {

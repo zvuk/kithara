@@ -4423,6 +4423,7 @@ dependencies = [
  "bon",
  "criterion",
  "dashmap",
+ "delegate",
  "fieldwork",
  "kithara-events",
  "kithara-platform",
@@ -4590,6 +4591,7 @@ name = "kithara-bufpool"
 version = "0.0.1-alpha4"
 dependencies = [
  "crossbeam-queue",
+ "delegate",
  "derive_more",
  "hotpath",
  "kithara-bufpool",
@@ -4608,6 +4610,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
  "criterion",
+ "delegate",
  "derive_more",
  "fdk-aac",
  "hotpath",
@@ -4716,6 +4719,7 @@ dependencies = [
  "console_error_panic_hook",
  "cpal 0.18.1",
  "dashmap",
+ "delegate",
  "futures",
  "jni 0.22.4",
  "js-sys",
@@ -4756,6 +4760,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "axum",
  "bon",
+ "delegate",
  "derive_more",
  "fieldwork",
  "futures",
@@ -4898,6 +4903,7 @@ dependencies = [
  "bon",
  "bytes",
  "dashmap",
+ "delegate",
  "derive_more",
  "fieldwork",
  "futures",
@@ -4962,6 +4968,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bevy_platform 0.19.0",
  "bon",
+ "delegate",
  "derive_more",
  "fieldwork",
  "firewheel",
@@ -5018,6 +5025,7 @@ dependencies = [
  "bitflags 2.13.0",
  "bon",
  "criterion",
+ "delegate",
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",

@@ -36,50 +36,44 @@ impl<T> Receiver<T> {
         std::iter::from_fn(move || self.recv().ok())
     }
 
-    /// Block until a value arrives.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RecvError`] if all senders have been dropped.
-    pub fn recv(&self) -> Result<T, RecvError> {
-        self.0.recv_sync()
+    delegate::delegate! {
+        to self.0 {
+            /// Block until a value arrives.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`RecvError`] if all senders have been dropped.
+            #[call(recv_sync)]
+            pub fn recv (& self) -> Result < T , RecvError >;
+            /// Await a value asynchronously (WASM only).
+            ///
+            /// # Errors
+            ///
+            /// Returns [`RecvError`] if all senders have been dropped.
+            pub async fn recv_async (& self) -> Result < T , RecvError >;
+            /// Block until a value arrives or `deadline` elapses.
+            ///
+            /// On worker threads this parks via `Atomics.wait`; on the browser main
+            /// thread (where `Atomics.wait` is disallowed) it falls back to spinning
+            /// until the deadline. Callers must only block on worker threads.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`RecvTimeoutError::Timeout`] when no value arrives before
+            /// `deadline`, or [`RecvTimeoutError::Disconnected`] if all senders are
+            /// dropped.
+            #[call(recv_sync_timeout)]
+            pub fn recv_timeout (& self , deadline : Instant) -> Result < T , RecvTimeoutError >;
+            /// Try to receive without blocking.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`TryRecvError`] if no value is available or senders are dropped.
+            pub fn try_recv (& self) -> Result < T , TryRecvError >;
+        }
     }
-
-    /// Await a value asynchronously (WASM only).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RecvError`] if all senders have been dropped.
-    pub async fn recv_async(&self) -> Result<T, RecvError> {
-        self.0.recv_async().await
-    }
-
-    /// Block until a value arrives or `deadline` elapses.
-    ///
-    /// On worker threads this parks via `Atomics.wait`; on the browser main
-    /// thread (where `Atomics.wait` is disallowed) it falls back to spinning
-    /// until the deadline. Callers must only block on worker threads.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RecvTimeoutError::Timeout`] when no value arrives before
-    /// `deadline`, or [`RecvTimeoutError::Disconnected`] if all senders are
-    /// dropped.
-    pub fn recv_timeout(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
-        self.0.recv_sync_timeout(deadline)
-    }
-
     /// Iterate over currently-available values without blocking.
     pub fn try_iter(&self) -> impl Iterator<Item = T> + '_ {
         std::iter::from_fn(move || self.try_recv().ok())
-    }
-
-    /// Try to receive without blocking.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TryRecvError`] if no value is available or senders are dropped.
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        self.0.try_recv()
     }
 }

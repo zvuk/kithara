@@ -58,11 +58,20 @@ impl<T> Outlet<T> {
         }
     }
 
-    /// Whether an item is currently parked in the overflow slot.
-    pub(crate) fn has_pending(&self) -> bool {
-        self.overflow.is_some()
+    delegate::delegate! {
+        to self.overflow {
+            /// Whether an item is currently parked in the overflow slot.
+            #[call(is_some)]
+            pub (crate) fn has_pending (& self) -> bool;
+            /// Discard the parked overflow item, returning it to the caller.
+            ///
+            /// Useful when a producer needs to invalidate previously enqueued data
+            /// (e.g. on a seek epoch change) without waiting for the consumer to
+            /// drain the ring.
+            #[call(take)]
+            pub (crate) fn take_pending (& mut self) -> Option < T >;
+        }
     }
-
     /// Whether both the ring buffer and the overflow slot are full.
     ///
     /// When `true`, the next [`try_push`](Self::try_push) is guaranteed to
@@ -110,15 +119,6 @@ impl<T> Outlet<T> {
         }
     }
 
-    /// Discard the parked overflow item, returning it to the caller.
-    ///
-    /// Useful when a producer needs to invalidate previously enqueued data
-    /// (e.g. on a seek epoch change) without waiting for the consumer to
-    /// drain the ring.
-    pub(crate) fn take_pending(&mut self) -> Option<T> {
-        self.overflow.take()
-    }
-
     /// Push an item into the outlet.
     ///
     /// First tries to drain the overflow slot, then attempts to push `item`
@@ -145,15 +145,14 @@ pub(crate) struct Inlet<T> {
 }
 
 impl<T> Inlet<T> {
-    /// Check if the inlet is empty.
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.consumer.is_empty()
-    }
-
-    /// Pop an item from the inlet. Returns `None` if empty.
-    pub(crate) fn try_pop(&mut self) -> Option<T> {
-        self.consumer.try_pop()
+    delegate::delegate! {
+        to self.consumer {
+            /// Check if the inlet is empty.
+            #[cfg(test)]
+            pub (crate) fn is_empty (& self) -> bool;
+            /// Pop an item from the inlet. Returns `None` if empty.
+            pub (crate) fn try_pop (& mut self) -> Option < T >;
+        }
     }
 }
 

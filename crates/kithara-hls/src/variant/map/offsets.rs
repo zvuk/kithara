@@ -271,27 +271,20 @@ impl Layout {
         self.republish(snapshot);
     }
 
-    pub(super) fn bisect_left(&self, byte: u64) -> usize {
-        self.frame.load().bisect_left(byte)
+    delegate::delegate! {
+        to self.frame.load() {
+            pub (super) fn bisect_left (& self , byte : u64) -> usize;
+            #[call(find_virtual)]
+            pub (super) fn find_at_offset (& self , byte_virtual : u64 , segments : & [Segment] ,) -> Option < (u32 , u64 , u64) >;
+            pub (super) fn find_natural (& self , byte : u64 , segments : & [Segment]) -> Option < (u32 , u64 , u64) >;
+            pub (super) fn segment_byte_offset (& self , idx : u32) -> Option < u64 >;
+        }
     }
-
     pub(super) fn clear_init_seed(&self) {
         let _w = self.write_lock.lock();
         let mut frame = (**self.frame.load()).clone();
         frame.init_seed = 0;
         self.frame.store(Arc::new(frame));
-    }
-
-    pub(super) fn find_at_offset(
-        &self,
-        byte_virtual: u64,
-        segments: &[Segment],
-    ) -> Option<(u32, u64, u64)> {
-        self.frame.load().find_virtual(byte_virtual, segments)
-    }
-
-    pub(super) fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)> {
-        self.frame.load().find_natural(byte, segments)
     }
 
     /// True when the frame is already the canonical single-variant
@@ -366,10 +359,6 @@ impl Layout {
             frame.init_seed = 0;
             frame.recompute(init_size, segments);
         });
-    }
-
-    pub(super) fn segment_byte_offset(&self, idx: u32) -> Option<u64> {
-        self.frame.load().segment_byte_offset(idx)
     }
 
     pub(super) fn served_from(&self) -> u32 {

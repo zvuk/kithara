@@ -13,20 +13,21 @@ impl<T> RwLock<T> {
         Self(LoomRwLock::new(value))
     }
 
-    #[inline]
-    pub(crate) fn read(&self) -> RwLockReadGuard<'_, T> {
-        RwLockReadGuard(match self.0.read() {
-            Ok(guard) => guard,
-            Err(error) => error.into_inner(),
-        })
-    }
-
-    #[inline]
-    pub(crate) fn write(&self) -> RwLockWriteGuard<'_, T> {
-        RwLockWriteGuard(match self.0.write() {
-            Ok(guard) => guard,
-            Err(error) => error.into_inner(),
-        })
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            #[expr(RwLockReadGuard(match $ {
+                        Ok(guard) => guard,
+                        Err(error) => error.into_inner(),
+                    }))]
+            pub (crate) fn read (& self) -> RwLockReadGuard < '_ , T >;
+            #[inline]
+            #[expr(RwLockWriteGuard(match $ {
+                        Ok(guard) => guard,
+                        Err(error) => error.into_inner(),
+                    }))]
+            pub (crate) fn write (& self) -> RwLockWriteGuard < '_ , T >;
+        }
     }
 }
 

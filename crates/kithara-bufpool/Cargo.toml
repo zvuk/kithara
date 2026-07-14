@@ -16,6 +16,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 kithara-platform = { workspace = true }
 
 crossbeam-queue = { workspace = true }
+delegate = { workspace = true }
 derive_more = { workspace = true }
 hotpath = { workspace = true, optional = true }
 

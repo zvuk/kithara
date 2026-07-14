@@ -352,43 +352,37 @@ where
         )
     }
 
-    fn duration(&self) -> Option<kithara_platform::time::Duration> {
-        self.decoder.duration()
-    }
-
-    fn flush_reader_signals(&mut self) {
-        self.decoder.flush_reader_signals();
-    }
-
-    fn metadata(&self) -> TrackMetadata {
-        self.decoder.metadata()
-    }
-
-    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        loop {
-            match self.decoder.next_chunk()? {
-                DecoderChunkOutcome::Chunk(chunk) => {
-                    self.append_chunk(&chunk)?;
-                    if let Some(output) = self.drain_ready()? {
-                        return Ok(DecoderChunkOutcome::Chunk(output));
-                    }
-                }
-                DecoderChunkOutcome::Pending(reason) => {
-                    return Ok(DecoderChunkOutcome::Pending(reason));
-                }
-                DecoderChunkOutcome::Eof => {
-                    if !self.eof_flushed {
-                        self.eof_flushed = true;
-                        if let Some(output) = self.flush_residual()? {
-                            return Ok(DecoderChunkOutcome::Chunk(output));
+    delegate::delegate! {
+        to self.decoder {
+            fn duration (& self) -> Option < kithara_platform :: time :: Duration >;
+            fn flush_reader_signals (& mut self);
+            fn metadata (& self) -> TrackMetadata;
+            #[expr(loop {
+                        match $? {
+                            DecoderChunkOutcome::Chunk(chunk) => {
+                                self.append_chunk(&chunk)?;
+                                if let Some(output) = self.drain_ready()? {
+                                    return Ok(DecoderChunkOutcome::Chunk(output));
+                                }
+                            }
+                            DecoderChunkOutcome::Pending(reason) => {
+                                return Ok(DecoderChunkOutcome::Pending(reason));
+                            }
+                            DecoderChunkOutcome::Eof => {
+                                if !self.eof_flushed {
+                                    self.eof_flushed = true;
+                                    if let Some(output) = self.flush_residual()? {
+                                        return Ok(DecoderChunkOutcome::Chunk(output));
+                                    }
+                                }
+                                return Ok(DecoderChunkOutcome::Eof);
+                            }
                         }
-                    }
-                    return Ok(DecoderChunkOutcome::Eof);
-                }
-            }
+                    })]
+            fn next_chunk (& mut self) -> DecodeResult < DecoderChunkOutcome >;
+            fn update_byte_len (& self , len : u64);
         }
     }
-
     fn seek(&mut self, pos: kithara_platform::time::Duration) -> DecodeResult<DecoderSeekOutcome> {
         let outcome = self.decoder.seek(pos)?;
         self.reset_resampler_state();
@@ -437,10 +431,6 @@ where
                 )
             }),
         }
-    }
-
-    fn update_byte_len(&self, len: u64) {
-        self.decoder.update_byte_len(len);
     }
 }
 

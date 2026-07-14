@@ -363,14 +363,20 @@ impl<S> Audio<S> {
         }
     }
 
-    /// Get total duration of the audio stream.
-    ///
-    /// Returns `None` for streaming sources where duration is unknown.
-    #[must_use]
-    pub fn duration(&self) -> Option<Duration> {
-        self.playhead.duration()
+    delegate! {
+        to self.playhead {
+            /// Get total duration of the audio stream.
+            ///
+            /// Returns `None` for streaming sources where duration is unknown.
+            #[must_use]
+            pub fn duration (& self) -> Option < Duration >;
+            /// Get current playback position.
+            ///
+            /// Calculated from samples read since last seek plus the seek base.
+            #[must_use]
+            pub fn position (& self) -> Duration;
+        }
     }
-
     fn emit_audio_event(&self, event: AudioEvent) {
         self.bus.publish(event);
     }
@@ -445,14 +451,6 @@ impl<S> Audio<S> {
             self.consumer_phase = ConsumerPhase::Playing;
         }
         true
-    }
-
-    /// Get current playback position.
-    ///
-    /// Calculated from samples read since last seek plus the seek base.
-    #[must_use]
-    pub fn position(&self) -> Duration {
-        self.playhead.position()
     }
 
     /// Enable non-blocking mode for `read()` and prime the first chunk.
@@ -1655,17 +1653,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
     delegate! {
         to self.playhead {
             fn duration(&self) -> Option<Duration>;
-        }
-    }
-
-    delegate! {
-        to self.playhead {
             fn position(&self) -> Duration;
-        }
-    }
-
-    delegate! {
-        to self.playhead {
             fn decoded_frontier(&self) -> Duration;
         }
     }

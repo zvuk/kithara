@@ -7,16 +7,14 @@ type WstCondvar = wasm_safe_thread::condvar::Condvar;
 pub struct Condvar(WstCondvar);
 
 impl Condvar {
-    #[inline]
-    pub fn notify_all(&self) {
-        self.0.notify_all();
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            pub fn notify_all (& self);
+            #[inline]
+            pub fn notify_one (& self);
+        }
     }
-
-    #[inline]
-    pub fn notify_one(&self) {
-        self.0.notify_one();
-    }
-
     #[inline]
     pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
         MutexGuard(self.0.wait_sync(guard.0))

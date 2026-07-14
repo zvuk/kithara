@@ -112,24 +112,61 @@ impl Resource {
         Ok(resource)
     }
 
-    /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
-    #[must_use]
-    pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.inner.abr_handle()
+    delegate::delegate! {
+        to self.inner {
+            /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
+            #[must_use]
+            pub fn abr_handle (& self) -> Option < kithara_abr :: AbrHandle >;
+            /// Decoded-ahead frontier of the underlying reader (always `>=` position).
+            #[must_use]
+            pub fn decoded_frontier (& self) -> Duration;
+            /// Get total duration (if known).
+            #[must_use]
+            pub fn duration (& self) -> Option < Duration >;
+            /// Get track metadata.
+            #[must_use]
+            pub fn metadata (& self) -> & TrackMetadata;
+            /// Read the next decoded chunk with full metadata.
+            ///
+            /// # Errors
+            /// Propagated from the underlying `PcmReader` on decoder / channel failure.
+            pub fn next_chunk (& mut self) -> Result < ChunkOutcome , DecodeError >;
+            /// Get current playback position.
+            #[must_use]
+            pub fn position (& self) -> Duration;
+            /// Read interleaved PCM samples.
+            ///
+            /// # Errors
+            /// Propagated from the underlying `PcmReader` on decoder / channel failure.
+            pub fn read (& mut self , buf : & mut [f32]) -> Result < ReadOutcome , DecodeError >;
+            /// Read deinterleaved (planar) PCM samples.
+            ///
+            /// # Errors
+            /// Propagated from the underlying `PcmReader` on decoder / channel failure.
+            pub fn read_planar < 'a > (& mut self , output : & 'a mut [& 'a mut [f32]] ,) -> Result < ReadOutcome , DecodeError >;
+            /// Seek to position.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if the seek position is out of range or the underlying
+            /// stream does not support seeking.
+            pub fn seek (& mut self , position : Duration) -> Result < SeekOutcome , DecodeError >;
+            /// Set the target sample rate of the audio host.
+            ///
+            /// Updates the audio pipeline's host sample rate for resampling.
+            /// Can be called at any time to reflect host sample rate changes.
+            pub fn set_host_sample_rate (& self , sample_rate : NonZeroU32);
+            /// Set the playback rate for the active stretch controls.
+            ///
+            /// Rate > 1.0 speeds up playback, rate < 1.0 slows it down.
+            pub fn set_playback_rate (& self , rate : f32);
+            /// Update the scheduling priority hint for the shared worker.
+            pub fn set_service_class (& self , class : ServiceClass);
+            /// Get current PCM specification.
+            #[must_use]
+            pub fn spec (& self) -> PcmSpec;
+        }
     }
-
-    /// Decoded-ahead frontier of the underlying reader (always `>=` position).
-    #[must_use]
-    pub fn decoded_frontier(&self) -> Duration {
-        self.inner.decoded_frontier()
-    }
-
-    /// Get total duration (if known).
-    #[must_use]
-    pub fn duration(&self) -> Option<Duration> {
-        self.inner.duration()
-    }
-
     /// Create a resource from any `PcmReader`.
     ///
     /// This is the single construction primitive: the stream-backed
@@ -174,26 +211,6 @@ impl Resource {
         Ok(Self::from_reader(audio, Some(src)))
     }
 
-    /// Get track metadata.
-    #[must_use]
-    pub fn metadata(&self) -> &TrackMetadata {
-        self.inner.metadata()
-    }
-
-    /// Read the next decoded chunk with full metadata.
-    ///
-    /// # Errors
-    /// Propagated from the underlying `PcmReader` on decoder / channel failure.
-    pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        self.inner.next_chunk()
-    }
-
-    /// Get current playback position.
-    #[must_use]
-    pub fn position(&self) -> Duration {
-        self.inner.position()
-    }
-
     /// Wait for first decoded chunk to be available, then move it to internal buffer.
     ///
     /// After preload completes, the first `read()` returns data without blocking.
@@ -208,61 +225,6 @@ impl Resource {
             gate.wait_for_epoch(self.inner.preload_epoch()).await;
         }
         self.inner.preload()
-    }
-
-    /// Read interleaved PCM samples.
-    ///
-    /// # Errors
-    /// Propagated from the underlying `PcmReader` on decoder / channel failure.
-    pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        self.inner.read(buf)
-    }
-
-    /// Read deinterleaved (planar) PCM samples.
-    ///
-    /// # Errors
-    /// Propagated from the underlying `PcmReader` on decoder / channel failure.
-    pub fn read_planar<'a>(
-        &mut self,
-        output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        self.inner.read_planar(output)
-    }
-
-    /// Seek to position.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the seek position is out of range or the underlying
-    /// stream does not support seeking.
-    pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        self.inner.seek(position)
-    }
-
-    /// Set the target sample rate of the audio host.
-    ///
-    /// Updates the audio pipeline's host sample rate for resampling.
-    /// Can be called at any time to reflect host sample rate changes.
-    pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
-        self.inner.set_host_sample_rate(sample_rate);
-    }
-
-    /// Set the playback rate for the active stretch controls.
-    ///
-    /// Rate > 1.0 speeds up playback, rate < 1.0 slows it down.
-    pub fn set_playback_rate(&self, rate: f32) {
-        self.inner.set_playback_rate(rate);
-    }
-
-    /// Update the scheduling priority hint for the shared worker.
-    pub fn set_service_class(&self, class: ServiceClass) {
-        self.inner.set_service_class(class);
-    }
-
-    /// Get current PCM specification.
-    #[must_use]
-    pub fn spec(&self) -> PcmSpec {
-        self.inner.spec()
     }
 
     /// Subscribe to unified events.

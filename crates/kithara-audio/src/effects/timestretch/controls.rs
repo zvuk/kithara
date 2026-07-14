@@ -57,17 +57,17 @@ impl StretchControls {
         })
     }
 
-    /// The active region-stretch plan, if any.
-    #[must_use]
-    pub fn region_plan(&self) -> Option<Arc<RegionPlan>> {
-        self.region_plan.load_full()
+    delegate::delegate! {
+        to self.region_plan {
+            /// The active region-stretch plan, if any.
+            #[must_use]
+            #[call(load_full)]
+            pub fn region_plan (& self) -> Option < Arc < RegionPlan > >;
+            /// Install or clear the region-stretch plan; picked up on the next chunk.
+            #[call(store)]
+            pub fn set_region_plan (& self , plan : Option < Arc < RegionPlan > >);
+        }
     }
-
-    /// Install or clear the region-stretch plan; picked up on the next chunk.
-    pub fn set_region_plan(&self, plan: Option<Arc<RegionPlan>>) {
-        self.region_plan.store(plan);
-    }
-
     /// Set the playback speed.
     pub fn set_speed(&self, speed: f32) {
         self.speed.store(speed, Ordering::Relaxed);

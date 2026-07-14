@@ -72,20 +72,24 @@ impl Resampler for RubatoResampler {
         self.channels
     }
 
-    fn input_frames_max(&self) -> usize {
-        self.inner.input_frames_max()
+    delegate::delegate! {
+        to self.inner {
+            fn input_frames_max (& self) -> usize;
+            fn input_frames_next (& self) -> usize;
+            fn output_delay (& self) -> usize;
+            fn output_frames_max (& self) -> usize;
+            fn output_frames_next (& self) -> usize;
+            #[expr($
+                        .map_err(|err| ResamplerError::Backend {
+                            detail: err.to_string(),
+                            op: "rubato process",
+                        }))]
+            fn process_into_buffer (& mut self , input : & [& [f32]] , output : & mut [& mut [f32]] ,) -> Result < ResamplerProcess , ResamplerError >;
+            fn reset (& mut self);
+        }
     }
-
-    fn input_frames_next(&self) -> usize {
-        self.inner.input_frames_next()
-    }
-
     fn mode(&self) -> ResamplerMode {
         self.mode
-    }
-
-    fn output_delay(&self) -> usize {
-        self.inner.output_delay()
     }
 
     fn output_frames_for_input(&self, input_frames: usize) -> usize {
@@ -98,31 +102,6 @@ impl Resampler for RubatoResampler {
         }
 
         frames.to_usize().unwrap_or(usize::MAX)
-    }
-
-    fn output_frames_max(&self) -> usize {
-        self.inner.output_frames_max()
-    }
-
-    fn output_frames_next(&self) -> usize {
-        self.inner.output_frames_next()
-    }
-
-    fn process_into_buffer(
-        &mut self,
-        input: &[&[f32]],
-        output: &mut [&mut [f32]],
-    ) -> Result<ResamplerProcess, ResamplerError> {
-        self.inner
-            .process_into_buffer(input, output)
-            .map_err(|err| ResamplerError::Backend {
-                detail: err.to_string(),
-                op: "rubato process",
-            })
-    }
-
-    fn reset(&mut self) {
-        self.inner.reset();
     }
 }
 

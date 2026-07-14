@@ -57,6 +57,7 @@ kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 bon = { workspace = true }
+delegate = { workspace = true }
 derive_more = { workspace = true }
 fdk-aac = { workspace = true, optional = true }
 hotpath = { workspace = true, optional = true }

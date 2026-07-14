@@ -7,10 +7,14 @@ use super::{HlsVariant, seqlock::AliasSnapshot, size::ExactSeekDemand};
 use crate::HlsError;
 
 impl HlsVariant {
-    pub(super) fn clear_seek_alias(&self) {
-        self.seek.alias.clear();
+    delegate::delegate! {
+        to self.seek.alias {
+            #[call(clear)]
+            pub (super) fn clear_seek_alias (& self);
+            #[call(set)]
+            pub (super) fn set_seek_alias (& self , anchor : u64 , segment : u32);
+        }
     }
-
     pub(super) fn clear_seek_alias_if_moved(&self, pos: u64) {
         // RT-reachable (via `advance`): a lock-free, alloc-free load + atomic
         // clear. The base is single-writer (on-core), so the `Some -> None`
@@ -169,10 +173,6 @@ impl HlsVariant {
     pub(crate) fn segment_index_at_time(&self, t: Duration) -> Option<u32> {
         self.index_at_time(t)
             .and_then(|idx| u32::try_from(idx).ok())
-    }
-
-    pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32) {
-        self.seek.alias.set(anchor, segment);
     }
 
     pub(super) fn set_segment_aware_seek_tail(&self, segment: u32) {

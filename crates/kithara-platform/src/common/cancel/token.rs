@@ -21,11 +21,14 @@ pub struct CancelToken {
 }
 
 impl CancelToken {
-    /// Cancel this token's subtree.
-    pub fn cancel(&self) {
-        self.node.cancel();
+    delegate::delegate! {
+        to self.node {
+            /// Cancel this token's subtree.
+            pub fn cancel (& self);
+            #[must_use]
+            pub fn is_cancelled (& self) -> bool;
+        }
     }
-
     /// Future that resolves once this token's subtree is cancelled. Cancel-safe
     /// in `tokio::select!`: dropping it unregisters its slot.
     #[must_use]
@@ -39,11 +42,6 @@ impl CancelToken {
         Self {
             node: Node::child(&self.node),
         }
-    }
-
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.node.is_cancelled()
     }
 
     /// A token that is never cancelled — a placeholder where a token is required

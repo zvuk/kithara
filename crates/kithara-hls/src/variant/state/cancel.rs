@@ -20,16 +20,15 @@ impl CancelEpoch {
         Self { master, current }
     }
 
-    /// Cancel the current epoch token (variant deactivation).
-    pub(super) fn cancel(&self) {
-        self.current.read().cancel();
+    delegate::delegate! {
+        to self.current.read() {
+            /// Cancel the current epoch token (variant deactivation).
+            pub (super) fn cancel (& self);
+            /// Clone the current epoch token — attached to every emitted `FetchCmd`.
+            #[call(clone)]
+            pub (super) fn handle (& self) -> CancelToken;
+        }
     }
-
-    /// Clone the current epoch token — attached to every emitted `FetchCmd`.
-    pub(super) fn handle(&self) -> CancelToken {
-        self.current.read().clone()
-    }
-
     /// Rotate to a fresh child of `master` on re-activation.
     pub(super) fn rearm(&self) {
         let fresh = self.master.child();

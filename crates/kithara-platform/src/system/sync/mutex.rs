@@ -12,19 +12,20 @@ impl<T> Mutex<T> {
         Self(ParkingLotMutex::new(value))
     }
 
-    #[inline]
-    pub fn lock(&self) -> MutexGuard<'_, T> {
-        MutexGuard(self.0.lock())
-    }
-
-    /// Try to acquire the lock without blocking.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NotAvailable`] if the mutex is already held.
-    #[inline]
-    pub fn try_lock(&self) -> Result<MutexGuard<'_, T>, NotAvailable> {
-        self.0.try_lock().map(MutexGuard).ok_or(NotAvailable)
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            #[expr(MutexGuard($))]
+            pub fn lock (& self) -> MutexGuard < '_ , T >;
+            /// Try to acquire the lock without blocking.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`NotAvailable`] if the mutex is already held.
+            #[inline]
+            #[expr($.map(MutexGuard).ok_or(NotAvailable))]
+            pub fn try_lock (& self) -> Result < MutexGuard < '_ , T > , NotAvailable >;
+        }
     }
 }
 

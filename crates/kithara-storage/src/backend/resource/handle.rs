@@ -148,44 +148,45 @@ impl<D: DriverIo> Resource<Active, D> {
         })
     }
 
-    /// Commit without consuming, for a decorator that rewrites in place.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the backend
-    /// cannot finalize.
-    pub(crate) fn commit_in_place(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.data.core.commit_inner(final_len)
-    }
-
-    /// Mark the resource as failed, consuming the writer.
-    pub fn fail(self, reason: String) {
-        self.data.core.fail_inner(reason);
-    }
-
-    /// Mark failed without consuming, for a decorator that owns the writer.
-    pub(crate) fn fail_in_place(&self, reason: String) {
-        self.data.core.fail_inner(reason);
-    }
-
-    /// Reactivate without consuming, for a decorator that rewrites in place.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled or the backend cannot reopen.
-    pub(crate) fn reactivate_in_place(&self) -> StorageResult<()> {
-        self.data.core.reactivate_inner()
-    }
-
-    /// Mint a cloneable read-only view over the in-flight resource (readers may
-    /// observe the committed prefix while the writer keeps appending).
-    #[must_use]
-    pub fn reader(&self) -> Resource<Reader, D> {
-        Resource {
-            data: ReadCore {
-                core: self.data.core.clone(),
-            },
+    delegate::delegate! {
+        to self.data.core {
+            /// Commit without consuming, for a decorator that rewrites in place.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the backend
+            /// cannot finalize.
+            #[call(commit_inner)]
+            pub (crate) fn commit_in_place (& self , final_len : Option < u64 >) -> StorageResult < () >;
+            /// Mark the resource as failed, consuming the writer.
+            #[call(fail_inner)]
+            pub fn fail (self , reason : String);
+            /// Mark failed without consuming, for a decorator that owns the writer.
+            #[call(fail_inner)]
+            pub (crate) fn fail_in_place (& self , reason : String);
+            /// Reactivate without consuming, for a decorator that rewrites in place.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled or the backend cannot reopen.
+            #[call(reactivate_inner)]
+            pub (crate) fn reactivate_in_place (& self) -> StorageResult < () >;
+            /// Mint a cloneable read-only view over the in-flight resource (readers may
+            /// observe the committed prefix while the writer keeps appending).
+            #[must_use]
+            #[expr(Resource {
+                        data: ReadCore {
+                            core: $,
+                        },
+                    })]
+            #[call(clone)]
+            pub fn reader (& self) -> Resource < Reader , D >;
+            /// Write data at the given offset.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the write fails.
+            #[call(write_at_inner)]
+            pub fn write_at (& self , offset : u64 , data : & [u8]) -> StorageResult < () >;
         }
     }
-
     /// Write entire contents and commit atomically, consuming the writer.
     ///
     /// # Errors
@@ -194,23 +195,26 @@ impl<D: DriverIo> Resource<Active, D> {
         self.data.core.write_at_inner(0, data)?;
         self.commit(Some(data.len() as u64))
     }
-
-    /// Write data at the given offset.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the write fails.
-    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.data.core.write_at_inner(offset, data)
-    }
 }
 
 impl<D: DriverIo> Resource<Committed, D> {
-    /// Committed length, if known.
-    #[must_use]
-    pub fn final_len(&self) -> Option<u64> {
-        self.data.core.len_inner()
+    delegate::delegate! {
+        to self.data.core {
+            /// Committed length, if known.
+            #[must_use]
+            #[call(len_inner)]
+            pub fn final_len (& self) -> Option < u64 >;
+            /// Mint a cloneable read-only view.
+            #[must_use]
+            #[expr(Resource {
+                        data: ReadCore {
+                            core: $,
+                        },
+                    })]
+            #[call(clone)]
+            pub fn reader (& self) -> Resource < Reader , D >;
+        }
     }
-
     /// Reactivate a committed resource for continued writing, consuming the
     /// committed handle and returning a fresh writer. Reactivating an `Active`
     /// handle is a compile error: no such method exists on the writer.
@@ -223,16 +227,6 @@ impl<D: DriverIo> Resource<Committed, D> {
         Ok(Resource {
             data: WriteGuard { core },
         })
-    }
-
-    /// Mint a cloneable read-only view.
-    #[must_use]
-    pub fn reader(&self) -> Resource<Reader, D> {
-        Resource {
-            data: ReadCore {
-                core: self.data.core.clone(),
-            },
-        }
     }
 }
 

@@ -266,11 +266,15 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
 }
 
 impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
-    fn default_priming_frames(&self, codec: AudioCodec) -> u64 {
-        AudioCodec::encoder_priming_frames(codec)
-            .saturating_add(self.codec.decoder_algo_delay(codec))
+    delegate::delegate! {
+        to self.codec {
+            #[expr(AudioCodec::encoder_priming_frames(codec)
+                        .saturating_add($))]
+            #[call(decoder_algo_delay)]
+            fn default_priming_frames (& self , codec : AudioCodec) -> u64;
+            fn track_info (& self) -> crate :: DecoderTrackInfo;
+        }
     }
-
     fn duration(&self) -> Option<Duration> {
         self.duration
     }
@@ -299,10 +303,6 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
 
     fn spec(&self) -> PcmSpec {
         self.spec
-    }
-
-    fn track_info(&self) -> crate::DecoderTrackInfo {
-        self.codec.track_info()
     }
 
     fn update_byte_len(&self, len: u64) {

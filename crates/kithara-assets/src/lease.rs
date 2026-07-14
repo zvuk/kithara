@@ -378,10 +378,12 @@ where
         self.cleanup.disarm();
     }
 
-    fn raw_write_handle(&self) -> RawWriteHandle {
-        self.inner.raw_write_handle()
+    delegate::delegate! {
+        to self.inner {
+            fn raw_write_handle (& self) -> RawWriteHandle;
+            fn write_at (& self , offset : u64 , data : & [u8]) -> StorageResult < () >;
+        }
     }
-
     fn reader(&self) -> LeaseReader<W::Reader, L> {
         LeaseReader {
             inner: self.inner.reader(),
@@ -391,10 +393,6 @@ where
             live: self.cleanup.live.clone(),
             resource_key: self.cleanup.resource_key.clone(),
         }
-    }
-
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.write_at(offset, data)
     }
 }
 
@@ -447,20 +445,22 @@ where
     type IndexRes = A::IndexRes;
     type ReadyRes = LeaseReader<A::ReadyRes, LeaseGuard>;
 
-    fn acquire_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        identity: Option<&RequestIdentity>,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
-        match self.inner.acquire_resource_with_ctx(key, identity, ctx)? {
-            AcquisitionResult::Pending(w) => {
-                Ok(AcquisitionResult::Pending(self.wrap_writer(key, w)?))
-            }
-            AcquisitionResult::Ready(r) => Ok(AcquisitionResult::Ready(self.wrap_reader(key, r)?)),
+    delegate::delegate! {
+        to self.inner {
+            fn capabilities(&self) -> crate::base::Capabilities;
+            fn root_dir(&self) -> &Path;
+            fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
+            #[expr(match $? {
+                        AcquisitionResult::Pending(w) => {
+                            Ok(AcquisitionResult::Pending(self.wrap_writer(key, w)?))
+                        }
+                        AcquisitionResult::Ready(r) => Ok(AcquisitionResult::Ready(self.wrap_reader(key, r)?)),
+                    })]
+            fn acquire_resource_with_ctx (& self , key : & ResourceKey , identity : Option < & RequestIdentity > , ctx : Option < Self :: Context > ,) -> AssetsResult < AcquisitionResult < Self :: ActiveRes , Self :: ReadyRes > >;
         }
     }
-
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
@@ -482,16 +482,6 @@ where
             return Ok(live.snapshot());
         }
         self.inner.resource_state(key)
-    }
-
-    delegate::delegate! {
-        to self.inner {
-            fn capabilities(&self) -> crate::base::Capabilities;
-            fn root_dir(&self) -> &Path;
-            fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-            fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
-        }
     }
 }
 

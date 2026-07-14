@@ -10,14 +10,17 @@ impl<T> RwLock<T> {
         Self(WstRwLock::new(value))
     }
 
-    #[inline]
-    pub fn read(&self) -> RwLockReadGuard<'_, T> {
-        RwLockReadGuard(self.0.lock_sync_read())
-    }
-
-    #[inline]
-    pub fn write(&self) -> RwLockWriteGuard<'_, T> {
-        RwLockWriteGuard(self.0.lock_sync_write())
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            #[expr(RwLockReadGuard($))]
+            #[call(lock_sync_read)]
+            pub fn read (& self) -> RwLockReadGuard < '_ , T >;
+            #[inline]
+            #[expr(RwLockWriteGuard($))]
+            #[call(lock_sync_write)]
+            pub fn write (& self) -> RwLockWriteGuard < '_ , T >;
+        }
     }
 }
 

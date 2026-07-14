@@ -135,10 +135,25 @@ impl WasmInner {
             .map(|(_, item)| Arc::clone(item))
     }
 
-    pub(crate) fn current_time(&self) -> f64 {
-        self.bridge.position_secs()
+    delegate::delegate! {
+        to self.bridge {
+            #[call(position_secs)]
+            pub (crate) fn current_time (& self) -> f64;
+            #[expr(if $ {
+                        load_f32(&self.playing_rate)
+                    } else {
+                        0.0
+                    })]
+            #[call(is_playing)]
+            pub (crate) fn rate (& self) -> f32;
+            /// Forward a command to the worker, mapping a channel failure to a
+            /// typed [`FfiError`]. Used by the fallible facade methods that should
+            /// surface a real error when the worker link is down.
+            #[expr($.map_err(|err| into_internal(&err)))]
+            #[call(send)]
+            fn try_send (& self , cmd : WorkerCmd) -> Result < () , FfiError >;
+        }
     }
-
     pub(crate) fn eq_band_count(&self) -> u32 {
         let n = self.eq_gains.len();
         u32::try_from(n).unwrap_or_else(|_| {
@@ -230,14 +245,6 @@ impl WasmInner {
 
     pub(crate) fn playing_rate(&self) -> f32 {
         load_f32(&self.playing_rate)
-    }
-
-    pub(crate) fn rate(&self) -> f32 {
-        if self.bridge.is_playing() {
-            load_f32(&self.playing_rate)
-        } else {
-            0.0
-        }
     }
 
     pub(crate) fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
@@ -435,13 +442,6 @@ impl WasmInner {
 
     pub(crate) fn stop(&self) {
         self.send(WorkerCmd::Stop);
-    }
-
-    /// Forward a command to the worker, mapping a channel failure to a
-    /// typed [`FfiError`]. Used by the fallible facade methods that should
-    /// surface a real error when the worker link is down.
-    fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError> {
-        self.bridge.send(cmd).map_err(|err| into_internal(&err))
     }
 
     pub(crate) fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {

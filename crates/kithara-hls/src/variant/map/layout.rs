@@ -88,23 +88,32 @@ impl HlsVariant {
         self.layout.reset(self.init_route_size(), &self.segments);
     }
 
-    /// Virtual byte offset of segment `seg_idx` in the combined stream.
-    /// For the initial variant (`byte_shift == 0`) this equals the natural
-    /// offset; after an Auto-mode switch this places the segment relative
-    /// to the reader's current byte position at the switch boundary.
-    pub(crate) fn segment_byte_offset(&self, seg_idx: u32) -> Option<u64> {
-        self.layout.segment_byte_offset(seg_idx)
+    delegate::delegate! {
+        to self.layout {
+            /// Virtual byte offset of segment `seg_idx` in the combined stream.
+            /// For the initial variant (`byte_shift == 0`) this equals the natural
+            /// offset; after an Auto-mode switch this places the segment relative
+            /// to the reader's current byte position at the switch boundary.
+            pub (crate) fn segment_byte_offset (& self , seg_idx : u32) -> Option < u64 >;
+            pub (crate) fn served_from (& self) -> u32;
+            /// Whether every served segment's byte size is known. While `false`,
+            /// [`Self::total_bytes`] is a lower bound (a segment's size estimate is
+            /// missing), so the byte-EOF gates must hold `Waiting`/`Pending` rather
+            /// than mint EOF for an in-range offset that only looks past-the-end
+            /// against the under-count.
+            pub (crate) fn sizes_complete (& self) -> bool;
+            #[kithara::probe(
+                    variant = self.variant as u64,
+                    total = self.layout.total_bytes()
+                )]
+            pub (crate) fn total_bytes (& self) -> u64;
+        }
     }
-
     /// Natural byte offset of segment `seg_idx` — i.e. without applying
     /// `byte_shift`. Used internally by `activate_*` to compute the
     /// shift needed to pin a segment at a given virtual byte.
     pub(crate) fn segment_byte_offset_natural(&self, seg_idx: u32) -> Option<u64> {
         self.layout.natural_offset(seg_idx as usize)
-    }
-
-    pub(crate) fn served_from(&self) -> u32 {
-        self.layout.served_from()
     }
 
     /// Cap the upper bound (exclusive) of segments this variant serves.
@@ -119,24 +128,7 @@ impl HlsVariant {
             .set_served_until(until, &self.segments, self.init_route_size());
     }
 
-    /// Whether every served segment's byte size is known. While `false`,
-    /// [`Self::total_bytes`] is a lower bound (a segment's size estimate is
-    /// missing), so the byte-EOF gates must hold `Waiting`/`Pending` rather
-    /// than mint EOF for an in-range offset that only looks past-the-end
-    /// against the under-count.
-    pub(crate) fn sizes_complete(&self) -> bool {
-        self.layout.sizes_complete()
-    }
-
     pub(crate) fn stream_len(&self) -> Option<u64> {
         self.authoritative_len()
-    }
-
-    #[kithara::probe(
-        variant = self.variant as u64,
-        total = self.layout.total_bytes()
-    )]
-    pub(crate) fn total_bytes(&self) -> u64 {
-        self.layout.total_bytes()
     }
 }

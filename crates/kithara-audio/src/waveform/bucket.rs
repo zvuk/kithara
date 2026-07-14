@@ -32,14 +32,13 @@ impl Waveform {
         &self.0
     }
 
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.0.len()
+    delegate::delegate! {
+        to self.0 {
+            #[must_use]
+            pub fn is_empty (& self) -> bool;
+            #[must_use]
+            pub fn len (& self) -> usize;
+        }
     }
 }
 

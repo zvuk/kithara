@@ -94,24 +94,19 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
         })
     }
 
-    fn fail(self, reason: String) {
-        self.inner.fail(reason);
+    delegate::delegate! {
+        to self.inner {
+            fn fail (self , reason : String);
+            fn raw_write_handle (& self) -> RawWriteHandle;
+            fn write_at (& self , offset : u64 , data : & [u8]) -> StorageResult < () >;
+        }
     }
-
-    fn raw_write_handle(&self) -> RawWriteHandle {
-        self.inner.raw_write_handle()
-    }
-
     fn reader(&self) -> CachedReader<W::Reader> {
         CachedReader {
             pinned: Arc::clone(&self.pinned),
             inner: self.inner.reader(),
             key: self.key.clone(),
         }
-    }
-
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.write_at(offset, data)
     }
 }
 
@@ -578,16 +573,18 @@ where
         self.inner.delete_asset(asset_root)
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        self.open_index_resource(CacheKey::LruIndex, || self.inner.open_lru_index_resource())
+    delegate::delegate! {
+        to self.inner {
+            fn capabilities(&self) -> Capabilities;
+            fn root_dir(&self) -> &Path;
+            #[expr(self.open_index_resource(CacheKey::LruIndex, || $))]
+            fn open_lru_index_resource (& self) -> AssetsResult < Self :: IndexRes >;
+            #[expr(self.open_index_resource(CacheKey::PinsIndex, || {
+                        $
+                    }))]
+            fn open_pins_index_resource (& self) -> AssetsResult < Self :: IndexRes >;
+        }
     }
-
-    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        self.open_index_resource(CacheKey::PinsIndex, || {
-            self.inner.open_pins_index_resource()
-        })
-    }
-
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
@@ -685,13 +682,6 @@ where
         }
 
         self.inner.resource_state(key)
-    }
-
-    delegate::delegate! {
-        to self.inner {
-            fn capabilities(&self) -> Capabilities;
-            fn root_dir(&self) -> &Path;
-        }
     }
 }
 
@@ -803,22 +793,16 @@ mod tests {
             self.inner.acquire_resource(key, identity)
         }
 
-        fn capabilities(&self) -> Capabilities {
-            self.inner.capabilities()
+        delegate::delegate! {
+            to self.inner {
+                fn capabilities (& self) -> Capabilities;
+                fn delete_asset (& self , asset_root : & str) -> AssetsResult < () >;
+                fn open_lru_index_resource (& self) -> AssetsResult < Self :: IndexRes >;
+                fn open_pins_index_resource (& self) -> AssetsResult < Self :: IndexRes >;
+                fn resource_state (& self , key : & ResourceKey) -> AssetsResult < AssetResourceState >;
+                fn root_dir (& self) -> & Path;
+            }
         }
-
-        fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
-            self.inner.delete_asset(asset_root)
-        }
-
-        fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-            self.inner.open_lru_index_resource()
-        }
-
-        fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-            self.inner.open_pins_index_resource()
-        }
-
         fn open_resource_with_ctx(
             &self,
             key: &ResourceKey,
@@ -826,14 +810,6 @@ mod tests {
             _ctx: Option<Self::Context>,
         ) -> AssetsResult<BaseReader> {
             self.inner.open_resource(key, identity)
-        }
-
-        fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-            self.inner.resource_state(key)
-        }
-
-        fn root_dir(&self) -> &Path {
-            self.inner.root_dir()
         }
     }
 

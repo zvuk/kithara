@@ -360,16 +360,13 @@ where
         self.guard.disarm();
     }
 
-    fn raw_write_handle(&self) -> RawWriteHandle {
-        self.inner.raw_write_handle()
-    }
-
-    fn reader(&self) -> ProcessedReader<W::Reader> {
-        self.build_reader(self.inner.reader())
-    }
-
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.write_at(offset, data)
+    delegate::delegate! {
+        to self.inner {
+            fn raw_write_handle (& self) -> RawWriteHandle;
+            #[expr(self.build_reader($))]
+            fn reader (& self) -> ProcessedReader < W :: Reader >;
+            fn write_at (& self , offset : u64 , data : & [u8]) -> StorageResult < () >;
+        }
     }
 }
 
@@ -412,22 +409,17 @@ where
 {
     type Writer = ProcessedWriter<R::Writer>;
 
-    fn contains_range(&self, range: Range<u64>) -> bool {
-        self.is_readable() && self.inner.contains_range(range)
+    delegate::delegate! {
+        to self.inner {
+            #[expr(self.is_readable() && $)]
+            fn contains_range (& self , range : Range < u64 >) -> bool;
+            fn len (& self) -> Option < u64 >;
+            fn next_gap (& self , from : u64 , limit : u64) -> Option < Range < u64 > >;
+            fn path (& self) -> Option < & Path >;
+            fn read_inflight_at (& self , offset : u64 , buf : & mut [u8]) -> StorageResult < usize >;
+            fn status (& self) -> ResourceStatus;
+        }
     }
-
-    fn len(&self) -> Option<u64> {
-        self.inner.len()
-    }
-
-    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
-        self.inner.next_gap(from, limit)
-    }
-
-    fn path(&self) -> Option<&Path> {
-        self.inner.path()
-    }
-
     fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer>> {
         let inner = self.inner.reactivate()?;
         let ready = self.processor.is_none();
@@ -444,18 +436,6 @@ where
             return Err(StorageError::NotReadable);
         }
         self.inner.read_at(offset, buf)
-    }
-
-    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        // Raw producer read-back: deliberately bypasses the processing gate
-        // (on-commit processing reads the not-yet-processed bytes to transform
-        // them) and the committed snapshot. Not a consumer read — minted from
-        // the writer via `reader()` for `run_process`, not handed to clients.
-        self.inner.read_inflight_at(offset, buf)
-    }
-
-    fn status(&self) -> ResourceStatus {
-        self.inner.status()
     }
 
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {

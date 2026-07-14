@@ -89,18 +89,17 @@ pub struct ProducerHandle {
 }
 
 impl ProducerHandle {
-    /// Aggregate demand watermark across all live consumers.
-    #[must_use]
-    pub fn max_watermark(&self) -> u64 {
-        self.slot.max_watermark()
+    delegate::delegate! {
+        to self.slot {
+            /// Aggregate demand watermark across all live consumers.
+            #[must_use]
+            pub fn max_watermark (& self) -> u64;
+            /// Producer wake notify (woken on attach / read-advance).
+            #[must_use]
+            #[field(&notify)]
+            pub fn notify (& self) -> & Notify;
+        }
     }
-
-    /// Producer wake notify (woken on attach / read-advance).
-    #[must_use]
-    pub fn notify(&self) -> &Notify {
-        &self.slot.notify
-    }
-
     /// Producer cancel token (fires when the last consumer detaches).
     #[must_use]
     pub fn producer_cancel(&self) -> CancelToken {

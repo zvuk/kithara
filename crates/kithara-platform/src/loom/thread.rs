@@ -20,13 +20,12 @@ impl<T> JoinHandle<T> {
         self.finished.load(Ordering::Acquire)
     }
 
-    pub fn join(self) -> std::thread::Result<T> {
-        self.inner.join()
-    }
-
-    #[must_use]
-    pub fn thread(&self) -> &Thread {
-        self.inner.thread()
+    delegate::delegate! {
+        to self.inner {
+            pub fn join (self) -> std :: thread :: Result < T >;
+            #[must_use]
+            pub fn thread (& self) -> & Thread;
+        }
     }
 }
 

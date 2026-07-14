@@ -166,18 +166,16 @@ impl HlsVariant {
         out
     }
 
-    fn dispatchable_size_demand(&self) -> Option<SizeDemand> {
-        self.seek.size_demand.lock().pop_dispatchable()
+    delegate::delegate! {
+        to self.seek.size_demand.lock() {
+            #[call(pop_dispatchable)]
+            fn dispatchable_size_demand (& self) -> Option < SizeDemand >;
+            #[call(enqueue)]
+            pub (super) fn enqueue_size_demand (& self , demand : SizeDemand);
+            #[call(finish)]
+            fn finish_size_demand (& self , demand : SizeDemand);
+        }
     }
-
-    pub(super) fn enqueue_size_demand(&self, demand: SizeDemand) {
-        self.seek.size_demand.lock().enqueue(demand);
-    }
-
-    fn finish_size_demand(&self, demand: SizeDemand) {
-        self.seek.size_demand.lock().finish(demand);
-    }
-
     fn finish_size_probe(
         &self,
         demand: SizeDemand,

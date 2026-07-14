@@ -288,10 +288,20 @@ impl Drop for EngineImpl {
 }
 
 impl Engine for EngineImpl {
-    fn active_slots(&self) -> Vec<SlotId> {
-        self.active_slots.lock().clone()
+    delegate::delegate! {
+        to self.active_slots.lock() {
+            #[call(clone)]
+            fn active_slots (& self) -> Vec < SlotId >;
+            #[call(len)]
+            fn slot_count (& self) -> usize;
+        }
+        to self.config {
+            #[field(channels)]
+            fn master_channels (& self) -> u16;
+            #[field]
+            fn max_slots (& self) -> usize;
+        }
     }
-
     fn allocate_slot(&self) -> Result<SlotId, PlayError> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
@@ -354,20 +364,12 @@ impl Engine for EngineImpl {
         self.running.load(Ordering::Acquire)
     }
 
-    fn master_channels(&self) -> u16 {
-        self.config.channels
-    }
-
     fn master_sample_rate(&self) -> u32 {
         Self::master_sample_rate(self)
     }
 
     fn master_volume(&self) -> f32 {
         self.master_volume.load(Ordering::Relaxed)
-    }
-
-    fn max_slots(&self) -> usize {
-        self.config.max_slots
     }
 
     fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
@@ -410,10 +412,6 @@ impl Engine for EngineImpl {
         }
 
         self.emit(EngineEvent::MasterVolumeChanged { volume: clamped });
-    }
-
-    fn slot_count(&self) -> usize {
-        self.active_slots.lock().len()
     }
 
     fn start(&self) -> Result<(), PlayError> {
