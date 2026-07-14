@@ -174,10 +174,6 @@ impl AndroidMediaExtractor {
         })
     }
 
-    pub(crate) fn track_count(&self) -> usize {
-        self.track_count
-    }
-
     pub(crate) fn track_info(&self, idx: usize) -> DecodeResult<TrackFormatInfo> {
         // SAFETY: extractor is live; the NDK bounds-checks `idx` and
         let fmt_raw = unsafe { AMediaExtractor_getTrackFormat(self.raw.as_ptr(), idx) };

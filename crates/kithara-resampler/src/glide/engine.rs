@@ -40,12 +40,14 @@ mod imp {
         low_pass_q: std::f64::consts::FRAC_1_SQRT_2,
     };
 
+    #[derive(fieldwork::Fieldwork)]
     pub(in crate::glide) struct GlideEngine {
         positions: PcmBuf,
         padded: SmallVec<[PcmBuf; 8]>,
         filtered: SmallVec<[PcmBuf; 8]>,
         filters: SmallVec<[Option<BiquadFilter>; 8]>,
         max_input_frames: usize,
+        #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
         max_output_frames: usize,
         filter_cutoff: Option<f64>,
     }
@@ -111,10 +113,6 @@ mod imp {
             }
             self.filter_cutoff = Some(cutoff);
             Ok(())
-        }
-
-        pub(in crate::glide) fn position_capacity(&self) -> usize {
-            self.max_output_frames
         }
 
         pub(in crate::glide) fn positions_mut(
@@ -268,12 +266,14 @@ mod imp {
         low_pass_q: std::f64::consts::FRAC_1_SQRT_2,
     };
 
+    #[derive(fieldwork::Fieldwork)]
     pub(in crate::glide) struct GlideEngine {
         positions: PcmBuf,
         padded: SmallVec<[PcmBuf; 8]>,
         filtered: SmallVec<[PcmBuf; 8]>,
         filters: SmallVec<[Option<ScalarBiquad>; 8]>,
         max_input_frames: usize,
+        #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
         max_output_frames: usize,
         filter_cutoff: Option<f64>,
     }
@@ -339,10 +339,6 @@ mod imp {
             }
             self.filter_cutoff = Some(cutoff);
             Ok(())
-        }
-
-        pub(in crate::glide) fn position_capacity(&self) -> usize {
-            self.max_output_frames
         }
 
         pub(in crate::glide) fn positions_mut(

@@ -38,12 +38,6 @@ pub(crate) struct Slot<N> {
     pub(crate) is_terminal: bool,
 }
 
-impl<N: Node> Slot<N> {
-    fn is_removable(&self) -> bool {
-        self.is_terminal
-    }
-}
-
 /// Clonable handle to a scheduler.
 pub(crate) struct SchedulerHandle<N> {
     inner: Arc<SchedulerInner<N>>,
@@ -213,7 +207,7 @@ fn run_loop<N: Node, O: SchedulerObserver>(
         let report = produce_pass(&mut slots, &slots_order, &mut observer);
 
         let before = slots.len();
-        slots.retain(|slot| !slot.is_removable());
+        slots.retain(|slot| !slot.is_terminal);
         needs_reorder |= slots.len() < before;
 
         report_outcome(&mut observer, report);

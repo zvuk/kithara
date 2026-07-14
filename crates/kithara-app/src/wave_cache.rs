@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, VecDeque},
-    fmt,
     io::{Error as IoError, ErrorKind},
 };
 
@@ -197,28 +196,16 @@ fn write_resource(
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display)]
 enum AnalysisBytesError {
+    #[display("track analysis blob version {found} != expected {expected}")]
     Version { found: u32, expected: u32 },
+    #[display("track analysis blob has a stale config fingerprint")]
     Fingerprint,
+    #[display("track analysis blob is too large")]
     TooLarge,
+    #[display("track analysis blob is corrupt")]
     Corrupt,
-}
-
-impl fmt::Display for AnalysisBytesError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Version { found, expected } => {
-                write!(
-                    f,
-                    "track analysis blob version {found} != expected {expected}"
-                )
-            }
-            Self::Fingerprint => f.write_str("track analysis blob has a stale config fingerprint"),
-            Self::TooLarge => f.write_str("track analysis blob is too large"),
-            Self::Corrupt => f.write_str("track analysis blob is corrupt"),
-        }
-    }
 }
 
 fn analysis_to_bytes(

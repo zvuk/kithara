@@ -49,6 +49,7 @@ impl<'a> AuthenticationChallenge<'a> {
         Self { challenge }
     }
 
+    #[must_use]
     pub fn is_server_trust(&self) -> bool {
         is_server_trust_challenge(self.challenge)
     }
@@ -73,34 +74,24 @@ pub trait DataTaskCompletion: Send + Sync + 'static {
     fn complete(&self, completion: DataCompletion<'_>);
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct DataCompletion<'a> {
+    #[field(get)]
     data: Option<&'a NSData>,
+    #[field(get)]
     error: Option<&'a NSError>,
     response: Option<&'a NSURLResponse>,
 }
 
 impl<'a> DataCompletion<'a> {
-    pub fn data(&self) -> Option<&'a NSData> {
-        self.data
-    }
-
-    pub fn error(&self) -> Option<&'a NSError> {
-        self.error
-    }
-
     fn new(data: *mut NSData, response: *mut NSURLResponse, error: *mut NSError) -> Self {
-        let error = unsafe {
-            // SAFETY: NSURLSession owns callback pointers for this callback.
-            error.as_ref()
-        };
-        let data = unsafe {
-            // SAFETY: NSURLSession owns callback pointers for this callback.
-            data.as_ref()
-        };
-        let response = unsafe {
-            // SAFETY: NSURLSession owns callback pointers for this callback.
-            response.as_ref()
-        };
+        // SAFETY: NSURLSession owns callback pointers for this callback.
+        let error = unsafe { error.as_ref() };
+        // SAFETY: NSURLSession owns callback pointers for this callback.
+        let data = unsafe { data.as_ref() };
+        // SAFETY: NSURLSession owns callback pointers for this callback.
+        let response = unsafe { response.as_ref() };
         Self {
             data,
             error,
@@ -230,10 +221,8 @@ define_class!(
 impl UrlSessionDelegate {
     pub fn new(events: Arc<dyn UrlSessionEvents>) -> Retained<Self> {
         let this = Self::alloc().set_ivars(DelegateIvars { events });
-        unsafe {
-            // SAFETY: The ivars were initialized before calling NSObject init.
-            msg_send![super(this), init]
-        }
+        // SAFETY: The ivars were initialized before calling NSObject init.
+        unsafe { msg_send![super(this), init] }
     }
 
     fn complete_challenge(
@@ -274,10 +263,8 @@ pub fn data_task_with_completion(
             completion.complete(DataCompletion::new(data, response, error));
         },
     );
-    unsafe {
-        // SAFETY: NSURLSession copies the block before returning the task.
-        session.dataTaskWithRequest_completionHandler(request, &completion)
-    }
+    // SAFETY: NSURLSession copies the block before returning the task.
+    unsafe { session.dataTaskWithRequest_completionHandler(request, &completion) }
 }
 
 pub fn session_with_delegate(
@@ -287,8 +274,8 @@ pub fn session_with_delegate(
 ) -> Retained<NSURLSession> {
     let delegate_ref: &ProtocolObject<dyn NSURLSessionDelegate> =
         ProtocolObject::from_ref(delegate);
+    // SAFETY: The delegate implements NSURLSessionDelegate.
     unsafe {
-        // SAFETY: The delegate implements NSURLSessionDelegate.
         NSURLSession::sessionWithConfiguration_delegate_delegateQueue(
             configuration,
             Some(delegate_ref),
@@ -298,10 +285,8 @@ pub fn session_with_delegate(
 }
 
 pub fn data_bytes(data: &NSData) -> &[u8] {
-    unsafe {
-        // SAFETY: The slice is tied to the borrowed NSData lifetime.
-        data.as_bytes_unchecked()
-    }
+    // SAFETY: The slice is tied to the borrowed NSData lifetime.
+    unsafe { data.as_bytes_unchecked() }
 }
 
 pub fn response_parts(response: &NSURLResponse) -> Option<ResponseParts> {
@@ -316,10 +301,8 @@ pub fn response_parts(response: &NSURLResponse) -> Option<ResponseParts> {
 fn http_response(response: &NSURLResponse) -> Option<&NSHTTPURLResponse> {
     if response.isKindOfClass(NSHTTPURLResponse::class()) {
         let raw = ptr::from_ref(response).cast::<NSHTTPURLResponse>();
-        Some(unsafe {
-            // SAFETY: Foundation reported this object as NSHTTPURLResponse.
-            &*raw
-        })
+        // SAFETY: Foundation reported this object as NSHTTPURLResponse.
+        Some(unsafe { &*raw })
     } else {
         None
     }
@@ -327,10 +310,8 @@ fn http_response(response: &NSURLResponse) -> Option<&NSHTTPURLResponse> {
 
 fn header_pairs(response: &NSHTTPURLResponse) -> Vec<(String, String)> {
     let fields = response.allHeaderFields();
-    let fields = unsafe {
-        // SAFETY: URLSession HTTP header dictionaries use NSString pairs.
-        fields.cast_unchecked::<NSString, NSString>()
-    };
+    // SAFETY: URLSession HTTP header dictionaries use NSString pairs.
+    let fields = unsafe { fields.cast_unchecked::<NSString, NSString>() };
     let (keys, values) = fields.to_vecs();
     keys.into_iter()
         .zip(values)
@@ -341,10 +322,8 @@ fn header_pairs(response: &NSHTTPURLResponse) -> Vec<(String, String)> {
 fn is_server_trust_challenge(challenge: &NSURLAuthenticationChallenge) -> bool {
     let space = challenge.protectionSpace();
     let method = space.authenticationMethod();
-    let server_trust = unsafe {
-        // SAFETY: Foundation owns this constant NSString for the process lifetime.
-        NSURLAuthenticationMethodServerTrust
-    };
+    // SAFETY: Foundation owns this constant NSString for the process lifetime.
+    let server_trust = unsafe { NSURLAuthenticationMethodServerTrust };
     method.isEqualToString(server_trust)
 }
 
@@ -354,15 +333,11 @@ fn server_trust_credential(challenge: &NSURLAuthenticationChallenge) -> *mut NSU
     if trust.is_null() {
         return ptr::null_mut();
     }
-    unsafe {
-        // SAFETY: `credentialForTrust:` is the documented SecTrust constructor.
-        msg_send![NSURLCredential::class(), credentialForTrust: trust]
-    }
+    // SAFETY: `credentialForTrust:` is the documented SecTrust constructor.
+    unsafe { msg_send![NSURLCredential::class(), credentialForTrust: trust] }
 }
 
 fn server_trust(space: &NSURLProtectionSpace) -> *mut SecTrust {
-    unsafe {
-        // SAFETY: Callers already checked for a server-trust protection space.
-        msg_send![space, serverTrust]
-    }
+    // SAFETY: Callers already checked for a server-trust protection space.
+    unsafe { msg_send![space, serverTrust] }
 }

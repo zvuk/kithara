@@ -8,6 +8,11 @@ use crate::{api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl};
 
 impl PlayerImpl {
     delegate! {
+        to self.core {
+            /// Get a reference to the underlying engine.
+            #[field(&engine)]
+            pub fn engine(&self) -> &EngineImpl;
+        }
         to self.core.params {
             /// Whether the built-in linear auto-advance handler is enabled.
             #[must_use]
@@ -38,6 +43,16 @@ impl PlayerImpl {
             #[must_use]
             pub fn worker(&self) -> &AudioWorkerHandle;
         }
+        to self {
+            /// Returns `true` if the player is in playing state.
+            #[expr($.is_some_and(|s| s.playing))]
+            #[call(playback_snapshot)]
+            pub fn is_playing(&self) -> bool;
+            /// Current playback position in seconds.
+            #[expr(Some($?.position))]
+            #[call(playback_snapshot)]
+            pub fn position_seconds(&self) -> Option<f64>;
+        }
     }
 
     /// Current item index in the queue.
@@ -53,11 +68,6 @@ impl PlayerImpl {
     #[must_use]
     pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.phase.lock().abr_handle()
-    }
-
-    /// Get a reference to the underlying engine.
-    pub fn engine(&self) -> &EngineImpl {
-        &self.core.engine
     }
 
     /// Live cost snapshot of the audio engine (decode + effects).
@@ -88,11 +98,6 @@ impl PlayerImpl {
             .and_then(|eq| eq.gain(band))
     }
 
-    /// Returns `true` if the player is in playing state.
-    pub fn is_playing(&self) -> bool {
-        self.playback_snapshot().is_some_and(|s| s.playing)
-    }
-
     /// Get the number of items in the queue (including consumed items).
     pub fn item_count(&self) -> usize {
         self.core.items.item_count()
@@ -106,11 +111,6 @@ impl PlayerImpl {
     pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
         let slot_id = self.slot()?;
         Some(self.core.engine.slot_playback(slot_id)?.snapshot())
-    }
-
-    /// Current playback position in seconds.
-    pub fn position_seconds(&self) -> Option<f64> {
-        Some(self.playback_snapshot()?.position)
     }
 
     /// Get current player status.

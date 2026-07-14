@@ -25,11 +25,14 @@ type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 /// off the player runtime, hands the opened reader to the worker thread,
 /// and keeps at most one run in flight. Dropping it cancels the run and
 /// stops the worker.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct TrackAnalysisRunner {
     worker: Arc<AppAnalysisWorker>,
     current: Option<RunHandle>,
     /// Whether any analyzer is compiled in; without one a decode pass would
     /// produce nothing, so the driver skips analysis entirely.
+    #[field(get = is_active)]
     active: bool,
 }
 
@@ -86,13 +89,6 @@ impl TrackAnalysisRunner {
             prev.cancel.cancel();
             prev.task.abort();
         }
-    }
-
-    /// `false` when no analyzer is configured (`builder.is_empty()`) — the
-    /// runtime signal to skip analysis scheduling.
-    #[must_use]
-    pub fn is_active(&self) -> bool {
-        self.active
     }
 }
 

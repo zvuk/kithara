@@ -27,6 +27,26 @@ count_if_let = false
 # decision-table anti-pattern is meaningful at 4+. See module docs.
 warn_streak = 4
 
+[derivable_delegation]
+enabled = true
+trait_min_methods = 2
+inherent_min_methods = 2
+blocking_impl_attrs = ["async_trait", "uniffi::export", "wasm_bindgen"]
+keep_manual_method_attrs = []
+
+[derivable_from]
+enabled = true
+
+[derivable_deref]
+enabled = true
+
+[derivable_display]
+enabled = true
+
+[derivable_getter]
+enabled = true
+qualified_deref_remaps = [{ field_type = "PathBuf", scoped_name = "Path" }]
+
 [retry_fallback]
 # retry_fallback flags retry/fallback vocabulary (max_retries, should_retry,
 # attempt, ...) to catch try-A-else-B chains that paper over state bugs. The

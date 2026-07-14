@@ -6,24 +6,12 @@ use url::Url;
 use super::config::ResourceConfig;
 
 /// Source of an audio resource: either a URL or a local file path.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, derive_more::From, PartialEq, Eq)]
 pub enum ResourceSrc {
     /// Remote resource accessed via URL (HTTP/HTTPS, or other schemes).
     Url(Url),
     /// Local file accessed directly from disk.
     Path(PathBuf),
-}
-
-impl From<Url> for ResourceSrc {
-    fn from(url: Url) -> Self {
-        Self::Url(url)
-    }
-}
-
-impl From<PathBuf> for ResourceSrc {
-    fn from(path: PathBuf) -> Self {
-        Self::Path(path)
-    }
 }
 
 impl fmt::Display for ResourceSrc {

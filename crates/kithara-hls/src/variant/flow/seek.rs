@@ -7,8 +7,23 @@ use super::{HlsVariant, seqlock::AliasSnapshot, size::ExactSeekDemand};
 use crate::HlsError;
 
 impl HlsVariant {
-    pub(super) fn clear_seek_alias(&self) {
-        self.seek.alias.clear();
+    delegate::delegate! {
+        to self.seek.alias {
+            #[call(clear)]
+            pub(super) fn clear_seek_alias(&self);
+            #[call(set)]
+            pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32);
+        }
+        to self {
+            /// Seek reset is layout-only. Active body fetches stay live: segment-aware
+            /// decoders re-resolve media ranges by segment index, and canceling the
+            /// in-flight target segment would put a streaming seek behind tail prefetch.
+            #[call(reset_layout_to_full_range)]
+            pub(crate) fn reset_for_seek(&self);
+            #[expr($.and_then(|idx| u32::try_from(idx).ok()))]
+            #[call(index_at_time)]
+            pub(crate) fn segment_index_at_time(&self, t: Duration) -> Option<u32>;
+        }
     }
 
     pub(super) fn clear_seek_alias_if_moved(&self, pos: u64) {
@@ -29,13 +44,6 @@ impl HlsVariant {
         self.seek
             .segment_aware_tail
             .store(Self::NO_SEEK_TAIL, Ordering::Release);
-    }
-
-    /// Seek reset is layout-only. Active body fetches stay live: segment-aware
-    /// decoders re-resolve media ranges by segment index, and canceling the
-    /// in-flight target segment would put a streaming seek behind tail prefetch.
-    pub(crate) fn reset_for_seek(&self) {
-        self.reset_layout_to_full_range();
     }
 
     /// Reset variant to a "fresh" single-variant layout: `byte_shift = 0`,
@@ -164,15 +172,6 @@ impl HlsVariant {
             return false;
         };
         !tail.is_empty() && tail.iter().all(|segment| segment.size().is_exact())
-    }
-
-    pub(crate) fn segment_index_at_time(&self, t: Duration) -> Option<u32> {
-        self.index_at_time(t)
-            .and_then(|idx| u32::try_from(idx).ok())
-    }
-
-    pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32) {
-        self.seek.alias.set(anchor, segment);
     }
 
     pub(super) fn set_segment_aware_seek_tail(&self, segment: u32) {

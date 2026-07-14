@@ -129,7 +129,7 @@ fn main() -> AppResult {
             .evict_config(EvictConfig::from(&store_options))
             .pool(byte_pool.clone())
             .maybe_cache_capacity(store_options.cache_capacity)
-            .maybe_flush_hub(store_options.flush_hub.clone())
+            .maybe_flush_hub(store_options.flush_hub)
             .build(),
     );
     let config = AppConfig::builder()

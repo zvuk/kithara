@@ -10,7 +10,7 @@
 
 # kithara-encode
 
-Synchronous audio encoding library with a thin facade, FFmpeg-backed implementations, and an in-tree fdk-aac HE-AAC v2 packaged encoder. `EncoderFactory` creates packaged access units for fMP4/HLS helpers and complete encoded bytes for test fixture routes.
+Synchronous audio encoding library with a thin facade, FFmpeg-backed implementations, and an in-tree fdk-aac HE-AAC v1/v2 packaged encoder. `EncoderFactory` creates packaged access units for fMP4/HLS helpers and complete encoded bytes for test fixture routes.
 
 ## Usage
 

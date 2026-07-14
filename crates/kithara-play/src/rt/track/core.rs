@@ -27,16 +27,20 @@ pub struct TrackParams {
 ///
 /// Manages the `MixDSP` fade, track state, cached position/duration,
 /// and notification logic for a single loaded track.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct PlayerTrack {
     pub(super) resource: Box<PlayerResource>,
     pub(super) fade: TrackFade,
     pub(super) item_id: Option<Arc<str>>,
+    #[field(get, copy)]
     pub(super) state: TrackState,
     /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
     /// Marks a played-out track as eligible to be kept warm at end-of-queue
     /// and revived by a later in-range seek (Superpowered-style resume).
     /// Cleared by `seek`/`play`. A `Finished` state from `stop()` or a
     /// faded-out crossfade leaves this `false`, so those are discarded as usual.
+    #[field(get)]
     pub(super) ended_at_eof: bool,
     pub(super) triggers: TrackTriggers,
     pub(super) state_dirty: bool,
@@ -105,14 +109,6 @@ impl PlayerTrack {
     #[must_use]
     pub fn duration(&self) -> f64 {
         observed_duration(self.observed_duration, self.resource.duration())
-    }
-
-    /// Whether this track reached *natural* EOF (vs `stop()` / faded-out).
-    /// A natural-EOF `Finished` track is kept warm at end-of-queue and can be
-    /// revived by an in-range seek. See [`Self::ended_at_eof`].
-    #[must_use]
-    pub fn ended_at_eof(&self) -> bool {
-        self.ended_at_eof
     }
 
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
@@ -185,12 +181,6 @@ impl PlayerTrack {
     #[must_use]
     pub fn src(&self) -> &Arc<str> {
         self.resource.src()
-    }
-
-    /// Current track state.
-    #[must_use]
-    pub fn state(&self) -> TrackState {
-        self.state
     }
 
     /// Instantly stop (silent, finished state).

@@ -221,21 +221,20 @@ impl PlayerNodeProcessor {
         &self.playback
     }
 
-    /// Look up a track by its source identifier.
-    #[must_use]
-    pub fn track(&self, src: &Arc<str>) -> Option<&PlayerTrack> {
-        self.tracks.get(src)
-    }
-
-    /// Number of tracks currently held in the processor arena.
-    #[must_use]
-    pub fn track_count(&self) -> usize {
-        self.tracks.len()
-    }
-
-    /// Look up a track by its source identifier (mutable).
-    pub fn track_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack> {
-        self.tracks.get_mut(src)
+    delegate::delegate! {
+        to self.tracks {
+            /// Look up a track by its source identifier.
+            #[must_use]
+            #[call(get)]
+            pub fn track(&self, src: &Arc<str>) -> Option<&PlayerTrack>;
+            /// Number of tracks currently held in the processor arena.
+            #[must_use]
+            #[call(len)]
+            pub fn track_count(&self) -> usize;
+            /// Look up a track by its source identifier (mutable).
+            #[call(get_mut)]
+            pub fn track_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack>;
+        }
     }
 
     pub fn render_audio(

@@ -158,16 +158,15 @@ pub trait RetryPolicyTrait: Send + Sync {
 }
 
 impl RetryPolicyTrait for DefaultRetryPolicy {
-    fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        self.delay_for_attempt(attempt)
+    delegate::delegate! {
+        to self {
+            fn delay_for_attempt(&self, attempt: u32) -> Duration;
+            fn should_retry(&self, error: &NetError, attempt: u32) -> bool;
+        }
     }
 
     fn max_attempts(&self) -> u32 {
         self.policy.max_retries
-    }
-
-    fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
-        self.should_retry(error, attempt)
     }
 }
 

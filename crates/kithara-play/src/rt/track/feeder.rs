@@ -50,6 +50,21 @@ pub enum ReadOutcome {
 }
 
 impl PlayerResource {
+    delegate::delegate! {
+        to self.resource.get() {
+            /// Total duration in seconds. Returns 0.0 if unknown.
+            #[must_use]
+            #[expr($.map_or(0.0, |d| d.as_secs_f64()))]
+            pub fn duration(&self) -> f64;
+            /// Set the target sample rate of the audio host.
+            pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
+            /// Set the playback rate for the active stretch controls.
+            pub(crate) fn set_playback_rate(&self, rate: f32);
+            /// Update the scheduling priority hint for the shared worker.
+            pub(crate) fn set_service_class(&self, class: ServiceClass);
+        }
+    }
+
     /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
     const BUFFER_DURATION_DIVISOR: usize = 5;
 
@@ -99,15 +114,6 @@ impl PlayerResource {
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
         self.resource.get().decoded_frontier().as_secs_f64()
-    }
-
-    /// Total duration in seconds. Returns 0.0 if unknown.
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        self.resource
-            .get()
-            .duration()
-            .map_or(0.0, |d| d.as_secs_f64())
     }
 
     fn fill_scratch(&mut self, target_frames: usize) -> bool {
@@ -249,20 +255,5 @@ impl PlayerResource {
                 warn!("failed to seek: {err}");
             }
         }
-    }
-
-    /// Set the target sample rate of the audio host.
-    pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
-        self.resource.get().set_host_sample_rate(sample_rate);
-    }
-
-    /// Set the playback rate for the active stretch controls.
-    pub(crate) fn set_playback_rate(&self, rate: f32) {
-        self.resource.get().set_playback_rate(rate);
-    }
-
-    /// Update the scheduling priority hint for the shared worker.
-    pub(crate) fn set_service_class(&self, class: ServiceClass) {
-        self.resource.get().set_service_class(class);
     }
 }

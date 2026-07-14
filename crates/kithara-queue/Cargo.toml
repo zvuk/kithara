@@ -21,6 +21,7 @@ backend-web-audio = ["kithara-play/backend-web-audio", "kithara-play/wasm-bindge
 # Software decoder pass-through (see kithara-play). Required unless an
 # explicit hardware backend feature is enabled.
 symphonia = ["kithara-play/symphonia"]
+webcodecs = ["kithara-play/webcodecs"]
 fdk-aac = ["kithara-play/fdk-aac"]
 apple = ["kithara-play/apple"]
 apple-fused-src = ["kithara-play/apple-fused-src"]
@@ -36,6 +37,8 @@ kithara-play = { workspace = true, default-features = false }
 
 bon = { workspace = true }
 delegate = { workspace = true }
+derive_more = { workspace = true }
+fieldwork = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

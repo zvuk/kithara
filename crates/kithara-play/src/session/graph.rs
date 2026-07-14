@@ -140,8 +140,7 @@ pub(super) mod lifecycle {
         player: &mut PlayerState,
     ) {
         let player_id = player.player_id;
-        let slots = player.slots.drain(..).collect::<Vec<_>>();
-        for slot in slots {
+        for slot in player.slots.drain(..) {
             if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
                 warn!(player_id, ?err, "failed to remove slot vol_pan node");
             }

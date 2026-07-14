@@ -236,16 +236,19 @@ impl Assets for MemAssetStore {
         Capabilities::CACHE | Capabilities::PROCESSING
     }
 
-    fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
-        self.deleter.delete_asset(asset_root)
-    }
-
-    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(StorageResource::from(MemResource::new(self.cancel.clone())))
-    }
-
-    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(StorageResource::from(MemResource::new(self.cancel.clone())))
+    delegate::delegate! {
+        to self.deleter {
+            fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
+            fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
+        }
+        to self.cancel {
+            #[expr(Ok(StorageResource::from(MemResource::new($))))]
+            #[call(clone)]
+            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            #[expr(Ok(StorageResource::from(MemResource::new($))))]
+            #[call(clone)]
+            fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+        }
     }
 
     fn open_resource_with_ctx(
@@ -266,10 +269,6 @@ impl Assets for MemAssetStore {
         }
 
         Err(IoError::new(ErrorKind::NotFound, "resource missing").into())
-    }
-
-    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        self.deleter.remove_resource(key)
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
