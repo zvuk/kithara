@@ -253,14 +253,14 @@ impl Harness {
             }
         });
 
-        let mut cfg = ResourceConfig::for_src(master.as_str())
+        let cfg = ResourceConfig::for_src(master.as_str())
             .expect("valid URL")
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader)
             .store(store)
+            .initial_abr_mode(AbrMode::Auto(None))
             .build();
-        cfg.initial_abr_mode = AbrMode::Auto(None);
         let mut rx = queue.subscribe();
         let id = queue.append(TrackSource::Config(Box::new(cfg)));
 

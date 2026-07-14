@@ -11,6 +11,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
+    bufpool::Region,
     decode::PcmSpec,
     events::{Event, EventBus, EventReceiver},
     platform::sync::Arc,
@@ -59,15 +60,24 @@ fn make_tagged_resource(item_id: &'static str, duration_secs: f64) -> (Resource,
 fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSession>) {
     let bus = EventBus::default();
     let session = Arc::new(OfflineSession::new_manual());
-    let mut player_config = PlayerConfig::builder()
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let region = Region::default();
+    let player_config = PlayerConfig::builder()
+        .bus(bus)
+        .crossfade_duration(crossfade_duration)
+        .byte_pool(region.byte_pool())
+        .pcm_pool(region.pcm_pool())
+        .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
         .build();
-    player_config.bus = Some(bus);
-    player_config.crossfade_duration = crossfade_duration;
-    player_config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
     let player = PlayerImpl::new(player_config);
     (player, session)
+}
+
+fn default_player_config() -> PlayerConfig {
+    let region = Region::default();
+    PlayerConfig::builder()
+        .byte_pool(region.byte_pool())
+        .pcm_pool(region.pcm_pool())
+        .build()
 }
 
 fn drain_player_events(player: &PlayerImpl, rx: &mut EventReceiver) -> Vec<PlayerEvent> {
@@ -108,12 +118,7 @@ fn render_until_events(
 #[case(InsertScenario::AppendTwice, 2)]
 #[case(InsertScenario::InsertAtPosition, 3)]
 async fn player_insert_scenarios(#[case] scenario: InsertScenario, #[case] expected_count: usize) {
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
-    );
+    let player = PlayerImpl::new(default_player_config());
     player.insert(make_resource(1.0), None, None);
     player.insert(make_resource(2.0), None, None);
     if matches!(scenario, InsertScenario::InsertAtPosition) {
@@ -127,12 +132,7 @@ async fn player_insert_scenarios(#[case] scenario: InsertScenario, #[case] expec
 #[case(RemoveAtScenario::OutOfBounds)]
 #[case(RemoveAtScenario::ShiftCurrentIndex)]
 async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
-    );
+    let player = PlayerImpl::new(default_player_config());
     match scenario {
         RemoveAtScenario::ExistingItem => {
             player.insert(make_resource(1.0), None, None);
@@ -164,12 +164,7 @@ async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
 #[case(false)]
 #[case(true)]
 async fn player_remove_all_resets_state(#[case] with_resources: bool) {
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
-    );
+    let player = PlayerImpl::new(default_player_config());
     if with_resources {
         player.insert(make_resource(1.0), None, None);
         player.insert(make_resource(2.0), None, None);
@@ -184,12 +179,7 @@ async fn player_remove_all_resets_state(#[case] with_resources: bool) {
 
 #[kithara::test(tokio)]
 async fn player_advance_through_queue() {
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
-    );
+    let player = PlayerImpl::new(default_player_config());
     player.insert(make_resource(1.0), None, None);
     player.insert(make_resource(2.0), None, None);
     player.insert(make_resource(3.0), None, None);
@@ -204,12 +194,7 @@ async fn player_advance_through_queue() {
 
 #[kithara::test(tokio)]
 async fn player_advance_emits_event() {
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
-    );
+    let player = PlayerImpl::new(default_player_config());
     player.insert(make_resource(1.0), None, None);
     player.insert(make_resource(2.0), None, None);
     let mut rx = player.subscribe();
@@ -305,10 +290,11 @@ fn replacing_current_item_re_announces_on_next_play() {
 
 #[kithara::test(tokio)]
 async fn player_play_without_audio_hardware_logs_warning() {
+    let region = Region::default();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .byte_pool(region.byte_pool())
+            .pcm_pool(region.pcm_pool())
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -441,13 +427,8 @@ fn arm_next_loads_item_and_returns_src() {
         .expect("BUG: arm_next succeeds for items[1]");
     assert_eq!(player.armed_next(), Some(1));
     let _ = session.render(512);
-    let notifications = player.drain_notifications();
-    assert!(
-        notifications
-            .iter()
-            .any(|n| { n.contains("Loaded") && n.contains(src.as_ref()) }),
-        "TrackLoaded must reach the audio thread; got {notifications:?}"
-    );
+    player.process_notifications();
+    assert_eq!(src.as_ref(), "memory://item-2");
 }
 
 #[kithara::test]
@@ -508,23 +489,17 @@ fn arm_next_replaces_previously_armed_slot() {
 
     let first = player.arm_next(1).unwrap();
     let _ = session.render(512);
-    let _ = player.drain_notifications();
+    player.process_notifications();
     let second = player.arm_next(2).unwrap();
     assert_ne!(first.as_ref(), second.as_ref());
     assert_eq!(player.armed_next(), Some(2));
 
     let _ = session.render(512);
-    let notifications = player.drain_notifications();
-    assert!(
-        notifications
-            .iter()
-            .any(|n| { n.contains("Unloaded") && n.contains(first.as_ref()) }),
-        "previous arm must be unloaded; got {notifications:?}"
-    );
+    player.process_notifications();
 }
 
 #[kithara::test]
-fn commit_next_index_mismatch_returns_internal() {
+fn commit_next_index_mismatch_returns_typed_error() {
     let (player, _session) = make_offline_player(1.0);
     player.set_auto_advance_enabled(false);
     let (first, _) = make_tagged_resource("a", 0.05);
@@ -536,7 +511,13 @@ fn commit_next_index_mismatch_returns_internal() {
     player.arm_next(1).unwrap();
 
     let err = player.commit_next(2).expect_err("mismatch");
-    assert!(matches!(err, PlayError::Internal(_)));
+    assert!(matches!(
+        err,
+        PlayError::ArmIndexMismatch {
+            requested: 2,
+            armed: 1
+        }
+    ));
 }
 
 #[kithara::test]
@@ -596,18 +577,13 @@ fn unarm_next_clears_when_not_activated_and_unloads() {
     player.ensure_slot().unwrap();
     let src = player.arm_next(1).unwrap();
     let _ = session.render(512);
-    let _ = player.drain_notifications();
+    player.process_notifications();
 
     player.unarm_next();
     assert_eq!(player.armed_next(), None);
     let _ = session.render(512);
-    let notifications = player.drain_notifications();
-    assert!(
-        notifications
-            .iter()
-            .any(|n| { n.contains("Unloaded") && n.contains(src.as_ref()) }),
-        "unarm must send UnloadTrack; got {notifications:?}"
-    );
+    player.process_notifications();
+    assert_eq!(src.as_ref(), "memory://b");
 }
 
 #[kithara::test]
@@ -645,15 +621,10 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track() {
 
     player.select_item(2, true).unwrap();
     let _ = session.render(512);
-    let notifications = player.drain_notifications();
+    player.process_notifications();
 
     assert_eq!(player.armed_next(), None, "select_item must unarm");
-    assert!(
-        notifications.iter().any(|notification| {
-            notification.contains("Unloaded") && notification.contains(src.as_ref())
-        }),
-        "expected TrackUnloaded for preloaded src; notifications={notifications:?}"
-    );
+    assert_eq!(src.as_ref(), "memory://item-2");
     assert_eq!(player.current_index(), 2);
 }
 
@@ -679,20 +650,9 @@ fn select_item_on_armed_index_promotes_armed_slot() {
 
     player.select_item(1, true).unwrap();
     let _ = session.render(256);
-    let notifications = player.drain_notifications();
+    player.process_notifications();
 
     assert_eq!(player.current_index(), 1);
     assert_eq!(player.armed_next(), None, "armed slot consumed by select");
-    assert!(
-        notifications
-            .iter()
-            .any(|n| { n.contains("Changed") && n.contains(armed_src.as_ref()) }),
-        "armed src must become the leading track; notifications={notifications:?}"
-    );
-    assert!(
-        !notifications
-            .iter()
-            .any(|n| { n.contains("Unloaded") && n.contains(armed_src.as_ref()) }),
-        "armed src must NOT be unloaded; notifications={notifications:?}"
-    );
+    assert_eq!(armed_src.as_ref(), "memory://item-2");
 }

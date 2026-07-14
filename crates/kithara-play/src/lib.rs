@@ -2,70 +2,44 @@
 #![cfg_attr(all(), allow(clippy::missing_errors_doc))]
 #![cfg_attr(rtsan, feature(sanitize))]
 
-#[cfg(all(target_arch = "wasm32", not(feature = "backend-web-audio")))]
-compile_error!("kithara-play: wasm32 build requires `backend-web-audio`");
-
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm-bindgen")))]
-compile_error!("kithara-play: wasm32 build requires `wasm-bindgen`");
-
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "backend-cpal")))]
-compile_error!("kithara-play: non-wasm build requires `backend-cpal`");
-
 mod error;
-mod events;
-mod metadata;
-mod time;
-mod types;
+mod guard;
 
-pub mod impls;
-pub mod traits;
+pub mod api;
+pub mod bridge;
+pub mod engine;
+pub mod player;
+pub mod resource;
+pub mod rt;
+pub mod session;
 
 #[cfg(target_arch = "wasm32")]
-pub mod wasm_support;
+pub mod wasm;
 
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
+pub use api::{
+    DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlayerEvent,
+    PlayerStatus, RouteChangeReason, SessionDuckingMode, SessionEvent, SlotId, TimeControlStatus,
+    TimeRange, WaitingReason,
+};
+pub use bridge::{
+    AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
+    PlayerNotification, Reply, SessionDispatcher, SessionError, SessionHandle, SessionState,
+    SharedEq, SlotControl, StartStreamFn, TrackPlaybackStopReason, TrackState, TrackTransition,
+    run_cmd,
+};
+pub use engine::{EngineConfig, EngineImpl};
 pub use error::PlayError;
-pub use events::{
-    DjEvent, EngineEvent, InterruptionKind, ItemEvent, PlayerEvent, RouteChangeReason, SessionEvent,
-};
-pub use impls::{
-    PlaybackResamplerBackend,
-    config::{ResourceConfig, ResourceSrc},
-    engine::{EngineConfig, EngineImpl},
-    player::{PlayerConfig, PlayerImpl, SelectTransition},
-    player_node::PlayerNode,
-    resource::Resource,
-    session::{
-        AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionState,
-        StartStreamFn, run_cmd,
-    },
-    shared_eq::SharedEq,
-    shared_player_state::PlaybackSnapshot,
-    source_type::SourceType,
-};
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::{
     AudioWorkerHandle, EngineLoadSnapshot, SeekOutcome, ServiceClass, StretchControls,
 };
 pub use kithara_net::Headers;
-pub use metadata::{Artwork, Metadata};
-pub use time::MediaTime;
-pub use traits::{
-    dj,
-    dj::{
-        bpm::{BeatGrid, BpmInfo, GridSegment},
-        crossfade::{CrossfadeConfig, CrossfadeCurve},
-        eq::Equalizer,
-    },
-    engine::Engine,
-    item::PlayerItem,
-    player::Player,
-    queue::QueuePlayer,
-    session::{PortDescription, PortType, RouteDescription},
+pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
+pub use resource::{
+    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
+    default_resource_decoder_config,
 };
-pub use types::{
-    ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId, TimeControlStatus, TimeRange,
-    WaitingReason,
-};
+pub use rt::PlayerNode;

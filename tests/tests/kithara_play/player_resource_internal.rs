@@ -20,7 +20,7 @@ use kithara::{
     platform::{sync::Arc, time::Duration},
     play::{
         Resource,
-        impls::player_resource::{PlayerResource, ReadOutcome as BlockReadOutcome},
+        rt::track::{PlayerResource, ReadOutcome as BlockReadOutcome},
     },
 };
 use kithara_integration_tests::audio_mock::TestPcmReader;

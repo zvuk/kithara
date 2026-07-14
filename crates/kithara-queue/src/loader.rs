@@ -59,8 +59,8 @@ impl Loader {
         let config = match source {
             TrackSource::Uri(url) => ResourceConfig::new(
                 &url,
-                self.player.config().byte_pool.clone(),
-                self.player.config().pcm_pool.clone(),
+                self.player.byte_pool().clone(),
+                self.player.pcm_pool().clone(),
             )
             .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
             TrackSource::Config(boxed) => *boxed,
@@ -72,7 +72,7 @@ impl Loader {
     /// for applying it via `PlayerImpl::replace_item` and emitting [`TrackStatus::Loaded`].
     async fn load(&self, id: TrackId, config: ResourceConfig) -> Result<Resource, QueueError> {
         let slow_watcher =
-            Self::watch_for_slow_status(id, config.bus.clone(), Arc::clone(&self.tracks));
+            Self::watch_for_slow_status(id, config.bus().cloned(), Arc::clone(&self.tracks));
         let resource_fut = async {
             Resource::new(config)
                 .await
@@ -122,7 +122,7 @@ impl Loader {
         source: TrackSource,
     ) -> Result<(ResourceConfig, CancelToken), QueueError> {
         let config = self.build_config(source)?;
-        let Some(cancel) = config.cancel.clone() else {
+        let Some(cancel) = config.cancel().cloned() else {
             return Err(QueueError::Resource(format!(
                 "track {id:?}: resource config missing per-track cancel"
             )));
@@ -294,7 +294,7 @@ mod tests {
             panic!("build_config should succeed");
         };
         assert!(
-            (returned.preferred_peak_bitrate - 321.0).abs() < f64::EPSILON,
+            (returned.preferred_peak_bitrate() - 321.0).abs() < f64::EPSILON,
             "caller-set fields must be preserved"
         );
     }

@@ -10,7 +10,7 @@ use kithara_platform::{
     time::{Duration, sleep},
     tokio::task::spawn as task_spawn,
 };
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
+use kithara_play::{ResourceConfig, wasm};
 use kithara_queue::{Queue, QueueConfig, TrackId, TrackSource};
 
 use crate::{
@@ -18,7 +18,7 @@ use crate::{
     web::{commands::WorkerCmd, key_processor_bridge},
 };
 
-/// Player-wide DRM, network, and buffer-pool state owned by the engine Worker, parallel to
+/// Player-wide DRM + network state owned by the engine Worker, parallel to
 /// the `key_options` + `player_headers` fields on
 /// [`NativeInner`](crate::native::inner::NativeInner). Held in a
 /// `RefCell` shared across the worker's command loop: setters mutate it,
@@ -41,7 +41,10 @@ macro_rules! clog {
 /// Creates and owns the [`Queue`] (mirroring
 /// [`NativeInner`](crate::native::inner::NativeInner)'s construction),
 /// spawns a periodic `tick` loop, then drives the command channel.
-pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
+pub(crate) fn worker_main(
+    cmd_rx: mpsc::Receiver<WorkerCmd>,
+    session_tx: mpsc::Sender<kithara_play::CmdMsg>,
+) {
     /// Default crossfade window, in seconds. Mirrors the legacy worker.
     const CROSSFADE_SECONDS: f32 = 5.0;
 
@@ -53,14 +56,16 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     keep_worker_alive();
 
     task_spawn(async move {
+        let session = wasm::remote_session(session_tx);
         let state = BuildState::default();
-        let player = Arc::new(PlayerImpl::new(
-            PlayerConfig::builder()
+        let player = Arc::new(kithara_play::PlayerImpl::new(
+            kithara_play::PlayerConfig::builder()
                 .byte_pool(state.region.byte_pool())
                 .pcm_pool(state.region.pcm_pool())
+                .session(session.dispatcher())
                 .build(),
         ));
-        let queue = Rc::new(Queue::new(QueueConfig::default().with_player(player)));
+        let queue = Rc::new(Queue::new(QueueConfig::builder().player(player).build()));
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
 
         let build_state = Rc::new(RefCell::new(state));
@@ -279,10 +284,10 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
         Ok(builder) => {
             let headers = (!state.headers.is_empty()).then(|| state.headers.clone());
             let config = builder
-                .byte_pool(state.region.byte_pool())
-                .pcm_pool(state.region.pcm_pool())
                 .keys(state.keys.clone())
                 .maybe_headers(headers.map(Into::into))
+                .byte_pool(state.region.byte_pool())
+                .pcm_pool(state.region.pcm_pool())
                 .build();
             TrackSource::Config(Box::new(config))
         }

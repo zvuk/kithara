@@ -92,9 +92,9 @@ fn bench_gapless_trim(c: &mut Criterion) {
             rt.block_on(async {
                 let config =
                     AudioConfig::<File>::for_stream(FileConfig::new(file_path.clone().into()))
+                        .hint("mp3".to_string())
                         .byte_pool(BytePool::default())
                         .pcm_pool(PcmPool::default())
-                        .hint("mp3".to_string())
                         .build();
                 let mut audio = Audio::<Stream<File>>::new(config)
                     .await

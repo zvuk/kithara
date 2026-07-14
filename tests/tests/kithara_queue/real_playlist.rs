@@ -2,7 +2,6 @@
 
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
-    audio::AudioDecoderConfig,
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
@@ -18,7 +17,7 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig, sources::build_source};
+use kithara_app::{baked, config::AppConfig};
 use kithara_integration_tests::{
     TestTempDir, Xorshift64, kithara,
     offline::OfflineSession,
@@ -47,19 +46,14 @@ fn build_track_source(
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> TrackSource {
-    match build_source(url, &ctx.config) {
-        TrackSource::Config(mut cfg) => {
-            cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder = AudioDecoderConfig::builder()
-                .backend(backend)
-                .gapless_mode(cfg.decoder.gapless_mode())
-                .maybe_resampler(cfg.decoder.resampler().cloned())
-                .build();
-            cfg.initial_abr_mode = abr;
-            TrackSource::Config(cfg)
-        }
-        other => other,
-    }
+    super::app_track_source(
+        url,
+        &ctx.config,
+        StoreOptions::new(ctx.cache.path()),
+        backend,
+        abr,
+        None,
+    )
 }
 
 mod test_statics {

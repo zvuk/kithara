@@ -5,13 +5,13 @@ use std::path::Path;
 use kithara::{
     assets::StoreOptions,
     platform::{sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerEvent, PlayerImpl, Resource, ResourceConfig},
+    play::{PlayerEvent, PlayerImpl, Resource, ResourceConfig},
 };
 use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara, temp_dir,
 };
 
-use super::offline_player_harness::OfflinePlayerHarness;
+use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -26,9 +26,7 @@ const STARTUP_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -135,9 +133,9 @@ async fn make_signal_resource(
     let url = server.sine(&spec, freq_hz).await;
     let mut config = ResourceConfig::for_src(url.as_str())
         .expect("valid signal fixture URL")
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(StoreOptions::new(cache_dir))
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     config = player.prepare_config(config);
 

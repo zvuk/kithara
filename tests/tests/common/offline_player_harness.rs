@@ -1,6 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    audio::{EqBandConfig, StretchControls},
+    bufpool::Region,
+    decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
     platform::sync::{Arc, Mutex},
     play::{PlayerConfig, PlayerImpl, SessionDispatcher},
@@ -13,11 +16,31 @@ pub(crate) struct OfflinePlayerHarness {
     session: Arc<OfflineSession>,
 }
 
+#[derive(Clone, bon::Builder)]
+pub(crate) struct OfflinePlayerOptions {
+    #[builder(default = 1.0)]
+    crossfade_duration: f32,
+    eq_layout: Option<Vec<EqBandConfig>>,
+    #[builder(default)]
+    gapless_mode: GaplessMode,
+    timestretch: Option<Arc<StretchControls>>,
+}
+
 impl OfflinePlayerHarness {
-    pub(crate) fn with_sample_rate(mut player_config: PlayerConfig, sample_rate: u32) -> Self {
+    pub(crate) fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
         let session = Arc::new(OfflineSession::new_manual());
-        player_config.sample_rate = sample_rate;
-        player_config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
+        let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
+        let region = Region::default();
+        let player_config = PlayerConfig::builder()
+            .crossfade_duration(options.crossfade_duration)
+            .gapless_mode(options.gapless_mode)
+            .sample_rate(sample_rate)
+            .session(Arc::clone(&session_dispatcher))
+            .byte_pool(region.byte_pool())
+            .pcm_pool(region.pcm_pool())
+            .maybe_eq_layout(options.eq_layout)
+            .maybe_timestretch(options.timestretch)
+            .build();
 
         let player = Arc::new(PlayerImpl::new(player_config));
         let events = player.subscribe();

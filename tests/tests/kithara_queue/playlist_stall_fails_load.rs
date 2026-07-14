@@ -7,8 +7,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        time,
-        time::{Duration, Instant, timeout},
+        time::{self, Duration, Instant, timeout},
         tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
@@ -53,6 +52,17 @@ async fn wait_for_failed(
     ))
 }
 
+fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn(async move {
+        loop {
+            time::sleep(Duration::from_millis(50)).await;
+            if queue.tick().is_err() {
+                break;
+            }
+        }
+    })
+}
+
 /// A master-playlist GET whose body stalls after the first bytes (headers
 /// sent, connection open, no further data — the throttling-CDN shape) must
 /// fail the track load with a typed error within the net budget
@@ -94,15 +104,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
             .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = spawn_ticker(Arc::clone(&queue));
 
     let cfg = ResourceConfig::for_src(url.as_str())
         .expect("valid URL")
