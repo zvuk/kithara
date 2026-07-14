@@ -821,20 +821,25 @@ impl ByteMap for HlsCoord {
         self.seek_time_anchor(position)
     }
 
-    fn init_segment_range(&self) -> Range<u64> {
-        self.active().map(|v| v.init_byte_range()).unwrap_or(0..0)
-    }
-
-    fn len(&self) -> Option<u64> {
-        self.active()?.stream_len()
+    delegate! {
+        to self {
+            #[expr($.map(|v| v.init_byte_range()).unwrap_or(0..0))]
+            #[call(active)]
+            fn init_segment_range(&self) -> Range<u64>;
+            #[expr($?.stream_len())]
+            #[call(active)]
+            fn len(&self) -> Option<u64>;
+            #[expr($.descriptor_at_byte(byte))]
+            #[call(variant_serving)]
+            fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor>;
+            #[expr(Some($?.num_segments()))]
+            #[call(active)]
+            fn segment_count(&self) -> Option<u32>;
+        }
     }
 
     fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
         self.active()?.descriptor_after_byte(byte)
-    }
-
-    fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        self.variant_serving(byte).descriptor_at_byte(byte)
     }
 
     fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
@@ -843,10 +848,6 @@ impl ByteMap for HlsCoord {
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         self.active()?.descriptor_at_time(t)
-    }
-
-    fn segment_count(&self) -> Option<u32> {
-        Some(self.active()?.num_segments())
     }
 }
 

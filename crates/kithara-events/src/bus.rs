@@ -25,9 +25,11 @@ struct BusRegistry {
 /// publisher's channel and all ancestor channels (topic-based routing).
 /// Subscribers only receive events from their scope's subtree — zero
 /// wasted recv/filter work.
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct EventBus {
     registry: Arc<BusRegistry>,
+    #[field(get)]
     scope: BusScope,
     /// Cached senders for self + ancestors, matching scope path order.
     /// Eliminates `DashMap` lookups on the hot publish path.
@@ -76,12 +78,6 @@ impl EventBus {
             sender.send(event.clone()).ok();
         }
         self.senders[len - 1].send(event).ok();
-    }
-
-    /// This bus's scope.
-    #[must_use]
-    pub fn scope(&self) -> &BusScope {
-        &self.scope
     }
 
     /// Create a child scope sharing the same topic registry.

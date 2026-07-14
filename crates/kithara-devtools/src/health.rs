@@ -9,7 +9,10 @@ use std::{
 use anyhow::{Context, Result};
 use clap::Args;
 
-use crate::common::{project::ProjectConfig, timestamp::utc_timestamp};
+use crate::{
+    common::{project::ProjectConfig, timestamp::utc_timestamp},
+    stages::{SharedStage, StageCommand},
+};
 
 struct Consts;
 impl Consts {
@@ -79,6 +82,16 @@ impl Stage {
         }
         self
     }
+
+    fn shared(name: &'static str, stage: SharedStage) -> Self {
+        let StageCommand { program, args } = stage.health_command();
+        Self {
+            name,
+            program,
+            args,
+            advisory: false,
+        }
+    }
 }
 
 struct StageResult {
@@ -123,35 +136,31 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
 }
 
 fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
+    build_stages_with_excludes(
+        &project.health.feature_powerset_exclude,
+        &project.health.workspace_exclude,
+    )
+}
+
+fn build_stages_with_excludes(
+    feature_powerset_exclude: &[String],
+    workspace_exclude: &[String],
+) -> Vec<Stage> {
     vec![
-        Stage::new("format-check", "cargo", &["xtask", "format", "--check"]),
+        Stage::shared("format-check", SharedStage::FmtCheck),
         Stage::new(
             "markdown-format-check",
             "cargo",
             &["xtask", "format", "--check", "--only", "markdown"],
         )
         .advisory(),
-        Stage::new(
-            "clippy",
-            "cargo",
-            &["clippy", "--workspace", "--", "-D", "warnings"],
-        ),
-        Stage::new(
-            "ast-grep-advisory",
-            "cargo",
-            &["xtask", "ast-grep", "--mode=advisory"],
-        )
-        .advisory(),
-        Stage::new("xtask-lint", "cargo", &["xtask", "lint"]),
+        Stage::shared("clippy", SharedStage::Clippy),
+        Stage::shared("ast-grep-advisory", SharedStage::AstGrep).advisory(),
+        Stage::shared("xtask-lint", SharedStage::Lint),
         Stage::new("quality-report", "cargo", &["xtask", "quality", "report"]),
-        Stage::new("typos", "cargo", &["xtask", "typos"]),
-        Stage::new(
-            "similarity-strict",
-            "cargo",
-            &["xtask", "similarity", "--profile=strict"],
-        )
-        .advisory(),
-        Stage::new("orphans", "cargo", &["xtask", "orphans", "--deny"]),
+        Stage::shared("typos", SharedStage::Typos),
+        Stage::shared("similarity-strict", SharedStage::Similarity).advisory(),
+        Stage::shared("orphans", SharedStage::Orphans),
         Stage::new("machete", "cargo", &["machete"]),
         Stage::new("shear", "cargo", &["shear", "--deny-warnings"]),
         Stage::new("deny", "cargo", &["deny", "check"]),
@@ -168,13 +177,13 @@ fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
                 "--workspace",
             ],
         )
-        .exclude_crates(&project.health.feature_powerset_exclude),
+        .exclude_crates(feature_powerset_exclude),
         Stage::new(
             "semver-checks",
             "cargo",
             &["semver-checks", "check-release", "--workspace"],
         )
-        .exclude_crates(&project.health.workspace_exclude),
+        .exclude_crates(workspace_exclude),
         Stage::new(
             "geiger",
             "cargo",
@@ -399,7 +408,10 @@ fn format_duration(d: Duration) -> String {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use clap::Subcommand;
+
     use super::*;
+    use crate::CoreCommand;
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -411,6 +423,51 @@ mod tests {
         ));
         fs::write(&path, content).expect("write tmp log");
         path
+    }
+
+    #[test]
+    fn health_xtask_stage_argv_is_parseable() {
+        let stages = build_stages_with_excludes(&[], &[]);
+        let command = CoreCommand::augment_subcommands(clap::Command::new("xtask"));
+
+        for stage in stages
+            .iter()
+            .filter(|stage| stage.args.first().is_some_and(|arg| arg == "xtask"))
+        {
+            let argv =
+                std::iter::once("xtask").chain(stage.args.iter().skip(1).map(String::as_str));
+            command
+                .clone()
+                .try_get_matches_from(argv)
+                .unwrap_or_else(|error| panic!("invalid health stage '{}': {error}", stage.name));
+        }
+
+        let scopes = [
+            crate::common::scope::Scope::default(),
+            crate::common::scope::Scope::new(vec!["kithara-bufpool".to_owned()], vec![]),
+            crate::common::scope::Scope::new(vec![], vec!["tests".into()]),
+        ];
+        for scope in scopes {
+            for stage in SharedStage::AUDIT {
+                let stage_command = stage.audit_command(&scope);
+                if stage_command.program != "xtask"
+                    || stage_command
+                        .args
+                        .last()
+                        .is_some_and(|arg| arg == "__skip__")
+                {
+                    continue;
+                }
+                let argv =
+                    std::iter::once("xtask").chain(stage_command.args.iter().map(String::as_str));
+                command
+                    .clone()
+                    .try_get_matches_from(argv)
+                    .unwrap_or_else(|error| {
+                        panic!("invalid audit stage '{}': {error}", stage.audit_name())
+                    });
+            }
+        }
     }
 
     #[test]

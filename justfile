@@ -257,7 +257,7 @@ e2e-resamplers ARGS="-E \"'test(track_plays_end_to_end_silvercomet)'\" --test-th
 # Argument parsing is in `cargo xtask scope`; filter list is in
 # `cargo xtask ast-grep`. This recipe is a thin orchestrator.
 #
-#   just audit                              # whole workspace, report only
+#   just audit                              # workspace checks; orphan sweep deferred to health
 #   just audit --autofix                    # apply every available autofix, then re-validate
 #   just audit kithara-queue                # crate by name
 #   just audit crates/kithara-abr/src       # path inside a crate
@@ -284,122 +284,7 @@ e2e-resamplers ARGS="-E \"'test(track_plays_end_to_end_silvercomet)'\" --test-th
 # `cargo xtask ast-grep --fix`, `cargo xtask lint --fix`) when you
 # want the dirty-tree safety net.
 audit *ARGS:
-    #!/usr/bin/env bash
-    set -uo pipefail
-
-    # ANSI styling — only when stdout is a TTY and NO_COLOR is unset.
-    if [[ -t 1 && -z "${NO_COLOR-}" ]]; then
-        BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
-        BLUE=$'\033[1;36m'; GREEN=$'\033[1;32m'; RED=$'\033[1;31m'; YEL=$'\033[1;33m'
-        export KITHARA_AUDIT_COLOR=1
-    else
-        BOLD=""; DIM=""; RESET=""; BLUE=""; GREEN=""; RED=""; YEL=""
-    fi
-    section() { printf '\n%s── %s%s\n' "$BLUE" "$1" "$RESET"; }
-    badge() {
-        case "$1" in
-            ok)   printf '%s✓ ok%s'   "$GREEN" "$RESET" ;;
-            FAIL) printf '%s✗ FAIL%s' "$RED"   "$RESET" ;;
-            skip) printf '%s∘ skip%s' "$DIM"   "$RESET" ;;
-            *)    printf '%s' "$1" ;;
-        esac
-    }
-
-    # Strip the recipe-level `--autofix` flag before forwarding the
-    # remainder to scope resolution.
-    autofix=0
-    scope_args=()
-    for a in {{ARGS}}; do
-        if [[ "$a" == "--autofix" ]]; then
-            autofix=1
-        else
-            scope_args+=("$a")
-        fi
-    done
-
-    if [[ $autofix -eq 1 ]]; then
-        section "autofix: fmt";              cargo +nightly fmt --all
-        section "autofix: clippy (1/2)";     cargo clippy --fix --workspace --all-targets --allow-dirty -- -D warnings
-        section "autofix: typos";            cargo xtask typos --fix --allow-dirty
-        section "autofix: ast-grep";         cargo xtask ast-grep --fix --allow-dirty
-        section "autofix: xtask lint";       cargo xtask lint --fix --allow-dirty
-        section "autofix: clippy (2/2)";     cargo clippy --fix --workspace --all-targets --allow-dirty -- -D warnings
-        section "autofix: fmt cleanup";      cargo +nightly fmt --all
-    fi
-
-    # Build xtask once up front so per-section invocations don't re-emit
-    # cargo's `Finished/Running target/...` noise on every step.
-    cargo build --quiet -p xtask
-    XTASK=target/debug/xtask
-    scope() {
-        if ((${#scope_args[@]})); then
-            "$XTASK" scope "$@" "${scope_args[@]}"
-        else
-            "$XTASK" scope "$@"
-        fi
-    }
-
-    # Validate scope tokens up front so a typo doesn't silently fall back to
-    # a workspace-wide audit. `cargo xtask scope` exits non-zero on bad scope.
-    if ! XTASK_FLAGS=$(scope --for=xtask); then exit 2; fi
-    CLIPPY_FLAGS=$(scope --for=clippy)
-    FMT_FLAGS=$(scope --for=fmt)
-    AST_GREP_PATHS=$(scope --for=ast-grep)
-    TYPOS_PATHS=$(scope --for=typos)
-    SIMILARITY_PATHS=$(scope --for=similarity)
-    ORPHANS_FLAGS=$(scope --for=orphans)
-
-    record() {
-        local name=$1 status=$2
-        results+=("$name=$status")
-    }
-
-    fmt_status="ok"; clippy_status="ok"; astgrep_status="ok"; lint_status="ok"
-    typos_status="ok"; similarity_status="ok"; orphans_status="ok"
-    fail=0
-    results=()
-
-    section "fmt-check"
-    if ! cargo +nightly fmt $FMT_FLAGS --check; then fail=1; fmt_status="FAIL"; fi
-
-    section "clippy"
-    if ! cargo clippy --quiet $CLIPPY_FLAGS -- -D warnings; then fail=1; clippy_status="FAIL"; fi
-
-    section "ast-grep"
-    if ! $XTASK ast-grep $AST_GREP_PATHS; then fail=1; astgrep_status="FAIL"; fi
-
-    section "xtask lint"
-    if ! $XTASK lint $XTASK_FLAGS; then fail=1; lint_status="FAIL"; fi
-
-    section "typos"
-    if ! $XTASK typos $TYPOS_PATHS; then fail=1; typos_status="FAIL"; fi
-
-    section "similarity"
-    if ! $XTASK similarity --profile audit $SIMILARITY_PATHS; then fail=1; similarity_status="FAIL"; fi
-
-    if [[ "$ORPHANS_FLAGS" == "__skip__" ]]; then
-        section "orphans"; echo "orphans: skipped (non-crate scope)"
-        orphans_status="skip"
-    else
-        section "orphans"
-        if ! $XTASK orphans --deny --audit-mode $ORPHANS_FLAGS; then fail=1; orphans_status="FAIL"; fi
-    fi
-
-    echo
-    printf '%s── summary%s\n' "$BLUE" "$RESET"
-    for entry in "fmt:$fmt_status" "clippy:$clippy_status" "ast-grep:$astgrep_status" \
-                 "lint:$lint_status" "typos:$typos_status" "similarity:$similarity_status" \
-                 "orphans:$orphans_status"; do
-        name=${entry%%:*}; status=${entry##*:}
-        printf "  %s%-12s%s %s\n" "$BOLD" "$name" "$RESET" "$(badge "$status")"
-    done
-    echo
-    if [[ $fail -eq 0 ]]; then
-        printf '%saudit: OK%s\n' "$GREEN" "$RESET"
-    else
-        printf '%saudit: FAILED%s\n' "$RED" "$RESET"
-        exit 1
-    fi
+    cargo xtask audit {{ARGS}}
 
 # --- internal: xtask self-tests ---
 
@@ -550,11 +435,13 @@ viz *ARGS:
 # Excluded by design (run separately): mutants, coverage, dead,
 # `just test --lane=e2e`, `just test --lane=selenium`, wasm, bench, perf,
 # memory-check.
-# Install every external tool that `just health`, `just audit`, and the
-# standalone diagnostic recipes depend on. Idempotent — `cargo install --locked`
-# is a no-op when the binary is already current. `lockbud` is rebuilt from
-# source against the active toolchain to avoid `librustc_driver` mismatches.
+# Install core tools used by health, audit, and diagnostics. Platform and
+# optional tools are installed by their own recipes. Idempotent:
+# `cargo install --locked` is a no-op when the binary is already current.
+# `lockbud` is rebuilt from source against the active toolchain to avoid
+# `librustc_driver` mismatches.
 install-tools:
+    cargo install --locked ast-grep
     cargo install --locked cargo-deny
     cargo install --locked cargo-machete
     cargo install --locked cargo-shear
@@ -567,6 +454,7 @@ install-tools:
     cargo install --locked cargo-depgraph
     cargo install --locked cargo-llvm-cov
     cargo install --locked cargo-mutants
+    cargo install --locked cargo-nextest
     cargo install --locked cargo-geiger
     cargo install --locked cargo-sort
     cargo install --locked taplo-cli
@@ -633,6 +521,7 @@ mutants TARGET="" *ARGS:
         RESUME_FLAG="--resume"
         echo "==> resuming from previous run at $OUTPUT/mutants.out"
       fi
+      # kithara-devtools holds the xtask logic after the split.
       cargo mutants --workspace --test-workspace=true --baseline=skip \
         --test-tool=nextest --profile test-release \
         --exclude 'crates/kithara-test-utils/**' \
@@ -640,6 +529,7 @@ mutants TARGET="" *ARGS:
         --exclude 'tests/**' \
         --exclude 'crates/kithara-ffi/**' \
         --exclude 'crates/kithara-app/**' \
+        --exclude 'crates/kithara-devtools/**' \
         --exclude 'xtask/**' \
         --exclude-re 'src/.*test.*\.rs' \
         -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \

@@ -144,12 +144,7 @@ lint:
     - rustup toolchain install nightly --component rustfmt
   script:
     - just lint-full
-    - just quality report
-        --min-unimock-traits "${QUALITY_MIN_UNIMOCK_TRAITS:-0}"
-        --min-rstest-cases "${QUALITY_MIN_RSTEST_CASES:-0}"
-        --min-perf-test-files "${QUALITY_MIN_PERF_TEST_FILES:-0}"
-        --min-bench-targets "${QUALITY_MIN_BENCH_TARGETS:-0}"
-        --max-local-http-servers "${QUALITY_MAX_LOCAL_HTTP_SERVERS:-999}"
+    - just quality-report-ci
     - just deny
     - just machete
     - just hack || true

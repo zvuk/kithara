@@ -219,23 +219,25 @@ impl<State> AssetStoreBuilder<State>
 where
     State: asset_store_builder::IsComplete,
 {
-    #[must_use]
-    pub fn build(self) -> AssetStore {
-        self.into_args().build()
-    }
-
-    /// Build a disk-backed `AssetStore` chain with a fresh availability index.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    #[must_use]
-    fn build_disk(self) -> DiskStore {
-        self.into_args().build_disk()
-    }
-
-    /// Build the in-memory asset store with its own
-    /// unshared [`AvailabilityIndex`].
-    #[cfg(test)]
-    fn build_mem(self) -> MemStore {
-        self.into_args().build_mem()
+    delegate::delegate! {
+        to self {
+            #[must_use]
+            #[expr($.build())]
+            #[call(into_args)]
+            pub fn build(self) -> AssetStore;
+            /// Build a disk-backed `AssetStore` chain with a fresh availability index.
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            #[must_use]
+            #[expr($.build_disk())]
+            #[call(into_args)]
+            fn build_disk(self) -> DiskStore;
+            /// Build the in-memory asset store with its own
+            /// unshared [`AvailabilityIndex`].
+            #[cfg(test)]
+            #[expr($.build_mem())]
+            #[call(into_args)]
+            fn build_mem(self) -> MemStore;
+        }
     }
 }
 

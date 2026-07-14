@@ -95,7 +95,10 @@ pub(super) enum WakeOutcome {
 /// (a runnable-but-not-yet-repolled task was uncounted, so the clock could jump
 /// past it). Because the gate IS the inner future's waker, EVERY wake routes
 /// through it: engine wakes, the real-I/O reactor, `JoinHandle`, raw channels.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(in crate::flash) struct TaskGate {
+    #[field(get(vis = "pub(in crate::flash)", doc = "Returns this task's spawn site."))]
     loc: &'static Location<'static>,
     state: AtomicTaskState,
     /// The runtime's waker for this task, refreshed each poll. The gate forwards
@@ -106,6 +109,10 @@ pub(in crate::flash) struct TaskGate {
     /// release ([`park`](Self::park) / [`complete`](Self::complete) /
     /// [`on_drop`](Self::on_drop)) and the wake re-acquire ([`Wake::wake_by_ref`])
     /// carry them, so the engine's holder map names WHICH task pins quiescence.
+    #[field(get(
+        vis = "pub(in crate::flash)",
+        doc = "Returns this task's active_async slot id."
+    ))]
     id: u64,
 }
 
@@ -133,16 +140,6 @@ impl TaskGate {
         if let Some(w) = w {
             w.wake();
         }
-    }
-
-    /// This task's `active_async` slot id (its stable engine identity).
-    pub(in crate::flash) fn id(&self) -> u64 {
-        self.id
-    }
-
-    /// This task's spawn site (for the diagnostic holder map).
-    pub(in crate::flash) fn loc(&self) -> &'static Location<'static> {
-        self.loc
     }
 
     /// Drop: release the slot iff the task still occupies one (`RUNNABLE`/`RUNNING`/

@@ -7,20 +7,19 @@ use core::sync::atomic::{AtomicU64, Ordering};
 /// over the FFI boundary is exactly the value the queue uses
 /// internally. Stable across removals: removing a track and adding a
 /// new one yields a fresh id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    derive_more::Display,
+    derive_more::From,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+)]
 pub struct TrackId(pub u64);
-
-impl core::fmt::Display for TrackId {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl From<u64> for TrackId {
-    fn from(value: u64) -> Self {
-        Self(value)
-    }
-}
 
 impl From<TrackId> for u64 {
     fn from(id: TrackId) -> Self {

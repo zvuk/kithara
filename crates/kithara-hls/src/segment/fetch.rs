@@ -158,12 +158,13 @@ impl FetchClaim<Downloading> {
 }
 
 impl FetchClaim<Loaded> {
-    pub(crate) fn final_len(&self) -> u64 {
-        self.data.final_len
-    }
-
-    pub(crate) fn planned(&self) -> PlannedFetch {
-        self.data.planned
+    delegate::delegate! {
+        to self.data {
+            #[field]
+            pub(crate) fn final_len(&self) -> u64;
+            #[field]
+            pub(crate) fn planned(&self) -> PlannedFetch;
+        }
     }
 }
 

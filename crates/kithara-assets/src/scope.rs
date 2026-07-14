@@ -13,10 +13,13 @@ use crate::{error::AssetsResult, key::ResourceKey, layout::AssetLayout, unified:
 /// the store ([`AssetStore::open_resource`] and friends) and take a
 /// self-contained `&ResourceKey`. Asset-level operations
 /// ([`AssetScope::delete_asset`]) stay here.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct AssetScope {
+    #[field(get)]
     asset_root: Arc<str>,
     layout: Arc<dyn AssetLayout>,
+    #[field(get)]
     store: AssetStore,
 }
 
@@ -24,12 +27,6 @@ impl AssetScope {
     pub(crate) fn new(store: AssetStore, asset_root: Arc<str>) -> Self {
         let layout = Arc::clone(store.layout());
         Self::with_layout(store, asset_root, layout)
-    }
-
-    /// The `asset_root` this scope is bound to.
-    #[must_use]
-    pub fn asset_root(&self) -> &str {
-        &self.asset_root
     }
 
     /// Delete this entire asset (all resources under its `asset_root`).
@@ -53,11 +50,6 @@ impl AssetScope {
     }
 
     /// The underlying shared store, where per-resource operations live.
-    #[must_use]
-    pub fn store(&self) -> &AssetStore {
-        &self.store
-    }
-
     pub(crate) fn with_layout(
         store: AssetStore,
         asset_root: Arc<str>,

@@ -45,7 +45,7 @@ use crate::{
 /// (`apple` / `android`) compile with `--no-default-features` so
 /// `symphonia` is absent, and the hardware variant is the sole default.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, derive_more::Display, PartialEq, Eq)]
 pub enum DecoderBackend {
     /// Apple `AudioToolbox` (macOS/iOS, requires the `apple` feature).
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -57,6 +57,7 @@ pub enum DecoderBackend {
         ),
         default
     )]
+    #[display("apple")]
     Apple,
     /// Android `MediaCodec` (Android, requires the `android` feature).
     #[cfg(all(feature = "android", target_os = "android"))]
@@ -69,33 +70,20 @@ pub enum DecoderBackend {
         ),
         default
     )]
+    #[display("android")]
     Android,
     /// Browser `AudioDecoder` (wasm32, requires the `webcodecs` feature).
     #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
     #[cfg_attr(all(target_arch = "wasm32", feature = "webcodecs"), default)]
+    #[display("webcodecs")]
     WebCodecs,
     /// Symphonia software decoder (cross-platform, requires the
     /// `symphonia` feature).
     #[cfg(feature = "symphonia")]
     #[cfg_attr(not(all(target_arch = "wasm32", feature = "webcodecs")), default)]
+    #[display("symphonia")]
     Symphonia,
 }
-
-impl std::fmt::Display for DecoderBackend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-            Self::Apple => f.write_str("apple"),
-            #[cfg(all(feature = "android", target_os = "android"))]
-            Self::Android => f.write_str("android"),
-            #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
-            Self::WebCodecs => f.write_str("webcodecs"),
-            #[cfg(feature = "symphonia")]
-            Self::Symphonia => f.write_str("symphonia"),
-        }
-    }
-}
-
 /// Decoder-side resampler selected by the caller.
 ///
 /// This describes conversion that is part of decoder construction, not the
@@ -827,7 +815,7 @@ where
     let codec_impl = if SymphoniaCodec::supports(codec) {
         SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?
     } else {
-        SymphoniaCodec::open_native(demuxer.native_params())?
+        SymphoniaCodec::open_native(&demuxer.native_params)?
     };
     let pool = config.pcm_pool.clone().unwrap_or_default();
     let resampler = config.resampler;

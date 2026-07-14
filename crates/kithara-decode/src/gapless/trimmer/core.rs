@@ -39,7 +39,8 @@ impl Consts {
 }
 
 /// Stateful PCM trimmer that applies one track's gapless contract.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub struct GaplessTrimmer {
     mode: GaplessMode,
     tail_buffer: TailBuffer,
@@ -54,6 +55,7 @@ pub struct GaplessTrimmer {
     /// helpers below: `trailing_frames` does not always mean "frames
     /// to drop", sometimes it just means "minimum buffered tail".
     trailing_frames: u64,
+    #[field(with)]
     tail_compensation: Option<GaplessTailCompensation>,
     input_frames_seen: u64,
 }
@@ -196,12 +198,6 @@ impl GaplessTrimmer {
     #[must_use]
     pub fn disabled() -> Self {
         Self::default()
-    }
-
-    #[must_use]
-    pub fn with_tail_compensation(mut self, compensation: Option<GaplessTailCompensation>) -> Self {
-        self.tail_compensation = compensation;
-        self
     }
 
     pub fn set_tail_compensation(&mut self, compensation: Option<GaplessTailCompensation>) {

@@ -2,7 +2,6 @@
 
 use std::{
     error::Error as StdError,
-    fmt,
     future::Future,
     io::{self, Error as IoError, ErrorKind, Read, Seek, SeekFrom},
     num::NonZeroUsize,
@@ -33,10 +32,11 @@ use crate::{
 /// retry) are **not** errors and are carried in
 /// [`StreamReadOutcome::Pending`] with a typed [`PendingReason`]. Only
 /// genuine source failures end up here.
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display)]
 #[non_exhaustive]
 pub enum StreamReadError {
     /// Anything surfaced by the underlying [`Source`] as a real error.
+    #[display("source error: {_0}")]
     Source(IoError),
 }
 
@@ -72,32 +72,15 @@ pub enum StreamReadOutcome {
 /// through their own error chain. Decoders downcast to recover the
 /// structured info and classify the failure as caller-side (the seek
 /// target is invalid for this stream, not a decoder state corruption).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, derive_more::Display)]
+#[display("seek past EOF: new_pos={new_pos} len={len} current_pos={current_pos}")]
 pub struct StreamSeekPastEof {
     pub current_pos: u64,
     pub len: u64,
     pub new_pos: u64,
 }
 
-impl fmt::Display for StreamSeekPastEof {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "seek past EOF: new_pos={} len={} current_pos={}",
-            self.new_pos, self.len, self.current_pos
-        )
-    }
-}
-
 impl StdError for StreamSeekPastEof {}
-
-impl fmt::Display for StreamReadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Source(e) => write!(f, "source error: {e}"),
-        }
-    }
-}
 
 impl StdError for StreamReadError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
@@ -120,7 +103,10 @@ impl StdError for StreamReadError {
 /// at the wrap site, so callers downcasting from `io::Error` recover
 /// both *what* stalled and *why* without having to instrument their
 /// own decoder.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, derive_more::Display)]
+#[display(
+    "{reason}: pos={pos} want={want} len={len:?} phase={phase:?} epoch={epoch} flushing={flushing} variant_fence={variant_fence}"
+)]
 pub struct StreamPending {
     pub len: Option<u64>,
     pub reason: PendingReason,
@@ -132,23 +118,6 @@ pub struct StreamPending {
     pub want: usize,
 }
 
-impl fmt::Display for StreamPending {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}: pos={} want={} len={:?} phase={:?} epoch={} flushing={} variant_fence={}",
-            self.reason,
-            self.pos,
-            self.want,
-            self.len,
-            self.phase,
-            self.epoch,
-            self.flushing,
-            self.variant_fence,
-        )
-    }
-}
-
 impl StdError for StreamPending {}
 
 /// Non-retriable cross-variant boundary signal — the typed payload of
@@ -156,14 +125,9 @@ impl StdError for StreamPending {}
 /// underlying source fenced on a variant change. Decoders that go
 /// through `std::io::Read` (Symphonia chain walker) downcast on this
 /// type to recover the precise classification without string-matching.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, derive_more::Display)]
+#[display("variant change: decoder recreation required")]
 pub struct VariantChangeError;
-
-impl fmt::Display for VariantChangeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("variant change: decoder recreation required")
-    }
-}
 
 impl StdError for VariantChangeError {}
 
@@ -222,10 +186,50 @@ impl<T: StreamType> Stream<T> {
         Ok(Self { source })
     }
 
-    /// Narrow activity handle — set/query the `PLAYING` flag.
-    #[must_use]
-    pub fn activity(&self) -> Arc<dyn Activity> {
-        self.source.activity()
+    delegate::delegate! {
+        to self.source {
+            /// Overall source readiness at current position.
+            pub fn phase(&self) -> SourcePhase;
+            /// Point-in-time readiness for a specific byte range.
+            pub fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            /// Get current media info if known.
+            pub fn media_info(&self) -> Option<MediaInfo>;
+            /// Runtime ABR handle — `Some` for adaptive sources (HLS).
+            pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            /// Get total length if known.
+            pub fn len(&self) -> Option<u64>;
+            /// The reader→peer wake handle — `Some` for segmented sources (HLS)
+            /// that push a downloader peer, `None` otherwise.
+            pub fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
+            /// Install the audio worker's data-arrival wake. Segmented sources
+            /// fire it from their off-RT write/commit sites; no-op otherwise.
+            pub fn set_worker_wake(&self, wake: Arc<dyn crate::WorkerWake>);
+            /// Build a fresh reader-side event-sink instance from the inner source.
+            pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
+            /// Optional byte-map handle for segment-aware decoders.
+            pub fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>>;
+            /// Absolute byte-position set — used by [`Stream::seek`] callers
+            /// and audio FSM landings. Forwards to the source's atomic cursor.
+            pub fn set_position(&self, pos: u64);
+            /// Narrow activity handle — set/query the `PLAYING` flag.
+            #[must_use]
+            pub fn activity(&self) -> Arc<dyn Activity>;
+            /// Narrow mutating playhead handle — position + duration.
+            #[must_use]
+            pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+            /// Get current read position.
+            pub fn position(&self) -> u64;
+            /// Narrow seek-control handle — begin / complete / `mark_pending`.
+            #[must_use]
+            pub fn seek_control(&self) -> Arc<dyn SeekControl>;
+            /// Narrow seek-observe handle — read seek state without mutation.
+            #[must_use]
+            pub fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+            /// Optional HLS-only variant-coordination handle — `Some` for adaptive
+            /// sources (HLS), `None` otherwise.
+            #[must_use]
+            pub fn variant_control(&self) -> Option<Arc<dyn VariantControl>>;
+        }
     }
 
     /// Clear the variant fence, allowing reads from the next variant.
@@ -263,29 +267,6 @@ impl<T: StreamType> Stream<T> {
         self.len().map(|len| len == 0)
     }
 
-    /// Narrow mutating playhead handle — position + duration.
-    #[must_use]
-    pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        self.source.playhead_write()
-    }
-
-    /// Get current read position.
-    pub fn position(&self) -> u64 {
-        self.source.position()
-    }
-
-    /// Narrow seek-control handle — begin / complete / `mark_pending`.
-    #[must_use]
-    pub fn seek_control(&self) -> Arc<dyn SeekControl> {
-        self.source.seek_control()
-    }
-
-    /// Narrow seek-observe handle — read seek state without mutation.
-    #[must_use]
-    pub fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        self.source.seek_observe()
-    }
-
     /// Resolve a deterministic time-based seek anchor.
     ///
     /// Returns `None` for sources without segmented time mapping.
@@ -315,41 +296,6 @@ impl<T: StreamType> Stream<T> {
         self.source
             .variant_control()
             .and_then(|vc| vc.variant_change_target())
-    }
-
-    /// Optional HLS-only variant-coordination handle — `Some` for adaptive
-    /// sources (HLS), `None` otherwise.
-    #[must_use]
-    pub fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
-        self.source.variant_control()
-    }
-
-    delegate::delegate! {
-        to self.source {
-            /// Overall source readiness at current position.
-            pub fn phase(&self) -> SourcePhase;
-            /// Point-in-time readiness for a specific byte range.
-            pub fn phase_at(&self, range: Range<u64>) -> SourcePhase;
-            /// Get current media info if known.
-            pub fn media_info(&self) -> Option<MediaInfo>;
-            /// Runtime ABR handle — `Some` for adaptive sources (HLS).
-            pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            /// Get total length if known.
-            pub fn len(&self) -> Option<u64>;
-            /// The reader→peer wake handle — `Some` for segmented sources (HLS)
-            /// that push a downloader peer, `None` otherwise.
-            pub fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
-            /// Install the audio worker's data-arrival wake. Segmented sources
-            /// fire it from their off-RT write/commit sites; no-op otherwise.
-            pub fn set_worker_wake(&self, wake: Arc<dyn crate::WorkerWake>);
-            /// Build a fresh reader-side event-sink instance from the inner source.
-            pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
-            /// Optional byte-map handle for segment-aware decoders.
-            pub fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>>;
-            /// Absolute byte-position set — used by [`Stream::seek`] callers
-            /// and audio FSM landings. Forwards to the source's atomic cursor.
-            pub fn set_position(&self, pos: u64);
-        }
     }
 }
 

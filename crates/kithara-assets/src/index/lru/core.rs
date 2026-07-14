@@ -254,13 +254,13 @@ impl LruState {
             .collect()
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.by_root.len()
-    }
-
-    /// Returns `true` if the entry was present and removed.
-    pub(crate) fn remove(&mut self, asset_root: &str) -> bool {
-        self.by_root.remove(asset_root).is_some()
+    delegate::delegate! {
+        to self.by_root {
+            pub(crate) fn len(&self) -> usize;
+            /// Returns `true` if the entry was present and removed.
+            #[expr($.is_some())]
+            pub(crate) fn remove(&mut self, asset_root: &str) -> bool;
+        }
     }
 
     /// Touch an asset in-memory.

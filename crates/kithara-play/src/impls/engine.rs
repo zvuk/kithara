@@ -91,6 +91,8 @@ pub(crate) struct SlotHandle {
 ///
 /// Multiple `EngineImpl` instances share one CPAL/Firewheel stream while
 /// retaining independent per-player graph controls.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct EngineImpl {
     /// Audio session backend. Production paths default to the
     /// process-wide cpal-backed `SessionClient`; tests inject a
@@ -106,6 +108,7 @@ pub struct EngineImpl {
     /// Shared audio worker for cooperative multi-track decoding.
     ///
     /// All tracks loaded by this engine share this single worker thread.
+    #[field(get)]
     worker: AudioWorkerHandle,
 
     config: EngineConfig,
@@ -262,15 +265,6 @@ impl EngineImpl {
             runtime: RuntimeHandle::try_current().ok(),
         }
     }
-
-    /// Shared audio worker handle for this engine.
-    ///
-    /// Clone and pass to [`ResourceConfig::with_worker`] so all tracks
-    /// loaded through this engine share a single decode thread.
-    #[must_use]
-    pub fn worker(&self) -> &AudioWorkerHandle {
-        &self.worker
-    }
 }
 
 impl Drop for EngineImpl {
@@ -290,8 +284,19 @@ impl Drop for EngineImpl {
 }
 
 impl Engine for EngineImpl {
-    fn active_slots(&self) -> Vec<SlotId> {
-        self.active_slots.lock().clone()
+    delegate::delegate! {
+        to self.active_slots.lock() {
+            #[call(clone)]
+            fn active_slots(&self) -> Vec<SlotId>;
+            #[call(len)]
+            fn slot_count(&self) -> usize;
+        }
+        to self.config {
+            #[field(channels)]
+            fn master_channels(&self) -> u16;
+            #[field]
+            fn max_slots(&self) -> usize;
+        }
     }
 
     fn allocate_slot(&self) -> Result<SlotId, PlayError> {
@@ -356,20 +361,12 @@ impl Engine for EngineImpl {
         self.running.load(Ordering::Acquire)
     }
 
-    fn master_channels(&self) -> u16 {
-        self.config.channels
-    }
-
     fn master_sample_rate(&self) -> u32 {
         Self::master_sample_rate(self)
     }
 
     fn master_volume(&self) -> f32 {
         self.master_volume.load(Ordering::Relaxed)
-    }
-
-    fn max_slots(&self) -> usize {
-        self.config.max_slots
     }
 
     fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
@@ -412,10 +409,6 @@ impl Engine for EngineImpl {
         }
 
         self.emit(EngineEvent::MasterVolumeChanged { volume: clamped });
-    }
-
-    fn slot_count(&self) -> usize {
-        self.active_slots.lock().len()
     }
 
     fn start(&self) -> Result<(), PlayError> {

@@ -153,12 +153,19 @@ impl FileSource {
 }
 
 impl kithara_stream::Source for FileSource {
-    fn activity(&self) -> Arc<dyn Activity> {
-        self.coord.activity_handle()
-    }
-
-    fn advance(&self, n: u64) {
-        self.coord.advance_position(n);
+    delegate::delegate! {
+        to self.coord {
+            #[call(activity_handle)]
+            fn activity(&self) -> Arc<dyn Activity>;
+            #[call(advance_position)]
+            fn advance(&self, n: u64);
+            fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
+            fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+            fn position(&self) -> u64;
+            fn seek_control(&self) -> Arc<dyn SeekControl>;
+            fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+            fn set_position(&self, pos: u64);
+        }
     }
 
     fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {
@@ -201,18 +208,6 @@ impl kithara_stream::Source for FileSource {
         SourcePhase::Waiting
     }
 
-    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-        self.coord.playhead_read()
-    }
-
-    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        self.coord.playhead_write()
-    }
-
-    fn position(&self) -> u64 {
-        self.coord.position()
-    }
-
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(
         &mut self,
@@ -233,18 +228,6 @@ impl kithara_stream::Source for FileSource {
         trace!(offset, bytes = n, "FileSource read complete");
 
         Ok(ReadOutcome::Bytes(count))
-    }
-
-    fn seek_control(&self) -> Arc<dyn SeekControl> {
-        self.coord.seek_control()
-    }
-
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        self.coord.seek_observe()
-    }
-
-    fn set_position(&self, pos: u64) {
-        self.coord.set_position(pos);
     }
 
     fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {

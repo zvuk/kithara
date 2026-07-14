@@ -246,10 +246,12 @@ impl RawHttp {
 /// `options.retry_policy` — retryable errors (TLS-close, timeout,
 /// 5xx, IO) are re-issued with exponential backoff; non-retryable
 /// errors (HTTP 4xx, cancellation) propagate immediately.
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct HttpClient {
     net: Arc<RetryNet<RawHttp, DefaultRetryPolicy>>,
     connection_metrics: ConnectionMetrics,
+    #[field(get)]
     options: NetOptions,
 }
 
@@ -288,54 +290,39 @@ impl HttpClient {
         self.connection_metrics.connection_count()
     }
 
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure, timeout, or network error.
-    pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
-        self.net.get_bytes(url, headers).await
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure or network error.
-    pub async fn get_range(
-        &self,
-        url: Url,
-        range: RangeSpec,
-        headers: Option<Headers>,
-    ) -> NetResult<crate::ByteStream> {
-        self.net.get_range(url, range, headers).await
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure or network error.
-    pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
-        self.net.head(url, headers).await
-    }
-
-    #[must_use]
-    pub fn options(&self) -> &NetOptions {
-        &self.options
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure, timeout, or network error.
-    pub async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> NetResult<Bytes> {
-        self.net.post_bytes(url, body, headers).await
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure or network error.
-    pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream> {
-        self.net.stream(url, headers).await
+    delegate::delegate! {
+        to self.net {
+            /// # Errors
+            ///
+            /// Returns [`NetError`] on HTTP failure, timeout, or network error.
+            pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes>;
+            /// # Errors
+            ///
+            /// Returns [`NetError`] on HTTP failure or network error.
+            pub async fn get_range(
+                &self,
+                url: Url,
+                range: RangeSpec,
+                headers: Option<Headers>,
+            ) -> NetResult<crate::ByteStream>;
+            /// # Errors
+            ///
+            /// Returns [`NetError`] on HTTP failure or network error.
+            pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers>;
+            /// # Errors
+            ///
+            /// Returns [`NetError`] on HTTP failure, timeout, or network error.
+            pub async fn post_bytes(
+                &self,
+                url: Url,
+                body: Bytes,
+                headers: Option<Headers>,
+            ) -> NetResult<Bytes>;
+            /// # Errors
+            ///
+            /// Returns [`NetError`] on HTTP failure or network error.
+            pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream>;
+        }
     }
 }
 
