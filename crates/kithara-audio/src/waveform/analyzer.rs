@@ -30,7 +30,7 @@ pub struct WaveformAnalyzer {
 impl WaveformAnalyzer {
     #[must_use]
     pub fn new(sample_rate: u32, params: AnalysisParams) -> Self {
-        let fft_size = params.fft_size.max(2);
+        let fft_size = params.fft_size().max(2);
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
         let fft_input = fft.make_input_vec();
@@ -42,8 +42,8 @@ impl WaveformAnalyzer {
         let rate = sample_rate.to_f32().unwrap_or(0.0);
         let size_f = fft_size.to_f32().unwrap_or(1.0);
         let bin_hz = if size_f > 0.0 { rate / size_f } else { 0.0 };
-        let low_mid_bin = crossover_bin(params.low_mid_hz, bin_hz, bins);
-        let mid_high_bin = crossover_bin(params.mid_high_hz, bin_hz, bins).max(low_mid_bin);
+        let low_mid_bin = crossover_bin(params.low_mid_hz(), bin_hz, bins);
+        let mid_high_bin = crossover_bin(params.mid_high_hz(), bin_hz, bins).max(low_mid_bin);
         // Per-band inverse bin count: divide summed energy by bandwidth so a
         // wide band (mid/high) doesn't outweigh a narrow one (low) by sheer bin
         // count. This makes each band an energy density (RMS-like).
@@ -85,15 +85,11 @@ impl WaveformAnalyzer {
         let buckets = buckets.min(self.raw_bands.len());
         let max = |a: [f32; 3], b: [f32; 3]| [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])];
         let energy = bucketize(&self.raw_bands, buckets, [0.0; 3], max);
-        let bands = normalize_bands(energy, self.params.band_gain);
+        let bands = normalize_bands(energy, self.params.band_gain());
 
         let out: Vec<Bucket> = bands
             .into_iter()
-            .map(|b| Bucket {
-                low: b[0],
-                mid: b[1],
-                high: b[2],
-            })
+            .map(|b| Bucket::new(b[0], b[1], b[2]))
             .collect();
         Waveform::from(out)
     }
@@ -170,7 +166,7 @@ impl WaveformAnalyzer {
         let bins = &self.fft_output[1..];
         let total: f32 = bins.iter().map(Complex::norm_sqr).sum();
         let rms = (total / self.fft_input.len().to_f32().unwrap_or(1.0)).sqrt();
-        if rms < self.params.energy_floor {
+        if rms < self.params.energy_floor() {
             return [0.0; 3];
         }
 
@@ -266,7 +262,7 @@ mod tests {
 
     /// Tallest band of a bucket (the outer hull height).
     fn peak(b: &Bucket) -> f32 {
-        b.low.max(b.mid).max(b.high)
+        b.low().max(b.mid()).max(b.high())
     }
 
     fn analyzer(params: AnalysisParams) -> WaveformAnalyzer {
@@ -276,10 +272,7 @@ mod tests {
     /// Unity gain so normalization/routing tests aren't coupled to the
     /// perceptual band balance.
     fn flat() -> AnalysisParams {
-        AnalysisParams {
-            band_gain: [1.0; 3],
-            ..AnalysisParams::default()
-        }
+        AnalysisParams::builder().band_gain([1.0; 3]).build()
     }
 
     fn sine(freq: f32, samples: usize) -> Vec<f32> {
@@ -338,7 +331,7 @@ mod tests {
         let wave = a.finalize(5);
         assert!(!wave.is_empty() && wave.len() <= 5, "len {}", wave.len());
         for b in wave.buckets() {
-            for v in [b.low, b.mid, b.high] {
+            for v in [b.low(), b.mid(), b.high()] {
                 assert!(
                     v.is_finite() && (0.0..=1.0).contains(&v),
                     "band must stay finite in [0,1]: {b:?}"
@@ -393,10 +386,10 @@ mod tests {
     fn dominant(freq: f32) -> Bucket {
         // Floor disabled so routing isn't coupled to the gate; unity gain so it
         // isn't coupled to the perceptual balance.
-        let params = AnalysisParams {
-            energy_floor: 0.0,
-            ..flat()
-        };
+        let params = AnalysisParams::builder()
+            .band_gain(flat().band_gain())
+            .energy_floor(0.0)
+            .build();
         let pcm = sine(freq, 16_384);
         let mut a = analyzer(params);
         a.push_interleaved(&pcm, 1);
@@ -412,7 +405,7 @@ mod tests {
     fn low_frequency_lands_in_low_band() {
         let b = dominant(80.0);
         assert!(
-            b.low > b.mid && b.low > b.high,
+            b.low() > b.mid() && b.low() > b.high(),
             "80 Hz must be low-dominant: {b:?}"
         );
     }
@@ -421,7 +414,7 @@ mod tests {
     fn mid_frequency_lands_in_mid_band() {
         let b = dominant(1_000.0);
         assert!(
-            b.mid > b.low && b.mid > b.high,
+            b.mid() > b.low() && b.mid() > b.high(),
             "1 kHz must be mid-dominant: {b:?}"
         );
     }
@@ -430,7 +423,7 @@ mod tests {
     fn high_frequency_lands_in_high_band() {
         let b = dominant(10_000.0);
         assert!(
-            b.high > b.low && b.high > b.mid,
+            b.high() > b.low() && b.high() > b.mid(),
             "10 kHz must be high-dominant: {b:?}"
         );
     }

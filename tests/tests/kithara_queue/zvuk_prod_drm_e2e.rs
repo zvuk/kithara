@@ -2,6 +2,7 @@
 
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
+    audio::AudioDecoderConfig,
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
@@ -85,7 +86,11 @@ fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSou
     match build_source(url, &ctx.config) {
         TrackSource::Config(mut cfg) => {
             cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder.backend = backend;
+            cfg.decoder = AudioDecoderConfig::builder()
+                .backend(backend)
+                .gapless_mode(cfg.decoder.gapless_mode())
+                .maybe_resampler(cfg.decoder.resampler().cloned())
+                .build();
             cfg.initial_abr_mode = AbrMode::Auto(None);
             TrackSource::Config(cfg)
         }

@@ -13,7 +13,7 @@ use axum::{Router, body::Body, extract::State, http::header, response::Response,
 use bytes::Bytes;
 use kithara::{
     assets::{AssetStoreBuilder, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader, analysis::BeatAnalysisConfig},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead, analysis::BeatAnalysisConfig},
     bufpool::{BytePool, PcmPool},
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
@@ -128,7 +128,8 @@ async fn waveform_and_player_share_one_get() {
         .borrow()
         .clone()
         .expect("analysis result present")
-        .waveform
+        .waveform()
+        .cloned()
         .expect("waveform analyzer fills its slot");
     let player_ok = player_drain.await.expect("player drain task");
 

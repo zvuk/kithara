@@ -1,6 +1,6 @@
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::DecoderBackend,
     events::{AudioEvent, Event, EventBus},
     file::{File, FileConfig},
@@ -26,7 +26,7 @@ async fn open_test_mp3(
     let file_config = FileConfig::for_src(url.into())
         .store(StoreOptions::new(temp_dir.path()))
         .build();
-    let mut config = AudioConfig::<File>::for_stream(file_config)
+    let config = AudioConfig::<File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint(String::from("mp3"))
@@ -35,10 +35,8 @@ async fn open_test_mp3(
                 .backend(backend)
                 .build(),
         )
+        .maybe_events(events)
         .build();
-    if let Some(bus) = events {
-        config.bus = Some(bus);
-    }
     Audio::<Stream<File>>::new(config).await.unwrap()
 }
 
@@ -51,7 +49,7 @@ async fn open_test_mp3(
 #[kithara::flash(true)]
 async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
     loop {
-        match PcmReader::next_chunk(audio) {
+        match PcmRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) => return,
             Ok(ChunkOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for {stage}");

@@ -407,9 +407,7 @@ mod tests {
     }
 
     fn analysis() -> TrackAnalysis {
-        let mut analysis = TrackAnalysis::default();
-        analysis.waveform = Some(one_bucket_wave());
-        analysis
+        TrackAnalysis::new(None, Some(one_bucket_wave()), 0)
     }
 
     fn cache() -> TrackAnalysisCache {

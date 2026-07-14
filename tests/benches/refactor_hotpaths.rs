@@ -319,6 +319,8 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                 rt.block_on(async move {
                     let file_config = FileConfig::new(file_path.into());
                     let config = AudioConfig::<File>::for_stream(file_config)
+                        .byte_pool(BytePool::default())
+                        .pcm_pool(PcmPool::default())
                         .hint(("mp3").to_string())
                         .byte_pool(BytePool::default())
                         .pcm_pool(PcmPool::default())

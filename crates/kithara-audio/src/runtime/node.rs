@@ -87,6 +87,15 @@ pub(crate) enum TickResult {
     Done,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum RtPolicy {
+    /// Tick under the realtime sanitizer's forbid-blocking scope.
+    #[default]
+    Rt,
+    /// Tick outside the forbid-blocking scope.
+    Heavy,
+}
+
 /// A component that can be executed by the scheduler.
 pub(crate) trait Node: Send + 'static {
     /// Called when the scheduler is cancelled or the node is unregistered.
@@ -97,6 +106,11 @@ pub(crate) trait Node: Send + 'static {
     /// before [`tick`](Node::tick), so a `free` on a full pool never lands on
     /// the checked produce path. Default no-op.
     fn recycle(&mut self) {}
+
+    /// Scheduling policy, cached when the node is registered.
+    fn rt_policy(&self) -> RtPolicy {
+        RtPolicy::Rt
+    }
 
     /// Return the current service class (priority) of this node.
     fn service_class(&self) -> ServiceClass {
@@ -122,6 +136,10 @@ impl Node for Box<dyn Node> {
 
     fn recycle(&mut self) {
         (**self).recycle();
+    }
+
+    fn rt_policy(&self) -> RtPolicy {
+        (**self).rt_policy()
     }
 
     fn service_class(&self) -> ServiceClass {
@@ -152,5 +170,18 @@ mod tests {
     #[kithara::test]
     fn service_class_default_is_idle() {
         assert_eq!(ServiceClass::default(), ServiceClass::Idle);
+    }
+
+    struct DefaultPolicyNode;
+
+    impl Node for DefaultPolicyNode {
+        fn tick(&mut self) -> TickResult {
+            TickResult::Done
+        }
+    }
+
+    #[kithara::test]
+    fn node_rt_policy_defaults_to_rt() {
+        assert_eq!(DefaultPolicyNode.rt_policy(), RtPolicy::Rt);
     }
 }

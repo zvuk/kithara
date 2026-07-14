@@ -9,8 +9,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara::decode::DecoderBackend;
 use kithara::{
     assets::StoreOptions,
-    audio::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
-    bufpool::{BytePool, PcmPool},
+    audio::{ChunkOutcome, PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome},
+    bufpool::PcmPool,
     decode::{
         DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
         PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
@@ -105,7 +105,7 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
+            .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
@@ -167,7 +167,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
+            .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
@@ -259,7 +259,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     let stitch_frame = crate::gapless_common::generated_aac_elst_visible_frames();
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
+            .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
@@ -382,7 +382,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
 
     let probe_harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
+            .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
@@ -441,7 +441,7 @@ async fn render_apple_fused_deficit_seam(
     let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
+            .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
@@ -520,7 +520,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
+            .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .gapless_mode(GaplessMode::Disabled)
@@ -576,7 +576,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
+            .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
@@ -621,7 +621,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
+            .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
@@ -721,7 +721,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
+            .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
@@ -870,7 +870,7 @@ async fn create_resource_with_encoding(
     let store = StoreOptions::new(cache_dir);
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
-        .byte_pool(BytePool::default())
+        .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(PcmPool::default())
         .store(store)
         .build();
@@ -928,7 +928,7 @@ async fn create_apple_fused_resource(
     let store = StoreOptions::new(cache_dir);
     let config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
-        .byte_pool(BytePool::default())
+        .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(PcmPool::default())
         .store(store)
         .decoder(
@@ -963,7 +963,7 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
 
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
+            .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(PcmPool::default())
             .crossfade_duration(0.0)
             .gapless_mode(GaplessMode::Disabled)
@@ -1210,7 +1210,7 @@ impl SyntheticPcmReader {
     }
 }
 
-impl PcmReader for SyntheticPcmReader {
+impl PcmSession for SyntheticPcmReader {
     fn duration(&self) -> Option<Duration> {
         Some(duration_for_test_frames(self.duration_frames))
     }
@@ -1222,7 +1222,9 @@ impl PcmReader for SyntheticPcmReader {
     fn metadata(&self) -> &TrackMetadata {
         &self.metadata
     }
+}
 
+impl PcmRead for SyntheticPcmReader {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         Ok(ChunkOutcome::Eof {
             position: self.position(),
@@ -1246,6 +1248,12 @@ impl PcmReader for SyntheticPcmReader {
         Ok(self.read_outcome(frames))
     }
 
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+}
+
+impl PcmControl for SyntheticPcmReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let frames = frames_for_test_duration(position);
         if frames >= self.frames.len() {
@@ -1261,10 +1269,6 @@ impl PcmReader for SyntheticPcmReader {
                 landed_at: self.position(),
             })
         }
-    }
-
-    fn spec(&self) -> PcmSpec {
-        self.spec
     }
 }
 

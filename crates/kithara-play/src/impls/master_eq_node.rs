@@ -35,10 +35,10 @@ impl MasterEqNode {
         let bands = layout
             .iter()
             .map(|band| MasterEqBand {
-                frequency: band.frequency,
-                gain_db: band.gain_db,
-                q_factor: band.q_factor,
-                kind: band.kind as u8,
+                frequency: band.frequency(),
+                gain_db: band.gain_db(),
+                q_factor: band.q_factor(),
+                kind: band.kind() as u8,
             })
             .collect();
 

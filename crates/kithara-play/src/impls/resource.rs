@@ -222,7 +222,7 @@ impl Resource {
     /// Safe to call multiple times (no-op if already preloaded).
     ///
     /// # Errors
-    /// Propagated from the underlying `PcmReader::preload` if the
+    /// Propagated from the underlying [`kithara_audio::PcmControl::preload`] if the
     /// producer channel closed or the initial fill hit a decoder
     /// failure.
     pub async fn preload(&mut self) -> Result<(), DecodeError> {
@@ -262,7 +262,7 @@ impl From<Resource> for Box<dyn PcmReader> {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{PcmReader, ReadOutcome, SeekOutcome};
+    use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_platform::CancelToken;
 
@@ -286,7 +286,7 @@ mod tests {
         }
     }
 
-    impl PcmReader for EofReader {
+    impl PcmSession for EofReader {
         fn duration(&self) -> Option<Duration> {
             None
         }
@@ -296,6 +296,9 @@ mod tests {
         fn metadata(&self) -> &TrackMetadata {
             &self.meta
         }
+    }
+
+    impl PcmRead for EofReader {
         fn position(&self) -> Duration {
             Duration::ZERO
         }
@@ -312,14 +315,18 @@ mod tests {
                 position: Duration::ZERO,
             })
         }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    impl PcmControl for EofReader {
         fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
             Ok(SeekOutcome::Landed {
                 target: position,
                 landed_at: position,
             })
-        }
-        fn spec(&self) -> PcmSpec {
-            self.spec
         }
     }
 

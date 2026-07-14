@@ -123,10 +123,10 @@ impl UiState {
         let (beats, downbeats) = analysis
             .as_ref()
             .and_then(|a| {
-                a.beat.as_ref().filter(|_| a.source_frames > 0).map(|grid| {
+                a.beat().filter(|_| a.source_frames() > 0).map(|grid| {
                     (
-                        frames_to_fractions(&grid.beats, a.source_frames),
-                        frames_to_fractions(&grid.downbeats, a.source_frames),
+                        frames_to_fractions(grid.beats(), a.source_frames()),
+                        frames_to_fractions(grid.downbeats(), a.source_frames()),
                     )
                 })
             })
@@ -285,13 +285,14 @@ impl StateController {
         let Some(analysis) = state.analysis.as_ref() else {
             return;
         };
-        let Some(grid) = analysis.beat.as_ref() else {
+        let Some(grid) = analysis.beat() else {
             return;
         };
+        let source_frames = analysis.source_frames();
         let slot = SlotId::new(1);
         let mut beat_clock = self.beat_clock.lock();
         if beat_clock.published_track != Some(current_index)
-            && let Some(info) = bpm_info_from_state(grid, analysis.source_frames, state.duration)
+            && let Some(info) = bpm_info_from_state(grid, source_frames, state.duration)
         {
             self.queue
                 .bus()
@@ -300,15 +301,15 @@ impl StateController {
             beat_clock.last_beat_number = None;
         }
 
-        let beats = &grid.beats;
-        if beats.is_empty() || analysis.source_frames == 0 || state.duration <= 0.0 {
+        let beats = grid.beats();
+        if beats.is_empty() || source_frames == 0 || state.duration <= 0.0 {
             return;
         }
 
-        let max_frame = u64_to_f64(analysis.source_frames);
+        let max_frame = u64_to_f64(source_frames);
         let current_frame = (((state.position / state.duration) * max_frame).clamp(0.0, max_frame))
             .to_u64()
-            .unwrap_or(analysis.source_frames);
+            .unwrap_or(source_frames);
         let crossed = beats.partition_point(|beat| *beat <= current_frame);
         let latest = crossed.checked_sub(1).and_then(|idx| idx.to_u64());
         let start = beat_clock.last_beat_number.map_or(0, |prev| prev + 1);
@@ -316,7 +317,7 @@ impl StateController {
             for beat_number in start..=latest {
                 let beat_idx = usize::try_from(beat_number).unwrap_or(usize::MAX);
                 let timestamp =
-                    media_time_for_frame(beats[beat_idx], analysis.source_frames, state.duration);
+                    media_time_for_frame(beats[beat_idx], source_frames, state.duration);
                 self.queue.bus().publish(DjEvent::BeatTick {
                     slot,
                     beat_number,
@@ -333,12 +334,12 @@ fn bpm_info_from_state(
     source_frames: u64,
     duration_secs: f64,
 ) -> Option<kithara::events::BpmInfo> {
-    let first_beat = *grid.beats.first()?;
+    let first_beat = *grid.beats().first()?;
     if source_frames == 0 || duration_secs <= 0.0 {
         return None;
     }
     Some(kithara::events::BpmInfo::new(
-        grid.bpm,
+        grid.bpm(),
         None,
         kithara_platform::time::Duration::from_secs_f64(
             (u64_to_f64(first_beat) / u64_to_f64(source_frames)) * duration_secs,

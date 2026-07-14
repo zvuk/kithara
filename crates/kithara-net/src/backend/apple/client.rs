@@ -21,7 +21,7 @@ use crate::{
     observe::Observer,
     resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
-    traits::{Net, NetExt},
+    traits::Net,
     types::{Headers, NetOptions, RangeSpec},
 };
 
@@ -72,12 +72,10 @@ impl RawAppleNet {
         }
         .await
         .map_err(|_| NetError::Timeout)??;
-        if let Some(observer) = self.options.observer.as_ref() {
-            observer.0.first_byte(
-                started.elapsed(),
-                response.status,
-                response.status == HTTP_PARTIAL_CONTENT,
-            );
+        if let (Some(observer), Some(status)) = (self.options.observer.as_ref(), response.status) {
+            observer
+                .0
+                .first_byte(started.elapsed(), status, status == HTTP_PARTIAL_CONTENT);
         }
         check_status(url, response.status, &response.body, accept_partial)?;
         Ok(response)
@@ -101,12 +99,10 @@ impl RawAppleNet {
         }
         .await
         .map_err(|_| NetError::Timeout)??;
-        if let Some(observer) = self.options.observer.as_ref() {
-            observer.0.first_byte(
-                started.elapsed(),
-                response.status,
-                response.status == HTTP_PARTIAL_CONTENT,
-            );
+        if let (Some(observer), Some(status)) = (self.options.observer.as_ref(), response.status) {
+            observer
+                .0
+                .first_byte(started.elapsed(), status, status == HTTP_PARTIAL_CONTENT);
         }
         if let Err(error) = check_status(url, response.status, &Bytes::new(), accept_partial) {
             response.cancel();

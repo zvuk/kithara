@@ -2,6 +2,7 @@
 
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
+    audio::AudioDecoderConfig,
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::AbrMode,
@@ -95,7 +96,11 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         panic!("expected an HLS config source for {PROD_TRACK}");
     };
     cfg.store = StoreOptions::new(temp.path());
-    cfg.decoder.backend = backend;
+    cfg.decoder = AudioDecoderConfig::builder()
+        .backend(backend)
+        .gapless_mode(cfg.decoder.gapless_mode())
+        .maybe_resampler(cfg.decoder.resampler().cloned())
+        .build();
     cfg.initial_abr_mode = AbrMode::Auto(None);
     cfg.name = Some("t0".to_string());
 

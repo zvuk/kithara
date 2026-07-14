@@ -6,8 +6,8 @@ use std::{
 use bon::Builder;
 use kithara_abr::{AbrController, AbrSettings};
 use kithara_audio::{
-    AudioWorkerHandle, EngineLoad, EngineLoadSnapshot, EqBandConfig, StretchControls,
-    generate_log_spaced_bands,
+    AudioDecoderConfig, AudioWorkerHandle, EngineLoad, EngineLoadSnapshot, EqBandConfig,
+    StretchControls, generate_log_spaced_bands,
 };
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
@@ -426,8 +426,11 @@ impl PlayerImpl {
         // compiled in, the stretch slot owns speed and key-lock live. Without
         // one, PCM speed is pinned and the controls remain state only.
         let stretch = Some(Arc::clone(&self.core.config.timestretch));
-        let mut decoder = config.decoder.clone();
-        decoder.gapless_mode = self.core.config.gapless_mode;
+        let decoder = AudioDecoderConfig::builder()
+            .backend(config.decoder.backend())
+            .gapless_mode(self.core.config.gapless_mode)
+            .maybe_resampler(config.decoder.resampler().cloned())
+            .build();
         crate::impls::config::ResourceConfig {
             bus,
             byte_pool,
@@ -645,7 +648,7 @@ mod tests {
 
         config = player.prepare_config(config);
 
-        assert_eq!(config.decoder.gapless_mode, GaplessMode::Disabled);
+        assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
         assert!(
             config.cancel.is_some(),
             "prepare_config must inject a per-track cancel child"

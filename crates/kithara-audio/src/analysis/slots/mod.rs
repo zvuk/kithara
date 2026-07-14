@@ -1,0 +1,10 @@
+#[cfg(feature = "analysis-beat")]
+pub(crate) mod beat;
+#[cfg(not(feature = "analysis-beat"))]
+#[path = "nobeat.rs"]
+pub(crate) mod beat;
+#[cfg(not(feature = "analysis-waveform"))]
+#[path = "nowaveform.rs"]
+pub(crate) mod waveform;
+#[cfg(feature = "analysis-waveform")]
+pub(crate) mod waveform;

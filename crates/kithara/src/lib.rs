@@ -125,8 +125,8 @@ pub mod prelude {
     #[cfg(feature = "hls")]
     pub use kithara_abr::AbrMode;
     pub use kithara_audio::{
-        Audio, AudioConfig, EngineLoadSnapshot, GridSegment, PcmReader, RegionPlan,
-        RegionPlanError, ResamplerQuality, StretchControls,
+        Audio, AudioConfig, EngineLoadSnapshot, GridSegment, PcmControl, PcmRead, PcmReader,
+        PcmSession, RegionPlan, RegionPlanError, ResamplerQuality, StretchControls,
     };
     #[cfg(all(
         not(target_arch = "wasm32"),
