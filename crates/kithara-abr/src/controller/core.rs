@@ -99,7 +99,6 @@ impl Default for AbrSettings {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct AbrController {
-    /// Settings snapshot.
     #[field(get)]
     pub(super) settings: AbrSettings,
     pub(super) estimator: Arc<dyn Estimator>,

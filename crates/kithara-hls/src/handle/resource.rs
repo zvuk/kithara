@@ -24,11 +24,8 @@ use crate::{HlsError, decrypt_processor::as_process_ctx, segment::SegmentContent
 #[fieldwork(opt_in, get)]
 pub(crate) struct ResourceHandle {
     scope: AssetScope,
-    /// The pre-minted [`ResourceKey`] for this resource.
     #[field(get, vis = "pub(crate)")]
     key: ResourceKey,
-    /// The segment URL this handle fetches from - consumed by the fetch path
-    /// when building the `FetchCmd` after [`acquire`](Self::acquire).
     #[field(get, vis = "pub(crate)")]
     url: Url,
 }

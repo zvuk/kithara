@@ -98,7 +98,6 @@ pub(super) enum WakeOutcome {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(in crate::flash) struct TaskGate {
-    /// This task's spawn site (for the diagnostic holder map).
     #[field(get(vis = "pub(in crate::flash)", doc = "Returns this task's spawn site."))]
     loc: &'static Location<'static>,
     state: AtomicTaskState,

@@ -32,8 +32,6 @@ pub struct TrackAnalysisRunner {
     current: Option<RunHandle>,
     /// Whether any analyzer is compiled in; without one a decode pass would
     /// produce nothing, so the driver skips analysis entirely.
-    /// `false` when no analyzer is configured (`builder.is_empty()`) — the
-    /// runtime signal to skip analysis scheduling.
     #[field(get = is_active)]
     active: bool,
 }

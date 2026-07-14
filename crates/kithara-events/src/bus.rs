@@ -29,7 +29,6 @@ struct BusRegistry {
 #[fieldwork(opt_in, get)]
 pub struct EventBus {
     registry: Arc<BusRegistry>,
-    /// This bus's scope.
     #[field(get)]
     scope: BusScope,
     /// Cached senders for self + ancestors, matching scope path order.

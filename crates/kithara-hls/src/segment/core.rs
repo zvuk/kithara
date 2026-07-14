@@ -152,10 +152,8 @@ pub(crate) struct MediaSegment {
     /// settles (cancelled before completion) are gated by
     /// `FetchSlot.cancel` and leave the slot untouched.
     pub(crate) state: Arc<SegmentSlotState>,
-    /// Decode-time window start of this media segment.
     #[field(get, vis = "pub(crate)", copy)]
     pub(crate) decode_time: Duration,
-    /// Decode-time window length of this media segment.
     #[field(get, vis = "pub(crate)", copy)]
     pub(crate) duration: Duration,
     pub(crate) resource_id: ResourceKey,

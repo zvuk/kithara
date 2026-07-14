@@ -105,10 +105,9 @@ pub struct EngineImpl {
     /// Master output volume for this player instance (linear 0.0 ..= 1.0).
     master_volume: AtomicF32,
 
-    /// Shared audio worker handle for cooperative multi-track decoding.
+    /// Shared audio worker for cooperative multi-track decoding.
     ///
-    /// Clone and pass to [`ResourceConfig::with_worker`] so all tracks loaded
-    /// through this engine share one decode thread.
+    /// All tracks loaded by this engine share this single worker thread.
     #[field(get)]
     worker: AudioWorkerHandle,
 

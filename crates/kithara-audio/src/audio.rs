@@ -141,10 +141,6 @@ pub struct Audio<S> {
     pub(crate) current_chunk: Option<PcmChunk>,
 
     /// Current audio specification (updated from chunks).
-    ///
-    /// Get current audio specification.
-    /// Returns sample rate and channel count for audio output setup.
-    /// Subscribe to audio events.
     #[field(get, copy)]
     pub(crate) spec: PcmSpec,
 
@@ -231,7 +227,6 @@ pub struct Audio<S> {
     _marker: PhantomData<S>,
 
     /// Track metadata (title, artist, album, artwork).
-    /// Get track metadata (title, artist, album, artwork).
     #[field(get)]
     metadata: TrackMetadata,
 
@@ -244,9 +239,6 @@ pub struct Audio<S> {
     is_standalone_worker: bool,
 
     /// Whether `preload()` has been called (enables non-blocking mode).
-    ///
-    /// Returns `false` after `seek()` until `preload()` is called again.
-    /// Whether non-blocking recv is active.
     #[field(get = is_preloaded)]
     preloaded: bool,
 }

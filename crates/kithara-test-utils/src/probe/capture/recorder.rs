@@ -52,7 +52,6 @@ pub fn install() -> Recorder {
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Recorder {
-    /// Wall-clock instant the recorder began capturing.
     #[field(get, copy)]
     start_at: Instant,
     log: SharedLog,

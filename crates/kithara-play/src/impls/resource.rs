@@ -35,7 +35,6 @@ use crate::impls::{config::ResourceConfig, source_type::SourceType};
 #[fieldwork(opt_in, get)]
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
-    /// Source identifier for this resource.
     #[field(get, deref = false)]
     src: Arc<str>,
     /// Drop guard for the per-track cancel — the token passed as
@@ -48,9 +47,6 @@ pub struct Resource {
     /// disarmed by the `From<Resource>` reader unwrap when the live reader
     /// passes to the analysis worker.
     cancel: CancelGuard,
-    ///
-    /// Get a reference to the underlying `EventBus`.
-    /// Useful for passing to downstream components that also publish events.
     #[field(get = event_bus)]
     bus: EventBus,
 }

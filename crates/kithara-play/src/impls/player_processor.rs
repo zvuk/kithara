@@ -98,7 +98,6 @@ struct Handover {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct PlayerNodeProcessor {
-    /// Reference to the shared state used to bridge processor and main thread.
     #[field(get(deref = false))]
     shared_state: Arc<SharedPlayerState>,
     tracks: ArenaRegistry<Arc<str>, PlayerTrack>,

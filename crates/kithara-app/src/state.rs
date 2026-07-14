@@ -172,7 +172,6 @@ pub struct StateController {
     queue: Arc<Queue>,
     state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
-    /// The per-deck time-stretch handle.
     #[field(get = deck, deref = false)]
     timestretch: Arc<StretchControls>,
     cancel: CancelToken,

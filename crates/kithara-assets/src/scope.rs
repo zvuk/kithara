@@ -16,11 +16,9 @@ use crate::{error::AssetsResult, key::ResourceKey, layout::AssetLayout, unified:
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct AssetScope {
-    /// The `asset_root` this scope is bound to.
     #[field(get)]
     asset_root: Arc<str>,
     layout: Arc<dyn AssetLayout>,
-    /// The underlying shared store, where per-resource operations live.
     #[field(get)]
     store: AssetStore,
 }

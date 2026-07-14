@@ -21,14 +21,11 @@ pub enum RepeatMode {
 #[derive(Debug, Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct NavigationState {
-    /// Current track index, if selected.
     #[field(get)]
     current_index: Option<usize>,
-    /// Current repeat mode.
     #[field(get, copy)]
     repeat_mode: RepeatMode,
     history: VecDeque<usize>,
-    /// Shuffle flag.
     #[field(get = is_shuffle_enabled)]
     shuffle_enabled: bool,
 }

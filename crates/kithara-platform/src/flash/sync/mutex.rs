@@ -82,12 +82,9 @@ impl<T: Default> Default for Mutex<T> {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct MutexGuard<'a, T> {
-    /// The site this guard's lock was acquired at - reused as the re-acquire
-    /// site after a condvar wait re-takes the lock.
     #[field(get = site, vis = "pub(in crate::flash)")]
     at: &'static Location<'static>,
     inner: NativeGuard<'a, T>,
-    /// The diagnostics entry, if tracing, for holder bookkeeping across a wait.
     #[field(get, vis = "pub(in crate::flash)")]
     meta: Option<&'a PrimEntry>,
 }

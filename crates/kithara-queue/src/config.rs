@@ -45,13 +45,10 @@ pub struct QueueConfig {
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
-    /// Thread an app-wide master cancel so the queue subtree derives from
-    /// a single owner instead of minting its own root.
     #[field(with, option_set_some)]
     pub cancel: Option<CancelToken>,
 
     /// Externally-owned player. `None` means Queue builds a default.
-    /// Replace the [`PlayerImpl`] instance.
     #[field(with, option_set_some)]
     pub player: Option<Arc<PlayerImpl>>,
 

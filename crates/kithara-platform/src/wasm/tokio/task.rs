@@ -105,7 +105,6 @@ impl<T> Future for JoinHandle<T> {
 #[display("task failed to execute to completion")]
 #[fieldwork(get)]
 pub struct JoinError {
-    /// Returns `true` if the task was cancelled.
     #[field(get = is_cancelled)]
     cancelled: bool,
 }

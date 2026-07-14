@@ -25,9 +25,6 @@ pub struct Violation {
     /// Optional long-form explanation (Summary / Why / Bad / Good /
     /// Suppress block) shown in `--verbose` output and markdown reports.
     /// `None` keeps the compact one-line render.
-    /// Attach the long-form Summary / Why / Bad / Good / Suppress block
-    /// renderers; the compact one-line form keeps using `message`.
-    /// to this violation. Shown in `--verbose` and markdown report
     #[field(with, option_set_some)]
     pub(crate) explanation: Option<&'static str>,
 }

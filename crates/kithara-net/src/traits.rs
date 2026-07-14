@@ -48,7 +48,6 @@ pub struct ByteStream {
     /// Response headers from the HTTP request that produced this stream.
     pub headers: Headers,
     inner: RawByteStream,
-    /// Whether this stream was produced by an HTTP partial-content response.
     #[field(get = is_partial)]
     partial: bool,
 }

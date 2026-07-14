@@ -105,16 +105,13 @@ pub enum TrackReadOutcome {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct PlayerTrack {
-    /// Reference to the underlying shared resource.
     #[field(get, deref = false)]
     resource: Arc<Mutex<PlayerResource>>,
-    /// Source identifier.
     #[field(get, deref = false)]
     src: Arc<str>,
     fade_curve: FadeCurve,
     mix: MixDSP,
     item_id: Option<Arc<str>>,
-    /// Current track state.
     #[field(get, copy)]
     state: TrackState,
     /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
@@ -122,9 +119,6 @@ pub struct PlayerTrack {
     /// and revived by a later in-range seek (Superpowered-style resume).
     /// Cleared by `seek`/`play`. A `Finished` state from `stop()` or a
     /// faded-out crossfade leaves this `false`, so those are discarded as usual.
-    /// A natural-EOF `Finished` track is kept warm at end-of-queue and can be
-    /// Whether this track reached *natural* EOF (vs `stop()` / faded-out).
-    /// revived by an in-range seek. See [`Self::ended_at_eof`].
     #[field(get)]
     ended_at_eof: bool,
     notified_prefetch_requested: bool,
