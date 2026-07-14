@@ -2,10 +2,10 @@ use std::{collections::BTreeSet, fs, ops::Range};
 
 use anyhow::{Context as _, Result};
 use proc_macro2::{Delimiter, TokenTree};
-use quote::{ToTokens, quote};
+use quote::ToTokens;
 use syn::{
     Expr, ExprAwait, ExprField, ExprMethodCall, FnArg, GenericParam, Ident, ImplItem, ItemImpl,
-    ItemUse, Member, Pat, Stmt, UseTree, parse_quote,
+    ItemUse, Member, Pat, Stmt, UseTree,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -724,6 +724,7 @@ fn render_method(
         Modifier::TryInto => push_indented(output, "#[try_into]", indent),
         Modifier::Unwrap => push_indented(output, "#[unwrap]", indent),
         Modifier::Expr(template) => {
+            let template = compact_expr_template(template);
             push_indented(output, &format!("#[expr({template})]"), indent);
         }
         Modifier::Field(attr) => push_indented(output, attr, indent),
@@ -731,39 +732,83 @@ fn render_method(
     if let Some(call) = &delegated.spec.call {
         push_indented(output, &format!("#[call({call})]"), indent);
     }
-    let visibility = &method.vis;
-    let mut signature = method.sig.clone();
-    for (input, modifier) in signature
+    let mut signature = method_signature(src, method, &delegated.spec.param_modifiers)?;
+    signature.push(';');
+    let trailing = src.get(item.end..block.bytes.end)?.trim();
+    if !trailing.is_empty() {
+        signature.push(' ');
+        signature.push_str(trailing);
+    }
+    push_indented(output, &signature, indent);
+    Some(())
+}
+
+fn compact_expr_template(template: &str) -> String {
+    template
+        .split_ascii_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(" .", ".")
+}
+
+fn method_signature(
+    src: &str,
+    method: &syn::ImplItemFn,
+    param_modifiers: &[ParamModifier],
+) -> Option<String> {
+    let start = match method.vis {
+        syn::Visibility::Inherited => method.sig.span().byte_range().start,
+        _ => method.vis.span().byte_range().start,
+    };
+    let end = method.block.brace_token.span.open().byte_range().start;
+    let mut signature = src.get(start..end)?.trim_end().to_owned();
+    let mut inserts = Vec::new();
+    for (input, modifier) in method
+        .sig
         .inputs
-        .iter_mut()
+        .iter()
         .filter(|input| matches!(input, FnArg::Typed(_)))
-        .zip(&delegated.spec.param_modifiers)
+        .zip(param_modifiers)
     {
         let FnArg::Typed(input) = input else {
             continue;
         };
         let attr = match modifier {
             ParamModifier::None => continue,
-            ParamModifier::Into => parse_quote!(#[into]),
-            ParamModifier::AsRef => parse_quote!(#[as_ref]),
-            ParamModifier::Newtype => parse_quote!(#[newtype]),
+            ParamModifier::Into => "#[into] ",
+            ParamModifier::AsRef => "#[as_ref] ",
+            ParamModifier::Newtype => "#[newtype] ",
         };
-        input.attrs.push(attr);
+        let offset = input.span().byte_range().start.checked_sub(start)?;
+        inserts.push((offset, attr));
     }
-    output.push_str(indent);
-    output.push_str(
-        &quote!(#visibility #signature)
-            .to_string()
-            .replace("# [", "#["),
-    );
-    output.push(';');
-    let trailing = src.get(item.end..block.bytes.end)?.trim();
-    if !trailing.is_empty() {
-        output.push(' ');
-        output.push_str(trailing);
+    inserts.sort_unstable_by(|left, right| right.0.cmp(&left.0));
+    for (offset, attr) in inserts {
+        if !signature.is_char_boundary(offset) {
+            return None;
+        }
+        signature.insert_str(offset, attr);
     }
-    output.push('\n');
-    Some(())
+    if !signature.contains('\n') {
+        return Some(signature);
+    }
+    let line = line_start(src, start);
+    let source_indent = src.get(line..start)?;
+    if !source_indent
+        .bytes()
+        .all(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        return None;
+    }
+    let mut lines = signature.lines();
+    let mut reindented = lines.next()?.to_owned();
+    for line in lines {
+        reindented.push('\n');
+        if !line.trim().is_empty() {
+            reindented.push_str(line.strip_prefix(source_indent)?);
+        }
+    }
+    Some(reindented)
 }
 
 fn push_raw_body(output: &mut String, body: &str, indent: &str) {
@@ -952,6 +997,9 @@ fn forward_spec(src: &str, method: &syn::ImplItemFn) -> Option<ForwardSpec> {
         return None;
     }
     let expr_range = expr.span().byte_range();
+    if src.get(expr_range.clone())?.lines().count() > 2 {
+        return None;
+    }
     let call_range = delegated_call_range(expr, analysis.call, method)?;
     if call_range.start < expr_range.start || call_range.end > expr_range.end {
         return None;
@@ -959,6 +1007,9 @@ fn forward_spec(src: &str, method: &syn::ImplItemFn) -> Option<ForwardSpec> {
     let mut template = src.get(expr_range.start..call_range.start)?.to_owned();
     template.push('$');
     template.push_str(src.get(call_range.end..expr_range.end)?);
+    if template.bytes().any(|byte| matches!(byte, b'{' | b'}')) {
+        return None;
+    }
     call_spec_with_modifiers(
         src,
         method,
@@ -1427,6 +1478,52 @@ mod tests {
     }
 
     #[test]
+    fn delegated_signatures_preserve_source_formatting() -> Result<()> {
+        let source = "impl Wrapper {\n    pub fn duration(&self) -> Option<Duration> { self.inner.duration() }\n    pub(crate) fn platform_duration(&self) -> kithara_platform::time::Duration { self.inner.platform_duration() }\n    fn update_byte_len(&self, len: u64) { self.inner.update_byte_len(len) }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("pub fn duration(&self) -> Option<Duration>;"));
+        assert!(fixed.contains(
+            "pub(crate) fn platform_duration(&self) -> kithara_platform::time::Duration;"
+        ));
+        assert!(fixed.contains("fn update_byte_len(&self, len: u64);"));
+        Ok(())
+    }
+
+    #[test]
+    fn source_signature_injects_parameter_modifier_at_parameter_span() -> Result<()> {
+        let source = "impl Wrapper {\n    pub fn foo(&self, other: Self) { self.0.foo(other.into()) }\n    fn bar(&self) { self.0.bar() }\n    fn baz(&self) { self.0.baz() }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("pub fn foo(&self, #[into] other: Self);"));
+        Ok(())
+    }
+
+    #[test]
+    fn source_signature_injects_multiple_parameter_modifiers_right_to_left() -> Result<()> {
+        let source = "impl Wrapper {\n    fn f(&self, input: Input, other: Other) { self.inner.f(input.as_ref(), other.into()) }\n}\n";
+        let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("fn f(&self, #[as_ref] input: Input, #[into] other: Other);"));
+        Ok(())
+    }
+
+    #[test]
+    fn multiline_source_signature_is_reindented_inside_delegate_block() -> Result<()> {
+        let source = "impl Wrapper {\n    pub fn read(\n        &self,\n        input: Input,\n    ) -> Output {\n        self.inner.read(input)\n    }\n}\n";
+        let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains(
+            "            pub fn read(\n                &self,\n                input: Input,\n            ) -> Output;"
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn generic_into_forwarder_stays_manual() -> Result<()> {
         let source = "impl Wrapper {\n    fn len(&self) -> usize { self.inner.len() }\n    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) { self.inner.insert(key.into(), value.into()); }\n    fn clear(&mut self) { self.inner.clear() }\n}\n";
         let (fixed, outcome) = fix_source(source)?;
@@ -1449,7 +1546,7 @@ mod tests {
 
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("delegate::delegate!"));
-        assert!(fixed.contains("fn get < 'a > (& 'a self) -> & 'a str;"));
+        assert!(fixed.contains("fn get<'a>(&'a self) -> &'a str;"));
         assert!(!fixed.contains("self.inner.get()"));
         Ok(())
     }
@@ -1491,8 +1588,8 @@ mod tests {
         assert!(fixed.contains("pub fn new() -> Self { Self { inner: Inner } }"));
         assert!(fixed.contains("delegate::delegate!"));
         assert!(fixed.contains("to self.inner"));
-        assert!(fixed.contains("fn a (& self);"));
-        assert!(fixed.contains("fn b (& self , x : u8);"));
+        assert!(fixed.contains("fn a(&self);"));
+        assert!(fixed.contains("fn b(&self, x: u8);"));
         assert!(!fixed.contains("self.inner.a()"));
         assert!(!fixed.contains("self.inner.b(x)"));
         Ok(())
@@ -1504,8 +1601,8 @@ mod tests {
         let (fixed, outcome) = fix_source(source)?;
 
         assert_eq!(outcome.writes, 1);
-        assert!(fixed.contains("fn notify_all (& self);"));
-        assert!(fixed.contains("fn notify_one (& self);"));
+        assert!(fixed.contains("fn notify_all(&self);"));
+        assert!(fixed.contains("fn notify_one(&self);"));
         assert!(!fixed.contains("self.cv.notify_all()"));
         Ok(())
     }
@@ -1516,8 +1613,8 @@ mod tests {
         let (fixed, outcome) = fix_source(source)?;
 
         assert_eq!(outcome.writes, 1);
-        assert!(fixed.contains("#[call(wake_all)]\n            async fn notify_all (& self);"));
-        assert!(fixed.contains("#[call(wake_one)]\n            async fn notify_one (& self);"));
+        assert!(fixed.contains("#[call(wake_all)]\n            async fn notify_all(&self);"));
+        assert!(fixed.contains("#[call(wake_one)]\n            async fn notify_one(&self);"));
         assert!(!fixed.contains("self.cv.wake_all().await"));
         Ok(())
     }
@@ -1528,8 +1625,8 @@ mod tests {
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("#[call(len)]"));
-        assert!(fixed.contains("fn size (& self) -> usize;"));
-        assert!(fixed.contains("fn clear (& mut self);"));
+        assert!(fixed.contains("fn size(&self) -> usize;"));
+        assert!(fixed.contains("fn clear(&mut self);"));
         Ok(())
     }
 
@@ -1540,7 +1637,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("#[into]"));
         assert!(fixed.contains("#[call(y)]"));
-        assert!(fixed.contains("fn x (& self , n : u32) -> u64;"));
+        assert!(fixed.contains("fn x(&self, n: u32) -> u64;"));
         Ok(())
     }
 
@@ -1551,7 +1648,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("#[unwrap]"));
         assert!(fixed.contains("#[call(y)]"));
-        assert!(fixed.contains("fn x (& self) -> u32;"));
+        assert!(fixed.contains("fn x(&self) -> u32;"));
         Ok(())
     }
 
@@ -1563,7 +1660,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert_eq!(
             fixed,
-            "impl Wrapper {\n    delegate::delegate! {\n        to self.0 {\n            #[expr(*$.unwrap())]\n            #[call(get)]\n            fn value (& self , i : usize) -> u8;\n        }\n    }\n}\n"
+            "impl Wrapper {\n    delegate::delegate! {\n        to self.0 {\n            #[expr(*$.unwrap())]\n            #[call(get)]\n            fn value(&self, i: usize) -> u8;\n        }\n    }\n}\n"
         );
         let (again, second) = fix_source_with_thresholds(&fixed, 1, 1)?;
         assert_eq!(again, fixed);
@@ -1577,22 +1674,22 @@ mod tests {
             (
                 "fn squared(&self, i: usize) -> Option<u8> { self.0.get(i)?.checked_pow(2) }",
                 "to self.0",
-                "#[expr($?.checked_pow(2))]\n            #[call(get)]\n            fn squared (& self , i : usize) -> Option < u8 >;",
+                "#[expr($?.checked_pow(2))]\n            #[call(get)]\n            fn squared(&self, i: usize) -> Option<u8>;",
             ),
             (
                 "fn mapped(&self, x: Input) -> Output { self.inner.m(x).map(Foo::from) }",
                 "to self.inner",
-                "#[expr($.map(Foo::from))]\n            #[call(m)]\n            fn mapped (& self , x : Input) -> Output;",
+                "#[expr($.map(Foo::from))]\n            #[call(m)]\n            fn mapped(&self, x: Input) -> Output;",
             ),
             (
                 "fn mapped(&self, x: Input) -> Output { self.inner.m(x.into()).map(Foo::from) }",
                 "to self.inner",
-                "#[expr($.map(Foo::from))]\n            #[call(m)]\n            fn mapped (& self , #[into] x : Input) -> Output;",
+                "#[expr($.map(Foo::from))]\n            #[call(m)]\n            fn mapped(&self, #[into] x: Input) -> Output;",
             ),
             (
                 "async fn squared(&self, i: usize) -> Option<u8> { self.0.get(i).await?.checked_pow(2) }",
                 "to self.0",
-                "#[expr($?.checked_pow(2))]\n            #[call(get)]\n            async fn squared (& self , i : usize) -> Option < u8 >;",
+                "#[expr($?.checked_pow(2))]\n            #[call(get)]\n            async fn squared(&self, i: usize) -> Option<u8>;",
             ),
         ];
         for (method, target, rendered) in cases {
@@ -1611,17 +1708,88 @@ mod tests {
     }
 
     #[test]
+    fn multiline_simple_expr_template_is_collapsed_to_one_line() -> Result<()> {
+        let source = "impl Wrapper {\n    fn index(&self) -> Option<usize> {\n        self.inner.index()\n            .map(|s| s.index().get())\n    }\n}\n";
+        let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("#[expr($.map(|s| s.index().get()))]"));
+        let start = fixed.find("#[expr(").expect("expr attribute");
+        let end = fixed[start..].find(")]").expect("expr attribute end") + start;
+        assert!(!fixed[start..end].contains('\n'));
+        Ok(())
+    }
+
+    #[test]
+    fn brace_expr_forwarder_stays_manual_while_siblings_are_delegated() -> Result<()> {
+        let source = "impl Wrapper {\n    fn x(&self) -> Result<()> { if self.cursor == self.inner.pos() { Ok(()) } else { Err(E) } }\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains(
+            "fn x(&self) -> Result<()> { if self.cursor == self.inner.pos() { Ok(()) } else { Err(E) } }"
+        ));
+        let block = &fixed[fixed.find("delegate::delegate!").expect("delegate block")..];
+        assert!(!block.contains("fn x(&self)"));
+        assert!(block.contains("fn a(&self);"));
+        assert!(block.contains("fn b(&self);"));
+        Ok(())
+    }
+
+    #[test]
+    fn loop_match_expr_forwarder_stays_manual() -> Result<()> {
+        let source = "impl Wrapper {\n    fn next_item(&mut self) -> Result<Item> {\n        loop {\n            match self.inner.next()? {\n                Some(item) => break Ok(item),\n                None => continue,\n            }\n        }\n    }\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("fn next_item(&mut self) -> Result<Item> {"));
+        assert!(fixed.contains("match self.inner.next()?"));
+        let block = &fixed[fixed.find("delegate::delegate!").expect("delegate block")..];
+        assert!(!block.contains("fn next_item(&mut self)"));
+        assert!(block.contains("fn a(&self);"));
+        assert!(block.contains("fn b(&self);"));
+        Ok(())
+    }
+
+    #[test]
+    fn three_line_brace_free_expr_forwarder_stays_manual() -> Result<()> {
+        let source = "impl Wrapper {\n    fn index(&self) -> Option<usize> {\n        self.inner\n            .index()\n            .map(|s| s.index().get())\n    }\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("fn index(&self) -> Option<usize> {"));
+        assert!(fixed.contains(".map(|s| s.index().get())"));
+        let block = &fixed[fixed.find("delegate::delegate!").expect("delegate block")..];
+        assert!(!block.contains("fn index(&self)"));
+        assert!(block.contains("fn a(&self);"));
+        assert!(block.contains("fn b(&self);"));
+        Ok(())
+    }
+
+    #[test]
     fn try_into_result_emits_dedicated_modifier() -> Result<()> {
         let source = "impl Wrapper {\n    fn value(&self, x: Input) -> Result<Output, Error> { self.inner.read(x).try_into() }\n}\n";
         let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
         assert_eq!(outcome.writes, 1);
         assert_eq!(
             fixed,
-            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            #[try_into]\n            #[call(read)]\n            fn value (& self , x : Input) -> Result < Output , Error >;\n        }\n    }\n}\n"
+            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            #[try_into]\n            #[call(read)]\n            fn value(&self, x: Input) -> Result<Output, Error>;\n        }\n    }\n}\n"
         );
         let (again, second) = fix_source_with_thresholds(&fixed, 1, 1)?;
         assert_eq!(again, fixed);
         assert_eq!(second.writes, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn multiline_dedicated_conversion_remains_eligible() -> Result<()> {
+        let source = "impl Wrapper {\n    fn value(&self) -> Output {\n        self.inner\n            .value()\n            .into()\n    }\n}\n";
+        let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("#[into]"));
+        assert!(fixed.contains("fn value(&self) -> Output;"));
+        assert!(!fixed.contains("#[expr("));
         Ok(())
     }
 
@@ -1651,7 +1819,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("#[into]"));
         assert!(fixed.contains("#[call(y)]"));
-        assert!(fixed.contains("async fn x (& self) -> u64;"));
+        assert!(fixed.contains("async fn x(&self) -> u64;"));
         assert!(!fixed.contains("self.inner.y().await.into()"));
         Ok(())
     }
@@ -1663,7 +1831,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("#[unwrap]"));
         assert!(fixed.contains("#[call(y)]"));
-        assert!(fixed.contains("async fn x (& self) -> u32;"));
+        assert!(fixed.contains("async fn x(&self) -> u32;"));
         Ok(())
     }
 
@@ -1674,8 +1842,8 @@ mod tests {
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("to self.0 {"));
-        assert!(fixed.contains("fn a (& self);"));
-        assert!(fixed.contains("fn b (& self);"));
+        assert!(fixed.contains("fn a(&self);"));
+        assert!(fixed.contains("fn b(&self);"));
         Ok(())
     }
 
@@ -1686,7 +1854,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert_eq!(
             fixed,
-            "impl Wrapper {\n    delegate::delegate! {\n        to self.0 {\n            #[field]\n            fn value (& self) -> u8;\n        }\n    }\n}\n"
+            "impl Wrapper {\n    delegate::delegate! {\n        to self.0 {\n            #[field]\n            fn value(&self) -> u8;\n        }\n    }\n}\n"
         );
         let (again, second) = fix_source_with_thresholds(&fixed, 1, 1)?;
         assert_eq!(again, fixed);
@@ -1699,15 +1867,15 @@ mod tests {
         let cases = [
             (
                 "fn value(&self) -> u8 { self.0.inner_name }",
-                "#[field(inner_name)]\n            fn value (& self) -> u8;",
+                "#[field(inner_name)]\n            fn value(&self) -> u8;",
             ),
             (
                 "fn value(&self) -> &u8 { &self.0.value }",
-                "#[field(&value)]\n            fn value (& self) -> & u8;",
+                "#[field(&value)]\n            fn value(&self) -> &u8;",
             ),
             (
                 "fn value(&mut self) -> &mut u8 { &mut self.0.value }",
-                "#[field(&mut value)]\n            fn value (& mut self) -> & mut u8;",
+                "#[field(&mut value)]\n            fn value(&mut self) -> &mut u8;",
             ),
         ];
         for (method, rendered) in cases {
@@ -1750,7 +1918,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert_eq!(
             fixed,
-            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner.lock() {\n            fn a (& self);\n            fn b (& mut self);\n        }\n    }\n}\n"
+            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner.lock() {\n            fn a(&self);\n            fn b(&mut self);\n        }\n    }\n}\n"
         );
         let (again, second) = fix_source(&fixed)?;
         assert_eq!(again, fixed);
@@ -1814,7 +1982,7 @@ mod tests {
         assert_eq!(fixed.matches("delegate::delegate!").count(), 1);
         assert_eq!(fixed.matches("to self.inner {").count(), 1);
         assert!(fixed.contains("fn a(&self);"));
-        assert!(fixed.contains("fn b (& self);"));
+        assert!(fixed.contains("fn b(&self);"));
         assert!(!fixed.contains("self.inner.b()"));
         Ok(())
     }
@@ -1872,7 +2040,7 @@ mod tests {
         assert_eq!(fixed.matches("delegate::delegate!").count(), 1);
         assert_eq!(fixed.matches("to self.inner {").count(), 2);
         assert_eq!(fixed.matches("#[await]").count(), 1);
-        assert!(fixed.contains("async fn b (& self);"));
+        assert!(fixed.contains("async fn b(&self);"));
         Ok(())
     }
 
@@ -1940,7 +2108,7 @@ mod tests {
         let source = "impl Read for Wrapper {\n    #[cfg(unix)]\n    fn read(&self, b: Buf) { self.inner.read(b) }\n    fn close(&self) { self.inner.close() }\n    fn flush(&self) { self.inner.flush() }\n}";
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 1);
-        assert!(fixed.contains("#[cfg(unix)]\n            fn read (& self , b : Buf);"));
+        assert!(fixed.contains("#[cfg(unix)]\n            fn read(&self, b: Buf);"));
         assert!(fixed.contains("delegate::delegate!"));
         assert!(!fixed.contains("self.inner.read(b)"));
         assert!(!fixed.contains("self.inner.close()"));
@@ -1953,7 +2121,7 @@ mod tests {
         let source = "impl Wrapper {\n    #[cfg(test)]\n    fn test_only(&self) { self.inner.test_only() }\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 1);
-        assert!(fixed.contains("#[cfg(test)]\n            fn test_only (& self);"));
+        assert!(fixed.contains("#[cfg(test)]\n            fn test_only(&self);"));
         assert!(!fixed.contains("self.inner.test_only()"));
         assert!(!fixed.contains("self.inner.a()"));
         assert!(!fixed.contains("self.inner.b()"));
@@ -1967,7 +2135,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert_eq!(
             fixed,
-            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            #[doc = r\" Doc. \"]\n            fn read (& self , b : Buf);\n        }\n    }\n}\n"
+            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            #[doc = r\" Doc. \"]\n            fn read(&self, b: Buf);\n        }\n    }\n}\n"
         );
         let (again, second) = fix_source_with_thresholds(&fixed, 1, 1)?;
         assert_eq!(again, fixed);
@@ -1982,7 +2150,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert_eq!(
             fixed,
-            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            #[doc = r#\" A \"quoted\" value. \"#]\n            fn read (& self);\n        }\n    }\n}\n"
+            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            #[doc = r#\" A \"quoted\" value. \"#]\n            fn read(&self);\n        }\n    }\n}\n"
         );
         Ok(())
     }
@@ -1993,7 +2161,7 @@ mod tests {
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("/// Reads bytes."));
-        assert!(fixed.contains("pub (crate) fn read"));
+        assert!(fixed.contains("pub(crate) fn read"));
         Ok(())
     }
 
@@ -2002,7 +2170,7 @@ mod tests {
         let source = "impl Wrapper {\n    #[must_use]\n    fn len(&self) -> Option<u64> { self.inner.len() }\n}\n";
         let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
         assert_eq!(outcome.writes, 1);
-        assert!(fixed.contains("#[must_use]\n            fn len (& self) -> Option < u64 >;"));
+        assert!(fixed.contains("#[must_use]\n            fn len(&self) -> Option<u64>;"));
         assert!(!fixed.contains("self.inner.len()"));
         Ok(())
     }
@@ -2012,7 +2180,7 @@ mod tests {
         let source = "impl Wrapper {\n    #[deprecated = \"x\"]\n    fn old(&self) { self.inner.old() }\n}\n";
         let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
         assert_eq!(outcome.writes, 1);
-        assert!(fixed.contains("#[deprecated = \"x\"]\n            fn old (& self);"));
+        assert!(fixed.contains("#[deprecated = \"x\"]\n            fn old(&self);"));
         assert!(!fixed.contains("self.inner.old()"));
         Ok(())
     }
@@ -2023,7 +2191,7 @@ mod tests {
         let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
 
         assert_eq!(outcome.writes, 1);
-        assert!(fixed.contains("#[tracing::instrument(skip(self))]\n            fn run (& self);"));
+        assert!(fixed.contains("#[tracing::instrument(skip(self))]\n            fn run(&self);"));
         assert!(!fixed.contains("self.inner.run()"));
         Ok(())
     }
@@ -2060,7 +2228,7 @@ mod tests {
         let must_use = fixed.find("#[must_use]").expect("preserved attribute");
         let into = fixed.find("#[into]").expect("into attribute");
         let call = fixed.find("#[call(read)]").expect("call attribute");
-        let signature = fixed.find("fn value (& self) -> u64;").expect("signature");
+        let signature = fixed.find("fn value(&self) -> u64;").expect("signature");
         assert!(must_use < into && into < call && call < signature);
         Ok(())
     }
@@ -2094,7 +2262,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert_eq!(
             fixed,
-            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            fn f (& self , #[into] x : Input);\n        }\n    }\n}\n"
+            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            fn f(&self, #[into] x: Input);\n        }\n    }\n}\n"
         );
         let (again, second) = fix_source_with_thresholds(&fixed, 1, 1)?;
         assert_eq!(again, fixed);
@@ -2107,15 +2275,15 @@ mod tests {
         let cases = [
             (
                 "fn f(&self, x: Input) { self.inner.f(x.as_ref()) }",
-                "fn f (& self , #[as_ref] x : Input);",
+                "fn f(&self, #[as_ref] x: Input);",
             ),
             (
                 "fn f(&self, x: Input) { self.inner.f(x.0) }",
-                "fn f (& self , #[newtype] x : Input);",
+                "fn f(&self, #[newtype] x: Input);",
             ),
             (
                 "fn f(&self, x: Input, y: Other) { self.inner.f(x, y.into()) }",
-                "fn f (& self , x : Input , #[into] y : Other);",
+                "fn f(&self, x: Input, #[into] y: Other);",
             ),
         ];
         for (method, signature) in cases {
@@ -2138,9 +2306,9 @@ mod tests {
         let source = "impl Wrapper {\n    #[must_use]\n    fn marked(&self) -> bool { self.inner.marked() }\n    fn transformed(&self, x: Input) { self.inner.transformed(x.into()) }\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 1);
-        assert!(fixed.contains("#[must_use]\n            fn marked (& self) -> bool;"));
+        assert!(fixed.contains("#[must_use]\n            fn marked(&self) -> bool;"));
         assert!(!fixed.contains("self.inner.marked()"));
-        assert!(fixed.contains("fn transformed (& self , #[into] x : Input);"));
+        assert!(fixed.contains("fn transformed(&self, #[into] x: Input);"));
         assert!(!fixed.contains("self.inner.transformed(x.into())"));
         assert!(!fixed.contains("self.inner.a()"));
         assert!(!fixed.contains("self.inner.b()"));
@@ -2245,7 +2413,7 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert_eq!(
             fixed,
-            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            async fn read (& self , #[into] b : Buf);\n        }\n    }\n}\n"
+            "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            async fn read(&self, #[into] b: Buf);\n        }\n    }\n}\n"
         );
         Ok(())
     }
