@@ -136,7 +136,8 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// Mark the resource failed and remove the orphaned temp file.
     pub fn fail(&self, reason: String) {
         self.inner.load().fail_in_place(reason);
-        if let Some(tmp) = self.tmp_path.lock().take() {
+        let tmp = self.tmp_path.lock().take();
+        if let Some(tmp) = tmp {
             let _ = fs::remove_file(&tmp);
         }
     }
@@ -300,7 +301,8 @@ impl<D: DriverIo> Drop for AtomicChunked<D> {
     /// `Drop` entirely, in which case the next `AtomicChunked::open`
     /// over the same canonical path wipes the stale temp.
     fn drop(&mut self) {
-        if let Some(tmp) = self.tmp_path.lock().take() {
+        let tmp = self.tmp_path.lock().take();
+        if let Some(tmp) = tmp {
             let _ = fs::remove_file(&tmp);
         }
     }

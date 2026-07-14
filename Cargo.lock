@@ -5052,6 +5052,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "bungee-rs",
+ "fast-interleave",
  "kithara-bufpool",
  "kithara-workspace-hack",
  "num-traits",

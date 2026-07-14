@@ -328,7 +328,7 @@ impl AssetStoreBuildArgs {
         let evict_cfg = self.evict_config.unwrap_or_default();
         let cancel = CancelScope::new(self.cancel).token();
 
-        let pool = self.pool.unwrap_or_else(|| BytePool::default().clone());
+        let pool = self.pool.unwrap_or_default();
 
         let hub = self
             .flush_hub
@@ -370,7 +370,7 @@ impl AssetStoreBuildArgs {
                 pins: pins.clone(),
             },
         ));
-        let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool.clone()));
+        let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool));
         let capacity = self
             .cache_capacity
             .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
@@ -379,7 +379,6 @@ impl AssetStoreBuildArgs {
         let cached = Arc::new(CachedAssets::new(processing, capacity, None, false));
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
-        let _ = pool;
         let chain = LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pins);
         (chain, base)
     }
@@ -398,7 +397,7 @@ impl AssetStoreBuildArgs {
     ) -> MemStore {
         let cancel = CancelScope::new(self.cancel).token();
         let evict_cfg = self.evict_config.unwrap_or_default();
-        let pool = self.pool.unwrap_or_else(|| BytePool::default().clone());
+        let pool = self.pool.unwrap_or_default();
 
         let hub = self
             .flush_hub
@@ -438,7 +437,7 @@ impl AssetStoreBuildArgs {
         let capacity = self
             .cache_capacity
             .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
-        let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool.clone()));
+        let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool));
         // Ephemeral backing: LRU displacement frees the bytes, so each
         // displaced key must clear availability and reach its eviction
         let availability_for_hook = availability.clone();

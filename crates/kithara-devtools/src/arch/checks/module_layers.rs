@@ -180,7 +180,7 @@ fn resolve_module_to_file(crate_root: &Path, segments: &[String]) -> Option<Path
     try_paths.push(exact.with_extension("rs"));
     try_paths.push(exact.join("mod.rs"));
     if segments.len() >= 2 {
-        let mut parent = src.clone();
+        let mut parent = src;
         for seg in &segments[..segments.len() - 1] {
             parent = parent.join(seg);
         }

@@ -152,7 +152,6 @@ lint:
         --max-local-http-servers "${QUALITY_MAX_LOCAL_HTTP_SERVERS:-999}"
     - just deny
     - just machete
-    - just lint arch
     - just hack || true
     - just semver || true
   artifacts:

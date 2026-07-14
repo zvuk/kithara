@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write,
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -307,14 +308,15 @@ fn write_report(
     } else {
         format!("{project_name} health report")
     };
-    out.push_str(&format!("# {title}\n\n"));
-    out.push_str(&format!("- generated_at_utc: {timestamp}\n"));
-    out.push_str(&format!("- total_duration: {total_str}\n"));
-    out.push_str(&format!(
-        "- overall: {overall} ({} stage(s), {failed} failed)\n",
+    let _ = write!(out, "# {title}\n\n");
+    let _ = writeln!(out, "- generated_at_utc: {timestamp}");
+    let _ = writeln!(out, "- total_duration: {total_str}");
+    let _ = writeln!(
+        out,
+        "- overall: {overall} ({} stage(s), {failed} failed)",
         results.len()
-    ));
-    out.push_str(&format!("- per-stage logs: `{}/`\n\n", logs_dir.display()));
+    );
+    let _ = write!(out, "- per-stage logs: `{}/`\n\n", logs_dir.display());
     out.push_str("Excluded by design (run separately): `mutants`, `coverage`, `dead`, ");
     out.push_str(
         "`test --lane=e2e`, `test --lane=selenium`, `wasm`, `bench`, `perf`, `memory-check`.\n\n",
@@ -324,39 +326,42 @@ fn write_report(
     out.push_str("| # | Stage | Status | Duration | Notes |\n");
     out.push_str("|---|-------|--------|----------|-------|\n");
     for (idx, r) in results.iter().enumerate() {
-        out.push_str(&format!(
-            "| {} | {} | {} | {} | {} |\n",
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
             idx + 1,
             r.name,
             r.status.label(),
             format_duration(r.duration),
             r.note.clone().unwrap_or_default(),
-        ));
+        );
     }
     out.push('\n');
 
     out.push_str("## Stage details\n\n");
     for (idx, r) in results.iter().enumerate() {
         let log_path = logs_dir.join(format!("{:02}-{}.log", idx + 1, r.name));
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "### {}. {} — {} ({})\n\n",
             idx + 1,
             r.name,
             r.status.label(),
             format_duration(r.duration),
-        ));
-        out.push_str(&format!("```\n{}\n```\n\n", r.cmdline));
+        );
+        let _ = write!(out, "```\n{}\n```\n\n", r.cmdline);
         if let Some(note) = &r.note {
-            out.push_str(&format!("note: {note}\n\n"));
+            let _ = write!(out, "note: {note}\n\n");
         }
         let tail = read_log_tail(&log_path, Consts::STDOUT_TAIL_LINES);
         if !tail.is_empty() {
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "<details><summary>last {} log lines (full: `{}`)</summary>\n\n```\n{}\n```\n\n</details>\n\n",
                 Consts::STDOUT_TAIL_LINES,
                 log_path.display(),
                 tail,
-            ));
+            );
         }
     }
 
