@@ -2,6 +2,7 @@
 
 use kithara::{
     audio::{EqBandConfig, StretchControls},
+    bufpool::Region,
     decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
     platform::sync::{Arc, Mutex},
@@ -29,11 +30,14 @@ impl OfflinePlayerHarness {
     pub(crate) fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
         let session = Arc::new(OfflineSession::new_manual());
         let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
+        let region = Region::default();
         let player_config = PlayerConfig::builder()
             .crossfade_duration(options.crossfade_duration)
             .gapless_mode(options.gapless_mode)
             .sample_rate(sample_rate)
             .session(Arc::clone(&session_dispatcher))
+            .byte_pool(region.byte_pool())
+            .pcm_pool(region.pcm_pool())
             .maybe_eq_layout(options.eq_layout)
             .maybe_timestretch(options.timestretch)
             .build();

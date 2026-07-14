@@ -3,7 +3,7 @@ use std::fmt;
 use bon::Builder;
 use kithara_abr::AbrController;
 use kithara_audio::{EqBandConfig, StretchControls, generate_log_spaced_bands};
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
@@ -28,8 +28,10 @@ pub struct PlayerConfig {
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for this player.
     pub(crate) cancel: Option<CancelToken>,
+    /// Byte buffer pool shared by resources created for this player.
+    pub(crate) byte_pool: BytePool,
     /// PCM buffer pool for audio-thread scratch buffers.
-    pub(crate) pcm_pool: Option<PcmPool>,
+    pub(crate) pcm_pool: PcmPool,
     /// Pre-built audio session dispatcher.
     pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout. Default: 10-band log-spaced.
@@ -72,8 +74,12 @@ impl fmt::Debug for PlayerConfig {
     }
 }
 
+#[cfg(test)]
 impl Default for PlayerConfig {
     fn default() -> Self {
-        Self::builder().build()
+        Self::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .build()
     }
 }

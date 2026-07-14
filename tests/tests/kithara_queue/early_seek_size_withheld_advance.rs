@@ -19,6 +19,7 @@
 
 use kithara::{
     assets::StoreOptions,
+    bufpool::Region,
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
     net::{HttpClient, NetOptions},
@@ -74,9 +75,12 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let session = Arc::new(OfflineSession::new_manual());
+        let region = Region::default();
         let config = PlayerConfig::builder()
             .crossfade_duration(0.0)
             .sample_rate(SAMPLE_RATE)
+            .byte_pool(region.byte_pool())
+            .pcm_pool(region.pcm_pool())
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build();
         let player = Arc::new(PlayerImpl::new(config));
@@ -92,6 +96,7 @@ async fn build_hls_resource(
     master: &url::Url,
     downloader: &Downloader,
     store: &StoreOptions,
+    player: &PlayerImpl,
 ) -> Resource {
     let cfg = ResourceConfig::for_src(master.as_str())
         .expect("valid master URL")
@@ -103,6 +108,8 @@ async fn build_hls_resource(
                 .build(),
         )
         .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     Resource::new(cfg).await.expect("create HLS resource")
 }
@@ -194,10 +201,10 @@ async fn run_case(mode: GateMode) {
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward
     // auto-advance has somewhere to land (observable as current_index 0 -> 1).
-    let target = build_hls_resource(&master, &downloader, &store).await;
+    let target = build_hls_resource(&master, &downloader, &store, &harness.player).await;
     let target_src = target.src().clone();
     let id0 = queue.insert_loaded_for_test(target);
-    let next = build_hls_resource(&master, &downloader, &store).await;
+    let next = build_hls_resource(&master, &downloader, &store, &harness.player).await;
     let _id1 = queue.insert_loaded_for_test(next);
 
     queue.select(id0, Transition::None).expect("select track 0");

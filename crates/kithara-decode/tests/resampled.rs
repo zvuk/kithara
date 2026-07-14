@@ -6,6 +6,7 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{
     DecoderChunkOutcome, DecoderConfig, DecoderFactory, DecoderResamplerConfig, PcmChunk,
 };
@@ -221,6 +222,28 @@ fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
     ));
 }
 
+#[test]
+fn decoder_factory_uses_configured_pcm_pool() {
+    let pcm_pool = PcmPool::new(4, 4_096);
+    let config: DecoderConfig = DecoderConfig::builder()
+        .byte_pool(BytePool::new(4, 4_096))
+        .pcm_pool(pcm_pool.clone())
+        .build();
+    let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let mut decoder =
+        DecoderFactory::create_from_media_info(Cursor::new(test_wav()), &media_info, config)
+            .expect("decoder builds");
+
+    assert_eq!(pcm_pool.allocated_bytes(), 0);
+    let chunk: PcmChunk = decoder
+        .next_chunk()
+        .expect("next chunk")
+        .try_into()
+        .expect("decoded chunk");
+    assert!(!chunk.samples.is_empty());
+    assert!(pcm_pool.allocated_bytes() > 0);
+}
+
 fn decoder_with_resampler<B>(
     target_rate: NonZeroU32,
     backend: B,
@@ -230,6 +253,8 @@ where
 {
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = DecoderConfig::builder()
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .resampler(
             DecoderResamplerConfig::builder()
                 .target_sample_rate(target_rate)

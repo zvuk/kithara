@@ -1,6 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use kithara_abr::AbrMode;
+use kithara_bufpool::Region;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_hls::{KeyOptions, KeyProcessorRule};
 use kithara_platform::{
@@ -26,6 +27,7 @@ use crate::{
 struct BuildState {
     headers: HashMap<String, String>,
     keys: KeyOptions,
+    region: Region,
 }
 
 macro_rules! clog {
@@ -55,15 +57,18 @@ pub(crate) fn worker_main(
 
     task_spawn(async move {
         let session = wasm::remote_session(session_tx);
+        let state = BuildState::default();
         let player = Arc::new(kithara_play::PlayerImpl::new(
             kithara_play::PlayerConfig::builder()
+                .byte_pool(state.region.byte_pool())
+                .pcm_pool(state.region.pcm_pool())
                 .session(session.dispatcher())
                 .build(),
         ));
         let queue = Rc::new(Queue::new(QueueConfig::builder().player(player).build()));
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
 
-        let build_state = Rc::new(RefCell::new(BuildState::default()));
+        let build_state = Rc::new(RefCell::new(state));
         spawn_tick_loop(Rc::clone(&queue));
         crate::web::observer::source::spawn(&queue);
 
@@ -281,6 +286,8 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
             let config = builder
                 .keys(state.keys.clone())
                 .maybe_headers(headers.map(Into::into))
+                .byte_pool(state.region.byte_pool())
+                .pcm_pool(state.region.pcm_pool())
                 .build();
             TrackSource::Config(Box::new(config))
         }

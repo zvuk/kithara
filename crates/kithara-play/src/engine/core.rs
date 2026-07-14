@@ -48,7 +48,7 @@ impl EngineImpl {
             .take()
             .map_or_else(default_session_handle, SessionHandle::new);
         let max_slots = config.max_slots;
-        let resolved_pool = config.pcm_pool.clone().unwrap_or_default();
+        let resolved_pool = config.pcm_pool.clone();
         let worker_cancel = CancelScope::new(config.cancel.clone()).token();
 
         Self {

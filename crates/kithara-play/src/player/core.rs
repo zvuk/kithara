@@ -1,6 +1,7 @@
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
 use kithara_audio::{EngineLoad, StretchControls};
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_platform::{
     CancelScope,
@@ -33,6 +34,7 @@ pub(crate) struct PlayerCore {
     pub(crate) params: PlayerParams,
     pub(crate) timestretch: Arc<StretchControls>,
     pub(crate) gapless_mode: GaplessMode,
+    pub(crate) byte_pool: BytePool,
     /// Engine drops last — worker shutdown happens after all tracks
     /// unregister and after `items` releases their resources.
     pub(crate) engine: EngineImpl,
@@ -68,7 +70,7 @@ impl PlayerImpl {
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig) -> Self {
-        let resolved_pool = config.pcm_pool.clone().unwrap_or_default();
+        let resolved_pool = config.pcm_pool.clone();
 
         let bus = config.bus.clone().unwrap_or_default();
 
@@ -98,6 +100,7 @@ impl PlayerImpl {
             params: PlayerParams::from(&config),
             timestretch: config.timestretch,
             gapless_mode: config.gapless_mode,
+            byte_pool: config.byte_pool,
             status: Mutex::default(),
             items: ItemQueue::new(bus),
             engine,
@@ -106,6 +109,18 @@ impl PlayerImpl {
             core,
             phase: Mutex::new(PlayerPhase::Idle),
         }
+    }
+
+    /// Byte pool used for resources created by this player.
+    #[must_use]
+    pub fn byte_pool(&self) -> &BytePool {
+        &self.core.byte_pool
+    }
+
+    /// PCM pool used by this player's audio engine.
+    #[must_use]
+    pub fn pcm_pool(&self) -> &PcmPool {
+        self.core.engine.pcm_pool()
     }
 
     /// Advance to the next item in the queue.
@@ -241,6 +256,7 @@ impl crate::api::Equalizer for PlayerImpl {
 #[cfg(test)]
 mod tests {
     use kithara_audio::{StretchControls, generate_log_spaced_bands};
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::GaplessMode;
     use kithara_events::Event;
     use kithara_platform::CancelToken;
@@ -263,10 +279,16 @@ mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .gapless_mode(GaplessMode::Disabled)
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
                 .build(),
         );
-        let mut config = crate::resource::ResourceConfig::new("https://example.com/song.mp3")
-            .expect("BUG: valid resource config");
+        let mut config = crate::resource::ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: valid resource config");
 
         config = player.prepare_config(config);
 
@@ -281,8 +303,12 @@ mod tests {
     #[kithara::test]
     fn prepare_config_per_track_cancel_is_child_of_player_master() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        let mut rc = crate::resource::ResourceConfig::new("https://example.com/song.mp3")
-            .expect("BUG: valid resource config");
+        let mut rc = crate::resource::ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: valid resource config");
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
@@ -302,10 +328,16 @@ mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .cancel(parent_master.clone())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
                 .build(),
         );
-        let mut rc = crate::resource::ResourceConfig::new("https://example.com/song.mp3")
-            .expect("BUG: valid resource config");
+        let mut rc = crate::resource::ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: valid resource config");
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
@@ -410,6 +442,8 @@ mod tests {
             .max_slots(2)
             .sample_rate(44_100)
             .timestretch(StretchControls::new(1.0))
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -423,6 +457,8 @@ mod tests {
             .crossfade_duration(2.5)
             .prefetch_duration(7.0)
             .eq_layout(generate_log_spaced_bands(5))
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .build();
         assert_eq!(config.max_slots, 8);
         assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
@@ -495,6 +531,8 @@ mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .session(testing::test_session())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
                 .build(),
         );
         let ptr_before = Arc::as_ptr(&player.core.timestretch);
@@ -582,7 +620,13 @@ mod tests {
 
     #[kithara::test]
     fn auto_advance_disabled_via_config() {
-        let player = PlayerImpl::new(PlayerConfig::builder().auto_advance_enabled(false).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .auto_advance_enabled(false)
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .build(),
+        );
         assert!(!player.auto_advance_enabled());
     }
 }

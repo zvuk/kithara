@@ -123,6 +123,8 @@ async fn build_resource(
 ) -> Resource {
     let cfg = ResourceConfig::for_src(url)
         .unwrap_or_else(|e| panic!("ResourceConfig::for_src({url}): {e}"))
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .name(format!("{iter_label}|{url}"))
         .store(store)

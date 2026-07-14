@@ -40,10 +40,9 @@ impl RenderPass {
     pub(crate) fn new(pool: &PcmPool, max_frames: usize) -> Self {
         let scratch_bufs = std::array::from_fn(|_| {
             let mut buf = pool.get();
-            let cap = buf.capacity();
-            if cap < max_frames {
-                buf.reserve(max_frames - cap);
-            }
+            buf.ensure_len(max_frames)
+                .expect("scratch buffer exceeds PCM pool budget");
+            buf.clear();
             buf
         });
 
@@ -70,7 +69,8 @@ impl RenderPass {
         }
 
         for buf in &mut self.scratch_bufs {
-            buf.resize(frames, 0.0);
+            buf.ensure_len(frames)
+                .expect("scratch buffer exceeds PCM pool budget");
         }
 
         let (left, right) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
@@ -206,10 +206,9 @@ impl RenderPass {
 
     pub(crate) fn resize(&mut self, max_frames: usize) {
         for buf in &mut self.scratch_bufs {
-            let cap = buf.capacity();
-            if cap < max_frames {
-                buf.reserve(max_frames - cap);
-            }
+            buf.ensure_len(max_frames)
+                .expect("scratch buffer exceeds PCM pool budget");
+            buf.clear();
         }
     }
 }

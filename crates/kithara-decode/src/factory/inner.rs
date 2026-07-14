@@ -157,16 +157,6 @@ where
 }
 
 /// Configuration for `DecoderFactory`.
-///
-/// `pcm_pool` / `byte_pool` are intentionally `Option<_>` — the
-/// production discipline is to propagate one pool down the entire host
-/// chain (player → `AudioConfig` → `DecoderConfig`). The `None` arm is
-/// a last-resort fallback for unit tests that don't care about pool
-/// budgets and for legacy call sites that haven't been threaded yet;
-/// it routes to the process-global `PcmPool::default()` /
-/// `BytePool::default()`. Don't construct fresh `PcmPool::new` / `BytePool::new`
-/// inside library components — that fragments the heap into many small
-/// per-component pools and defeats recycling.
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -178,17 +168,15 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Optional byte-map handle over the underlying source.
     pub byte_map: Option<Arc<dyn ByteMap>>,
-    /// Raw byte buffer pool, propagated from the host. `None` falls
-    /// back to `BytePool::default()`.
-    pub byte_pool: Option<BytePool>,
+    /// Raw byte buffer pool, propagated from the host.
+    pub byte_pool: BytePool,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     pub hint: Option<String>,
     /// Reader-side observer hooks. Single-owner; moved into
     /// [`ComposedDecoder`] by the chosen backend path.
     pub hooks: Option<BoxedEventSink>,
-    /// PCM buffer pool, propagated from the host. `None` falls back to
-    /// `PcmPool::default()`.
-    pub pcm_pool: Option<PcmPool>,
+    /// PCM buffer pool, propagated from the host.
+    pub pcm_pool: PcmPool,
     /// Optional decoder-side resampler plan. `None` means the decoder emits
     /// at the source rate.
     pub resampler: Option<DecoderResamplerConfig<B>>,
@@ -200,9 +188,13 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     pub epoch: u64,
 }
 
+#[cfg(test)]
 impl Default for DecoderConfig {
     fn default() -> Self {
-        Self::builder().build()
+        Self::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .build()
     }
 }
 
@@ -562,7 +554,7 @@ where
     }
     let codec_impl =
         AppleCodec::open_with_config(&output_track, config.gapless, target_output_rate)?;
-    let pool = config.pcm_pool.clone().unwrap_or_default();
+    let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -731,10 +723,7 @@ where
         _ => return Err(DecodeError::UnsupportedCodec { codec }),
     };
     let codec_impl = AndroidCodec::open_with_config(demuxer.track_info())?;
-    let pool = config
-        .pcm_pool
-        .clone()
-        .unwrap_or_else(|| PcmPool::default().clone());
+    let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -817,7 +806,7 @@ where
     } else {
         SymphoniaCodec::open_native(&demuxer.native_params)?
     };
-    let pool = config.pcm_pool.clone().unwrap_or_default();
+    let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -903,10 +892,9 @@ where
         fmp4::Fmp4SegmentDemuxer,
     };
 
-    let demuxer =
-        Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone().unwrap_or_default())?;
+    let demuxer = Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone())?;
     let codec = open_codec(demuxer.track_info())?;
-    let pool = config.pcm_pool.clone().unwrap_or_default();
+    let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,

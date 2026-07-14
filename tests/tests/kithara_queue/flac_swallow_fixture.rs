@@ -3,6 +3,7 @@
 use kithara::{
     abr::AbrMode,
     assets::StoreOptions,
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     net::{HttpClient, NetOptions},
     platform::{
@@ -144,6 +145,8 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
                 .build(),
         )
         .initial_abr_mode(AbrMode::manual(TOP_VARIANT))
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .build();
 
     let resource = Resource::new(cfg)

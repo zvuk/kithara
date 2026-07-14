@@ -26,6 +26,7 @@ impl ConfigPrep<'_> {
         ResourceConfig {
             bus,
             cancel,
+            pcm_pool: self.player.core.engine.pcm_pool().clone(),
             worker: Some(self.player.core.engine.worker().clone()),
             host_sample_rate,
             decoder,

@@ -31,6 +31,7 @@ probe = ["kithara-play/probe"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
+kithara-bufpool = { workspace = true }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }

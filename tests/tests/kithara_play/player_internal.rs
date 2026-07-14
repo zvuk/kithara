@@ -11,6 +11,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
+    bufpool::Region,
     decode::PcmSpec,
     events::{Event, EventBus, EventReceiver},
     platform::sync::Arc,
@@ -59,13 +60,24 @@ fn make_tagged_resource(item_id: &'static str, duration_secs: f64) -> (Resource,
 fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSession>) {
     let bus = EventBus::default();
     let session = Arc::new(OfflineSession::new_manual());
+    let region = Region::default();
     let player_config = PlayerConfig::builder()
         .bus(bus)
         .crossfade_duration(crossfade_duration)
+        .byte_pool(region.byte_pool())
+        .pcm_pool(region.pcm_pool())
         .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
         .build();
     let player = PlayerImpl::new(player_config);
     (player, session)
+}
+
+fn default_player_config() -> PlayerConfig {
+    let region = Region::default();
+    PlayerConfig::builder()
+        .byte_pool(region.byte_pool())
+        .pcm_pool(region.pcm_pool())
+        .build()
 }
 
 fn drain_player_events(player: &PlayerImpl, rx: &mut EventReceiver) -> Vec<PlayerEvent> {
@@ -106,7 +118,7 @@ fn render_until_events(
 #[case(InsertScenario::AppendTwice, 2)]
 #[case(InsertScenario::InsertAtPosition, 3)]
 async fn player_insert_scenarios(#[case] scenario: InsertScenario, #[case] expected_count: usize) {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(default_player_config());
     player.insert(make_resource(1.0), None, None);
     player.insert(make_resource(2.0), None, None);
     if matches!(scenario, InsertScenario::InsertAtPosition) {
@@ -120,7 +132,7 @@ async fn player_insert_scenarios(#[case] scenario: InsertScenario, #[case] expec
 #[case(RemoveAtScenario::OutOfBounds)]
 #[case(RemoveAtScenario::ShiftCurrentIndex)]
 async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(default_player_config());
     match scenario {
         RemoveAtScenario::ExistingItem => {
             player.insert(make_resource(1.0), None, None);
@@ -152,7 +164,7 @@ async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
 #[case(false)]
 #[case(true)]
 async fn player_remove_all_resets_state(#[case] with_resources: bool) {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(default_player_config());
     if with_resources {
         player.insert(make_resource(1.0), None, None);
         player.insert(make_resource(2.0), None, None);
@@ -167,7 +179,7 @@ async fn player_remove_all_resets_state(#[case] with_resources: bool) {
 
 #[kithara::test(tokio)]
 async fn player_advance_through_queue() {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(default_player_config());
     player.insert(make_resource(1.0), None, None);
     player.insert(make_resource(2.0), None, None);
     player.insert(make_resource(3.0), None, None);
@@ -182,7 +194,7 @@ async fn player_advance_through_queue() {
 
 #[kithara::test(tokio)]
 async fn player_advance_emits_event() {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(default_player_config());
     player.insert(make_resource(1.0), None, None);
     player.insert(make_resource(2.0), None, None);
     let mut rx = player.subscribe();
@@ -278,8 +290,11 @@ fn replacing_current_item_re_announces_on_next_play() {
 
 #[kithara::test(tokio)]
 async fn player_play_without_audio_hardware_logs_warning() {
+    let region = Region::default();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(region.byte_pool())
+            .pcm_pool(region.pcm_pool())
             .session(OfflineSession::arc_auto())
             .build(),
     );

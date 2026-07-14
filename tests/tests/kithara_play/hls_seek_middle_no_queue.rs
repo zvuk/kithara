@@ -204,6 +204,8 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
     let cfg = {
         let builder = ResourceConfig::for_src(master.as_str())
             .expect("valid master URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .name("t0".to_string())
             .store(store);

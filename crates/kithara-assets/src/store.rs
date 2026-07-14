@@ -173,7 +173,7 @@ struct AssetStoreBuildArgs {
     flush_hub: Option<Arc<FlushHub>>,
     layout: Option<Arc<dyn AssetLayout>>,
     mem_resource_capacity: Option<usize>,
-    pool: Option<BytePool>,
+    pool: BytePool,
 }
 
 struct AssetStoreBuilderFactory;
@@ -194,7 +194,7 @@ impl AssetStoreBuilderFactory {
         flush_hub: Option<Arc<FlushHub>>,
         layout: Option<Arc<dyn AssetLayout>>,
         mem_resource_capacity: Option<usize>,
-        pool: Option<BytePool>,
+        #[builder(default = BytePool::default())] pool: BytePool,
     ) -> AssetStoreBuildArgs {
         AssetStoreBuildArgs {
             backend,
@@ -330,7 +330,7 @@ impl AssetStoreBuildArgs {
         let evict_cfg = self.evict_config.unwrap_or_default();
         let cancel = CancelScope::new(self.cancel).token();
 
-        let pool = self.pool.unwrap_or_default();
+        let pool = self.pool;
 
         let hub = self
             .flush_hub
@@ -399,7 +399,7 @@ impl AssetStoreBuildArgs {
     ) -> MemStore {
         let cancel = CancelScope::new(self.cancel).token();
         let evict_cfg = self.evict_config.unwrap_or_default();
-        let pool = self.pool.unwrap_or_default();
+        let pool = self.pool;
 
         let hub = self
             .flush_hub
@@ -424,6 +424,7 @@ impl AssetStoreBuildArgs {
                 mem_resource_capacity: self.mem_resource_capacity,
                 availability: availability.clone(),
                 deleter: Arc::clone(&deleter),
+                pool: pool.clone(),
             },
         ));
         let evict = Arc::new(EvictAssets::new(

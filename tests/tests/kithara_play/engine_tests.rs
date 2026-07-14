@@ -1,5 +1,6 @@
 use kithara::{
     self,
+    bufpool::PcmPool,
     events::EventBus,
     play::{
         Cmd, EngineConfig, EngineImpl, PlayError, Reply, SessionDuckingMode, SessionHandle, SlotId,
@@ -11,7 +12,10 @@ fn slot_id(value: u64) -> SlotId {
 }
 
 fn make_engine() -> EngineImpl {
-    EngineImpl::new(EngineConfig::default(), EventBus::default())
+    EngineImpl::new(
+        EngineConfig::builder().pcm_pool(PcmPool::default()).build(),
+        EventBus::default(),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -42,6 +46,7 @@ fn engine_config_builder() {
         .sample_rate(48000)
         .channels(1)
         .eq_layout(kithara::audio::generate_log_spaced_bands(5))
+        .pcm_pool(PcmPool::default())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.max_slots(), 8);
@@ -92,7 +97,10 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
 
 #[kithara::test]
 fn engine_master_sample_rate_returns_config_when_stopped() {
-    let config = EngineConfig::builder().sample_rate(48000).build();
+    let config = EngineConfig::builder()
+        .sample_rate(48000)
+        .pcm_pool(PcmPool::default())
+        .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
 }
@@ -126,6 +134,7 @@ fn injected_engine_instances_share_session_ducking() {
     let session = SessionHandle::spawn_native();
     let config = EngineConfig::builder()
         .session(session.dispatcher())
+        .pcm_pool(PcmPool::default())
         .build();
     let _a = EngineImpl::new(config.clone(), EventBus::default());
     let _b = EngineImpl::new(config, EventBus::default());

@@ -1271,6 +1271,8 @@ async fn hls_resource_with_segments_and_duration(
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     config = player.prepare_config(config);
     let mut resource = Resource::new(config)
@@ -1304,6 +1306,8 @@ async fn hls_multivariant_flac_resource(
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     config = player.prepare_config(config);
     let mut resource = Resource::new(config)
@@ -1333,6 +1337,8 @@ async fn hls_sine_aac_resource(
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     config = player.prepare_config(config);
     let mut resource = Resource::new(config)

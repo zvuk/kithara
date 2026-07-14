@@ -10,6 +10,7 @@ use kithara::decode::DecoderBackend;
 use kithara::{
     assets::StoreOptions,
     audio::{ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome},
+    bufpool::PcmPool,
     decode::{
         DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
         PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
@@ -852,6 +853,8 @@ async fn create_resource_with_encoding(
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     config = player.prepare_config(config);
     let mut resource = Resource::new(config)
@@ -1006,21 +1009,24 @@ fn synthetic_interleaved_chunk(frames: Vec<f32>) -> PcmChunk {
         GAPLESS_CHANNELS,
         NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("test sample rate"),
     );
-    let mut chunk = PcmChunk::default();
-    chunk.meta = PcmMeta {
-        frames: u32::try_from(frames.len()).expect("fixture frame count fits u32"),
-        spec,
-        ..Default::default()
-    };
-    chunk
-        .samples
-        .reserve(frames.len() * usize::from(GAPLESS_CHANNELS));
-    for sample in frames {
-        for _ in 0..GAPLESS_CHANNELS {
-            chunk.samples.push(sample);
-        }
+    let frame_count = frames.len();
+    let sample_count = frame_count * usize::from(GAPLESS_CHANNELS);
+    let mut samples = PcmPool::default().get();
+    samples
+        .ensure_len(sample_count)
+        .expect("synthetic chunk exceeds PCM pool budget");
+    for (frame, sample) in frames.into_iter().enumerate() {
+        let offset = frame * usize::from(GAPLESS_CHANNELS);
+        samples[offset..offset + usize::from(GAPLESS_CHANNELS)].fill(sample);
     }
-    chunk
+    PcmChunk::new(
+        PcmMeta {
+            frames: u32::try_from(frame_count).expect("fixture frame count fits u32"),
+            spec,
+            ..Default::default()
+        },
+        samples,
+    )
 }
 
 fn left_frames_from_chunks(chunks: impl IntoIterator<Item = PcmChunk>) -> Vec<f32> {

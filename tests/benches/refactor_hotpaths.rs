@@ -20,7 +20,7 @@ use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_m
 use kithara::{
     assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig},
-    bufpool::PcmPool,
+    bufpool::{BytePool, PcmPool},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -320,6 +320,8 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                     let file_config = FileConfig::new(file_path.into());
                     let config = AudioConfig::<File>::for_stream(file_config)
                         .hint(("mp3").to_string())
+                        .byte_pool(BytePool::default())
+                        .pcm_pool(PcmPool::default())
                         .build();
                     let mut audio = Audio::<Stream<File>>::new(config)
                         .await

@@ -27,6 +27,8 @@ async fn open_test_mp3(
         .store(StoreOptions::new(temp_dir.path()))
         .build();
     let mut config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint(String::from("mp3"))
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

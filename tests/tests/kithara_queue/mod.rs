@@ -48,6 +48,7 @@ fn app_track_source(
         .downloader(config.downloader.clone())
         .flush_hub(config.flush_hub.clone())
         .byte_pool(config.byte_pool.clone())
+        .pcm_pool(config.pcm_pool.clone())
         .asset_store(config.asset_store.clone())
         .keys(keys)
         .maybe_headers(headers)

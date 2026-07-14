@@ -134,6 +134,8 @@ async fn make_signal_resource(
     let mut config = ResourceConfig::for_src(url.as_str())
         .expect("valid signal fixture URL")
         .store(StoreOptions::new(cache_dir))
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .build();
     config = player.prepare_config(config);
 

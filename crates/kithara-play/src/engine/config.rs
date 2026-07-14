@@ -17,7 +17,7 @@ pub struct EngineConfig {
     /// observes a master cancel.
     pub(crate) cancel: Option<CancelToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
-    pub(crate) pcm_pool: Option<PcmPool>,
+    pub(crate) pcm_pool: PcmPool,
     /// Pre-built audio session dispatcher.
     pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout per player. Default: 10-band log-spaced.
@@ -46,8 +46,9 @@ impl fmt::Debug for EngineConfig {
     }
 }
 
+#[cfg(test)]
 impl Default for EngineConfig {
     fn default() -> Self {
-        Self::builder().build()
+        Self::builder().pcm_pool(PcmPool::default()).build()
     }
 }

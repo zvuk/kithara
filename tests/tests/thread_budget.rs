@@ -82,7 +82,10 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create hls audio");
@@ -136,6 +139,8 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config: AudioConfig<Hls> = AudioConfig::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .worker(shared_worker.clone())
         .build();
     let a1 = Audio::<Stream<Hls>>::new(config).await;
@@ -146,6 +151,8 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .initial_abr_mode(AbrMode::manual(1))
         .build();
     let config: AudioConfig<Hls> = AudioConfig::for_stream(hls_config2)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .worker(shared_worker.clone())
         .build();
     let a2 = Audio::<Stream<Hls>>::new(config).await;
@@ -156,6 +163,8 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config: AudioConfig<Hls> = AudioConfig::for_stream(drm_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .worker(shared_worker.clone())
         .build();
     let a3 = Audio::<Stream<Hls>>::new(config).await;

@@ -6,6 +6,7 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetLayout, BytePool},
     audio::generate_log_spaced_bands,
+    bufpool::Region,
     hls::{KeyOptions, KeyProcessorRegistry, KeyProcessorRule},
     net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
@@ -159,7 +160,7 @@ pub(crate) struct NativeInner {
     queue: Arc<Queue>,
     /// App-wide byte pool shared by `NSURLSession` copies, cache processors,
     /// and resource probes.
-    byte_pool: BytePool,
+    region: Region,
     /// Master cancel token for this FFI player instance. Propagated
     /// into [`PlayerConfig::cancel`] so the audio worker, downloader,
     /// asset store, HLS peer, and per-track resources all derive
@@ -200,15 +201,17 @@ pub(crate) struct NativeInner {
 impl NativeInner {
     pub(crate) fn new(config: FfiPlayerConfig) -> Self {
         let cancel = CancelToken::root();
-        let byte_pool = BytePool::default();
+        let region = Region::default();
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
             .cancel(cancel.child())
+            .byte_pool(region.byte_pool())
+            .pcm_pool(region.pcm_pool())
             .session(super::session::handle().dispatcher())
             .build();
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::default().with_player(player);
-        let net = default_net_options(byte_pool.clone());
+        let net = default_net_options(region.byte_pool());
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, cancel.child()))
                 .runtime(crate::FFI_RUNTIME.clone())
@@ -219,7 +222,7 @@ impl NativeInner {
         let layout = super::layout::resolve_layout(config.store.layout.as_ref());
         Self {
             downloader,
-            byte_pool,
+            region,
             layout,
             shutdown: cancel,
             key_options: Mutex::new(key_options),
@@ -573,7 +576,8 @@ fn build_source_for_item(
         .maybe_headers(merged_headers_for_item(inner, item).map(Into::into))
         .events(scoped.clone())
         .downloader(inner.downloader.clone())
-        .byte_pool(inner.byte_pool.clone())
+        .byte_pool(inner.region.byte_pool())
+        .pcm_pool(inner.region.pcm_pool())
         .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();

@@ -59,9 +59,7 @@ where
         let store = store_options_with_flush_hub(&self.store, self.flush_hub.clone());
         let downloader = self.downloader.clone().unwrap_or_else(|| {
             let dl_cancel = CancelScope::new(self.cancel.clone()).token();
-            let net_options = NetOptions::builder()
-                .maybe_byte_pool(byte_pool.clone())
-                .build();
+            let net_options = NetOptions::builder().byte_pool(byte_pool.clone()).build();
             let client = HttpClient::new(net_options, dl_cancel.child());
             Downloader::new(
                 DownloaderConfig::for_client(client)
@@ -76,15 +74,15 @@ where
             .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers.clone())
             .maybe_name(self.name.clone())
-            .maybe_pool(byte_pool.clone())
+            .pool(byte_pool.clone())
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .build();
         AudioConfig::<kithara_file::File, B>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint.or(derived_hint))
-            .maybe_byte_pool(byte_pool)
-            .maybe_pcm_pool(self.pcm_pool)
+            .byte_pool(byte_pool)
+            .pcm_pool(self.pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
@@ -117,7 +115,7 @@ where
             .maybe_headers(self.headers)
             .maybe_name(self.name)
             .maybe_base_url(self.hls_base_url)
-            .maybe_pool(byte_pool.clone())
+            .pool(byte_pool.clone())
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .size_probe_method(self.size_probe_method)
@@ -125,8 +123,8 @@ where
         Ok(AudioConfig::<kithara_hls::Hls, B>::for_stream(hls_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint)
-            .maybe_byte_pool(byte_pool)
-            .maybe_pcm_pool(self.pcm_pool)
+            .byte_pool(byte_pool)
+            .pcm_pool(self.pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)

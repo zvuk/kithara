@@ -7,10 +7,14 @@
 //! ## Quick start
 //!
 //! ```ignore
-//! use kithara::prelude::*;
+//! use kithara::{bufpool::{BytePool, PcmPool}, prelude::*};
 //!
 //! // Auto-detect from URL
-//! let config = ResourceConfig::new("https://example.com/song.mp3")?;
+//! let config = ResourceConfig::new(
+//!     "https://example.com/song.mp3",
+//!     BytePool::default(),
+//!     PcmPool::default(),
+//! )?;
 //! let mut resource = Resource::new(config).await?;
 //!
 //! // Read interleaved PCM

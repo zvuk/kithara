@@ -209,6 +209,7 @@ impl PlayerImpl {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_events::{Event, PlayerEvent};
     use kithara_test_utils::kithara;
 
@@ -227,6 +228,8 @@ mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .session(testing::test_session())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
                 .build(),
         );
         player

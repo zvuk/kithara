@@ -74,6 +74,8 @@ fn build_queue_with_tick(
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -232,6 +234,8 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
 
     let cfg = ResourceConfig::for_src(url.as_str())
         .expect("ResourceConfig::for_src")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .initial_abr_mode(AbrMode::Auto(None))

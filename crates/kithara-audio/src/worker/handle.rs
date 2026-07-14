@@ -120,7 +120,8 @@ impl kithara_stream::WorkerWake for WorkerWakeBridge {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use kithara_decode::PcmChunk;
+    use kithara_bufpool::PcmPool;
+    use kithara_decode::{PcmChunk, PcmMeta};
     use kithara_platform::{
         sync::Arc,
         thread::sleep as thread_sleep,
@@ -135,6 +136,10 @@ mod tests {
         runtime::connect,
         worker::{AudioWorkerSource, thread_wake::ThreadWake, types::ServiceClass},
     };
+
+    fn empty_chunk() -> PcmChunk {
+        PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+    }
 
     struct MockSource {
         seek: Arc<dyn SeekControl>,
@@ -199,7 +204,7 @@ mod tests {
                 return TrackStep::Eof;
             }
             self.cursor += 1;
-            TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
+            TrackStep::Produced(Fetch::data(empty_chunk(), 0))
         }
     }
 
@@ -581,7 +586,7 @@ mod tests {
 
             fn step_track(&mut self) -> TrackStep<PcmChunk> {
                 thread_sleep(Duration::from_millis(self.block_ms));
-                TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
+                TrackStep::Produced(Fetch::data(empty_chunk(), 0))
             }
 
             fn seek_observe(&self) -> Arc<dyn SeekObserve> {

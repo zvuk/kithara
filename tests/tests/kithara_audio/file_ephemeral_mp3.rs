@@ -54,6 +54,8 @@ async fn audio_file_mp3_decodes_with_duration(
         )
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -142,6 +144,8 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
         )
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .maybe_hint(hint.map(String::from))
         .build();
     let audio = Audio::<Stream<File>>::new(config)
@@ -178,7 +182,11 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
                 .build(),
         )
         .build();
-    let config = AudioConfig::<File>::new(file_config);
+    let config = AudioConfig::<File>::new(
+        file_config,
+        kithara::bufpool::BytePool::default(),
+        kithara::bufpool::PcmPool::default(),
+    );
     let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();
 
     let (samples_read, position, eof) = spawn_blocking(move || {

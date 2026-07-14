@@ -19,6 +19,8 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
         cursor,
         &media_info,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .hint("wav".into())
             .build(),
     );
@@ -34,9 +36,15 @@ fn test_next_chunk_returns_data() {
     let wav_data = create_test_wav(100, 44100, 2);
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let mut decoder =
-        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default())
-            .expect("BUG: decoder");
+    let mut decoder = DecoderFactory::create_from_media_info(
+        cursor,
+        &media_info,
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .expect("BUG: decoder");
 
     let outcome = decoder.next_chunk().unwrap();
     assert!(outcome.is_chunk());
@@ -52,9 +60,15 @@ fn test_next_chunk_eof() {
     let wav_data = create_test_wav(10, 44100, 2);
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let mut decoder =
-        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default())
-            .expect("BUG: decoder");
+    let mut decoder = DecoderFactory::create_from_media_info(
+        cursor,
+        &media_info,
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .expect("BUG: decoder");
 
     while decoder.next_chunk().unwrap().is_chunk() {}
 
@@ -67,9 +81,15 @@ fn test_seek_to_beginning() {
     let wav_data = create_test_wav(10000, 44100, 2);
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let mut decoder =
-        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default())
-            .expect("BUG: decoder");
+    let mut decoder = DecoderFactory::create_from_media_info(
+        cursor,
+        &media_info,
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .expect("BUG: decoder");
 
     let _ = decoder.next_chunk().unwrap();
     let _ = decoder.next_chunk().unwrap();
@@ -85,9 +105,15 @@ fn test_duration_available() {
     let wav_data = create_test_wav(44100, 44100, 2);
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let decoder =
-        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default())
-            .expect("BUG: decoder");
+    let decoder = DecoderFactory::create_from_media_info(
+        cursor,
+        &media_info,
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .expect("BUG: decoder");
 
     let duration = decoder.duration();
     assert!(duration.is_some());
@@ -102,8 +128,14 @@ fn test_duration_available() {
 fn test_invalid_input_fails(#[case] data: Vec<u8>) {
     let cursor = Cursor::new(data);
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let result =
-        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default());
+    let result = DecoderFactory::create_from_media_info(
+        cursor,
+        &media_info,
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    );
     assert!(result.is_err());
 }
 
@@ -112,8 +144,14 @@ fn test_unsupported_container_returns_error() {
     let data = vec![0u8; 100];
     let cursor = Cursor::new(data);
     let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::MpegTs));
-    let result =
-        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default());
+    let result = DecoderFactory::create_from_media_info(
+        cursor,
+        &media_info,
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    );
     assert!(matches!(
         result,
         Err(DecodeError::UnsupportedContainer { .. })

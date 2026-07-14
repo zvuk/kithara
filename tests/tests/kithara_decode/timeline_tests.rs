@@ -10,8 +10,15 @@ fn test_progressive_file_timeline_monotonic() {
     let audio = EmbeddedAudio::get();
     let reader = Cursor::new(audio.wav());
 
-    let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("wav"), DecoderConfig::default()).unwrap();
+    let mut decoder = DecoderFactory::create_with_probe(
+        reader,
+        Some("wav"),
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .unwrap();
 
     let mut prev_frame_end = 0u64;
     let mut chunk_count = 0u64;
@@ -54,8 +61,15 @@ fn test_progressive_file_seek_resets_frame_offset() {
     let audio = EmbeddedAudio::get();
     let reader = Cursor::new(audio.wav());
 
-    let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("wav"), DecoderConfig::default()).unwrap();
+    let mut decoder = DecoderFactory::create_with_probe(
+        reader,
+        Some("wav"),
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .unwrap();
 
     for _ in 0..3 {
         let _ = decoder.next_chunk();
@@ -135,6 +149,8 @@ mod hls_timeline {
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
         let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .hint("wav".to_string())
             .maybe_byte_map(stream.byte_map())
             .build();
