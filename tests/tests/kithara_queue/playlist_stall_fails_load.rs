@@ -7,7 +7,8 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        time::{Duration, Instant, sleep, timeout},
+        time,
+        time::{Duration, Instant, timeout},
         tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
@@ -99,7 +100,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
         loop {
-            sleep(Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
             if queue_for_tick.tick().is_err() {
                 break;
             }
