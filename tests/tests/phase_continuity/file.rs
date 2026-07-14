@@ -72,6 +72,8 @@ async fn run_case(
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     // Park on ring underrun: the offline scan needs no wall-clock pacing.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -179,6 +181,8 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
 
     let file_config = FileConfig::for_src(FileSrc::Local(fixture_path)).build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -247,6 +251,8 @@ async fn local_apple_fused_run_case() {
 
     let file_config = FileConfig::for_src(FileSrc::Local(fixture_path)).build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Apple)
@@ -386,6 +392,8 @@ async fn decode_pcm_seconds(
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     // Park on ring underrun instead of spinning on Pending.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -696,6 +704,8 @@ async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_ra
         .build();
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Symphonia)
@@ -965,6 +975,8 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     // Park on ring underrun: covers both the cold and seeked handles.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)

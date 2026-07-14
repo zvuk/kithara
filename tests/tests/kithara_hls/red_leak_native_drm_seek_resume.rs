@@ -71,6 +71,8 @@ async fn run_drm_seek_resume_cycle(
 
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .worker(shared_worker.clone())
             .build(),
     )

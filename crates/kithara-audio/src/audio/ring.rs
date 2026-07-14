@@ -7,8 +7,8 @@ use kithara_platform::{CancelToken, sync::Arc};
 use kithara_test_utils::kithara;
 
 use super::{
-    AudioWorkerHandle, ConsumerPhase, EpochValidator, Fetch, FetchKind, Inlet, Outlet, ThreadWake,
-    WakeSignal, connect,
+    AudioWorkerHandle, ConsumerPhase, EpochValidator, Fetch, Inlet, Outlet, ThreadWake, WakeSignal,
+    connect,
     cursor::ChunkCursor,
     event::{AudioEvents, ReaderOutputWake},
     park::{receive_is_nonblocking, wait_for_fetch},
@@ -167,7 +167,9 @@ impl RingConsumer {
 
         while let Some(fetch) = self.pcm_rx.try_pop() {
             if fetch.epoch() < epoch {
-                self.discard(fetch.into_inner());
+                if let Fetch::Data { data, .. } = fetch {
+                    self.discard(data);
+                }
                 hang_tick!();
                 continue;
             }
@@ -178,22 +180,22 @@ impl RingConsumer {
 
     fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> FetchOutcome {
         if !self.validator.is_valid(&fetch) {
-            self.discard(fetch.into_inner());
+            if let Fetch::Data { data, .. } = fetch {
+                self.discard(data);
+            }
             return FetchOutcome::Continue;
         }
 
-        match fetch.kind() {
-            FetchKind::NaturalEof => {
+        match fetch {
+            Fetch::NaturalEof { .. } => {
                 self.phase = ConsumerPhase::AtEof;
-                self.discard(fetch.into_inner());
                 FetchOutcome::Return(None)
             }
-            FetchKind::Failure => {
+            Fetch::Failure { .. } => {
                 self.phase = ConsumerPhase::Failed;
-                self.discard(fetch.into_inner());
                 FetchOutcome::Return(None)
             }
-            FetchKind::Data => FetchOutcome::Return(Some(fetch.into_inner())),
+            Fetch::Data { data, .. } => FetchOutcome::Return(Some(data)),
         }
     }
 
@@ -208,20 +210,17 @@ impl RingConsumer {
             epoch,
             "PCM ring preserved a fetch from a future seek epoch"
         );
-        match fetch.kind() {
-            FetchKind::Data => {
-                let chunk = fetch.into_inner();
-                cursor.begin_chunk(&chunk);
-                self.current_chunk = Some(chunk);
+        match fetch {
+            Fetch::Data { data, .. } => {
+                cursor.begin_chunk(&data);
+                self.current_chunk = Some(data);
                 self.phase = ConsumerPhase::Playing;
             }
-            FetchKind::NaturalEof => {
+            Fetch::NaturalEof { .. } => {
                 self.phase = ConsumerPhase::AtEof;
-                self.discard(fetch.into_inner());
             }
-            FetchKind::Failure => {
+            Fetch::Failure { .. } => {
                 self.phase = ConsumerPhase::Failed;
-                self.discard(fetch.into_inner());
             }
         }
     }
@@ -345,12 +344,10 @@ mod tests {
     }
 
     fn make_chunk(samples: &[f32]) -> PcmChunk {
-        let mut chunk = PcmChunk::default();
-        chunk.samples.clear();
-        chunk.samples.extend_from_slice(samples);
-        chunk.meta.spec.channels = 1;
-        chunk.meta.frames = u32::try_from(samples.len()).unwrap_or(u32::MAX);
-        chunk
+        let mut meta = PcmMeta::default();
+        meta.spec.channels = 1;
+        meta.frames = u32::try_from(samples.len()).unwrap_or(u32::MAX);
+        PcmChunk::new(meta, PcmPool::default().attach(samples.to_vec()))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -397,7 +394,7 @@ mod tests {
         let mut fixture = RingFixture::new(true);
         fixture
             .data_tx
-            .try_push(Fetch::new(make_chunk(&[0.1, 0.2]), FetchKind::Data, 0))
+            .try_push(Fetch::data(make_chunk(&[0.1, 0.2]), 0))
             .expect("chunk reaches ring");
         assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
         assert_eq!(fixture.ring.phase, ConsumerPhase::Playing);
@@ -419,7 +416,7 @@ mod tests {
         fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
         fixture
             .data_tx
-            .try_push(Fetch::new(make_chunk(&[0.1, 0.2]), FetchKind::Data, 1))
+            .try_push(Fetch::data(make_chunk(&[0.1, 0.2]), 1))
             .expect("post-seek chunk reaches ring");
         assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
         assert_eq!(fixture.ring.phase, ConsumerPhase::Playing);
@@ -430,11 +427,11 @@ mod tests {
         let mut fixture = RingFixture::new(true);
         fixture
             .data_tx
-            .try_push(Fetch::new(make_chunk(&[0.1, 0.2]), FetchKind::Data, 0))
+            .try_push(Fetch::data(make_chunk(&[0.1, 0.2]), 0))
             .expect("stale chunk reaches ring");
         fixture
             .data_tx
-            .try_push(Fetch::new(make_chunk(&[0.7, 0.8]), FetchKind::Data, 1))
+            .try_push(Fetch::data(make_chunk(&[0.7, 0.8]), 1))
             .expect("fresh chunk reaches ring");
         fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
         let mut buf = [0.0; 2];
@@ -459,11 +456,11 @@ mod tests {
         let mut fixture = RingFixture::new(true);
         fixture
             .data_tx
-            .try_push(Fetch::new(make_chunk(&[0.1, 0.2]), FetchKind::Data, 0))
+            .try_push(Fetch::data(make_chunk(&[0.1, 0.2]), 0))
             .expect("stale chunk reaches ring");
         fixture
             .data_tx
-            .try_push(Fetch::new(PcmChunk::default(), FetchKind::NaturalEof, 1))
+            .try_push(Fetch::eof(1))
             .expect("eof reaches ring");
         fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
         let mut buf = [0.0; 2];
@@ -485,7 +482,7 @@ mod tests {
         let mut fixture = RingFixture::new(true);
         fixture
             .data_tx
-            .try_push(Fetch::new(PcmChunk::default(), FetchKind::NaturalEof, 0))
+            .try_push(Fetch::eof(0))
             .expect("eof reaches ring");
         assert!(fixture.recv().is_none());
         assert_eq!(fixture.ring.phase, ConsumerPhase::AtEof);
@@ -520,7 +517,7 @@ mod tests {
     fn process_fetch_must_distinguish_failure_from_natural_eof() {
         let mut eof = RingFixture::new(true);
         eof.data_tx
-            .try_push(Fetch::new(PcmChunk::default(), FetchKind::NaturalEof, 0))
+            .try_push(Fetch::eof(0))
             .expect("natural eof reaches ring");
         let _ = eof.recv();
         assert_eq!(eof.ring.phase, ConsumerPhase::AtEof);
@@ -528,7 +525,7 @@ mod tests {
         let mut failed = RingFixture::new(true);
         failed
             .data_tx
-            .try_push(Fetch::new(PcmChunk::default(), FetchKind::Failure, 0))
+            .try_push(Fetch::failure(0))
             .expect("failure reaches ring");
         let _ = failed.recv();
         assert_ne!(failed.ring.phase, ConsumerPhase::AtEof);

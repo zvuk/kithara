@@ -163,7 +163,8 @@ pub struct NetOptions {
     pub impersonate: ImpersonatePreset,
     /// Shared byte buffer pool used by backends that must copy platform-owned
     /// response buffers before handing bytes to Rust consumers.
-    pub byte_pool: Option<BytePool>,
+    #[builder(default = BytePool::default())]
+    pub byte_pool: BytePool,
     #[builder(default)]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
@@ -193,8 +194,8 @@ impl Default for NetOptions {
     }
 }
 
-impl FromWithParams<Self, Option<BytePool>> for NetOptions {
-    fn build(options: Self, byte_pool: Option<BytePool>) -> Self {
+impl FromWithParams<Self, BytePool> for NetOptions {
+    fn build(options: Self, byte_pool: BytePool) -> Self {
         Self::builder()
             .compression(options.compression)
             .inactivity_timeout(options.inactivity_timeout)
@@ -203,7 +204,7 @@ impl FromWithParams<Self, Option<BytePool>> for NetOptions {
             .pool_max_idle_per_host(options.pool_max_idle_per_host)
             .body_queue_capacity(options.body_queue_capacity)
             .body_queue_resume_at(options.body_queue_resume_at)
-            .maybe_byte_pool(options.byte_pool.or(byte_pool))
+            .byte_pool(byte_pool)
             .impersonate(options.impersonate)
             .build()
     }

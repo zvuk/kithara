@@ -19,10 +19,15 @@ use crate::impls::{config::ResourceConfig, source_type::SourceType};
 /// # Example
 ///
 /// ```ignore
+/// use kithara_bufpool::{BytePool, PcmPool};
 /// use kithara_play::{Resource, ResourceConfig};
 ///
 /// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
-/// let config = ResourceConfig::new("https://example.com/song.mp3")?;
+/// let config = ResourceConfig::new(
+///     "https://example.com/song.mp3",
+///     BytePool::default(),
+///     PcmPool::default(),
+/// )?;
 /// let mut resource = Resource::new(config).await?;
 ///
 /// let spec = resource.spec();

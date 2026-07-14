@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_test_utils::kithara;
 
@@ -49,6 +49,8 @@ mod native {
         let config = AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(
             FileConfig::default(),
         )
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .effects(effects)
         .build();
         assert_eq!(config.effects().len(), 2);

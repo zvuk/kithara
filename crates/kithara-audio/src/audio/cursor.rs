@@ -143,7 +143,7 @@ impl ChunkCursor {
             });
         };
         interleaved.clear();
-        interleaved.resize(total_samples, 0.0);
+        interleaved.ensure_len(total_samples)?;
 
         let result = self.read(ring, playhead, recv, &mut interleaved[..]);
         let result = match result {
@@ -269,7 +269,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::audio::{Fetch, FetchKind, ThreadWake, connect, ring::RingParts};
+    use crate::audio::{Fetch, ThreadWake, connect, ring::RingParts};
 
     #[kithara::test]
     fn partial_resampled_chunk_position_caps_at_duration() {
@@ -292,7 +292,7 @@ mod tests {
         });
         ring.preloaded = true;
         data_tx
-            .try_push(Fetch::new(chunk, FetchKind::Data, 0))
+            .try_push(Fetch::data(chunk, 0))
             .expect("chunk reaches test ring");
 
         let playhead = PlayheadState::new();
@@ -334,9 +334,8 @@ mod tests {
         });
         ring.preloaded = true;
         data_tx
-            .try_push(Fetch::new(
+            .try_push(Fetch::data(
                 timed_chunk(spec, 1, Duration::ZERO, Duration::from_millis(1)),
-                FetchKind::Data,
                 0,
             ))
             .expect("chunk reaches test ring");

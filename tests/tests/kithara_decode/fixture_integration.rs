@@ -121,7 +121,10 @@ async fn test_signal_server_encoded_formats_are_decodable(
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some(ext),
-        DecoderConfig::default(),
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
     )
     .unwrap();
 
@@ -168,7 +171,10 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some(ext),
-        DecoderConfig::default(),
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
     )
     .unwrap_or_else(|error| panic!("probe {format:?} decode failed: {error}"));
 
@@ -508,6 +514,8 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
     );
     let config = || {
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .backend(backend)
             .build()
     };

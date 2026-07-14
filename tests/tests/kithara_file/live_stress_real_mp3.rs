@@ -123,6 +123,8 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     let mut audio = Audio::<Stream<File>>::new(
         AudioConfig::<File>::for_stream(file_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .hint(("mp3").to_string())
             .block_on_underrun(true)
             .build(),

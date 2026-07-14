@@ -87,6 +87,8 @@ async fn startup_issues_no_eager_size_probe_storm(#[case] fixture: StartupFixtur
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(fixture.media_info())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

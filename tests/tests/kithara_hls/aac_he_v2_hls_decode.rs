@@ -119,6 +119,8 @@ async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: Deco
     // Park on ring underrun instead of spinning on Pending, so the read
     // loop needs no wall-clock iteration cap.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)

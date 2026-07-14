@@ -45,7 +45,7 @@ pub struct EngineConfig {
     /// observes a master cancel.
     pub cancel: Option<CancelToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
-    pub pcm_pool: Option<PcmPool>,
+    pub pcm_pool: PcmPool,
     /// Pre-built audio session dispatcher.
     pub session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout per player. Default: 10-band log-spaced.
@@ -62,6 +62,13 @@ pub struct EngineConfig {
     pub max_slots: usize,
 }
 
+#[cfg(test)]
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self::builder().pcm_pool(PcmPool::default()).build()
+    }
+}
+
 impl fmt::Debug for EngineConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EngineConfig")
@@ -71,12 +78,6 @@ impl fmt::Debug for EngineConfig {
             .field("max_slots", &self.max_slots)
             .field("pcm_pool", &self.pcm_pool)
             .finish_non_exhaustive()
-    }
-}
-
-impl Default for EngineConfig {
-    fn default() -> Self {
-        Self::builder().build()
     }
 }
 
@@ -198,6 +199,10 @@ impl EngineImpl {
         result
     }
 
+    pub(crate) fn pcm_pool(&self) -> &PcmPool {
+        &self.pcm_pool
+    }
+
     /// Process-wide session ducking mode.
     #[must_use]
     pub fn session_ducking() -> SessionDuckingMode {
@@ -247,7 +252,7 @@ impl EngineImpl {
         session: Arc<dyn SessionDispatcher>,
     ) -> Self {
         let max_slots = config.max_slots;
-        let resolved_pool = config.pcm_pool.clone().unwrap_or_default();
+        let resolved_pool = config.pcm_pool.clone();
         let worker_cancel = CancelScope::new(config.cancel.clone()).token();
 
         Self {

@@ -161,7 +161,6 @@ where
         })?;
 
         let bus = resolve_event_bus::<T>(&stream_config, config_bus);
-        let byte_pool = byte_pool.unwrap_or_default();
         let stream = create_stream_with_probe::<T>(stream_config, byte_pool.clone()).await?;
         let initial_byte_len = stream.len().unwrap_or(0);
         let playhead = stream.playhead_write();
@@ -174,7 +173,6 @@ where
         let shared_stream = SharedStream::new(stream);
         let byte_len = Arc::new(AtomicU64::new(initial_byte_len));
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
-        let pcm_pool = pcm_pool.unwrap_or_default();
         warm_pcm_pool(
             &pcm_pool,
             warm_channels(initial_media_info.as_ref()),

@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecoderConfig, DecoderFactory as DecodeFactory, GaplessMode, PcmChunk};
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -24,6 +24,7 @@ use kithara_test_utils::kithara;
 use crate::{
     pipeline::{
         decode::core::{DecodeInit, DecoderFactory},
+        fetch::Fetch,
         parts::SourceParts,
         rebuild::{RecreateCause, RecreateNext, RecreateState, port::RebuildRuntime},
         seek::{SeekContext, SeekRequest},
@@ -33,6 +34,13 @@ use crate::{
     },
     renderer::AudioWorkerSource,
 };
+
+fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
+    let Fetch::Data { data, .. } = fetch else {
+        panic!("TrackStep::Produced must carry PCM data");
+    };
+    data
+}
 
 struct Consts;
 
@@ -374,6 +382,8 @@ fn decoder_config<T: StreamType>(
     byte_len.store(stream.len().unwrap_or(0), Ordering::Release);
     DecoderConfig::builder()
         .backend(backend)
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .byte_len_handle(byte_len)
         .maybe_byte_map(stream.byte_map())
         .gapless(false)
@@ -416,6 +426,8 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
             let config: DecoderConfig<kithara_resampler::NoResamplerBackend> =
                 DecoderConfig::builder()
                     .backend(backend)
+                    .byte_pool(BytePool::default())
+                    .pcm_pool(PcmPool::default())
                     .byte_len_handle(factory_byte_len.clone())
                     .maybe_byte_map(stream.byte_map())
                     .gapless(false)
@@ -510,7 +522,7 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric() {
         run_pending_rebuild_inline(&mut source);
         match source.step_track() {
             TrackStep::Produced(fetch) => {
-                let chunk = fetch.into_inner();
+                let chunk = produced_data(fetch);
                 append_left_channel(&mut left, &chunk);
                 source.playhead.advance(&ChunkPosition::from(&chunk.meta));
                 if !switched
@@ -581,7 +593,7 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric() {
         run_pending_rebuild_inline(&mut source);
         match source.step_track() {
             TrackStep::Produced(fetch) => {
-                let chunk = fetch.into_inner();
+                let chunk = produced_data(fetch);
                 append_left_channel(&mut left, &chunk);
                 source.playhead.advance(&ChunkPosition::from(&chunk.meta));
                 if !recreated

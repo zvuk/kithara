@@ -107,6 +107,8 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)

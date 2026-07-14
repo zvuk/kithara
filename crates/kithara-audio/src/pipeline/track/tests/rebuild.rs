@@ -26,6 +26,7 @@ use kithara_test_utils::kithara;
 use crate::{
     pipeline::{
         decode::core::{DecodeInit, DecoderFactory},
+        fetch::Fetch,
         parts::SourceParts,
         rebuild::{
             DecoderRebuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateState,
@@ -40,6 +41,13 @@ use crate::{
     },
     renderer::AudioWorkerSource,
 };
+
+fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
+    let Fetch::Data { data, .. } = fetch else {
+        panic!("TrackStep::Produced must carry PCM data");
+    };
+    data
+}
 
 struct Consts;
 
@@ -134,7 +142,9 @@ impl Decoder for RouteSignalDecoder {
         let channels = usize::from(Consts::CHANNELS);
         let frames = Consts::ROUTE_CHUNK_FRAMES;
         let mut samples = PcmPool::default().get();
-        samples.resize(frames.saturating_mul(channels), 0.0);
+        samples
+            .ensure_len(frames.saturating_mul(channels))
+            .expect("route signal fixture fits PCM pool budget");
         for frame in 0..frames {
             let absolute = self
                 .next_frame
@@ -514,7 +524,7 @@ fn next_test_chunk(
     loop {
         run_pending_rebuild_inline(source);
         match source.step_track() {
-            TrackStep::Produced(fetch) => return fetch.into_inner(),
+            TrackStep::Produced(fetch) => return produced_data(fetch),
             TrackStep::StateChanged => {
                 if matches!(
                     &source.state,

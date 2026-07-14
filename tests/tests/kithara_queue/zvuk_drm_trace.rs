@@ -2,6 +2,7 @@
 
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
+    bufpool::{BytePool, PcmPool},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -70,8 +71,19 @@ async fn shared_ctx() -> &'static Ctx {
                 .build(),
         );
         let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-        let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
-        let player = Arc::new(PlayerImpl::new(PlayerConfig::builder().build()));
+        let config = AppConfig::new(
+            downloader,
+            flush_hub,
+            CancelToken::never(),
+            BytePool::default(),
+            PcmPool::default(),
+        );
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder()
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .build(),
+        ));
         let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
         let q = Arc::clone(&queue);

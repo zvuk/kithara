@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use kithara::{
     assets::AssetStore,
     audio::analysis::BeatAnalysisConfig,
+    bufpool::PcmPool,
     events::{Event, EventReceiver, TrackId},
     prelude::{PlaybackResamplerBackend, ResourceConfig},
 };
@@ -45,6 +46,7 @@ pub(crate) async fn listen(
         &cancel,
         Some(Arc::clone(&config.asset_store)),
         &config.beat_analysis,
+        config.pcm_pool.clone(),
     );
 
     // Analyse whatever is already loaded; later tracks arrive as events.
@@ -113,9 +115,15 @@ impl AnalysisController {
         cancel: &CancelToken,
         store: Option<Arc<AssetStore>>,
         beat_config: &AppBeatAnalysisConfig,
+        pcm_pool: PcmPool,
     ) -> Self {
         Self {
-            runner: TrackAnalysisRunner::new(cancel, WAVEFORM_MAX_BUCKETS, beat_config.clone()),
+            runner: TrackAnalysisRunner::new(
+                cancel,
+                WAVEFORM_MAX_BUCKETS,
+                beat_config.clone(),
+                pcm_pool,
+            ),
             cache: TrackAnalysisCache::new(store, analysis_fingerprint(beat_config)),
             current: None,
             displayed: None,
@@ -377,6 +385,7 @@ fn resource_config_from_source(
 mod tests {
     use ::kithara::{
         audio::{Waveform, analysis::BeatAnalysisConfig},
+        bufpool::PcmPool,
         events::TrackId,
         prelude::PlaybackResamplerBackend,
     };
@@ -426,6 +435,7 @@ mod tests {
             &cancel,
             None,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
+            PcmPool::default(),
         );
         let (tx, rx) = watch::channel(value);
         controller.current = Some(Run {

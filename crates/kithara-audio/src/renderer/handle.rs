@@ -106,7 +106,8 @@ impl kithara_stream::WorkerWake for WorkerWakeBridge {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use kithara_decode::PcmChunk;
+    use kithara_bufpool::PcmPool;
+    use kithara_decode::{PcmChunk, PcmMeta};
     use kithara_platform::{
         sync::Arc,
         thread::sleep as thread_sleep,
@@ -118,12 +119,16 @@ mod tests {
     use super::*;
     use crate::{
         pipeline::{
-            fetch::{Fetch, FetchKind},
+            fetch::Fetch,
             track::{TrackStep, WaitingReason},
         },
         renderer::{AudioWorkerSource, MockSource, PreloadGate, ServiceClass, ThreadWake},
         runtime::{AtomicServiceClass, connect},
     };
+
+    fn empty_chunk() -> PcmChunk {
+        PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+    }
 
     struct FailingSource {
         seek_obs: Arc<dyn SeekObserve>,
@@ -514,7 +519,7 @@ mod tests {
 
             fn step_track(&mut self) -> TrackStep<PcmChunk> {
                 thread_sleep(Duration::from_millis(self.block_ms));
-                TrackStep::Produced(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
+                TrackStep::Produced(Fetch::data(empty_chunk(), 0))
             }
 
             fn seek_observe(&self) -> Arc<dyn SeekObserve> {

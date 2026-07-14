@@ -73,6 +73,8 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         async move {
             let file_cfg = FileConfig::new(FileSrc::Local(p));
             let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .hint("mp3".to_string())
                 .worker(w)
                 .build();
@@ -89,6 +91,8 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
             let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
             let cfg = HlsConfig::for_url(u).store(s).build();
             let audio_cfg = AudioConfig::<Hls>::for_stream(cfg)
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .media_info(wav_info)
                 .worker(w)
                 .build();

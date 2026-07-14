@@ -8,7 +8,7 @@ use kithara_stream::SeekObserve;
 use super::{AudioWorkerSource, EngineLoad, PreloadGate, ServiceClass};
 use crate::{
     pipeline::{
-        fetch::{Fetch, FetchKind},
+        fetch::Fetch,
         track::{TrackStep, WaitingReason},
     },
     runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
@@ -95,12 +95,8 @@ impl DecoderNode {
     /// Record one produced chunk's decode+effects cost into the shared engine
     /// meter.
     fn record_load(&self, busy: Duration, fetch: &Fetch<PcmChunk>) {
-        if let Some(load) = self.engine_load.as_ref() {
-            load.record(
-                busy,
-                fetch.data().frames(),
-                fetch.data().spec().sample_rate.get(),
-            );
+        if let (Some(load), Fetch::Data { data, .. }) = (self.engine_load.as_ref(), fetch) {
+            load.record(busy, data.frames(), data.spec().sample_rate.get());
         }
     }
 
@@ -206,7 +202,7 @@ impl Node for DecoderNode {
 
             TrackStep::Eof => {
                 let epoch = self.source.decode_epoch();
-                let marker = Fetch::new(PcmChunk::default(), FetchKind::NaturalEof, epoch);
+                let marker = Fetch::eof(epoch);
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
                     self.runtime.eof_sent = true;
@@ -219,7 +215,7 @@ impl Node for DecoderNode {
 
             TrackStep::Failed => {
                 let epoch = self.source.decode_epoch();
-                let marker = Fetch::new(PcmChunk::default(), FetchKind::Failure, epoch);
+                let marker = Fetch::failure(epoch);
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
                     if self.outlet.has_pending() {
@@ -245,6 +241,8 @@ impl Node for DecoderNode {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::PcmPool;
+    use kithara_decode::PcmMeta;
     use kithara_platform::time::Duration;
     use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
@@ -255,6 +253,10 @@ mod tests {
         renderer::MockAudioWorkerSource,
         runtime::{Inlet, Outlet, connect},
     };
+
+    fn empty_chunk() -> PcmChunk {
+        PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+    }
 
     /// Build a `DecoderNode` for tests: same defaults across the whole
     /// suite (preload after one chunk, default service class, fresh
@@ -284,12 +286,8 @@ mod tests {
         let gate = Arc::new(PreloadGate::default());
         let (mut outlet, _inlet) = connect::<Fetch<PcmChunk>>(1, None);
 
-        outlet
-            .try_push(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
-            .unwrap();
-        outlet
-            .try_push(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
-            .unwrap();
+        outlet.try_push(Fetch::data(empty_chunk(), 0)).unwrap();
+        outlet.try_push(Fetch::data(empty_chunk(), 0)).unwrap();
         assert!(outlet.has_pending());
 
         let source = Box::new(Unimock::new((
@@ -322,8 +320,7 @@ mod tests {
     fn decoder_node_records_engine_load_on_produced() {
         use std::num::NonZero;
 
-        use kithara_bufpool::PcmPool;
-        use kithara_decode::{PcmMeta, PcmSpec};
+        use kithara_decode::PcmSpec;
 
         let meter = Arc::new(EngineLoad::default());
         assert!(!meter.snapshot().is_active(), "idle before any tick");
@@ -343,7 +340,7 @@ mod tests {
         let source = Box::new(Unimock::new(
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::new(chunk, FetchKind::Data, 0))),
+                .returns(TrackStep::Produced(Fetch::data(chunk, 0))),
         ));
 
         let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
@@ -369,24 +366,14 @@ mod tests {
 
     #[kithara::test]
     fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
-        use std::fmt::Debug;
-
-        use crate::pipeline::fetch::FetchKind;
-
-        /// Drains one marker off the outlet and returns its `FetchKind`.
+        /// Drains one marker off the outlet.
         /// The two producer terminal steps (`TrackStep::Eof` /
-        /// `TrackStep::Failed`) must materialise as distinct kinds on
+        /// `TrackStep::Failed`) must materialise as distinct variants on
         /// the wire so the consumer can finalise the track only on
         /// natural EOF.
-        fn drain_marker_kind<T: Debug>(
-            outlet: &mut Outlet<Fetch<T>>,
-            inlet: &mut Inlet<Fetch<T>>,
-        ) -> FetchKind {
+        fn drain_marker<T>(outlet: &mut Outlet<Fetch<T>>, inlet: &mut Inlet<Fetch<T>>) -> Fetch<T> {
             outlet.flush();
-            inlet
-                .try_pop()
-                .expect("producer pushed a terminal marker")
-                .kind()
+            inlet.try_pop().expect("producer pushed a terminal marker")
         }
 
         let gate = Arc::new(PreloadGate::default());
@@ -407,7 +394,7 @@ mod tests {
             Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         );
         assert_eq!(eof_node.tick(), TickResult::Progress);
-        let eof_kind = drain_marker_kind(&mut eof_node.outlet, &mut eof_inlet);
+        let eof_marker = drain_marker(&mut eof_node.outlet, &mut eof_inlet);
 
         let (failed_outlet, mut failed_inlet) = connect::<Fetch<PcmChunk>>(1, None);
         let failed_source = Box::new(Unimock::new((
@@ -425,16 +412,10 @@ mod tests {
             Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         );
         let _ = failed_node.tick();
-        let failed_kind = drain_marker_kind(&mut failed_node.outlet, &mut failed_inlet);
+        let failed_marker = drain_marker(&mut failed_node.outlet, &mut failed_inlet);
 
-        assert_ne!(
-            eof_kind, failed_kind,
-            "TrackStep::Eof and TrackStep::Failed must not collapse into \
-             the same wire marker — the consumer has to distinguish \
-             natural end-of-clip from a transient decoder/source failure, \
-             otherwise a post-seek failure cascades into PlayerTrack::\
-             Finished and empties the track arena mid-clip"
-        );
+        assert!(matches!(eof_marker, Fetch::NaturalEof { .. }));
+        assert!(matches!(failed_marker, Fetch::Failure { .. }));
     }
 
     #[kithara::test]
@@ -448,8 +429,6 @@ mod tests {
         // (N+1). Stamping the live epoch makes the stale end-of-stream pass the
         // consumer's epoch validator as the *new* seek's terminal, surfacing a
         // false `ReadOutcome::Eof` for an in-range seek.
-        use crate::pipeline::fetch::FetchKind;
-
         let gate = Arc::new(PreloadGate::default());
         let (outlet, mut inlet) = connect::<Fetch<PcmChunk>>(1, None);
 
@@ -474,7 +453,7 @@ mod tests {
 
         node.outlet.flush();
         let marker = inlet.try_pop().expect("producer pushed an EOF marker");
-        assert_eq!(marker.kind(), FetchKind::NaturalEof);
+        assert!(matches!(&marker, Fetch::NaturalEof { .. }));
         assert_eq!(
             marker.epoch(),
             0,
@@ -488,18 +467,12 @@ mod tests {
         let gate = Arc::new(PreloadGate::default());
         let (mut outlet, mut inlet) = connect::<Fetch<PcmChunk>>(1, None);
 
-        outlet
-            .try_push(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
-            .unwrap();
+        outlet.try_push(Fetch::data(empty_chunk(), 0)).unwrap();
 
         let source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::new(
-                    PcmChunk::default(),
-                    FetchKind::Data,
-                    0,
-                ))),
+                .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Blocked(WaitingReason::Waiting)),
@@ -558,21 +531,13 @@ mod tests {
         let source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::new(
-                    PcmChunk::default(),
-                    FetchKind::Data,
-                    0,
-                ))),
+                .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
                 .returns(TrackStep::StateChanged),
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::new(
-                    PcmChunk::default(),
-                    FetchKind::Data,
-                    0,
-                ))),
+                .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
         )));
 
         // Pass a seek_obs handle derived from `seek_state` so begin()

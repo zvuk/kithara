@@ -49,6 +49,8 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
     // so the loops need no wall-clock deadlines — a hot-refetch livelock
     // becomes a permanent park caught by the hang watchdog / timeout.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)

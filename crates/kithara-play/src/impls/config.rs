@@ -115,7 +115,7 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
-    pub byte_pool: Option<BytePool>,
+    pub byte_pool: BytePool,
     /// Per-track parent cancel. The atomic flag reaches the HLS coord's
     /// lock-free `is_cancelled()` read; downloader / file / decode paths derive
     /// children via [`CancelToken::child`]. `None` lets each subsystem own a
@@ -140,7 +140,7 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Optional name for cache disambiguation.
     pub name: Option<String>,
     /// Shared PCM pool for temporary buffers.
-    pub pcm_pool: Option<PcmPool>,
+    pub pcm_pool: PcmPool,
     /// Legacy shared playback-rate state for direct audio configuration. The
     /// resampler is fixed-ratio; live speed DSP uses `stretch`.
     pub playback_rate: Option<Arc<AtomicF32>>,
@@ -176,8 +176,12 @@ impl ResourceConfig<PlaybackResamplerBackend> {
     ///
     /// Returns `DecodeError::InvalidData` if input is not a valid URL or
     /// absolute path. See [`Self::parse_src`].
-    pub fn new<S: AsRef<str>>(input: S) -> Result<Self, DecodeError> {
-        Self::for_src(input).map(ResourceConfigBuilder::build)
+    pub fn new<S: AsRef<str>>(
+        input: S,
+        byte_pool: BytePool,
+        pcm_pool: PcmPool,
+    ) -> Result<Self, DecodeError> {
+        Self::for_src(input).map(|builder| builder.byte_pool(byte_pool).pcm_pool(pcm_pool).build())
     }
 
     /// Chainable counterpart to [`Self::new`]: parses input and returns a
@@ -205,6 +209,7 @@ where
     /// Build an `AudioConfig<File>` from this resource configuration.
     pub(crate) fn build_file_config(self) -> AudioConfig<kithara_file::File, B> {
         let byte_pool = self.byte_pool.clone();
+        let pcm_pool = self.pcm_pool.clone();
         let (file_src, derived_hint) = match self.src {
             ResourceSrc::Url(ref url) => {
                 (FileSrc::Remote(url.clone()), derive_remote_file_hint(url))
@@ -219,9 +224,7 @@ where
         let store = store_options_with_flush_hub(&self.store, self.flush_hub.clone());
         let downloader = self.downloader.clone().unwrap_or_else(|| {
             let dl_cancel = CancelScope::new(self.cancel.clone()).token();
-            let net_options = NetOptions::builder()
-                .maybe_byte_pool(byte_pool.clone())
-                .build();
+            let net_options = NetOptions::builder().byte_pool(byte_pool.clone()).build();
             let client = HttpClient::new(net_options, dl_cancel.child());
             Downloader::new(
                 DownloaderConfig::for_client(client)
@@ -236,15 +239,15 @@ where
             .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers.clone())
             .maybe_name(self.name.clone())
-            .maybe_pool(byte_pool.clone())
+            .pool(byte_pool.clone())
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .build();
         AudioConfig::<kithara_file::File, B>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint.or(derived_hint))
-            .maybe_byte_pool(byte_pool)
-            .maybe_pcm_pool(self.pcm_pool)
+            .byte_pool(byte_pool)
+            .pcm_pool(pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
@@ -258,6 +261,7 @@ where
     /// Build an `AudioConfig<Hls>` from this resource configuration.
     pub(crate) fn build_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls, B>, DecodeError> {
         let byte_pool = self.byte_pool.clone();
+        let pcm_pool = self.pcm_pool.clone();
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),
             ResourceSrc::Path(_) => {
@@ -277,7 +281,7 @@ where
             .maybe_headers(self.headers)
             .maybe_name(self.name)
             .maybe_base_url(self.hls_base_url)
-            .maybe_pool(byte_pool.clone())
+            .pool(byte_pool.clone())
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .size_probe_method(self.size_probe_method)
@@ -285,8 +289,8 @@ where
         Ok(AudioConfig::<kithara_hls::Hls, B>::for_stream(hls_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint)
-            .maybe_byte_pool(byte_pool)
-            .maybe_pcm_pool(self.pcm_pool)
+            .byte_pool(byte_pool)
+            .pcm_pool(pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
@@ -344,15 +348,19 @@ mod tests {
 
     use super::*;
 
+    fn test_resource_config(input: &str) -> Result<ResourceConfig, DecodeError> {
+        ResourceConfig::new(input, BytePool::default(), PcmPool::default())
+    }
+
     #[kithara::test]
     fn config_source_parsing_url() {
-        let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        let config = test_resource_config("https://example.com/song.mp3").unwrap();
         assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == "https"));
     }
 
     #[kithara::test]
     fn config_file_url_derives_extension_hint_from_last_path_segment() {
-        let config = ResourceConfig::new("https://example.com/audio/get-mp3/song.MP3?sign=test")
+        let config = test_resource_config("https://example.com/audio/get-mp3/song.MP3?sign=test")
             .unwrap()
             .build_file_config();
 
@@ -361,7 +369,7 @@ mod tests {
 
     #[kithara::test]
     fn config_file_url_without_extension_does_not_derive_hint() {
-        let config = ResourceConfig::new("https://example.com/get-mp3/42?sign=test")
+        let config = test_resource_config("https://example.com/get-mp3/42?sign=test")
             .unwrap()
             .build_file_config();
 
@@ -372,7 +380,7 @@ mod tests {
     #[case("/tmp/song.mp3", "/tmp/song.mp3")]
     #[case("file:///tmp/song.mp3", "/tmp/song.mp3")]
     fn config_source_parsing_file_path(#[case] input: &str, #[case] expected: &str) {
-        let config = ResourceConfig::new(input).unwrap();
+        let config = test_resource_config(input).unwrap();
         assert!(matches!(
             &config.src,
             ResourceSrc::Path(path) if path == Path::new(expected)
@@ -382,7 +390,7 @@ mod tests {
     #[kithara::test]
     #[case("relative/path.mp3")]
     fn config_source_parsing_error(#[case] input: &str) {
-        assert!(ResourceConfig::new(input).is_err());
+        assert!(test_resource_config(input).is_err());
     }
 
     #[kithara::test]
@@ -391,6 +399,8 @@ mod tests {
     fn config_bus_presence(#[case] with_events: bool) {
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .maybe_events(with_events.then(|| EventBus::new(32)))
             .build();
         assert_eq!(config.bus.is_some(), with_events);
@@ -400,6 +410,8 @@ mod tests {
     fn config_bus_propagates_to_file_config() {
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .events(EventBus::new(32))
             .build();
         let audio_config = config.build_file_config();
@@ -410,6 +422,8 @@ mod tests {
     fn config_bus_propagates_to_hls_config() {
         let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .events(EventBus::new(32))
             .build();
         let audio_config = config.build_hls_config().unwrap();
@@ -428,6 +442,8 @@ mod tests {
             .build();
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .decoder(decoder)
             .build();
         let audio_config = config.build_file_config();
@@ -454,6 +470,8 @@ mod tests {
             .build();
         let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .decoder(decoder)
             .build();
         let audio_config = config.build_hls_config().unwrap();
@@ -475,6 +493,8 @@ mod tests {
         headers.insert("Authorization", "Bearer test");
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .headers(headers)
             .build();
 
@@ -489,6 +509,8 @@ mod tests {
     fn config_builder_chain() {
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .events(EventBus::new(32))
             .hint("mp3".to_string())
             .name("test".to_string())
@@ -502,7 +524,7 @@ mod tests {
 
     #[kithara::test]
     fn config_bitrate_fields_default_zero() {
-        let config = ResourceConfig::new("https://example.com/live.m3u8").unwrap();
+        let config = test_resource_config("https://example.com/live.m3u8").unwrap();
         assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
         assert!((config.preferred_peak_bitrate_for_expensive_networks - 0.0).abs() < f64::EPSILON);
     }
@@ -511,6 +533,8 @@ mod tests {
     fn config_bitrate_propagates_to_hls_abr() {
         let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .preferred_peak_bitrate(512_000.0)
             .build();
         let _audio_config = config.build_hls_config().unwrap();
@@ -518,7 +542,7 @@ mod tests {
 
     #[kithara::test]
     fn config_worker_default_none() {
-        let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        let config = test_resource_config("https://example.com/song.mp3").unwrap();
         assert!(config.worker.is_none());
     }
 
@@ -527,6 +551,8 @@ mod tests {
         let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .worker(worker.clone())
             .build();
         assert!(config.worker.is_some());
@@ -538,6 +564,8 @@ mod tests {
         let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .worker(worker.clone())
             .build();
         let audio_config = config.build_file_config();
@@ -550,6 +578,8 @@ mod tests {
         let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
         let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .worker(worker.clone())
             .build();
         let audio_config = config.build_hls_config().unwrap();
@@ -560,7 +590,7 @@ mod tests {
     #[kithara::test]
     fn file_hint_none_for_url_without_extension() {
         let config =
-            ResourceConfig::new("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
+            test_resource_config("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
         let audio_config = config.build_file_config();
         assert_eq!(
             audio_config.hint(),
@@ -576,7 +606,7 @@ mod tests {
     #[case("https://example.com/track/streamhq?id=123", None)]
     #[case("https://example.com/audio", None)]
     fn file_hint_from_url_extension(#[case] url: &str, #[case] expected: Option<&str>) {
-        let config = ResourceConfig::new(url).unwrap();
+        let config = test_resource_config(url).unwrap();
         let audio_config = config.build_file_config();
         assert_eq!(
             audio_config.hint(),

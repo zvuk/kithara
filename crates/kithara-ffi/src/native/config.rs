@@ -25,6 +25,7 @@ pub(crate) fn configure_resource(
 
 #[cfg(test)]
 mod tests {
+    use kithara::bufpool::{BytePool, PcmPool};
     use url::Url;
 
     use super::*;
@@ -36,7 +37,12 @@ mod tests {
             cache_dir: Some("/tmp/kithara-ffi-config-test".to_owned()),
             layout: None,
         };
-        let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        let mut config = ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .unwrap();
         configure_resource(&mut config, &store, None);
         assert_eq!(
             config.store.backend,
@@ -49,7 +55,12 @@ mod tests {
     #[kithara::test]
     fn configure_resource_preserves_default_when_unset() {
         let store = StoreOptions::default();
-        let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        let mut config = ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .unwrap();
         let original = config.store.backend.clone();
         configure_resource(&mut config, &store, None);
         assert_eq!(config.store.backend, original);
@@ -58,7 +69,12 @@ mod tests {
     #[kithara::test]
     fn omitted_layout_leaves_store_layout_none() {
         let store = StoreOptions::default();
-        let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        let mut config = ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .unwrap();
         let resolved = resolve_layout(store.layout.as_ref());
         configure_resource(&mut config, &store, resolved.as_ref());
         assert!(
@@ -79,7 +95,12 @@ mod tests {
             cache_dir: None,
             layout: Some(Arc::new(FlatLayout)),
         };
-        let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        let mut config = ResourceConfig::new(
+            "https://example.com/song.mp3",
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .unwrap();
         let resolved = resolve_layout(store.layout.as_ref());
         configure_resource(&mut config, &store, resolved.as_ref());
 

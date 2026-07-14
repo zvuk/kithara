@@ -59,7 +59,10 @@ fn make_tagged_resource(item_id: &'static str, duration_secs: f64) -> (Resource,
 fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSession>) {
     let bus = EventBus::default();
     let session = Arc::new(OfflineSession::new_manual());
-    let mut player_config = PlayerConfig::default();
+    let mut player_config = PlayerConfig::builder()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .build();
     player_config.bus = Some(bus);
     player_config.crossfade_duration = crossfade_duration;
     player_config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
@@ -105,7 +108,12 @@ fn render_until_events(
 #[case(InsertScenario::AppendTwice, 2)]
 #[case(InsertScenario::InsertAtPosition, 3)]
 async fn player_insert_scenarios(#[case] scenario: InsertScenario, #[case] expected_count: usize) {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    );
     player.insert(make_resource(1.0), None, None);
     player.insert(make_resource(2.0), None, None);
     if matches!(scenario, InsertScenario::InsertAtPosition) {
@@ -119,7 +127,12 @@ async fn player_insert_scenarios(#[case] scenario: InsertScenario, #[case] expec
 #[case(RemoveAtScenario::OutOfBounds)]
 #[case(RemoveAtScenario::ShiftCurrentIndex)]
 async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    );
     match scenario {
         RemoveAtScenario::ExistingItem => {
             player.insert(make_resource(1.0), None, None);
@@ -151,7 +164,12 @@ async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
 #[case(false)]
 #[case(true)]
 async fn player_remove_all_resets_state(#[case] with_resources: bool) {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    );
     if with_resources {
         player.insert(make_resource(1.0), None, None);
         player.insert(make_resource(2.0), None, None);
@@ -166,7 +184,12 @@ async fn player_remove_all_resets_state(#[case] with_resources: bool) {
 
 #[kithara::test(tokio)]
 async fn player_advance_through_queue() {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    );
     player.insert(make_resource(1.0), None, None);
     player.insert(make_resource(2.0), None, None);
     player.insert(make_resource(3.0), None, None);
@@ -181,7 +204,12 @@ async fn player_advance_through_queue() {
 
 #[kithara::test(tokio)]
 async fn player_advance_emits_event() {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    );
     player.insert(make_resource(1.0), None, None);
     player.insert(make_resource(2.0), None, None);
     let mut rx = player.subscribe();
@@ -279,6 +307,8 @@ fn replacing_current_item_re_announces_on_next_play() {
 async fn player_play_without_audio_hardware_logs_warning() {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     );

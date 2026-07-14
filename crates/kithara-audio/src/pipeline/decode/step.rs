@@ -8,7 +8,7 @@ use crate::pipeline::{
         core::{DecodeAction, DecodeCore, DecodeCtx},
         format::{FormatDecision, detect, handle_variant_change},
     },
-    fetch::{Fetch, FetchKind},
+    fetch::Fetch,
     gapless::visible_duration,
     seek::skip::apply as apply_skip,
     track::{TrackFailure, WaitingReason},
@@ -121,7 +121,7 @@ pub(crate) fn produced<T: StreamType>(
         });
     }
     ctx.cursor.record(&chunk, epoch);
-    DecodeAction::Produced(Fetch::new(chunk, FetchKind::Data, epoch))
+    DecodeAction::Produced(Fetch::data(chunk, epoch))
 }
 
 pub(crate) fn variant_change<T: StreamType>(

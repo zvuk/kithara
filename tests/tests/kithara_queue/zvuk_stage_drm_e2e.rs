@@ -3,6 +3,7 @@
 use kithara::{
     assets::{FlushHub, FlushPolicy, StoreOptions},
     audio::AudioDecoderConfig,
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -44,9 +45,17 @@ async fn shared_ctx() -> &'static Ctx {
             DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
         );
         let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-        let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
+        let config = AppConfig::new(
+            downloader,
+            flush_hub,
+            CancelToken::never(),
+            BytePool::default(),
+            PcmPool::default(),
+        );
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
                 .session(OfflineSession::arc_auto())
                 .build(),
         ));

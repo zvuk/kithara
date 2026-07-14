@@ -14,7 +14,7 @@ pub(crate) use crate::{
     pipeline::{
         config::create_effects,
         consumer::ConsumerPhase,
-        fetch::{EpochValidator, FetchKind},
+        fetch::EpochValidator,
         parts::SourceParts,
         rebuild::port::RebuildRuntime,
         source::{

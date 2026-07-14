@@ -135,6 +135,8 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
         .build();
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
 

@@ -1,12 +1,17 @@
-use kithara_decode::PcmChunk;
+use kithara_bufpool::PcmPool;
+use kithara_decode::{PcmChunk, PcmMeta};
 use kithara_platform::sync::Arc;
 use kithara_stream::{SeekControl, SeekObserve, SeekState};
 
 use super::AudioWorkerSource;
 use crate::pipeline::{
-    fetch::{Fetch, FetchKind},
+    fetch::Fetch,
     track::{TrackStep, WaitingReason},
 };
+
+fn empty_chunk() -> PcmChunk {
+    PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+}
 
 pub(crate) struct MockSource {
     pub(crate) seek: Arc<dyn SeekControl>,
@@ -71,6 +76,6 @@ impl AudioWorkerSource for MockSource {
             return TrackStep::Eof;
         }
         self.cursor += 1;
-        TrackStep::Produced(Fetch::new(PcmChunk::default(), FetchKind::Data, 0))
+        TrackStep::Produced(Fetch::data(empty_chunk(), 0))
     }
 }
