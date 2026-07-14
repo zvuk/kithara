@@ -1,4 +1,4 @@
-use std::{backtrace::Backtrace, fmt};
+use std::backtrace::Backtrace;
 
 use crate::flash::ids::ThreadKey;
 
