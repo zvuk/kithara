@@ -70,6 +70,7 @@ apple-fused-src = ["kithara-audio/apple-fused-src", "kithara-decode/apple"]
 # one variant available. `backend-web-audio` pulls it in transitively:
 # wasm has no hardware decoder (apple/android are native-only).
 symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
+webcodecs = ["kithara-audio/webcodecs", "kithara-decode/webcodecs"]
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
