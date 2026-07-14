@@ -19,6 +19,7 @@
 
 use kithara::{
     assets::StoreOptions,
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
     net::{HttpClient, NetOptions},
@@ -74,7 +75,11 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let session = Arc::new(OfflineSession::new_manual());
-        let mut config = PlayerConfig::builder().crossfade_duration(0.0).build();
+        let mut config = PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .crossfade_duration(0.0)
+            .build();
         config.sample_rate = SAMPLE_RATE;
         config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
         let player = Arc::new(PlayerImpl::new(config));
@@ -101,6 +106,8 @@ async fn build_hls_resource(
                 .build(),
         )
         .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .build();
     Resource::new(cfg).await.expect("create HLS resource")
 }

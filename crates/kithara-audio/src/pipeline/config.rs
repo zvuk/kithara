@@ -113,7 +113,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
-    pub byte_pool: Option<BytePool>,
+    pub byte_pool: BytePool,
     /// Master cancel token for the audio pipeline.
     pub cancel: Option<kithara_platform::CancelToken>,
     /// Live audio-engine cost meter (decode + effects). When set, the worker
@@ -126,7 +126,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Media info hint for format detection
     pub media_info: Option<kithara_stream::MediaInfo>,
     /// Shared PCM pool for temporary buffers.
-    pub pcm_pool: Option<PcmPool>,
+    pub pcm_pool: PcmPool,
     /// Legacy shared playback-rate state for direct `Audio` callers. The
     /// effect chain no longer consumes this value: speed lives in
     /// [`StretchControls`] when a stretch backend is compiled in.
@@ -172,8 +172,11 @@ where
     B: ResamplerBackend,
 {
     /// Create config with stream config and default audio settings.
-    pub fn new(stream: T::Config) -> Self {
-        Self::for_stream(stream).build()
+    pub fn new(stream: T::Config, byte_pool: BytePool, pcm_pool: PcmPool) -> Self {
+        Self::for_stream(stream)
+            .byte_pool(byte_pool)
+            .pcm_pool(pcm_pool)
+            .build()
     }
 
     /// Chainable counterpart to [`AudioConfig::new`]: returns a builder
@@ -265,6 +268,8 @@ mod tests {
         let config = AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(
             FileConfig::default(),
         )
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .effects(effects)
         .build();
         assert_eq!(config.effects.len(), 2);

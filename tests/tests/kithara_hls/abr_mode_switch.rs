@@ -467,6 +467,8 @@ async fn vod_manual_switch_affects_future_segments() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -628,6 +630,8 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -731,6 +735,8 @@ async fn multi_track_shared_abr_with_cache() {
         .build();
 
     let config1 = AudioConfig::<Hls>::for_stream(hls1)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus1)
         .media_info(wav_info.clone())
         .build();
@@ -767,6 +773,8 @@ async fn multi_track_shared_abr_with_cache() {
         .build();
 
     let config2 = AudioConfig::<Hls>::for_stream(hls2)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus2)
         .media_info(wav_info.clone())
         .build();
@@ -802,6 +810,8 @@ async fn multi_track_shared_abr_with_cache() {
         .build();
 
     let config3 = AudioConfig::<Hls>::for_stream(hls3)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus3)
         .media_info(wav_info)
         .build();
@@ -894,6 +904,8 @@ async fn abr_switch_must_not_redownload_covered_segments() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -984,6 +996,8 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -1068,6 +1082,8 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .build();
     let audio = Audio::<Stream<Hls>>::new(config)
@@ -1178,6 +1194,8 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     // Offline pull: park on ring underrun instead of spinning on Pending,
     // so the warmup loop needs no wall-clock deadline.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .block_on_underrun(true)
@@ -1304,6 +1322,8 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     // seek-settled wait below.
     let mut seek_rx = bus.subscribe();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -1465,6 +1485,8 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -1559,6 +1581,8 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .build();
     let audio = Audio::<Stream<Hls>>::new(config)
@@ -1685,6 +1709,8 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -1900,6 +1926,8 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

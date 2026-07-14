@@ -170,6 +170,8 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
         let byte_len = stream.len().unwrap_or(0);
         let byte_map = stream.byte_map();
         let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .backend(DecoderBackend::Symphonia)
             .byte_len_handle(Arc::new(std::sync::atomic::AtomicU64::new(byte_len)))
             .maybe_byte_map(byte_map)
@@ -190,7 +192,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
         while chunks.len() < 64 {
             match decoder.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                    chunks.push((chunk.meta.frame_offset, chunk.samples.clone()));
+                    chunks.push((chunk.meta.frame_offset, chunk.samples.to_vec()));
                 }
                 Ok(DecoderChunkOutcome::Pending(_)) => {
                     // Not expected under the wait-then-resume contract (the

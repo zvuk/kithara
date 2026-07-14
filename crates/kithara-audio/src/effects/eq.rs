@@ -639,7 +639,7 @@ impl AudioEffect for EqEffect {
             return Some(chunk);
         }
 
-        let samples = chunk.samples.as_mut_slice();
+        let samples = &mut chunk.samples;
 
         for frame in samples.chunks_exact_mut(channels) {
             frame[0] = self.eq_l.process_sample(frame[0]);

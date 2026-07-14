@@ -139,6 +139,8 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)

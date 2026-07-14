@@ -1,6 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use kithara_abr::AbrMode;
+use kithara_bufpool::Region;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_hls::{KeyOptions, KeyProcessorRule};
 use kithara_platform::{
@@ -9,7 +10,7 @@ use kithara_platform::{
     time::{Duration, sleep},
     tokio::task::spawn as task_spawn,
 };
-use kithara_play::ResourceConfig;
+use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackId, TrackSource};
 
 use crate::{
@@ -17,7 +18,7 @@ use crate::{
     web::{commands::WorkerCmd, key_processor_bridge},
 };
 
-/// Player-wide DRM + network state owned by the engine Worker, parallel to
+/// Player-wide DRM, network, and buffer-pool state owned by the engine Worker, parallel to
 /// the `key_options` + `player_headers` fields on
 /// [`NativeInner`](crate::native::inner::NativeInner). Held in a
 /// `RefCell` shared across the worker's command loop: setters mutate it,
@@ -26,6 +27,7 @@ use crate::{
 struct BuildState {
     headers: HashMap<String, String>,
     keys: KeyOptions,
+    region: Region,
 }
 
 macro_rules! clog {
@@ -51,10 +53,17 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     keep_worker_alive();
 
     task_spawn(async move {
-        let queue = Rc::new(Queue::new(QueueConfig::default()));
+        let state = BuildState::default();
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder()
+                .byte_pool(state.region.byte_pool())
+                .pcm_pool(state.region.pcm_pool())
+                .build(),
+        ));
+        let queue = Rc::new(Queue::new(QueueConfig::default().with_player(player)));
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
 
-        let build_state = Rc::new(RefCell::new(BuildState::default()));
+        let build_state = Rc::new(RefCell::new(state));
         spawn_tick_loop(Rc::clone(&queue));
         crate::web::observer::source::spawn(&queue);
 
@@ -270,6 +279,8 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
         Ok(builder) => {
             let headers = (!state.headers.is_empty()).then(|| state.headers.clone());
             let config = builder
+                .byte_pool(state.region.byte_pool())
+                .pcm_pool(state.region.pcm_pool())
                 .keys(state.keys.clone())
                 .maybe_headers(headers.map(Into::into))
                 .build();

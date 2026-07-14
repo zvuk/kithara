@@ -14,7 +14,12 @@ fn slot_id(value: u64) -> SlotId {
 }
 
 fn make_engine() -> EngineImpl {
-    EngineImpl::new(EngineConfig::default(), EventBus::default())
+    EngineImpl::new(
+        EngineConfig::builder()
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+        EventBus::default(),
+    )
 }
 
 fn session_ducking_lock() -> &'static StdMutex<()> {
@@ -39,7 +44,9 @@ enum NotRunningErrorScenario {
 
 #[kithara::test]
 fn engine_config_defaults() {
-    let config = EngineConfig::default();
+    let config = EngineConfig::builder()
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .build();
     assert_eq!(config.channels, 2);
     assert_eq!(config.eq_layout.len(), 10);
     assert_eq!(config.max_slots, 4);
@@ -49,6 +56,7 @@ fn engine_config_defaults() {
 #[kithara::test]
 fn engine_config_builder() {
     let config = EngineConfig::builder()
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .max_slots(8)
         .sample_rate(48000)
         .channels(1)
@@ -149,7 +157,10 @@ fn engine_cancel_crossfade_stub_returns_no_crossfade() {
 
 #[kithara::test]
 fn engine_master_sample_rate_returns_config_when_stopped() {
-    let config = EngineConfig::builder().sample_rate(48000).build();
+    let config = EngineConfig::builder()
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .sample_rate(48000)
+        .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
 }

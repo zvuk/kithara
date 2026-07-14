@@ -3,6 +3,7 @@
 use kithara::{
     abr::AbrMode,
     assets::StoreOptions,
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     net::{HttpClient, NetOptions},
     platform::{
@@ -140,6 +141,8 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
                 .build(),
         )
         .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .build();
 
     let resource = Resource::new(cfg)

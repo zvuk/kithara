@@ -465,6 +465,8 @@ async fn stress_seek_audio_hls(
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(fixture.media_info())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

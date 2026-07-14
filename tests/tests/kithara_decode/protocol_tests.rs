@@ -34,6 +34,8 @@ impl Backend {
     fn make_decoder(self, bytes: Vec<u8>, info: &MediaInfo) -> Box<dyn Decoder> {
         let source = Cursor::new(bytes);
         let config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .backend(self.to_choice())
             .build();
         DecoderFactory::create_from_media_info(source, info, config)

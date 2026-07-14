@@ -64,9 +64,14 @@ async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
-        .await
-        .expect("audio creation");
+    let mut audio = Audio::<Stream<Hls>>::new(
+        AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .await
+    .expect("audio creation");
 
     // Mirror the user-facing app: opening the audio handle implicitly
     // arms its scheduler slot via `preload()`. After that no consumer
@@ -153,6 +158,8 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
 
     let _audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .events(bus.clone())
             .build(),
     )

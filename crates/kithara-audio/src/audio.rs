@@ -35,7 +35,7 @@ use crate::{
     effects::timestretch::StretchControls,
     pipeline::{
         config::{AudioConfig, AudioDecoderConfig, create_effects},
-        fetch::{EpochValidator, Fetch, FetchKind},
+        fetch::{EpochValidator, Fetch},
         source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
@@ -477,22 +477,22 @@ impl<S> Audio<S> {
 
     fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> FetchOutcome {
         if !self.validator.is_valid(&fetch) {
-            self.discard_chunk(fetch.into_inner());
+            if let Fetch::Data { data, .. } = fetch {
+                self.discard_chunk(data);
+            }
             return FetchOutcome::Continue;
         }
 
-        match fetch.kind {
-            FetchKind::NaturalEof => {
+        match fetch {
+            Fetch::NaturalEof { .. } => {
                 self.consumer_phase = ConsumerPhase::AtEof;
-                self.discard_chunk(fetch.into_inner());
                 FetchOutcome::Return(None)
             }
-            FetchKind::Failure => {
+            Fetch::Failure { .. } => {
                 self.consumer_phase = ConsumerPhase::Failed;
-                self.discard_chunk(fetch.into_inner());
                 FetchOutcome::Return(None)
             }
-            FetchKind::Data => FetchOutcome::Return(Some(fetch.into_inner())),
+            Fetch::Data { data, .. } => FetchOutcome::Return(Some(data)),
         }
     }
 
@@ -728,26 +728,24 @@ impl<S> Audio<S> {
 
     fn stage_post_seek_fetch(&mut self, fetch: Fetch<PcmChunk>, epoch: u64) {
         debug_assert_eq!(
-            fetch.epoch, epoch,
+            fetch.epoch(),
+            epoch,
             "PCM ring preserved a fetch from a future seek epoch"
         );
         // Decoder emits a terminal marker as the last item for its epoch, so
         // staging EOF/failure cannot hide same-epoch PCM behind it.
-        match fetch.kind {
-            FetchKind::Data => {
-                let chunk = fetch.into_inner();
-                self.spec = chunk.spec();
-                self.current_chunk = Some(chunk);
+        match fetch {
+            Fetch::Data { data, .. } => {
+                self.spec = data.spec();
+                self.current_chunk = Some(data);
                 self.current_chunk_consumed_frames = 0;
                 self.consumer_phase = ConsumerPhase::Playing;
             }
-            FetchKind::NaturalEof => {
+            Fetch::NaturalEof { .. } => {
                 self.consumer_phase = ConsumerPhase::AtEof;
-                self.discard_chunk(fetch.into_inner());
             }
-            FetchKind::Failure => {
+            Fetch::Failure { .. } => {
                 self.consumer_phase = ConsumerPhase::Failed;
-                self.discard_chunk(fetch.into_inner());
             }
         }
     }
@@ -767,7 +765,7 @@ impl<S> Audio<S> {
     /// # Errors
     /// Propagated from the underlying stream (currently infallible at
     /// this layer — the worker thread surfaces errors lazily via
-    /// `FetchKind::Failure`, which becomes `Err` from a subsequent
+    /// `Fetch::Failure`, which becomes `Err` from a subsequent
     /// `read()` / `next_chunk()`).
     #[kithara::hang_watchdog]
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
@@ -788,8 +786,10 @@ impl<S> Audio<S> {
         self.consumer_phase = ConsumerPhase::SeekPending { epoch };
 
         while let Some(fetch) = self.pcm_rx.try_pop() {
-            if fetch.epoch < epoch {
-                self.discard_chunk(fetch.into_inner());
+            if fetch.epoch() < epoch {
+                if let Fetch::Data { data, .. } = fetch {
+                    self.discard_chunk(data);
+                }
                 hang_tick!();
                 continue;
             }
@@ -998,7 +998,7 @@ where
             host_sample_rate: config_host_sr,
             media_info: user_media_info,
             pcm_buffer_chunks,
-            pcm_pool: mut pool,
+            pcm_pool: pool,
             playback_rate: config_playback_rate,
             stretch: config_stretch,
             engine_load: config_engine_load,
@@ -1019,7 +1019,6 @@ where
         })?;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
-        let byte_pool = byte_pool.unwrap_or_default();
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let initial_byte_len = stream.len().unwrap_or(0);
@@ -1034,9 +1033,8 @@ where
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
 
-        let pool = pool.get_or_insert_default();
         let warm_channels = warm_channels_from_media_info(initial_media_info.as_ref());
-        Self::warm_pcm_pool(pool, warm_channels, pcm_buffer_chunks);
+        Self::warm_pcm_pool(&pool, warm_channels, pcm_buffer_chunks);
         // The single up-front build reads through the blocking off-RT
         // `Stream::read` adapter (waits for residual init lateness, cancel-
         // bounded), then we disarm before the RT worker is registered so the
@@ -1062,11 +1060,11 @@ where
         let epoch = Arc::new(AtomicU64::new(0));
         let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
 
-        let effects = create_effects(initial_spec, config_stretch.as_ref(), pool, custom_effects);
+        let effects = create_effects(initial_spec, config_stretch.as_ref(), &pool, custom_effects);
 
         Self::log_pipeline_ready(initial_spec, initial_spec, &host_sample_rate);
 
-        let interleaved = Self::alloc_interleaved_scratch(pool, initial_spec);
+        let interleaved = Self::alloc_interleaved_scratch(&pool, initial_spec);
 
         let abr_handle = shared_stream.abr_handle();
         let peer_wake = shared_stream.peer_wake();
@@ -1571,7 +1569,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
             .take()
             .unwrap_or_else(|| self.pcm_pool.get());
         interleaved.clear();
-        interleaved.resize(total_samples, 0.0);
+        interleaved.ensure_len(total_samples)?;
         debug_assert!(
             interleaved.capacity() >= total_samples,
             "Audio::read_planar scratch undersized: capacity={} < total_samples={total_samples}",
@@ -1740,7 +1738,7 @@ mod tests {
         let reader_wake = Arc::new(ThreadWake::default());
         let (mut tx, mut rx) = Audio::<()>::create_channels(2, &bus, &reader_wake);
 
-        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+        tx.try_push(Fetch::data(make_chunk(&[]), 0))
             .expect("first push reaches ring");
         assert!(
             events.try_recv().is_err(),
@@ -1752,7 +1750,7 @@ mod tests {
             Ok(kithara_events::Event::Audio(AudioEvent::OutputAvailable))
         ));
 
-        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+        tx.try_push(Fetch::data(make_chunk(&[]), 0))
             .expect("second push reaches ring");
         tx.flush_wake_signals();
         assert!(
@@ -1763,7 +1761,7 @@ mod tests {
         assert!(rx.try_pop().is_some());
         assert!(rx.try_pop().is_some());
 
-        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+        tx.try_push(Fetch::data(make_chunk(&[]), 0))
             .expect("third push reaches empty ring");
         tx.flush_wake_signals();
         assert!(matches!(
@@ -1828,12 +1826,10 @@ mod tests {
     }
 
     fn make_chunk(samples: &[f32]) -> PcmChunk {
-        let mut chunk = PcmChunk::default();
-        chunk.samples.clear();
-        chunk.samples.extend_from_slice(samples);
-        chunk.meta.spec.channels = 1;
-        chunk.meta.frames = u32::try_from(samples.len()).unwrap_or(u32::MAX);
-        chunk
+        let mut meta = PcmMeta::default();
+        meta.spec.channels = 1;
+        meta.frames = u32::try_from(samples.len()).unwrap_or(u32::MAX);
+        PcmChunk::new(meta, PcmPool::default().attach(samples.to_vec()))
     }
 
     fn make_timed_chunk(spec: PcmSpec, frames: u32, start: Duration, end: Duration) -> PcmChunk {
@@ -1862,7 +1858,7 @@ mod tests {
     fn consumer_phase_transitions_to_playing_on_first_chunk() {
         let (mut audio, mut tx) = audio_with_channel();
         let chunk = make_chunk(&[0.1, 0.2]);
-        let fetch = Fetch::new(chunk, false, 0);
+        let fetch = Fetch::data(chunk, 0);
         tx.try_push(fetch).ok();
 
         assert!(audio.fill_buffer());
@@ -1882,7 +1878,7 @@ mod tests {
         );
 
         audio.playhead.set_duration(Some(duration));
-        tx.try_push(Fetch::new(chunk, false, 0))
+        tx.try_push(Fetch::data(chunk, 0))
             .expect("chunk reaches test ring");
 
         let mut buf = vec![0.0f32; 200];
@@ -1914,7 +1910,7 @@ mod tests {
         let epoch = audio.validator.epoch;
 
         let chunk = make_chunk(&[0.1, 0.2]);
-        let fetch = Fetch::new(chunk, false, epoch);
+        let fetch = Fetch::data(chunk, epoch);
         tx.try_push(fetch).ok();
 
         assert!(audio.fill_buffer());
@@ -1925,8 +1921,8 @@ mod tests {
     fn seek_drain_preserves_new_epoch_chunk_after_stale_chunks() {
         let (mut audio, mut tx) = audio_with_channel();
 
-        let stale = Fetch::new(make_chunk(&[0.1, 0.2]), false, 0);
-        let fresh = Fetch::new(make_chunk(&[0.7, 0.8]), false, 1);
+        let stale = Fetch::data(make_chunk(&[0.1, 0.2]), 0);
+        let fresh = Fetch::data(make_chunk(&[0.7, 0.8]), 1);
         assert!(tx.try_push(stale).is_ok());
         assert!(tx.try_push(fresh).is_ok());
 
@@ -1945,8 +1941,8 @@ mod tests {
     fn seek_drain_preserves_new_epoch_eof_after_stale_chunks() {
         let (mut audio, mut tx) = audio_with_channel();
 
-        let stale = Fetch::new(make_chunk(&[0.1, 0.2]), false, 0);
-        let eof = Fetch::new(PcmChunk::default(), true, 1);
+        let stale = Fetch::data(make_chunk(&[0.1, 0.2]), 0);
+        let eof = Fetch::eof(1);
         assert!(tx.try_push(stale).is_ok());
         assert!(tx.try_push(eof).is_ok());
 
@@ -1961,7 +1957,7 @@ mod tests {
     fn consumer_phase_eof_terminates() {
         let (mut audio, mut tx) = audio_with_channel();
 
-        let fetch = Fetch::new(PcmChunk::default(), true, 0);
+        let fetch = Fetch::eof(0);
         tx.try_push(fetch).ok();
 
         let result = audio.recv_valid_chunk();
@@ -2002,21 +1998,21 @@ mod tests {
     fn process_fetch_must_distinguish_failure_from_natural_eof() {
         let (mut audio_eof, mut tx_eof) = audio_with_channel();
         tx_eof
-            .try_push(Fetch::new(PcmChunk::default(), true, 0))
+            .try_push(Fetch::eof(0))
             .expect("push natural-eof marker");
         let _ = audio_eof.recv_valid_chunk();
         assert_eq!(audio_eof.consumer_phase, ConsumerPhase::AtEof);
 
         let (mut audio_failure, mut tx_failure) = audio_with_channel();
         tx_failure
-            .try_push(Fetch::failure(PcmChunk::default(), 0))
+            .try_push(Fetch::failure(0))
             .expect("push failure marker");
         let _ = audio_failure.recv_valid_chunk();
 
         assert_ne!(
             audio_failure.consumer_phase,
             ConsumerPhase::AtEof,
-            "process_fetch must not collapse FetchKind::Failure into \
+            "process_fetch must not collapse Fetch::Failure into \
              ConsumerPhase::AtEof — AtEof means 'clip finished' and is \
              used by PlayerTrack to finalize; a transient failure must \
              land in a distinct non-natural-eof state so the pipeline \

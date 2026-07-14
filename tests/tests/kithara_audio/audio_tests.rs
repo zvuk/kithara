@@ -5,7 +5,7 @@ use std::{fs::File, io::Write};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
-    bufpool::{PcmPool, SharedPool},
+    bufpool::PcmPool,
     decode::{GaplessMode, SilenceTrimParams},
     events::{AudioEvent, Event, EventReceiver, SeekEpoch, SeekLifecycleStage},
     file::{FileConfig, FileSrc},
@@ -71,6 +71,8 @@ fn test_wav_config(
         .store(StoreOptions::new(cache.path()))
         .build();
     let config = AudioConfig::<kithara::file::File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(PcmPool::default())
         .hint("wav".to_string())
         .build();
     (cache, tmp, config)
@@ -92,7 +94,7 @@ async fn test_audio_new(#[case] sample_count: usize) {
 /// leaves it warmed.
 #[kithara::test(tokio)]
 async fn audio_new_warms_pcm_pool() {
-    let pool: PcmPool = SharedPool::<8, Vec<f32>>::new(128, 200_000);
+    let pool = PcmPool::new(128, 200_000);
     assert_eq!(
         pool.allocated_bytes(),
         0,
@@ -100,7 +102,7 @@ async fn audio_new_warms_pcm_pool() {
     );
 
     let (_cache, _tmp, mut config) = test_wav_config(1000);
-    config.pcm_pool = Some(pool.clone());
+    config.pcm_pool = pool.clone();
 
     let _audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
@@ -134,6 +136,8 @@ fn test_audio_config_with_media_info() {
         .build();
 
     let config = AudioConfig::<kithara::file::File>::for_stream(FileConfig::default())
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(PcmPool::default())
         .media_info(info.clone())
         .build();
 
@@ -154,6 +158,8 @@ fn test_audio_config_with_media_info() {
 }))]
 fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
     let config = AudioConfig::<kithara::file::File>::for_stream(FileConfig::default())
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .gapless_mode(mode)

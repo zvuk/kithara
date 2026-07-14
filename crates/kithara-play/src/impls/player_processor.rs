@@ -123,6 +123,10 @@ impl PlayerNodeProcessor {
     const SCRATCH_BUF_COUNT: usize = 4;
 
     /// Create a new processor with the given command receiver and shared state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the PCM pool budget cannot admit the real-time scratch buffers.
     #[must_use]
     pub fn new(
         cmd_rx: HeapCons<PlayerCmd>,
@@ -134,10 +138,9 @@ impl PlayerNodeProcessor {
         let max_frames: usize = max_block_frames.get().as_();
         let scratch_bufs = std::array::from_fn(|_| {
             let mut buf = pool.get();
-            let cap = buf.capacity();
-            if cap < max_frames {
-                buf.reserve(max_frames - cap);
-            }
+            buf.ensure_len(max_frames)
+                .expect("invariant: player scratch pre-sizing must fit the PCM pool budget");
+            buf.clear();
             buf
         });
 
@@ -548,6 +551,10 @@ impl PlayerNodeProcessor {
     ///   position/duration snapshot lifted out of [`TrackReadOutcome`]
     ///   so [`Self::update_position_duration`] can publish it to
     ///   `shared_state` without re-locking the resource.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `frames` exceeds the stream's declared maximum block size.
     pub fn render_audio(
         &mut self,
         buffers: &mut ProcBuffers,
@@ -566,7 +573,8 @@ impl PlayerNodeProcessor {
         }
 
         for buf in &mut self.scratch_bufs {
-            buf.resize(frames, 0.0);
+            buf.ensure_len(frames)
+                .expect("invariant: process block fits the pre-sized player scratch buffer");
         }
 
         let (left, right) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
@@ -806,10 +814,9 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let max_frames: usize = stream_info.max_block_frames.get().as_();
         for buf in &mut self.scratch_bufs {
-            let cap = buf.capacity();
-            if cap < max_frames {
-                buf.reserve(max_frames - cap);
-            }
+            buf.ensure_len(max_frames)
+                .expect("invariant: player scratch resizing must fit the PCM pool budget");
+            buf.clear();
         }
     }
 

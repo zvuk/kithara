@@ -131,6 +131,8 @@ async fn run_case(
     };
     let cfg = ResourceConfig::for_src(master.as_str())
         .expect("valid master URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)
         .name("t0".to_string())
         .store(store)
