@@ -3,6 +3,7 @@ pub mod arch;
 pub mod ast_grep;
 #[cfg(feature = "lint")]
 pub mod audit;
+pub mod audit_clippy;
 pub mod common;
 pub mod ctx;
 pub mod format;
@@ -41,6 +42,8 @@ pub enum CoreCommand {
     Format(format::FormatArgs),
     /// Thin wrapper around `ast-grep scan` that bakes in the policy filter list.
     AstGrep(ast_grep::AstGrepArgs),
+    /// Opt-in, non-gating Clippy sweep for extended advisory lints.
+    AuditClippy(audit_clippy::AuditClippyArgs),
     /// Thin wrapper around `typos` that pins the workspace config.
     Typos(typos::TyposArgs),
     /// Thin wrapper around `similarity-rs` with audit/advisory/strict profiles.
@@ -84,6 +87,7 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Audit(args) => audit::run(args, ctx),
         CoreCommand::Format(args) => format::run(args, ctx),
         CoreCommand::AstGrep(args) => ast_grep::run(args, ctx),
+        CoreCommand::AuditClippy(args) => audit_clippy::run(args, ctx),
         CoreCommand::Typos(args) => typos::run(args, ctx),
         CoreCommand::Similarity(args) => similarity::run(args, ctx),
         CoreCommand::Manifest(args) => manifest::run(args, ctx),

@@ -4616,6 +4616,7 @@ dependencies = [
  "fieldwork",
  "hotpath",
  "jni 0.22.4",
+ "js-sys",
  "kithara-apple",
  "kithara-bufpool",
  "kithara-platform",
@@ -4634,7 +4635,10 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "unimock",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]
@@ -5103,6 +5107,7 @@ dependencies = [
  "bon",
  "bungee-rs",
  "derive_more",
+ "fast-interleave",
  "kithara-bufpool",
  "kithara-workspace-hack",
  "num-traits",

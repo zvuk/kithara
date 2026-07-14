@@ -47,6 +47,7 @@ client-reqwest = ["kithara-stream/client-reqwest"]
 client-wreq = ["kithara-stream/client-wreq"]
 tls-rustls = ["kithara-stream/tls-rustls"]
 tls-native = ["kithara-stream/tls-native"]
+webcodecs = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
@@ -79,6 +80,12 @@ core-foundation-sys = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }

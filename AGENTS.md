@@ -223,6 +223,7 @@ Risks or follow-ups:
 - Load `docs/guides/tooling.md` only when touching formatter, lint, dependency-audit, or external-tool policy.
 - Load `docs/guides/test-harness.md` only when adding/debugging tests or reporting validation scope.
 - Load `docs/guides/agent-hooks.md` only when touching tool adapters, hooks, or command routing.
+- Load `docs/guides/performance.md` only when optimizing a hot path, cutting allocations, or triaging a perf regression.
 - If shared boundaries are unclear, stop and clarify before implementation.
 - Keep debate procedures, investigation journaling, and TDD choreography out of `AGENTS.md`. Put that guidance in workflow docs or owning `CONTEXT.md` files.
 - Do not restate the same repo rule in tool-specific files. Tool-specific files should only route the agent to canonical docs and scoped domain guidance.

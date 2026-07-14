@@ -189,7 +189,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        let Some(readable) = self.readable_part(range.clone()) else {
+        let Some(readable) = self.readable_part(range) else {
             return match self.inner.asset.reader.status() {
                 ResourceStatus::Committed { .. } => SourcePhase::Eof,
                 ResourceStatus::Active | ResourceStatus::Failed(_) | ResourceStatus::Cancelled => {

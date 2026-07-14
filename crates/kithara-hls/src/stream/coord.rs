@@ -56,7 +56,7 @@ pub(crate) struct HlsCoordEnv {
     pub(crate) signal: SizeSignal,
 }
 
-/// Thin router over a fixed `Vec<Arc<HlsVariant>>`. Every `Source`-side
+/// Thin router over a fixed slice of [`HlsVariant`] handles. Every `Source`-side
 /// reader op is delegated to `self.active()` (the variant whose index
 /// `AbrState::current_variant_index` resolves to). The coord owns only
 /// what is genuinely cross-variant: the ABR handle (single source of
@@ -65,7 +65,7 @@ pub(crate) struct HlsCoordEnv {
 /// references it hands to variants and to peer `PlanCtx`-builders.
 pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
-    pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
+    pub(crate) variants: Arc<[Arc<HlsVariant>]>,
     pub(crate) scope: AssetScope,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
@@ -127,7 +127,7 @@ impl HlsCoord {
         playhead: Arc<PlayheadState>,
         seek: Arc<SeekState>,
         abr: AbrHandle,
-        variants: Arc<Vec<Arc<HlsVariant>>>,
+        variants: Arc<[Arc<HlsVariant>]>,
         playlist_state: Arc<PlaylistState>,
     ) -> Self {
         assert!(

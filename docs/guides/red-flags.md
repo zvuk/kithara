@@ -54,3 +54,6 @@ checks, handoffs, or lint failures.
   or standard library.
 - The patch needs `#[allow]`, `#[expect]`, `#![allow]`, `xtask-lint-ignore`, or
   baseline growth.
+
+See `docs/guides/performance.md` for the hot-path antipatterns behind these
+performance bullets and the kithara-specific fixes.

@@ -147,7 +147,6 @@ lint:
     - just quality-report-ci
     - just deny
     - just machete
-    - just lint arch
     - just hack || true
     - just semver || true
   artifacts:

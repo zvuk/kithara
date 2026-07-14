@@ -83,6 +83,10 @@ shear:
 ast-grep *ARGS:
     cargo xtask ast-grep {{ARGS}}
 
+# Opt-in advisory clippy sweep (extended nursery/pedantic perf lints, non-gating)
+audit-clippy *ARGS:
+    cargo xtask audit-clippy {{ARGS}}
+
 # Workspace linters: arch, style, idioms.
 #   just lint                       # all three
 #   just lint arch                  # only arch (or style / idioms)
@@ -318,12 +322,15 @@ quality-report-ci:
 
 # --- lint composites ---
 
-# Fast lint chain: fmt-check + clippy + ast-grep + arch.
-lint-fast: fmt-check clippy ast-grep
+# Fast lint chain: fmt-check + clippy + ast-grep + typos + arch ratchet.
+# style/idioms ratchets are slower and run in lint-full (CI), not pre-commit.
+lint-fast: fmt-check clippy ast-grep typos
     cargo xtask lint arch
 
-# Full lint: fast chain plus xtask self-tests and the quality scans.
+# Full lint: fast chain + style/idioms ratchets + xtask self-tests + quality scans.
 lint-full: lint-fast xtask-test _quality-unimock _quality-rstest _quality-trait-mock _quality-trait-mock-exceptions
+    cargo xtask lint style
+    cargo xtask lint idioms
 
 # --- CI cycle ---
 
@@ -409,6 +416,17 @@ typos *ARGS:
 #   just orphans --package kithara-queue         # single crate
 orphans *ARGS:
     cargo xtask orphans {{ARGS}}
+
+# Cargo manifest hygiene checks (workspace-dep usage, ordering, drift).
+#   just manifest                                # whole workspace
+manifest *ARGS:
+    cargo xtask manifest {{ARGS}}
+
+# Architecture visualization (module hierarchy / dependency arc-map).
+#   just viz hierarchy kithara-stream
+#   just viz arc-map
+viz *ARGS:
+    cargo xtask viz {{ARGS}}
 
 # Comprehensive workspace health check (15-30 min).
 # Runs lint + quality + audit tools + heavy stages (lockbud / hack /
@@ -535,6 +553,14 @@ perf:
 perf-compare *ARGS:
     cargo xtask perf-compare {{ARGS}}
 
+# Test-suite performance measurement pipeline (matrix/slow/profile/report/trace).
+# Distinct from `just perf` (which runs the `perf`-feature integration tests):
+# this measures and reports the test-suite's own wall-clock hotspots.
+#   just testperf matrix
+#   just testperf report
+testperf *ARGS:
+    cargo xtask perf {{ARGS}}
+
 # Run benchmarks. Default: build only.
 #   just bench                # build benches
 #   just bench run            # execute (writes bench-results.txt)
@@ -623,7 +649,7 @@ wasm MODE="check":
         # kithara-decode on wasm uses symphonia (pure Rust). Its default `fdk-aac`
         # feature is libfdk-aac (C via fdk-aac-sys), which cannot target
         # wasm32-unknown-unknown (no libc/sysroot), so check the realistic wasm set.
-        cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,client-reqwest,tls-rustls
+        cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,webcodecs,client-reqwest,tls-rustls
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       test)

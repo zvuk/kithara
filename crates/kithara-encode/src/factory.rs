@@ -45,7 +45,7 @@ impl EncoderFactory {
         #[cfg(not(target_arch = "wasm32"))]
         {
             match codec {
-                AudioCodec::AacLc | AudioCodec::AacHeV2 | AudioCodec::Flac => {
+                AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac => {
                     Ok(Box::new(FfmpegEncoder))
                 }
                 codec => Err(EncodeError::UnsupportedCodec(codec)),

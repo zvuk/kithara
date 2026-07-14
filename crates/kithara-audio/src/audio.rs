@@ -1019,7 +1019,7 @@ where
         })?;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
-        let byte_pool = byte_pool.unwrap_or_else(|| BytePool::default().clone());
+        let byte_pool = byte_pool.unwrap_or_default();
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let initial_byte_len = stream.len().unwrap_or(0);
@@ -1034,7 +1034,7 @@ where
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
 
-        let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
+        let pool = pool.get_or_insert_default();
         let warm_channels = warm_channels_from_media_info(initial_media_info.as_ref());
         Self::warm_pcm_pool(pool, warm_channels, pcm_buffer_chunks);
         // The single up-front build reads through the blocking off-RT
@@ -1248,7 +1248,7 @@ where
                 .maybe_hooks(stream.take_reader_event_sink())
                 .maybe_resampler(resampler)
                 .build();
-            let source = OffsetReader::new(stream.clone(), base_offset);
+            let source = OffsetReader::new(stream, base_offset);
             match DecoderFactory::create_from_media_info(source, &info, config) {
                 Ok(d) => {
                     d.update_byte_len(byte_len);

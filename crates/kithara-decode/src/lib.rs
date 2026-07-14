@@ -32,6 +32,8 @@ mod resampled;
 mod symphonia;
 mod traits;
 mod types;
+#[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
+mod webcodecs;
 
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
@@ -54,3 +56,5 @@ pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };
 pub use types::{DecoderTrackInfo, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+#[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
+pub use webcodecs::probe::spawn_webcodecs_probe;

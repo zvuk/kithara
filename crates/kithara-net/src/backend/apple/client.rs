@@ -1,4 +1,4 @@
-use std::num::NonZeroU16;
+use std::{fmt::Write, num::NonZeroU16};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -342,6 +342,6 @@ fn truncate_error_body(mut body: String) -> String {
         .nth(MAX_ERROR_BODY_CHARS)
         .map_or(body.len(), |(index, _)| index);
     body.truncate(cut_at);
-    body.push_str(&format!("...(truncated, {total} chars total)"));
+    let _ = write!(body, "...(truncated, {total} chars total)");
     body
 }
