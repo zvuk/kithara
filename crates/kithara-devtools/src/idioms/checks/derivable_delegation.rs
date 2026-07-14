@@ -261,13 +261,18 @@ struct TargetGroup<'a> {
 struct ExistingSegment {
     attrs: Vec<String>,
     target: String,
-    body: String,
+    body: ExistingBody,
+}
+
+struct ExistingBody {
+    source: String,
+    attr_ranges: Vec<Range<usize>>,
 }
 
 struct DelegateSegment<'a> {
     attrs: Vec<String>,
     target: String,
-    bodies: Vec<String>,
+    bodies: Vec<ExistingBody>,
     methods: Vec<ForwardMethod<'a>>,
 }
 
@@ -377,9 +382,8 @@ fn collect_impl_items<'a>(
 fn collect_existing_segments<'a>(
     src: &str,
     delegate_macros: &[(usize, &syn::ImplItemMacro)],
-) -> Result<(Vec<DelegateSegment<'a>>, bool), ()> {
+) -> Result<Vec<DelegateSegment<'a>>, ()> {
     let mut segments = Vec::<DelegateSegment<'_>>::new();
-    let mut coalesced = false;
     for (_, item) in delegate_macros {
         for parsed in parse_delegate_segments(src, item)? {
             if let Some(segment) = segments
@@ -387,7 +391,6 @@ fn collect_existing_segments<'a>(
                 .find(|segment| segment.target == parsed.target && segment.attrs == parsed.attrs)
             {
                 segment.bodies.push(parsed.body);
-                coalesced = true;
             } else {
                 segments.push(DelegateSegment {
                     attrs: parsed.attrs,
@@ -398,7 +401,7 @@ fn collect_existing_segments<'a>(
             }
         }
     }
-    Ok((segments, coalesced))
+    Ok(segments)
 }
 
 fn candidate(
@@ -421,7 +424,7 @@ fn candidate(
     let (groups, delegate_macros) = collect_impl_items(src, impl_block, keep_manual_method_attrs);
     let target = self_ty_name(&impl_block.self_ty).unwrap_or_else(|| "impl".to_owned());
     let line = impl_block.impl_token.span.start().line;
-    let Ok((mut segments, coalesced)) = collect_existing_segments(src, &delegate_macros) else {
+    let Ok(mut segments) = collect_existing_segments(src, &delegate_macros) else {
         return Some(Candidate {
             target,
             kind,
@@ -434,8 +437,7 @@ fn candidate(
         });
     };
 
-    let mut augmented = false;
-    let mut new_group = false;
+    let mut structural_change = delegate_macros.len() >= 2;
     let mut augment_groups = Vec::new();
     let mut new_groups = Vec::new();
     for group in groups {
@@ -445,7 +447,6 @@ fn candidate(
                 .iter()
                 .any(|segment| segment.target == *group_target)
         {
-            augmented = true;
             augment_groups.push(group);
         } else {
             new_groups.push(group);
@@ -458,6 +459,7 @@ fn candidate(
             .find(|segment| segment.target == group_target && segment.attrs.is_empty())
         {
             segment.methods.extend(group.methods);
+            structural_change = true;
         } else {
             segments.push(DelegateSegment {
                 attrs: Vec::new(),
@@ -465,11 +467,12 @@ fn candidate(
                 bodies: Vec::new(),
                 methods: group.methods,
             });
+            structural_change = true;
         }
     }
     for group in new_groups {
         if group.methods.len() >= min_methods {
-            new_group = true;
+            structural_change = true;
             segments.push(DelegateSegment {
                 attrs: Vec::new(),
                 target: group.target.source,
@@ -478,7 +481,11 @@ fn candidate(
             });
         }
     }
-    if delegate_macros.len() < 2 && !coalesced && !augmented && !new_group {
+    let generated_block = delegate_macros.iter().any(|(_, item)| {
+        src.get(item.span().byte_range())
+            .is_some_and(|source| source.contains('\n'))
+    });
+    if !structural_change && !generated_block {
         return None;
     }
 
@@ -513,7 +520,36 @@ fn candidate(
                 .map(|method| method.index),
         )
         .min()?;
-    let replacement = render_delegate(src, &segments, &blocks, first_index, unqualified_macro)?;
+    let edits = delegation_edits(
+        src,
+        impl_block,
+        &segments,
+        &blocks,
+        &delegate_macros,
+        first_index,
+        unqualified_macro,
+    )?;
+    Some(Candidate {
+        target,
+        kind,
+        existing_blocks: delegate_macros.len(),
+        fields,
+        methods,
+        line,
+        edits,
+        skip: None,
+    })
+}
+
+fn delegation_edits(
+    src: &str,
+    impl_block: &ItemImpl,
+    segments: &[DelegateSegment<'_>],
+    blocks: &[BlockRange],
+    delegate_macros: &[(usize, &syn::ImplItemMacro)],
+    first_index: usize,
+    unqualified_macro: bool,
+) -> Option<Vec<Edit>> {
     let mut relevant: Vec<_> = delegate_macros
         .iter()
         .map(|(index, _)| *index)
@@ -526,28 +562,47 @@ fn candidate(
         .collect();
     relevant.sort_unstable();
     relevant.dedup();
+    let mut replacement = render_delegate(src, segments, blocks, first_index, unqualified_macro)?;
+    let has_following_item = impl_block
+        .items
+        .iter()
+        .enumerate()
+        .skip(first_index + 1)
+        .any(|(index, _)| !relevant.contains(&index));
+    if has_following_item {
+        replacement.push('\n');
+    }
+    let leading = if first_index == 0 { "\n" } else { "\n\n" };
+    replacement.insert_str(0, leading);
     let mut replacement = Some(replacement);
-    let edits = relevant
+    let edits: Vec<_> = relevant
         .into_iter()
-        .map(|index| Edit {
-            range: deletion_range(src, blocks[index].bytes.clone()),
-            text: if index == first_index {
-                replacement.take().unwrap_or_default()
-            } else {
-                String::new()
-            },
+        .map(|index| {
+            let mut range = deletion_range(src, blocks[index].bytes.clone());
+            if index == first_index {
+                range.start = if first_index == 0 {
+                    impl_block.brace_token.span.open().byte_range().end
+                } else {
+                    blocks[first_index - 1].bytes.end
+                };
+            }
+            Edit {
+                range,
+                text: if index == first_index {
+                    replacement.take().unwrap_or_default()
+                } else {
+                    String::new()
+                },
+            }
         })
         .collect();
-    Some(Candidate {
-        target,
-        kind,
-        existing_blocks: delegate_macros.len(),
-        fields,
-        methods,
-        line,
-        edits,
-        skip: None,
-    })
+    if edits.iter().all(|edit| {
+        src.get(edit.range.clone())
+            .is_some_and(|source| source == edit.text)
+    }) {
+        return None;
+    }
+    Some(edits)
 }
 
 fn is_delegate_macro(item: &syn::ImplItemMacro) -> bool {
@@ -605,17 +660,49 @@ fn parse_delegate_segments(
         let target = simple_delegate_target(&tokens[target_start..cursor - 1]).ok_or(())?;
         let range = body.span().byte_range();
         let inner = range.start.checked_add(1).ok_or(())?..range.end.checked_sub(1).ok_or(())?;
-        let body = src.get(inner).ok_or(())?.to_owned();
+        let mut attr_ranges = Vec::new();
+        let body_tokens: Vec<_> = body.stream().into_iter().collect();
+        for pair in body_tokens.windows(2) {
+            let [TokenTree::Punct(hash), TokenTree::Group(group)] = pair else {
+                continue;
+            };
+            if hash.as_char() != '#' || group.delimiter() != Delimiter::Bracket {
+                continue;
+            }
+            let start = hash
+                .span()
+                .byte_range()
+                .start
+                .checked_sub(inner.start)
+                .ok_or(())?;
+            let end = group
+                .span()
+                .byte_range()
+                .end
+                .checked_sub(inner.start)
+                .ok_or(())?;
+            if end > inner.len() {
+                return Err(());
+            }
+            attr_ranges.push(start..end);
+        }
+        let source = src.get(inner).ok_or(())?.to_owned();
         segments.push(ExistingSegment {
             attrs,
             target,
-            body,
+            body: ExistingBody {
+                source,
+                attr_ranges,
+            },
         });
     }
     Ok(segments)
 }
 
 fn simple_delegate_target(tokens: &[TokenTree]) -> Option<String> {
+    if matches!(tokens, [TokenTree::Ident(root)] if root == "self") {
+        return Some("self".to_owned());
+    }
     let [
         TokenTree::Ident(root),
         TokenTree::Punct(dot),
@@ -684,7 +771,8 @@ fn render_delegate(
         output.push_str(&segment.target);
         output.push_str(" {\n");
         for body in &segment.bodies {
-            push_raw_body(&mut output, body, &method_indent);
+            let body = normalized_existing_body(body)?;
+            push_raw_body(&mut output, &body, &method_indent);
         }
         for delegated in &segment.methods {
             render_method(&mut output, src, blocks, delegated, &method_indent)?;
@@ -695,6 +783,26 @@ fn render_delegate(
     output.push_str(indent);
     output.push_str("}\n");
     Some(output)
+}
+
+fn normalized_existing_body(body: &ExistingBody) -> Option<String> {
+    let mut normalized = body.source.clone();
+    for range in body.attr_ranges.iter().rev() {
+        let source = body.source.get(range.clone())?;
+        if !source.contains('\n') {
+            continue;
+        }
+        let line = line_start(&body.source, range.start);
+        let target_indent = body.source.get(line..range.start)?;
+        let closing_line = source.rsplit('\n').next()?;
+        let source_indent = &closing_line[..closing_line
+            .bytes()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .count()];
+        let shifted = shift_multiline_source(source, source_indent, target_indent)?;
+        normalized.replace_range(range.clone(), &shifted);
+    }
+    Some(normalized)
 }
 
 fn render_method(
@@ -714,6 +822,9 @@ fn render_method(
             output.push_str(indent);
             output.push_str(&block_doc_attribute(attr)?);
             output.push('\n');
+        } else if source.contains('\n') {
+            let source = reindent_multiline_source(src, attr.span().byte_range().start, source)?;
+            push_indented(output, &source, indent);
         } else {
             push_indented(output, source, indent);
         }
@@ -741,6 +852,38 @@ fn render_method(
     }
     push_indented(output, &signature, indent);
     Some(())
+}
+
+fn reindent_multiline_source(src: &str, start: usize, source: &str) -> Option<String> {
+    let line = line_start(src, start);
+    let source_indent = src.get(line..start)?;
+    shift_multiline_source(source, source_indent, "")
+}
+
+fn shift_multiline_source(
+    source: &str,
+    source_indent: &str,
+    target_indent: &str,
+) -> Option<String> {
+    if !source_indent
+        .bytes()
+        .all(|byte| matches!(byte, b' ' | b'\t'))
+        || !target_indent
+            .bytes()
+            .all(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        return None;
+    }
+    let mut lines = source.lines();
+    let mut reindented = lines.next()?.to_owned();
+    for line in lines {
+        reindented.push('\n');
+        if !line.trim().is_empty() {
+            reindented.push_str(target_indent);
+            reindented.push_str(line.strip_prefix(source_indent)?);
+        }
+    }
+    Some(reindented)
 }
 
 fn compact_expr_template(template: &str) -> String {
@@ -792,23 +935,7 @@ fn method_signature(
     if !signature.contains('\n') {
         return Some(signature);
     }
-    let line = line_start(src, start);
-    let source_indent = src.get(line..start)?;
-    if !source_indent
-        .bytes()
-        .all(|byte| matches!(byte, b' ' | b'\t'))
-    {
-        return None;
-    }
-    let mut lines = signature.lines();
-    let mut reindented = lines.next()?.to_owned();
-    for line in lines {
-        reindented.push('\n');
-        if !line.trim().is_empty() {
-            reindented.push_str(line.strip_prefix(source_indent)?);
-        }
-    }
-    Some(reindented)
+    reindent_multiline_source(src, start, &signature)
 }
 
 fn push_raw_body(output: &mut String, body: &str, indent: &str) {
@@ -1146,6 +1273,9 @@ fn delegate_target(src: &str, receiver: &Expr) -> Option<DelegateTarget> {
 }
 
 fn simple_target(expr: &Expr) -> Option<String> {
+    if is_self_path(expr) {
+        return Some("self".to_owned());
+    }
     let Expr::Field(field) = expr else {
         return None;
     };
@@ -1241,11 +1371,15 @@ struct SelfMethodCallCollector<'a> {
 
 impl<'ast> Visit<'ast> for SelfMethodCallCollector<'ast> {
     fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
-        if contains_self_field(&call.receiver) {
+        if is_self_path(&call.receiver) || contains_self_field(&call.receiver) {
             self.calls.push(call);
         }
         visit::visit_expr_method_call(self, call);
     }
+}
+
+fn is_self_path(expr: &Expr) -> bool {
+    matches!(expr, Expr::Path(path) if path.path.is_ident("self"))
 }
 
 fn contains_self_field(expr: &Expr) -> bool {
@@ -1596,6 +1730,48 @@ mod tests {
     }
 
     #[test]
+    fn delegate_block_is_separated_from_trailing_item() -> Result<()> {
+        let source = "impl Wrapper {\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n    pub(crate) fn manual(&self) { work() }\n}\n";
+        let expected = "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            fn a(&self);\n            fn b(&self);\n        }\n    }\n\n    pub(crate) fn manual(&self) { work() }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert_eq!(fixed, expected);
+        let (again, second) = fix_source(&fixed)?;
+        assert_eq!(again, fixed);
+        assert_eq!(second.writes, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn final_delegate_block_has_no_trailing_blank_line() -> Result<()> {
+        let source = "impl Wrapper {\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
+        let expected = "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            fn a(&self);\n            fn b(&self);\n        }\n    }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert_eq!(fixed, expected);
+        let (again, second) = fix_source(&fixed)?;
+        assert_eq!(again, fixed);
+        assert_eq!(second.writes, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn preceding_blank_line_is_not_doubled() -> Result<()> {
+        let source = "impl Wrapper {\n    pub(crate) fn manual(&self) { work() }\n\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
+        let expected = "impl Wrapper {\n    pub(crate) fn manual(&self) { work() }\n\n    delegate::delegate! {\n        to self.inner {\n            fn a(&self);\n            fn b(&self);\n        }\n    }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert_eq!(fixed, expected);
+        let (again, second) = fix_source(&fixed)?;
+        assert_eq!(again, fixed);
+        assert_eq!(second.writes, 0);
+        Ok(())
+    }
+
+    #[test]
     fn semicolon_terminated_unit_forwarders_are_fixed() -> Result<()> {
         let source = "impl Wrapper {\n    fn notify_all(&self) { self.cv.notify_all(); }\n    fn notify_one(&self) { self.cv.notify_one(); }\n}\n";
         let (fixed, outcome) = fix_source(source)?;
@@ -1627,6 +1803,58 @@ mod tests {
         assert!(fixed.contains("#[call(len)]"));
         assert!(fixed.contains("fn size(&self) -> usize;"));
         assert!(fixed.contains("fn clear(&mut self);"));
+        Ok(())
+    }
+
+    #[test]
+    fn self_method_forwarders_are_fixed_and_idempotent() -> Result<()> {
+        let source = "impl Equalizer for PlayerImpl {\n    fn band_count(&self) -> usize { self.eq_band_count() }\n    fn gain(&self, band: usize) -> Option<f32> { self.eq_gain(band) }\n    fn reset(&self) -> Result<(), PlayError> { self.reset_eq() }\n    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> { self.set_eq_gain(band, gain_db) }\n}\n";
+        let expected = "impl Equalizer for PlayerImpl {\n    delegate::delegate! {\n        to self {\n            #[call(eq_band_count)]\n            fn band_count(&self) -> usize;\n            #[call(eq_gain)]\n            fn gain(&self, band: usize) -> Option<f32>;\n            #[call(reset_eq)]\n            fn reset(&self) -> Result<(), PlayError>;\n            #[call(set_eq_gain)]\n            fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError>;\n        }\n    }\n}\n";
+
+        let (fixed, outcome) = fix_source(source)?;
+        assert_eq!(outcome.writes, 1);
+        assert_eq!(fixed, expected);
+        let (again, second) = fix_source(&fixed)?;
+        assert_eq!(again, fixed);
+        assert_eq!(second.writes, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn lone_self_method_forwarder_stays_manual() -> Result<()> {
+        let source = "impl Equalizer for PlayerImpl {\n    fn band_count(&self) -> usize { self.eq_band_count() }\n}\n";
+
+        let (fixed, outcome) = fix_source(source)?;
+        assert_eq!(fixed, source);
+        assert_eq!(outcome.writes, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn self_and_field_forwarders_share_one_delegate_block() -> Result<()> {
+        let source = "impl Wrapper {\n    fn local_a(&self) { self.inner_a() }\n    fn local_b(&self, value: u8) { self.inner_b(value) }\n    fn field_a(&self) { self.inner.field_a() }\n    fn field_b(&self, value: u8) { self.inner.field_b(value) }\n}\n";
+        let expected = "impl Wrapper {\n    delegate::delegate! {\n        to self {\n            #[call(inner_a)]\n            fn local_a(&self);\n            #[call(inner_b)]\n            fn local_b(&self, value: u8);\n        }\n        to self.inner {\n            fn field_a(&self);\n            fn field_b(&self, value: u8);\n        }\n    }\n}\n";
+
+        let (fixed, outcome) = fix_source(source)?;
+        assert_eq!(outcome.writes, 1);
+        assert_eq!(fixed, expected);
+        let (again, second) = fix_source(&fixed)?;
+        assert_eq!(again, fixed);
+        assert_eq!(second.writes, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn self_method_generic_stays_manual_and_attributes_are_preserved() -> Result<()> {
+        let source = "impl Equalizer for PlayerImpl {\n    fn generic<T>(&self, value: T) { self.eq_generic(value) }\n    #[cfg(feature = \"eq\")]\n    fn gain(&self, band: usize) -> Option<f32> { self.eq_gain(band) }\n    #[kithara::probe(level = \"debug\")]\n    fn reset(&self) -> Result<(), PlayError> { self.reset_eq() }\n}\n";
+        let expected = "impl Equalizer for PlayerImpl {\n    fn generic<T>(&self, value: T) { self.eq_generic(value) }\n\n    delegate::delegate! {\n        to self {\n            #[cfg(feature = \"eq\")]\n            #[call(eq_gain)]\n            fn gain(&self, band: usize) -> Option<f32>;\n            #[kithara::probe(level = \"debug\")]\n            #[call(reset_eq)]\n            fn reset(&self) -> Result<(), PlayError>;\n        }\n    }\n}\n";
+
+        let (fixed, outcome) = fix_source(source)?;
+        assert_eq!(outcome.writes, 1);
+        assert_eq!(fixed, expected);
+        let (again, second) = fix_source(&fixed)?;
+        assert_eq!(again, fixed);
+        assert_eq!(second.writes, 0);
         Ok(())
     }
 
@@ -2193,6 +2421,36 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("#[tracing::instrument(skip(self))]\n            fn run(&self);"));
         assert!(!fixed.contains("self.inner.run()"));
+        Ok(())
+    }
+
+    #[test]
+    fn multiline_attribute_is_reindented_inside_delegate_block() -> Result<()> {
+        let source = "impl Wrapper {\n    #[foo(\n        a,\n        b\n    )]\n    fn run(&self) { self.inner.run() }\n}\n";
+        let expected = "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            #[foo(\n                a,\n                b\n            )]\n            fn run(&self);\n        }\n    }\n}\n";
+        let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert_eq!(fixed, expected);
+        let (again, second) = fix_source_with_thresholds(&fixed, 1, 1)?;
+        assert_eq!(again, fixed);
+        assert_eq!(second.writes, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn existing_delegate_block_spacing_and_attribute_indent_are_normalized() -> Result<()> {
+        let source = "impl Wrapper {\n    delegate::delegate! {\n        to self.inner {\n            #[foo(\n                    a,\n                    b\n                )]\n            fn run(&self);\n        }\n    }\n    pub(crate) fn manual(&self) { work() }\n}\n";
+        let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains(
+            "            #[foo(\n                a,\n                b\n            )]\n            fn run(&self);"
+        ));
+        assert!(fixed.contains("    }\n\n    pub(crate) fn manual"));
+        let (again, second) = fix_source_with_thresholds(&fixed, 1, 1)?;
+        assert_eq!(again, fixed);
+        assert_eq!(second.writes, 0);
         Ok(())
     }
 
