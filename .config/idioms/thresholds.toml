@@ -32,6 +32,7 @@ enabled = true
 trait_min_methods = 2
 inherent_min_methods = 2
 blocking_impl_attrs = ["async_trait", "uniffi::export", "wasm_bindgen"]
+keep_manual_method_attrs = []
 
 [derivable_from]
 enabled = true

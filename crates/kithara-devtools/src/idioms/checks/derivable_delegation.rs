@@ -4,8 +4,8 @@ use anyhow::{Context as _, Result};
 use proc_macro2::{Delimiter, TokenTree};
 use quote::{ToTokens, quote};
 use syn::{
-    Expr, ExprAwait, ExprField, ExprMethodCall, FnArg, Ident, ImplItem, ItemImpl, Member, Pat,
-    Stmt, parse_quote,
+    Expr, ExprAwait, ExprField, ExprMethodCall, FnArg, Ident, ImplItem, ItemImpl, ItemUse, Member,
+    Pat, Stmt, UseTree, parse_quote,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -15,7 +15,6 @@ use super::{
     derivable_support::{crate_manifest, deletion_range, item_blocks, line_start},
 };
 use crate::common::{
-    exclude::attrs_have_cfg_test,
     fix::{FixOutcome, SourceRewriter, block::BlockRange},
     parse::{collect_scopes, self_ty_name},
     violation::Violation,
@@ -54,6 +53,7 @@ impl Check for DerivableDelegation {
                 cfg.trait_min_methods,
                 cfg.inherent_min_methods,
                 &cfg.blocking_impl_attrs,
+                &cfg.keep_manual_method_attrs,
             ) {
                 let detail = candidate.skip.map_or_else(
                     || {
@@ -122,6 +122,7 @@ impl Check for DerivableDelegation {
                 cfg.trait_min_methods,
                 cfg.inherent_min_methods,
                 &cfg.blocking_impl_attrs,
+                &cfg.keep_manual_method_attrs,
             ) {
                 if let Some(reason) = &candidate.skip {
                     outcome.skipped.push(format!(
@@ -276,8 +277,10 @@ fn candidates(
     trait_min_methods: usize,
     inherent_min_methods: usize,
     blocking: &[String],
+    keep_manual_method_attrs: &[String],
 ) -> Vec<Candidate> {
     let mut out = Vec::new();
+    let unqualified_macro = file_imports_delegate(file);
     for scope in collect_scopes(file) {
         for impl_block in scope.impls {
             if let Some(candidate) = candidate(
@@ -286,6 +289,8 @@ fn candidates(
                 trait_min_methods,
                 inherent_min_methods,
                 blocking,
+                keep_manual_method_attrs,
+                unqualified_macro,
             ) {
                 out.push(candidate);
             }
@@ -294,16 +299,47 @@ fn candidates(
     out
 }
 
+fn file_imports_delegate(file: &syn::File) -> bool {
+    let mut finder = DelegateImportFinder(false);
+    finder.visit_file(file);
+    finder.0
+}
+
+struct DelegateImportFinder(bool);
+
+impl<'ast> Visit<'ast> for DelegateImportFinder {
+    fn visit_item_use(&mut self, item: &'ast ItemUse) {
+        if let UseTree::Path(path) = &item.tree
+            && path.ident == "delegate"
+            && imports_delegate_name(&path.tree)
+        {
+            self.0 = true;
+        }
+    }
+}
+
+fn imports_delegate_name(tree: &UseTree) -> bool {
+    match tree {
+        UseTree::Name(name) => name.ident == "delegate",
+        UseTree::Group(group) => group
+            .items
+            .iter()
+            .any(|item| matches!(item, UseTree::Name(name) if name.ident == "delegate")),
+        _ => false,
+    }
+}
+
 fn collect_impl_items<'a>(
     src: &str,
     impl_block: &'a ItemImpl,
+    keep_manual_method_attrs: &[String],
 ) -> (Vec<TargetGroup<'a>>, Vec<(usize, &'a syn::ImplItemMacro)>) {
     let mut groups = Vec::<TargetGroup<'_>>::new();
     let mut delegate_macros = Vec::new();
     for (index, item) in impl_block.items.iter().enumerate() {
         match item {
             ImplItem::Fn(method) => {
-                if !method_is_supported(src, method) {
+                if !method_is_supported(src, method, keep_manual_method_attrs) {
                     continue;
                 }
                 let Some(spec) = forward_spec(src, method) else {
@@ -371,6 +407,8 @@ fn candidate(
     trait_min_methods: usize,
     inherent_min_methods: usize,
     blocking: &[String],
+    keep_manual_method_attrs: &[String],
+    unqualified_macro: bool,
 ) -> Option<Candidate> {
     if impl_has_blocking_attr(&impl_block.attrs, blocking) {
         return None;
@@ -380,7 +418,7 @@ fn candidate(
     } else {
         ("inherent", inherent_min_methods)
     };
-    let (groups, delegate_macros) = collect_impl_items(src, impl_block);
+    let (groups, delegate_macros) = collect_impl_items(src, impl_block, keep_manual_method_attrs);
     let target = self_ty_name(&impl_block.self_ty).unwrap_or_else(|| "impl".to_owned());
     let line = impl_block.impl_token.span.start().line;
     let Ok((mut segments, coalesced)) = collect_existing_segments(src, &delegate_macros) else {
@@ -475,7 +513,7 @@ fn candidate(
                 .map(|method| method.index),
         )
         .min()?;
-    let replacement = render_delegate(src, &segments, &blocks, first_index)?;
+    let replacement = render_delegate(src, &segments, &blocks, first_index, unqualified_macro)?;
     let mut relevant: Vec<_> = delegate_macros
         .iter()
         .map(|(index, _)| *index)
@@ -617,6 +655,7 @@ fn render_delegate(
     segments: &[DelegateSegment<'_>],
     blocks: &[BlockRange],
     first_index: usize,
+    unqualified_macro: bool,
 ) -> Option<String> {
     let item_start = blocks.get(first_index)?.item_bytes.start;
     let item_line = line_start(src, item_start);
@@ -630,7 +669,12 @@ fn render_delegate(
     };
     let segment_indent = format!("{indent}    ");
     let method_indent = format!("{segment_indent}    ");
-    let mut output = format!("{indent}delegate::delegate! {{\n");
+    let macro_path = if unqualified_macro {
+        "delegate"
+    } else {
+        "delegate::delegate"
+    };
+    let mut output = format!("{indent}{macro_path}! {{\n");
     for segment in segments {
         for attr in &segment.attrs {
             push_indented(&mut output, attr, &segment_indent);
@@ -769,6 +813,13 @@ fn push_indented(output: &mut String, text: &str, indent: &str) {
 }
 
 fn impl_has_blocking_attr(attrs: &[syn::Attribute], blocking: &[String]) -> bool {
+    attrs_match_config(attrs, blocking)
+}
+
+fn attrs_match_config(attrs: &[syn::Attribute], configured: &[String]) -> bool {
+    if configured.is_empty() {
+        return false;
+    }
     attrs.iter().any(|attr| {
         let path = attr
             .path()
@@ -784,14 +835,18 @@ fn impl_has_blocking_attr(attrs: &[syn::Attribute], blocking: &[String]) -> bool
             .to_string()
             .split_whitespace()
             .collect();
-        blocking.iter().any(|entry| {
+        configured.iter().any(|entry| {
             path == *entry || path.ends_with(&format!("::{entry}")) || meta.contains(entry.as_str())
         })
     })
 }
 
-fn method_is_supported(src: &str, method: &syn::ImplItemFn) -> bool {
-    if attrs_have_cfg_test(&method.attrs) {
+fn method_is_supported(
+    src: &str,
+    method: &syn::ImplItemFn,
+    keep_manual_method_attrs: &[String],
+) -> bool {
+    if attrs_match_config(&method.attrs, keep_manual_method_attrs) {
         return false;
     }
     for attr in &method.attrs {
@@ -852,7 +907,7 @@ fn raw_string_literal(value: &str) -> Option<String> {
 }
 
 fn forward_spec(src: &str, method: &syn::ImplItemFn) -> Option<ForwardSpec> {
-    let [Stmt::Expr(expr, None)] = method.block.stmts.as_slice() else {
+    let [Stmt::Expr(expr, _)] = method.block.stmts.as_slice() else {
         return None;
     };
     if let Some(spec) = nested_field_spec(method, expr) {
@@ -1250,6 +1305,24 @@ fn fix_source_with_thresholds(
     trait_min_methods: usize,
     inherent_min_methods: usize,
 ) -> Result<(String, FixOutcome)> {
+    fix_source_with_config(source, trait_min_methods, inherent_min_methods, &[])
+}
+
+#[cfg(test)]
+fn fix_source_with_keep_manual(
+    source: &str,
+    keep_manual_method_attrs: &[String],
+) -> Result<(String, FixOutcome)> {
+    fix_source_with_config(source, 2, 2, keep_manual_method_attrs)
+}
+
+#[cfg(test)]
+fn fix_source_with_config(
+    source: &str,
+    trait_min_methods: usize,
+    inherent_min_methods: usize,
+    keep_manual_method_attrs: &[String],
+) -> Result<(String, FixOutcome)> {
     let file = syn::parse_file(source)?;
     let mut outcome = FixOutcome::default();
     let mut rewriter = SourceRewriter::new(source);
@@ -1260,6 +1333,7 @@ fn fix_source_with_thresholds(
         trait_min_methods,
         inherent_min_methods,
         &blocking,
+        keep_manual_method_attrs,
     ) {
         if let Some(reason) = candidate.skip {
             outcome.skipped.push(reason);
@@ -1297,6 +1371,7 @@ mod tests {
             trait_min_methods,
             inherent_min_methods,
             &test_blocking(),
+            &[],
         )
         .len()
     }
@@ -1338,6 +1413,35 @@ mod tests {
     }
 
     #[test]
+    fn existing_delegate_import_uses_unqualified_macro() -> Result<()> {
+        let imports = [
+            "use delegate::delegate;",
+            "use delegate::{delegate, Delegate};",
+        ];
+        for import in imports {
+            let source = format!(
+                "{import}\n\nimpl Wrapper {{\n    fn a(&self) {{ self.inner.a() }}\n    fn b(&self) {{ self.inner.b() }}\n}}\n"
+            );
+            let (fixed, outcome) = fix_source(&source)?;
+
+            assert_eq!(outcome.writes, 1);
+            assert!(fixed.contains("\n    delegate! {"));
+            assert!(!fixed.contains("delegate::delegate!"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn missing_delegate_import_uses_fully_qualified_macro() -> Result<()> {
+        let source = "impl Wrapper {\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("\n    delegate::delegate! {"));
+        Ok(())
+    }
+
+    #[test]
     fn forwarding_subset_is_fixed() -> Result<()> {
         let source = "impl Wrapper {\n    pub fn new() -> Self { Self { inner: Inner } }\n    fn a(&self) { self.inner.a() }\n    fn b(&self, x: u8) { self.inner.b(x) }\n}\n";
         let (fixed, outcome) = fix_source(source)?;
@@ -1349,6 +1453,30 @@ mod tests {
         assert!(fixed.contains("fn b (& self , x : u8);"));
         assert!(!fixed.contains("self.inner.a()"));
         assert!(!fixed.contains("self.inner.b(x)"));
+        Ok(())
+    }
+
+    #[test]
+    fn semicolon_terminated_unit_forwarders_are_fixed() -> Result<()> {
+        let source = "impl Wrapper {\n    fn notify_all(&self) { self.cv.notify_all(); }\n    fn notify_one(&self) { self.cv.notify_one(); }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("fn notify_all (& self);"));
+        assert!(fixed.contains("fn notify_one (& self);"));
+        assert!(!fixed.contains("self.cv.notify_all()"));
+        Ok(())
+    }
+
+    #[test]
+    fn semicolon_terminated_renamed_async_forwarders_are_fixed() -> Result<()> {
+        let source = "impl Wrapper {\n    async fn notify_all(&self) { self.cv.wake_all().await; }\n    async fn notify_one(&self) { self.cv.wake_one().await; }\n}\n";
+        let (fixed, outcome) = fix_source(source)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("#[call(wake_all)]\n            async fn notify_all (& self);"));
+        assert!(fixed.contains("#[call(wake_one)]\n            async fn notify_one (& self);"));
+        assert!(!fixed.contains("self.cv.wake_all().await"));
         Ok(())
     }
 
@@ -1779,12 +1907,12 @@ mod tests {
     }
 
     #[test]
-    fn cfg_test_method_stays_manual_while_siblings_are_fixed() -> Result<()> {
+    fn cfg_test_method_is_delegated_with_its_siblings() -> Result<()> {
         let source = "impl Wrapper {\n    #[cfg(test)]\n    fn test_only(&self) { self.inner.test_only() }\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 1);
-        assert!(fixed.contains("#[cfg(test)]\n    fn test_only(&self)"));
-        assert!(fixed.contains("self.inner.test_only()"));
+        assert!(fixed.contains("#[cfg(test)]\n            fn test_only (& self);"));
+        assert!(!fixed.contains("self.inner.test_only()"));
         assert!(!fixed.contains("self.inner.a()"));
         assert!(!fixed.contains("self.inner.b()"));
         Ok(())
@@ -1844,6 +1972,31 @@ mod tests {
         assert_eq!(outcome.writes, 1);
         assert!(fixed.contains("#[deprecated = \"x\"]\n            fn old (& self);"));
         assert!(!fixed.contains("self.inner.old()"));
+        Ok(())
+    }
+
+    #[test]
+    fn custom_attribute_is_preserved_on_delegated_method() -> Result<()> {
+        let source = "impl Wrapper {\n    #[tracing::instrument(skip(self))]\n    fn run(&self) { self.inner.run() }\n}\n";
+        let (fixed, outcome) = fix_source_with_thresholds(source, 1, 1)?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("#[tracing::instrument(skip(self))]\n            fn run (& self);"));
+        assert!(!fixed.contains("self.inner.run()"));
+        Ok(())
+    }
+
+    #[test]
+    fn configured_method_attributes_stay_manual() -> Result<()> {
+        let source = "impl Wrapper {\n    #[tracing::instrument]\n    fn direct(&self) { self.inner.direct() }\n    #[cfg_attr(feature = \"trace\", tracing::instrument)]\n    fn wrapped(&self) { self.inner.wrapped() }\n    fn a(&self) { self.inner.a() }\n    fn b(&self) { self.inner.b() }\n}\n";
+        let (fixed, outcome) =
+            fix_source_with_keep_manual(source, &["tracing::instrument".to_owned()])?;
+
+        assert_eq!(outcome.writes, 1);
+        assert!(fixed.contains("fn direct(&self) { self.inner.direct() }"));
+        assert!(fixed.contains("fn wrapped(&self) { self.inner.wrapped() }"));
+        assert!(!fixed.contains("self.inner.a()"));
+        assert!(!fixed.contains("self.inner.b()"));
         Ok(())
     }
 

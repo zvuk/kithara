@@ -91,6 +91,8 @@ pub(crate) struct DerivableDelegationConfig {
     pub(crate) inherent_min_methods: usize,
     #[serde(default = "default_blocking_impl_attrs")]
     pub(crate) blocking_impl_attrs: Vec<String>,
+    #[serde(default = "default_keep_manual_method_attrs")]
+    pub(crate) keep_manual_method_attrs: Vec<String>,
 }
 
 fn default_delegation_enabled() -> bool {
@@ -113,6 +115,10 @@ fn default_blocking_impl_attrs() -> Vec<String> {
     ]
 }
 
+fn default_keep_manual_method_attrs() -> Vec<String> {
+    Vec::new()
+}
+
 impl Default for DerivableDelegationConfig {
     fn default() -> Self {
         Self {
@@ -120,6 +126,7 @@ impl Default for DerivableDelegationConfig {
             trait_min_methods: default_trait_delegation_methods(),
             inherent_min_methods: default_inherent_delegation_methods(),
             blocking_impl_attrs: default_blocking_impl_attrs(),
+            keep_manual_method_attrs: default_keep_manual_method_attrs(),
         }
     }
 }
@@ -564,4 +571,22 @@ where
     let text = fs::read_to_string(path)
         .with_context(|| format!("read idioms config: {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parse idioms config: {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keep_manual_method_attrs_defaults_to_empty() -> Result<()> {
+        let configured: DerivableDelegationConfig = toml::from_str("")?;
+
+        assert!(configured.keep_manual_method_attrs.is_empty());
+        assert!(
+            DerivableDelegationConfig::default()
+                .keep_manual_method_attrs
+                .is_empty()
+        );
+        Ok(())
+    }
 }
