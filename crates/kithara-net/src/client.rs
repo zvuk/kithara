@@ -24,7 +24,7 @@ use crate::{
     resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::Net,
-    types::{Headers, NetOptions, RangeSpec},
+    types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec},
 };
 
 /// Truncate an HTTP error body so it stays useful in logs without dumping
@@ -95,6 +95,27 @@ fn status_error(url: Url, status: u16, body: String) -> NetError {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn reject_undecoded_content_encoding(resp: &Response, url: &Url) -> Result<(), NetError> {
+    for value in resp.headers().get_all("content-encoding") {
+        let value = value.to_str().map_err(|error| {
+            NetError::Decode(format!(
+                "invalid content-encoding header for {url}: {error}"
+            ))
+        })?;
+        if value
+            .split(',')
+            .map(str::trim)
+            .any(|coding| !coding.eq_ignore_ascii_case("identity"))
+        {
+            return Err(NetError::Decode(format!(
+                "response body for {url} retained content-encoding: {value}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Extract response headers into our [`Headers`] type.
 fn extract_headers(resp: &Response) -> Headers {
     let mut headers = Headers::new();
@@ -121,10 +142,39 @@ struct RawHttp {
 }
 
 impl RawHttp {
-    fn apply_headers(mut req: RequestBuilder, headers: Option<Headers>) -> RequestBuilder {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn apply_headers(
+        &self,
+        mut req: RequestBuilder,
+        headers: Option<Headers>,
+        policy: AcceptEncodingPolicy,
+    ) -> RequestBuilder {
         if let Some(headers) = headers {
             for (k, v) in headers.iter() {
-                req = req.header(k, v);
+                if !k.eq_ignore_ascii_case("accept-encoding") {
+                    req = req.header(k, v);
+                }
+            }
+        }
+        let accept_encoding = match policy {
+            AcceptEncodingPolicy::Configured => {
+                crate::types::accept_encoding_value(self.options.compression)
+            }
+            AcceptEncodingPolicy::Identity => "identity".to_string(),
+        };
+        req.header("Accept-Encoding", accept_encoding)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn apply_headers(
+        &self,
+        mut req: RequestBuilder,
+        headers: Option<Headers>,
+        _policy: AcceptEncodingPolicy,
+    ) -> RequestBuilder {
+        if let Some(headers) = headers {
+            for (key, value) in headers.iter() {
+                req = req.header(key, value);
             }
         }
         req
@@ -148,7 +198,15 @@ impl RawHttp {
         if let Some(range) = &range {
             req = req.header("Range", range.to_string());
         }
-        let resp = self.send_checked(req, headers, url, accept_partial).await?;
+        let resp = self
+            .send_checked(
+                req,
+                headers,
+                url,
+                accept_partial,
+                AcceptEncodingPolicy::Identity,
+            )
+            .await?;
         Ok(Self::response_to_stream(resp))
     }
 
@@ -168,8 +226,9 @@ impl RawHttp {
         headers: Option<Headers>,
         url: Url,
         accept_partial: bool,
+        encoding: AcceptEncodingPolicy,
     ) -> Result<Response, NetError> {
-        let req = Self::apply_headers(req, headers);
+        let req = self.apply_headers(req, headers, encoding);
         let started = Instant::now();
         let resp = self.send_idle_bounded(req).await?;
         let status = resp.status();
@@ -186,6 +245,9 @@ impl RawHttp {
             let body = error_body(resp, self.options.inactivity_timeout).await;
             return Err(status_error(url, status.as_u16(), body));
         }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        reject_undecoded_content_encoding(&resp, &url)?;
 
         Ok(resp)
     }
@@ -431,7 +493,9 @@ impl Net for RawHttp {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.clone());
-        let resp = self.send_checked(req, headers, url, false).await?;
+        let resp = self
+            .send_checked(req, headers, url, false, AcceptEncodingPolicy::Configured)
+            .await?;
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
@@ -451,7 +515,7 @@ impl Net for RawHttp {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
         let req = self.head_request(url.clone());
-        let req = Self::apply_headers(req, headers);
+        let req = self.apply_headers(req, headers, AcceptEncodingPolicy::Identity);
         let resp = self.send_idle_bounded(req).await?;
 
         let status = resp.status();
@@ -460,6 +524,9 @@ impl Net for RawHttp {
             let body = error_body(resp, self.options.inactivity_timeout).await;
             return Err(status_error(url, status.as_u16(), body));
         }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        reject_undecoded_content_encoding(&resp, &url)?;
 
         let mut out = Headers::new();
         let str_pairs = resp
@@ -492,7 +559,9 @@ impl Net for RawHttp {
         headers: Option<Headers>,
     ) -> Result<Bytes, NetError> {
         let req = post_request(&self.inner, url.clone(), body);
-        let resp = self.send_checked(req, headers, url, false).await?;
+        let resp = self
+            .send_checked(req, headers, url, false, AcceptEncodingPolicy::Configured)
+            .await?;
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
@@ -524,9 +593,12 @@ mod tests {
 
     use axum::{
         Router,
-        http::StatusCode,
-        routing::{get, post},
+        body::Body,
+        http::{HeaderMap, StatusCode, header::CONTENT_ENCODING},
+        response::Response as AxumResponse,
+        routing::{any, get, post},
     };
+    use futures::StreamExt;
     use kithara_platform::{
         sync::Arc,
         time::Duration,
@@ -675,6 +747,139 @@ mod tests {
             .await
             .expect_err("stalled body must abort, not hang");
         assert_timeout_class(&err);
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn native_content_coding_policy_is_authoritative_per_request() {
+        const PLAYLIST: &[u8] = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\na.m3u8\n";
+        const BROTLI_PLAYLIST: &[u8] = &[
+            0x0f, 0x16, 0x80, 0x23, 0x45, 0x58, 0x54, 0x4d, 0x33, 0x55, 0x0a, 0x23, 0x45, 0x58,
+            0x54, 0x2d, 0x58, 0x2d, 0x53, 0x54, 0x52, 0x45, 0x41, 0x4d, 0x2d, 0x49, 0x4e, 0x46,
+            0x3a, 0x42, 0x41, 0x4e, 0x44, 0x57, 0x49, 0x44, 0x54, 0x48, 0x3d, 0x31, 0x0a, 0x61,
+            0x2e, 0x6d, 0x33, 0x75, 0x38, 0x0a, 0x03,
+        ];
+        const GZIP_PLAYLIST: &[u8] = &[
+            0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x53, 0x76, 0x8d, 0x08,
+            0xf1, 0x35, 0x0e, 0xe5, 0x52, 0x06, 0xd2, 0xba, 0x11, 0xba, 0xc1, 0x21, 0x41, 0xae,
+            0x8e, 0xbe, 0xba, 0x9e, 0x7e, 0x6e, 0x56, 0x4e, 0x8e, 0x7e, 0x2e, 0xe1, 0x9e, 0x2e,
+            0x21, 0x1e, 0xb6, 0x86, 0x5c, 0x89, 0x7a, 0xb9, 0xc6, 0xa5, 0x16, 0x5c, 0x00, 0xf1,
+            0x51, 0x3e, 0xd3, 0x2d, 0x00, 0x00, 0x00,
+        ];
+
+        let seen = Arc::new(kithara_platform::sync::Mutex::new(Vec::new()));
+        let handler_seen = Arc::clone(&seen);
+        let app = Router::new().route(
+            "/master.m3u8",
+            any(move |headers: HeaderMap| {
+                let seen = Arc::clone(&handler_seen);
+                async move {
+                    let accept_encoding = headers
+                        .get("accept-encoding")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string();
+                    seen.lock().push(accept_encoding.clone());
+                    if accept_encoding
+                        .split(',')
+                        .any(|coding| coding.trim() == "br")
+                    {
+                        AxumResponse::builder()
+                            .header(CONTENT_ENCODING, "br")
+                            .body(Body::from(BROTLI_PLAYLIST))
+                            .expect("brotli response")
+                    } else if accept_encoding
+                        .split(',')
+                        .any(|coding| coding.trim() == "gzip")
+                    {
+                        AxumResponse::builder()
+                            .header(CONTENT_ENCODING, "gzip")
+                            .body(Body::from(GZIP_PLAYLIST))
+                            .expect("gzip response")
+                    } else {
+                        AxumResponse::new(Body::from(PLAYLIST))
+                    }
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let url = Url::parse(&format!("http://{addr}/master.m3u8")).expect("url");
+        let options = NetOptions::builder()
+            .compression(crate::Compression::GZIP | crate::Compression::DEFLATE)
+            .build();
+        let client = HttpClient::new(options, CancelToken::never());
+
+        let mut caller_headers = Headers::new();
+        caller_headers.insert("AcCePt-EnCoDiNg", "br");
+        let bytes = client
+            .get_bytes(url.clone(), Some(caller_headers))
+            .await
+            .expect("atomic response");
+        assert_eq!(bytes, PLAYLIST);
+
+        let mut body = client
+            .stream(url.clone(), None)
+            .await
+            .expect("stream response");
+        let mut bytes = Vec::new();
+        while let Some(chunk) = body.next().await {
+            bytes.extend_from_slice(&chunk.expect("body chunk"));
+        }
+        assert_eq!(bytes, PLAYLIST);
+
+        let _range = client
+            .get_range(url.clone(), RangeSpec::new(0, Some(3)), None)
+            .await
+            .expect("range response");
+        client.head(url.clone(), None).await.expect("head response");
+        let posted = client
+            .post_bytes(url, Bytes::from_static(b"request"), None)
+            .await
+            .expect("post response");
+        assert_eq!(posted, PLAYLIST);
+
+        assert_eq!(
+            seen.lock().as_slice(),
+            [
+                "gzip, deflate",
+                "identity",
+                "identity",
+                "identity",
+                "gzip, deflate"
+            ]
+        );
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn native_rejects_an_undecoded_content_encoding() {
+        let app = Router::new().route(
+            "/encoded",
+            get(|| async {
+                AxumResponse::builder()
+                    .header(CONTENT_ENCODING, "br")
+                    .body(Body::from(Bytes::from_static(b"encoded")))
+                    .expect("encoded response")
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let url = Url::parse(&format!("http://{addr}/encoded")).expect("url");
+        let options = NetOptions::builder()
+            .compression(crate::Compression::GZIP | crate::Compression::DEFLATE)
+            .build();
+        let client = HttpClient::new(options, CancelToken::never());
+
+        let Err(error) = client.stream(url, None).await else {
+            panic!("encoded bytes must not reach a byte-addressed stream");
+        };
+
+        assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-encoding")));
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]

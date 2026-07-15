@@ -76,11 +76,11 @@ impl DiskAssetDeleter {
 
 impl AssetDeleter for DiskAssetDeleter {
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
-        let fs_result = delete_asset_dir(&self.root_dir, asset_root).map_err(AssetsError::from);
+        delete_asset_dir(&self.root_dir, asset_root).map_err(AssetsError::from)?;
         self.availability.clear_root(asset_root);
         let pins_result = self.pins.remove(asset_root).map(|_| ());
         let lru_result = self.lru.remove(asset_root);
-        fs_result.and(pins_result).and(lru_result)
+        pins_result.and(lru_result)
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
@@ -95,13 +95,13 @@ impl AssetDeleter for DiskAssetDeleter {
             }
             ResourceKey::Absolute(path) => path.clone(),
         };
-        let result = match fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into()),
-        };
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
         self.availability.remove(key);
-        result
+        Ok(())
     }
 }
 
@@ -375,12 +375,17 @@ pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use kithara_platform::CancelToken;
     use kithara_storage::ResourceStatus;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::acquisition::ReadSide;
+    use crate::{
+        acquisition::ReadSide,
+        index::{EvictConfig, LruIndex, PinsIndex},
+    };
 
     #[kithara::test]
     #[case("valid.txt", true, "Simple filename")]
@@ -436,5 +441,73 @@ mod tests {
         let mut buf = [0u8; 15];
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(&buf[..n], b"fake audio data");
+    }
+
+    #[kithara::test]
+    fn failed_asset_delete_keeps_all_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset_root = "undeletable-asset";
+        let asset_path = dir.path().join(asset_root);
+        fs::write(&asset_path, b"not a directory").unwrap();
+
+        let availability = AvailabilityIndex::new();
+        let key = ResourceKey::relative(asset_root, "track.bin");
+        availability.record_commit(&key, 4);
+
+        let pins = PinsIndex::ephemeral();
+        pins.add(asset_root).unwrap();
+        let lru = LruIndex::ephemeral();
+        lru.touch(asset_root, Some(4)).unwrap();
+
+        let deleter = DiskAssetDeleter::new(
+            dir.path().into(),
+            availability.clone(),
+            pins.clone(),
+            lru.clone(),
+        );
+
+        assert!(matches!(
+            deleter.delete_asset(asset_root),
+            Err(AssetsError::Io(_))
+        ));
+        assert!(asset_path.is_file());
+        assert!(availability.contains_range(&key, 0..4));
+        assert!(pins.contains(asset_root));
+        assert_eq!(
+            lru.eviction_candidates(
+                &EvictConfig {
+                    max_assets: Some(0),
+                    max_bytes: None,
+                },
+                &HashSet::new(),
+            ),
+            vec![asset_root.to_string()]
+        );
+    }
+
+    #[kithara::test]
+    fn failed_resource_delete_keeps_availability() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset_root = "asset";
+        let rel_path = "track.bin";
+        let resource_path = dir.path().join(asset_root).join(rel_path);
+        fs::create_dir_all(&resource_path).unwrap();
+
+        let availability = AvailabilityIndex::new();
+        let key = ResourceKey::relative(asset_root, rel_path);
+        availability.record_commit(&key, 4);
+        let deleter = DiskAssetDeleter::new(
+            dir.path().into(),
+            availability.clone(),
+            PinsIndex::ephemeral(),
+            LruIndex::ephemeral(),
+        );
+
+        assert!(matches!(
+            deleter.remove_resource(&key),
+            Err(AssetsError::Io(_))
+        ));
+        assert!(resource_path.is_dir());
+        assert!(availability.contains_range(&key, 0..4));
     }
 }

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{num::NonZeroUsize, ops::Range, path::Path, sync::atomic::AtomicU64};
+use std::{future::Future, num::NonZeroUsize, ops::Range, path::Path, sync::atomic::AtomicU64};
 
 #[cfg(test)]
 use kithara_platform::CancelToken;
@@ -13,7 +13,10 @@ use crate::{
     error::AssetsResult,
     eviction::{EvictionRouter, EvictionSubscription},
     identity::RequestIdentity,
-    index::{AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle},
+    index::{
+        AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle,
+        ResourceTransactionIndex,
+    },
     key::ResourceKey,
     layout::AssetLayout,
     process::ProcessCtx,
@@ -47,6 +50,7 @@ pub enum AssetStore {
         store: DiskStore,
         availability: AvailabilityIndex,
         demand: DemandIndex,
+        transactions: ResourceTransactionIndex,
         eviction: EvictionRouter,
         base: Option<Arc<DiskAssetStore>>,
         layout: Arc<dyn AssetLayout>,
@@ -56,6 +60,7 @@ pub enum AssetStore {
         store: MemStore,
         availability: AvailabilityIndex,
         demand: DemandIndex,
+        transactions: ResourceTransactionIndex,
         eviction: EvictionRouter,
         layout: Arc<dyn AssetLayout>,
     },
@@ -201,6 +206,14 @@ impl AssetStore {
         }
     }
 
+    fn transactions(&self) -> &ResourceTransactionIndex {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { transactions, .. } => transactions,
+            Self::Mem { transactions, .. } => transactions,
+        }
+    }
+
     /// Return the crate-private eviction-router handle.
     fn eviction(&self) -> &EvictionRouter {
         match self {
@@ -265,16 +278,11 @@ impl AssetStore {
     /// channel, which atomically clears the matching
     /// [`AvailabilityIndex`](crate::index) entry — so this method
     /// must not invalidate the index again.
-    pub fn remove_resource(&self, key: &ResourceKey) {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => {
-                let _ = store.remove_resource(key);
-            }
-            Self::Mem { store, .. } => {
-                let _ = store.remove_resource(key);
-            }
-        }
+    ///
+    /// # Errors
+    /// Returns `AssetsError` if the backing resource cannot be removed.
+    pub fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        delegate_to_store!(self, remove_resource, key)
     }
 
     /// Request the in-memory LRU handle cache hold up to `media_items`
@@ -326,6 +334,19 @@ impl AssetStore {
     ) -> EvictionSubscription {
         self.eviction().subscribe(asset_root, tx)
     }
+
+    /// Serialize a closure per key across clones of this store. The closure
+    /// must re-read state inside; separate stores are not coordinated. Waiting
+    /// and running operations release the transaction when cancelled.
+    /// Transactions are not reentrant: an operation must not acquire the same
+    /// key again through this store.
+    pub async fn with_resource_transaction<T, F, Fut>(&self, key: &ResourceKey, operation: F) -> T
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = T>,
+    {
+        self.transactions().run(key, operation).await
+    }
 }
 
 // Test-only conversions from a bare store chain (no shared cancel, no
@@ -344,6 +365,7 @@ impl From<DiskStore> for AssetStore {
             store,
             availability: AvailabilityIndex::new(),
             demand: DemandIndex::new(CancelToken::never()),
+            transactions: ResourceTransactionIndex::default(),
             eviction: EvictionRouter::default(),
             base: None,
             layout: Arc::new(crate::layout::DefaultLayout),
@@ -358,6 +380,7 @@ impl From<MemStore> for AssetStore {
             store,
             availability: AvailabilityIndex::new(),
             demand: DemandIndex::new(CancelToken::never()),
+            transactions: ResourceTransactionIndex::default(),
             eviction: EvictionRouter::default(),
             layout: Arc::new(crate::layout::DefaultLayout),
         }

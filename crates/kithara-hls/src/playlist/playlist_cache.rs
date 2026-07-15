@@ -60,9 +60,9 @@ impl PlaylistCache {
     where
         F: Fn(&[u8]) -> HlsResult<T>,
     {
-        let headers = self.headers();
-        let bytes = self.fetch.fetch(key, url, headers).await?;
-        parse(&bytes)
+        self.fetch
+            .fetch_validated(key, url, self.headers(), parse)
+            .await
     }
 
     #[must_use]
@@ -141,3 +141,7 @@ impl PlaylistCache {
         self.config.write().master_url = Some(url);
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "../../tests/support/playlist_cache.rs"]
+mod tests;

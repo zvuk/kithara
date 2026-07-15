@@ -19,7 +19,7 @@ use crate::{
     evict::{EvictAssets, EvictDeps},
     eviction::EvictionRouter,
     flush::{FlushHub, FlushPolicy},
-    index::{AvailabilityIndex, DemandIndex, EvictConfig},
+    index::{AvailabilityIndex, DemandIndex, EvictConfig, ResourceTransactionIndex},
     key::ResourceKey,
     layout::{AssetLayout, DefaultLayout},
     lease::{LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter},
@@ -261,6 +261,7 @@ impl AssetStoreBuildArgs {
         // no observer / decorator threading, just a shared field. Each
         // slot's `producer_cancel` is a child of this store cancel.
         let demand = DemandIndex::new(CancelScope::new(self.cancel.clone()).token());
+        let transactions = ResourceTransactionIndex::default();
         // The eviction router is the third consumer-driven sibling: the
         // memory cache's `on_invalidated` hook routes evicted keys into
         // it; the store hands subscribers per `asset_root`.
@@ -277,6 +278,7 @@ impl AssetStoreBuildArgs {
                 store,
                 availability,
                 demand,
+                transactions,
                 eviction,
                 layout,
             }
@@ -293,6 +295,7 @@ impl AssetStoreBuildArgs {
                         store,
                         availability,
                         demand,
+                        transactions,
                         eviction,
                         layout,
                     }
@@ -304,6 +307,7 @@ impl AssetStoreBuildArgs {
                         store,
                         availability,
                         demand,
+                        transactions,
                         eviction,
                         layout,
                         base: Some(base),

@@ -1,15 +1,15 @@
 #![forbid(unsafe_code)]
 
-use std::marker::PhantomData;
+use std::{io::ErrorKind, marker::PhantomData};
 
 use bytes::Bytes;
 use kithara_assets::{
-    AcquisitionResult, AssetScope, AssetWriter, ReadSide, ResourceKey, WriteSide,
+    AcquisitionResult, AssetScope, AssetWriter, AssetsError, ReadSide, ResourceKey, WriteSide,
 };
 use kithara_bufpool::BytePool;
 use kithara_net::{Headers, NetError};
 use kithara_stream::dl::{FetchCmd, FetchResponse, PeerHandle, reject_html_response};
-use tracing::{debug, trace};
+use tracing::{debug, warn};
 use url::Url;
 
 use crate::{HlsError, HlsResult};
@@ -76,51 +76,25 @@ impl<R: AtomicResource> AtomicFetch<R> {
         self.downloader.execute(cmd).await
     }
 
-    /// Fetch a small atomic body through the disk cache + unified
-    /// downloader pipeline.
-    ///
-    /// Looks the URL up in the cache first; on hit, returns the cached
-    /// bytes. On miss, issues a `PeerHandle::execute` with the supplied
-    /// headers, then best-effort writes the result back to the cache.
-    ///
-    /// # Errors
-    /// Returns an error when the network fetch fails or when the cache
-    /// access layer reports an error other than a harmless concurrent
-    /// commit.
-    pub(crate) async fn fetch(
+    async fn download(
         &self,
         key: &ResourceKey,
         url: &Url,
         headers: Option<Headers>,
     ) -> HlsResult<Bytes> {
-        let rel_path = rel_path_for_log(key);
-        if let Some(bytes) =
-            try_read_cached(&self.scope, &self.byte_pool, key, url, rel_path, R::KIND)?
-        {
-            return Ok(bytes);
-        }
-
         debug!(
             url = %url,
             asset_root = %self.scope.asset_root(),
-            rel_path = %rel_path,
+            rel_path = %rel_path_for_log(key),
             resource_kind = R::KIND,
-            "kithara-hls: cache miss -> fetching from network"
+            "kithara-hls: fetching from network"
         );
+        download_atomic_bytes(&self.downloader, url.clone(), headers).await
+    }
 
-        let writer = match self.scope.store().acquire_resource(key, None)? {
-            AcquisitionResult::Pending(writer) => Some(writer.retain()),
-            // Committed by a concurrent caller after our cache-miss probe (or any
-            // future variant) — the network bytes below are still correct; skip
-            _ => None,
-        };
-        let bytes = download_atomic_bytes(&self.downloader, url.clone(), headers).await?;
-
-        if let Some(writer) = writer {
-            write_back_cache(writer, &bytes, &self.scope, url, rel_path, R::KIND);
-        }
-
-        Ok(bytes)
+    fn invalidate(&self, key: &ResourceKey) -> HlsResult<()> {
+        self.scope.store().remove_resource(key)?;
+        Ok(())
     }
 
     /// Try to read the resource from the cache. Returns `Ok(Some(bytes))`
@@ -133,10 +107,9 @@ impl<R: AtomicResource> AtomicFetch<R> {
         try_read_cached(&self.scope, &self.byte_pool, key, url, rel_path, R::KIND)
     }
 
-    /// Best-effort cache write of `bytes` under the URL's resource key.
-    /// Acquires the writer (commit ordering matches the network path:
-    /// acquire after the bytes are in hand). On a concurrent commit the
-    /// resource is already `Committed` and the write is skipped.
+    /// Cache `bytes` under the URL's resource key.
+    /// Acquires the writer after the bytes are in hand. An already committed
+    /// resource is left unchanged.
     ///
     /// # Errors
     /// Returns an error when acquiring the resource fails.
@@ -151,10 +124,69 @@ impl<R: AtomicResource> AtomicFetch<R> {
     }
 }
 
-/// Best-effort cache write. Concurrent callers may race: all miss
-/// the cache, all fetch, first commits, later writes fail because the
-/// resource is already committed. Harmless — the bytes are in memory
-/// from the network fetch. Consumes the writer (commit is consume-self).
+impl<R: AtomicResource> AtomicFetch<R> {
+    /// Fetch and validate an atomic resource within one store transaction.
+    /// # Errors
+    /// Returns an error when cache invalidation, network fetch, validation, or
+    /// cache acquisition fails.
+    pub(crate) async fn fetch_validated<T, F>(
+        &self,
+        key: &ResourceKey,
+        url: &Url,
+        headers: Option<Headers>,
+        validate: F,
+    ) -> HlsResult<T>
+    where
+        F: Fn(&[u8]) -> HlsResult<T>,
+    {
+        let store = self.scope.store().clone();
+        store
+            .with_resource_transaction(key, || async {
+                self.fetch_validated_inner(key, url, headers, validate)
+                    .await
+            })
+            .await
+    }
+
+    async fn fetch_validated_inner<T, F>(
+        &self,
+        key: &ResourceKey,
+        url: &Url,
+        headers: Option<Headers>,
+        validate: F,
+    ) -> HlsResult<T>
+    where
+        F: Fn(&[u8]) -> HlsResult<T>,
+    {
+        if let Some(bytes) = self.try_cached(key, url)? {
+            match validate(&bytes) {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    warn!(
+                        url = %url,
+                        error = %error,
+                        resource_kind = R::KIND,
+                        "kithara-hls: cached atomic resource is invalid; removing it before refetch"
+                    );
+                    self.invalidate(key)?;
+                }
+            }
+        }
+
+        let bytes = self.download(key, url, headers).await?;
+        let value = validate(&bytes)?;
+        if let Err(error) = self.write_back(key, url, &bytes) {
+            warn!(
+                url = %url,
+                error = %error,
+                resource_kind = R::KIND,
+                "kithara-hls: valid atomic resource could not be persisted; using network bytes"
+            );
+        }
+        Ok(value)
+    }
+}
+
 fn write_back_cache(
     writer: AssetWriter,
     bytes: &Bytes,
@@ -162,39 +194,36 @@ fn write_back_cache(
     url: &Url,
     rel_path: &str,
     resource_kind: &str,
-) {
-    let final_len = match u64::try_from(bytes.len()) {
-        Ok(len) => len,
-        Err(e) => {
-            trace!(
-                url = %url,
-                error = %e,
-                resource_kind,
-                "kithara-hls: cache write skipped because body length cannot fit u64"
-            );
-            return;
-        }
+) -> bool {
+    let Ok(final_len) = u64::try_from(bytes.len()) else {
+        warn!(
+            url = %url,
+            resource_kind,
+            "kithara-hls: cache write skipped because body length does not fit u64"
+        );
+        return false;
     };
     let result = writer
         .write_at(0, bytes)
         .and_then(|()| writer.commit(Some(final_len)).map(|_reader| ()));
-    if let Err(e) = result {
-        trace!(
+    if let Err(error) = result {
+        warn!(
             url = %url,
-            error = %e,
+            error = %error,
             resource_kind,
-            "kithara-hls: cache write failed (concurrent commit), using network bytes"
+            "kithara-hls: cache write failed"
         );
-    } else {
-        debug!(
-            url = %url,
-            asset_root = %scope.asset_root(),
-            rel_path = %rel_path,
-            bytes = bytes.len(),
-            resource_kind,
-            "kithara-hls: fetched from network and cached"
-        );
+        return false;
     }
+    debug!(
+        url = %url,
+        asset_root = %scope.asset_root(),
+        rel_path = %rel_path,
+        bytes = bytes.len(),
+        resource_kind,
+        "kithara-hls: fetched from network and cached"
+    );
+    true
 }
 
 fn rel_path_for_log(key: &ResourceKey) -> &str {
@@ -209,12 +238,22 @@ fn try_read_cached(
     rel_path: &str,
     resource_kind: &str,
 ) -> HlsResult<Option<Bytes>> {
-    let Ok(res) = scope.store().open_resource(key, None) else {
-        return Ok(None);
+    let res = match scope.store().open_resource(key, None) {
+        Ok(resource) => resource,
+        Err(AssetsError::Io(error)) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
     };
     let mut buf = byte_pool.get();
     let n = res.read_into(&mut buf)?;
     if n == 0 {
+        warn!(
+            url = %url,
+            asset_root = %scope.asset_root(),
+            rel_path,
+            resource_kind,
+            "kithara-hls: cached atomic resource is empty; removing it before refetch"
+        );
+        scope.store().remove_resource(key)?;
         return Ok(None);
     }
     let _pinned = res.retain();
@@ -241,4 +280,40 @@ async fn download_atomic_bytes(
         .build();
     let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
     resp.body.collect().await.map_err(HlsError::from)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_platform::CancelToken;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn cache_write_failure_is_nonfatal() {
+        let cancel = CancelToken::never();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cancel(cancel.clone())
+            .build();
+        let scope = store.scope("failed-cache-write");
+        let url = Url::parse("https://example.com/master.m3u8").unwrap();
+        let key = scope.key_for(&url);
+        let AcquisitionResult::Pending(writer) =
+            scope.store().acquire_resource(&key, None).unwrap()
+        else {
+            panic!("fresh resource must be pending");
+        };
+        cancel.cancel();
+
+        assert!(!write_back_cache(
+            writer,
+            &Bytes::from_static(b"#EXTM3U\n"),
+            &scope,
+            &url,
+            rel_path_for_log(&key),
+            Playlist::KIND,
+        ));
+    }
 }

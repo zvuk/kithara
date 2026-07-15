@@ -27,8 +27,8 @@ pub trait AssetLayout: fmt::Debug + Send + Sync {
     fn rel_path(&self, url: &Url) -> String;
 }
 
-/// Fingerprinted URL mirror: `hls/<host>/<path>/<leaf>_<fingerprint>.<ext>`.
-/// The `hls/` prefix is a fixed literal; on-disk caches address it byte-for-byte.
+/// Fingerprinted URL mirror: `track/<host>/<path>/<leaf>_<fingerprint>.<ext>`.
+/// The `track/` prefix is a fixed literal; on-disk caches address it byte-for-byte.
 #[derive(Debug, Default)]
 pub struct DefaultLayout;
 
@@ -39,7 +39,7 @@ impl AssetLayout for DefaultLayout {
 }
 
 fn url_mirror(url: &Url) -> String {
-    let mut parts = vec!["hls".to_string()];
+    let mut parts = vec!["track".to_string()];
     let host = url.host_str().unwrap_or("host");
     parts.push(safe_path_component(host, url.as_str()));
 
@@ -118,7 +118,7 @@ mod tests {
         let u = url("https://cdn.example.com/audio/v0/index.m3u8?token=secret");
         assert_eq!(
             DefaultLayout.rel_path(&u),
-            "hls/cdn.example.com/audio/v0/index_7d31050f3d8af153.m3u8"
+            "track/cdn.example.com/audio/v0/index_7d31050f3d8af153.m3u8"
         );
     }
 
@@ -127,13 +127,13 @@ mod tests {
         let seg = url("https://cdn.example.com/a/seg001.m4s?X-Amz-Signature=abc");
         assert_eq!(
             DefaultLayout.rel_path(&seg),
-            "hls/cdn.example.com/a/seg001_b121e4c47d79143a.m4s"
+            "track/cdn.example.com/a/seg001_b121e4c47d79143a.m4s"
         );
 
         let key = url("https://cdn.example.com/a/key.bin");
         assert_eq!(
             DefaultLayout.rel_path(&key),
-            "hls/cdn.example.com/a/key_5195634fe6e6cb0b.bin"
+            "track/cdn.example.com/a/key_5195634fe6e6cb0b.bin"
         );
     }
 
@@ -142,7 +142,7 @@ mod tests {
         let u = url("https://example.com/get-mp3/42?sign=x");
         assert_eq!(
             DefaultLayout.rel_path(&u),
-            format!("hls/example.com/get-mp3/42_{}", url_fingerprint(&u))
+            format!("track/example.com/get-mp3/42_{}", url_fingerprint(&u))
         );
     }
 }

@@ -1,9 +1,16 @@
-//! Phase P-4 integration tests for `AssetStore::checkpoint`.
+//! Phase P-4 integration tests for availability persistence.
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_assets::{AcquisitionResult, AssetStoreBuilder, StorageBackend, WriteSide};
-use kithara_platform::time::Duration;
+use std::{fs, num::NonZeroUsize, path::Path};
+
+use kithara_assets::{
+    AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend, WriteSide,
+};
+use kithara_platform::{
+    CancelToken, thread,
+    time::{Duration, Instant},
+};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 
@@ -22,6 +29,24 @@ fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
         panic!("expected a Pending writer");
     };
     w
+}
+
+fn wait_for_snapshot_change(path: &Path, previous: Option<&[u8]>) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Ok(bytes) = fs::read(path)
+            && !bytes.is_empty()
+            && previous.is_none_or(|old| old != bytes)
+        {
+            return bytes;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "availability worker did not publish a changed snapshot at {}",
+            path.display()
+        );
+        thread::yield_now();
+    }
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -58,6 +83,135 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
     let ranges = scope.store().available_ranges(&key);
     let pairs: Vec<_> = ranges.iter().map(|r| (r.start, r.end)).collect();
     assert_eq!(pairs, vec![(0, 11)]);
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn remove_resource_persists_availability_deletion_across_rebuild() {
+    let dir = tempdir().unwrap();
+    let root = "remove-resource-persist";
+    let key_name = "master.m3u8";
+
+    {
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: dir.path().into(),
+            })
+            .build();
+        let scope = store.scope(root);
+        let key = scope.key(key_name);
+        write_commit(
+            scope.store().acquire_resource(&key, None).unwrap(),
+            b"poisoned",
+        );
+        store.checkpoint().unwrap();
+    }
+
+    {
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: dir.path().into(),
+            })
+            .build();
+        let scope = store.scope(root);
+        let key = scope.key(key_name);
+        assert!(store.contains_range(&key, 0..8));
+        store.remove_resource(&key).unwrap();
+        assert!(!store.contains_range(&key, 0..8));
+        store.checkpoint().unwrap();
+    }
+
+    let reopened = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: dir.path().into(),
+        })
+        .build();
+    let key = reopened.scope(root).key(key_name);
+    assert!(!reopened.contains_range(&key, 0..8));
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn delete_asset_persists_availability_deletion_across_rebuild() {
+    let dir = tempdir().unwrap();
+    let root = "delete-asset-persist";
+    let key_name = "master.m3u8";
+
+    {
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: dir.path().into(),
+            })
+            .build();
+        let scope = store.scope(root);
+        let key = scope.key(key_name);
+        write_commit(
+            scope.store().acquire_resource(&key, None).unwrap(),
+            b"poisoned",
+        );
+        store.checkpoint().unwrap();
+    }
+
+    {
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: dir.path().into(),
+            })
+            .build();
+        let scope = store.scope(root);
+        let key = scope.key(key_name);
+        assert!(store.contains_range(&key, 0..8));
+        scope.delete_asset().unwrap();
+        assert!(!store.contains_range(&key, 0..8));
+        store.checkpoint().unwrap();
+    }
+
+    let reopened = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: dir.path().into(),
+        })
+        .build();
+    let key = reopened.scope(root).key(key_name);
+    assert!(!reopened.contains_range(&key, 0..8));
+}
+
+#[kithara::test(native, flash(false), timeout(Duration::from_secs(5)))]
+fn worker_persists_resource_deletion_without_checkpoint() {
+    let dir = tempdir().unwrap();
+    let root = "worker-delete-persist";
+    let key_name = "empty.m3u8";
+    let hub = FlushHub::new(
+        CancelToken::never(),
+        FlushPolicy {
+            debounce: Duration::ZERO,
+            poll_interval: Duration::from_millis(100),
+            force_every_n_ops: NonZeroUsize::MIN,
+        },
+    );
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: dir.path().into(),
+        })
+        .flush_hub(hub)
+        .build();
+    let key = store.scope(root).key(key_name);
+    let writer = pending(store.acquire_resource(&key, None).unwrap());
+    drop(writer.commit(Some(0)).unwrap());
+
+    let availability_path = dir.path().join("_index/availability.bin");
+    let before = wait_for_snapshot_change(&availability_path, None);
+    assert!(dir.path().join(root).join(key_name).is_file());
+
+    store.remove_resource(&key).unwrap();
+    assert!(!dir.path().join(root).join(key_name).exists());
+    let after = wait_for_snapshot_change(&availability_path, Some(&before));
+    assert_ne!(before, after);
+
+    let reopened = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: dir.path().into(),
+        })
+        .build();
+    assert_eq!(reopened.final_len(&key), None);
+    assert!(reopened.available_ranges(&key).is_empty());
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]

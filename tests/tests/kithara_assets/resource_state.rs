@@ -262,7 +262,7 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
         scope.store().resource_state(&key_failed).unwrap(),
         AssetResourceState::Failed("boom".to_string())
     );
-    scope.store().remove_resource(&key_failed);
+    scope.store().remove_resource(&key_failed).unwrap();
     assert_eq!(
         scope.store().resource_state(&key_failed).unwrap(),
         AssetResourceState::Missing

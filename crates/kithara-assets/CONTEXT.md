@@ -19,7 +19,7 @@ Disk mapping is `<cache_root>/<asset_root>/<rel_path>`. Assets does not "invent"
 
 The `AssetStore` owns one `Arc<dyn AssetLayout>` (`AssetStoreBuilder::layout` / `StoreOptions::layout`, default `DefaultLayout`); every `AssetScope` inherits it, and `AssetScope::key_for(&Url)` mints the `ResourceKey` used by cache, leases, eviction, demand, and availability. Switching layouts over an existing cache keeps the asset directories but re-downloads resources under the new relative paths.
 
-`DefaultLayout` is the fingerprinted URL mirror for every resource: `hls/<host>/<path>/<leaf>_<fp>.<ext>` — injective on any input; the `hls/` prefix is a fixed literal that on-disk caches address byte-for-byte. Any other policy is a caller-injected `AssetLayout`; the store validates each `rel_path` (non-empty, relative, no traversal) and rejects violations with `AssetsError::InvalidKey`.
+`DefaultLayout` is the fingerprinted URL mirror for every resource: `track/<host>/<path>/<leaf>_<fp>.<ext>` — injective on any input; the `track/` prefix is a fixed literal that on-disk caches address byte-for-byte. Any other policy is a caller-injected `AssetLayout`; the store validates each `rel_path` (non-empty, relative, no traversal) and rejects violations with `AssetsError::InvalidKey`.
 
 Auto-pin (lease) semantics: all resources opened through the leasing decorator (`LeaseAssets`) are automatically pinned by `asset_root` for the lifetime of the returned handle. The pin is an RAII guard stored inside the `LeaseWriter` / `LeaseReader`; drop the handle to release the pin.
 
@@ -184,6 +184,10 @@ let (lease, producer) = store.attach_demand(&key, read_pos, look_ahead);
 Known v1 limitation: the producer observes `producer_cancel` only at its throttle await, not mid-chunk. If the last consumer detaches and a new one attaches almost immediately, the old task can briefly overlap the new one — a short window of two in-flight GETs. Overlapping writes are idempotent, so this is wasteful, not incorrect.
 
 `DemandKey` is the `ResourceKey`, matching the granularity at which the store shares a resource. HTTP-response metadata (content length, codec) is **not** part of the demand index: only the producer (the CAS winner) observes the response headers; other consumers see the shared bytes via availability and the committed `final_len`, and rely on byte-probe codec detection (best-effort, same as a single consumer that lacks a `Content-Type`).
+
+## Resource Transactions
+
+`AssetStore::with_resource_transaction` serializes one read/validate/mutate operation per `ResourceKey` across clones from the same `AssetStore::build`. The closure re-reads state after entering the transaction. Cancellation releases or forwards the transaction to the next waiter. The transaction is process-local, ephemeral, and non-reentrant for the same store and key: it coordinates cache mutation but provides neither rollback nor cross-process locking.
 
 ## Eviction Subscription
 

@@ -111,11 +111,33 @@ It returns `Err(FormatChangeNotApplicable)` when the variant was activated by `a
 
 Encrypted segments parse `#EXT-X-KEY` from the media playlist; `KeyStore` resolves the key URL (with `KeyProcessorRule`-driven rewriting if configured) and the asset store decrypts on read. URIs in `#EXT-X-KEY` are resolved relative to the **segment** URL, not the media-playlist URL.
 
+Every final AES-128 key, whether used directly or produced by a provider
+processor, is validated as exactly 16 bytes before it enters session memory or
+the asset store. Key repair is serialized per resource: an invalid cached key is
+removed and refetched once, with cache state rechecked after the transaction is
+acquired. Session memory owns the validated key needed by synchronous segment
+construction, so a cache persistence failure does not turn a successful key
+fetch into a playback failure.
+
 ## Caching
 
 Each segment is stored as its own `AssetResource` via `AssetStore` (`kithara-assets`). Encrypted segments are acquired with `acquire_resource_with_ctx(key, identity, Some(ProcessCtx))`, where `DecryptContext` is wrapped by `decrypt_processor.rs` as a `ResourceProcessor`, so decryption is part of the resource lifecycle.
 
 HLS cache naming is owned by the `AssetLayout` carried on the scope (`kithara-assets`). Keys are minted once at the semantic site via `scope.key_for(&url)` — every resource (manifest, init, segment, key) is keyed by its URL alone; `stream/hls.rs` resolves the layout from `config.store.layout` (`StoreOptions`), or the store default.
+
+Playlist bytes are one validated cache transaction. A cached master or media
+playlist is parsed before it is accepted; a parse failure removes the resource
+through `AssetStore::remove_resource`, which also clears its availability-index
+entry, then performs one network fetch. Empty committed resources follow the
+same removal path. The store serializes this transaction per resource across
+independent playlist caches, so a late stale reader cannot delete a repaired
+entry. Network bytes are parsed before commit, so an invalid response is
+returned as an error and never becomes a persistent cache hit.
+
+A valid network playlist remains usable when cache persistence fails. The write
+failure is logged at `WARN`, and a later cache/session retries persistence rather
+than turning a cache outage into a playback outage. The current `PlaylistCache`
+keeps its parsed value in memory for the rest of that cache instance.
 
 ## Seek and wait_range Contract
 

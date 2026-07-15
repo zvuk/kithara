@@ -281,7 +281,9 @@ impl FileInner {
 
 #[cfg(test)]
 mod tests {
-    use kithara_assets::{AcquisitionResult, AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{
+        AcquisitionResult, AssetResourceState, AssetStoreBuilder, StorageBackend,
+    };
     use kithara_events::{Envelope, Event, EventBus};
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_stream::{PlayheadState, SeekState};
@@ -371,6 +373,26 @@ mod tests {
                 event: Event::File(FileEvent::CacheComplete { total_bytes: 12 }),
                 ..
             })
+        ));
+    }
+
+    #[kithara::test]
+    fn terminal_failure_does_not_publish_cache_complete() {
+        let inner = make_inner();
+        let mut rx = inner.source.bus.subscribe();
+        inner.source.coord.set_total_bytes(Some(12));
+        inner.set_phase(FilePhase::Downloading);
+
+        inner.fail_and_evict("fixture terminal failure");
+
+        assert!(rx.try_recv().is_err());
+        assert!(matches!(
+            inner
+                .asset
+                .backend
+                .resource_state(&inner.asset.key)
+                .expect("resource state"),
+            AssetResourceState::Missing
         ));
     }
 }

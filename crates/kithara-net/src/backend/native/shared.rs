@@ -12,10 +12,8 @@ pub(crate) fn post_request(client: &Client, url: Url, body: Bytes) -> RequestBui
     client.post(url).body(body)
 }
 
-/// A native `ClientBuilder` transform. Used to disable individual
-/// compression algorithms (`no_gzip` etc.) so the advertised
-/// `Accept-Encoding` stays in lockstep with [`Compression`]. The builder
-/// type is the active native backend — `wreq` or `reqwest`.
+/// A native compression transform. Request code owns the exact header because
+/// browser emulation may add one independently of the enabled decoders.
 type ClientBuilderMod = fn(ClientBuilder) -> ClientBuilder;
 
 pub(crate) fn apply_compression(builder: ClientBuilder, c: Compression) -> ClientBuilder {

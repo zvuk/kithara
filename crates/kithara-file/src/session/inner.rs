@@ -163,11 +163,12 @@ impl FileInner {
     /// keeps the mmap parked in the cache directory for the full lifetime
     /// of the holding `Stream<File>`.
     pub(crate) fn fail_and_evict(&self, reason: &str) {
-        self.set_phase(FilePhase::Complete);
         if let Some(writer) = self.take_writer() {
             writer.fail(reason.to_string());
         }
-        self.asset.backend.remove_resource(&self.asset.key);
+        if let Err(error) = self.asset.backend.remove_resource(&self.asset.key) {
+            tracing::warn!(%error, reason, "kithara-file: failed to remove terminal resource");
+        }
     }
 
     /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs

@@ -103,7 +103,7 @@ fn remove_resource_clears_aggregate_remove_call() {
     res.write_at(0, b"data").unwrap();
     drop(res.commit(Some(4)).unwrap());
 
-    scope.store().remove_resource(&key);
+    scope.store().remove_resource(&key).unwrap();
     assert_eq!(scope.store().final_len(&key), None);
     assert!(!scope.store().contains_range(&key, 0..4));
 }
