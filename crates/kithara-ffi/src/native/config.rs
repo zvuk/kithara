@@ -25,7 +25,10 @@ pub(crate) fn configure_resource(
 
 #[cfg(test)]
 mod tests {
-    use kithara::bufpool::{BytePool, PcmPool};
+    use kithara::{
+        assets::AssetResource,
+        bufpool::{BytePool, PcmPool},
+    };
     use url::Url;
 
     use super::*;
@@ -99,7 +102,7 @@ mod tests {
             .clone()
             .expect("custom layout must reach store");
         let url = Url::parse("https://example.com/song.mp3").unwrap();
-        let rel = layout.rel_path(&url);
+        let rel = layout.path(&AssetResource::Url(url));
         assert_eq!(rel, "flat/track.mp3");
     }
 }

@@ -1,19 +1,14 @@
 #![forbid(unsafe_code)]
 
 use kithara_platform::sync::Arc;
-use url::Url;
 
-use super::{AssetLayout, ResourceKey};
+use super::{
+    AssetLayout, AssetResource, AssetSource, ResourceKey, validate_path, validate_root,
+    validate_source,
+};
 use crate::{error::AssetsResult, store::AssetStore};
 
-/// A lightweight handle that holds one `asset_root` over a shared
-/// [`AssetStore`] and mints self-identifying [`ResourceKey`]s under it.
-/// Cloning is cheap - the backing store is shared, not copied.
-///
-/// Obtain one via [`AssetStore::scope`]. Per-resource operations live on
-/// the store ([`AssetStore::open_resource`] and friends) and take a
-/// self-contained `&ResourceKey`. Asset-level operations
-/// ([`AssetScope::delete_asset`]) stay here.
+/// A store handle bound to one layout-selected asset root.
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct AssetScope {
@@ -25,41 +20,36 @@ pub struct AssetScope {
 }
 
 impl AssetScope {
-    pub(crate) fn new(store: AssetStore, asset_root: Arc<str>) -> Self {
-        let layout = Arc::clone(store.layout());
-        Self::with_layout(store, asset_root, layout)
+    pub(crate) fn new(
+        store: AssetStore,
+        source: &AssetSource,
+        layout: Arc<dyn AssetLayout>,
+    ) -> AssetsResult<Self> {
+        validate_source(source)?;
+        let asset_root = layout.root(source);
+        validate_root(&asset_root)?;
+        Ok(Self {
+            asset_root: Arc::from(asset_root),
+            layout,
+            store,
+        })
     }
 
-    /// Delete this entire asset (all resources under its `asset_root`).
+    /// Delete this asset and every resource below its layout-owned root.
     ///
     /// # Errors
-    /// Returns `AssetsError` if the asset directory cannot be removed.
+    /// Returns an error when the backing asset cannot be removed.
     pub fn delete_asset(&self) -> AssetsResult<()> {
         self.store.delete_asset(&self.asset_root)
     }
 
-    /// Mint a relative key for `rel_path` under this scope's `asset_root`.
-    #[must_use]
-    pub fn key<P: Into<Arc<str>>>(&self, rel_path: P) -> ResourceKey {
-        ResourceKey::relative(Arc::clone(&self.asset_root), rel_path)
-    }
-
-    /// Mint a relative key for the resource at `url` under this scope's `asset_root`.
-    #[must_use]
-    pub fn key_for(&self, url: &Url) -> ResourceKey {
-        ResourceKey::relative(Arc::clone(&self.asset_root), self.layout.rel_path(url))
-    }
-
-    /// The underlying shared store, where per-resource operations live.
-    pub(crate) fn with_layout(
-        store: AssetStore,
-        asset_root: Arc<str>,
-        layout: Arc<dyn AssetLayout>,
-    ) -> Self {
-        Self {
-            asset_root,
-            layout,
-            store,
-        }
+    /// Mint a validated key using the scope's selected layout.
+    ///
+    /// # Errors
+    /// Returns [`crate::AssetsError::InvalidKey`] for hostile layout output.
+    pub fn key(&self, resource: &AssetResource) -> AssetsResult<ResourceKey> {
+        let path = self.layout.path(resource);
+        validate_path(&path)?;
+        Ok(ResourceKey::relative(Arc::clone(&self.asset_root), path))
     }
 }

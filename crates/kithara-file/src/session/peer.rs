@@ -282,7 +282,8 @@ impl FileInner {
 #[cfg(test)]
 mod tests {
     use kithara_assets::{
-        AcquisitionResult, AssetResourceState, AssetStoreBuilder, StorageBackend,
+        AcquisitionResult, AssetResource, AssetResourceState, AssetSource, AssetStore,
+        AssetStoreBuilder, ResourceKey, StorageBackend,
     };
     use kithara_events::{Envelope, Event, EventBus};
     use kithara_platform::{CancelToken, sync::Arc};
@@ -291,7 +292,20 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::coord::FileCoord;
+    use crate::{File, coord::FileCoord};
+
+    fn test_key(store: &AssetStore) -> ResourceKey {
+        let source = AssetSource::Remote {
+            url: Url::parse("https://example.com/remote.dat").expect("test URL"),
+            discriminator: Some("peer-test".to_string()),
+        };
+        let scope = store.scope::<File>(&source).expect("test scope");
+        scope
+            .key(&AssetResource::Source {
+                extension: "dat".to_string(),
+            })
+            .expect("test resource key")
+    }
 
     fn make_inner() -> Arc<FileInner> {
         let store = Arc::new(
@@ -300,7 +314,7 @@ mod tests {
                 .cancel(CancelToken::never())
                 .build(),
         );
-        let key = store.scope("test").key("remote.dat");
+        let key = test_key(&store);
         let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
             panic!("fresh acquire must be Pending");
         };

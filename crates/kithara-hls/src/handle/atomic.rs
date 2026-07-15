@@ -284,7 +284,7 @@ async fn download_atomic_bytes(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
     use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
 
@@ -297,9 +297,16 @@ mod tests {
             .backend(StorageBackend::Memory)
             .cancel(cancel.clone())
             .build();
-        let scope = store.scope("failed-cache-write");
         let url = Url::parse("https://example.com/master.m3u8").unwrap();
-        let key = scope.key_for(&url);
+        let scope = store
+            .scope::<crate::Hls>(&AssetSource::Remote {
+                url: url.clone(),
+                discriminator: Some("failed-cache-write".to_owned()),
+            })
+            .expect("test asset scope");
+        let key = scope
+            .key(&AssetResource::Url(url.clone()))
+            .expect("playlist key");
         let AcquisitionResult::Pending(writer) =
             scope.store().acquire_resource(&key, None).unwrap()
         else {

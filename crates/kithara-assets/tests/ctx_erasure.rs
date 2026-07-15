@@ -2,6 +2,8 @@
 //! `ctx = Some(ProcessCtx)` (per-acquire processing): covers chunk chaining and
 //! per-acquire application of the processor.
 
+mod support;
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -13,6 +15,7 @@ use kithara_assets::{
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_test_utils::kithara;
+use support::{key as test_key, scope as test_scope};
 use tempfile::tempdir;
 
 /// Processing chunk size (64KB); a larger payload spans multiple chunks.
@@ -133,8 +136,8 @@ fn one_store_serves_both_none_and_processing_scopes() {
         })
         .build();
 
-    let scope_a = store.scope("scope-a-file");
-    let key_a = scope_a.key("media/audio.bin");
+    let scope_a = test_scope(&store, "scope-a-file");
+    let key_a = test_key(&scope_a, "media/audio.bin");
     let plain = b"plain file bytes, unprocessed";
     write_commit(
         scope_a
@@ -146,8 +149,8 @@ fn one_store_serves_both_none_and_processing_scopes() {
     let read_a = read_all(&scope_a.store().open_resource(&key_a, None).unwrap());
     assert_eq!(read_a, plain, "ctx=None scope must round-trip raw bytes");
 
-    let scope_b = store.scope("scope-b-drm");
-    let key_b = scope_b.key("segments/0001.m4s");
+    let scope_b = test_scope(&store, "scope-b-drm");
+    let key_b = test_key(&scope_b, "segments/0001.m4s");
     let payload = b"encrypted-ish segment payload";
     let proc = processor(0x42, &[0x42]);
     let expected_b = reference_transform(0x42, payload);
@@ -185,7 +188,7 @@ fn multi_chunk_chaining_matches_reference() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope("chaining");
+    let scope = test_scope(&store, "chaining");
 
     // 200KB > 64KB chunk size => 4 chunks => 3 key evolutions.
     let payload: Vec<u8> = (0u8..=u8::MAX).cycle().take(200 * 1024).collect();
@@ -198,7 +201,7 @@ fn multi_chunk_chaining_matches_reference() {
     let proc = processor(seed, &[seed]);
     let expected = reference_transform(seed, &payload);
 
-    let key = scope.key("segments/big.m4s");
+    let key = test_key(&scope, "segments/big.m4s");
     write_commit(
         scope
             .store()
@@ -216,7 +219,7 @@ fn multi_chunk_chaining_matches_reference() {
 
     // `begin()` must reset chaining state per commit: a second key processed
     // with a fresh sink chains from the seed again, not from where the first
-    let key2 = scope.key("segments/big2.m4s");
+    let key2 = test_key(&scope, "segments/big2.m4s");
     let payload2: Vec<u8> = (0u8..=u8::MAX).rev().cycle().take(200 * 1024).collect();
     let expected2 = reference_transform(seed, &payload2);
     write_commit(
@@ -241,11 +244,11 @@ fn per_acquire_processor_applies_to_its_own_resource() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope("per-acquire");
+    let scope = test_scope(&store, "per-acquire");
 
     let payload = b"shared payload bytes for both keys";
 
-    let key_one = scope.key("segments/one.m4s");
+    let key_one = test_key(&scope, "segments/one.m4s");
     let proc_one = processor(0x01, &[0x01]);
     let expected_one = reference_transform(0x01, payload);
     write_commit(
@@ -256,7 +259,7 @@ fn per_acquire_processor_applies_to_its_own_resource() {
         payload,
     );
 
-    let key_two = scope.key("segments/two.m4s");
+    let key_two = test_key(&scope, "segments/two.m4s");
     let proc_two = processor(0x02, &[0x02]);
     let expected_two = reference_transform(0x02, payload);
     write_commit(

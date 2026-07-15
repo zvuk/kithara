@@ -1,7 +1,8 @@
 use std::num::NonZeroUsize;
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetStoreBuilder, StorageBackend, WriteSide,
+    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, AssetStoreBuilder,
+    ResourceKey, StorageBackend, WriteSide,
 };
 use kithara_events::{
     AudioCodecKind, ContainerKind, Envelope, Event, EventBus, FileEvent, TotalBytesSource,
@@ -15,7 +16,21 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 
 use super::source::FileSource;
-use crate::coord::FileCoord;
+use crate::{File, coord::FileCoord};
+
+fn test_key(store: &AssetStore, name: &str) -> ResourceKey {
+    let source = AssetSource::Remote {
+        url: url::Url::parse("https://example.com/session-test").expect("test URL"),
+        discriminator: Some("session-test".to_string()),
+    };
+    let scope = store.scope::<File>(&source).expect("test scope");
+    scope
+        .key(&AssetResource::Named {
+            namespace: "test".to_string(),
+            name: name.to_string(),
+        })
+        .expect("test resource key")
+}
 
 fn nz_bytes(n: usize) -> ReadOutcome {
     ReadOutcome::Bytes(NonZeroUsize::new(n).expect("test: byte count must be > 0"))
@@ -34,7 +49,7 @@ fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> Fil
             .cancel(CancelToken::never())
             .build(),
     );
-    let key = backend.scope("test").key("test-source");
+    let key = test_key(&backend, "test-source");
     FileSource::local(
         reader,
         coord,
@@ -121,7 +136,7 @@ fn create_committed_resource(data: &[u8]) -> AssetReader {
         .cancel(CancelToken::never())
         .build();
 
-    let key = store.scope("test").key("test.dat");
+    let key = test_key(&store, "test.dat");
     let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
         panic!("fresh acquire must be Pending");
     };
@@ -135,7 +150,7 @@ fn create_active_resource(data: &[u8]) -> (AssetReader, kithara_assets::AssetWri
         .cancel(CancelToken::never())
         .build();
 
-    let key = store.scope("test").key("active.dat");
+    let key = test_key(&store, "active.dat");
     let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
         panic!("fresh acquire must be Pending");
     };

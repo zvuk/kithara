@@ -33,7 +33,7 @@ pub type AssetReader = LeaseReader<CachedReader<ProcessedReader<BaseReader>>, Le
 /// Phase-typed acquisition outcome returned by
 /// [`super::AssetStore::acquire_resource`]: a `Pending` [`AssetWriter`] to stream and
 /// commit, or a `Ready` [`AssetReader`] when the resource is already committed.
-pub type AssetResource = AcquisitionResult<AssetWriter, AssetReader>;
+pub type ResourceAcquisition = AcquisitionResult<AssetWriter, AssetReader>;
 
 /// In-memory asset store with disabled decorators.
 ///

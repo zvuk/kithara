@@ -17,7 +17,7 @@ flowchart LR
     subgraph Remote["Remote FileSrc::Remote"]
         Peer["FilePeer<br/>(pull-driven, internal)"]
         DL["dl::Downloader<br/>(shared HTTP pool)"]
-        AS2["AssetStore<br/>(asset_root_for_url)"]
+        AS2["AssetStore<br/>(File layout scope)"]
     end
 
     Coord --> Local
@@ -41,4 +41,4 @@ When `FileSrc::Local(path)` is used, the crate opens the file via `AssetStore` w
 
 For `FileSrc::Remote(url)`, downloading is pull-driven: the peer requests fetches as the reader advances, with backpressure controlled by the read-demand cell shared between `FileCoord` and the asset demand lease. A missing range advances that demand and wakes the elected producer; each successful HTTP chunk write wakes the audio worker through `WorkerWake` so a parked probe re-runs when bytes arrive instead of waiting for the scheduler backstop. Seek miss enqueues an explicit range fetch for the requested offset.
 
-Remote file cache naming is owned by the `AssetLayout` carried on the scope (`kithara-assets`). The asset directory keeps the hash identity (`config.name` when present, otherwise query-aware for remote URLs); the single file resource is keyed by its URL via `scope.key_for(&url)`.
+Remote file cache naming is owned by the layout registered for the `File` marker in `kithara-assets`. The stream binds `AssetSource::Remote { url, discriminator: config.name }` through `store.scope::<File>()`, then mints one `AssetResource::Source` using the final safe URL-path extension (or `bin`). The default layout stores it at `<hash>/track/track.<ext>`. Query parameters are not an implicit discriminator; callers use `config.name` when the canonical URL needs an additional identity. A standalone `StoreOptions::layout` becomes the registry default, while an injected store uses its existing registry.

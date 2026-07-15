@@ -7,7 +7,7 @@ use kithara_platform::CancelToken;
 use kithara_platform::{sync::Arc, tokio::sync::mpsc};
 use rangemap::RangeSet;
 
-use super::{AssetReader, AssetResource, DiskStore, MemStore};
+use super::{AssetReader, DiskStore, MemStore, ResourceAcquisition};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::backend::DiskAssetStore;
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
         AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle,
         ResourceTransactionIndex,
     },
-    layout::{AssetLayout, AssetScope, ResourceKey},
+    layout::{AssetLayoutRegistry, AssetScope, AssetSource, ResourceKey},
     resource::{AssetResourceState, RequestIdentity},
 };
 
@@ -48,7 +48,7 @@ pub enum AssetStore {
         transactions: ResourceTransactionIndex,
         eviction: EvictionRouter,
         base: Option<Arc<DiskAssetStore>>,
-        layout: Arc<dyn AssetLayout>,
+        layouts: AssetLayoutRegistry,
     },
     /// In-memory storage (ephemeral, no disk artifacts).
     Mem {
@@ -57,7 +57,7 @@ pub enum AssetStore {
         demand: DemandIndex,
         transactions: ResourceTransactionIndex,
         eviction: EvictionRouter,
-        layout: Arc<dyn AssetLayout>,
+        layouts: AssetLayoutRegistry,
     },
 }
 
@@ -70,7 +70,7 @@ impl AssetStore {
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-    ) -> AssetsResult<AssetResource> {
+    ) -> AssetsResult<ResourceAcquisition> {
         delegate_to_store!(self, acquire_resource, key, identity)
     }
 
@@ -83,7 +83,7 @@ impl AssetStore {
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<ProcessCtx>,
-    ) -> AssetsResult<AssetResource> {
+    ) -> AssetsResult<ResourceAcquisition> {
         delegate_to_store!(self, acquire_resource_with_ctx, key, identity, ctx)
     }
 
@@ -233,13 +233,11 @@ impl AssetStore {
         None
     }
 
-    /// The on-disk [`AssetLayout`] this store was built with.
-    #[must_use]
-    pub fn layout(&self) -> &Arc<dyn AssetLayout> {
+    fn layouts(&self) -> &AssetLayoutRegistry {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { layout, .. } => layout,
-            Self::Mem { layout, .. } => layout,
+            Self::Disk { layouts, .. } => layouts,
+            Self::Mem { layouts, .. } => layouts,
         }
     }
 
@@ -308,13 +306,13 @@ impl AssetStore {
         delegate_to_store!(self, root_dir)
     }
 
-    /// Bind this store to one `asset_root`, returning a scoped handle
-    /// that drops the per-call `asset_root` argument. Cheap to clone --
-    /// the backing store is shared, so many scopes over distinct asset
-    /// roots cooperate on one store; the scope inherits the store's [`AssetLayout`].
-    #[must_use]
-    pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope {
-        AssetScope::new(self.clone(), asset_root.into())
+    /// Bind `source` to the layout registered for marker `T`.
+    ///
+    /// # Errors
+    /// Returns an error when the source or layout-owned root is invalid.
+    pub fn scope<T: 'static>(&self, source: &AssetSource) -> AssetsResult<AssetScope> {
+        let layout = Arc::clone(self.layouts().layout::<T>());
+        AssetScope::new(self.clone(), source, layout)
     }
 
     /// Subscribe to evictions under `asset_root`.
@@ -363,7 +361,7 @@ impl From<DiskStore> for AssetStore {
             transactions: ResourceTransactionIndex::default(),
             eviction: EvictionRouter::default(),
             base: None,
-            layout: Arc::new(crate::layout::DefaultLayout),
+            layouts: AssetLayoutRegistry::default(),
         }
     }
 }
@@ -377,7 +375,7 @@ impl From<MemStore> for AssetStore {
             demand: DemandIndex::new(CancelToken::never()),
             transactions: ResourceTransactionIndex::default(),
             eviction: EvictionRouter::default(),
-            layout: Arc::new(crate::layout::DefaultLayout),
+            layouts: AssetLayoutRegistry::default(),
         }
     }
 }

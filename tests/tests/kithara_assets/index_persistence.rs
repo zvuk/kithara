@@ -16,6 +16,8 @@ use kithara::{
 use kithara_integration_tests::{kithara, temp_dir};
 use rkyv::option::ArchivedOption;
 
+use super::support::{AssetScopeTestKeyExt, AssetStoreTestScopeExt, literal_layouts};
+
 fn index_dir(root: &Path) -> PathBuf {
     root.join("_index")
 }
@@ -109,8 +111,9 @@ fn build_scope(temp_dir: &kithara_integration_tests::TestTempDir, asset_root: &s
             max_assets: None,
             max_bytes: None,
         })
+        .layouts(literal_layouts())
         .build()
-        .scope(asset_root)
+        .test_scope(asset_root)
 }
 
 /// End-to-end persistence contract: realistic acquire → write →
@@ -135,7 +138,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
         "no commit yet → the flush worker has nothing to persist"
     );
 
-    let key_a = scope.key("segment-a.bin");
+    let key_a = scope.test_key("segment-a.bin");
     let AcquisitionResult::Pending(writer_a) = scope
         .store()
         .acquire_resource(&key_a, None)
@@ -192,7 +195,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
         "in-memory availability must reflect the committed range"
     );
 
-    let key_b = scope.key("segment-b.bin");
+    let key_b = scope.test_key("segment-b.bin");
     let AcquisitionResult::Pending(writer_b) = scope
         .store()
         .acquire_resource(&key_b, None)
@@ -246,7 +249,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
 fn index_files_land_under_root_dir_index(temp_dir: kithara_integration_tests::TestTempDir) {
     let root = temp_dir.path().to_path_buf();
     let scope = build_scope(&temp_dir, "basic-asset");
-    let key = scope.key("one.bin");
+    let key = scope.test_key("one.bin");
     {
         let AcquisitionResult::Pending(writer) =
             scope.store().acquire_resource(&key, None).unwrap()

@@ -4,8 +4,8 @@ use std::sync::{
 };
 
 use kithara_assets::{
-    AssetReader, AssetResource, AssetStore, AssetWriter, DemandLease, RawWriteHandle, ReadSide,
-    ResourceKey, WriteSide,
+    AssetReader, AssetStore, AssetWriter, DemandLease, RawWriteHandle, ReadSide,
+    ResourceAcquisition, ResourceKey, WriteSide,
 };
 use kithara_events::{AudioCodecKind, ContainerKind, EventBus, FileEvent, TotalBytesSource};
 use kithara_net::Headers;
@@ -25,7 +25,7 @@ use crate::{coord::FileCoord, error::SourceError};
 /// by the caller.
 pub(crate) struct FileStreamState {
     pub(crate) backend: Arc<AssetStore>,
-    pub(crate) acq: AssetResource,
+    pub(crate) acq: ResourceAcquisition,
     pub(crate) bus: EventBus,
     pub(crate) key: ResourceKey,
 }

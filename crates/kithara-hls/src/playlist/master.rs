@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kithara_assets::AssetScope;
+use kithara_assets::{AssetResource, AssetScope, ResourceKey};
 use url::Url;
 
 use super::{parse::ParsedMaster, playlist_cache::PlaylistCache};
@@ -19,10 +19,14 @@ pub(crate) struct MasterPlaylist {
 impl MasterPlaylist {
     /// Build a loadable for the master at `url`, resolving the per-resource
     /// [`ResourceHandle`] from `scope`.
-    pub(crate) fn new(cache: PlaylistCache, scope: &AssetScope, url: Url) -> Self {
-        let key = scope.key_for(&url);
+    pub(crate) fn new(cache: PlaylistCache, scope: &AssetScope, url: Url) -> HlsResult<Self> {
+        let key = scope.key(&AssetResource::Url(url.clone()))?;
         let resource = ResourceHandle::new(scope.clone(), key, url);
-        Self { cache, resource }
+        Ok(Self { cache, resource })
+    }
+
+    pub(crate) fn key(&self) -> &ResourceKey {
+        self.resource.key()
     }
 
     /// Fetch + parse the master playlist (deduped + disk-cached via the

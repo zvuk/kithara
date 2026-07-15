@@ -16,6 +16,8 @@ use kithara::{
 };
 use kithara_integration_tests::temp_dir;
 
+use super::support::{AssetScopeTestKeyExt, AssetStoreTestScopeExt, literal_layouts};
+
 #[derive(Debug)]
 struct XorProcessor {
     call_count: Arc<AtomicUsize>,
@@ -91,16 +93,18 @@ fn build_test_processing_scope(
                 max_assets: None,
                 max_bytes: None,
             })
+            .layouts(literal_layouts())
             .build()
-            .scope(asset_root)
+            .test_scope(asset_root)
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
         builder
             .backend(StorageBackend::Memory)
+            .layouts(literal_layouts())
             .build()
-            .scope(asset_root)
+            .test_scope(asset_root)
     }
 }
 
@@ -118,16 +122,18 @@ fn build_test_scope_no_processing(
                 max_assets: None,
                 max_bytes: None,
             })
+            .layouts(literal_layouts())
             .build()
-            .scope(asset_root)
+            .test_scope(asset_root)
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
         AssetStoreBuilder::default()
             .backend(StorageBackend::Memory)
+            .layouts(literal_layouts())
             .build()
-            .scope(asset_root)
+            .test_scope(asset_root)
     }
 }
 
@@ -137,7 +143,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::Tes
 
     let scope = build_test_processing_scope(&temp_dir, "test-processing");
 
-    let key = scope.key("data.bin");
+    let key = scope.test_key("data.bin");
 
     let original_data = b"Hello, World! This is test data for processing.";
     let ctx = create_xor_processor(0x42, Arc::clone(&call_count));
@@ -175,7 +181,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_te
 
     let scope = build_test_processing_scope(&temp_dir, "test-cache");
 
-    let key = scope.key("cached.bin");
+    let key = scope.test_key("cached.bin");
     let ctx = create_xor_processor(0xAB, Arc::clone(&call_count));
 
     let original_data = b"Data for caching test";
@@ -217,7 +223,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::
 
     let scope = build_test_processing_scope(&temp_dir, "test-partial");
 
-    let key = scope.key("partial.bin");
+    let key = scope.test_key("partial.bin");
     let ctx = create_xor_processor(0xFF, Arc::clone(&call_count));
 
     let original_data: Vec<u8> = (0..100).collect();
@@ -259,7 +265,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::Te
 
     let scope = build_test_processing_scope(&temp_dir, "test-eof");
 
-    let key = scope.key("eof.bin");
+    let key = scope.test_key("eof.bin");
     let ctx = create_xor_processor(0x00, Arc::clone(&call_count));
 
     let original_data = b"short";
@@ -289,7 +295,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::Te
 fn store_without_processing_works_normally(temp_dir: kithara_integration_tests::TestTempDir) {
     let scope = build_test_scope_no_processing(&temp_dir, "no-processing");
 
-    let key = scope.key("test.bin");
+    let key = scope.test_key("test.bin");
 
     {
         let AcquisitionResult::Pending(writer) =

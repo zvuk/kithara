@@ -28,12 +28,15 @@ pub use index::{
 };
 #[doc(hidden)]
 pub use kithara_bufpool::BytePool;
-pub use layout::{AssetLayout, AssetScope, DefaultLayout, ResourceKey, asset_root_for_url};
+pub use layout::{
+    AssetLayout, AssetLayoutRegistry, AssetResource, AssetScope, AssetSource, DefaultLayout,
+    ResourceKey,
+};
 pub use resource::{
     AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RawWriteHandle, ReadSide,
     RequestIdentity, WriteSide,
 };
 pub use store::{
-    AssetReader, AssetResource, AssetStore, AssetStoreBuilder, AssetWriter, StorageBackend,
+    AssetReader, AssetStore, AssetStoreBuilder, AssetWriter, ResourceAcquisition, StorageBackend,
     StoreOptions,
 };

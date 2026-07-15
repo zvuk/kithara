@@ -121,7 +121,7 @@ fetch into a playback failure.
 
 ## Caching
 
-Each segment is stored as its own `AssetResource` via `AssetStore` (`kithara-assets`). Encrypted segments are acquired with `acquire_resource_with_ctx(key, identity, Some(ProcessCtx))`, where `DecryptContext` is wrapped by `decrypt_processor.rs` as a `ResourceProcessor`, so decryption is part of the resource lifecycle.
+Each segment is stored as its own `ResourceAcquisition` via `AssetStore` (`kithara-assets`). Encrypted segments are acquired with `acquire_resource_with_ctx(key, identity, Some(ProcessCtx))`, where `DecryptContext` is wrapped by `decrypt_processor.rs` as a `ResourceProcessor`, so decryption is part of the resource lifecycle.
 
 HLS cache naming is owned by the `AssetLayout` carried on the scope (`kithara-assets`). Keys are minted once at the semantic site via `scope.key_for(&url)` — every resource (manifest, init, segment, key) is keyed by its URL alone; `stream/hls.rs` resolves the layout from `config.store.layout` (`StoreOptions`), or the store default.
 

@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use kithara_assets::{
-    AcquisitionResult, AssetLayout, AssetReader, AssetStore, AssetStoreBuilder, AssetWriter,
-    AssetsError, BytePool, EvictConfig, ReadSide, ResourceKey, StoreOptions, WriteSide,
+    AcquisitionResult, AssetLayoutRegistry, AssetReader, AssetResource, AssetSource, AssetStore,
+    AssetStoreBuilder, AssetWriter, AssetsError, BytePool, EvictConfig, ReadSide, ResourceKey,
+    StoreOptions, WriteSide,
 };
 use kithara_events::{EventBus, FileError, FileEvent};
 use kithara_net::{Headers, HttpClient, NetOptions};
@@ -29,6 +30,13 @@ use crate::{
 
 /// Marker type for file streaming.
 pub struct File;
+
+struct Consts;
+
+impl Consts {
+    const DEFAULT_EXTENSION: &'static str = "bin";
+    const MAX_EXTENSION_LEN: usize = 16;
+}
 
 struct RemoteFileOpen {
     backend: Arc<AssetStore>,
@@ -92,11 +100,36 @@ fn publish_open_error(bus: Option<&EventBus>, error: &SourceError) {
     }
 }
 
-fn remote_asset_root(url: &url::Url, name: Option<&str>, layout: &Arc<dyn AssetLayout>) -> String {
-    let name_or_query = name
-        .or_else(|| url.query())
-        .filter(|value| !value.is_empty());
-    layout.asset_root(url, name_or_query)
+fn source_extension(url: &url::Url) -> String {
+    url.path_segments()
+        .and_then(Iterator::last)
+        .and_then(|leaf| leaf.rsplit_once('.'))
+        .filter(|(stem, extension)| {
+            !stem.is_empty()
+                && !extension.is_empty()
+                && extension.len() <= Consts::MAX_EXTENSION_LEN
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+        .map_or_else(
+            || Consts::DEFAULT_EXTENSION.to_string(),
+            |(_, extension)| extension.to_ascii_lowercase(),
+        )
+}
+
+fn remote_key(
+    store: &AssetStore,
+    url: &url::Url,
+    discriminator: Option<String>,
+) -> Result<ResourceKey, SourceError> {
+    let source = AssetSource::Remote {
+        url: url.clone(),
+        discriminator,
+    };
+    let scope = store.scope::<File>(&source)?;
+    let resource = AssetResource::Source {
+        extension: source_extension(url),
+    };
+    scope.key(&resource).map_err(SourceError::from)
 }
 
 fn default_downloader(cancel: &CancelToken, pool: Option<BytePool>) -> Downloader {
@@ -232,9 +265,7 @@ impl File {
         let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pool.clone()));
         let backend =
             asset_store.unwrap_or_else(|| build_shared_asset_store(&store, pool, cancel.clone()));
-        let asset_root = remote_asset_root(&url, name.as_deref(), backend.layout());
-
-        let key = backend.scope(asset_root.as_str()).key_for(&url);
+        let key = remote_key(&backend, &url, name)?;
         let publish_bus = bus.clone();
         let file_state = FileStreamState::create(&backend, key, bus, event_channel_capacity)
             .inspect_err(|error| publish_open_error(publish_bus.as_ref(), error))?;
@@ -330,12 +361,18 @@ pub(crate) fn build_shared_asset_store(
     pool: Option<BytePool>,
     cancel: CancelToken,
 ) -> Arc<AssetStore> {
+    let layouts = store
+        .layout
+        .as_ref()
+        .map_or_else(AssetLayoutRegistry::default, |layout| {
+            AssetLayoutRegistry::new(Arc::clone(layout))
+        });
     Arc::new(
         AssetStoreBuilder::default()
             .cancel(cancel)
             .backend(store.backend.clone())
             .evict_config(EvictConfig::from(store))
-            .maybe_layout(store.layout.clone())
+            .layouts(layouts)
             .maybe_pool(pool)
             .maybe_cache_capacity(store.cache_capacity)
             .maybe_flush_hub(store.flush_hub.clone())
@@ -343,11 +380,6 @@ pub(crate) fn build_shared_asset_store(
     )
 }
 
-/// Probe the first bytes of a committed `AssetResource` and try to
-/// classify the codec by magic prefix. Returns `None` when the read
-/// itself fails or the prefix doesn't match a known signature — callers
-/// must treat both as "no hint available" and fall back to the regular
-/// probe path.
 fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
     let mut buf = [0u8; 16];
     let read = reader.read_at(0, &mut buf).ok()?;
@@ -356,7 +388,67 @@ fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_assets::StorageBackend;
+
     use super::*;
+
+    fn url(value: &str) -> url::Url {
+        url::Url::parse(value).expect("valid test URL")
+    }
+
+    #[kithara::test]
+    #[case("https://example.com/audio.MP3?token=secret", "mp3")]
+    #[case("https://example.com/archive.tar.gz", "gz")]
+    #[case("https://example.com/audio", "bin")]
+    #[case("https://example.com/.mp3", "bin")]
+    #[case("https://example.com/audio.thisextensionistoolong", "bin")]
+    #[case("https://example.com/audio.m%2F4a", "bin")]
+    fn source_extension_uses_safe_final_url_extension(#[case] value: &str, #[case] expected: &str) {
+        assert_eq!(source_extension(&url(value)), expected);
+    }
+
+    #[kithara::test]
+    fn remote_key_uses_file_source_layout() {
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build();
+        let key = remote_key(
+            &store,
+            &url("https://example.com/get/audio.MP3?token=secret"),
+            Some("track-42".to_string()),
+        )
+        .expect("remote key");
+
+        assert_eq!(key.rel_path(), Some("track/track.mp3"));
+    }
+
+    #[kithara::test]
+    fn remote_key_uses_only_explicit_discriminator() {
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build();
+        let first = remote_key(
+            &store,
+            &url("https://example.com/audio.mp3?token=first"),
+            None,
+        )
+        .expect("first key");
+        let second = remote_key(
+            &store,
+            &url("https://example.com/audio.mp3?token=second"),
+            None,
+        )
+        .expect("second key");
+        let named = remote_key(
+            &store,
+            &url("https://example.com/audio.mp3?token=second"),
+            Some("named".to_string()),
+        )
+        .expect("named key");
+
+        assert_eq!(first.asset_root(), second.asset_root());
+        assert_ne!(first.asset_root(), named.asset_root());
+    }
 
     #[kithara::test]
     fn local_key_rejects_relative_paths_as_invalid_paths() {

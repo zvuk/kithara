@@ -3,7 +3,8 @@
 use std::sync::OnceLock;
 
 use kithara_assets::{
-    AssetStore, AssetStoreBuilder, BytePool, EvictConfig, ResourceKey, StorageBackend, StoreOptions,
+    AssetLayoutRegistry, AssetSource, AssetStore, AssetStoreBuilder, BytePool, EvictConfig,
+    ResourceKey, StorageBackend, StoreOptions,
 };
 use kithara_events::{DeferredBus, EventBus, HlsError as EventHlsError, HlsEvent, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
@@ -74,12 +75,14 @@ impl StreamType for Hls {
             .asset_store
             .clone()
             .unwrap_or_else(|| Arc::new(build_asset_store(&config, cancel.clone())));
-        let asset_root = store
-            .layout()
-            .asset_root(&config.url, config.name.as_deref());
-        let asset_root_arc: Arc<str> = Arc::from(asset_root.as_str());
-        let invalidation_guard = store.subscribe_eviction(Arc::clone(&asset_root_arc), evict_tx);
-        let scope = store.scope(asset_root_arc);
+        let source = AssetSource::Remote {
+            url: config.url.clone(),
+            discriminator: config.name.clone(),
+        };
+        let scope = store
+            .scope::<Self>(&source)
+            .map_err(crate::HlsError::from)?;
+        let invalidation_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), evict_tx);
 
         let byte_pool = config.pool.clone();
 
@@ -182,7 +185,7 @@ impl StreamType for Hls {
             .map(|(idx, mp)| {
                 let init_decrypt_ctx = resolve_init_decrypt_ctx(&key_store, mp);
                 let decrypt_contexts = resolve_variant_decrypt_contexts(&key_store, mp);
-                FromWithParams::build(
+                HlsVariant::try_build(
                     &playlist_state,
                     VariantParams {
                         init_decrypt_ctx,
@@ -193,7 +196,7 @@ impl StreamType for Hls {
                     },
                 )
             })
-            .collect();
+            .collect::<crate::HlsResult<Vec<_>>>()?;
         let variants: Arc<[Arc<HlsVariant>]> = variants.into();
 
         let coord = Arc::new(HlsCoord::new(
@@ -250,15 +253,14 @@ async fn load_playlists(
     playlist_cache.set_base_url(config.base_url.clone());
     playlist_cache.set_headers(config.headers.clone());
 
-    let master_key = stream_peer.scope().key_for(&config.url);
-    let master = MasterPlaylist::new(
+    let master_playlist = MasterPlaylist::new(
         playlist_cache.clone(),
         &stream_peer.scope(),
         config.url.clone(),
     )
-    .load()
-    .await
-    .map_err(|err| {
+    .map_err(SourceError::from)?;
+    let master_key = master_playlist.key().clone();
+    let master = master_playlist.load().await.map_err(|err| {
         publish_playlist_error(bus, &err);
         SourceError::from(err)
     })?;
@@ -309,7 +311,7 @@ fn build_asset_store(config: &HlsConfig, cancel: CancelToken) -> AssetStore {
         .cancel(cancel)
         .backend(config.store.backend.clone())
         .evict_config(EvictConfig::from(&config.store))
-        .maybe_layout(config.store.layout.clone())
+        .layouts(layout_registry(&config.store))
         .pool(config.pool.clone())
         .maybe_cache_capacity(config.store.cache_capacity)
         .maybe_flush_hub(config.store.flush_hub.clone())
@@ -332,10 +334,18 @@ pub fn build_shared_asset_store(
             .cancel(cancel)
             .backend(store.backend.clone())
             .evict_config(EvictConfig::from(store))
-            .maybe_layout(store.layout.clone())
+            .layouts(layout_registry(store))
             .pool(pool)
             .maybe_cache_capacity(store.cache_capacity)
             .maybe_flush_hub(store.flush_hub.clone())
             .build(),
     )
+}
+
+fn layout_registry(store: &StoreOptions) -> AssetLayoutRegistry {
+    let mut layouts = AssetLayoutRegistry::default();
+    if let Some(layout) = &store.layout {
+        layouts.register::<Hls>(Arc::clone(layout));
+    }
+    layouts
 }

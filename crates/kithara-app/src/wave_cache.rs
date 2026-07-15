@@ -5,16 +5,15 @@ use std::{
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetResourceState, AssetStore, AssetsError, ReadSide, ResourceKey,
-        WriteSide, asset_root_for_url,
+        AcquisitionResult, AssetResource, AssetResourceState, AssetScope, AssetSource, AssetStore,
+        AssetsError, ReadSide, ResourceKey, WriteSide,
     },
     audio::{BeatGrid, Waveform},
-    prelude::{ResourceConfig, ResourceSrc},
+    prelude::{File, Hls, ResourceConfig, ResourceSrc, SourceType},
 };
 use kithara_platform::sync::Arc;
 use kithara_queue::TrackSource;
 use tracing::{debug, warn};
-use url::Url;
 
 use crate::waveform::TrackAnalysis;
 
@@ -23,9 +22,6 @@ struct Consts;
 
 impl Consts {
     const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0004;
-    /// Analysis artifact resource under the track's asset scope. One blob per
-    /// track: the active config fingerprint is checked inside it.
-    const ANALYSIS_REL_PATH: &str = "analysis/track.analysis";
     /// Cap on the in-memory tier; past it the oldest entries fall back to disk.
     const MAX_MEM_ENTRIES: usize = 64;
 }
@@ -33,13 +29,27 @@ impl Consts {
 /// Cache key for a track's analysis.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct AnalysisKey {
-    asset_root: String,
+    layout: AnalysisLayout,
+    source: AssetSource,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum AnalysisLayout {
+    File,
+    Hls,
 }
 
 impl AnalysisKey {
+    #[cfg(test)]
     pub(crate) fn new(asset_root: impl Into<String>) -> Self {
         Self {
-            asset_root: asset_root.into(),
+            layout: AnalysisLayout::File,
+            source: AssetSource::Remote {
+                url: "https://analysis.test.invalid/track"
+                    .parse()
+                    .expect("valid analysis test URL"),
+                discriminator: Some(asset_root.into()),
+            },
         }
     }
 }
@@ -57,16 +67,19 @@ pub(crate) fn source_key(source: &TrackSource) -> Option<AnalysisKey> {
 /// `asset_root` for a source, mirroring `kithara-file`'s remote derivation
 /// (`name` first, else the URL query).
 fn key_for_src(src: &ResourceSrc, name: Option<&str>) -> Option<AnalysisKey> {
-    match src {
-        ResourceSrc::Url(url) => {
-            let name_or_query = name.or_else(|| url.query()).filter(|s| !s.is_empty());
-            Some(AnalysisKey::new(asset_root_for_url(url, name_or_query)))
-        }
-        ResourceSrc::Path(path) => {
-            let url = Url::from_file_path(path).ok()?;
-            Some(AnalysisKey::new(asset_root_for_url(&url, None)))
-        }
-    }
+    let discriminator = name.map(str::to_string);
+    let (layout, source) = match SourceType::detect(src).ok()? {
+        SourceType::RemoteFile(url) => (
+            AnalysisLayout::File,
+            AssetSource::Remote { url, discriminator },
+        ),
+        SourceType::HlsStream(url) => (
+            AnalysisLayout::Hls,
+            AssetSource::Remote { url, discriminator },
+        ),
+        SourceType::LocalFile(path) => (AnalysisLayout::File, AssetSource::Local { path }),
+    };
+    Some(AnalysisKey { layout, source })
 }
 
 /// Two-tier track-analysis memoization: a session in-memory map plus durable
@@ -106,7 +119,7 @@ impl TrackAnalysisCache {
 
     fn load_disk(&self, key: &AnalysisKey) -> Option<TrackAnalysis> {
         let store = self.store.as_ref()?;
-        let resource = Self::resource_key(store, key);
+        let resource = Self::resource_key(store, key).ok()?;
         // Side-effect-free probe first: opening a missing key would create it.
         match store.resource_state(&resource).ok()? {
             AssetResourceState::Committed { .. } => {}
@@ -151,17 +164,31 @@ impl TrackAnalysisCache {
         }
     }
 
-    fn resource_key(store: &AssetStore, key: &AnalysisKey) -> ResourceKey {
-        store
-            .scope(key.asset_root.as_str())
-            .key(Consts::ANALYSIS_REL_PATH)
+    fn scope(store: &AssetStore, key: &AnalysisKey) -> Result<AssetScope, AssetsError> {
+        match key.layout {
+            AnalysisLayout::File => store.scope::<File>(&key.source),
+            AnalysisLayout::Hls => store.scope::<Hls>(&key.source),
+        }
+    }
+
+    fn resource_key(store: &AssetStore, key: &AnalysisKey) -> Result<ResourceKey, AssetsError> {
+        Self::scope(store, key)?.key(&AssetResource::Named {
+            namespace: "analysis".to_string(),
+            name: "track.analysis".to_string(),
+        })
     }
 
     fn store_disk(&self, key: &AnalysisKey, analysis: &TrackAnalysis) {
         let Some(store) = self.store.as_ref() else {
             return;
         };
-        let resource = Self::resource_key(store, key);
+        let resource = match Self::resource_key(store, key) {
+            Ok(resource) => resource,
+            Err(e) => {
+                warn!(%e, "track analysis cache: invalid layout resource");
+                return;
+            }
+        };
         let bytes = match analysis_to_bytes(analysis, &self.fingerprint) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -412,7 +439,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn url_query_distinguishes_tracks_like_the_stream_layer() {
+    fn source_identity_preserves_query_without_using_it_as_discriminator() {
         let a = source_key(&TrackSource::Uri(
             "https://h.example/track/streamhq?id=123".to_string(),
         ))
@@ -421,7 +448,7 @@ mod tests {
             "https://h.example/track/streamhq?id=456".to_string(),
         ))
         .expect("url source is keyable");
-        assert_ne!(a, b, "query carries track identity in the file layer");
+        assert_ne!(a, b, "distinct source URLs remain distinct memory keys");
 
         let again = source_key(&TrackSource::Uri(
             "https://h.example/track/streamhq?id=123".to_string(),
@@ -432,8 +459,6 @@ mod tests {
 
     #[kithara::test]
     fn config_source_shares_the_players_asset_root() {
-        // A Config source must key by the same name-or-query rule the
-        // file layer uses for its asset root.
         let cfg = ResourceConfig::for_src("https://h.example/a.mp3?token=1")
             .expect("valid url")
             .byte_pool(::kithara::bufpool::BytePool::default())
@@ -519,9 +544,9 @@ mod tests {
         let mut cache = cache_over(&store);
         cache.put(key.clone(), full_analysis());
 
-        // The artifact is a resource of the track's scope...
-        let scope = store.scope("track_root");
-        let resource = scope.key(Consts::ANALYSIS_REL_PATH);
+        let scope = TrackAnalysisCache::scope(&store, &key).expect("valid analysis scope");
+        let resource =
+            TrackAnalysisCache::resource_key(&store, &key).expect("valid analysis resource key");
         assert!(
             matches!(
                 store.resource_state(&resource),

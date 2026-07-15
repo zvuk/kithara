@@ -3,13 +3,18 @@
 //! receives every `ResourceKey` evicted under its `asset_root`; keys
 //! under a different `asset_root` are not delivered to it; dropping the
 //! returned guard deregisters, so no further keys arrive.
+
+mod support;
+
 use std::num::NonZeroUsize;
 
 use kithara_assets::{
-    AcquisitionResult, AssetStore, AssetStoreBuilder, ResourceKey, StorageBackend, WriteSide,
+    AcquisitionResult, AssetScope, AssetStore, AssetStoreBuilder, ResourceKey, StorageBackend,
+    WriteSide,
 };
 use kithara_platform::{sync::Arc, time::Duration, tokio::sync::mpsc};
 use kithara_test_utils::kithara;
+use support::{key as test_key, scope as test_scope};
 
 const ROOT_A: &str = "asset_root_a";
 const ROOT_B: &str = "asset_root_b";
@@ -34,11 +39,9 @@ fn write_commit(store: &AssetStore, key: &ResourceKey, data: &[u8]) {
         .expect("test commit must succeed");
 }
 
-/// Commit `count` resources under `root` to force LRU displacement.
-fn fill_root(store: &AssetStore, root: &str, count: usize) -> Vec<ResourceKey> {
-    let scope = store.scope(root);
+fn fill_scope(store: &AssetStore, scope: &AssetScope, count: usize) -> Vec<ResourceKey> {
     let keys: Vec<ResourceKey> = (0..count)
-        .map(|i| scope.key(format!("seg_{i}.m4s")))
+        .map(|i| test_key(scope, format!("seg_{i}.m4s")))
         .collect();
     for key in &keys {
         write_commit(store, key, b"data");
@@ -49,13 +52,14 @@ fn fill_root(store: &AssetStore, root: &str, count: usize) -> Vec<ResourceKey> {
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn evicted_key_under_subscribed_root_is_delivered() {
     let store = ephemeral_store(2);
+    let scope = test_scope(&store, ROOT_A);
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ResourceKey>();
-    let _guard = store.subscribe_eviction(Arc::from(ROOT_A), tx);
+    let _guard = store.subscribe_eviction(Arc::from(scope.asset_root()), tx);
 
     // The 2-slot LRU displaces the oldest key on the third insert; its
     // bytes are gone (ephemeral), so the subscriber must receive it.
-    let keys = fill_root(&store, ROOT_A, 3);
+    let keys = fill_scope(&store, &scope, 3);
 
     let received = rx.try_recv().expect("evicted key must be delivered");
     assert_eq!(received, keys[0]);
@@ -64,12 +68,14 @@ fn evicted_key_under_subscribed_root_is_delivered() {
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn evicted_key_under_other_root_is_not_delivered() {
     let store = ephemeral_store(2);
+    let scope_a = test_scope(&store, ROOT_A);
+    let scope_b = test_scope(&store, ROOT_B);
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ResourceKey>();
-    let _guard = store.subscribe_eviction(Arc::from(ROOT_A), tx);
+    let _guard = store.subscribe_eviction(Arc::from(scope_a.asset_root()), tx);
 
     // Evict under a DIFFERENT root; the ROOT_A subscriber must see nothing.
-    let _keys = fill_root(&store, ROOT_B, 3);
+    let _keys = fill_scope(&store, &scope_b, 3);
 
     assert!(
         rx.try_recv().is_err(),
@@ -80,12 +86,13 @@ fn evicted_key_under_other_root_is_not_delivered() {
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn dropping_guard_deregisters() {
     let store = ephemeral_store(2);
+    let scope = test_scope(&store, ROOT_A);
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ResourceKey>();
-    let guard = store.subscribe_eviction(Arc::from(ROOT_A), tx);
+    let guard = store.subscribe_eviction(Arc::from(scope.asset_root()), tx);
     drop(guard);
 
-    let _keys = fill_root(&store, ROOT_A, 3);
+    let _keys = fill_scope(&store, &scope, 3);
 
     assert!(
         rx.try_recv().is_err(),

@@ -23,7 +23,7 @@ use crate::{
         AvailabilityIndex, DemandIndex, EvictConfig, FlushHub, FlushPolicy,
         ResourceTransactionIndex,
     },
-    layout::{AssetLayout, DefaultLayout, ResourceKey},
+    layout::{AssetLayout, AssetLayoutRegistry, ResourceKey},
 };
 
 /// Private module-level defaults, grouped per ast-grep style rule.
@@ -79,7 +79,7 @@ pub struct StoreOptions {
     /// [`FlushHub::with_worker`] in production for debounced /
     /// coalesced background flushing.
     pub flush_hub: Option<Arc<FlushHub>>,
-    /// On-disk layout policy; `None` keeps [`DefaultLayout`].
+    /// On-disk layout policy; `None` keeps [`crate::DefaultLayout`].
     pub layout: Option<Arc<dyn AssetLayout>>,
     /// Maximum number of assets to keep (soft cap for LRU eviction).
     pub max_assets: Option<usize>,
@@ -143,7 +143,7 @@ struct AssetStoreBuildArgs {
     evict_config: Option<EvictConfig>,
     event_bus: Option<EventBus>,
     flush_hub: Option<Arc<FlushHub>>,
-    layout: Option<Arc<dyn AssetLayout>>,
+    layouts: Option<AssetLayoutRegistry>,
     mem_resource_capacity: Option<usize>,
     pool: BytePool,
 }
@@ -165,7 +165,7 @@ impl AssetStoreBuilderFactory {
         evict_config: Option<EvictConfig>,
         event_bus: Option<EventBus>,
         flush_hub: Option<Arc<FlushHub>>,
-        layout: Option<Arc<dyn AssetLayout>>,
+        layouts: Option<AssetLayoutRegistry>,
         mem_resource_capacity: Option<usize>,
         #[builder(default = BytePool::default())] pool: BytePool,
     ) -> AssetStoreBuildArgs {
@@ -176,7 +176,7 @@ impl AssetStoreBuilderFactory {
             evict_config,
             event_bus,
             flush_hub,
-            layout,
+            layouts,
             mem_resource_capacity,
             pool,
         }
@@ -236,10 +236,7 @@ impl AssetStoreBuildArgs {
         // memory cache's `on_invalidated` hook routes evicted keys into
         // it; the store hands subscribers per `asset_root`.
         let eviction = EvictionRouter::default();
-        let layout = self
-            .layout
-            .clone()
-            .unwrap_or_else(|| Arc::new(DefaultLayout));
+        let layouts = self.layouts.take().unwrap_or_default();
         #[cfg(target_arch = "wasm32")]
         {
             let _ = self.backend.take();
@@ -250,7 +247,7 @@ impl AssetStoreBuildArgs {
                 demand,
                 transactions,
                 eviction,
-                layout,
+                layouts,
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -267,7 +264,7 @@ impl AssetStoreBuildArgs {
                         demand,
                         transactions,
                         eviction,
-                        layout,
+                        layouts,
                     }
                 }
                 StorageBackend::Disk { root } => {
@@ -279,7 +276,7 @@ impl AssetStoreBuildArgs {
                         demand,
                         transactions,
                         eviction,
-                        layout,
+                        layouts,
                         base: Some(base),
                     }
                 }
@@ -511,7 +508,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        AssetResource, AssetWriter, ResourceKey,
+        AssetWriter, ResourceAcquisition, ResourceKey,
         decorator::{Assets, Capabilities},
         resource::{AcquisitionResult, ReadSide, WriteSide},
     };
@@ -519,7 +516,7 @@ mod tests {
     const ROOT: &str = "test_asset";
 
     /// Stream `data` through the Pending writer and commit it.
-    fn write_commit(acq: AssetResource, data: &[u8]) {
+    fn write_commit(acq: ResourceAcquisition, data: &[u8]) {
         let AcquisitionResult::Pending(w) = acq else {
             panic!("expected a Pending writer");
         };
@@ -528,7 +525,7 @@ mod tests {
     }
 
     /// Extract the Pending writer or panic.
-    fn pending(acq: AssetResource) -> AssetWriter {
+    fn pending(acq: ResourceAcquisition) -> AssetWriter {
         match acq {
             AcquisitionResult::Pending(w) => w,
             AcquisitionResult::Ready(_) => panic!("expected a Pending writer"),

@@ -1,7 +1,9 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara::assets::{AssetStoreBuilder, StorageBackend, asset_root_for_url};
+use kithara::assets::{
+    AssetLayout, AssetResource, AssetSource, AssetStoreBuilder, DefaultLayout, StorageBackend,
+};
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 
@@ -10,6 +12,8 @@ struct Input {
     name: Option<Vec<u8>>,
     raw: Vec<u8>,
 }
+
+struct FuzzProtocol;
 
 fuzz_target!(|input: Input| {
     let mut raw = input.raw;
@@ -25,15 +29,28 @@ fuzz_target!(|input: Input| {
         .as_ref()
         .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
 
-    let root = asset_root_for_url(&url, name.as_deref());
+    if url.host().is_none() || url.path_segments().is_none() {
+        return;
+    }
+
+    let source = AssetSource::Remote {
+        url: url.clone(),
+        discriminator: name.clone(),
+    };
+    let layout = DefaultLayout;
+    let root = layout.root(&source);
     assert_eq!(root.len(), 32);
     assert!(root.bytes().all(|b| b.is_ascii_hexdigit()));
 
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope = store.scope(root.clone());
-    let key = scope.key_for(&url);
+    let scope = store
+        .scope::<FuzzProtocol>(&source)
+        .expect("valid remote source");
+    let key = scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("valid remote resource");
     assert!(!key.is_absolute());
 
     let rel = key.rel_path().expect("url key is relative");
@@ -43,12 +60,12 @@ fuzz_target!(|input: Input| {
             .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
     );
 
-    if url.host().is_some() {
-        let mut without_query = url.clone();
-        without_query.set_fragment(None);
-        without_query.set_query(None);
-
-        let root_without_query = asset_root_for_url(&without_query, name.as_deref());
-        assert_eq!(root, root_without_query);
-    }
+    let mut without_query = url;
+    without_query.set_fragment(None);
+    without_query.set_query(None);
+    let source_without_query = AssetSource::Remote {
+        url: without_query,
+        discriminator: name,
+    };
+    assert_eq!(root, layout.root(&source_without_query));
 });

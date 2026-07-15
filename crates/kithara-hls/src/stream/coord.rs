@@ -868,7 +868,7 @@ mod tests {
     use std::sync::OnceLock;
 
     use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
     use kithara_events::{AbrMode, Event, EventBus, VariantIndex};
     use kithara_platform::sync::{Arc, ThreadGate};
     use kithara_stream::{AudioCodec, ContainerFormat, PlayheadWrite, SeekControl};
@@ -910,7 +910,14 @@ mod tests {
             bus: bus.clone(),
             prefetch_budget: 1,
             master_cancel: cancel.clone(),
-            scope: store.scope("coord-test"),
+            scope: store
+                .scope::<crate::Hls>(&AssetSource::Remote {
+                    url: "https://example.com/master.m3u8"
+                        .parse()
+                        .expect("master url"),
+                    discriminator: Some("coord-test".to_owned()),
+                })
+                .expect("coord asset scope"),
             seek_epoch: 0,
             look_ahead_bytes: None,
             look_ahead_segments: None,
@@ -949,7 +956,10 @@ mod tests {
                     url: "https://example.com/v0-seg0.m4s".parse().expect("url"),
                     resource_id: ctx
                         .scope
-                        .key_for(&"https://example.com/v0-seg0.m4s".parse().expect("url")),
+                        .key(&AssetResource::Url(
+                            "https://example.com/v0-seg0.m4s".parse().expect("url"),
+                        ))
+                        .expect("segment key"),
                     state: SegmentSlotState::missing(),
                     size: SegmentSize::seed(100),
                     content: SegmentContent::Plain,
@@ -967,7 +977,10 @@ mod tests {
                     url: "https://example.com/v1-seg0.m4s".parse().expect("url"),
                     resource_id: ctx
                         .scope
-                        .key_for(&"https://example.com/v1-seg0.m4s".parse().expect("url")),
+                        .key(&AssetResource::Url(
+                            "https://example.com/v1-seg0.m4s".parse().expect("url"),
+                        ))
+                        .expect("segment key"),
                     state: SegmentSlotState::missing(),
                     size: SegmentSize::seed(100),
                     content: SegmentContent::Plain,

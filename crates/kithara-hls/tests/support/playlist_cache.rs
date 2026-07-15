@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use axum::{Router, routing::get};
 use bytes::Bytes;
 use kithara_assets::{
-    AcquisitionResult, AssetResourceState, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide,
+    AcquisitionResult, AssetResource, AssetResourceState, AssetScope, AssetSource, AssetStore,
+    AssetStoreBuilder, StorageBackend, WriteSide,
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -93,6 +94,15 @@ fn test_cache(scope: AssetScope) -> PlaylistCache {
     PlaylistCache::new(scope, handle, kithara_bufpool::BytePool::default())
 }
 
+fn test_scope(store: &AssetStore, url: &Url, discriminator: &str) -> AssetScope {
+    store
+        .scope::<kithara_hls::Hls>(&AssetSource::Remote {
+            url: url.clone(),
+            discriminator: Some(discriminator.to_owned()),
+        })
+        .expect("test asset scope")
+}
+
 fn commit(scope: &AssetScope, key: &ResourceKey, bytes: &[u8]) {
     let AcquisitionResult::Pending(writer) =
         scope.store().acquire_resource(key, None).expect("acquire")
@@ -113,8 +123,10 @@ async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
         })
         .cancel(CancelToken::never())
         .build();
-    let scope = store.scope("corrupt-playlist");
-    let key = scope.key_for(&url);
+    let scope = test_scope(&store, &url, "corrupt-playlist");
+    let key = scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("playlist key");
     let corrupt = b"\x1b\xbf\x01\x00brotli bytes";
     commit(&scope, &key, corrupt);
     assert!(scope.store().contains_range(&key, 0..corrupt.len() as u64));
@@ -128,7 +140,7 @@ async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
         })
         .cancel(CancelToken::never())
         .build();
-    let scope = store.scope("corrupt-playlist");
+    let scope = test_scope(&store, &url, "corrupt-playlist");
     assert!(scope.store().contains_range(&key, 0..corrupt.len() as u64));
 
     let parsed = test_cache(scope.clone())
@@ -148,7 +160,7 @@ async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
         })
         .cancel(CancelToken::never())
         .build();
-    let parsed_again = test_cache(reopened.scope("corrupt-playlist"))
+    let parsed_again = test_cache(test_scope(&reopened, &url, "corrupt-playlist"))
         .master_playlist(&key, &url)
         .await
         .expect("replacement bytes must be cached and parseable");
@@ -166,8 +178,10 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
         })
         .cancel(CancelToken::never())
         .build();
-    let scope = store.scope("empty-playlist");
-    let key = scope.key_for(&url);
+    let scope = test_scope(&store, &url, "empty-playlist");
+    let key = scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("playlist key");
     commit(&scope, &key, b"");
     store.checkpoint().expect("persist empty index entry");
     drop(scope);
@@ -179,7 +193,7 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
         })
         .cancel(CancelToken::never())
         .build();
-    let scope = store.scope("empty-playlist");
+    let scope = test_scope(&store, &url, "empty-playlist");
     let parsed = test_cache(scope.clone())
         .master_playlist(&key, &url)
         .await
@@ -197,7 +211,7 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
         })
         .cancel(CancelToken::never())
         .build();
-    test_cache(reopened.scope("empty-playlist"))
+    test_cache(test_scope(&reopened, &url, "empty-playlist"))
         .master_playlist(&key, &url)
         .await
         .expect("replacement bytes must survive reopen");
@@ -212,8 +226,10 @@ async fn concurrent_caches_share_one_playlist_repair() {
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
-    let scope = store.scope("concurrent-playlist-repair");
-    let key = scope.key_for(&url);
+    let scope = test_scope(&store, &url, "concurrent-playlist-repair");
+    let key = scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("playlist key");
     commit(&scope, &key, b"\x1b\xbf\x01\x00cached brotli bytes");
 
     let first_cache = test_cache(scope.clone());
@@ -252,8 +268,10 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
         })
         .cancel(CancelToken::never())
         .build();
-    let scope = store.scope("failed-playlist-refetch");
-    let key = scope.key_for(&url);
+    let scope = test_scope(&store, &url, "failed-playlist-refetch");
+    let key = scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("playlist key");
     let corrupt = b"\x1b\xbf\x01\x00cached brotli bytes";
     commit(&scope, &key, corrupt);
     store.checkpoint().expect("persist poisoned index");
@@ -266,7 +284,7 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
         })
         .cancel(CancelToken::never())
         .build();
-    let scope = store.scope("failed-playlist-refetch");
+    let scope = test_scope(&store, &url, "failed-playlist-refetch");
     let error = test_cache(scope.clone())
         .master_playlist(&key, &url)
         .await
@@ -303,8 +321,10 @@ async fn invalid_network_playlist_is_not_cached() {
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
-    let scope = store.scope("invalid-network-playlist");
-    let key = scope.key_for(&url);
+    let scope = test_scope(&store, &url, "invalid-network-playlist");
+    let key = scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("playlist key");
 
     let err = test_cache(scope.clone())
         .master_playlist(&key, &url)

@@ -1,8 +1,7 @@
 use std::fmt;
 
-use kithara::assets::AssetLayout;
+use kithara::assets::{AssetLayout, AssetResource, AssetSource, DefaultLayout};
 use kithara_platform::sync::Arc;
-use url::Url;
 
 use crate::layout::FfiAssetLayout;
 
@@ -17,8 +16,15 @@ impl fmt::Debug for ForeignLayout {
 }
 
 impl AssetLayout for ForeignLayout {
-    fn rel_path(&self, url: &Url) -> String {
-        self.0.rel_path(url.as_str().to_string())
+    fn root(&self, source: &AssetSource) -> String {
+        DefaultLayout.root(source)
+    }
+
+    fn path(&self, resource: &AssetResource) -> String {
+        match resource {
+            AssetResource::Url(url) => self.0.rel_path(url.as_str().to_string()),
+            resource => DefaultLayout.path(resource),
+        }
     }
 }
 
@@ -33,9 +39,11 @@ pub(crate) fn resolve_layout(
 #[cfg(test)]
 mod tests {
     use kithara::assets::{
-        AcquisitionResult, AssetResource, AssetStoreBuilder, AssetsError, StorageBackend, WriteSide,
+        AcquisitionResult, AssetLayoutRegistry, AssetStoreBuilder, AssetsError,
+        ResourceAcquisition, StorageBackend, WriteSide,
     };
     use tempfile::tempdir;
+    use url::Url;
 
     use super::*;
 
@@ -64,12 +72,12 @@ mod tests {
         let layout =
             resolve_layout(Some(&delegate(EchoLayout))).expect("delegate resolves to Some");
         let u = url("https://zvuk.com/42/stream/hq/seg7.mp4");
-        let rel = layout.rel_path(&u);
+        let rel = layout.path(&AssetResource::Url(u));
         assert_eq!(rel, "https://zvuk.com/42/stream/hq/seg7.mp4");
     }
 
     /// Stream `data` through the Pending writer and commit it.
-    fn write_commit(acq: AssetResource, data: &[u8]) {
+    fn write_commit(acq: ResourceAcquisition, data: &[u8]) {
         let AcquisitionResult::Pending(w) = acq else {
             panic!("expected a Pending writer");
         };
@@ -94,18 +102,30 @@ mod tests {
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
-            .layout(layout)
+            .layouts(AssetLayoutRegistry::new(layout))
             .build();
-        let scope = store.scope("root");
 
         let u = url("https://example.com/audio.mp3");
-        let key = scope.key_for(&u);
+        let source = AssetSource::Remote {
+            url: u.clone(),
+            discriminator: Some("root".to_string()),
+        };
+        let scope = store
+            .scope::<LeafFromUrl>(&source)
+            .expect("valid foreign scope");
+        let key = scope
+            .key(&AssetResource::Url(u))
+            .expect("valid foreign key");
         write_commit(
             scope.store().acquire_resource(&key, None).expect("acquire"),
             b"payload",
         );
 
-        let expected = dir.path().join("root").join("custom").join("audio.mp3");
+        let expected = dir
+            .path()
+            .join(scope.asset_root())
+            .join("custom")
+            .join("audio.mp3");
         assert!(
             expected.exists(),
             "foreign layout must dictate the real on-disk path: {}",
@@ -133,16 +153,20 @@ mod tests {
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
-            .layout(layout)
+            .layouts(AssetLayoutRegistry::new(layout))
             .build();
-        let scope = store.scope("root");
 
         let u = url("https://example.com/audio.mp3");
-        let key = scope.key_for(&u);
+        let source = AssetSource::Remote {
+            url: u.clone(),
+            discriminator: Some("root".to_string()),
+        };
+        let scope = store
+            .scope::<HostileForeign>(&source)
+            .expect("valid foreign scope");
         let err = scope
-            .store()
-            .acquire_resource(&key, None)
-            .expect_err("hostile rel_path must be rejected");
+            .key(&AssetResource::Url(u))
+            .expect_err("hostile path must be rejected");
         assert!(
             matches!(err, AssetsError::InvalidKey),
             "expected InvalidKey, got {err:?}"

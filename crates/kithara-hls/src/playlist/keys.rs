@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use kithara_assets::{AssetScope, ReadSide, ResourceKey};
+use kithara_assets::{AssetResource, AssetScope, ReadSide, ResourceKey};
 use kithara_drm::{DecryptContext, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
 use kithara_events::{
     DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent, KeyFailureStage, KeySource,
@@ -28,7 +28,7 @@ pub struct KeyStore {
     /// `get_cached_key` reads from here under a synchronous segment
     /// fetch after prefetch, so that hot path stays zero-I/O. The final key is
     /// persisted to the [`AssetStore`] by [`Self::get_raw_key`] under
-    /// the same `ResourceKey::from_url(key_url)` as plain HLS-AES keys
+    /// the same layout-derived URL resource key as plain HLS-AES keys
     /// — re-opening the same track in a later session resolves through
     /// disk cache without re-hitting the key endpoint. The cached
     /// **plaintext** is deterministic per track/quality and safe to
@@ -107,7 +107,7 @@ impl KeyStore {
             return Ok(cached);
         }
 
-        let cache_key = self.scope.key_for(url);
+        let cache_key = self.scope.key(&AssetResource::Url(url.clone()))?;
         let res = self
             .scope
             .store()
@@ -178,7 +178,7 @@ impl KeyStore {
             return Ok(cached);
         }
 
-        let cache_key = self.scope.key_for(url);
+        let cache_key = self.scope.key(&AssetResource::Url(url.clone()))?;
         let Some(rule) = self
             .key_registry
             .as_ref()
@@ -592,7 +592,8 @@ mod tests {
     use axum::{Router, body::Body, routing::get};
     use bytes::Bytes;
     use kithara_assets::{
-        AcquisitionResult, AssetStore, AssetStoreBuilder, StorageBackend, WriteSide,
+        AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, AssetStoreBuilder,
+        StorageBackend, WriteSide,
     };
     use kithara_drm::{
         DrmError, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule, KeyRequest,
@@ -700,6 +701,15 @@ mod tests {
         make_store_with_assets(bus, cancel, registry, &store)
     }
 
+    fn test_scope(store: &AssetStore) -> AssetScope {
+        store
+            .scope::<crate::Hls>(&AssetSource::Remote {
+                url: Url::parse("https://example.com/master.m3u8").expect("master url"),
+                discriminator: Some("key-test".to_owned()),
+            })
+            .expect("key asset scope")
+    }
+
     fn make_store_with_assets(
         bus: &EventBus,
         network_cancel: CancelToken,
@@ -715,7 +725,7 @@ mod tests {
             .with_bus(bus.clone());
         KeyStore::new(
             handle,
-            store.scope("key-test"),
+            test_scope(store),
             bus.clone(),
             None,
             registry,
@@ -724,7 +734,9 @@ mod tests {
     }
 
     fn commit_key(store: &AssetStore, url: &Url, bytes: &[u8]) {
-        let key = store.scope("key-test").key_for(url);
+        let key = test_scope(store)
+            .key(&AssetResource::Url(url.clone()))
+            .expect("key resource path");
         let AcquisitionResult::Pending(writer) =
             store.acquire_resource(&key, None).expect("acquire key")
         else {

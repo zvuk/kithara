@@ -13,6 +13,8 @@ use kithara::{
 };
 use kithara_integration_tests::temp_dir;
 
+use super::support::{AssetScopeTestKeyExt, AssetStoreTestScopeExt, literal_layouts};
+
 /// Helper to read bytes from resource into a pooled buffer
 fn read_bytes<R: ReadSide>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     let mut buf = BytePool::default().get_with(|b| b.resize(len, 0));
@@ -63,8 +65,9 @@ fn asset_scope_with_root(
             max_assets: None,
             max_bytes: None,
         })
+        .layouts(literal_layouts())
         .build()
-        .scope(asset_root)
+        .test_scope(asset_root)
 }
 
 #[kithara::test(
@@ -84,7 +87,7 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     let dir = temp_dir.path().to_path_buf();
     let scope = asset_scope_with_root(&temp_dir, asset_root);
 
-    let key = scope.key(rel_path);
+    let key = scope.test_key(rel_path);
     let payload: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
 
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
@@ -117,7 +120,7 @@ fn atomic_resource_persistence(
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
     let scope = asset_scope_with_root(&temp_dir, asset_root);
-    let key = scope.key(rel_path);
+    let key = scope.test_key(rel_path);
 
     {
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
@@ -141,7 +144,7 @@ fn streaming_resource_persistence(
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
     let scope = asset_scope_with_root(&temp_dir, asset_root);
-    let key = scope.key(rel_path);
+    let key = scope.test_key(rel_path);
 
     {
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
@@ -159,8 +162,8 @@ fn streaming_resource_persistence(
 fn mixed_resource_persistence_across_reopen(temp_dir: kithara_integration_tests::TestTempDir) {
     let scope = asset_scope_with_root(&temp_dir, "mixed-asset");
 
-    let atomic_key = scope.key("meta/index.json");
-    let streaming_key = scope.key("media/data.bin");
+    let atomic_key = scope.test_key("meta/index.json");
+    let streaming_key = scope.test_key("media/data.bin");
 
     let atomic_payload = b"{\"idx\":1}".to_vec();
     let streaming_payload = b"stream-bytes-123".to_vec();
@@ -208,7 +211,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
 ) {
     let scope = asset_scope_with_root(&temp_dir, "concurrent-asset");
 
-    let key = scope.key("media/concurrent.bin");
+    let key = scope.test_key("media/concurrent.bin");
     let payload: Vec<u8> = b"concurrent streaming data".to_vec();
     let payload_len = payload.len() as u64;
     let writer_res = pending(scope.store().acquire_resource(&key, None).unwrap());
@@ -258,7 +261,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     let dir = temp_dir.path().to_path_buf();
     let scope = asset_scope_with_root(&temp_dir, asset_root);
 
-    let playlist_key = scope.key("master.m3u8");
+    let playlist_key = scope.test_key("master.m3u8");
     let playlist_bytes = b"#EXTM3U\n#EXT-X-VERSION:7\n".to_vec();
 
     let playlist = pending(scope.store().acquire_resource(&playlist_key, None).unwrap());
@@ -270,7 +273,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
 
     let mut segments = Vec::new();
     for i in 0..segment_count.min(2) {
-        let seg_key = scope.key(format!("segments/{:04}.m4s", i + 1));
+        let seg_key = scope.test_key(format!("segments/{:04}.m4s", i + 1));
 
         let seg = pending(scope.store().acquire_resource(&seg_key, None).unwrap());
         let seg_reader = seg.reader();
@@ -329,7 +332,7 @@ fn atomic_resource_roundtrip_with_different_paths(
 ) {
     let scope = asset_scope_with_root(&temp_dir, asset_root);
 
-    let key = scope.key(rel_path);
+    let key = scope.test_key(rel_path);
     let payload = b"test data for atomic resource".to_vec();
 
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
@@ -354,7 +357,7 @@ fn streaming_resource_write_read_at_different_positions(
 ) {
     let scope = asset_scope_with_root(&temp_dir, "streaming-test");
 
-    let key = scope.key("data.bin");
+    let key = scope.test_key("data.bin");
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
     let reader = writer.reader();
 
@@ -387,7 +390,7 @@ fn multiple_resources_same_asset_root_independently_accessible(
             } else {
                 format!("subdir/file{}.bin", i)
             };
-            scope.key(rel_path)
+            scope.test_key(rel_path)
         })
         .collect();
 
@@ -424,7 +427,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
 
     for (i, asset_root) in asset_roots.iter().enumerate() {
         let scope = asset_scope_with_root(&temp_dir, asset_root);
-        let key = scope.key("data.bin");
+        let key = scope.test_key("data.bin");
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         writer.write_at(0, payloads[i]).unwrap();
         writer.commit(Some(payloads[i].len() as u64)).unwrap();
@@ -455,7 +458,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
     );
     {
         let scope = asset_scope_with_root(&temp_dir, "asset-alpha");
-        let key = scope.key("data.bin");
+        let key = scope.test_key("data.bin");
         let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = BytePool::default().get();
         res.read_into(&mut buf).unwrap();
@@ -468,7 +471,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
     );
     {
         let scope = asset_scope_with_root(&temp_dir, "asset-gamma");
-        let key = scope.key("data.bin");
+        let key = scope.test_key("data.bin");
         let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = BytePool::default().get();
         res.read_into(&mut buf).unwrap();
@@ -489,7 +492,7 @@ fn delete_assets_sequentially(temp_dir: kithara_integration_tests::TestTempDir) 
 
     for (i, asset_root) in asset_roots.iter().enumerate() {
         let scope = asset_scope_with_root(&temp_dir, asset_root);
-        let key = scope.key(format!("file{}.bin", i));
+        let key = scope.test_key(format!("file{}.bin", i));
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         let content = format!("content {}", i).into_bytes();
         writer.write_at(0, &content).unwrap();
@@ -548,7 +551,7 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_integration_tests::T
 
     {
         let scope = asset_scope_with_root(&temp_dir, "existing-asset");
-        let key = scope.key("data.bin");
+        let key = scope.test_key("data.bin");
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         let data: &[u8] = b"existing data";
         writer.write_at(0, data).unwrap();
@@ -567,7 +570,7 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_integration_tests::T
     );
     {
         let scope = asset_scope_with_root(&temp_dir, "existing-asset");
-        let key = scope.key("data.bin");
+        let key = scope.test_key("data.bin");
         let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = BytePool::default().get();
         res.read_into(&mut buf).unwrap();

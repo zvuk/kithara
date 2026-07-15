@@ -1,19 +1,12 @@
 use std::fmt;
 
-use url::Url;
+use super::{AssetResource, AssetSource};
 
-use super::asset_root_for_url;
-
-/// On-disk layout policy carried by an [`AssetScope`](crate::AssetScope):
-/// maps a resource URL to a relative path inside the asset's directory.
+/// Policy that owns every cache-relative asset and resource path.
 pub trait AssetLayout: fmt::Debug + Send + Sync {
-    /// Derive the on-disk asset directory name for a source URL.
-    #[must_use]
-    fn asset_root(&self, url: &Url, name: Option<&str>) -> String {
-        asset_root_for_url(url, name)
-    }
+    /// Return the single cache-root component for `source`.
+    fn root(&self, source: &AssetSource) -> String;
 
-    /// Derive the relative path for the resource at `url` inside the scope's asset root.
-    #[must_use]
-    fn rel_path(&self, url: &Url) -> String;
+    /// Return the relative path for `resource` inside an asset root.
+    fn path(&self, resource: &AssetResource) -> String;
 }

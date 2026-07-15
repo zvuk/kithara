@@ -5,12 +5,15 @@
 //! - `RequestIdentity` differentiates inflight handles within one store.
 //! - Distinct `AssetStore` instances stay isolated by construction.
 
+mod support;
+
 use kithara_assets::{
     AcquisitionResult, AssetStoreBuilder, ReadSide, RequestIdentity, StorageBackend, WriteSide,
 };
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
+use support::{key as test_key, scope as test_scope};
 use tempfile::tempdir;
 
 /// Extract the Pending writer or panic.
@@ -26,8 +29,8 @@ fn one_store_same_url_same_identity_shares_inner() {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope = store.scope("asset_a");
-    let key = scope.key("audio.mp3");
+    let scope = test_scope(&store, "asset_a");
+    let key = test_key(&scope, "audio.mp3");
     let id = RequestIdentity::from_headers([("authorization", b"Bearer x".as_slice())]);
 
     let w = pending(scope.store().acquire_resource(&key, Some(&id)).unwrap());
@@ -50,8 +53,8 @@ fn one_store_same_url_different_identity_yields_different_inner() {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope = store.scope("asset_a");
-    let key = scope.key("audio.mp3");
+    let scope = test_scope(&store, "asset_a");
+    let key = test_key(&scope, "audio.mp3");
     let id1 = RequestIdentity::from_headers([("authorization", b"Bearer a".as_slice())]);
     let id2 = RequestIdentity::from_headers([("authorization", b"Bearer b".as_slice())]);
 
@@ -77,18 +80,16 @@ fn one_store_two_asset_roots_isolated() {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope_a = store.scope("root_a");
-    let scope_b = store.scope("root_b");
+    let scope_a = test_scope(&store, "root_a");
+    let scope_b = test_scope(&store, "root_b");
+    let key_a = test_key(&scope_a, "audio.mp3");
+    let key_b = test_key(&scope_b, "audio.mp3");
     let id = RequestIdentity::empty();
 
-    let w_a = pending(
-        store
-            .acquire_resource(&scope_a.key("audio.mp3"), Some(&id))
-            .unwrap(),
-    );
+    let w_a = pending(store.acquire_resource(&key_a, Some(&id)).unwrap());
     w_a.write_at(0, b"hello").unwrap();
 
-    match store.open_resource(&scope_b.key("audio.mp3"), Some(&id)) {
+    match store.open_resource(&key_b, Some(&id)) {
         Err(_) => {}
         Ok(r_b) => {
             let mut buf = [0u8; 5];
@@ -108,18 +109,16 @@ fn two_stores_isolated_even_with_same_identity() {
     let store_b = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope_a = store_a.scope("root");
-    let scope_b = store_b.scope("root");
+    let scope_a = test_scope(&store_a, "root");
+    let scope_b = test_scope(&store_b, "root");
+    let key_a = test_key(&scope_a, "audio.mp3");
+    let key_b = test_key(&scope_b, "audio.mp3");
     let id = RequestIdentity::empty();
 
-    let w_a = pending(
-        store_a
-            .acquire_resource(&scope_a.key("audio.mp3"), Some(&id))
-            .unwrap(),
-    );
+    let w_a = pending(store_a.acquire_resource(&key_a, Some(&id)).unwrap());
     w_a.write_at(0, b"hello").unwrap();
 
-    match store_b.open_resource(&scope_b.key("audio.mp3"), Some(&id)) {
+    match store_b.open_resource(&key_b, Some(&id)) {
         Err(_) => {}
         Ok(r_b) => {
             let mut buf = [0u8; 5];
@@ -139,8 +138,8 @@ fn drop_first_leaves_second_alive() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope("root");
-    let key = scope.key("audio.mp3");
+    let scope = test_scope(&store, "root");
+    let key = test_key(&scope, "audio.mp3");
     let id = RequestIdentity::empty();
 
     let w1 = pending(scope.store().acquire_resource(&key, Some(&id)).unwrap());
@@ -170,8 +169,8 @@ fn shared_inner_propagates_commit_and_final_len() {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope = store.scope("asset_a");
-    let key = scope.key("audio.mp3");
+    let scope = test_scope(&store, "asset_a");
+    let key = test_key(&scope, "audio.mp3");
 
     let w1 = pending(scope.store().acquire_resource(&key, None).unwrap());
     let r2 = w1.reader();
