@@ -17,8 +17,8 @@ use rangemap::RangeSet;
 
 use crate::{
     error::AssetsResult,
-    flush::{FlushHub, Flushable},
-    key::ResourceKey,
+    index::persistence::{FlushHub, Flushable},
+    layout::ResourceKey,
 };
 
 /// Byte-level availability state for a single resource.

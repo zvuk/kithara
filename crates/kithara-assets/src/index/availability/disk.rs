@@ -12,8 +12,8 @@ use kithara_storage::{Atomic, MmapDriver, StorageError};
 use super::core::{Availability, AvailabilityIndex, InnerIndex};
 use crate::{
     error::{AssetsError, AssetsResult},
-    index::{
-        persist,
+    index::persistence::{
+        init_atomic, open_existing,
         schema::{AssetAvailabilityFile, AvailabilityFile, ResourceAvailabilityFile},
     },
 };
@@ -35,7 +35,7 @@ impl AvailabilityIndex {
     /// on first flush.
     pub(crate) fn enable_persistence(&self, path: PathBuf, cancel: CancelToken) {
         let opened = if path.exists() {
-            match persist::open_existing(&path, &cancel) {
+            match open_existing(&path, &cancel) {
                 Ok(res) => {
                     let atomic = Atomic::new(res);
                     let _ = self.load_from(&atomic);
@@ -122,7 +122,7 @@ impl InnerIndex {
         let Some(p) = self.persist.get() else {
             return Ok(());
         };
-        let atomic = persist::init_atomic(&p.res, &p.path, &p.cancel)?;
+        let atomic = init_atomic(&p.res, &p.path, &p.cancel)?;
         write_aggregate(self, atomic, durable)?;
         Ok(())
     }

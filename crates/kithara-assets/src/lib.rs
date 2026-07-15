@@ -5,53 +5,35 @@
 //! The public contract is the unified [`AssetStore`] type. See the crate
 //! `CONTEXT.md` for key mapping, lease/pin semantics, and the global index.
 
-mod acquisition;
-mod base;
-pub(crate) mod cache;
-mod deleter;
-mod disk_store;
+mod backend;
+mod decorator;
 mod error;
-mod evict;
-mod eviction;
-mod flush;
-mod identity;
 pub mod index;
-mod key;
 mod layout;
-mod lease;
-mod mem_store;
-mod naming;
-mod process;
 mod resource;
-mod scope;
-mod state;
 mod store;
-mod unified;
 
-pub use acquisition::{AcquisitionResult, RawWriteHandle, ReadSide, WriteSide};
-pub use base::Assets;
-pub use cache::{CachedAssets, CachedReader, CachedWriter};
 #[cfg(not(target_arch = "wasm32"))]
-pub use disk_store::DiskAssetStore;
+pub use backend::DiskAssetStore;
+pub use backend::MemAssetStore;
+pub use decorator::{
+    Assets, CachedAssets, CachedReader, CachedWriter, ChunkSink, EvictAssets, EvictionSubscription,
+    LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter, ProcessCtx, ProcessedReader,
+    ProcessedWriter, ProcessingAssets, ResourceProcessor,
+};
 pub use error::{AssetsError, AssetsResult};
-pub use evict::EvictAssets;
-pub use eviction::EvictionSubscription;
-pub use flush::{FlushHub, FlushPolicy};
-pub use identity::RequestIdentity;
-pub use index::{DemandLease, EvictConfig, ProducerHandle};
-pub use key::{ResourceKey, asset_root_for_url};
+pub use index::{
+    DemandLease, EvictConfig, ProducerHandle,
+    persistence::{FlushHub, FlushPolicy},
+};
 #[doc(hidden)]
 pub use kithara_bufpool::BytePool;
-pub use layout::{AssetLayout, DefaultLayout};
-pub use lease::{LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter};
-pub use mem_store::MemAssetStore;
-pub use process::{
-    ChunkSink, ProcessCtx, ProcessedReader, ProcessedWriter, ProcessingAssets, ResourceProcessor,
+pub use layout::{AssetLayout, AssetScope, DefaultLayout, ResourceKey, asset_root_for_url};
+pub use resource::{
+    AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RawWriteHandle, ReadSide,
+    RequestIdentity, WriteSide,
 };
-pub use resource::{BaseReader, BaseWriter};
-pub use scope::AssetScope;
-pub use state::AssetResourceState;
 pub use store::{
-    AssetReader, AssetResource, AssetStoreBuilder, AssetWriter, StorageBackend, StoreOptions,
+    AssetReader, AssetResource, AssetStore, AssetStoreBuilder, AssetWriter, StorageBackend,
+    StoreOptions,
 };
-pub use unified::AssetStore;

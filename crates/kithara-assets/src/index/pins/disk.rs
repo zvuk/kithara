@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::BTreeMap,
     fs,
+    num::NonZeroU32,
     path::PathBuf,
     sync::{
         OnceLock,
@@ -9,38 +11,36 @@ use std::{
     },
 };
 
+use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-};
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
-use super::core::{LruIndex, LruInner, LruState};
+use super::core::{PinsIndex, PinsInner};
 use crate::{
     error::{AssetsError, AssetsResult},
-    index::persistence::{init_atomic, open_existing, schema::LruIndexFile},
+    index::persistence::{init_atomic, open_existing, schema::PinsIndexFile},
 };
 
-pub(super) struct LruPersist {
+pub(super) struct PinsPersist {
     cancel: CancelToken,
     res: OnceLock<Atomic<MmapDriver>>,
     path: PathBuf,
 }
 
-impl LruIndex {
+impl PinsIndex {
     /// Construct a disk-backed index rooted at `path`.
     ///
-    /// If the file already exists and is non-empty it is opened and
+    /// If the file already exists and is non-empty, it is opened and
     /// hydrated synchronously. Otherwise the disk file is **not**
-    /// materialised — it appears on the first [`LruIndex::touch`]
-    /// or [`LruIndex::remove`].
-    pub(crate) fn with_persist_at(path: PathBuf, cancel: CancelToken, pool: &BytePool) -> Self {
+    /// materialised — it appears the first time [`PinsIndex::add`]
+    /// or [`PinsIndex::remove`] flush a real change.
+    pub fn with_persist_at(path: PathBuf, cancel: CancelToken, pool: &BytePool) -> Self {
         let (initial, opened) = hydrate_existing(&path, &cancel, pool);
         Self {
-            inner: Arc::new(LruInner {
-                state: Mutex::new(initial),
-                persist: Some(LruPersist {
+            inner: Arc::new(PinsInner {
+                pins: initial,
+                persist: Some(PinsPersist {
                     path,
                     cancel,
                     res: opened.map_or_else(OnceLock::new, |a| {
@@ -57,15 +57,15 @@ impl LruIndex {
     }
 }
 
-impl LruInner {
+impl PinsInner {
     pub(super) fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
         let Some(persist) = self.persist.as_ref() else {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
-        let snapshot = self.state.lock().clone();
+        let snapshot: Vec<String> = self.pins.iter().map(|r| r.key().clone()).collect();
         let atomic = init_atomic(&persist.res, &persist.path, &persist.cancel)?;
-        write_state(atomic, &snapshot, durable)?;
+        write_pins(atomic, &snapshot, durable)?;
         self.dirty.store(false, Ordering::Release);
         Ok(())
     }
@@ -75,48 +75,65 @@ fn hydrate_existing(
     path: &std::path::Path,
     cancel: &CancelToken,
     pool: &BytePool,
-) -> (LruState, Option<Atomic<MmapDriver>>) {
+) -> (DashMap<String, NonZeroU32>, Option<Atomic<MmapDriver>>) {
     let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
     if !nonempty {
-        return (LruState::default(), None);
+        return (DashMap::new(), None);
     }
     match open_existing(path, cancel) {
         Ok(res) => {
             let atomic = Atomic::new(res);
-            let initial = read_state(&atomic, pool).unwrap_or_default();
+            let initial = read_pins(&atomic, pool).unwrap_or_default();
             (initial, Some(atomic))
         }
         Err(e) => {
-            tracing::debug!("open existing lru.bin failed: {e}");
-            (LruState::default(), None)
+            tracing::debug!("open existing pins.bin failed: {e}");
+            (DashMap::new(), None)
         }
     }
 }
 
-fn read_state(res: &Atomic<MmapDriver>, pool: &BytePool) -> AssetsResult<LruState> {
+fn read_pins(
+    res: &Atomic<MmapDriver>,
+    pool: &BytePool,
+) -> AssetsResult<DashMap<String, NonZeroU32>> {
     let mut buf = pool.get();
     let n = res.read_into(&mut buf)?;
 
     if n == 0 {
-        return Ok(LruState::default());
+        return Ok(DashMap::new());
     }
 
-    let file = match rkyv::access::<crate::index::schema::ArchivedLruIndexFile, rkyv::rancor::Error>(
-        &buf[..n],
-    ) {
-        Ok(archived) => rkyv::deserialize::<LruIndexFile, rkyv::rancor::Error>(archived)
-            .expect("BUG: LRU archived → owned deserialize"),
-        Err(e) => {
-            tracing::debug!("Failed to deserialize lru index: {}", e);
-            return Ok(LruState::default());
-        }
-    };
+    let archived =
+        match rkyv::access::<crate::index::schema::ArchivedPinsIndexFile, rkyv::rancor::Error>(
+            &buf[..n],
+        ) {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::debug!("Failed to validate pins index: {}", e);
+                return Ok(DashMap::new());
+            }
+        };
 
-    Ok(LruState::from(file))
+    let pinned = archived
+        .pinned
+        .iter()
+        .filter(|(_, v)| **v)
+        .map(|(k, _)| (k.as_str().to_string(), NonZeroU32::MIN))
+        .collect();
+    Ok(pinned)
 }
 
-fn write_state(res: &Atomic<MmapDriver>, state: &LruState, durable: bool) -> AssetsResult<()> {
-    let file = LruIndexFile::from(state);
+fn write_pins(res: &Atomic<MmapDriver>, pins: &[String], durable: bool) -> AssetsResult<()> {
+    let mut map = BTreeMap::new();
+    for pin in pins {
+        map.insert(pin.clone(), true);
+    }
+    let file = PinsIndexFile {
+        version: 1,
+        pinned: map,
+    };
+
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
     if durable {

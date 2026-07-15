@@ -13,7 +13,7 @@ use kithara_platform::sync::{Arc, Mutex};
 use crate::index::schema::{LruEntryFile, LruIndexFile};
 use crate::{
     error::AssetsResult,
-    flush::{FlushHub, Flushable, flush_sync},
+    index::persistence::{FlushHub, Flushable, flush_sync},
 };
 
 /// Eviction configuration for an assets store decorator.

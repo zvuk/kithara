@@ -8,7 +8,7 @@ use kithara_platform::{
     sync::{Arc, Mutex, Notify},
 };
 
-use crate::key::ResourceKey;
+use crate::layout::ResourceKey;
 
 /// One consumer's contribution to the aggregate demand. `read_pos` is
 /// shared with the consumer (advances seen without an update call);
@@ -277,7 +277,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::key::ResourceKey;
+    use crate::layout::ResourceKey;
 
     fn entry(read_pos: u64, look_ahead: Option<u64>) -> Arc<DemandEntry> {
         Arc::new(DemandEntry::new(
