@@ -23,7 +23,7 @@ pub use decorator::{
 };
 pub use error::{AssetsError, AssetsResult};
 pub use index::{
-    DemandLease, EvictConfig, ProducerHandle,
+    DemandLease, ProducerHandle,
     persistence::{FlushHub, FlushPolicy},
 };
 #[doc(hidden)]

@@ -8,7 +8,7 @@ use std::{
 
 use clap::Parser;
 use kithara::{
-    assets::{AssetStoreBuilder, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
+    assets::{AssetStoreBuilder, FlushHub, FlushPolicy, StoreOptions},
     audio::generate_log_spaced_bands,
     bufpool::Region,
     net::{HttpClient, NetOptions},
@@ -128,7 +128,8 @@ fn main() -> AppResult {
         AssetStoreBuilder::default()
             .cancel(shutdown.child())
             .backend(store_options.backend.clone())
-            .evict_config(EvictConfig::from(&store_options))
+            .maybe_max_assets(store_options.max_assets)
+            .maybe_max_bytes(store_options.max_bytes)
             .pool(byte_pool.clone())
             .maybe_cache_capacity(store_options.cache_capacity)
             .maybe_flush_hub(store_options.flush_hub)

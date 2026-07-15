@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use kithara_assets::{
     AcquisitionResult, AssetLayoutRegistry, AssetReader, AssetResource, AssetSource, AssetStore,
-    AssetStoreBuilder, AssetWriter, AssetsError, BytePool, EvictConfig, ReadSide, ResourceKey,
-    StoreOptions, WriteSide,
+    AssetStoreBuilder, AssetWriter, AssetsError, BytePool, ReadSide, ResourceKey, StoreOptions,
+    WriteSide,
 };
 use kithara_events::{EventBus, FileError, FileEvent};
 use kithara_net::{Headers, HttpClient, NetOptions};
@@ -371,8 +371,9 @@ pub(crate) fn build_shared_asset_store(
         AssetStoreBuilder::default()
             .cancel(cancel)
             .backend(store.backend.clone())
-            .evict_config(EvictConfig::from(store))
             .layouts(layouts)
+            .maybe_max_assets(store.max_assets)
+            .maybe_max_bytes(store.max_bytes)
             .maybe_pool(pool)
             .maybe_cache_capacity(store.cache_capacity)
             .maybe_flush_hub(store.flush_hub.clone())

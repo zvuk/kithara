@@ -5,8 +5,6 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-#[cfg(not(target_arch = "wasm32"))]
-use kithara::assets::EvictConfig;
 use kithara::{
     assets::{
         AcquisitionResult, AssetScope, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide,
@@ -89,10 +87,6 @@ fn build_test_processing_scope(
             .backend(StorageBackend::Disk {
                 root: (temp_dir.path()).into(),
             })
-            .evict_config(EvictConfig {
-                max_assets: None,
-                max_bytes: None,
-            })
             .layouts(literal_layouts())
             .build()
             .test_scope(asset_root)
@@ -117,10 +111,6 @@ fn build_test_scope_no_processing(
         AssetStoreBuilder::default()
             .backend(StorageBackend::Disk {
                 root: (temp_dir.path()).into(),
-            })
-            .evict_config(EvictConfig {
-                max_assets: None,
-                max_bytes: None,
             })
             .layouts(literal_layouts())
             .build()

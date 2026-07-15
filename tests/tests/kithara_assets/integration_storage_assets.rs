@@ -4,8 +4,8 @@ use std::{fs, path::Path};
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, ReadSide, ResourceKey,
-        StorageBackend, WriteSide,
+        AcquisitionResult, AssetScope, AssetStoreBuilder, ReadSide, ResourceKey, StorageBackend,
+        WriteSide,
         index::schema::{ArchivedPinsIndexFile, PinsIndexFile},
     },
     bufpool::BytePool,
@@ -60,10 +60,6 @@ fn asset_scope_with_root(
     AssetStoreBuilder::default()
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
-        })
-        .evict_config(EvictConfig {
-            max_assets: None,
-            max_bytes: None,
         })
         .layouts(literal_layouts())
         .build()

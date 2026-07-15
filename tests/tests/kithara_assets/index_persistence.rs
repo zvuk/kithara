@@ -8,7 +8,7 @@ use std::{
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, StorageBackend, WriteSide,
+        AcquisitionResult, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide,
         index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
     },
     platform::time::Duration,
@@ -106,10 +106,6 @@ fn build_scope(temp_dir: &kithara_integration_tests::TestTempDir, asset_root: &s
     AssetStoreBuilder::default()
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
-        })
-        .evict_config(EvictConfig {
-            max_assets: None,
-            max_bytes: None,
         })
         .layouts(literal_layouts())
         .build()
@@ -242,7 +238,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     );
 }
 
-/// Minimal contract test: no reliance on `EvictConfig`/`LeaseAssets`
+/// Minimal contract test: no reliance on eviction or lease configuration
 /// fine-print — just asserts the three files appear in the spots the
 /// documented API promises they will.
 #[kithara::test(timeout(Duration::from_secs(3)))]

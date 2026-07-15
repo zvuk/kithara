@@ -2,7 +2,7 @@ use std::fmt;
 
 use bon::Builder;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, BytePool, EvictConfig, FlushHub, StoreOptions},
+    assets::{AssetStore, AssetStoreBuilder, BytePool, FlushHub, StoreOptions},
     audio::analysis::BeatAnalysisConfig,
     bufpool::PcmPool,
     hls::SizeProbeMethod,
@@ -113,7 +113,8 @@ impl AppConfig {
             AssetStoreBuilder::default()
                 .cancel(cancel.child())
                 .backend(store_options.backend.clone())
-                .evict_config(EvictConfig::from(&store_options))
+                .maybe_max_assets(store_options.max_assets)
+                .maybe_max_bytes(store_options.max_bytes)
                 .pool(byte_pool.clone())
                 .maybe_cache_capacity(store_options.cache_capacity)
                 .maybe_flush_hub(store_options.flush_hub)

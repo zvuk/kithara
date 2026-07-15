@@ -75,8 +75,6 @@ pub fn create_test_assets() -> TestAssets {
 /// Create test assets with custom asset root
 #[cfg(not(target_arch = "wasm32"))]
 pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
-    use kithara::assets::EvictConfig;
-
     let temp_dir = TestTempDir::new();
     let temp_dir = Arc::new(temp_dir);
 
@@ -84,7 +82,6 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
-        .evict_config(EvictConfig::default())
         .cancel(CancelToken::never())
         .layouts(test_layouts())
         .build();

@@ -3,8 +3,8 @@
 use std::sync::OnceLock;
 
 use kithara_assets::{
-    AssetLayoutRegistry, AssetSource, AssetStore, AssetStoreBuilder, BytePool, EvictConfig,
-    ResourceKey, StorageBackend, StoreOptions,
+    AssetLayoutRegistry, AssetSource, AssetStore, AssetStoreBuilder, BytePool, ResourceKey,
+    StorageBackend, StoreOptions,
 };
 use kithara_events::{DeferredBus, EventBus, HlsError as EventHlsError, HlsEvent, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
@@ -310,8 +310,9 @@ fn build_asset_store(config: &HlsConfig, cancel: CancelToken) -> AssetStore {
     AssetStoreBuilder::default()
         .cancel(cancel)
         .backend(config.store.backend.clone())
-        .evict_config(EvictConfig::from(&config.store))
         .layouts(layout_registry(&config.store))
+        .maybe_max_assets(config.store.max_assets)
+        .maybe_max_bytes(config.store.max_bytes)
         .pool(config.pool.clone())
         .maybe_cache_capacity(config.store.cache_capacity)
         .maybe_flush_hub(config.store.flush_hub.clone())
@@ -333,8 +334,9 @@ pub fn build_shared_asset_store(
         AssetStoreBuilder::default()
             .cancel(cancel)
             .backend(store.backend.clone())
-            .evict_config(EvictConfig::from(store))
             .layouts(layout_registry(store))
+            .maybe_max_assets(store.max_assets)
+            .maybe_max_bytes(store.max_bytes)
             .pool(pool)
             .maybe_cache_capacity(store.cache_capacity)
             .maybe_flush_hub(store.flush_hub.clone())

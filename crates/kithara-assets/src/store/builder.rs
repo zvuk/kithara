@@ -129,15 +129,6 @@ impl StoreOptions {
     }
 }
 
-impl From<&StoreOptions> for EvictConfig {
-    fn from(opts: &StoreOptions) -> Self {
-        Self {
-            max_assets: opts.max_assets,
-            max_bytes: opts.max_bytes,
-        }
-    }
-}
-
 /// Constructor for the ready-to-use [`AssetStore`].
 ///
 /// One store services every asset under `root_dir`. A scope binds the
@@ -147,10 +138,11 @@ struct AssetStoreBuildArgs {
     backend: Option<StorageBackend>,
     cache_capacity: Option<NonZeroUsize>,
     cancel: Option<CancelToken>,
-    evict_config: Option<EvictConfig>,
     event_bus: Option<EventBus>,
     flush_hub: Option<Arc<FlushHub>>,
     layouts: Option<AssetLayoutRegistry>,
+    max_assets: Option<usize>,
+    max_bytes: Option<u64>,
     mem_resource_capacity: Option<usize>,
     pool: BytePool,
 }
@@ -169,10 +161,11 @@ impl AssetStoreBuilderFactory {
         backend: Option<StorageBackend>,
         cache_capacity: Option<NonZeroUsize>,
         cancel: Option<CancelToken>,
-        evict_config: Option<EvictConfig>,
         event_bus: Option<EventBus>,
         flush_hub: Option<Arc<FlushHub>>,
         layouts: Option<AssetLayoutRegistry>,
+        max_assets: Option<usize>,
+        max_bytes: Option<u64>,
         mem_resource_capacity: Option<usize>,
         #[builder(default = BytePool::default())] pool: BytePool,
     ) -> AssetStoreBuildArgs {
@@ -180,10 +173,11 @@ impl AssetStoreBuilderFactory {
             backend,
             cache_capacity,
             cancel,
-            evict_config,
             event_bus,
             flush_hub,
             layouts,
+            max_assets,
+            max_bytes,
             mem_resource_capacity,
             pool,
         }
@@ -311,7 +305,10 @@ impl AssetStoreBuildArgs {
         root_dir: PathBuf,
         availability: AvailabilityIndex,
     ) -> (DiskStore, Arc<DiskAssetStore>) {
-        let evict_cfg = self.evict_config.unwrap_or_default();
+        let evict_cfg = EvictConfig {
+            max_assets: self.max_assets,
+            max_bytes: self.max_bytes,
+        };
         let cancel = CancelScope::new(self.cancel).token();
 
         let pool = self.pool;
@@ -388,7 +385,10 @@ impl AssetStoreBuildArgs {
         eviction: &EvictionRouter,
     ) -> MemStore {
         let cancel = CancelScope::new(self.cancel).token();
-        let evict_cfg = self.evict_config.unwrap_or_default();
+        let evict_cfg = EvictConfig {
+            max_assets: self.max_assets,
+            max_bytes: self.max_bytes,
+        };
         let pool = self.pool;
 
         let hub = self
@@ -604,10 +604,7 @@ mod tests {
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
-            .evict_config(EvictConfig {
-                max_assets: Some(1),
-                max_bytes: None,
-            })
+            .max_assets(1)
             .event_bus(bus.clone())
             .build();
 

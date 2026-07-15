@@ -4,8 +4,7 @@ use kithara::{
     self,
     assets::{
         AcquisitionResult, AssetResourceState, AssetStoreBuilder, BytePool, ChunkSink,
-        DiskAssetStore, EvictConfig, ProcessCtx, ReadSide, ResourceProcessor, StorageBackend,
-        WriteSide,
+        DiskAssetStore, ProcessCtx, ReadSide, ResourceProcessor, StorageBackend, WriteSide,
     },
     platform::{CancelToken, sync::Arc, time::Duration},
 };
@@ -303,16 +302,12 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let dir = tempdir().unwrap();
-    let evict = EvictConfig {
-        max_assets: Some(2),
-        max_bytes: None,
-    };
 
     let scope_a = AssetStoreBuilder::default()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
-        .evict_config(evict.clone())
+        .max_assets(2)
         .layouts(literal_layouts())
         .build()
         .test_scope("asset-a");
@@ -358,7 +353,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
-        .evict_config(evict.clone())
+        .max_assets(2)
         .layouts(literal_layouts())
         .build()
         .test_scope("asset-b");
@@ -389,7 +384,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
-        .evict_config(evict.clone())
+        .max_assets(2)
         .layouts(literal_layouts())
         .build()
         .test_scope("asset-c");
@@ -408,7 +403,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
-        .evict_config(evict.clone())
+        .max_assets(2)
         .layouts(literal_layouts())
         .build()
         .test_scope("asset-a");

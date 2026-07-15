@@ -8,18 +8,25 @@ Detailed contracts and invariants for the kithara-assets crate; the README is th
 
 ## Key mapping (normative)
 
-Resources are addressed by strings chosen by higher layers:
-
-- `asset_root`: e.g. `hex(hash(canonical_url))`
-- `rel_path`: e.g. `media/audio.mp3`, `segments/0001.m4s`
-
-Disk mapping is `<cache_root>/<asset_root>/<rel_path>`. Assets does not "invent" paths; it only enforces safety (no absolute paths, no `..`, no empty segments).
+Disk mapping is `<cache_root>/<layout.root(source)>/<layout.path(resource)>`.
+Higher layers describe an `AssetSource` and `AssetResource`; they do not supply
+an already-formed relative cache path. Assets validates both layout outputs
+before constructing a `ResourceKey`.
 
 ### Layout
 
-The `AssetStore` owns one `Arc<dyn AssetLayout>` (`AssetStoreBuilder::layout` / `StoreOptions::layout`, default `DefaultLayout`); every `AssetScope` inherits it, and `AssetScope::key_for(&Url)` mints the `ResourceKey` used by cache, leases, eviction, demand, and availability. Switching layouts over an existing cache keeps the asset directories but re-downloads resources under the new relative paths.
+The `AssetStore` owns an immutable `AssetLayoutRegistry`, configured through
+`AssetStoreBuilder::layouts`. `AssetStore::scope::<T>(&AssetSource)` selects the
+layout once and resolves its root; `AssetScope::key(&AssetResource)` invokes the
+selected layout once to mint the `ResourceKey` used by cache, leases, eviction,
+demand, and availability. Switching layouts does not migrate existing cache
+entries.
 
-`DefaultLayout` is the fingerprinted URL mirror for every resource: `track/<host>/<path>/<leaf>_<fp>.<ext>` — injective on any input; the `track/` prefix is a fixed literal that on-disk caches address byte-for-byte. Any other policy is a caller-injected `AssetLayout`; the store validates each `rel_path` (non-empty, relative, no traversal) and rejects violations with `AssetsError::InvalidKey`.
+`DefaultLayout` maps source bytes to `track/track.<ext>`, URL resources to a
+safe authority/path mirror under `track/`, and named resources to their
+namespace and name. Non-empty URL queries add a bounded fingerprint before the
+leaf extension. Any registered custom layout is subject to the same root/path
+validation and invalid output returns `AssetsError::InvalidKey`.
 
 Auto-pin (lease) semantics: all resources opened through the leasing decorator (`LeaseAssets`) are automatically pinned by `asset_root` for the lifetime of the returned handle. The pin is an RAII guard stored inside the `LeaseWriter` / `LeaseReader`; drop the handle to release the pin.
 
@@ -155,14 +162,12 @@ The store is **not** generic over a processing context. Processing travels per a
 
 The in-memory cache key is `(ResourceKey, Option<RequestIdentity>, Option<CtxIdentity>)`, where `CtxIdentity` wraps `ResourceProcessor::identity()` (via the crate-internal `CacheIdentity` bridge). Equality is **byte-exact** `Eq`, not a hash digest — two distinct processors never collide. `CtxIdentity`'s `Debug` is redacted because the bytes can be key material (e.g. AES `key||iv`).
 
-## Trait Bridges
+## Conversions and builder inputs
 
-- `AssetScope::key_for(&Url)` — derive a layout-owned `ResourceKey` from a URL, query-aware
-- `&StoreOptions` → `EvictConfig` (`From`) — extract eviction config from store options
-- `StoreOptions` / `AssetStoreBuilder` — configure the store through explicit builder setters; only eviction config has a `From<&StoreOptions>` bridge
+- `AssetStoreBuilder::{max_assets, max_bytes}` configure eviction directly;
+  `EvictConfig` is an internal value assembled by the builder.
 - `ResourceStatus` → `AssetResourceState` (`From`) — map storage status to asset state
 - `&LruState` ↔ `LruIndexFile` (`From` both ways) — LRU index persistence round-trip
-- `DiskStore` / `MemStore` → `AssetStore` (`From`) — wrap a backend into the unified store
 
 ## Consumer Demand
 

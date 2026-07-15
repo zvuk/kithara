@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[cfg(not(target_arch = "wasm32"))]
-use kithara::assets::EvictConfig;
 use kithara::{
     assets::{
         AcquisitionResult, AssetScope, AssetStoreBuilder, ReadSide, StorageBackend, WriteSide,
@@ -36,10 +34,6 @@ fn asset_scope_with_root(
         AssetStoreBuilder::default()
             .backend(StorageBackend::Disk {
                 root: (temp_dir.path()).into(),
-            })
-            .evict_config(EvictConfig {
-                max_assets: None,
-                max_bytes: None,
             })
             .layouts(literal_layouts())
             .build()
