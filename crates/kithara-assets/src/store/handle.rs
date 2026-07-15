@@ -2,12 +2,12 @@
 
 use std::{future::Future, num::NonZeroUsize, ops::Range, path::Path, sync::atomic::AtomicU64};
 
-#[cfg(test)]
-use kithara_platform::CancelToken;
 use kithara_platform::{sync::Arc, tokio::sync::mpsc};
 use rangemap::RangeSet;
 
-use super::{AssetReader, DiskStore, MemStore, ResourceAcquisition};
+#[cfg(not(target_arch = "wasm32"))]
+use super::DiskStore;
+use super::{AssetReader, MemStore, ResourceAcquisition};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::backend::DiskAssetStore;
 use crate::{
@@ -26,42 +26,49 @@ use crate::{
 /// the enum arms don't repeat it across a dozen trivial wrappers.
 macro_rules! delegate_to_store {
     ($self:expr, $method:ident $(, $arg:expr)*) => {
-        match $self {
+        match &$self.inner.backend {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.$method($($arg),*),
-            Self::Mem { store, .. } => store.$method($($arg),*),
+            StoreBackendInner::Disk { store, .. } => store.$method($($arg),*),
+            StoreBackendInner::Memory { store } => store.$method($($arg),*),
         }
     };
 }
 
-/// Unified storage backend: dispatches to an inner disk or memory store chain.
-/// Byte-availability queries hit the aggregate `availability` index first, else
-/// a slow `resource_state` probe; persistence is via [`AssetStore::checkpoint`].
+/// Cheap shared handle for one asset-store identity.
 #[derive(Clone, Debug)]
-pub enum AssetStore {
-    /// File-backed storage with mmap resources.
+pub struct AssetStore {
+    inner: Arc<AssetStoreInner>,
+}
+
+#[derive(Debug)]
+pub(super) struct AssetStoreInner {
+    pub(super) backend: StoreBackendInner,
+    pub(super) availability: AvailabilityIndex,
+    pub(super) demand: DemandIndex,
+    pub(super) transactions: ResourceTransactionIndex,
+    pub(super) eviction: EvictionRouter,
+    pub(super) layouts: AssetLayoutRegistry,
+}
+
+#[derive(Debug)]
+pub(super) enum StoreBackendInner {
     #[cfg(not(target_arch = "wasm32"))]
     Disk {
         store: DiskStore,
-        availability: AvailabilityIndex,
-        demand: DemandIndex,
-        transactions: ResourceTransactionIndex,
-        eviction: EvictionRouter,
         base: Option<Arc<DiskAssetStore>>,
-        layouts: AssetLayoutRegistry,
     },
-    /// In-memory storage (ephemeral, no disk artifacts).
-    Mem {
+    Memory {
         store: MemStore,
-        availability: AvailabilityIndex,
-        demand: DemandIndex,
-        transactions: ResourceTransactionIndex,
-        eviction: EvictionRouter,
-        layouts: AssetLayoutRegistry,
     },
 }
 
 impl AssetStore {
+    pub(super) fn new_handle(inner: AssetStoreInner) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
     /// Acquire a resource explicitly for mutation.
     ///
     /// # Errors
@@ -108,11 +115,7 @@ impl AssetStore {
 
     /// Return the crate-private aggregate availability handle.
     pub(crate) fn availability(&self) -> &AvailabilityIndex {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { availability, .. } => availability,
-            Self::Mem { availability, .. } => availability,
-        }
+        &self.inner.availability
     }
 
     /// Return a snapshot of byte ranges known to be available for the
@@ -142,7 +145,7 @@ impl AssetStore {
     }
 
     /// Persist the in-memory byte-availability aggregate snapshot to
-    /// disk. For `AssetStore::Mem` this is a no-op.
+    /// disk. For an in-memory store this is a no-op.
     ///
     /// Checkpointing is always explicit — there is no `Drop` hook and
     /// no background flush timer. Callers decide when a consistent
@@ -152,12 +155,13 @@ impl AssetStore {
     ///
     /// Returns `AssetsError` if the persistent index resource cannot
     /// be opened or the atomic write fails.
-    // ast-grep-ignore: idioms.match-self-conversion
     pub fn checkpoint(&self) -> AssetsResult<()> {
-        match self {
+        match &self.inner.backend {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { base, .. } => base.as_ref().map_or(Ok(()), |base| base.checkpoint()),
-            Self::Mem { .. } => Ok(()),
+            StoreBackendInner::Disk { base, .. } => {
+                base.as_ref().map_or(Ok(()), |base| base.checkpoint())
+            }
+            StoreBackendInner::Memory { .. } => Ok(()),
         }
     }
 
@@ -194,28 +198,16 @@ impl AssetStore {
 
     /// Return the crate-private aggregate demand handle.
     fn demand(&self) -> &DemandIndex {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { demand, .. } => demand,
-            Self::Mem { demand, .. } => demand,
-        }
+        &self.inner.demand
     }
 
     fn transactions(&self) -> &ResourceTransactionIndex {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { transactions, .. } => transactions,
-            Self::Mem { transactions, .. } => transactions,
-        }
+        &self.inner.transactions
     }
 
     /// Return the crate-private eviction-router handle.
     fn eviction(&self) -> &EvictionRouter {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { eviction, .. } => eviction,
-            Self::Mem { eviction, .. } => eviction,
-        }
+        &self.inner.eviction
     }
 
     /// Return the committed final length of the resource, if known.
@@ -234,11 +226,7 @@ impl AssetStore {
     }
 
     fn layouts(&self) -> &AssetLayoutRegistry {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { layouts, .. } => layouts,
-            Self::Mem { layouts, .. } => layouts,
-        }
+        &self.inner.layouts
     }
 
     /// Open a resource by key (no processing context).
@@ -285,10 +273,10 @@ impl AssetStore {
     /// an app-wide shared store clobbers sibling streams.
     #[must_use]
     pub fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
-        match self {
+        match &self.inner.backend {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.reserve_cache_for(media_items),
-            Self::Mem { store, .. } => store.reserve_cache_for(media_items),
+            StoreBackendInner::Disk { store, .. } => store.reserve_cache_for(media_items),
+            StoreBackendInner::Memory { store } => store.reserve_cache_for(media_items),
         }
     }
 
@@ -342,40 +330,20 @@ impl AssetStore {
     }
 }
 
-// Test-only conversions from a bare store chain (no shared cancel, no
-// `base` for checkpointing). The `demand` index is constructed with a
-// fresh cancel here because there is no upstream master on this path;
-// production stores are built through `AssetStoreBuilder::build`, which
-// threads the store cancel. Gated to keep the cancel-hierarchy lint
-// Test-only: no non-test callers in the workspace. The `EvictionRouter`
-// here is unwired (no `on_invalidated` hook); `subscribe_eviction` is a
-// no-op on a `From`-built store. Production stores come from `build()`.
 #[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
-impl From<DiskStore> for AssetStore {
-    fn from(store: DiskStore) -> Self {
-        Self::Disk {
-            store,
-            availability: AvailabilityIndex::new(),
-            demand: DemandIndex::new(CancelToken::never()),
-            transactions: ResourceTransactionIndex::default(),
-            eviction: EvictionRouter::default(),
-            base: None,
-            layouts: AssetLayoutRegistry::default(),
-        }
-    }
-}
+mod tests {
+    use kithara_test_utils::kithara;
 
-#[cfg(test)]
-impl From<MemStore> for AssetStore {
-    fn from(store: MemStore) -> Self {
-        Self::Mem {
-            store,
-            availability: AvailabilityIndex::new(),
-            demand: DemandIndex::new(CancelToken::never()),
-            transactions: ResourceTransactionIndex::default(),
-            eviction: EvictionRouter::default(),
-            layouts: AssetLayoutRegistry::default(),
-        }
+    use super::*;
+    use crate::{AssetStoreBuilder, StorageBackend};
+
+    #[kithara::test]
+    fn clone_shares_one_inner_identity() {
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build();
+        let clone = store.clone();
+
+        assert!(Arc::ptr_eq(&store.inner, &clone.inner));
     }
 }

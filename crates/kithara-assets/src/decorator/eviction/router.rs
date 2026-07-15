@@ -6,7 +6,7 @@ use crate::layout::ResourceKey;
 /// Per-`asset_root` eviction fanout: routes each evicted [`ResourceKey`] to the
 /// single subscriber registered for its `asset_root` (last-writer-wins).
 #[derive(Clone, Debug, Default)]
-pub struct EvictionRouter {
+pub(crate) struct EvictionRouter {
     subscribers: Arc<DashMap<Arc<str>, mpsc::UnboundedSender<ResourceKey>>>,
 }
 

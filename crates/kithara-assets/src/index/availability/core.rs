@@ -61,7 +61,7 @@ impl Availability {
 
 /// Opaque handle to the aggregate byte availability index.
 #[derive(Clone)]
-pub struct AvailabilityIndex {
+pub(crate) struct AvailabilityIndex {
     pub(super) inner: Arc<InnerIndex>,
 }
 

@@ -10,14 +10,21 @@ use kithara_bufpool::BytePool;
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 
-use super::{AssetStore, DiskStore, MemStore, OnInvalidatedFn};
+#[cfg(not(target_arch = "wasm32"))]
+use super::DiskStore;
+use super::{
+    MemStore, OnInvalidatedFn,
+    handle::{AssetStore, AssetStoreInner, StoreBackendInner},
+};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::backend::{DiskAssetDeleter, DiskAssetStore};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::decorator::ByteRecorder;
 use crate::{
     backend::{AssetDeleter, MemAssetDeleter, MemAssetStore, MemStoreSetup},
     decorator::{
-        ByteRecorder, CachedAssets, EvictAssets, EvictDeps, EvictionEvents, EvictionRouter,
-        LeaseAssets, LeaseEvents, ProcessingAssets,
+        CachedAssets, EvictAssets, EvictDeps, EvictionEvents, EvictionRouter, LeaseAssets,
+        LeaseEvents, ProcessingAssets,
     },
     index::{
         AvailabilityIndex, DemandIndex, EvictConfig, FlushHub, FlushPolicy,
@@ -218,7 +225,7 @@ where
 impl AssetStoreBuildArgs {
     /// Build the storage backend.
     ///
-    /// Selects `AssetStore::Disk` or `AssetStore::Mem` per [`StorageBackend`];
+    /// Selects the disk or memory backend per [`StorageBackend`];
     /// on wasm the store is always memory-backed. Creates a
     /// single [`AvailabilityIndex`] per build call and threads it
     /// through both the base store (observer target) and the enum
@@ -241,14 +248,14 @@ impl AssetStoreBuildArgs {
         {
             let _ = self.backend.take();
             let store = self.build_mem_with_availability(&availability, &eviction);
-            AssetStore::Mem {
-                store,
+            AssetStore::new_handle(AssetStoreInner {
+                backend: StoreBackendInner::Memory { store },
                 availability,
                 demand,
                 transactions,
                 eviction,
                 layouts,
-            }
+            })
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -258,27 +265,29 @@ impl AssetStoreBuildArgs {
             match backend {
                 StorageBackend::Memory => {
                     let store = self.build_mem_with_availability(&availability, &eviction);
-                    AssetStore::Mem {
-                        store,
+                    AssetStore::new_handle(AssetStoreInner {
+                        backend: StoreBackendInner::Memory { store },
                         availability,
                         demand,
                         transactions,
                         eviction,
                         layouts,
-                    }
+                    })
                 }
                 StorageBackend::Disk { root } => {
                     let (store, base) =
                         self.build_disk_with_availability(root, availability.clone());
-                    AssetStore::Disk {
-                        store,
+                    AssetStore::new_handle(AssetStoreInner {
+                        backend: StoreBackendInner::Disk {
+                            store,
+                            base: Some(base),
+                        },
                         availability,
                         demand,
                         transactions,
                         eviction,
                         layouts,
-                        base: Some(base),
-                    }
+                    })
                 }
             }
         }
@@ -786,19 +795,6 @@ mod tests {
             backend.open_resource(&keys[0], None).is_err(),
             "evicted resource should be gone in the memory backend"
         );
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn from_asset_store() {
-        let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::default()
-            .backend(StorageBackend::Disk {
-                root: dir.path().into(),
-            })
-            .build_disk();
-        let backend: AssetStore = store.into();
-        assert!(matches!(backend, AssetStore::Disk { .. }));
     }
 
     /// Pins the `local_queue_playlist_behavior_*` HLS+AES128 hang: a single-resource

@@ -35,7 +35,4 @@ pub type AssetReader = LeaseReader<CachedReader<ProcessedReader<BaseReader>>, Le
 /// commit, or a `Ready` [`AssetReader`] when the resource is already committed.
 pub type ResourceAcquisition = AcquisitionResult<AssetWriter, AssetReader>;
 
-/// In-memory asset store with disabled decorators.
-///
-/// Internal chain used for `AssetStore::Mem`.
 pub(crate) type MemStore = LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<MemAssetStore>>>>;

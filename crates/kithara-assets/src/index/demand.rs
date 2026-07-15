@@ -189,12 +189,8 @@ struct DemandInner {
 ///
 /// Cheap to [`Clone`] (one `Arc` bump); all clones share the same slot
 /// map, so demand aggregates across `AssetStore` clones automatically.
-///
-/// Declared `pub` to satisfy `private_interfaces` on the `AssetStore`
-/// enum field (mirrors [`AvailabilityIndex`](super::AvailabilityIndex));
-/// the crate re-export in `index/mod.rs` narrows it to `pub(crate)`.
 #[derive(Clone)]
-pub struct DemandIndex {
+pub(crate) struct DemandIndex {
     inner: Arc<DemandInner>,
 }
 

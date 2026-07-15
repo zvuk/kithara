@@ -62,7 +62,7 @@ impl Drop for ResourceTransaction {
 
 /// Shared process-local registry for per-resource cache transactions.
 #[derive(Clone, Default)]
-pub struct ResourceTransactionIndex {
+pub(crate) struct ResourceTransactionIndex {
     inner: Arc<TransactionInner>,
 }
 
