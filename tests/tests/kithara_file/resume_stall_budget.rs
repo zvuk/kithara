@@ -24,7 +24,6 @@ use axum::{
 use bytes::Bytes;
 use futures::stream;
 use kithara::{
-    assets::StoreOptions,
     events::{Event, EventBus, FileEvent},
     file::{File, FileConfig, FileSrc},
     net::{HttpClient, NetOptions, RetryPolicy},
@@ -132,7 +131,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
 
     let config = FileConfig::for_src(FileSrc::Remote(url))
         .events(bus)
-        .store(StoreOptions::new(temp.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp.path()))
         .cancel(cancel)
         .look_ahead_bytes(Consts::TOTAL as u64)
         .downloader(downloader)

@@ -1,15 +1,13 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     decode::DecoderBackend,
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         sync::Arc,
-        time,
-        time::{Duration, Instant, timeout},
+        time::{self, Duration, Instant, timeout},
         tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
@@ -94,7 +92,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     const URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 
     let temp = temp_dir();
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::builder()
@@ -123,6 +121,8 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let cfg = ResourceConfig::for_src(URL)
         .expect("valid silvercomet URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .decoder(

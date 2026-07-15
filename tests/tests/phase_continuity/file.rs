@@ -1,7 +1,7 @@
 use std::{io::Write, num::NonZeroUsize};
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig, FileSrc},
@@ -57,12 +57,12 @@ async fn run_case(
 
     let temp_dir = TestTempDir::new();
     let store = if ephemeral {
-        StoreOptions::builder()
+        AssetStoreBuilder::default()
             .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
             .backend(StorageBackend::Memory)
             .build()
     } else {
-        StoreOptions::builder()
+        AssetStoreBuilder::default()
             .backend(StorageBackend::Disk {
                 root: temp_dir.path().into(),
             })
@@ -179,7 +179,9 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
     let temp_dir = TestTempDir::new();
     let fixture_path = write_sine_fixture_to_disk(&spec, &temp_dir).await;
 
-    let file_config = FileConfig::for_src(FileSrc::Local(fixture_path)).build();
+    let file_config = FileConfig::for_src(FileSrc::Local(fixture_path))
+        .store(kithara_integration_tests::memory_asset_store())
+        .build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -249,7 +251,9 @@ async fn local_apple_fused_run_case() {
     let temp_dir = TestTempDir::new();
     let fixture_path = write_sine_fixture_to_disk(&spec, &temp_dir).await;
 
-    let file_config = FileConfig::for_src(FileSrc::Local(fixture_path)).build();
+    let file_config = FileConfig::for_src(FileSrc::Local(fixture_path))
+        .store(kithara_integration_tests::memory_asset_store())
+        .build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -385,7 +389,7 @@ async fn decode_pcm_seconds(
         bit_rate,
     };
     let url = helper.sine(&spec, FREQ_HZ).await;
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .backend(StorageBackend::Memory)
         .build();
@@ -698,7 +702,7 @@ async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_ra
     };
     let url = helper.sine(&spec, FREQ_HZ).await;
 
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .backend(StorageBackend::Memory)
         .build();
@@ -967,7 +971,7 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
     // leaking it: the source reads from `url` (an HTTP path) and only uses
     // the store as an ephemeral cache, so the leaked guard is harmless in
     // this short-lived test and avoids threading a guard through the caller.
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .backend(StorageBackend::Memory)
         .build();

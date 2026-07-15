@@ -22,7 +22,7 @@
 //! leaving the supersede path untaken.
 
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -113,9 +113,10 @@ fn build_queue_with_tick(
 ) -> (
     Arc<Queue>,
     Downloader,
-    StoreOptions,
+    AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
@@ -123,14 +124,17 @@ fn build_queue_with_tick(
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::default()
+            .with_player(player)
+            .with_store(store.clone()),
+    ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(run_tick_driver(queue_for_tick));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
 
@@ -151,7 +155,8 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 /// `select_item` — never via end-of-track auto-advance. The completion-race
 /// test relies on this to isolate a barge-in (slow stomping the current fast)
 /// from the legitimate end-of-`fast` auto-advance to the next queue entry.
-fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, StoreOptions) {
+fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, AssetStore) {
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
@@ -159,12 +164,15 @@ fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, Store
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::default()
+            .with_player(player)
+            .with_store(store.clone()),
+    ));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store)
 }
 
@@ -355,7 +363,7 @@ async fn assert_no_barge_in(queue: &Queue, slow_id: TrackId) -> Result<(), Strin
     }
 }
 
-fn mk_cfg(url: &Url, downloader: &Downloader, store: &StoreOptions) -> ResourceConfig {
+fn mk_cfg(url: &Url, downloader: &Downloader, store: &AssetStore) -> ResourceConfig {
     ResourceConfig::for_src(url.as_str())
         .expect("valid fixture URL")
         .byte_pool(kithara::bufpool::BytePool::default())

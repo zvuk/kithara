@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus, FileEvent},
     file::{File, FileConfig},
     platform::{
@@ -90,7 +89,7 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     let cancel = CancelToken::never();
     let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel.clone())
         .build();
 
@@ -135,7 +134,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let cancel = CancelToken::never();
     let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel.clone())
         .build();
 

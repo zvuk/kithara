@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -70,7 +70,7 @@ fn build_queue_with_tick(
 ) -> (
     Arc<Queue>,
     Downloader,
-    StoreOptions,
+    AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
@@ -94,7 +94,7 @@ fn build_queue_with_tick(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp_dir.path());
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
 
@@ -217,7 +217,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         .map(|p| server.url(p).as_str().to_string())
         .collect();
 
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),

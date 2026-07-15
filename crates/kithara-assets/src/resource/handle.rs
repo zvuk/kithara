@@ -1,8 +1,18 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, path::Path};
+#[cfg(not(target_arch = "wasm32"))]
+use std::fs;
+use std::{
+    io::{Error as IoError, ErrorKind},
+    ops::Range,
+    path::Path,
+};
 
-use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::CancelToken;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
+use kithara_storage::{ResourceStatus, StorageResource, StorageResult, WaitOutcome};
 
 use super::{RawWriteHandle, ReadSide, WriteSide};
 
@@ -14,7 +24,7 @@ use super::{RawWriteHandle, ReadSide, WriteSide};
 /// itself on [`commit`](WriteSide::commit) into a [`BaseReader`]. It is not
 /// `Clone` — a single producer owns the write side.
 #[derive(Debug)]
-pub struct BaseWriter(kithara_storage::StorageResource);
+pub struct BaseWriter(StorageResource);
 
 /// Base-layer reader over a `kithara_storage::StorageResource`.
 ///
@@ -22,19 +32,40 @@ pub struct BaseWriter(kithara_storage::StorageResource);
 /// whatever the storage layer has committed; the processed/decrypt gate is
 /// applied by `ProcessedReader` above.
 #[derive(Clone, Debug)]
-pub struct BaseReader(kithara_storage::StorageResource);
+pub struct BaseReader {
+    inner: StorageResource,
+    read_only: bool,
+}
 
 impl BaseWriter {
     /// Wrap a freshly-acquired (uncommitted) storage resource.
-    pub(crate) fn new(inner: kithara_storage::StorageResource) -> Self {
+    pub(crate) fn new(inner: StorageResource) -> Self {
         Self(inner)
     }
 }
 
 impl BaseReader {
     /// Wrap a committed (or in-flight shared) storage resource for reading.
-    pub(crate) fn new(inner: kithara_storage::StorageResource) -> Self {
-        Self(inner)
+    pub(crate) fn new(inner: StorageResource) -> Self {
+        Self {
+            inner,
+            read_only: false,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn open_read_only_file(path: &Path, cancel: &CancelToken) -> StorageResult<Self> {
+        fs::metadata(path)?;
+        let mmap: MmapResource = Resource::open(
+            cancel.clone(),
+            MmapOptions::for_path(path.to_path_buf())
+                .mode(OpenMode::ReadOnly)
+                .build(),
+        )?;
+        Ok(Self {
+            inner: StorageResource::from(mmap),
+            read_only: true,
+        })
     }
 }
 
@@ -43,13 +74,13 @@ impl WriteSide for BaseWriter {
 
     fn commit(self, final_len: Option<u64>) -> StorageResult<BaseReader> {
         self.0.commit(final_len)?;
-        Ok(BaseReader(self.0))
+        Ok(BaseReader::new(self.0))
     }
 
     delegate::delegate! {
         to self.0 {
             fn fail(self, reason: String);
-            #[expr(BaseReader($))]
+            #[expr(BaseReader::new($))]
             #[call(clone)]
             fn reader(&self) -> BaseReader;
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
@@ -66,7 +97,7 @@ impl ReadSide for BaseReader {
     type Writer = BaseWriter;
 
     delegate::delegate! {
-        to self.0 {
+        to self.inner {
             fn contains_range(&self, range: Range<u64>) -> bool;
             fn len(&self) -> Option<u64>;
             fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
@@ -79,7 +110,14 @@ impl ReadSide for BaseReader {
     }
 
     fn reactivate(self) -> StorageResult<BaseWriter> {
-        self.0.reactivate()?;
-        Ok(BaseWriter(self.0))
+        if self.read_only {
+            return Err(IoError::new(
+                ErrorKind::PermissionDenied,
+                "read-only resource cannot be reactivated",
+            )
+            .into());
+        }
+        self.inner.reactivate()?;
+        Ok(BaseWriter(self.inner))
     }
 }

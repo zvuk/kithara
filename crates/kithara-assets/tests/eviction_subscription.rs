@@ -99,3 +99,73 @@ fn dropping_guard_deregisters() {
         "after dropping the guard no eviction may be delivered"
     );
 }
+
+#[kithara::test(timeout(Duration::from_secs(5)))]
+fn dropping_first_subscriber_preserves_second() {
+    let store = ephemeral_store(2);
+    let scope = test_scope(&store, ROOT_A);
+
+    let (first_tx, mut first_rx) = mpsc::unbounded_channel::<ResourceKey>();
+    let first_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), first_tx);
+    let (second_tx, mut second_rx) = mpsc::unbounded_channel::<ResourceKey>();
+    let _second_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), second_tx);
+
+    let keys = fill_scope(&store, &scope, 3);
+    assert_eq!(
+        first_rx.try_recv().expect("first subscriber must receive"),
+        keys[0]
+    );
+    assert_eq!(
+        second_rx
+            .try_recv()
+            .expect("second subscriber must receive"),
+        keys[0]
+    );
+
+    drop(first_guard);
+    let next = test_key(&scope, "after_first_drop.m4s");
+    write_commit(&store, &next, b"data");
+
+    assert!(first_rx.try_recv().is_err());
+    assert_eq!(
+        second_rx
+            .try_recv()
+            .expect("second subscriber must survive first guard drop"),
+        keys[1]
+    );
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)))]
+fn dropping_second_subscriber_preserves_first() {
+    let store = ephemeral_store(2);
+    let scope = test_scope(&store, ROOT_A);
+
+    let (first_tx, mut first_rx) = mpsc::unbounded_channel::<ResourceKey>();
+    let _first_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), first_tx);
+    let (second_tx, mut second_rx) = mpsc::unbounded_channel::<ResourceKey>();
+    let second_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), second_tx);
+
+    let keys = fill_scope(&store, &scope, 3);
+    assert_eq!(
+        first_rx.try_recv().expect("first subscriber must receive"),
+        keys[0]
+    );
+    assert_eq!(
+        second_rx
+            .try_recv()
+            .expect("second subscriber must receive"),
+        keys[0]
+    );
+
+    drop(second_guard);
+    let next = test_key(&scope, "after_second_drop.m4s");
+    write_commit(&store, &next, b"data");
+
+    assert_eq!(
+        first_rx
+            .try_recv()
+            .expect("first subscriber must survive second guard drop"),
+        keys[1]
+    );
+    assert!(second_rx.try_recv().is_err());
+}

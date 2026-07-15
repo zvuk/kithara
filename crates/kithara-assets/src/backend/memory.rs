@@ -97,6 +97,9 @@ impl AssetDeleter for MemAssetDeleter {
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        if key.is_absolute() {
+            return Err(AssetsError::InvalidKey);
+        }
         self.active_resources.retain(|k, _| k.key != *key);
         self.availability.remove(key);
         Ok(())
@@ -130,6 +133,14 @@ impl MemAssetStore {
 
     fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
         ScopedAvailabilityObserver::new(key.clone(), self.availability.clone())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_absolute_resource(&self, key: &ResourceKey) -> AssetsResult<Option<BaseReader>> {
+        let Some(path) = key.as_absolute_path() else {
+            return Ok(None);
+        };
+        Ok(Some(BaseReader::open_read_only_file(path, &self.cancel)?))
     }
 
     /// Like [`MemAssetStore::new`] but shares the given aggregate
@@ -194,6 +205,15 @@ impl Assets for MemAssetStore {
         identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<AcquisitionResult<BaseWriter, BaseReader>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(reader) = self.open_absolute_resource(key)? {
+            return Ok(AcquisitionResult::Ready(reader));
+        }
+
+        if key.is_absolute() {
+            return Err(AssetsError::InvalidKey);
+        }
+
         if key.rel_path().is_some_and(str::is_empty) {
             return Err(AssetsError::InvalidKey);
         }
@@ -265,6 +285,15 @@ impl Assets for MemAssetStore {
         identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<BaseReader> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(reader) = self.open_absolute_resource(key)? {
+            return Ok(reader);
+        }
+
+        if key.is_absolute() {
+            return Err(AssetsError::InvalidKey);
+        }
+
         if key.rel_path().is_some_and(str::is_empty) {
             return Err(AssetsError::InvalidKey);
         }
@@ -280,6 +309,23 @@ impl Assets for MemAssetStore {
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = key.as_absolute_path() {
+            return match std::fs::metadata(path) {
+                Ok(metadata) => Ok(AssetResourceState::Committed {
+                    final_len: Some(metadata.len()),
+                }),
+                Err(error) if error.kind() == ErrorKind::NotFound => {
+                    Ok(AssetResourceState::Missing)
+                }
+                Err(error) => Err(error.into()),
+            };
+        }
+
+        if key.is_absolute() {
+            return Err(AssetsError::InvalidKey);
+        }
+
         if key.rel_path().is_some_and(str::is_empty) {
             return Err(AssetsError::InvalidKey);
         }
@@ -355,5 +401,41 @@ mod tests {
         assert!(caps.contains(Capabilities::PROCESSING));
         assert!(!caps.contains(Capabilities::EVICT));
         assert!(!caps.contains(Capabilities::LEASE));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test]
+    fn direct_store_cannot_remove_absolute_resource() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("local_audio.mp3");
+        std::fs::write(&file_path, b"fake audio data").unwrap();
+        let store = make_mem_store();
+        let key = ResourceKey::absolute(&file_path).expect("absolute test path");
+
+        assert!(matches!(
+            store.remove_resource(&key),
+            Err(AssetsError::InvalidKey)
+        ));
+        assert_eq!(std::fs::read(file_path).unwrap(), b"fake audio data");
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[kithara::test]
+    fn absolute_resources_are_rejected_without_a_filesystem() {
+        let store = make_mem_store();
+        let key = ResourceKey::absolute("/local_audio.mp3").expect("absolute test path");
+
+        assert!(matches!(
+            store.acquire_resource(&key, None),
+            Err(AssetsError::InvalidKey)
+        ));
+        assert!(matches!(
+            store.open_resource(&key, None),
+            Err(AssetsError::InvalidKey)
+        ));
+        assert!(matches!(
+            store.resource_state(&key),
+            Err(AssetsError::InvalidKey)
+        ));
     }
 }

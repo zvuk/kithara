@@ -308,12 +308,10 @@ mod tests {
     }
 
     fn make_inner() -> Arc<FileInner> {
-        let store = Arc::new(
-            AssetStoreBuilder::default()
-                .backend(StorageBackend::Memory)
-                .cancel(CancelToken::never())
-                .build(),
-        );
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cancel(CancelToken::never())
+            .build();
         let key = test_key(&store);
         let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
             panic!("fresh acquire must be Pending");

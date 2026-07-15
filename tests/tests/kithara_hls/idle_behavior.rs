@@ -5,7 +5,6 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig},
     events::{Event, EventBus},
     hls::{AbrMode, Hls, HlsConfig},
@@ -60,7 +59,7 @@ async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
@@ -149,7 +148,7 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     let bus = EventBus::new(8192);
     let mut rx = bus.subscribe();
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(AbrMode::manual(0))
         .download_batch_size(1)
         .look_ahead_bytes(LOOK_AHEAD_BYTES)

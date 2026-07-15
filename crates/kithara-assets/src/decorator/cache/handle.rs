@@ -11,8 +11,11 @@ use crate::{
     resource::{RawWriteHandle, ReadSide, WriteSide},
 };
 
+pub(super) type EnforceCapacity = Arc<dyn Fn() + Send + Sync>;
+
 /// Writer (Pending) wrapper returned by [`super::CachedAssets`].
 pub struct CachedWriter<W> {
+    enforce_capacity: Option<EnforceCapacity>,
     pinned: Arc<DashSet<ResourceKey>>,
     key: ResourceKey,
     inner: W,
@@ -21,6 +24,7 @@ pub struct CachedWriter<W> {
 /// Reader (Ready) wrapper returned by [`super::CachedAssets`]. Cheap to clone.
 #[derive(Clone)]
 pub struct CachedReader<R> {
+    enforce_capacity: Option<EnforceCapacity>,
     pinned: Arc<DashSet<ResourceKey>>,
     inner: R,
     key: ResourceKey,
@@ -39,8 +43,18 @@ impl<R: fmt::Debug> fmt::Debug for CachedReader<R> {
 }
 
 impl<W> CachedWriter<W> {
-    pub(super) fn new(pinned: Arc<DashSet<ResourceKey>>, key: ResourceKey, inner: W) -> Self {
-        Self { pinned, key, inner }
+    pub(super) fn new(
+        pinned: Arc<DashSet<ResourceKey>>,
+        key: ResourceKey,
+        inner: W,
+        enforce_capacity: Option<EnforceCapacity>,
+    ) -> Self {
+        Self {
+            enforce_capacity,
+            pinned,
+            key,
+            inner,
+        }
     }
 
     /// Pin this resource in the LRU cache so it is never evicted, until
@@ -57,13 +71,26 @@ impl<W> CachedWriter<W> {
 }
 
 impl<R> CachedReader<R> {
-    pub(super) fn new(pinned: Arc<DashSet<ResourceKey>>, key: ResourceKey, inner: R) -> Self {
-        Self { pinned, inner, key }
+    pub(super) fn new(
+        pinned: Arc<DashSet<ResourceKey>>,
+        key: ResourceKey,
+        inner: R,
+        enforce_capacity: Option<EnforceCapacity>,
+    ) -> Self {
+        Self {
+            enforce_capacity,
+            pinned,
+            inner,
+            key,
+        }
     }
 
     /// Unpin this resource, making it eligible for LRU eviction.
     pub fn release(self) -> Self {
         self.pinned.remove(&self.key);
+        if let Some(enforce) = &self.enforce_capacity {
+            enforce();
+        }
         self
     }
 
@@ -84,11 +111,22 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
     type Reader = CachedReader<W::Reader>;
 
     fn commit(self, final_len: Option<u64>) -> StorageResult<CachedReader<W::Reader>> {
-        Ok(CachedReader::new(
-            Arc::clone(&self.pinned),
-            self.key.clone(),
-            self.inner.commit(final_len)?,
-        ))
+        let Self {
+            enforce_capacity,
+            pinned,
+            key,
+            inner,
+        } = self;
+        let reader = CachedReader::new(
+            pinned,
+            key,
+            inner.commit(final_len)?,
+            enforce_capacity.clone(),
+        );
+        if let Some(enforce) = enforce_capacity {
+            enforce();
+        }
+        Ok(reader)
     }
 
     delegate::delegate! {
@@ -104,6 +142,7 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
             Arc::clone(&self.pinned),
             self.key.clone(),
             self.inner.reader(),
+            self.enforce_capacity.clone(),
         )
     }
 }
@@ -116,6 +155,7 @@ impl<R: ReadSide> ReadSide for CachedReader<R> {
             Arc::clone(&self.pinned),
             self.key.clone(),
             self.inner.reactivate()?,
+            self.enforce_capacity.clone(),
         ))
     }
 

@@ -1,8 +1,11 @@
-use kithara_assets::StoreOptions;
+use kithara_assets::{AssetResource, AssetSource, AssetStore, ResourceKey};
+use kithara_decode::DecodeError;
 use kithara_events::EventBus;
+use kithara_file::File;
+use kithara_hls::Hls;
 use kithara_platform::CancelToken;
 
-use super::{ResourceConfig, ResourceSrc};
+use super::{ResourceConfig, ResourceSrc, SourceType};
 
 impl<B: Default> ResourceConfig<B> {
     /// Event bus attached to this resource, when one was configured.
@@ -16,10 +19,10 @@ impl<B: Default> ResourceConfig<B> {
         self.bus = Some(bus);
     }
 
-    /// Optional cache-disambiguating resource name.
+    /// Optional cache discriminator.
     #[must_use]
-    pub fn name(&self) -> Option<&str> {
-        self.name.as_deref()
+    pub fn discriminator(&self) -> Option<&str> {
+        self.discriminator.as_deref()
     }
 
     /// Preferred peak bitrate cap for normal networks.
@@ -45,15 +48,34 @@ impl<B: Default> ResourceConfig<B> {
         &self.src
     }
 
-    /// Storage configuration for this resource.
+    /// Shared asset store for this resource.
     #[must_use]
-    pub fn store(&self) -> &StoreOptions {
+    pub fn store(&self) -> &AssetStore {
         &self.store
     }
 
-    /// Mutable storage configuration for caller-owned resource templates.
-    #[must_use]
-    pub fn store_mut(&mut self) -> &mut StoreOptions {
-        &mut self.store
+    /// Mint a layout-owned key for a playback or derived resource.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when source detection or layout validation fails.
+    pub fn asset_key(&self, resource: &AssetResource) -> Result<ResourceKey, DecodeError> {
+        let source_type = SourceType::detect(&self.src)?;
+        let discriminator = self.discriminator.clone();
+        let source = match &source_type {
+            SourceType::RemoteFile(url) | SourceType::HlsStream(url) => AssetSource::Remote {
+                url: url.clone(),
+                discriminator,
+            },
+            SourceType::LocalFile(path) => AssetSource::Local { path: path.clone() },
+        };
+        let scope = match source_type {
+            SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
+                self.store.scope::<File>(&source)
+            }
+            SourceType::HlsStream(_) => self.store.scope::<Hls>(&source),
+        }
+        .map_err(DecodeError::backend)?;
+        scope.key(resource).map_err(DecodeError::backend)
     }
 }

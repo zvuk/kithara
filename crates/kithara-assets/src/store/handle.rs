@@ -12,7 +12,7 @@ use super::{AssetReader, MemStore, ResourceAcquisition};
 use crate::backend::DiskAssetStore;
 use crate::{
     decorator::{Assets, EvictionRouter, EvictionSubscription, ProcessCtx},
-    error::AssetsResult,
+    error::{AssetsError, AssetsResult},
     index::{
         AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle,
         ResourceTransactionIndex,
@@ -67,6 +67,12 @@ impl AssetStore {
         Self {
             inner: Arc::new(inner),
         }
+    }
+
+    /// Return whether both handles refer to the same store instance.
+    #[must_use]
+    pub fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// Acquire a resource explicitly for mutation.
@@ -263,20 +269,21 @@ impl AssetStore {
     /// # Errors
     /// Returns `AssetsError` if the backing resource cannot be removed.
     pub fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        if key.is_absolute() {
+            return Err(AssetsError::InvalidKey);
+        }
         delegate_to_store!(self, remove_resource, key)
     }
 
-    /// Request the in-memory LRU handle cache hold up to `media_items`
-    /// media resources (e.g. the variant segment count). The store applies
-    /// its own non-media headroom and hard cap, returning the capacity
-    /// actually installed. Use on a private per-stream store only; resizing
-    /// an app-wide shared store clobbers sibling streams.
+    /// Return the fixed handle-cache capacity for an ephemeral memory store.
+    /// Durable stores return `None` because handle displacement does not remove
+    /// their committed bytes.
     #[must_use]
-    pub fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
+    pub fn ephemeral_cache_capacity(&self) -> Option<NonZeroUsize> {
         match &self.inner.backend {
             #[cfg(not(target_arch = "wasm32"))]
-            StoreBackendInner::Disk { store, .. } => store.reserve_cache_for(media_items),
-            StoreBackendInner::Memory { store } => store.reserve_cache_for(media_items),
+            StoreBackendInner::Disk { .. } => None,
+            StoreBackendInner::Memory { store } => Some(store.cache_capacity()),
         }
     }
 
@@ -306,8 +313,8 @@ impl AssetStore {
     /// Subscribe to evictions under `asset_root`.
     ///
     /// When a [`ResourceKey`] under `asset_root` is invalidated, the evicted key is sent on `tx`.
-    /// A single subscriber per `asset_root`, last-writer-wins. The returned
-    /// [`EvictionSubscription`] guard deregisters on drop.
+    /// Every subscriber for that root receives the key. The returned
+    /// [`EvictionSubscription`] guard deregisters only its own subscription on drop.
     pub fn subscribe_eviction(
         &self,
         asset_root: Arc<str>,
@@ -334,7 +341,6 @@ impl AssetStore {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::*;
     use crate::{AssetStoreBuilder, StorageBackend};
 
     #[kithara::test]
@@ -343,7 +349,11 @@ mod tests {
             .backend(StorageBackend::Memory)
             .build();
         let clone = store.clone();
+        let other = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build();
 
-        assert!(Arc::ptr_eq(&store.inner, &clone.inner));
+        assert!(store.is_same(&clone));
+        assert!(!store.is_same(&other));
     }
 }

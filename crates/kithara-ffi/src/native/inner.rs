@@ -4,7 +4,6 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
-    assets::{AssetLayout, BytePool},
     audio::generate_log_spaced_bands,
     bufpool::Region,
     events::ScopeLabel,
@@ -13,6 +12,7 @@ use kithara::{
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
+use kithara_assets::{AssetStore, BytePool};
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_platform::{
     CancelToken,
@@ -22,7 +22,6 @@ use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource, Transition};
 
 use super::salt;
 use crate::{
-    config::StoreOptions,
     event_bridge::EventBridge,
     item::AudioPlayerItem,
     native_config,
@@ -192,11 +191,8 @@ pub(crate) struct NativeInner {
     /// drives the ABR cap unless cellular is tighter; cellular is held
     /// for future network-state-aware switching.
     peak_bitrate: Mutex<PeakBitrate>,
-    /// Shared on-disk layout resolved once from [`StoreOptions::layout`].
-    /// `None` keeps the store's `DefaultLayout`.
-    layout: Option<Arc<dyn AssetLayout>>,
-    /// Shared storage options (cache dir, etc.) applied to every item.
-    store: StoreOptions,
+    /// App-wide asset store shared by the queue and every item resource.
+    store: AssetStore,
 }
 
 impl NativeInner {
@@ -211,7 +207,13 @@ impl NativeInner {
             .session(super::session::handle().dispatcher())
             .build();
         let player = Arc::new(PlayerImpl::new(player_config));
-        let queue_config = QueueConfig::default().with_player(player);
+        let layout = super::layout::resolve_layout(config.store.layout.as_ref());
+        let store =
+            native_config::build_store(&config.store, layout, cancel.child(), region.byte_pool());
+        let queue_config = QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build();
         let net = default_net_options(region.byte_pool());
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, cancel.child()))
@@ -220,17 +222,15 @@ impl NativeInner {
         );
         let (key_options, player_headers) = build_initial_key_state(config.key_options);
         let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
-        let layout = super::layout::resolve_layout(config.store.layout.as_ref());
         Self {
             downloader,
             region,
-            layout,
             shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
             peak_bitrate: Mutex::default(),
             queue: Arc::new(Queue::new(queue_config)),
-            store: config.store,
+            store,
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
@@ -572,7 +572,7 @@ fn build_source_for_item(
         FfiAbrMode::Auto => AbrMode::Auto(None),
         FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),
     });
-    let mut config = ResourceConfig::for_src(item.url())
+    let config = ResourceConfig::for_src(item.url())
         .map_err(|e| FfiError::InvalidArgument {
             reason: e.to_string(),
         })?
@@ -582,11 +582,10 @@ fn build_source_for_item(
         .downloader(inner.downloader.clone())
         .byte_pool(inner.region.byte_pool())
         .pcm_pool(inner.region.pcm_pool())
+        .store(inner.store.clone())
         .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();
-
-    native_config::configure_resource(&mut config, &inner.store, inner.layout.as_ref());
     *item.bus.lock() = Some(scoped);
 
     Ok(TrackSource::Config(Box::new(config)))

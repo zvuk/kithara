@@ -16,6 +16,7 @@ use kithara::{
     file::{File as FileSource, FileConfig, FileSrc},
     stream::Stream,
 };
+use kithara_assets::{AssetStoreBuilder, StorageBackend};
 use kithara_platform::{
     CancelToken,
     time::{Duration, Instant, sleep},
@@ -124,7 +125,12 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         "offline capture: start"
     );
 
-    let file_cfg = FileConfig::new(FileSrc::Local(input));
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
+    let file_cfg = FileConfig::for_src(FileSrc::Local(input))
+        .store(store)
+        .build();
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
         .hint("mp3".to_string())

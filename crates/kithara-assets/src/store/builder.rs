@@ -2,9 +2,9 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
-use std::{fmt, num::NonZeroUsize, path::PathBuf};
+use std::{num::NonZeroUsize, path::PathBuf};
 
-use bon::{Builder, bon};
+use bon::bon;
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
 use kithara_events::EventBus;
@@ -30,7 +30,7 @@ use crate::{
         AvailabilityIndex, DemandIndex, EvictConfig, FlushHub, FlushPolicy,
         ResourceTransactionIndex,
     },
-    layout::{AssetLayout, AssetLayoutRegistry, ResourceKey},
+    layout::{AssetLayoutRegistry, ResourceKey},
 };
 
 /// Private module-level defaults, grouped per ast-grep style rule.
@@ -65,67 +65,6 @@ impl Default for StorageBackend {
         {
             Self::Memory
         }
-    }
-}
-
-/// Simplified storage options for creating an asset store; used by higher-level
-/// crates (kithara-file, kithara-hls).
-#[derive(Clone, Builder)]
-#[builder(state_mod(vis = "pub"))]
-#[non_exhaustive]
-pub struct StoreOptions {
-    /// In-memory LRU cache capacity for opened resources.
-    pub cache_capacity: Option<NonZeroUsize>,
-    /// Shared flush coordinator for the on-disk indexes (`pins.bin`,
-    /// `lru.bin`, `availability.bin`).
-    ///
-    /// `None` — the builder creates a hub without a background worker;
-    /// every mutation flushes synchronously (historical behaviour).
-    /// `Some(hub)` — the caller-owned hub is reused, allowing several
-    /// `AssetStore`s to share a single worker. Use
-    /// [`FlushHub::with_worker`] in production for debounced /
-    /// coalesced background flushing.
-    pub flush_hub: Option<Arc<FlushHub>>,
-    /// On-disk layout policy; `None` keeps [`crate::DefaultLayout`].
-    pub layout: Option<Arc<dyn AssetLayout>>,
-    /// Maximum number of assets to keep (soft cap for LRU eviction).
-    pub max_assets: Option<usize>,
-    /// Maximum bytes to store (soft cap for LRU eviction).
-    pub max_bytes: Option<u64>,
-    /// Storage backend: in-memory, or disk rooted at a directory.
-    #[builder(default)]
-    pub backend: StorageBackend,
-}
-
-impl fmt::Debug for StoreOptions {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StoreOptions")
-            .field("backend", &self.backend)
-            .field("cache_capacity", &self.cache_capacity)
-            .field("flush_hub", &self.flush_hub.as_ref().map(|_| "..."))
-            .field("layout", &self.layout)
-            .field("max_assets", &self.max_assets)
-            .field("max_bytes", &self.max_bytes)
-            .finish()
-    }
-}
-
-impl Default for StoreOptions {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
-impl StoreOptions {
-    /// Create options with a disk backend rooted at `root` and all other
-    /// fields at their builder defaults.
-    pub fn new<P>(root: P) -> Self
-    where
-        P: Into<PathBuf>,
-    {
-        Self::builder()
-            .backend(StorageBackend::Disk { root: root.into() })
-            .build()
     }
 }
 
@@ -357,8 +296,7 @@ impl AssetStoreBuildArgs {
         let capacity = self
             .cache_capacity
             .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
-        // Durable backing: LRU displacement is a transparent cache miss
-        // (bytes survive on disk), so the cache never invalidates and no
+        // Disk bytes survive LRU displacement, so it needs no invalidation hook.
         let cached = Arc::new(CachedAssets::new(processing, capacity, None, false));
         let byte_recorder: Option<Arc<dyn ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);
@@ -431,19 +369,19 @@ impl AssetStoreBuildArgs {
             .cache_capacity
             .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
         let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool));
-        // Ephemeral backing: LRU displacement frees the bytes, so each
-        // displaced key must clear availability and reach its eviction
+        // Memory bytes do not survive displacement, so indexes must be invalidated.
         let availability_for_hook = availability.clone();
         let eviction_for_hook = eviction.clone();
         let on_invalidated: OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {
             availability_for_hook.remove(key);
             eviction_for_hook.route(key);
         });
-        let cached = Arc::new(CachedAssets::new(
+        let cached = Arc::new(CachedAssets::with_max_bytes(
             processing,
             capacity,
             Some(on_invalidated),
             true,
+            self.max_bytes,
         ));
         LeaseAssets::with_byte_recorder(
             cached,
@@ -517,7 +455,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        AssetWriter, ResourceAcquisition, ResourceKey,
+        AssetResourceState, AssetWriter, AssetsError, ResourceAcquisition, ResourceKey,
         decorator::{Assets, Capabilities},
         resource::{AcquisitionResult, ReadSide, WriteSide},
     };
@@ -643,6 +581,50 @@ mod tests {
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 4);
         assert_eq!(&buf, b"data");
+        assert!(matches!(
+            store.remove_resource(&key),
+            Err(AssetsError::InvalidKey)
+        ));
+        assert_eq!(fs::read(&file_path).unwrap(), b"data");
+    }
+
+    #[kithara::test(native, timeout(Duration::from_secs(5)))]
+    fn memory_backend_opens_absolute_file_in_place() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.bin");
+        fs::write(&file_path, b"data").unwrap();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build();
+
+        let key = ResourceKey::absolute(&file_path).expect("absolute test path");
+        let reader = store.open_resource_with_ctx(&key, None, None).unwrap();
+
+        let mut buf = [0u8; 4];
+        let n = reader.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(&buf, b"data");
+        assert_eq!(reader.path(), Some(file_path.as_path()));
+        assert!(matches!(
+            store.resource_state(&key).unwrap(),
+            AssetResourceState::Committed { final_len: Some(4) }
+        ));
+
+        let AcquisitionResult::Ready(acquired) = store.acquire_resource(&key, None).unwrap() else {
+            panic!("absolute file must be acquired read-only");
+        };
+        let mut acquired_buf = [0u8; 4];
+        let acquired_n = acquired.read_at(0, &mut acquired_buf).unwrap();
+        assert_eq!(acquired_n, 4);
+        assert_eq!(&acquired_buf, b"data");
+        assert!(acquired.reactivate().is_err());
+        assert_eq!(fs::read(&file_path).unwrap(), b"data");
+
+        assert!(matches!(
+            store.remove_resource(&key),
+            Err(AssetsError::InvalidKey)
+        ));
+        assert_eq!(fs::read(&file_path).unwrap(), b"data");
     }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -792,6 +774,43 @@ mod tests {
             backend.open_resource(&keys[0], None).is_err(),
             "evicted resource should be gone in the memory backend"
         );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn memory_max_bytes_bounds_large_handle_cache() {
+        let backend = AssetStoreBuilder::default()
+            .cache_capacity(NonZeroUsize::new(128).unwrap())
+            .max_bytes(8)
+            .backend(StorageBackend::Memory)
+            .build();
+        let keys: Vec<ResourceKey> = (0..3)
+            .map(|i| ResourceKey::relative(ROOT, format!("track_{i}.mp3")))
+            .collect();
+
+        for key in &keys {
+            write_commit(backend.acquire_resource(key, None).unwrap(), b"12345678");
+        }
+
+        assert!(backend.open_resource(&keys[0], None).is_err());
+        assert!(backend.open_resource(&keys[1], None).is_err());
+        assert_eq!(
+            backend.open_resource(&keys[2], None).unwrap().len(),
+            Some(8)
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn memory_max_bytes_does_not_retain_oversized_resource() {
+        let backend = AssetStoreBuilder::default()
+            .cache_capacity(NonZeroUsize::new(128).unwrap())
+            .max_bytes(4)
+            .backend(StorageBackend::Memory)
+            .build();
+        let key = ResourceKey::relative(ROOT, "oversized.mp3");
+
+        write_commit(backend.acquire_resource(&key, None).unwrap(), b"12345678");
+
+        assert!(backend.open_resource(&key, None).is_err());
     }
 
     /// Pins the `local_queue_playlist_behavior_*` HLS+AES128 hang: a single-resource

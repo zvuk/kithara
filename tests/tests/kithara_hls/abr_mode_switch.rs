@@ -4,7 +4,6 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     events::{
@@ -459,7 +458,7 @@ async fn vod_manual_switch_affects_future_segments() {
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -622,7 +621,7 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     }));
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -728,7 +727,7 @@ async fn multi_track_shared_abr_with_cache() {
     let collector1 = EventCollector::new(&bus1);
 
     let hls1 = HlsConfig::for_url(url1.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .events(bus1.clone())
         .initial_abr_mode(auto(0))
@@ -766,7 +765,7 @@ async fn multi_track_shared_abr_with_cache() {
     let collector2 = EventCollector::new(&bus2);
 
     let hls2 = HlsConfig::for_url(url2)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .events(bus2.clone())
         .initial_abr_mode(AbrMode::manual(1))
@@ -803,7 +802,7 @@ async fn multi_track_shared_abr_with_cache() {
     let collector3 = EventCollector::new(&bus3);
 
     let hls3 = HlsConfig::for_url(url1)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .events(bus3.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -896,7 +895,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -988,7 +987,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1075,7 +1074,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1183,7 +1182,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     // download_batch_size larger than total segments → peer fetches the
     // full variant 0 then parks itself idle.
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1309,7 +1308,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     // Manual(0) initial so Auto-decision doesn't fire an UpSwitch/
     // DownSwitch that races against the explicit Manual(1) below.
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -1477,7 +1476,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 
     // Crucially: NO `with_settings(abr_fast())` — production defaults.
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1574,7 +1573,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1702,7 +1701,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(2))
@@ -1919,7 +1918,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     });
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))

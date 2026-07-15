@@ -1,18 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    fmt,
-    num::NonZeroUsize,
-    path::Path,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::{fmt, num::NonZeroUsize, path::Path};
 
 use dashmap::DashSet;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::ResourceStatus;
 use lru::LruCache;
 
-use super::handle::{CachedReader, CachedWriter};
+use super::handle::{CachedReader, CachedWriter, EnforceCapacity};
 use crate::{
     decorator::{Assets, Capabilities},
     error::AssetsResult,
@@ -84,11 +79,12 @@ pub struct CachedAssets<A>
 where
     A: Assets,
 {
-    capacity: Arc<AtomicUsize>,
+    capacity: NonZeroUsize,
     inner: Arc<A>,
     pinned: Arc<DashSet<ResourceKey>>,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
     cache: SharedCache<A>,
+    enforce_capacity: Option<EnforceCapacity>,
     /// True when dropping a resource handle frees its bytes (ephemeral
     /// backing). Only then does LRU displacement mean the data is gone
     /// and `on_invalidated` must fire. For durable backends the bytes
@@ -112,27 +108,111 @@ impl<A> CachedAssets<A>
 where
     A: Assets,
 {
-    /// Hard ceiling on the auto-sized cache, bounding the fd / memory
-    /// budget for very long tracks.
-    const MAX_CACHE_CAPACITY: usize = 64;
-
-    /// Slots reserved above the media count for non-media handles
-    /// (init segment, LRU / pins index resources).
-    const NON_MEDIA_HEADROOM: usize = 2;
     pub fn new(
         inner: Arc<A>,
         capacity: NonZeroUsize,
         on_invalidated: Option<crate::store::OnInvalidatedFn>,
         volatile: bool,
     ) -> Self {
+        Self::with_max_bytes(inner, capacity, on_invalidated, volatile, None)
+    }
+
+    pub(crate) fn with_max_bytes(
+        inner: Arc<A>,
+        capacity: NonZeroUsize,
+        on_invalidated: Option<crate::store::OnInvalidatedFn>,
+        volatile: bool,
+        max_bytes: Option<u64>,
+    ) -> Self {
+        let cache = Arc::new(Mutex::new(LruCache::new(capacity)));
+        let pinned = Arc::new(DashSet::new());
+        let enforce_capacity = max_bytes.map(|max_bytes| {
+            let cache = Arc::clone(&cache);
+            let pinned = Arc::clone(&pinned);
+            let on_invalidated = on_invalidated.clone();
+            Arc::new(move || {
+                let invalidated = {
+                    let mut cache = cache.lock();
+                    Self::trim_to_max_bytes(&mut cache, &pinned, max_bytes)
+                };
+                if let Some(cb) = &on_invalidated {
+                    for key in invalidated {
+                        cb(&key);
+                    }
+                }
+            }) as EnforceCapacity
+        });
         Self {
+            capacity,
             inner,
+            pinned,
             on_invalidated,
+            cache,
+            enforce_capacity,
             volatile,
-            capacity: Arc::new(AtomicUsize::new(capacity.get())),
-            cache: Arc::new(Mutex::new(LruCache::new(capacity))),
-            pinned: Arc::new(DashSet::new()),
         }
+    }
+
+    fn committed_bytes(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> Option<u64> {
+        let CacheEntry::Resource { reader, .. } = entry else {
+            return None;
+        };
+        let ResourceStatus::Committed { final_len } = reader.status() else {
+            return None;
+        };
+        Some(final_len.or_else(|| reader.len()).unwrap_or(u64::MAX))
+    }
+
+    fn retained_bytes(cache: &CacheMap<A>, pinned: &DashSet<ResourceKey>) -> u64 {
+        cache
+            .iter()
+            .filter(|(key, _)| !Self::is_pinned(pinned, key))
+            .filter_map(|(_, entry)| Self::committed_bytes(entry))
+            .fold(0_u64, u64::saturating_add)
+    }
+
+    fn trim_to_max_bytes(
+        cache: &mut CacheMap<A>,
+        pinned: &DashSet<ResourceKey>,
+        max_bytes: u64,
+    ) -> Vec<ResourceKey> {
+        let mut invalidated = Vec::new();
+        while Self::retained_bytes(cache, pinned) > max_bytes {
+            let Some(key) = cache
+                .iter()
+                .filter_map(|(key, entry)| {
+                    let bytes = Self::committed_bytes(entry)?;
+                    if bytes == 0 || Self::is_pinned(pinned, key) {
+                        return None;
+                    }
+                    Some((key.clone(), Self::entry_hits(entry)))
+                })
+                .reduce(|best, candidate| {
+                    if candidate.1 <= best.1 {
+                        candidate
+                    } else {
+                        best
+                    }
+                })
+                .map(|(key, _)| key)
+            else {
+                break;
+            };
+            let Some(entry) = cache.pop(&key) else {
+                continue;
+            };
+            if let (
+                CacheKey::Resource {
+                    key: resource_key, ..
+                },
+                CacheEntry::Resource { .. },
+            ) = (key, entry)
+                && !invalidated.contains(&resource_key)
+            {
+                invalidated.push(resource_key);
+            }
+        }
+        invalidated
     }
 
     fn cache_entry(
@@ -143,7 +223,7 @@ where
     ) -> Vec<ResourceKey> {
         let mut invalidated = Vec::new();
 
-        let effective = self.capacity.load(Ordering::Relaxed) + self.pinned_cache_count(cache);
+        let effective = self.capacity.get() + self.pinned_cache_count(cache);
 
         while cache.len() >= effective {
             let Some((displaced_key, displaced_entry)) = self.pop_evictable(cache) else {
@@ -244,10 +324,14 @@ where
     }
 
     fn is_pinned_key(&self, key: &CacheKey) -> bool {
+        Self::is_pinned(&self.pinned, key)
+    }
+
+    fn is_pinned(pinned: &DashSet<ResourceKey>, key: &CacheKey) -> bool {
         match key {
             CacheKey::Resource {
                 key: resource_key, ..
-            } => self.pinned.contains(resource_key),
+            } => pinned.contains(resource_key),
             _ => false,
         }
     }
@@ -307,20 +391,8 @@ where
         cache.pop(&key).map(|entry| (key, entry))
     }
 
-    /// Size the cache to hold up to `media_items` media resources plus a
-    /// small non-media headroom, clamped to [`Self::MAX_CACHE_CAPACITY`].
-    /// This is the store's own policy seam: callers propose a media count
-    /// and receive the capacity actually installed. Growing lets the
-    /// eviction loop retain more resources; shrinking is enforced lazily on
-    /// the next insert. The capacity stays owned here — callers reach this
-    /// through the lease/store forwarders, never by holding the atomic.
-    pub(crate) fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
-        let want = media_items
-            .saturating_add(Self::NON_MEDIA_HEADROOM)
-            .clamp(1, Self::MAX_CACHE_CAPACITY);
-        let capacity = NonZeroUsize::new(want).unwrap_or(NonZeroUsize::MIN);
-        self.capacity.store(capacity.get(), Ordering::Relaxed);
-        capacity
+    pub(crate) fn cache_capacity(&self) -> NonZeroUsize {
+        self.capacity
     }
 
     /// Wrap an [`AcquisitionResult`] from the inner store in cache wrappers
@@ -337,11 +409,21 @@ where
     }
 
     fn wrap_reader(&self, key: &ResourceKey, inner: A::ReadyRes) -> CachedReader<A::ReadyRes> {
-        CachedReader::new(Arc::clone(&self.pinned), key.clone(), inner)
+        CachedReader::new(
+            Arc::clone(&self.pinned),
+            key.clone(),
+            inner,
+            self.enforce_capacity.clone(),
+        )
     }
 
     fn wrap_writer(&self, key: &ResourceKey, inner: A::ActiveRes) -> CachedWriter<A::ActiveRes> {
-        CachedWriter::new(Arc::clone(&self.pinned), key.clone(), inner)
+        CachedWriter::new(
+            Arc::clone(&self.pinned),
+            key.clone(),
+            inner,
+            self.enforce_capacity.clone(),
+        )
     }
 }
 
@@ -423,6 +505,9 @@ where
             for displaced_key in displaced {
                 cb(&displaced_key);
             }
+        }
+        if let Some(enforce) = &self.enforce_capacity {
+            enforce();
         }
 
         Ok(self.wrap_acq(key, acq))
@@ -522,6 +607,9 @@ where
             for displaced_key in displaced {
                 cb(&displaced_key);
             }
+        }
+        if let Some(enforce) = &self.enforce_capacity {
+            enforce();
         }
 
         Ok(self.wrap_reader(key, res))
@@ -797,6 +885,38 @@ mod tests {
             &[keys[0].clone()],
             "ephemeral backend must invalidate the displaced key"
         );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn byte_limit_is_enforced_when_retained_resource_is_released() {
+        let mem = Arc::new(MemAssetStore::new(
+            CancelToken::never(),
+            None,
+            &crate::BytePool::default(),
+        ));
+        let (log, cb) = record_invalidations();
+        let cached = CachedAssets::with_max_bytes(
+            mem,
+            NonZeroUsize::new(5).unwrap(),
+            Some(cb),
+            true,
+            Some(3),
+        );
+        let key = ResourceKey::relative(ROOT, "retained.mp3");
+        let writer = pending(cached.acquire_resource(&key, None).unwrap()).retain();
+        writer.write_at(0, b"data").unwrap();
+
+        let reader = writer.commit(Some(4)).unwrap();
+        assert_eq!(cached.cache.lock().len(), 1);
+        assert!(log.lock().expect("log lock").is_empty());
+
+        let reader = reader.release();
+        assert!(cached.cache.lock().is_empty());
+        assert_eq!(
+            log.lock().expect("log lock").as_slice(),
+            std::slice::from_ref(&key)
+        );
+        drop(reader);
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

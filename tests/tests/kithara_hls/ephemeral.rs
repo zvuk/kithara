@@ -5,13 +5,6 @@ use std::{fs, path::Path};
 use kithara::platform::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::tokio::task::spawn_blocking;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara::{
-    assets::StoreOptions,
-    audio::{Audio, AudioConfig, ReadOutcome},
-    hls::{AbrMode, Hls, HlsConfig},
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
-};
 use kithara::{
     assets::{
         AcquisitionResult, AssetResource, AssetSource, AssetStoreBuilder, ReadSide, StorageBackend,
@@ -20,13 +13,18 @@ use kithara::{
     platform::{CancelToken, time::Duration},
 };
 #[cfg(not(target_arch = "wasm32"))]
+use kithara::{
+    audio::{Audio, AudioConfig, ReadOutcome},
+    hls::{AbrMode, Hls, HlsConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+};
+#[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::TestTempDir;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::create_wav_exact_bytes;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
 use kithara_integration_tests::signal_pcm::signal;
-#[cfg(not(target_arch = "wasm32"))]
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 use url::Url;
@@ -144,7 +142,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            StoreOptions::builder()
+            AssetStoreBuilder::default()
                 .backend(StorageBackend::Memory)
                 .build(),
         )

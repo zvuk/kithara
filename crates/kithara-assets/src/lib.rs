@@ -38,5 +38,4 @@ pub use resource::{
 };
 pub use store::{
     AssetReader, AssetStore, AssetStoreBuilder, AssetWriter, ResourceAcquisition, StorageBackend,
-    StoreOptions,
 };

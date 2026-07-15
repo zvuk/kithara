@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     decode::DecoderBackend,
     events::{AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
     net::{HttpClient, NetOptions},
@@ -179,9 +179,10 @@ fn build_queue_with_tick(
 ) -> (
     Arc<Queue>,
     Downloader,
-    StoreOptions,
+    AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
@@ -189,7 +190,11 @@ fn build_queue_with_tick(
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::default()
+            .with_player(player)
+            .with_store(store.clone()),
+    ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
         loop {
@@ -203,7 +208,6 @@ fn build_queue_with_tick(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
 

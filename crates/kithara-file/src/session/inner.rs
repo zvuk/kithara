@@ -24,7 +24,7 @@ use crate::{coord::FileCoord, error::SourceError};
 /// (`Pending` writer to download / `Ready` reader already cached) is decided
 /// by the caller.
 pub(crate) struct FileStreamState {
-    pub(crate) backend: Arc<AssetStore>,
+    pub(crate) backend: AssetStore,
     pub(crate) acq: ResourceAcquisition,
     pub(crate) bus: EventBus,
     pub(crate) key: ResourceKey,
@@ -32,7 +32,7 @@ pub(crate) struct FileStreamState {
 
 impl FileStreamState {
     pub(crate) fn create(
-        assets: &Arc<AssetStore>,
+        assets: &AssetStore,
         key: ResourceKey,
         bus: Option<EventBus>,
         event_channel_capacity: usize,
@@ -45,7 +45,7 @@ impl FileStreamState {
             bus,
             key,
             acq,
-            backend: Arc::clone(assets),
+            backend: assets.clone(),
         })
     }
 }
@@ -77,7 +77,7 @@ pub(crate) struct FileSourceCtx {
 /// present only on the download path; `raw` is the clone-able streaming-write
 /// handle a fetch closure uses to land bytes into the writer's generation.
 pub(crate) struct FileAssetCtx {
-    pub(crate) backend: Arc<AssetStore>,
+    pub(crate) backend: AssetStore,
     pub(crate) reader: AssetReader,
     pub(crate) writer: Mutex<Option<AssetWriter>>,
     pub(crate) headers: Option<Headers>,

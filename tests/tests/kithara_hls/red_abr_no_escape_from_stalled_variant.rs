@@ -42,7 +42,7 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
@@ -97,7 +97,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         .expect("create HLS fixture")
         .master_url();
 
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(64).expect("nonzero"))
         .build();

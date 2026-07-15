@@ -4,7 +4,7 @@
 use std::fmt::Write;
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::AbrMode,
@@ -408,7 +408,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let cfg = kithara::play::ResourceConfig::for_src(spec.url.as_str())
         .expect("valid track URL")
         .byte_pool(BytePool::default())
@@ -662,7 +662,7 @@ fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource {
     crate::kithara_queue::app_track_source(
         url,
         &ctx.config,
-        StoreOptions::new(ctx.cache.path()),
+        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
         DecoderBackend::Symphonia,
         AbrMode::Auto(None),
         None,

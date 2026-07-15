@@ -5,14 +5,13 @@ use std::{
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetResource, AssetResourceState, AssetScope, AssetSource, AssetStore,
-        AssetsError, ReadSide, ResourceKey, WriteSide,
+        AcquisitionResult, AssetResource, AssetResourceState, AssetStore, AssetsError, ReadSide,
+        ResourceKey, WriteSide,
     },
     audio::{BeatGrid, Waveform},
-    prelude::{File, Hls, ResourceConfig, ResourceSrc, SourceType},
+    decode::DecodeError,
+    prelude::ResourceConfig,
 };
-use kithara_platform::sync::Arc;
-use kithara_queue::TrackSource;
 use tracing::{debug, warn};
 
 use crate::waveform::TrackAnalysis;
@@ -26,60 +25,37 @@ impl Consts {
     const MAX_MEM_ENTRIES: usize = 64;
 }
 
-/// Cache key for a track's analysis.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct AnalysisKey {
-    layout: AnalysisLayout,
-    source: AssetSource,
+/// Physical analysis resource together with the store that owns it.
+#[derive(Clone, Debug)]
+pub(crate) struct AnalysisTarget {
+    key: ResourceKey,
+    store: AssetStore,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum AnalysisLayout {
-    File,
-    Hls,
-}
+impl AnalysisTarget {
+    pub(crate) fn for_config(config: &ResourceConfig) -> Result<Self, DecodeError> {
+        let key = config.asset_key(&AssetResource::Named {
+            namespace: "analysis".to_string(),
+            name: "track.analysis".to_string(),
+        })?;
+        Ok(Self {
+            key,
+            store: config.store().clone(),
+        })
+    }
 
-impl AnalysisKey {
-    #[cfg(test)]
-    pub(crate) fn new(asset_root: impl Into<String>) -> Self {
-        Self {
-            layout: AnalysisLayout::File,
-            source: AssetSource::Remote {
-                url: "https://analysis.test.invalid/track"
-                    .parse()
-                    .expect("valid analysis test URL"),
-                discriminator: Some(asset_root.into()),
-            },
-        }
+    pub(crate) fn key(&self) -> &ResourceKey {
+        &self.key
+    }
+
+    pub(crate) fn is_same(&self, other: &Self) -> bool {
+        self.key == other.key && self.store.is_same(&other.store)
     }
 }
 
-/// Cache key for a track source, or `None` for a source with no stable
-/// cross-session identity.
-pub(crate) fn source_key(source: &TrackSource) -> Option<AnalysisKey> {
-    match source {
-        TrackSource::Uri(src) => key_for_src(&ResourceConfig::parse_src(src).ok()?, None),
-        TrackSource::Config(cfg) => key_for_src(cfg.source(), cfg.name()),
-        _ => None,
-    }
-}
-
-/// `asset_root` for a source, mirroring `kithara-file`'s remote derivation
-/// (`name` first, else the URL query).
-fn key_for_src(src: &ResourceSrc, name: Option<&str>) -> Option<AnalysisKey> {
-    let discriminator = name.map(str::to_string);
-    let (layout, source) = match SourceType::detect(src).ok()? {
-        SourceType::RemoteFile(url) => (
-            AnalysisLayout::File,
-            AssetSource::Remote { url, discriminator },
-        ),
-        SourceType::HlsStream(url) => (
-            AnalysisLayout::Hls,
-            AssetSource::Remote { url, discriminator },
-        ),
-        SourceType::LocalFile(path) => (AnalysisLayout::File, AssetSource::Local { path }),
-    };
-    Some(AnalysisKey { layout, source })
+struct MemoryEntry {
+    analysis: TrackAnalysis,
+    target: AnalysisTarget,
 }
 
 /// Two-tier track-analysis memoization: a session in-memory map plus durable
@@ -87,19 +63,18 @@ fn key_for_src(src: &ResourceSrc, name: Option<&str>) -> Option<AnalysisKey> {
 /// track's storage lifecycle). Owned by the single listener task, so it needs
 /// no synchronization.
 pub(crate) struct TrackAnalysisCache {
-    mem: HashMap<AnalysisKey, TrackAnalysis>,
-    store: Option<Arc<AssetStore>>,
+    mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
     /// Active analysis configuration; blobs carrying a different one are
     /// cache misses.
     fingerprint: String,
-    /// Insertion order of `mem` keys; the oldest is evicted past the cap.
-    order: VecDeque<AnalysisKey>,
+    /// Insertion order of store-qualified targets; the oldest is evicted past
+    /// the cap.
+    order: VecDeque<AnalysisTarget>,
 }
 
 impl TrackAnalysisCache {
-    pub(crate) fn new(store: Option<Arc<AssetStore>>, fingerprint: String) -> Self {
+    pub(crate) fn new(fingerprint: String) -> Self {
         Self {
-            store,
             fingerprint,
             mem: HashMap::new(),
             order: VecDeque::new(),
@@ -108,24 +83,28 @@ impl TrackAnalysisCache {
 
     /// Look up a cached analysis: memory first, then the scope resource.
     /// `None` on a miss or an unreadable blob.
-    pub(crate) fn get(&mut self, key: &AnalysisKey) -> Option<TrackAnalysis> {
-        if let Some(analysis) = self.mem.get(key) {
-            return Some(analysis.clone());
+    pub(crate) fn get(&mut self, target: &AnalysisTarget) -> Option<TrackAnalysis> {
+        if let Some(analysis) = self.mem.get(&target.key).and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| entry.target.is_same(target))
+                .map(|entry| entry.analysis.clone())
+        }) {
+            return Some(analysis);
         }
-        let analysis = self.load_disk(key)?;
-        self.remember(key.clone(), analysis.clone());
+        let analysis = self.load_disk(target)?;
+        self.remember(target.clone(), analysis.clone());
         Some(analysis)
     }
 
-    fn load_disk(&self, key: &AnalysisKey) -> Option<TrackAnalysis> {
-        let store = self.store.as_ref()?;
-        let resource = Self::resource_key(store, key).ok()?;
+    fn load_disk(&self, target: &AnalysisTarget) -> Option<TrackAnalysis> {
+        let resource = &target.key;
         // Side-effect-free probe first: opening a missing key would create it.
-        match store.resource_state(&resource).ok()? {
+        match target.store.resource_state(resource).ok()? {
             AssetResourceState::Committed { .. } => {}
             _ => return None,
         }
-        let reader = store.open_resource(&resource, None).ok()?;
+        let reader = target.store.open_resource(resource, None).ok()?;
         let mut bytes = Vec::new();
         reader.read_into(&mut bytes).ok()?;
         match analysis_from_bytes(&bytes, &self.fingerprint) {
@@ -141,54 +120,49 @@ impl TrackAnalysisCache {
     }
 
     /// Store freshly derived track analysis in both tiers.
-    pub(crate) fn put(&mut self, key: AnalysisKey, analysis: TrackAnalysis) {
+    pub(crate) fn put(&mut self, target: AnalysisTarget, analysis: TrackAnalysis) {
         // An analysis with no meaningful slots would be served forever as
         // emptiness on later hits; skip memoizing it in either tier.
         if analysis.waveform().is_none() && analysis.beat().is_none() {
             return;
         }
-        self.store_disk(&key, &analysis);
-        self.remember(key, analysis);
+        self.store_disk(&target, &analysis);
+        self.remember(target, analysis);
     }
 
     /// Insert into the bounded memory tier, evicting the oldest entry past
     /// [`Consts::MAX_MEM_ENTRIES`]. Evicted entries are still served from disk.
-    fn remember(&mut self, key: AnalysisKey, analysis: TrackAnalysis) {
-        if self.mem.insert(key.clone(), analysis).is_none() {
-            self.order.push_back(key);
+    fn remember(&mut self, target: AnalysisTarget, analysis: TrackAnalysis) {
+        let entries = self.mem.entry(target.key.clone()).or_default();
+        if let Some(entry) = entries
+            .iter_mut()
+            .find(|entry| entry.target.is_same(&target))
+        {
+            entry.analysis = analysis;
+            return;
         }
+
+        entries.push(MemoryEntry {
+            analysis,
+            target: target.clone(),
+        });
+        self.order.push_back(target);
+
         while self.order.len() > Consts::MAX_MEM_ENTRIES {
             if let Some(old) = self.order.pop_front() {
-                self.mem.remove(&old);
+                let bucket_is_empty = self.mem.get_mut(old.key()).is_some_and(|entries| {
+                    entries.retain(|entry| !entry.target.is_same(&old));
+                    entries.is_empty()
+                });
+                if bucket_is_empty {
+                    self.mem.remove(old.key());
+                }
             }
         }
     }
 
-    fn scope(store: &AssetStore, key: &AnalysisKey) -> Result<AssetScope, AssetsError> {
-        match key.layout {
-            AnalysisLayout::File => store.scope::<File>(&key.source),
-            AnalysisLayout::Hls => store.scope::<Hls>(&key.source),
-        }
-    }
-
-    fn resource_key(store: &AssetStore, key: &AnalysisKey) -> Result<ResourceKey, AssetsError> {
-        Self::scope(store, key)?.key(&AssetResource::Named {
-            namespace: "analysis".to_string(),
-            name: "track.analysis".to_string(),
-        })
-    }
-
-    fn store_disk(&self, key: &AnalysisKey, analysis: &TrackAnalysis) {
-        let Some(store) = self.store.as_ref() else {
-            return;
-        };
-        let resource = match Self::resource_key(store, key) {
-            Ok(resource) => resource,
-            Err(e) => {
-                warn!(%e, "track analysis cache: invalid layout resource");
-                return;
-            }
-        };
+    fn store_disk(&self, target: &AnalysisTarget, analysis: &TrackAnalysis) {
+        let resource = &target.key;
         let bytes = match analysis_to_bytes(analysis, &self.fingerprint) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -196,7 +170,7 @@ impl TrackAnalysisCache {
                 return;
             }
         };
-        if let Err(e) = write_resource(store, &resource, &bytes) {
+        if let Err(e) = write_resource(&target.store, resource, &bytes) {
             warn!(%e, ?resource, "track analysis cache: blob write failed");
         }
     }
@@ -341,17 +315,22 @@ mod tests {
 
     // The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
-        assets::{AssetResourceState, AssetStore, AssetStoreBuilder, StorageBackend},
+        assets::{
+            AssetLayout, AssetLayoutRegistry, AssetResource, AssetResourceState, AssetSource,
+            AssetStore, AssetStoreBuilder, StorageBackend,
+        },
         audio::{BeatGrid, GridSegment, Waveform},
+        bufpool::{BytePool, PcmPool},
+        file::File,
         prelude::ResourceConfig,
     };
     use kithara_platform::sync::Arc;
-    use kithara_queue::TrackSource;
     use kithara_test_utils::kithara;
+    use url::Url;
 
     use super::{
-        AnalysisBytesError, AnalysisKey, Consts, TrackAnalysisCache, analysis_from_bytes,
-        analysis_to_bytes, source_key,
+        AnalysisBytesError, AnalysisTarget, Consts, TrackAnalysisCache, analysis_from_bytes,
+        analysis_to_bytes,
     };
     use crate::waveform::TrackAnalysis;
 
@@ -380,16 +359,45 @@ mod tests {
         TrackAnalysis::new(None, Some(wave()), 0)
     }
 
-    fn store_in(dir: &Path) -> Arc<AssetStore> {
-        Arc::new(
-            AssetStoreBuilder::default()
-                .backend(StorageBackend::Disk { root: dir.into() })
-                .build(),
+    fn store_in(dir: &Path) -> AssetStore {
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk { root: dir.into() })
+            .build()
+    }
+
+    fn memory_store() -> AssetStore {
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build()
+    }
+
+    fn config(store: &AssetStore, src: &str, discriminator: Option<&str>) -> ResourceConfig {
+        let builder = ResourceConfig::for_src(src)
+            .expect("valid test source")
+            .store(store.clone())
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default());
+        match discriminator {
+            Some(discriminator) => builder.discriminator(discriminator.to_string()).build(),
+            None => builder.build(),
+        }
+    }
+
+    fn target_for(store: &AssetStore, src: &str, discriminator: Option<&str>) -> AnalysisTarget {
+        AnalysisTarget::for_config(&config(store, src, discriminator))
+            .expect("test source has a layout-owned analysis target")
+    }
+
+    fn target(store: &AssetStore, discriminator: &str) -> AnalysisTarget {
+        target_for(
+            store,
+            "https://analysis.test.invalid/track.mp3",
+            Some(discriminator),
         )
     }
 
-    fn cache_over(store: &Arc<AssetStore>) -> TrackAnalysisCache {
-        TrackAnalysisCache::new(Some(Arc::clone(store)), FP.to_string())
+    fn analysis_cache() -> TrackAnalysisCache {
+        TrackAnalysisCache::new(FP.to_string())
     }
 
     #[kithara::test]
@@ -439,64 +447,129 @@ mod tests {
     }
 
     #[kithara::test]
-    fn source_identity_preserves_query_without_using_it_as_discriminator() {
-        let a = source_key(&TrackSource::Uri(
-            "https://h.example/track/streamhq?id=123".to_string(),
-        ))
-        .expect("url source is keyable");
-        let b = source_key(&TrackSource::Uri(
-            "https://h.example/track/streamhq?id=456".to_string(),
-        ))
-        .expect("url source is keyable");
-        assert_ne!(a, b, "distinct source URLs remain distinct memory keys");
+    fn source_identity_ignores_query_without_a_discriminator() {
+        let store = memory_store();
+        let a = target_for(&store, "https://h.example/track/streamhq.mp3?id=123", None);
+        let b = target_for(&store, "https://h.example/track/streamhq.mp3?id=456", None);
+        assert_eq!(
+            a.key(),
+            b.key(),
+            "query credentials do not fragment one logical asset"
+        );
 
-        let again = source_key(&TrackSource::Uri(
-            "https://h.example/track/streamhq?id=123".to_string(),
-        ))
-        .expect("url source is keyable");
-        assert_eq!(a, again, "keys are stable across calls");
+        let again = target_for(&store, "https://h.example/track/streamhq.mp3?id=123", None);
+        assert_eq!(a.key(), again.key(), "keys are stable across calls");
     }
 
     #[kithara::test]
-    fn config_source_shares_the_players_asset_root() {
-        let cfg = ResourceConfig::for_src("https://h.example/a.mp3?token=1")
-            .expect("valid url")
-            .byte_pool(::kithara::bufpool::BytePool::default())
-            .pcm_pool(::kithara::bufpool::PcmPool::default())
-            .build();
-        let from_cfg =
-            source_key(&TrackSource::Config(Box::new(cfg))).expect("config source is keyable");
-        let from_uri = source_key(&TrackSource::Uri(
-            "https://h.example/a.mp3?token=1".to_string(),
-        ))
-        .expect("url source is keyable");
-        assert_eq!(from_cfg, from_uri);
+    fn explicit_discriminator_separates_query_selected_content() {
+        let store = memory_store();
+        let src = "https://h.example/track/streamhq.mp3?id=123";
+        let a = target_for(&store, src, Some("content-a"));
+        let b = target_for(&store, src, Some("content-b"));
+
+        assert_ne!(a.key(), b.key());
+    }
+
+    #[kithara::test]
+    fn config_target_is_stable_and_layout_owned() {
+        let store = memory_store();
+        let cfg = config(&store, "https://h.example/a.mp3?token=1", None);
+        let first = AnalysisTarget::for_config(&cfg).expect("config source is keyable");
+        let second = AnalysisTarget::for_config(&cfg).expect("config source is keyable");
+
+        assert_eq!(first.key(), second.key());
+        assert_eq!(first.key().rel_path(), Some("analysis/track.analysis"));
     }
 
     #[kithara::test(native)]
     fn local_path_sources_are_keyable() {
-        let key = source_key(&TrackSource::Uri("/tmp/song.mp3".to_string()));
-        assert!(key.is_some(), "local files must cache their analysis");
+        let store = memory_store();
+        let target = AnalysisTarget::for_config(&config(&store, "/tmp/song.mp3", None));
+        assert!(target.is_ok(), "local files must cache their analysis");
+    }
+
+    #[derive(Debug)]
+    struct InvalidLayout;
+
+    impl AssetLayout for InvalidLayout {
+        fn root(&self, _source: &AssetSource) -> String {
+            "root".to_string()
+        }
+
+        fn path(&self, _resource: &AssetResource) -> String {
+            "../escape".to_string()
+        }
     }
 
     #[kithara::test]
-    fn memory_round_trips_without_store() {
-        let mut cache = TrackAnalysisCache::new(None, FP.to_string());
-        let key = AnalysisKey::new("root_a");
-        assert!(cache.get(&key).is_none());
-        cache.put(key.clone(), full_analysis());
-        let cached = cache.get(&key).expect("analysis must be cached");
+    fn invalid_layout_is_not_treated_as_an_uncacheable_source() {
+        let layouts = AssetLayoutRegistry::default().with::<File>(Arc::new(InvalidLayout));
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .layouts(layouts)
+            .build();
+        let target =
+            AnalysisTarget::for_config(&config(&store, "https://h.example/track.mp3", None));
+
+        assert!(
+            target.is_err(),
+            "invalid layout output must remain an error"
+        );
+    }
+
+    #[kithara::test]
+    fn memory_store_round_trips() {
+        let store = memory_store();
+        let target = target(&store, "root_a");
+        let mut cache = analysis_cache();
+        assert!(cache.get(&target).is_none());
+        cache.put(target.clone(), full_analysis());
+        let cached = cache.get(&target).expect("analysis must be cached");
         assert_eq!(cached.waveform().expect("waveform cached").len(), 1);
         assert!(cached.beat().is_some(), "beat grid rides along");
     }
 
     #[kithara::test]
+    fn same_key_in_different_stores_keeps_distinct_memory_entries() {
+        let first_store = memory_store();
+        let second_store = memory_store();
+        let src = "https://analysis.test.invalid/shared.mp3";
+        let first = target_for(&first_store, src, None);
+        let second = target_for(&second_store, src, None);
+        assert_eq!(first.key(), second.key());
+        assert!(!first.is_same(&second));
+
+        let mut cache = analysis_cache();
+        cache.put(first.clone(), TrackAnalysis::new(None, Some(wave()), 111));
+        cache.put(second.clone(), TrackAnalysis::new(None, Some(wave()), 222));
+
+        assert_eq!(
+            cache
+                .get(&first)
+                .expect("first store entry")
+                .source_frames(),
+            111
+        );
+        assert_eq!(
+            cache
+                .get(&second)
+                .expect("second store entry")
+                .source_frames(),
+            222
+        );
+        assert_eq!(cache.order.len(), 2);
+        assert_eq!(cache.mem.get(first.key()).map(Vec::len), Some(2));
+    }
+
+    #[kithara::test]
     fn empty_analysis_is_not_memoized() {
-        let mut cache = TrackAnalysisCache::new(None, FP.to_string());
-        let key = AnalysisKey::new("root_empty");
-        cache.put(key.clone(), TrackAnalysis::default());
+        let store = memory_store();
+        let target = target(&store, "root_empty");
+        let mut cache = analysis_cache();
+        cache.put(target.clone(), TrackAnalysis::default());
         assert!(
-            cache.get(&key).is_none(),
+            cache.get(&target).is_none(),
             "an analysis with no slots must not be served from the cache"
         );
     }
@@ -505,16 +578,19 @@ mod tests {
     fn memory_tier_is_bounded_with_disk_fallback() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = store_in(dir.path());
-        let mut cache = cache_over(&store);
+        let mut cache = analysis_cache();
+        let oldest = target(&store, "root_0");
         for i in 0..=Consts::MAX_MEM_ENTRIES {
-            cache.put(AnalysisKey::new(format!("root_{i}")), full_analysis());
+            cache.put(target(&store, &format!("root_{i}")), full_analysis());
         }
         assert!(
-            cache.mem.len() <= Consts::MAX_MEM_ENTRIES,
+            cache.order.len() <= Consts::MAX_MEM_ENTRIES,
             "memory tier stays bounded under a whole-library sweep"
         );
-        let oldest = AnalysisKey::new("root_0");
-        assert!(!cache.mem.contains_key(&oldest), "oldest entry evicted");
+        assert!(
+            !cache.mem.contains_key(oldest.key()),
+            "oldest entry evicted"
+        );
         assert!(
             cache.get(&oldest).is_some(),
             "evicted entry is still served from the disk tier"
@@ -525,13 +601,13 @@ mod tests {
     fn disk_survives_a_fresh_cache_instance() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = store_in(dir.path());
-        let key = AnalysisKey::new("root_b");
-        let mut writer = cache_over(&store);
-        writer.put(key.clone(), full_analysis());
+        let target = target(&store, "root_b");
+        let mut writer = analysis_cache();
+        writer.put(target.clone(), full_analysis());
 
         // A new cache with an empty memory tier must still find the blob.
-        let mut reader = cache_over(&store);
-        let cached = reader.get(&key).expect("disk analysis must load");
+        let mut reader = analysis_cache();
+        let cached = reader.get(&target).expect("disk analysis must load");
         assert_eq!(cached.waveform().expect("waveform persisted").len(), 1);
         assert_eq!(cached.beat().expect("beat grid persisted"), &grid());
     }
@@ -540,25 +616,29 @@ mod tests {
     fn artifact_is_a_scope_resource_and_dies_with_the_asset() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = store_in(dir.path());
-        let key = AnalysisKey::new("track_root");
-        let mut cache = cache_over(&store);
-        cache.put(key.clone(), full_analysis());
+        let url = Url::parse("https://analysis.test.invalid/track.mp3").expect("valid test URL");
+        let discriminator = "track_root";
+        let target = target_for(&store, url.as_str(), Some(discriminator));
+        let mut cache = analysis_cache();
+        cache.put(target.clone(), full_analysis());
 
-        let scope = TrackAnalysisCache::scope(&store, &key).expect("valid analysis scope");
-        let resource =
-            TrackAnalysisCache::resource_key(&store, &key).expect("valid analysis resource key");
         assert!(
             matches!(
-                store.resource_state(&resource),
+                store.resource_state(target.key()),
                 Ok(AssetResourceState::Committed { .. })
             ),
             "analysis blob must be a committed resource under the track scope"
         );
         // Deleting the asset takes the analysis with it.
+        let source = AssetSource::Remote {
+            url,
+            discriminator: Some(discriminator.to_string()),
+        };
+        let scope = store.scope::<File>(&source).expect("valid analysis scope");
         scope.delete_asset().expect("asset deletes");
-        let mut fresh = cache_over(&store);
+        let mut fresh = analysis_cache();
         assert!(
-            fresh.get(&key).is_none(),
+            fresh.get(&target).is_none(),
             "analysis must follow the track asset's lifecycle"
         );
     }
@@ -567,18 +647,18 @@ mod tests {
     fn stale_fingerprint_blob_is_re_analysed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = store_in(dir.path());
-        let key = AnalysisKey::new("root_fp");
-        let mut old = TrackAnalysisCache::new(Some(Arc::clone(&store)), "old-config".to_string());
-        old.put(key.clone(), full_analysis());
+        let target = target(&store, "root_fp");
+        let mut old = TrackAnalysisCache::new("old-config".to_string());
+        old.put(target.clone(), full_analysis());
 
-        let mut current = cache_over(&store);
+        let mut current = analysis_cache();
         assert!(
-            current.get(&key).is_none(),
+            current.get(&target).is_none(),
             "a blob from another analysis config must be a miss"
         );
         // Overwriting with the current config works.
-        current.put(key.clone(), full_analysis());
-        let mut fresh = cache_over(&store);
-        assert!(fresh.get(&key).is_some());
+        current.put(target.clone(), full_analysis());
+        let mut fresh = analysis_cache();
+        assert!(fresh.get(&target).is_some());
     }
 }

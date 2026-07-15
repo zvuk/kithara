@@ -103,12 +103,8 @@ impl<A> LeaseAssets<CachedAssets<A>>
 where
     A: Assets<Context = ProcessCtx>,
 {
-    /// Size the buried LRU handle cache to fit `media_items` resources.
-    /// Forwarded to the inner [`CachedAssets`], which owns the
-    /// headroom/cap policy; no atomic handle escapes the cache decorator.
-    /// Returns the capacity actually installed.
-    pub(crate) fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
-        self.inner.reserve_cache_for(media_items)
+    pub(crate) fn cache_capacity(&self) -> NonZeroUsize {
+        self.inner.cache_capacity()
     }
 }
 

@@ -162,6 +162,19 @@ The store is **not** generic over a processing context. Processing travels per a
 
 The in-memory cache key is `(ResourceKey, Option<RequestIdentity>, Option<CtxIdentity>)`, where `CtxIdentity` wraps `ResourceProcessor::identity()` (via the crate-internal `CacheIdentity` bridge). Equality is **byte-exact** `Eq`, not a hash digest — two distinct processors never collide. `CtxIdentity`'s `Debug` is redacted because the bytes can be key material (e.g. AES `key||iv`).
 
+### Memory byte bound
+
+`AssetStoreBuilder::max_bytes` has backend-specific ownership semantics. On
+disk, `EvictAssets` applies it to persisted asset roots. On memory,
+`CachedAssets` applies it to the aggregate bytes of committed, unretained
+resource entries held by the cache. The memory bound is checked after cache
+insertion, commit, and `CachedReader::release`; eviction uses the cache's
+frequency-aware LRU order and runs the volatile invalidation hook for every
+removed resource. Explicitly retained resources are exempt until released. A
+committed resource whose length is unknown is treated as unbounded and
+therefore cannot remain in a byte-bounded memory cache. This lifecycle work
+never runs from `read_at` or the decoder read loop.
+
 ## Conversions and builder inputs
 
 - `AssetStoreBuilder::{max_assets, max_bytes}` configure eviction directly;
@@ -203,5 +216,8 @@ let guard = store.subscribe_eviction(asset_root, tx); // EvictionSubscription
 ```
 
 - The ephemeral build path wires the router into the cache's single `on_invalidated` hook: when the cache volatile-displaces a resource the hook clears `AvailabilityIndex` and routes the evicted `ResourceKey` by its `asset_root` to the subscriber registered for that root. Keys under a different `asset_root` are not delivered.
-- One subscriber per `asset_root`, **last-writer-wins** (`DashMap::insert`), matching the HLS one-stream-per-`asset_root` model. The returned `EvictionSubscription` is an RAII guard that deregisters on drop; absolute keys (no `asset_root`) and unsubscribed roots no-op.
+- Every subscriber registered for an `asset_root` receives each eviction under
+  that root. The returned `EvictionSubscription` is an RAII guard that
+  deregisters only its own registration on drop; absolute keys (no
+  `asset_root`) and unsubscribed roots no-op.
 - Firing is gated by volatile displacement: it fires for ephemeral (`MemAssetStore`) backings, where displacement frees bytes, and is dormant for durable disk backings, where displaced bytes survive on disk — so the disk path wires no `on_invalidated` hook at all. There is no public callback and no builder field; the router reaches the cache only through the ephemeral path's hook.

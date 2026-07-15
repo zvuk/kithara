@@ -31,7 +31,6 @@
 //! `stress_chunk_integrity` asserts).
 
 use kithara::{
-    assets::StoreOptions,
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -116,7 +115,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     let cancel = CancelToken::never();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         // Manual variant 0 — no ABR, no recreate; isolate the read-ahead strand.
         .initial_abr_mode(AbrMode::manual(0))

@@ -1,10 +1,9 @@
-use kithara_assets::{FlushHub, StoreOptions};
 use kithara_audio::{AudioConfig, ResamplerBackend};
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancelScope, sync::Arc};
+use kithara_platform::CancelScope;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use url::Url;
 
@@ -22,20 +21,6 @@ fn derive_extension_hint(segment: &str) -> Option<String> {
         return None;
     }
     Some(extension.to_lowercase())
-}
-
-fn store_options_with_flush_hub(
-    store: &StoreOptions,
-    flush_hub: Option<Arc<FlushHub>>,
-) -> StoreOptions {
-    StoreOptions::builder()
-        .backend(store.backend.clone())
-        .maybe_cache_capacity(store.cache_capacity)
-        .maybe_flush_hub(flush_hub.or_else(|| store.flush_hub.clone()))
-        .maybe_layout(store.layout.clone())
-        .maybe_max_assets(store.max_assets)
-        .maybe_max_bytes(store.max_bytes)
-        .build()
 }
 
 impl<B> ResourceConfig<B>
@@ -56,7 +41,7 @@ where
                     .map(str::to_lowercase),
             ),
         };
-        let store = store_options_with_flush_hub(&self.store, self.flush_hub.clone());
+        let extension = self.hint.clone().or(derived_hint);
         let downloader = self.downloader.clone().unwrap_or_else(|| {
             let dl_cancel = CancelScope::new(self.cancel.clone()).token();
             let net_options = NetOptions::builder().byte_pool(byte_pool.clone()).build();
@@ -68,19 +53,19 @@ where
             )
         });
         let file_config = FileConfig::for_src(file_src)
-            .store(store)
+            .store(self.store.clone())
             .downloader(downloader)
-            .maybe_asset_store(self.asset_store.clone())
             .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers.clone())
-            .maybe_name(self.name.clone())
+            .maybe_discriminator(self.discriminator.clone())
+            .maybe_extension(extension.clone())
             .pool(byte_pool.clone())
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .build();
         AudioConfig::<kithara_file::File, B>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())
-            .maybe_hint(self.hint.or(derived_hint))
+            .maybe_hint(extension)
             .byte_pool(byte_pool)
             .pcm_pool(self.pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
@@ -104,16 +89,14 @@ where
                 });
             }
         };
-        let store = store_options_with_flush_hub(&self.store, self.flush_hub.clone());
         let hls_config = HlsConfig::for_url(url)
-            .store(store)
-            .maybe_asset_store(self.asset_store)
+            .store(self.store.clone())
             .keys(self.keys)
             .maybe_downloader(self.downloader)
             .initial_abr_mode(self.initial_abr_mode)
             .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers)
-            .maybe_name(self.name)
+            .maybe_discriminator(self.discriminator)
             .maybe_base_url(self.hls_base_url)
             .pool(byte_pool.clone())
             .maybe_events(self.bus.clone())

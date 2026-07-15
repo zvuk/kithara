@@ -2,7 +2,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     decode::DecoderBackend,
     events::{AbrMode, AudioEvent, Event, EventReceiver},
     net::{HttpClient, NetOptions},
@@ -220,7 +219,7 @@ async fn build_resource(
     url: &Url,
     downloader: &Downloader,
     iter_label: &str,
-    store: StoreOptions,
+    store: kithara::assets::AssetStore,
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
@@ -229,7 +228,7 @@ async fn build_resource(
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
-        .name(format!("{iter_label}|{url}"))
+        .discriminator(format!("{iter_label}|{url}"))
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -291,7 +290,7 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
     for iter in 0..Consts::ITERATIONS {
         let iter_label = format!("iter-{iter}");
         let temp = temp_dir();
-        let store = StoreOptions::new(temp.path());
+        let store = kithara_integration_tests::disk_asset_store(temp.path());
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),

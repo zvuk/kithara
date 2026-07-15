@@ -2,7 +2,7 @@ use std::fmt;
 
 use bon::Builder;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, BytePool, FlushHub, StoreOptions},
+    assets::{AssetStore, AssetStoreBuilder, BytePool, FlushHub, StorageBackend},
     audio::analysis::BeatAnalysisConfig,
     bufpool::PcmPool,
     hls::SizeProbeMethod,
@@ -23,9 +23,7 @@ use crate::{baked, theme::Palette};
 #[non_exhaustive]
 pub struct AppConfig {
     /// App-wide shared asset store.
-    pub asset_store: Arc<AssetStore>,
-    /// Shared `AssetStore` flush coordinator for every track.
-    pub flush_hub: Arc<FlushHub>,
+    pub store: AssetStore,
     /// App-wide shared byte pool for network and cache buffers.
     pub byte_pool: BytePool,
     /// App-wide shared PCM pool for playback and track analysis.
@@ -106,27 +104,18 @@ impl AppConfig {
         byte_pool: BytePool,
         pcm_pool: PcmPool,
     ) -> Self {
-        let store_options = StoreOptions::builder()
-            .flush_hub(Arc::clone(&flush_hub))
+        let store = AssetStoreBuilder::default()
+            .cancel(cancel.child())
+            .backend(StorageBackend::default())
+            .pool(byte_pool.clone())
+            .flush_hub(flush_hub)
             .build();
-        let asset_store = Arc::new(
-            AssetStoreBuilder::default()
-                .cancel(cancel.child())
-                .backend(store_options.backend.clone())
-                .maybe_max_assets(store_options.max_assets)
-                .maybe_max_bytes(store_options.max_bytes)
-                .pool(byte_pool.clone())
-                .maybe_cache_capacity(store_options.cache_capacity)
-                .maybe_flush_hub(store_options.flush_hub)
-                .build(),
-        );
         Self::builder()
             .downloader(downloader)
-            .flush_hub(flush_hub)
             .shutdown(cancel)
             .byte_pool(byte_pool)
             .pcm_pool(pcm_pool)
-            .asset_store(asset_store)
+            .store(store)
             .build()
     }
 }

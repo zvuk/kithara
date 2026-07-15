@@ -4,7 +4,7 @@
 use std::{io::Read, num::NonZeroUsize};
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStore, AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
     decode::DecoderBackend,
     file::{File as FileSource, FileConfig, FileSrc},
@@ -88,14 +88,16 @@ async fn mp3_endpoints() -> (url::Url, url::Url) {
     (ok.child_url("ok.mp3"), gone.url())
 }
 
-fn store_options(temp_dir: &TestTempDir, ephemeral: bool) -> StoreOptions {
-    let mut store = StoreOptions::new(temp_dir.path());
+fn asset_store(temp_dir: &TestTempDir, ephemeral: bool) -> AssetStore {
     if ephemeral {
-        store.backend = StorageBackend::Memory;
-        store.cache_capacity = Some(NonZeroUsize::new(4).expect("nonzero"));
-        store.max_assets = Some(8);
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
+            .max_assets(8)
+            .build()
+    } else {
+        kithara_integration_tests::disk_asset_store(temp_dir.path())
     }
-    store
 }
 
 /// Build a `ResourceConfig` with the common shape used throughout this
@@ -103,7 +105,7 @@ fn store_options(temp_dir: &TestTempDir, ephemeral: bool) -> StoreOptions {
 /// shared audio worker handle.
 fn resource_config(
     url: &url::Url,
-    store: StoreOptions,
+    store: AssetStore,
     backend: DecoderBackend,
     hint: Option<&str>,
     worker: Option<AudioWorkerHandle>,
@@ -126,7 +128,7 @@ fn resource_config(
 /// Open a resource with [`resource_config`] options; panics on error.
 async fn open_resource_full(
     url: &url::Url,
-    store: StoreOptions,
+    store: AssetStore,
     backend: DecoderBackend,
     hint: Option<&str>,
     worker: Option<AudioWorkerHandle>,
@@ -136,13 +138,13 @@ async fn open_resource_full(
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
 
-async fn open_resource(url: &url::Url, store: StoreOptions, backend: DecoderBackend) -> Resource {
+async fn open_resource(url: &url::Url, store: AssetStore, backend: DecoderBackend) -> Resource {
     open_resource_full(url, store, backend, Some("mp3"), None).await
 }
 
 async fn open_resource_with_worker(
     url: &url::Url,
-    store: StoreOptions,
+    store: AssetStore,
     worker: AudioWorkerHandle,
     backend: DecoderBackend,
 ) -> Resource {
@@ -151,7 +153,7 @@ async fn open_resource_with_worker(
 
 fn resource_config_with_worker(
     url: &url::Url,
-    store: StoreOptions,
+    store: AssetStore,
     worker: AudioWorkerHandle,
     backend: DecoderBackend,
 ) -> ResourceConfig {
@@ -160,7 +162,7 @@ fn resource_config_with_worker(
 
 fn resource_config_no_hint(
     url: &url::Url,
-    store: StoreOptions,
+    store: AssetStore,
     backend: DecoderBackend,
 ) -> ResourceConfig {
     resource_config(url, store, backend, None, None)
@@ -172,7 +174,7 @@ fn resource_config_no_hint(
 #[kithara::flash(true)]
 async fn warm_hls_worker(
     url: &url::Url,
-    store: StoreOptions,
+    store: AssetStore,
     worker: AudioWorkerHandle,
     backend: DecoderBackend,
 ) -> f64 {
@@ -231,7 +233,7 @@ async fn warm_hls_worker(
 #[kithara::flash(true)]
 async fn warm_hls_worker_without_seek(
     url: &url::Url,
-    store: StoreOptions,
+    store: AssetStore,
     worker: AudioWorkerHandle,
     backend: DecoderBackend,
 ) -> f64 {
@@ -269,7 +271,7 @@ async fn warm_hls_worker_without_seek(
     }
 }
 
-async fn read_hls_stream_some(url: &url::Url, store: StoreOptions) -> usize {
+async fn read_hls_stream_some(url: &url::Url, store: AssetStore) -> usize {
     let config = HlsConfig::for_url(url.clone()).store(store).build();
     let mut stream = Stream::<Hls>::new(config)
         .await
@@ -315,7 +317,7 @@ async fn create_packaged_single_variant_fixture(codec: AudioCodec) -> (TestServe
 
 async fn open_packaged_hls_audio(
     url: &url::Url,
-    store: StoreOptions,
+    store: AssetStore,
     _codec: AudioCodec,
     backend: DecoderBackend,
 ) -> Audio<Stream<Hls>> {
@@ -412,7 +414,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let (ok_url, bad_url) = mp3_endpoints().await;
-    let store = store_options(&temp_dir, true);
+    let store = asset_store(&temp_dir, true);
 
     let mut ok = open_resource(&ok_url, store.clone(), backend).await;
     assert!(read_some(&mut ok, "initial_ok").await > 0);
@@ -487,7 +489,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let (ok_url, _) = mp3_endpoints().await;
-    let store = store_options(&temp_dir, ephemeral);
+    let store = asset_store(&temp_dir, ephemeral);
 
     let mut first = open_resource(&ok_url, store.clone(), backend).await;
     assert!(read_some(&mut first, "first_initial").await > 0);
@@ -555,7 +557,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
             .build(),
     );
     let worker = player.worker().clone();
-    let store = store_options(&temp_dir, ephemeral);
+    let store = asset_store(&temp_dir, ephemeral);
     let hls_url = hls_server.url("/master.m3u8");
 
     let hls_pos = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
@@ -620,7 +622,7 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     let hls_server = open_audio_hls_server().await;
     let (ok_url, _) = mp3_endpoints().await;
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
-    let store = store_options(&temp_dir, true);
+    let store = asset_store(&temp_dir, true);
     let hls_url = hls_server.url("/master.m3u8");
 
     let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
@@ -731,8 +733,8 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     let temp_b = TestTempDir::new();
     let worker_a = AudioWorkerHandle::with_cancel(CancelToken::never());
     let worker_b = AudioWorkerHandle::with_cancel(CancelToken::never());
-    let store_a = store_options(&temp_a, false);
-    let store_b = store_options(&temp_b, true);
+    let store_a = asset_store(&temp_a, false);
+    let store_b = asset_store(&temp_b, true);
     let hls_url_a = server_a.url("/master.m3u8");
     let hls_url_b = server_b.url("/master.m3u8");
 
@@ -785,8 +787,8 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
     let temp_b = TestTempDir::new();
-    let store_a = store_options(&temp_a, false);
-    let store_b = store_options(&temp_b, true);
+    let store_a = asset_store(&temp_a, false);
+    let store_b = asset_store(&temp_b, true);
     let hls_url_a = server_a.url("/master.m3u8");
     let hls_url_b = server_b.url("/master.m3u8");
 
@@ -837,7 +839,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     use kithara_integration_tests::offline::OfflinePlayer;
 
     let (_server, url) = create_packaged_single_variant_fixture(codec).await;
-    let store = StoreOptions::new(temp_dir.path());
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
 
     let mut progress_audio = open_packaged_hls_audio(&url, store.clone(), codec, backend).await;
     let mut progress_rx = progress_audio.events();
@@ -965,7 +967,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
             .build(),
     );
     let worker = player.worker().clone();
-    let store = store_options(&temp_dir, ephemeral);
+    let store = asset_store(&temp_dir, ephemeral);
     let hls_url = hls_server.url("/master.m3u8");
 
     let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
@@ -1035,7 +1037,7 @@ async fn stress_offline_crossfade_no_gaps() {
     let block_budget = Duration::from_secs_f64(BLOCK as f64 / f64::from(SR));
 
     let hls_server = open_audio_hls_server().await;
-    let store = store_options(&temp_dir(), true);
+    let store = asset_store(&temp_dir(), true);
     let hls_url = hls_server.url("/master.m3u8");
 
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
@@ -1043,10 +1045,10 @@ async fn stress_offline_crossfade_no_gaps() {
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
-    let make_mp3 = |w: AudioWorkerHandle, _s: StoreOptions| {
+    let make_mp3 = |w: AudioWorkerHandle, s: AssetStore| {
         let p = local_mp3.clone();
         async move {
-            let file_cfg = FileConfig::new(FileSrc::Local(p));
+            let file_cfg = FileConfig::new(FileSrc::Local(p), s);
             let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
                 .byte_pool(kithara::bufpool::BytePool::default())
                 .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -1060,7 +1062,7 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    let make_hls = |w: AudioWorkerHandle, s: StoreOptions| {
+    let make_hls = |w: AudioWorkerHandle, s: AssetStore| {
         let u = hls_url.clone();
         async move {
             let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -1240,7 +1242,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
         Some(s) => handle.child_url(s),
         None => handle.url(),
     };
-    let store = store_options(&temp_dir, true);
+    let store = asset_store(&temp_dir, true);
     let path = url.as_str();
 
     let config = resource_config_no_hint(&url, store, backend);
@@ -1413,7 +1415,7 @@ async fn live_remote_resource_decodes_with_duration(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let store = store_options(&temp_dir, true);
+    let store = asset_store(&temp_dir, true);
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_secs(25))
         .build();
@@ -1541,7 +1543,7 @@ async fn player_mp3_duration_matches_app_flow(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let store = store_options(&temp_dir, true);
+    let store = asset_store(&temp_dir, true);
 
     let player = PlayerImpl::new(
         PlayerConfig::builder()
@@ -1645,7 +1647,7 @@ async fn local_resource_decodes_with_duration(
                 .master_url()
         }
     };
-    let store = store_options(&temp_dir, true);
+    let store = asset_store(&temp_dir, true);
     let config = ResourceConfig::for_src(url.as_str())
         .expect("valid URL")
         .store(store)

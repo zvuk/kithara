@@ -2,7 +2,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     events::{
         AbrMode, AudioEvent, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
     },
@@ -239,7 +238,7 @@ impl Harness {
             ))
             .build(),
         );
-        let store = StoreOptions::new(temp_dir.path());
+        let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
                 .byte_pool(kithara::bufpool::BytePool::default())

@@ -5,7 +5,6 @@ use std::{error::Error, io::Read};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::tokio::task::spawn_blocking;
 use kithara::{
-    assets::StoreOptions,
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::{
@@ -49,7 +48,7 @@ async fn test_basic_hls_playback(
 
     info!("Opening HLS source...");
     let config = HlsConfig::for_url(test_stream_url.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(rt_cancel)
         .events(bus)
         .build();
@@ -104,7 +103,7 @@ async fn test_hls_session_creation(
     let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::for_url(test_stream_url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(rt_cancel)
         .events(bus)
         .build();
@@ -179,7 +178,7 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         let config = HlsConfig::for_url(url)
-            .store(StoreOptions::new(temp_dir.path()))
+            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
             .cancel(rt_cancel)
             .build();
 

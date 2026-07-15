@@ -82,6 +82,9 @@ impl AssetDeleter for DiskAssetDeleter {
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        if key.is_absolute() {
+            return Err(AssetsError::InvalidKey);
+        }
         let path = match key.kind() {
             ResourceKeyKind::Relative {
                 asset_root,
@@ -91,7 +94,7 @@ impl AssetDeleter for DiskAssetDeleter {
                 let safe_rel = sanitize_rel(rel_path).map_err(|()| AssetsError::InvalidKey)?;
                 self.root_dir.join(safe_root).join(safe_rel)
             }
-            ResourceKeyKind::Absolute(path) => path.clone(),
+            ResourceKeyKind::Absolute(_) => return Err(AssetsError::InvalidKey),
         };
         match fs::remove_file(path) {
             Ok(()) => {}
@@ -186,6 +189,13 @@ impl DiskAssetStore {
         )?)
     }
 
+    fn open_absolute_resource(&self, key: &ResourceKey) -> AssetsResult<Option<BaseReader>> {
+        let Some(path) = key.as_absolute_path() else {
+            return Ok(None);
+        };
+        Ok(Some(BaseReader::open_read_only_file(path, &self.cancel)?))
+    }
+
     fn open_storage_resource(
         &self,
         key: &ResourceKey,
@@ -277,14 +287,14 @@ impl Assets for DiskAssetStore {
         _identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<AcquisitionResult<BaseWriter, BaseReader>> {
+        if let Some(reader) = self.open_absolute_resource(key)? {
+            return Ok(AcquisitionResult::Ready(reader));
+        }
+
         let path = self.resource_path(key)?;
-        if key.is_absolute() || (path.exists() && path.metadata().is_ok_and(|m| m.len() > 0)) {
-            let mode = if key.is_absolute() {
-                OpenMode::ReadOnly
-            } else {
-                OpenMode::Auto
-            };
-            let storage = StorageResource::from(self.open_storage_resource(key, path, mode)?);
+        if path.exists() && path.metadata().is_ok_and(|m| m.len() > 0) {
+            let storage =
+                StorageResource::from(self.open_storage_resource(key, path, OpenMode::Auto)?);
             if matches!(storage.status(), ResourceStatus::Committed { .. }) {
                 return Ok(AcquisitionResult::Ready(BaseReader::new(storage)));
             }
@@ -323,6 +333,10 @@ impl Assets for DiskAssetStore {
         _identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<BaseReader> {
+        if let Some(reader) = self.open_absolute_resource(key)? {
+            return Ok(reader);
+        }
+
         let path = self.resource_path(key)?;
         if !path.exists() {
             return Err(IoError::new(ErrorKind::NotFound, "resource missing").into());
@@ -439,6 +453,25 @@ mod tests {
         let mut buf = [0u8; 15];
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(&buf[..n], b"fake audio data");
+    }
+
+    #[kithara::test]
+    fn direct_store_cannot_remove_absolute_resource() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("local_audio.mp3");
+        fs::write(&file_path, b"fake audio data").unwrap();
+        let store = DiskAssetStore::new(
+            dir.path().join("cache"),
+            CancelToken::never(),
+            &crate::BytePool::default(),
+        );
+        let key = ResourceKey::absolute(&file_path).expect("absolute test path");
+
+        assert!(matches!(
+            store.remove_resource(&key),
+            Err(AssetsError::InvalidKey)
+        ));
+        assert_eq!(fs::read(file_path).unwrap(), b"fake audio data");
     }
 
     #[kithara::test]

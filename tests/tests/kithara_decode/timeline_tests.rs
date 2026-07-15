@@ -92,7 +92,6 @@ fn test_progressive_file_seek_resets_frame_offset() {
 #[cfg(not(target_arch = "wasm32"))]
 mod hls_timeline {
     use kithara::{
-        assets::StoreOptions,
         decode::{DecoderConfig, DecoderFactory},
         hls::{AbrMode, Hls, HlsConfig},
         platform::{CancelToken, sync::Arc, time::Duration, tokio},
@@ -140,7 +139,7 @@ mod hls_timeline {
         let cancel = CancelToken::never();
 
         let hls_config = HlsConfig::for_url(url)
-            .store(StoreOptions::new(temp_dir.path()))
+            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
             .cancel(cancel)
             .initial_abr_mode(AbrMode::manual(0))
             .build();

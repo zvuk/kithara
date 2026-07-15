@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken, thread,
@@ -151,11 +151,14 @@ async fn drm_stream_byte_integrity(
     let url = server.asset(path);
     let cancel = CancelToken::never();
 
-    let mut store = StoreOptions::new(temp_dir.path());
-    if ephemeral {
-        store.backend = StorageBackend::Memory;
-        store.cache_capacity = Some(NonZeroUsize::new(40).expect("nonzero"));
-    }
+    let store = if ephemeral {
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cache_capacity(NonZeroUsize::new(40).expect("nonzero"))
+            .build()
+    } else {
+        kithara_integration_tests::disk_asset_store(temp_dir.path())
+    };
 
     let abr_mode = if abr_variant == 99 {
         auto(0)

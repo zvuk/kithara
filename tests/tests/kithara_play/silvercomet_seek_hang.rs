@@ -4,7 +4,6 @@
 use std::{fs::File, io::Write, path::Path};
 
 use kithara::{
-    assets::StoreOptions,
     decode::DecoderBackend,
     events::AbrMode,
     net::{HttpClient, NetOptions},
@@ -117,7 +116,7 @@ async fn build_resource(
     url: &str,
     downloader: &Downloader,
     iter_label: &str,
-    store: StoreOptions,
+    store: kithara::assets::AssetStore,
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
@@ -126,7 +125,7 @@ async fn build_resource(
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
-        .name(format!("{iter_label}|{url}"))
+        .discriminator(format!("{iter_label}|{url}"))
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -250,7 +249,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
     for iter in 0..Consts::ITERATIONS {
         let iter_label = format!("iter-{iter}");
         let temp = temp_dir();
-        let store = StoreOptions::new(temp.path());
+        let store = kithara_integration_tests::disk_asset_store(temp.path());
         let downloader = fresh_downloader();
 
         let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);

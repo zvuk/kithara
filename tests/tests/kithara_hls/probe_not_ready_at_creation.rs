@@ -41,7 +41,7 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig},
     hls::{Hls, HlsConfig},
     net::{NetOptions, RetryPolicy},
@@ -92,7 +92,7 @@ fn fixture_config() -> HlsTestServerConfig {
 }
 
 fn audio_config(server: &HlsTestServer) -> AudioConfig<Hls> {
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();

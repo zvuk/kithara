@@ -44,11 +44,9 @@ fn make_coord() -> Arc<FileCoord> {
 }
 
 fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
-    let backend = Arc::new(
-        AssetStoreBuilder::default()
-            .cancel(CancelToken::never())
-            .build(),
-    );
+    let backend = AssetStoreBuilder::default()
+        .cancel(CancelToken::never())
+        .build();
     let key = test_key(&backend, "test-source");
     FileSource::local(
         reader,

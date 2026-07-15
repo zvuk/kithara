@@ -57,7 +57,7 @@ impl FileSource {
         reader: AssetReader,
         coord: Arc<FileCoord>,
         bus: EventBus,
-        backend: Arc<AssetStore>,
+        backend: AssetStore,
         key: ResourceKey,
         cancel: CancelToken,
         cached_codec: Option<AudioCodec>,

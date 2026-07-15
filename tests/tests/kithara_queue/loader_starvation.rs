@@ -12,7 +12,7 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     events::{AbrMode, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -88,9 +88,10 @@ fn build_queue_with_tick(
 ) -> (
     Arc<Queue>,
     Downloader,
-    StoreOptions,
+    AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
@@ -102,6 +103,7 @@ fn build_queue_with_tick(
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .max_concurrent_loads(cap)
+            .store(store.clone())
             .build()
             .with_player(player),
     ));
@@ -118,7 +120,6 @@ fn build_queue_with_tick(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
 

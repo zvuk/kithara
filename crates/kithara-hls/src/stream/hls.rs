@@ -2,10 +2,7 @@
 
 use std::sync::OnceLock;
 
-use kithara_assets::{
-    AssetLayoutRegistry, AssetSource, AssetStore, AssetStoreBuilder, BytePool, ResourceKey,
-    StorageBackend, StoreOptions,
-};
+use kithara_assets::{AssetSource, ResourceKey};
 use kithara_events::{DeferredBus, EventBus, HlsError as EventHlsError, HlsEvent, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -39,14 +36,15 @@ use crate::{
 pub struct Hls;
 
 fn effective_look_ahead_segments(config: &HlsConfig) -> Option<usize> {
-    if config.store.backend != StorageBackend::Memory {
-        return None;
-    }
-    let capacity = config.store.cache_capacity?;
+    let capacity = config.store.ephemeral_cache_capacity()?;
+    let maximum = config
+        .ephemeral_cache_max_media_window
+        .max(config.ephemeral_cache_min_media_window);
     let bounded = capacity
         .get()
         .saturating_sub(config.ephemeral_cache_non_media_reserve)
-        .max(config.ephemeral_cache_min_media_window);
+        .max(config.ephemeral_cache_min_media_window)
+        .min(maximum);
     Some(capacity.get().min(bounded))
 }
 
@@ -71,13 +69,10 @@ impl StreamType for Hls {
 
         let (evict_tx, evict_rx) = mpsc::unbounded_channel::<ResourceKey>();
 
-        let store = config
-            .asset_store
-            .clone()
-            .unwrap_or_else(|| Arc::new(build_asset_store(&config, cancel.clone())));
+        let store = config.store.clone();
         let source = AssetSource::Remote {
             url: config.url.clone(),
-            discriminator: config.name.clone(),
+            discriminator: config.discriminator.clone(),
         };
         let scope = store
             .scope::<Self>(&source)
@@ -103,28 +98,6 @@ impl StreamType for Hls {
         );
 
         let (master, media_playlists) = load_playlists(&stream_peer, &bus, &config).await?;
-
-        // Size the private per-stream LRU handle cache to the variant's
-        // segment count when the caller left it at the default, so random
-        // seeks reuse open segment resources instead of thrashing a tiny
-        // window into repeated re-opens. The store owns the headroom/cap
-        // policy; shared stores are app-wide and must not be resized here.
-        if config.asset_store.is_none() && config.store.cache_capacity.is_none() {
-            let max_variant_segments = media_playlists
-                .iter()
-                .map(|mp| mp.segments.len())
-                .max()
-                .unwrap_or(0);
-            let installed = stream_peer
-                .scope()
-                .store()
-                .reserve_cache_for(max_variant_segments);
-            tracing::debug!(
-                max_variant_segments,
-                cache_capacity = installed.get(),
-                "sized private per-stream handle cache"
-            );
-        }
 
         let key_store = KeyStore::with_options(
             stream_peer.peer_handle(),
@@ -302,52 +275,63 @@ fn default_downloader(config: &HlsConfig, cancel: &CancelToken) -> Downloader {
     Downloader::new(dl_config)
 }
 
-/// Build a private per-stream `AssetStore` (cache, flush hub; AES-128
-/// decryption travels per-acquire as a `ProcessCtx`). The caller
-/// subscribes its eviction channel via
-/// [`AssetStore::subscribe_eviction`](kithara_assets::AssetStore::subscribe_eviction).
-fn build_asset_store(config: &HlsConfig, cancel: CancelToken) -> AssetStore {
-    AssetStoreBuilder::default()
-        .cancel(cancel)
-        .backend(config.store.backend.clone())
-        .layouts(layout_registry(&config.store))
-        .maybe_max_assets(config.store.max_assets)
-        .maybe_max_bytes(config.store.max_bytes)
-        .pool(config.pool.clone())
-        .maybe_cache_capacity(config.store.cache_capacity)
-        .maybe_flush_hub(config.store.flush_hub.clone())
-        .build()
-}
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroUsize;
 
-/// Build an app-wide shared HLS asset store.
-///
-/// Inject the result into every [`HlsConfig::asset_store`] that should
-/// cooperate on a single cache. Per-stream eviction delivery is bound by
-/// [`AssetStore::subscribe_eviction`].
-#[must_use]
-pub fn build_shared_asset_store(
-    store: &StoreOptions,
-    pool: BytePool,
-    cancel: CancelToken,
-) -> Arc<AssetStore> {
-    Arc::new(
-        AssetStoreBuilder::default()
-            .cancel(cancel)
-            .backend(store.backend.clone())
-            .layouts(layout_registry(store))
-            .maybe_max_assets(store.max_assets)
-            .maybe_max_bytes(store.max_bytes)
-            .pool(pool)
-            .maybe_cache_capacity(store.cache_capacity)
-            .maybe_flush_hub(store.flush_hub.clone())
-            .build(),
-    )
-}
+    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_test_utils::kithara;
+    use url::Url;
 
-fn layout_registry(store: &StoreOptions) -> AssetLayoutRegistry {
-    let mut layouts = AssetLayoutRegistry::default();
-    if let Some(layout) = &store.layout {
-        layouts.register::<Hls>(Arc::clone(layout));
+    use super::*;
+
+    fn config_with_capacity(capacity: usize) -> HlsConfig {
+        let capacity = NonZeroUsize::new(capacity).expect("test capacity must be non-zero");
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cache_capacity(capacity)
+            .build();
+        let url = Url::parse("https://example.com/master.m3u8").expect("valid test URL");
+        HlsConfig::new(url, store)
     }
-    layouts
+
+    #[kithara::test]
+    fn default_window_keeps_two_streams_within_shared_capacity() {
+        let config = config_with_capacity(128);
+
+        assert_eq!(effective_look_ahead_segments(&config), Some(60));
+    }
+
+    #[kithara::test]
+    fn window_preserves_reserve_below_default_maximum() {
+        let config = config_with_capacity(63);
+
+        assert_eq!(effective_look_ahead_segments(&config), Some(59));
+    }
+
+    #[kithara::test]
+    fn window_preserves_minimum_until_capacity_is_exhausted() {
+        let at_minimum = config_with_capacity(3);
+        let below_minimum = config_with_capacity(2);
+
+        assert_eq!(effective_look_ahead_segments(&at_minimum), Some(3));
+        assert_eq!(effective_look_ahead_segments(&below_minimum), Some(2));
+    }
+
+    #[kithara::test]
+    fn configured_maximum_bounds_the_window() {
+        let mut config = config_with_capacity(128);
+        config.ephemeral_cache_max_media_window = 10;
+
+        assert_eq!(effective_look_ahead_segments(&config), Some(10));
+    }
+
+    #[kithara::test]
+    fn configured_minimum_takes_precedence_over_smaller_maximum() {
+        let mut config = config_with_capacity(128);
+        config.ephemeral_cache_min_media_window = 8;
+        config.ephemeral_cache_max_media_window = 2;
+
+        assert_eq!(effective_look_ahead_segments(&config), Some(8));
+    }
 }

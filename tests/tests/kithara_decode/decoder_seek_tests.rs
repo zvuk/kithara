@@ -1,5 +1,4 @@
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::DecoderBackend,
     events::{AudioEvent, Event, EventBus},
@@ -24,7 +23,7 @@ async fn open_test_mp3(
 ) -> Audio<Stream<File>> {
     let url = server.asset("test.mp3");
     let file_config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())

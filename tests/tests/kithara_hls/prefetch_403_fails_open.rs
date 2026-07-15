@@ -3,7 +3,6 @@
 use std::error::Error;
 
 use kithara::{
-    assets::StoreOptions,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration},
     stream::Stream,
@@ -33,7 +32,7 @@ async fn prefetch_403_returns_err_quickly(
 
     let url = server.url("/master-encrypted.m3u8");
     let config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .build();
 

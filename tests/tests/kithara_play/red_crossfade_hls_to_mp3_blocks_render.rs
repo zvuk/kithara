@@ -27,13 +27,12 @@ impl Consts {
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
 )]
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
-    use kithara::assets::{StorageBackend, StoreOptions};
+    use kithara::assets::{AssetStore, AssetStoreBuilder, StorageBackend};
     use kithara_integration_tests::{
         create_wav_exact_bytes,
         hls_server::{HlsTestServer, HlsTestServerConfig},
         offline::OfflinePlayer,
         signal_pcm::signal,
-        temp_dir,
     };
 
     const HLS_SEGMENT_COUNT: usize = 3;
@@ -56,11 +55,11 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         ..Default::default()
     })
     .await;
-    let temp = temp_dir();
-    let mut store = StoreOptions::new(temp.path());
-    store.backend = StorageBackend::Memory;
-    store.cache_capacity = Some(std::num::NonZeroUsize::new(4).expect("nonzero"));
-    store.max_assets = Some(8);
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .cache_capacity(std::num::NonZeroUsize::new(4).expect("nonzero"))
+        .max_assets(8)
+        .build();
     let hls_url = hls_server.url("/master.m3u8");
 
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
@@ -70,8 +69,9 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     let make_mp3 = |w: AudioWorkerHandle| {
         let p = local_mp3.clone();
+        let store = store.clone();
         async move {
-            let file_cfg = FileConfig::new(FileSrc::Local(p));
+            let file_cfg = FileConfig::new(FileSrc::Local(p), store);
             let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
                 .byte_pool(kithara::bufpool::BytePool::default())
                 .pcm_pool(kithara::bufpool::PcmPool::default())
@@ -85,7 +85,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         }
     };
 
-    let make_hls = |w: AudioWorkerHandle, s: StoreOptions| {
+    let make_hls = |w: AudioWorkerHandle, s: AssetStore| {
         let u = hls_url.clone();
         async move {
             let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));

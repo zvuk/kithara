@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kithara::assets::{AssetLayout, AssetResource, AssetSource, DefaultLayout};
+use kithara_assets::{AssetLayout, AssetResource, AssetSource, DefaultLayout};
 use kithara_platform::sync::Arc;
 
 use crate::layout::FfiAssetLayout;
@@ -29,7 +29,7 @@ impl AssetLayout for ForeignLayout {
 }
 
 /// Resolve the optional foreign delegate into a shared core layout. `None`
-/// keeps the store's [`DefaultLayout`](kithara::assets::DefaultLayout).
+/// keeps the store's [`DefaultLayout`].
 pub(crate) fn resolve_layout(
     layout: Option<&Arc<dyn FfiAssetLayout>>,
 ) -> Option<Arc<dyn AssetLayout>> {
@@ -38,7 +38,7 @@ pub(crate) fn resolve_layout(
 
 #[cfg(test)]
 mod tests {
-    use kithara::assets::{
+    use kithara_assets::{
         AcquisitionResult, AssetLayoutRegistry, AssetStoreBuilder, AssetsError,
         ResourceAcquisition, StorageBackend, WriteSide,
     };

@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
 use kithara_assets::{
-    AcquisitionResult, AssetLayoutRegistry, AssetReader, AssetResource, AssetSource, AssetStore,
-    AssetStoreBuilder, AssetWriter, AssetsError, BytePool, ReadSide, ResourceKey, StoreOptions,
-    WriteSide,
+    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, AssetWriter,
+    AssetsError, BytePool, ReadSide, ResourceKey, WriteSide,
 };
 use kithara_events::{EventBus, FileError, FileEvent};
 use kithara_net::{Headers, HttpClient, NetOptions};
@@ -39,7 +38,7 @@ impl Consts {
 }
 
 struct RemoteFileOpen {
-    backend: Arc<AssetStore>,
+    backend: AssetStore,
     cancel: CancelToken,
     downloader: Downloader,
     bus: EventBus,
@@ -83,7 +82,7 @@ fn completed_coord(len: Option<u64>) -> Arc<FileCoord> {
 fn cached_source(
     reader: AssetReader,
     bus: EventBus,
-    backend: Arc<AssetStore>,
+    backend: AssetStore,
     key: ResourceKey,
     cancel: CancelToken,
 ) -> FileSource {
@@ -100,26 +99,31 @@ fn publish_open_error(bus: Option<&EventBus>, error: &SourceError) {
     }
 }
 
-fn source_extension(url: &url::Url) -> String {
-    url.path_segments()
-        .and_then(Iterator::last)
-        .and_then(|leaf| leaf.rsplit_once('.'))
-        .filter(|(stem, extension)| {
-            !stem.is_empty()
-                && !extension.is_empty()
-                && extension.len() <= Consts::MAX_EXTENSION_LEN
-                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+fn valid_extension(extension: &str) -> Option<String> {
+    let extension = extension.strip_prefix('.').unwrap_or(extension);
+    (!extension.is_empty()
+        && extension.len() <= Consts::MAX_EXTENSION_LEN
+        && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+    .then(|| extension.to_ascii_lowercase())
+}
+
+fn source_extension(url: &url::Url, hint: Option<&str>) -> String {
+    hint.and_then(valid_extension)
+        .or_else(|| {
+            url.path_segments()
+                .and_then(Iterator::last)
+                .and_then(|leaf| leaf.rsplit_once('.'))
+                .filter(|(stem, _)| !stem.is_empty())
+                .and_then(|(_, extension)| valid_extension(extension))
         })
-        .map_or_else(
-            || Consts::DEFAULT_EXTENSION.to_string(),
-            |(_, extension)| extension.to_ascii_lowercase(),
-        )
+        .unwrap_or_else(|| Consts::DEFAULT_EXTENSION.to_string())
 }
 
 fn remote_key(
     store: &AssetStore,
     url: &url::Url,
     discriminator: Option<String>,
+    extension: Option<&str>,
 ) -> Result<ResourceKey, SourceError> {
     let source = AssetSource::Remote {
         url: url.clone(),
@@ -127,7 +131,7 @@ fn remote_key(
     };
     let scope = store.scope::<File>(&source)?;
     let resource = AssetResource::Source {
-        extension: source_extension(url),
+        extension: source_extension(url, extension),
     };
     scope.key(&resource).map_err(SourceError::from)
 }
@@ -221,12 +225,7 @@ impl File {
         cancel: &CancelToken,
     ) -> Result<FileSource, SourceError> {
         let key = local_key(path)?;
-        let store = Arc::new(
-            AssetStoreBuilder::default()
-                .cancel(cancel.clone())
-                .maybe_pool(config.pool.clone())
-                .build(),
-        );
+        let store = config.store.clone();
         let bus = config
             .bus
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
@@ -251,21 +250,20 @@ impl File {
         cancel: CancelToken,
     ) -> Result<FileSource, SourceError> {
         let FileConfig {
-            asset_store,
             bus,
+            discriminator,
             downloader,
             event_channel_capacity,
+            extension,
             headers,
             look_ahead_bytes,
-            name,
             pool,
             store,
             ..
         } = config;
         let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pool.clone()));
-        let backend =
-            asset_store.unwrap_or_else(|| build_shared_asset_store(&store, pool, cancel.clone()));
-        let key = remote_key(&backend, &url, name)?;
+        let backend = store;
+        let key = remote_key(&backend, &url, discriminator, extension.as_deref())?;
         let publish_bus = bus.clone();
         let file_state = FileStreamState::create(&backend, key, bus, event_channel_capacity)
             .inspect_err(|error| publish_open_error(publish_bus.as_ref(), error))?;
@@ -348,39 +346,6 @@ impl File {
     }
 }
 
-/// Build an app-wide shared file asset store from [`StoreOptions`].
-///
-/// Inject the result into every [`FileConfig::asset_store`](crate::FileConfig)
-/// that should cooperate on a single cache so concurrent consumers of
-/// one URL share a single download. `cancel` must be a child of the app
-/// master so a shutdown cascades through the store. Also used as the
-/// standalone default when no store is injected (single consumer).
-#[must_use]
-pub(crate) fn build_shared_asset_store(
-    store: &StoreOptions,
-    pool: Option<BytePool>,
-    cancel: CancelToken,
-) -> Arc<AssetStore> {
-    let layouts = store
-        .layout
-        .as_ref()
-        .map_or_else(AssetLayoutRegistry::default, |layout| {
-            AssetLayoutRegistry::new(Arc::clone(layout))
-        });
-    Arc::new(
-        AssetStoreBuilder::default()
-            .cancel(cancel)
-            .backend(store.backend.clone())
-            .layouts(layouts)
-            .maybe_max_assets(store.max_assets)
-            .maybe_max_bytes(store.max_bytes)
-            .maybe_pool(pool)
-            .maybe_cache_capacity(store.cache_capacity)
-            .maybe_flush_hub(store.flush_hub.clone())
-            .build(),
-    )
-}
-
 fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
     let mut buf = [0u8; 16];
     let read = reader.read_at(0, &mut buf).ok()?;
@@ -389,7 +354,7 @@ fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_assets::StorageBackend;
+    use kithara_assets::{AssetStoreBuilder, StorageBackend};
 
     use super::*;
 
@@ -405,7 +370,15 @@ mod tests {
     #[case("https://example.com/audio.thisextensionistoolong", "bin")]
     #[case("https://example.com/audio.m%2F4a", "bin")]
     fn source_extension_uses_safe_final_url_extension(#[case] value: &str, #[case] expected: &str) {
-        assert_eq!(source_extension(&url(value)), expected);
+        assert_eq!(source_extension(&url(value), None), expected);
+    }
+
+    #[kithara::test]
+    fn source_extension_prefers_explicit_safe_hint() {
+        assert_eq!(
+            source_extension(&url("https://example.com/audio.bin"), Some("FLAC")),
+            "flac"
+        );
     }
 
     #[kithara::test]
@@ -417,6 +390,7 @@ mod tests {
             &store,
             &url("https://example.com/get/audio.MP3?token=secret"),
             Some("track-42".to_string()),
+            None,
         )
         .expect("remote key");
 
@@ -432,11 +406,13 @@ mod tests {
             &store,
             &url("https://example.com/audio.mp3?token=first"),
             None,
+            None,
         )
         .expect("first key");
         let second = remote_key(
             &store,
             &url("https://example.com/audio.mp3?token=second"),
+            None,
             None,
         )
         .expect("second key");
@@ -444,6 +420,7 @@ mod tests {
             &store,
             &url("https://example.com/audio.mp3?token=second"),
             Some("named".to_string()),
+            None,
         )
         .expect("named key");
 

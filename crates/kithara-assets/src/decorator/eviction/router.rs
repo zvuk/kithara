@@ -1,37 +1,103 @@
-use dashmap::DashMap;
-use kithara_platform::{sync::Arc, tokio::sync::mpsc};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    fmt,
+};
+
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    tokio::sync::mpsc,
+};
 
 use crate::layout::ResourceKey;
 
-/// Per-`asset_root` eviction fanout: routes each evicted [`ResourceKey`] to the
-/// single subscriber registered for its `asset_root` (last-writer-wins).
-#[derive(Clone, Debug, Default)]
+type SubscriptionId = u64;
+type RootSubscribers = HashMap<SubscriptionId, mpsc::UnboundedSender<ResourceKey>>;
+
+#[derive(Default)]
+struct RouterState {
+    next_id: SubscriptionId,
+    subscribers: HashMap<Arc<str>, RootSubscribers>,
+}
+
+impl RouterState {
+    fn allocate_id(&mut self) -> SubscriptionId {
+        loop {
+            let id = self.next_id;
+            self.next_id = self.next_id.wrapping_add(1);
+            if self
+                .subscribers
+                .values()
+                .all(|subscribers| !subscribers.contains_key(&id))
+            {
+                return id;
+            }
+        }
+    }
+
+    fn remove(&mut self, asset_root: &Arc<str>, id: SubscriptionId) {
+        let Entry::Occupied(mut subscribers) = self.subscribers.entry(Arc::clone(asset_root))
+        else {
+            return;
+        };
+        subscribers.get_mut().remove(&id);
+        if subscribers.get().is_empty() {
+            subscribers.remove();
+        }
+    }
+}
+
+/// Per-`asset_root` eviction fanout.
+#[derive(Clone, Default)]
 pub(crate) struct EvictionRouter {
-    subscribers: Arc<DashMap<Arc<str>, mpsc::UnboundedSender<ResourceKey>>>,
+    state: Arc<Mutex<RouterState>>,
+}
+
+impl fmt::Debug for EvictionRouter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EvictionRouter").finish_non_exhaustive()
+    }
 }
 
 impl EvictionRouter {
-    /// Route an evicted key to the subscriber that owns its `asset_root`.
+    /// Route an evicted key to every subscriber for its `asset_root`.
     /// No-op for absolute keys (no `asset_root`) or unsubscribed roots.
     pub(crate) fn route(&self, key: &ResourceKey) {
-        if let Some(root) = key.asset_root()
-            && let Some(tx) = self.subscribers.get(root)
-        {
+        let Some(root) = key.asset_root() else {
+            return;
+        };
+        let subscribers = self
+            .state
+            .lock()
+            .subscribers
+            .get(root)
+            .map(|subscribers| subscribers.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for tx in subscribers {
             let _ = tx.send(key.clone());
         }
     }
 
     /// Register `tx` to receive evictions under `asset_root`, returning an
-    /// RAII guard that deregisters on drop. Last-writer-wins per root.
+    /// RAII guard that deregisters only this subscription on drop.
     pub(crate) fn subscribe(
         &self,
         asset_root: Arc<str>,
         tx: mpsc::UnboundedSender<ResourceKey>,
     ) -> EvictionSubscription {
-        self.subscribers.insert(Arc::clone(&asset_root), tx);
+        let id = {
+            let mut state = self.state.lock();
+            let id = state.allocate_id();
+            state
+                .subscribers
+                .entry(Arc::clone(&asset_root))
+                .or_default()
+                .insert(id, tx);
+            id
+        };
         EvictionSubscription {
             asset_root,
-            subscribers: Arc::clone(&self.subscribers),
+            id,
+            state: Arc::clone(&self.state),
         }
     }
 }
@@ -42,11 +108,12 @@ impl EvictionRouter {
 #[must_use = "drop the guard to deregister the eviction subscription"]
 pub struct EvictionSubscription {
     asset_root: Arc<str>,
-    subscribers: Arc<DashMap<Arc<str>, mpsc::UnboundedSender<ResourceKey>>>,
+    id: SubscriptionId,
+    state: Arc<Mutex<RouterState>>,
 }
 
 impl Drop for EvictionSubscription {
     fn drop(&mut self) {
-        self.subscribers.remove(&self.asset_root);
+        self.state.lock().remove(&self.asset_root, self.id);
     }
 }
