@@ -428,7 +428,7 @@ mod tests {
         let lease = make_lease(dir.path());
         let p = dir.path().join("audio.mp3");
         fs::write(&p, b"data").unwrap();
-        let key = ResourceKey::absolute(&p);
+        let key = ResourceKey::absolute(&p).expect("absolute test path");
 
         let _res = lease.open_resource(&key, None).unwrap();
 
@@ -444,7 +444,7 @@ mod tests {
         let lease = make_lease(dir.path());
         let p = dir.path().join("audio.mp3");
         fs::write(&p, b"data").unwrap();
-        let key = ResourceKey::absolute(&p);
+        let key = ResourceKey::absolute(&p).expect("absolute test path");
 
         let res = lease.open_resource(&key, None).unwrap();
 

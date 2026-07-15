@@ -18,7 +18,7 @@ use crate::{
     decorator::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
     index::AvailabilityIndex,
-    layout::ResourceKey,
+    layout::{ResourceKey, ResourceKeyKind},
     resource::{AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RequestIdentity},
 };
 
@@ -82,8 +82,8 @@ impl AssetDeleter for DiskAssetDeleter {
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        let path = match key {
-            ResourceKey::Relative {
+        let path = match key.kind() {
+            ResourceKeyKind::Relative {
                 asset_root,
                 rel_path,
             } => {
@@ -91,7 +91,7 @@ impl AssetDeleter for DiskAssetDeleter {
                 let safe_rel = sanitize_rel(rel_path).map_err(|()| AssetsError::InvalidKey)?;
                 self.root_dir.join(safe_root).join(safe_rel)
             }
-            ResourceKey::Absolute(path) => path.clone(),
+            ResourceKeyKind::Absolute(path) => path.clone(),
         };
         match fs::remove_file(path) {
             Ok(()) => {}
@@ -211,8 +211,8 @@ impl DiskAssetStore {
     }
 
     fn resource_path(&self, key: &ResourceKey) -> AssetsResult<PathBuf> {
-        match key {
-            ResourceKey::Relative {
+        match key.kind() {
+            ResourceKeyKind::Relative {
                 asset_root,
                 rel_path,
             } => {
@@ -221,7 +221,7 @@ impl DiskAssetStore {
                 let rel = sanitize_rel(rel_path).map_err(|()| AssetsError::InvalidKey)?;
                 Ok(self.root_dir.join(asset_root_safe).join(rel))
             }
-            ResourceKey::Absolute(path) => Ok(path.clone()),
+            ResourceKeyKind::Absolute(path) => Ok(path.clone()),
         }
     }
 
@@ -431,7 +431,7 @@ mod tests {
             &crate::BytePool::default(),
         );
 
-        let key = ResourceKey::absolute(&file_path);
+        let key = ResourceKey::absolute(&file_path).expect("absolute test path");
         let res = store.open_resource(&key, None).unwrap();
 
         assert!(matches!(res.status(), ResourceStatus::Committed { .. }));

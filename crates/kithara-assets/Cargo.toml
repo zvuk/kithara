@@ -40,7 +40,6 @@ hex = { workspace = true }
 lru = { workspace = true }
 rangemap = { workspace = true }
 rkyv = { workspace = true }
-serde = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

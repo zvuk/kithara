@@ -18,7 +18,7 @@ use rangemap::RangeSet;
 use crate::{
     error::AssetsResult,
     index::persistence::{FlushHub, Flushable},
-    layout::ResourceKey,
+    layout::{ResourceKey, ResourceKeyKind},
 };
 
 /// Byte-level availability state for a single resource.
@@ -242,12 +242,12 @@ impl AvailabilityIndex {
     }
 
     fn resolve_refs(key: &ResourceKey) -> (&str, &str) {
-        match key {
-            ResourceKey::Relative {
+        match key.kind() {
+            ResourceKeyKind::Relative {
                 asset_root,
                 rel_path,
             } => (asset_root, rel_path),
-            ResourceKey::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
+            ResourceKeyKind::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
         }
     }
 }

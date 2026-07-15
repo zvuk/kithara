@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 
 use kithara_platform::sync::Arc;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use url::Url;
 
@@ -11,63 +10,49 @@ use crate::error::{AssetsError, AssetsResult};
 
 /// Self-identifying key for a single resource (file) within an asset store.
 ///
-/// Two variants:
-/// - `Relative`: a `rel_path` under an `asset_root` namespace.
-/// - `Absolute`: a filesystem path used directly; its own namespace,
-///   bypassing `root_dir`/`asset_root` resolution. Used for local files.
-///
-/// Mint relative keys through [`crate::AssetScope`], which holds the
-/// `asset_root`. `Arc<str>` keeps clones into the cache and HLS
-/// bookkeeping maps cheap.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ResourceKey {
-    /// `rel_path` under an `asset_root` namespace.
+/// Relative keys can only be minted by [`crate::AssetScope`]. Absolute keys
+/// are the explicit local-file read-in-place capability.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct ResourceKey(ResourceKeyKind);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ResourceKeyKind {
     Relative {
-        #[serde(
-            serialize_with = "serialize_arc_str",
-            deserialize_with = "deserialize_arc_str"
-        )]
         asset_root: Arc<str>,
-        #[serde(
-            serialize_with = "serialize_arc_str",
-            deserialize_with = "deserialize_arc_str"
-        )]
         rel_path: Arc<str>,
     },
-    /// Absolute filesystem path - its own namespace.
     Absolute(PathBuf),
-}
-
-fn serialize_arc_str<S: Serializer>(value: &Arc<str>, ser: S) -> Result<S::Ok, S::Error> {
-    ser.serialize_str(value)
-}
-
-fn deserialize_arc_str<'de, D: Deserializer<'de>>(de: D) -> Result<Arc<str>, D::Error> {
-    let s = String::deserialize(de)?;
-    Ok(Arc::from(s.as_str()))
 }
 
 impl ResourceKey {
     /// Create an absolute resource key for a local file.
-    pub fn absolute<P: Into<PathBuf>>(path: P) -> Self {
-        Self::Absolute(path.into())
+    ///
+    /// # Errors
+    /// Returns [`AssetsError::InvalidKey`] when `path` is relative.
+    pub fn absolute<P: Into<PathBuf>>(path: P) -> AssetsResult<Self> {
+        let path = path.into();
+        if !path.is_absolute() {
+            return Err(AssetsError::InvalidKey);
+        }
+        Ok(Self(ResourceKeyKind::Absolute(path)))
     }
 
     /// Returns the absolute path if this is an Absolute key.
     #[must_use]
     pub fn as_absolute_path(&self) -> Option<&Path> {
-        match self {
-            Self::Absolute(p) => Some(p),
-            Self::Relative { .. } => None,
+        match &self.0 {
+            ResourceKeyKind::Absolute(path) => Some(path),
+            ResourceKeyKind::Relative { .. } => None,
         }
     }
 
     /// The asset namespace, or `None` for an absolute key.
     #[must_use]
     pub fn asset_root(&self) -> Option<&str> {
-        match self {
-            Self::Relative { asset_root, .. } => Some(asset_root),
-            Self::Absolute(_) => None,
+        match &self.0 {
+            ResourceKeyKind::Relative { asset_root, .. } => Some(asset_root),
+            ResourceKeyKind::Absolute(_) => None,
         }
     }
 
@@ -80,18 +65,22 @@ impl ResourceKey {
     /// The relative path, or `None` for an absolute key.
     #[must_use]
     pub fn rel_path(&self) -> Option<&str> {
-        match self {
-            Self::Relative { rel_path, .. } => Some(rel_path),
-            Self::Absolute(_) => None,
+        match &self.0 {
+            ResourceKeyKind::Relative { rel_path, .. } => Some(rel_path),
+            ResourceKeyKind::Absolute(_) => None,
         }
     }
 
     /// Create a relative key under `asset_root`.
     pub(crate) fn relative(asset_root: impl Into<Arc<str>>, rel_path: impl Into<Arc<str>>) -> Self {
-        Self::Relative {
+        Self(ResourceKeyKind::Relative {
             asset_root: asset_root.into(),
             rel_path: rel_path.into(),
-        }
+        })
+    }
+
+    pub(crate) fn kind(&self) -> &ResourceKeyKind {
+        &self.0
     }
 }
 
@@ -180,7 +169,7 @@ pub(crate) fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, path::PathBuf};
+    use std::{collections::HashSet, env};
 
     use kithara_test_utils::kithara;
     use url::Url;
@@ -383,8 +372,8 @@ mod tests {
 
     #[kithara::test]
     fn test_resource_key_absolute() {
-        let path = PathBuf::from("/tmp/song.mp3");
-        let key = ResourceKey::absolute(&path);
+        let path = env::temp_dir().join("song.mp3");
+        let key = ResourceKey::absolute(&path).expect("absolute test path");
         assert!(key.is_absolute());
         assert_eq!(key.as_absolute_path(), Some(path.as_path()));
     }
@@ -400,7 +389,7 @@ mod tests {
 
     #[kithara::test]
     fn test_resource_key_absolute_hash_differs() {
-        let abs = ResourceKey::absolute("/tmp/a.mp3");
+        let abs = ResourceKey::absolute(env::temp_dir().join("a.mp3")).expect("absolute test path");
         let rel = ResourceKey::relative("root", "/tmp/a.mp3");
         let mut set = HashSet::new();
         set.insert(abs.clone());
@@ -429,8 +418,16 @@ mod tests {
         let same = ResourceKey::relative("root_a", "seg.m4s");
         assert_eq!(a, same, "same root + rel_path must be equal");
 
-        let abs = ResourceKey::absolute("/tmp/seg.m4s");
+        let abs =
+            ResourceKey::absolute(env::temp_dir().join("seg.m4s")).expect("absolute test path");
         assert_ne!(abs, a);
         assert_eq!(abs.asset_root(), None);
+    }
+
+    #[kithara::test]
+    fn test_resource_key_rejects_relative_absolute_path() {
+        let result = ResourceKey::absolute("relative/track.mp3");
+
+        assert!(matches!(result, Err(AssetsError::InvalidKey)));
     }
 }

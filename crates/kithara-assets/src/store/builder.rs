@@ -633,7 +633,7 @@ mod tests {
             })
             .build();
 
-        let key = ResourceKey::absolute(&file_path);
+        let key = ResourceKey::absolute(&file_path).expect("absolute test path");
         let res = store.open_resource(&key, None).unwrap();
 
         let mut buf = [0u8; 4];
@@ -674,7 +674,7 @@ mod tests {
             })
             .build();
 
-        let key = ResourceKey::absolute(&file_path);
+        let key = ResourceKey::absolute(&file_path).expect("absolute test path");
         let res = store.open_resource(&key, None).unwrap();
 
         let mut buf = [0u8; 9];

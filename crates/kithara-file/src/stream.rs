@@ -42,8 +42,14 @@ struct RemoteFileOpen {
 }
 
 fn local_key(path: PathBuf) -> Result<ResourceKey, SourceError> {
+    if !path.is_absolute() {
+        return Err(SourceError::InvalidPath(format!(
+            "path must be absolute: {}",
+            path.display()
+        )));
+    }
     if path.exists() {
-        return Ok(ResourceKey::absolute(path));
+        return ResourceKey::absolute(path).map_err(SourceError::from);
     }
     Err(SourceError::InvalidPath(format!(
         "file not found: {}",
@@ -346,4 +352,16 @@ fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
     let mut buf = [0u8; 16];
     let read = reader.read_at(0, &mut buf).ok()?;
     AudioCodec::try_from(&buf[..read]).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[kithara::test]
+    fn local_key_rejects_relative_paths_as_invalid_paths() {
+        let result = local_key(PathBuf::from("relative/track.mp3"));
+
+        assert!(matches!(result, Err(SourceError::InvalidPath(_))));
+    }
 }
