@@ -123,16 +123,16 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let cancel = CancelToken::never();
     let shared_worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let shared_hub = FlushHub::new(cancel.child(), FlushPolicy::default());
+
+    // Baseline gate: include the eager shared audio worker, but measure before
+    // the store registers with the flush hub and starts its worker.
+    let before = wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
     let shared_store = AssetStoreBuilder::default()
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
         .flush_hub(shared_hub.clone())
         .build();
-
-    // Baseline gate: measure `before` only once the shared worker's eager
-    // increment and any prior teardown have quiesced (state-driven).
-    let before = wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
 
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
         .store(shared_store.clone())
@@ -183,10 +183,9 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         a.preload().expect("preload must succeed");
         audios.push(Box::new(a));
     }
-    // Spawn side: the flush-hub worker starts lazily on the first store
-    // registration (during `new()`/`preload()`), and its named-thread increment
-    // is eager/synchronous at the spawn call site — so once the preloads return
-    // the count already reflects it. No settle needed.
+    // Spawn side: the flush-hub worker starts on the first store registration
+    // during `AssetStoreBuilder::build()`, and its named-thread increment is
+    // eager/synchronous at the spawn call site. No settle is needed.
     let after = active_named_thread_count();
     let delta = after.saturating_sub(before);
     info!(
