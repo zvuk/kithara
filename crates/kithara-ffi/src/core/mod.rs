@@ -1,4 +1,3 @@
-pub mod config;
 pub(crate) mod convert;
 pub mod item;
 pub mod layout;

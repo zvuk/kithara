@@ -12,7 +12,7 @@ use kithara::{
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_assets::{AssetStore, BytePool};
+use kithara_assets::BytePool;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_platform::{
     CancelToken,
@@ -22,14 +22,13 @@ use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource, Transition};
 
 use super::salt;
 use crate::{
+    asset::FfiAssetStore,
+    config::FfiPlayerConfig,
     event_bridge::EventBridge,
     item::AudioPlayerItem,
-    native_config,
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
     registry::ItemRegistry,
-    types::{
-        FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus,
-    },
+    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus},
 };
 
 fn build_processor_closure(
@@ -158,18 +157,10 @@ pub(crate) struct NativeInner {
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
     queue: Arc<Queue>,
-    /// App-wide byte pool shared by `NSURLSession` copies, cache processors,
-    /// and resource probes.
+    /// Store-owned pools shared by cache, network, decode, and playback.
     region: Region,
-    /// Master cancel token for this FFI player instance. Propagated
-    /// into [`PlayerConfig::cancel`] so the audio worker, downloader,
-    /// asset store, HLS peer, and per-track resources all derive
-    /// children of this token. The facade's `Drop` fires
-    /// `cancel.cancel()` so the shutdown pulse reaches subsystems before
-    /// structural Arc teardown unwinds. See `kithara-play/CONTEXT.md`
-    /// "Cancel Hierarchy". The chain flag reaches the audio worker and HLS
-    /// coord lock-free `is_cancelled()` reads; every subsystem derives its
-    /// own [`CancelToken::child`] from this consumer-top master.
+    /// Cancellation root for player-owned work; the shared store owns a
+    /// separate scope.
     shutdown: CancelToken,
     /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
     /// `X-Auth-Token`). Merged into per-item `headers` on insert.
@@ -191,26 +182,30 @@ pub(crate) struct NativeInner {
     /// drives the ABR cap unless cellular is tighter; cellular is held
     /// for future network-state-aware switching.
     peak_bitrate: Mutex<PeakBitrate>,
-    /// App-wide asset store shared by the queue and every item resource.
-    store: AssetStore,
+    /// Rust-owned asset store shared by the queue and every item resource.
+    store: Arc<FfiAssetStore>,
 }
 
 impl NativeInner {
     pub(crate) fn new(config: FfiPlayerConfig) -> Self {
+        let FfiPlayerConfig {
+            key_options,
+            store,
+            eq_band_count,
+        } = config;
         let cancel = CancelToken::root();
-        let region = Region::default();
+        let region = store.region().clone();
         let player_config = PlayerConfig::builder()
-            .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
+            .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
             .cancel(cancel.child())
             .byte_pool(region.byte_pool())
             .pcm_pool(region.pcm_pool())
             .session(super::session::handle().dispatcher())
             .build();
         let player = Arc::new(PlayerImpl::new(player_config));
-        let store = native_config::build_store(&config.cache, cancel.child(), region.byte_pool());
         let queue_config = QueueConfig::builder()
             .player(player)
-            .store(store.clone())
+            .store(store.handle().clone())
             .build();
         let net = default_net_options(region.byte_pool());
         let downloader = Downloader::new(
@@ -218,7 +213,7 @@ impl NativeInner {
                 .runtime(crate::FFI_RUNTIME.clone())
                 .build(),
         );
-        let (key_options, player_headers) = build_initial_key_state(config.key_options);
+        let (key_options, player_headers) = build_initial_key_state(key_options);
         let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
         Self {
             downloader,
@@ -580,7 +575,7 @@ fn build_source_for_item(
         .downloader(inner.downloader.clone())
         .byte_pool(inner.region.byte_pool())
         .pcm_pool(inner.region.pcm_pool())
-        .store(inner.store.clone())
+        .store(inner.store.handle().clone())
         .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();
@@ -630,6 +625,29 @@ impl Drop for NativeInner {
 mod tests {
     use super::*;
     use crate::observer::FfiKeyProcessor;
+
+    #[kithara::test]
+    fn shared_store_outlives_each_player() {
+        let store = Arc::new(FfiAssetStore::default());
+        let cancel = store.cancel_token();
+        let config = |store| FfiPlayerConfig {
+            key_options: crate::types::FfiKeyOptions::default(),
+            store,
+            eq_band_count: 10,
+        };
+        let first = NativeInner::new(config(Arc::clone(&store)));
+        let second = NativeInner::new(config(Arc::clone(&store)));
+
+        assert!(Arc::ptr_eq(&first.store, &second.store));
+        assert!(first.store.handle().is_same(second.store.handle()));
+
+        drop(store);
+        drop(first);
+        assert!(!cancel.is_cancelled());
+
+        drop(second);
+        assert!(cancel.is_cancelled());
+    }
 
     #[kithara::test]
     fn setup_network_writes_auth_token_into_player_headers() {

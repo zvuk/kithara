@@ -25,14 +25,20 @@ impl AssetLayoutRegistry {
     }
 
     /// Register or replace the layout selected for marker `T`.
-    pub fn register<T: 'static>(&mut self, layout: Arc<dyn AssetLayout>) {
-        self.overrides.insert(TypeId::of::<T>(), layout);
+    ///
+    /// Returns the replaced layout so callers can control where its destructor
+    /// runs.
+    pub fn register<T: 'static>(
+        &mut self,
+        layout: Arc<dyn AssetLayout>,
+    ) -> Option<Arc<dyn AssetLayout>> {
+        self.overrides.insert(TypeId::of::<T>(), layout)
     }
 
     /// Register a layout for marker `T` and return the registry.
     #[must_use]
     pub fn with<T: 'static>(mut self, layout: Arc<dyn AssetLayout>) -> Self {
-        self.register::<T>(layout);
+        drop(self.register::<T>(layout));
         self
     }
 
@@ -92,9 +98,16 @@ mod tests {
     #[kithara::test]
     fn repeated_registration_replaces_marker_layout() {
         let mut registry = AssetLayoutRegistry::default();
-        registry.register::<File>(Arc::new(FixedLayout("first")));
-        registry.register::<File>(Arc::new(FixedLayout("second")));
+        assert!(
+            registry
+                .register::<File>(Arc::new(FixedLayout("first")))
+                .is_none()
+        );
+        let replaced = registry
+            .register::<File>(Arc::new(FixedLayout("second")))
+            .expect("first layout is replaced");
 
+        assert_eq!(replaced.root(&source()), "first");
         assert_eq!(registry.layout::<File>().root(&source()), "second");
     }
 }
