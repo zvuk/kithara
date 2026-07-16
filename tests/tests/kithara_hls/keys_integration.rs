@@ -31,10 +31,10 @@ async fn fetch_and_cache_key(
 ) -> HlsResult<()> {
     let server = test_server.await;
     let key_store = test_key_store(&assets_fixture, None);
-    let key_url = server.url("/key.bin");
+    let key_url = server.url("/aes/key.bin");
 
     let key = key_store.get_raw_key(&key_url, None).await?;
-    assert!(!key.is_empty(), "fetched key must not be empty");
+    assert_eq!(key.as_ref(), b"0123456789abcdef");
 
     Ok(())
 }
@@ -51,20 +51,16 @@ async fn key_processor_applied(
 ) -> HlsResult<()> {
     let server = test_server.await;
 
-    let processor: kithara::hls::KeyProcessor = Arc::new(|key: Bytes| {
-        let mut processed = Vec::new();
-        processed.extend_from_slice(b"processed:");
-        processed.extend_from_slice(&key);
-        Ok(Bytes::from(processed))
-    });
+    let processor: kithara::hls::KeyProcessor =
+        Arc::new(|key: Bytes| Ok(Bytes::from(key.to_ascii_uppercase())));
 
-    let key_url = server.url("/key.bin");
+    let key_url = server.url("/aes/key.bin");
     let host = key_url.host_str().expect("host").to_string();
     let registry = registry_for_host(&host, processor);
     let key_store = test_key_store(&assets_fixture, Some(registry));
 
     let key: Bytes = key_store.get_raw_key(&key_url, None).await?;
-    assert!(key.starts_with(b"processed:"));
+    assert_eq!(key.as_ref(), b"0123456789ABCDEF");
 
     Ok(())
 }
@@ -81,18 +77,18 @@ async fn key_store_with_different_processors(
 ) -> HlsResult<()> {
     let server = test_server.await;
 
-    let uppercase_processor: kithara::hls::KeyProcessor = Arc::new(|key: Bytes| {
-        let upper = key.to_ascii_uppercase();
-        Ok(Bytes::from(upper))
+    let reverse_processor: kithara::hls::KeyProcessor = Arc::new(|key: Bytes| {
+        let reversed = key.iter().rev().copied().collect::<Vec<_>>();
+        Ok(Bytes::from(reversed))
     });
 
-    let key_url = server.url("/key.bin");
+    let key_url = server.url("/aes/key.bin");
     let host = key_url.host_str().expect("host").to_string();
-    let registry = registry_for_host(&host, uppercase_processor);
+    let registry = registry_for_host(&host, reverse_processor);
     let key_store = test_key_store(&assets_fixture, Some(registry));
 
     let key: Bytes = key_store.get_raw_key(&key_url, None).await?;
-    assert!(key.is_ascii());
+    assert_eq!(key.as_ref(), b"fedcba9876543210");
 
     Ok(())
 }
@@ -127,7 +123,7 @@ async fn key_store_caching_behavior(
 ) -> HlsResult<()> {
     let server = test_server.await;
     let key_store = test_key_store(&assets_fixture, None);
-    let key_url = server.url("/key.bin");
+    let key_url = server.url("/aes/key.bin");
 
     let key1: Bytes = key_store.get_raw_key(&key_url, None).await?;
     let key2 = key_store.get_raw_key(&key_url, None).await?;
@@ -154,9 +150,9 @@ async fn unmatched_domain_uses_raw_key(
     let registry = registry_for_host("other.example", sentinel_processor);
     let key_store = test_key_store(&assets_fixture, Some(registry));
 
-    let key_url = server.url("/key.bin");
+    let key_url = server.url("/aes/key.bin");
     let key = key_store.get_raw_key(&key_url, None).await?;
-    assert_ne!(&key[..], b"MODIFIED");
+    assert_eq!(key.as_ref(), b"0123456789abcdef");
 
     Ok(())
 }

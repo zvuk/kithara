@@ -99,6 +99,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation("rustls:rustls-platform-verifier:0.1.1")
 
+    testImplementation(libs.junit4)
     androidTestImplementation(libs.junit4)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.ext.junit)

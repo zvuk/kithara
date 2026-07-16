@@ -39,9 +39,10 @@ loom = { workspace = true, optional = true }
 tracing = { workspace = true }
 web-time = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cpu-time = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 pin-project-lite = { workspace = true }

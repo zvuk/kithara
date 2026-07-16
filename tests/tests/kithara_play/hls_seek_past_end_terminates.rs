@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -60,7 +59,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     let master = server.url("/master.m3u8");
 
     let temp = temp_dir();
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
@@ -71,7 +70,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
-        .name("t0".to_string())
+        .discriminator("t0".to_string())
         .store(store)
         .build();
 

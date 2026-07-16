@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig},
     file::{File, FileConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
@@ -16,7 +15,7 @@ use tracing::info;
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
 async fn create_file_audio(url: url::Url, cache_dir: &Path) -> Audio<Stream<File>> {
     let file_config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(cache_dir))
+        .store(kithara_integration_tests::disk_asset_store(cache_dir))
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())

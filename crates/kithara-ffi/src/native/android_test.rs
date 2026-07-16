@@ -13,9 +13,11 @@ use jni::{
 };
 use kithara::{
     audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
+    bufpool::{BytePool, PcmPool},
     file::{File as FileSource, FileConfig, FileSrc},
     stream::Stream,
 };
+use kithara_assets::{AssetStoreBuilder, StorageBackend};
 use kithara_platform::{
     CancelToken,
     time::{Duration, Instant, sleep},
@@ -96,11 +98,7 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeRunOfflineCapture<'local>(
         return string_rc;
     }
 
-    let runtime = match Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-    {
+    let runtime = match Builder::new_current_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(err) => {
             error!(?err, "failed to build tokio runtime");
@@ -124,11 +122,18 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         "offline capture: start"
     );
 
-    let file_cfg = FileConfig::new(FileSrc::Local(input));
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
+    let file_cfg = FileConfig::for_src(FileSrc::Local(input))
+        .store(store)
+        .build();
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
         .hint("mp3".to_string())
         .worker(worker)
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .build();
 
     let mut audio = match Audio::<Stream<FileSource>>::new(audio_cfg).await {
@@ -241,7 +246,10 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeProbeAndroidAudio<'local>(
         return Consts::FMT_ERR_NO_DEVICE;
     };
 
-    let device_name = device.name().unwrap_or_else(|_| "<unknown>".to_owned());
+    let device_name = device.description().map_or_else(
+        |_| "<unknown>".to_owned(),
+        |description| description.name().to_owned(),
+    );
     info!(device = %device_name, "cpal default output device");
 
     let default_cfg = match device.default_output_config() {

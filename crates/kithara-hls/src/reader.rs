@@ -184,7 +184,7 @@ mod tests {
     use std::sync::{OnceLock, atomic::AtomicU64};
 
     use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
-    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{AssetResource, AssetSource, AssetStoreBuilder, StorageBackend};
     use kithara_events::{Event, EventBus};
     use kithara_platform::{
         CancelToken,
@@ -225,7 +225,14 @@ mod tests {
             bus: bus.clone(),
             prefetch_budget: 1,
             master_cancel: cancel,
-            scope: store.scope("reader-test"),
+            scope: store
+                .scope::<crate::Hls>(&AssetSource::Remote {
+                    url: "https://example.com/master.m3u8"
+                        .parse()
+                        .expect("master url"),
+                    discriminator: Some("reader-test".to_owned()),
+                })
+                .expect("reader asset scope"),
             seek_epoch: 0,
             look_ahead_bytes: None,
             look_ahead_segments: None,
@@ -265,7 +272,10 @@ mod tests {
                 url: "https://example.com/seg0.m4s".parse().expect("url"),
                 resource_id: ctx
                     .scope
-                    .key_for(&"https://example.com/seg0.m4s".parse().expect("url")),
+                    .key(&AssetResource::Url(
+                        "https://example.com/seg0.m4s".parse().expect("url"),
+                    ))
+                    .expect("segment key"),
                 state: SegmentSlotState::missing(),
                 size: SegmentSize::seed(100),
                 content: SegmentContent::Plain,
@@ -276,7 +286,10 @@ mod tests {
                 url: "https://example.com/seg1.m4s".parse().expect("url"),
                 resource_id: ctx
                     .scope
-                    .key_for(&"https://example.com/seg1.m4s".parse().expect("url")),
+                    .key(&AssetResource::Url(
+                        "https://example.com/seg1.m4s".parse().expect("url"),
+                    ))
+                    .expect("segment key"),
                 state: SegmentSlotState::missing(),
                 size: SegmentSize::seed(200),
                 content: SegmentContent::Plain,

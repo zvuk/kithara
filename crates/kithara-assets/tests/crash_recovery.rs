@@ -1,13 +1,16 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+mod support;
+
 use std::{fs, path::Path};
 
 use kithara_assets::{
-    AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, ReadSide, StorageBackend,
-    WriteSide,
+    AcquisitionResult, AssetScope, AssetStoreBuilder, FlushHub, FlushPolicy, ReadSide, ResourceKey,
+    StorageBackend, WriteSide,
 };
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_test_utils::kithara;
+use support::{Test, resource, source};
 use tempfile::tempdir;
 
 /// Stream `data` through a Pending writer and commit it.
@@ -46,32 +49,34 @@ fn availability_bin(root: &Path) -> std::path::PathBuf {
     root.join("_index/availability.bin")
 }
 
-fn segment_path(root: &Path) -> std::path::PathBuf {
-    root.join(Consts::ASSET_ROOT).join(Consts::KEY_NAME)
+fn segment_path(root: &Path, scope: &AssetScope, key: &ResourceKey) -> std::path::PathBuf {
+    root.join(scope.asset_root())
+        .join(key.rel_path().expect("relative test key"))
 }
 
 /// Write a complete segment + flush every index file. Uses an
 /// explicit `checkpoint()` so the on-disk state matches what a clean
 /// shutdown would produce. The closure runs *after* checkpoint and
 /// before drop — the place to inject a "crash" by mangling files.
-fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path)) {
+fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path, &AssetScope, &ResourceKey)) {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Disk { root: (dir).into() })
         .build();
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let source = source(Consts::ASSET_ROOT);
+    let scope = store.scope::<Test>(&source).expect("scope");
+    let key = scope.key(&resource(Consts::KEY_NAME)).expect("key");
     write_commit(
         store.acquire_resource(&key, None).expect("acquire"),
         b"hello-world!",
     );
     store.checkpoint().expect("checkpoint");
-    mangle(dir);
+    mangle(dir, &scope, &key);
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn truncated_pins_bin_is_treated_as_empty() {
     let dir = tempdir().unwrap();
-    seed_clean_state_then(dir.path(), |root| {
+    seed_clean_state_then(dir.path(), |root, _, _| {
         fs::write(pins_bin(root), b"").unwrap();
     });
 
@@ -81,8 +86,8 @@ fn truncated_pins_bin_is_treated_as_empty() {
         })
         .build();
 
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
     let _res = store
         .acquire_resource(&key, None)
         .expect("rebuild over zero-byte pins.bin must still acquire");
@@ -91,7 +96,7 @@ fn truncated_pins_bin_is_treated_as_empty() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn garbage_pins_bin_is_treated_as_empty() {
     let dir = tempdir().unwrap();
-    seed_clean_state_then(dir.path(), |root| {
+    seed_clean_state_then(dir.path(), |root, _, _| {
         fs::write(pins_bin(root), b"NOT-RKYV-PAYLOAD-AT-ALL").unwrap();
     });
 
@@ -100,8 +105,8 @@ fn garbage_pins_bin_is_treated_as_empty() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
     let _res = store
         .acquire_resource(&key, None)
         .expect("garbage pins.bin must not block rebuild");
@@ -110,7 +115,7 @@ fn garbage_pins_bin_is_treated_as_empty() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn garbage_lru_bin_is_treated_as_empty() {
     let dir = tempdir().unwrap();
-    seed_clean_state_then(dir.path(), |root| {
+    seed_clean_state_then(dir.path(), |root, _, _| {
         fs::write(lru_bin(root), [0xff; 64]).unwrap();
     });
 
@@ -120,8 +125,8 @@ fn garbage_lru_bin_is_treated_as_empty() {
         })
         .build();
 
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
     assert_eq!(scope.store().final_len(&key), Some(12));
     assert!(scope.store().contains_range(&key, 0..12));
 }
@@ -129,7 +134,7 @@ fn garbage_lru_bin_is_treated_as_empty() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn garbage_availability_bin_is_treated_as_empty() {
     let dir = tempdir().unwrap();
-    seed_clean_state_then(dir.path(), |root| {
+    seed_clean_state_then(dir.path(), |root, _, _| {
         fs::write(availability_bin(root), b"corrupted-bytes-here").unwrap();
     });
 
@@ -139,8 +144,8 @@ fn garbage_availability_bin_is_treated_as_empty() {
         })
         .build();
 
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
     assert_eq!(
         scope.store().final_len(&key),
         Some(12),
@@ -152,8 +157,8 @@ fn garbage_availability_bin_is_treated_as_empty() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn segment_deleted_externally_after_checkpoint_degrades_gracefully() {
     let dir = tempdir().unwrap();
-    seed_clean_state_then(dir.path(), |root| {
-        fs::remove_file(segment_path(root)).unwrap();
+    seed_clean_state_then(dir.path(), |root, scope, key| {
+        fs::remove_file(segment_path(root, scope, key)).unwrap();
     });
 
     let store = AssetStoreBuilder::default()
@@ -161,8 +166,8 @@ fn segment_deleted_externally_after_checkpoint_degrades_gracefully() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
 
     assert_eq!(
         scope.store().final_len(&key),
@@ -195,12 +200,9 @@ fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = store.scope(Consts::ASSET_ROOT);
-        let res = pending(
-            store
-                .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-                .unwrap(),
-        );
+        let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+        let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+        let res = pending(store.acquire_resource(&key, None).unwrap());
         res.write_at(0, b"partial-bytes").unwrap();
         drop(res);
     }
@@ -210,8 +212,8 @@ fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
 
     assert!(scope.store().available_ranges(&key).is_empty());
     assert_eq!(scope.store().final_len(&key), None);
@@ -227,12 +229,9 @@ fn partial_uncommitted_write_flushed_before_drop_is_invisible_after_crash() {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = store.scope(Consts::ASSET_ROOT);
-        let res = pending(
-            store
-                .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-                .unwrap(),
-        );
+        let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+        let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+        let res = pending(store.acquire_resource(&key, None).unwrap());
         res.write_at(0, b"partial-bytes").unwrap();
         // Force the availability snapshot to disk WHILE the uncommitted writer
         // is still alive. This deterministically reproduces the worker-wins race
@@ -248,8 +247,8 @@ fn partial_uncommitted_write_flushed_before_drop_is_invisible_after_crash() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
 
     assert!(scope.store().available_ranges(&key).is_empty());
     assert_eq!(scope.store().final_len(&key), None);
@@ -265,13 +264,9 @@ fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = store.scope(Consts::ASSET_ROOT);
-        write_commit(
-            store
-                .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-                .unwrap(),
-            b"durable-data",
-        );
+        let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+        let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+        write_commit(store.acquire_resource(&key, None).unwrap(), b"durable-data");
     }
 
     let store = AssetStoreBuilder::default()
@@ -279,8 +274,8 @@ fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
 
     assert_eq!(scope.store().final_len(&key), Some(12));
     assert!(scope.store().contains_range(&key, 0..12));
@@ -308,19 +303,17 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
             .flush_hub(hub.clone())
             .build();
 
-        let scope_a = store_a.scope("track-a");
+        let scope_a = store_a.scope::<Test>(&source("track-a")).unwrap();
+        let key_a = scope_a.key(&resource(Consts::KEY_NAME)).unwrap();
         write_commit(
-            store_a
-                .acquire_resource(&scope_a.key(Consts::KEY_NAME), None)
-                .unwrap(),
+            store_a.acquire_resource(&key_a, None).unwrap(),
             b"alpha-data!!",
         );
 
-        let scope_b = store_b.scope("track-b");
+        let scope_b = store_b.scope::<Test>(&source("track-b")).unwrap();
+        let key_b = scope_b.key(&resource(Consts::KEY_NAME)).unwrap();
         write_commit(
-            store_b
-                .acquire_resource(&scope_b.key(Consts::KEY_NAME), None)
-                .unwrap(),
+            store_b.acquire_resource(&key_b, None).unwrap(),
             b"bravo-data!!",
         );
 
@@ -337,10 +330,10 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
             root: (&dir_b).into(),
         })
         .build();
-    let scope_a = rebuilt_a.scope("track-a");
-    let scope_b = rebuilt_b.scope("track-b");
-    let key_a = scope_a.key(Consts::KEY_NAME);
-    let key_b = scope_b.key(Consts::KEY_NAME);
+    let scope_a = rebuilt_a.scope::<Test>(&source("track-a")).unwrap();
+    let scope_b = rebuilt_b.scope::<Test>(&source("track-b")).unwrap();
+    let key_a = scope_a.key(&resource(Consts::KEY_NAME)).unwrap();
+    let key_b = scope_b.key(&resource(Consts::KEY_NAME)).unwrap();
 
     assert_eq!(rebuilt_a.final_len(&key_a), Some(12));
     assert!(rebuilt_a.contains_range(&key_a, 0..12));
@@ -360,15 +353,12 @@ fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let res = pending(
-        store
-            .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-            .unwrap(),
-    );
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let res = pending(store.acquire_resource(&key, None).unwrap());
     res.write_at(0, b"partial-bytes").unwrap();
 
-    let canonical = segment_path(dir.path());
+    let canonical = segment_path(dir.path(), &scope, &key);
     let canonical_visible_with_bytes = canonical.metadata().is_ok_and(|m| m.len() > 0);
     assert!(
         !canonical_visible_with_bytes,
@@ -380,25 +370,23 @@ fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
     let dir = tempdir().unwrap();
+    let canonical;
     {
         let store = AssetStoreBuilder::default()
             .backend(StorageBackend::Disk {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = store.scope(Consts::ASSET_ROOT);
-        let res = pending(
-            store
-                .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-                .unwrap(),
-        );
+        let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+        let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+        let res = pending(store.acquire_resource(&key, None).unwrap());
         res.write_at(0, b"partial-bytes-from-killed-writer")
             .unwrap();
+        canonical = segment_path(dir.path(), &scope, &key);
         std::mem::forget(res);
         std::mem::forget(store);
     }
 
-    let canonical = segment_path(dir.path());
     if canonical.exists() {
         let len = canonical.metadata().unwrap().len();
         assert_eq!(
@@ -413,8 +401,8 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
     assert_eq!(
         store.final_len(&key),
         None,
@@ -431,15 +419,12 @@ fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let res = pending(
-        store
-            .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-            .unwrap(),
-    );
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let res = pending(store.acquire_resource(&key, None).unwrap());
     res.write_at(0, payload).unwrap();
 
-    let canonical = segment_path(dir.path());
+    let canonical = segment_path(dir.path(), &scope, &key);
     let mid_write_size = canonical.metadata().map_or(0, |m| m.len());
     assert_eq!(
         mid_write_size, 0,
@@ -460,7 +445,7 @@ fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn doubly_corrupted_indexes_do_not_panic_and_slow_path_serves_data() {
     let dir = tempdir().unwrap();
-    seed_clean_state_then(dir.path(), |root| {
+    seed_clean_state_then(dir.path(), |root, _, _| {
         fs::write(pins_bin(root), b"").unwrap();
         fs::write(lru_bin(root), b"\xfe\xfe\xfe").unwrap();
         fs::write(availability_bin(root), b"PARTIAL!").unwrap();
@@ -471,8 +456,8 @@ fn doubly_corrupted_indexes_do_not_panic_and_slow_path_serves_data() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope(Consts::ASSET_ROOT);
-    let key = scope.key(Consts::KEY_NAME);
+    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
 
     assert_eq!(
         scope.store().final_len(&key),

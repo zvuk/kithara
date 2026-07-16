@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::{
     error::{NetError, NetResult},
-    types::{Compression, Headers, RangeSpec},
+    types::{AcceptEncodingPolicy, Headers, RangeSpec},
 };
 
 #[derive(Clone, Copy)]
@@ -28,6 +28,7 @@ impl Method {
 }
 
 pub(super) struct AppleRequest {
+    accept_encoding: AcceptEncodingPolicy,
     method: Method,
     body: Option<Bytes>,
     headers: Option<Headers>,
@@ -42,15 +43,25 @@ impl AppleRequest {
         range: Option<RangeSpec>,
         headers: Option<Headers>,
         body: Option<Bytes>,
+        accept_encoding: AcceptEncodingPolicy,
     ) -> NetResult<Self> {
         validate_url(url)?;
         Ok(Self {
+            accept_encoding,
             body,
             method,
             headers,
             range,
             url: url.clone(),
         })
+    }
+
+    pub(super) fn accept_encoding(&self) -> AcceptEncodingPolicy {
+        self.accept_encoding
+    }
+
+    pub(super) fn url(&self) -> &Url {
+        &self.url
     }
 
     pub(super) fn into_ns_request(
@@ -65,16 +76,18 @@ impl AppleRequest {
             request.setHTTPBody(Some(&body));
         }
 
-        let mut has_accept_encoding = false;
         if let Some(headers) = self.headers {
             for (key, value) in headers.iter() {
-                has_accept_encoding |= key.eq_ignore_ascii_case("accept-encoding");
-                set_header(&request, key, value);
+                if !key.eq_ignore_ascii_case("accept-encoding") {
+                    set_header(&request, key, value);
+                }
             }
         }
-        if !has_accept_encoding {
-            set_header(&request, "Accept-Encoding", accept_encoding);
-        }
+        let accept_encoding = match self.accept_encoding {
+            AcceptEncodingPolicy::Configured => accept_encoding,
+            AcceptEncodingPolicy::Identity => "identity",
+        };
+        set_header(&request, "Accept-Encoding", accept_encoding);
         if let Some(range) = self.range {
             let value = range.to_string();
             set_header(&request, "Range", &value);
@@ -82,26 +95,6 @@ impl AppleRequest {
 
         Ok(request)
     }
-}
-
-pub(super) fn accept_encoding_value(compression: Compression) -> String {
-    let mut codings = Vec::new();
-    if compression.contains(Compression::GZIP) {
-        codings.push("gzip");
-    }
-    if compression.contains(Compression::DEFLATE) {
-        codings.push("deflate");
-    }
-    if compression.contains(Compression::BROTLI) {
-        codings.push("br");
-    }
-    if compression.contains(Compression::ZSTD) {
-        codings.push("zstd");
-    }
-    if codings.is_empty() {
-        return "identity".to_string();
-    }
-    codings.join(", ")
 }
 
 fn validate_url(url: &Url) -> NetResult<()> {

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use kithara::{
     abr::AbrHandle,
-    assets::StoreOptions,
+    assets::AssetStore,
     decode::DecoderBackend,
     events::{
         AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
@@ -75,7 +75,7 @@ pub(crate) struct SimHarness {
     session: Arc<OfflineSession>,
     tick: tokio::task::JoinHandle<()>,
     _downloader: Downloader,
-    _store: StoreOptions,
+    _store: AssetStore,
     track_ids: Vec<TrackId>,
     /// Captured codec of the currently-playing variant. Updated by
     /// `enter_track` and on each successful quality switch; the
@@ -146,7 +146,7 @@ impl SimHarness {
             ))
             .build(),
         );
-        let store = StoreOptions::new(cache_path);
+        let store = kithara_integration_tests::disk_asset_store(cache_path);
 
         let mut track_ids = Vec::with_capacity(specs.len());
         for spec in specs {

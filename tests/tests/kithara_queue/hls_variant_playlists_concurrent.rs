@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     decode::DecoderBackend,
     events::{AbrMode, DownloaderEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -69,9 +69,10 @@ fn build_queue_with_tick(
     Arc<Queue>,
     Arc<PlayerImpl>,
     Downloader,
-    StoreOptions,
+    AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
@@ -80,7 +81,9 @@ fn build_queue_with_tick(
             .build(),
     ));
     let queue = Arc::new(Queue::new(
-        QueueConfig::default().with_player(Arc::clone(&player)),
+        QueueConfig::default()
+            .with_player(Arc::clone(&player))
+            .with_store(store.clone()),
     ));
     let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
@@ -88,7 +91,6 @@ fn build_queue_with_tick(
             .max_concurrent(Consts::MAX_CONCURRENT)
             .build(),
     );
-    let store = StoreOptions::new(temp_dir.path());
     (queue, player, downloader, store, tick_handle)
 }
 

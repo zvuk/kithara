@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
@@ -168,7 +168,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     let source = super::app_track_source(
         url.as_str(),
         &config,
-        StoreOptions::new(temp.path()),
+        kithara_integration_tests::disk_asset_store(temp.path()),
         backend,
         abr,
         None,

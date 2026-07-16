@@ -127,11 +127,7 @@ pub enum DownloaderEvent {
     },
     RequestRetrying {
         request_id: RequestId,
-        // WHY: telemetry mirror of the sanctioned kithara-net RetryPolicy,
-        // not retry control flow — the event makes retries observable.
-        // xtask-lint-ignore: retry_fallback
         attempt: u32,
-        // xtask-lint-ignore: retry_fallback
         max_retries: u32,
         error: NetError,
         backoff: Duration,
@@ -150,8 +146,6 @@ pub enum DownloaderEvent {
     },
     RetryExhausted {
         request_id: RequestId,
-        // WHY: telemetry mirror of the RetryPolicy budget (see RequestRetrying).
-        // xtask-lint-ignore: retry_fallback
         max_retries: u32,
         consumed: u64,
         error: NetError,

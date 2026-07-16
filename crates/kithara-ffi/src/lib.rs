@@ -25,11 +25,11 @@ pub mod web;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use core::registry;
-pub use core::{config, item, layout, observer, types};
+pub use core::{item, layout, observer, types};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use native::{FFI_RUNTIME, Inner, config as native_config, event_bridge};
+pub(crate) use native::{FFI_RUNTIME, Inner, event_bridge};
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{cipher, logging, salt};
+pub use native::{asset, cipher, config, logging, salt};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::inner::Inner;

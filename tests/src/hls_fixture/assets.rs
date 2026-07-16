@@ -1,21 +1,56 @@
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::StorageBackend;
 use kithara::{
-    assets::{AssetScope, AssetStore, AssetStoreBuilder},
-    hls::{KeyStore, PlaylistCache},
+    assets::{
+        AssetLayout, AssetLayoutRegistry, AssetResource, AssetScope, AssetSource, AssetStore,
+        AssetStoreBuilder, DefaultLayout,
+    },
+    hls::{Hls, KeyStore, PlaylistCache},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc},
     stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle},
 };
+use url::Url;
 
 use crate::TestTempDir;
 
 /// Wrapper for test assets with temp directory lifetime management
 pub struct TestAssets {
     assets: AssetStore,
-    asset_root: Arc<str>,
+    source: AssetSource,
     #[cfg(not(target_arch = "wasm32"))]
     _temp_dir: Arc<TestTempDir>,
+}
+
+#[derive(Debug)]
+struct TestHlsLayout;
+
+impl AssetLayout for TestHlsLayout {
+    fn root(&self, source: &AssetSource) -> String {
+        let AssetSource::Remote {
+            discriminator: Some(root),
+            ..
+        } = source
+        else {
+            panic!("test HLS source must carry its literal root")
+        };
+        root.clone()
+    }
+
+    fn path(&self, resource: &AssetResource) -> String {
+        DefaultLayout.path(resource)
+    }
+}
+
+fn test_source(asset_root: &str) -> AssetSource {
+    AssetSource::Remote {
+        url: Url::parse("https://cache.test/master.m3u8").expect("valid test URL"),
+        discriminator: Some(asset_root.to_string()),
+    }
+}
+
+fn test_layouts() -> AssetLayoutRegistry {
+    AssetLayoutRegistry::default().with::<Hls>(Arc::new(TestHlsLayout))
 }
 
 impl TestAssets {
@@ -26,7 +61,9 @@ impl TestAssets {
     /// Scope bound to this fixture's `asset_root`, mirroring how
     /// `Hls::create` scopes its per-stream store.
     pub fn scope(&self) -> AssetScope {
-        self.assets.scope(Arc::clone(&self.asset_root))
+        self.assets
+            .scope::<Hls>(&self.source)
+            .expect("valid test HLS source")
     }
 }
 
@@ -38,8 +75,6 @@ pub fn create_test_assets() -> TestAssets {
 /// Create test assets with custom asset root
 #[cfg(not(target_arch = "wasm32"))]
 pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
-    use kithara::assets::EvictConfig;
-
     let temp_dir = TestTempDir::new();
     let temp_dir = Arc::new(temp_dir);
 
@@ -47,13 +82,13 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
-        .evict_config(EvictConfig::default())
         .cancel(CancelToken::never())
+        .layouts(test_layouts())
         .build();
 
     TestAssets {
         assets,
-        asset_root: Arc::from(asset_root),
+        source: test_source(asset_root),
         _temp_dir: temp_dir,
     }
 }
@@ -63,11 +98,12 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let assets = AssetStoreBuilder::default()
         .cancel(CancelToken::never())
+        .layouts(test_layouts())
         .build();
 
     TestAssets {
         assets,
-        asset_root: Arc::from(asset_root),
+        source: test_source(asset_root),
     }
 }
 

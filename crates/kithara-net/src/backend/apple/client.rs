@@ -22,7 +22,7 @@ use crate::{
     resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::Net,
-    types::{Headers, NetOptions, RangeSpec},
+    types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec},
 };
 
 mod kithara {
@@ -64,7 +64,11 @@ impl RawAppleNet {
     ) -> Result<AppleDataResponse, NetError> {
         let started = Instant::now();
         let response = {
-            let request = AppleRequest::new(&url, method, range, headers, body)?;
+            let accept_encoding = match method {
+                Method::Get | Method::Post => AcceptEncodingPolicy::Configured,
+                Method::Head => AcceptEncodingPolicy::Identity,
+            };
+            let request = AppleRequest::new(&url, method, range, headers, body, accept_encoding)?;
             timeout(
                 self.options.inactivity_timeout,
                 self.session.data(request, self.cancel.clone()),
@@ -91,7 +95,14 @@ impl RawAppleNet {
     ) -> Result<ByteStream, NetError> {
         let started = Instant::now();
         let response = {
-            let request = AppleRequest::new(&url, Method::Get, range, headers, None)?;
+            let request = AppleRequest::new(
+                &url,
+                Method::Get,
+                range,
+                headers,
+                None,
+                AcceptEncodingPolicy::Identity,
+            )?;
             timeout(
                 self.options.inactivity_timeout,
                 self.session.stream(request, self.cancel.clone()),

@@ -12,7 +12,7 @@
 
 # kithara-assets
 
-Assets store (disk or in-memory) with lease/pin semantics and LRU eviction. An *asset* is a logical unit addressed by `asset_root` containing multiple *resources* addressed by `rel_path`. A single `AssetStore` services every asset under its `root_dir`: `asset_root` is a per-request argument, so one shared store can back many URLs (e.g. app-wide playback + waveform). All resources use the unified `StorageResource` from `kithara-storage`. `AssetStore` is a unified wrapper with two backends: file-backed mmap (`Disk`) and ephemeral in-memory storage (`Mem`).
+Assets store (disk or in-memory) with lease/pin semantics and LRU eviction. An *asset* is a logical source containing one or more semantic *resources*. An `AssetLayout` maps those values to `<asset_root>/<resource_path>`; callers cannot inject a preformed relative cache path. One cheap, `Arc`-backed `AssetStore` handle can be cloned into every file, HLS, playback, and analysis consumer while retaining one backend, layout registry, index set, and eviction policy.
 
 ## Role
 
@@ -20,26 +20,36 @@ Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-fil
 
 ## Key types & entry points
 
-- `AssetStore` — the unified, explicit public contract (`Disk`/`Mem` backends).
-- `AssetStoreBuilder` — constructs a store; propagates the shared cancellation token.
-- `scope(asset_root)` — binds a scope to one `asset_root` and mints self-identifying keys; per-resource operations and byte-availability queries live on the store.
+- `AssetStore` — the unified shared handle over `Disk` or `Memory` storage.
+- `AssetStoreBuilder` — constructs the store and its immutable layout registry.
+- `AssetLayout` / `AssetLayoutRegistry` — own cache-root and resource-path policy, with optional overrides selected by protocol marker type.
+- `AssetSource` / `AssetResource` — semantic input to the selected layout.
+- `AssetScope` / `ResourceKey` — validated output used by cache operations.
 - `attach_demand(&key, read_pos, look_ahead)` — registers a consumer with the single-producer demand index.
-- `AssetResource = AcquisitionResult<AssetWriter, AssetReader>` — the Pending/Ready typestate split surfaced by the facade.
+- `ResourceAcquisition` — the Pending/Ready `AcquisitionResult<AssetWriter, AssetReader>` surfaced by the facade.
 
 ## Usage
 
 ```rust
-use kithara_assets::{AssetStoreBuilder, StorageBackend};
+use kithara_assets::{
+    AssetResource, AssetSource, AssetStoreBuilder, StorageBackend,
+};
+
+struct Protocol;
 
 let store = AssetStoreBuilder::default()
     .backend(StorageBackend::Disk { root: cache_dir })
     .cancel(cancel.clone())
     .build();
-// Bind a scope to one `asset_root`; it mints self-identifying keys.
-let scope = store.scope("asset123");
-let key = scope.key("segments/001.m4s");
-// Per-resource ops live on the store; request identity is passed per call.
-let resource = scope.store().acquire_resource(&key, None)?;
+let source = AssetSource::Remote {
+    url,
+    discriminator: None,
+};
+let scope = store.scope::<Protocol>(&source)?;
+let key = scope.key(&AssetResource::Source {
+    extension: "mp3".to_string(),
+})?;
+let resource = store.acquire_resource(&key, None)?;
 ```
 
 ## Features
@@ -50,6 +60,6 @@ let resource = scope.store().acquire_resource(&key, None)?;
 
 ## Public contract
 
-The explicit public contract is the unified `AssetStore` type. Everything else should be considered an implementation detail (even if currently `pub`), and constructors must propagate the shared cancellation token (use `AssetStoreBuilder`).
+The public storage contract is `AssetStore` plus the source/resource/layout/key types used to mint validated keys. Decorator and backend implementation types are not configuration alternatives. Construct one store with `AssetStoreBuilder` and pass cheap clones of that handle to consumers.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

@@ -1,14 +1,18 @@
 use std::fmt;
 
-use kithara::assets::AssetLayout;
+use kithara_assets::{AssetLayout, AssetResource, AssetSource};
 use kithara_platform::sync::Arc;
-use url::Url;
 
-use crate::layout::FfiAssetLayout;
+use crate::layout::{FfiAssetLayout, FfiAssetResource, FfiAssetSource};
 
-/// Adapts a foreign [`FfiAssetLayout`] to the core [`AssetLayout`] trait;
-/// `rel_path` runs once per resource-key derivation, not per sample.
+/// Adapts a foreign layout to the core layout contract.
 pub(crate) struct ForeignLayout(Arc<dyn FfiAssetLayout>);
+
+impl ForeignLayout {
+    pub(crate) fn new(layout: Arc<dyn FfiAssetLayout>) -> Self {
+        Self(layout)
+    }
+}
 
 impl fmt::Debug for ForeignLayout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -17,25 +21,58 @@ impl fmt::Debug for ForeignLayout {
 }
 
 impl AssetLayout for ForeignLayout {
-    fn rel_path(&self, url: &Url) -> String {
-        self.0.rel_path(url.as_str().to_string())
+    fn root(&self, source: &AssetSource) -> String {
+        let source = match source {
+            AssetSource::Remote { url, discriminator } => FfiAssetSource::Remote {
+                url: url.as_str().to_string(),
+                discriminator: discriminator.clone(),
+            },
+            AssetSource::Local { path } => {
+                let Some(path) = path.to_str() else {
+                    return String::new();
+                };
+                FfiAssetSource::Local {
+                    path: path.to_string(),
+                }
+            }
+            _ => return String::new(),
+        };
+        self.0.root(source)
     }
-}
 
-/// Resolve the optional foreign delegate into a shared core layout. `None`
-/// keeps the store's [`DefaultLayout`](kithara::assets::DefaultLayout).
-pub(crate) fn resolve_layout(
-    layout: Option<&Arc<dyn FfiAssetLayout>>,
-) -> Option<Arc<dyn AssetLayout>> {
-    layout.map(|delegate| Arc::new(ForeignLayout(Arc::clone(delegate))) as Arc<dyn AssetLayout>)
+    fn path(&self, resource: &AssetResource) -> String {
+        let resource = match resource {
+            AssetResource::Source { extension } => FfiAssetResource::Source {
+                extension: extension.clone(),
+            },
+            AssetResource::Url(url) => FfiAssetResource::Url {
+                url: url.as_str().to_string(),
+            },
+            AssetResource::Named { namespace, name } => FfiAssetResource::Named {
+                namespace: namespace.clone(),
+                name: name.clone(),
+            },
+            _ => return String::new(),
+        };
+        self.0.path(resource)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use kithara::assets::{
-        AcquisitionResult, AssetResource, AssetStoreBuilder, AssetsError, StorageBackend, WriteSide,
+    #[cfg(unix)]
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use kithara_assets::{
+        AcquisitionResult, AssetLayoutRegistry, AssetStoreBuilder, AssetsError, ReadSide,
+        ResourceAcquisition, StorageBackend, WriteSide,
     };
     use tempfile::tempdir;
+    use url::Url;
 
     use super::*;
 
@@ -43,74 +80,223 @@ mod tests {
         Url::parse(s).expect("valid test URL")
     }
 
-    fn delegate<L: FfiAssetLayout + 'static>(layout: L) -> Arc<dyn FfiAssetLayout> {
-        Arc::new(layout)
+    fn layout<L: FfiAssetLayout + 'static>(layout: L) -> Arc<dyn AssetLayout> {
+        Arc::new(ForeignLayout::new(Arc::new(layout)))
     }
 
-    #[kithara::test]
-    fn resolve_layout_none_keeps_the_store_default() {
-        assert!(resolve_layout(None).is_none());
-    }
+    struct EchoLayout;
 
-    #[kithara::test]
-    fn foreign_layout_receives_the_resource_url() {
-        struct EchoLayout;
-        impl FfiAssetLayout for EchoLayout {
-            fn rel_path(&self, url: String) -> String {
-                url
+    impl FfiAssetLayout for EchoLayout {
+        fn root(&self, source: FfiAssetSource) -> String {
+            match source {
+                FfiAssetSource::Remote { url, discriminator } => {
+                    format!(
+                        "remote:{url}:{}",
+                        discriminator.as_deref().unwrap_or("none")
+                    )
+                }
+                FfiAssetSource::Local { path } => format!("local:{path}"),
             }
         }
 
-        let layout =
-            resolve_layout(Some(&delegate(EchoLayout))).expect("delegate resolves to Some");
-        let u = url("https://zvuk.com/42/stream/hq/seg7.mp4");
-        let rel = layout.rel_path(&u);
-        assert_eq!(rel, "https://zvuk.com/42/stream/hq/seg7.mp4");
+        fn path(&self, resource: FfiAssetResource) -> String {
+            match resource {
+                FfiAssetResource::Source { extension } => format!("source:{extension}"),
+                FfiAssetResource::Url { url } => format!("url:{url}"),
+                FfiAssetResource::Named { namespace, name } => {
+                    format!("named:{namespace}:{name}")
+                }
+            }
+        }
     }
 
-    /// Stream `data` through the Pending writer and commit it.
-    fn write_commit(acq: AssetResource, data: &[u8]) {
-        let AcquisitionResult::Pending(w) = acq else {
-            panic!("expected a Pending writer");
+    #[kithara::test]
+    fn foreign_layout_receives_every_source_variant() {
+        let layout = ForeignLayout::new(Arc::new(EchoLayout));
+        let remote = AssetSource::Remote {
+            url: url("https://example.com/track.mp3?token=secret"),
+            discriminator: Some("quality".to_string()),
         };
-        w.write_at(0, data).expect("write");
-        w.commit(Some(data.len() as u64)).expect("commit");
+        let local = AssetSource::Local {
+            path: PathBuf::from("/music/track.flac"),
+        };
+
+        assert_eq!(
+            layout.root(&remote),
+            "remote:https://example.com/track.mp3?token=secret:quality"
+        );
+        assert_eq!(layout.root(&local), "local:/music/track.flac");
+    }
+
+    #[kithara::test]
+    fn foreign_layout_receives_every_resource_variant() {
+        let layout = ForeignLayout::new(Arc::new(EchoLayout));
+
+        assert_eq!(
+            layout.path(&AssetResource::Source {
+                extension: "mp3".to_string(),
+            }),
+            "source:mp3"
+        );
+        assert_eq!(
+            layout.path(&AssetResource::Url(url(
+                "https://example.com/hls/seg.m4s?part=2"
+            ))),
+            "url:https://example.com/hls/seg.m4s?part=2"
+        );
+        assert_eq!(
+            layout.path(&AssetResource::Named {
+                namespace: "analysis".to_string(),
+                name: "waveform.json".to_string(),
+            }),
+            "named:analysis:waveform.json"
+        );
+    }
+
+    fn write_commit(acquisition: ResourceAcquisition, data: &[u8]) {
+        let AcquisitionResult::Pending(writer) = acquisition else {
+            panic!("expected a pending writer");
+        };
+        writer.write_at(0, data).expect("write resource");
+        writer
+            .commit(Some(data.len() as u64))
+            .expect("commit resource");
+    }
+
+    #[kithara::test]
+    fn foreign_layout_callbacks_only_mint_scope_and_key() {
+        const PAYLOAD: &[u8] = b"payload";
+
+        struct CountingLayout {
+            root_calls: Arc<AtomicUsize>,
+            path_calls: Arc<AtomicUsize>,
+        }
+
+        impl FfiAssetLayout for CountingLayout {
+            fn root(&self, _source: FfiAssetSource) -> String {
+                self.root_calls.fetch_add(1, Ordering::Relaxed);
+                "callback-root".to_string()
+            }
+
+            fn path(&self, _resource: FfiAssetResource) -> String {
+                self.path_calls.fetch_add(1, Ordering::Relaxed);
+                "callback/resource.bin".to_string()
+            }
+        }
+
+        let root_calls = Arc::new(AtomicUsize::new(0));
+        let path_calls = Arc::new(AtomicUsize::new(0));
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .layouts(AssetLayoutRegistry::new(layout(CountingLayout {
+                root_calls: Arc::clone(&root_calls),
+                path_calls: Arc::clone(&path_calls),
+            })))
+            .build();
+        let resource_url = url("https://example.com/audio.mp3");
+        let source = AssetSource::Remote {
+            url: resource_url.clone(),
+            discriminator: None,
+        };
+
+        let scope = store.scope::<CountingLayout>(&source).expect("valid scope");
+        assert_eq!(root_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(path_calls.load(Ordering::Relaxed), 0);
+
+        let cloned_scope = scope.clone();
+        assert_eq!(root_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(path_calls.load(Ordering::Relaxed), 0);
+        drop(cloned_scope);
+
+        let key = scope
+            .key(&AssetResource::Url(resource_url))
+            .expect("valid key");
+        assert_eq!(root_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(path_calls.load(Ordering::Relaxed), 1);
+
+        store
+            .resource_state(&key)
+            .expect("inspect missing resource");
+        assert!(store.available_ranges(&key).is_empty());
+
+        write_commit(
+            store
+                .acquire_resource(&key, None)
+                .expect("acquire resource"),
+            PAYLOAD,
+        );
+        store
+            .resource_state(&key)
+            .expect("inspect committed resource");
+        assert!(store.contains_range(&key, 0..PAYLOAD.len() as u64));
+        assert!(!store.available_ranges(&key).is_empty());
+
+        let reopened = store.open_resource(&key, None).expect("reopen resource");
+        let mut bytes = [0; PAYLOAD.len()];
+        assert_eq!(
+            reopened.read_at(0, &mut bytes).expect("first read"),
+            PAYLOAD.len()
+        );
+        assert_eq!(
+            reopened.read_at(0, &mut bytes).expect("second read"),
+            PAYLOAD.len()
+        );
+        assert_eq!(bytes.as_slice(), PAYLOAD);
+        store
+            .open_resource(&key, None)
+            .expect("reopen resource again");
+        let AcquisitionResult::Ready(_) = store
+            .acquire_resource(&key, None)
+            .expect("reacquire resource")
+        else {
+            panic!("committed resource must be ready");
+        };
+
+        assert_eq!(root_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(path_calls.load(Ordering::Relaxed), 1);
     }
 
     #[kithara::test(native, timeout(kithara_platform::time::Duration::from_secs(5)))]
-    fn foreign_layout_dictates_real_on_disk_path() {
-        struct LeafFromUrl;
-        impl FfiAssetLayout for LeafFromUrl {
-            fn rel_path(&self, url: String) -> String {
+    fn foreign_layout_dictates_real_on_disk_root_and_path() {
+        struct FixedLayout;
+
+        impl FfiAssetLayout for FixedLayout {
+            fn root(&self, _source: FfiAssetSource) -> String {
+                "foreign-root".to_string()
+            }
+
+            fn path(&self, resource: FfiAssetResource) -> String {
+                let FfiAssetResource::Url { url } = resource else {
+                    panic!("expected URL resource");
+                };
                 let leaf = url.rsplit('/').next().unwrap_or("res");
                 format!("custom/{leaf}")
             }
         }
 
         let dir = tempdir().expect("tempdir");
-        let layout =
-            resolve_layout(Some(&delegate(LeafFromUrl))).expect("delegate resolves to Some");
         let store = AssetStoreBuilder::default()
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
-            .layout(layout)
+            .layouts(AssetLayoutRegistry::new(layout(FixedLayout)))
             .build();
-        let scope = store.scope("root");
 
-        let u = url("https://example.com/audio.mp3");
-        let key = scope.key_for(&u);
+        let resource_url = url("https://example.com/audio.mp3");
+        let source = AssetSource::Remote {
+            url: resource_url.clone(),
+            discriminator: Some("root".to_string()),
+        };
+        let scope = store.scope::<FixedLayout>(&source).expect("valid scope");
+        let key = scope
+            .key(&AssetResource::Url(resource_url))
+            .expect("valid key");
         write_commit(
             scope.store().acquire_resource(&key, None).expect("acquire"),
             b"payload",
         );
 
-        let expected = dir.path().join("root").join("custom").join("audio.mp3");
-        assert!(
-            expected.exists(),
-            "foreign layout must dictate the real on-disk path: {}",
-            expected.display()
-        );
+        assert!(dir.path().join("foreign-root/custom/audio.mp3").exists());
     }
 
     #[kithara::test(native, timeout(kithara_platform::time::Duration::from_secs(5)))]
@@ -118,34 +304,94 @@ mod tests {
     #[case("/absolute/path")]
     #[case("")]
     #[case("dir/../escape")]
-    fn hostile_foreign_layout_is_rejected(#[case] hostile: &'static str) {
+    fn hostile_foreign_path_is_rejected(#[case] hostile: &'static str) {
         struct HostileForeign(&'static str);
+
         impl FfiAssetLayout for HostileForeign {
-            fn rel_path(&self, _url: String) -> String {
+            fn root(&self, _source: FfiAssetSource) -> String {
+                "foreign-root".to_string()
+            }
+
+            fn path(&self, _resource: FfiAssetResource) -> String {
                 self.0.to_string()
             }
         }
 
-        let dir = tempdir().expect("tempdir");
-        let layout = resolve_layout(Some(&delegate(HostileForeign(hostile))))
-            .expect("delegate resolves to Some");
+        let layout = layout(HostileForeign(hostile));
         let store = AssetStoreBuilder::default()
-            .backend(StorageBackend::Disk {
-                root: dir.path().into(),
-            })
-            .layout(layout)
+            .backend(StorageBackend::Memory)
+            .layouts(AssetLayoutRegistry::new(layout))
             .build();
-        let scope = store.scope("root");
+        let resource_url = url("https://example.com/audio.mp3");
+        let source = AssetSource::Remote {
+            url: resource_url.clone(),
+            discriminator: None,
+        };
+        let scope = store.scope::<HostileForeign>(&source).expect("valid scope");
+        let error = scope
+            .key(&AssetResource::Url(resource_url))
+            .expect_err("hostile path must be rejected");
 
-        let u = url("https://example.com/audio.mp3");
-        let key = scope.key_for(&u);
-        let err = scope
-            .store()
-            .acquire_resource(&key, None)
-            .expect_err("hostile rel_path must be rejected");
-        assert!(
-            matches!(err, AssetsError::InvalidKey),
-            "expected InvalidKey, got {err:?}"
-        );
+        assert!(matches!(error, AssetsError::InvalidKey));
+    }
+
+    #[kithara::test]
+    #[case("../escape")]
+    #[case("/absolute")]
+    #[case("")]
+    #[case("nested/root")]
+    fn hostile_foreign_root_is_rejected(#[case] hostile: &'static str) {
+        struct HostileRoot(&'static str);
+
+        impl FfiAssetLayout for HostileRoot {
+            fn root(&self, _source: FfiAssetSource) -> String {
+                self.0.to_string()
+            }
+
+            fn path(&self, _resource: FfiAssetResource) -> String {
+                "resource.bin".to_string()
+            }
+        }
+
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .layouts(AssetLayoutRegistry::new(layout(HostileRoot(hostile))))
+            .build();
+        let error = store
+            .scope::<HostileRoot>(&AssetSource::Remote {
+                url: url("https://example.com/audio.mp3"),
+                discriminator: None,
+            })
+            .expect_err("hostile root must be rejected");
+
+        assert!(matches!(error, AssetsError::InvalidKey));
+    }
+
+    #[cfg(unix)]
+    #[kithara::test]
+    fn non_utf8_local_source_is_rejected_without_lossy_conversion() {
+        struct RejectNonUtf8;
+
+        impl FfiAssetLayout for RejectNonUtf8 {
+            fn root(&self, _source: FfiAssetSource) -> String {
+                panic!("non-UTF-8 path must not reach the foreign delegate");
+            }
+
+            fn path(&self, _resource: FfiAssetResource) -> String {
+                "resource.bin".to_string()
+            }
+        }
+
+        let path = PathBuf::from(OsString::from_vec(vec![b'/', 0xff]));
+        let source = AssetSource::Local { path };
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .layouts(AssetLayoutRegistry::new(layout(RejectNonUtf8)))
+            .build();
+        let error = store
+            .scope::<RejectNonUtf8>(&source)
+            .expect_err("non-UTF-8 source must be rejected");
+
+        assert!(matches!(error, AssetsError::InvalidKey));
     }
 }

@@ -3,7 +3,6 @@
 use std::error::Error as StdError;
 
 use kithara::{
-    assets::StoreOptions,
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::{
@@ -36,7 +35,7 @@ async fn test_hls_session_creation(
     let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::for_url(test_stream_url.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .events(bus)
         .build();
@@ -110,7 +109,7 @@ async fn test_hls_session_events_consumption(
     let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::for_url(test_stream_url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .events(bus)
         .build();
@@ -147,7 +146,7 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         let config = HlsConfig::for_url(url)
-            .store(StoreOptions::new(temp_dir.path()))
+            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
             .cancel(CancelToken::never())
             .build();
 

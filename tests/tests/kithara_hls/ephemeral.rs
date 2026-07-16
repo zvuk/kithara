@@ -5,16 +5,18 @@ use std::{fs, path::Path};
 use kithara::platform::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::tokio::task::spawn_blocking;
+use kithara::{
+    assets::{
+        AcquisitionResult, AssetResource, AssetSource, AssetStoreBuilder, ReadSide, StorageBackend,
+        WriteSide,
+    },
+    platform::{CancelToken, time::Duration},
+};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
-};
-use kithara::{
-    assets::{AcquisitionResult, AssetStoreBuilder, ReadSide, StorageBackend, WriteSide},
-    platform::{CancelToken, time::Duration},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::TestTempDir;
@@ -24,8 +26,8 @@ use kithara_integration_tests::create_wav_exact_bytes;
 use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
 use kithara_integration_tests::signal_pcm::signal;
 #[cfg(not(target_arch = "wasm32"))]
-#[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
+use url::Url;
 
 /// `ephemeral=true` → `MemResource` (no path). `ephemeral=false` → `MmapResource`
 /// (has a file path). The disk case is native-only because wasm targets do
@@ -38,6 +40,8 @@ use tracing::info;
 #[case::ephemeral_mem(true, false)]
 #[case::disk_mmap(false, true)]
 fn resource_path_follows_storage_backend(#[case] ephemeral: bool, #[case] expect_path: bool) {
+    struct StorageProbe;
+
     let temp = TestTempDir::new();
     let backend = if ephemeral {
         StorageBackend::Memory
@@ -49,9 +53,18 @@ fn resource_path_follows_storage_backend(#[case] ephemeral: bool, #[case] expect
     let scope = AssetStoreBuilder::default()
         .backend(backend)
         .build()
-        .scope("test");
+        .scope::<StorageProbe>(&AssetSource::Remote {
+            url: Url::parse("https://cache.test/test").expect("valid test URL"),
+            discriminator: None,
+        })
+        .expect("valid test source");
 
-    let key = scope.key("seg_0.m4s");
+    let key = scope
+        .key(&AssetResource::Named {
+            namespace: "segments".to_string(),
+            name: "seg_0.m4s".to_string(),
+        })
+        .expect("valid test resource");
     let AcquisitionResult::Pending(writer) = scope
         .store()
         .acquire_resource(&key, None)
@@ -129,7 +142,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            StoreOptions::builder()
+            AssetStoreBuilder::default()
                 .backend(StorageBackend::Memory)
                 .build(),
         )

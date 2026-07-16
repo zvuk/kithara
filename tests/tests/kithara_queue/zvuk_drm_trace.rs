@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
     bufpool::{BytePool, PcmPool},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -13,7 +13,7 @@ use kithara::{
         tokio::sync::OnceCell,
     },
     play::{PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, TrackSource},
+    queue::{Queue, QueueConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{config::AppConfig, sources::build_source};
@@ -37,13 +37,9 @@ async fn zvuk_drm_master_playlist_trace() {
     let ctx = shared_ctx().await;
     let url = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
 
-    let source = match build_source(url, &ctx.config) {
-        TrackSource::Config(mut cfg) => {
-            *cfg.store_mut() = StoreOptions::new(cache.path());
-            TrackSource::Config(cfg)
-        }
-        other => other,
-    };
+    let mut config = ctx.config.clone();
+    config.store = kithara_integration_tests::disk_asset_store(cache.path());
+    let source = build_source(url, &config);
 
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx.queue.append(source);

@@ -1,7 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::StoreOptions,
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
@@ -114,7 +113,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
 
     let mut rx = queue.subscribe();

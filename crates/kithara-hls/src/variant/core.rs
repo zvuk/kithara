@@ -3,6 +3,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
+use kithara_assets::AssetResource;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_net::Headers;
@@ -10,7 +11,6 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
     time::Duration,
-    traits::FromWithParams,
 };
 use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve};
 
@@ -23,6 +23,7 @@ use super::{
     seqlock::{AtomicOptU64, AtomicSeekAlias},
 };
 use crate::{
+    HlsResult,
     config::SizeProbeMethod,
     playlist::{PlaylistAccess, PlaylistState},
     segment::{MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize, SegmentSlotState},
@@ -268,12 +269,6 @@ pub(super) fn segment_placeholder_size(duration: Duration, bandwidth_bps: Option
         .clamp(MIN_BYTES, MAX_PRECOMMIT_BYTES)
 }
 
-/// Per-variant construction parameters: the runtime context a parsed
-/// [`PlaylistState`] cannot carry, folded in via [`FromWithParams`].
-/// `decrypt_contexts[i]` carries the pre-resolved [`DecryptContext`] for
-/// segment `i` (or `None` for cleartext segments) — the caller resolves
-/// AES-128 keys through [`KeyStore`](crate::playlist::KeyStore) before
-/// construction.
 pub(crate) struct VariantParams<'a> {
     pub(crate) ctx: &'a PlanCtx,
     pub(crate) decrypt_contexts: &'a [Option<DecryptContext>],
@@ -282,10 +277,11 @@ pub(crate) struct VariantParams<'a> {
     pub(crate) variant_idx: usize,
 }
 
-/// Production constructor: read parsed playlist metadata and assemble the
-/// per-variant index, init/segment entries, queue, and cancel hierarchy.
-impl FromWithParams<&Arc<PlaylistState>, VariantParams<'_>> for Arc<HlsVariant> {
-    fn build(playlist_state: &Arc<PlaylistState>, params: VariantParams<'_>) -> Self {
+impl HlsVariant {
+    pub(crate) fn try_build(
+        playlist_state: &Arc<PlaylistState>,
+        params: VariantParams<'_>,
+    ) -> HlsResult<Arc<Self>> {
         let VariantParams {
             variant_idx,
             seek_obs,
@@ -293,28 +289,24 @@ impl FromWithParams<&Arc<PlaylistState>, VariantParams<'_>> for Arc<HlsVariant> 
             decrypt_contexts,
             ctx,
         } = params;
-        let init = HlsVariant::build_init_entry(
-            playlist_state.as_ref(),
-            variant_idx,
-            init_decrypt_ctx,
-            ctx,
-        );
-        let segments = HlsVariant::build_segment_entries(
+        let init =
+            Self::build_init_entry(playlist_state.as_ref(), variant_idx, init_decrypt_ctx, ctx)?;
+        let segments = Self::build_segment_entries(
             playlist_state.as_ref(),
             decrypt_contexts,
             variant_idx,
             ctx,
-        );
+        )?;
         let codec = playlist_state.variant_codec(variant_idx);
         let container = playlist_state.variant_container(variant_idx);
-        VariantParts {
+        Ok(VariantParts {
             seek_obs,
             codec,
             container,
             init,
             segments,
         }
-        .into_variant(variant_idx, ctx)
+        .into_variant(variant_idx, ctx))
     }
 }
 
@@ -392,10 +384,10 @@ impl HlsVariant {
         decrypt_contexts: &[Option<DecryptContext>],
         variant_idx: usize,
         ctx: &PlanCtx,
-    ) -> Vec<Segment> {
+    ) -> HlsResult<Vec<Segment>> {
         let scope = &ctx.scope;
         let Some(num) = playlist_state.num_segments(variant_idx) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let bandwidth_bps = playlist_state.variant_bandwidth_bps(variant_idx);
         let mut decode_time = Duration::ZERO;
@@ -415,7 +407,7 @@ impl HlsVariant {
                     SegmentSize::seed,
                 );
             entries.push(Segment::Media(MediaSegment {
-                resource_id: scope.key_for(&url),
+                resource_id: scope.key(&AssetResource::Url(url.clone()))?,
                 url,
                 state: SegmentSlotState::missing(),
                 size,
@@ -425,6 +417,6 @@ impl HlsVariant {
             }));
             decode_time = decode_time.saturating_add(duration);
         }
-        entries
+        Ok(entries)
     }
 }

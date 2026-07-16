@@ -1,105 +1,25 @@
-use std::path::PathBuf;
-
-use kithara::{
-    assets::{AssetLayout, StorageBackend},
-    play::ResourceConfig,
-};
 use kithara_platform::sync::Arc;
 
-use crate::config::StoreOptions;
+use crate::{asset::FfiAssetStore, types::FfiKeyOptions};
 
-pub(crate) fn configure_resource(
-    config: &mut ResourceConfig,
-    store: &StoreOptions,
-    layout: Option<&Arc<dyn AssetLayout>>,
-) {
-    if let Some(ref dir) = store.cache_dir {
-        config.store_mut().backend = StorageBackend::Disk {
-            root: PathBuf::from(dir),
-        };
-    }
-    if let Some(layout) = layout {
-        config.store_mut().layout = Some(Arc::clone(layout));
-    }
+/// FFI-friendly player configuration.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FfiPlayerConfig {
+    /// DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
+    pub key_options: FfiKeyOptions,
+    /// Shared asset store used by every item created by this player.
+    pub store: Arc<FfiAssetStore>,
+    /// Number of EQ bands (log-spaced). Default: 10.
+    pub eq_band_count: u32,
 }
 
-#[cfg(test)]
-mod tests {
-    use kithara::bufpool::{BytePool, PcmPool};
-    use url::Url;
-
-    use super::*;
-    use crate::{layout::FfiAssetLayout, native::layout::resolve_layout};
-
-    fn resource_config() -> ResourceConfig {
-        ResourceConfig::new(
-            "https://example.com/song.mp3",
-            BytePool::default(),
-            PcmPool::default(),
-        )
-        .expect("valid test URL")
-    }
-
-    #[kithara::test]
-    fn configure_resource_applies_explicit_cache_dir() {
-        let store = StoreOptions {
-            cache_dir: Some("/tmp/kithara-ffi-config-test".to_owned()),
-            layout: None,
-        };
-        let mut config = resource_config();
-        configure_resource(&mut config, &store, None);
-        assert_eq!(
-            config.store().backend.clone(),
-            StorageBackend::Disk {
-                root: PathBuf::from("/tmp/kithara-ffi-config-test")
-            }
-        );
-    }
-
-    #[kithara::test]
-    fn configure_resource_preserves_default_when_unset() {
-        let store = StoreOptions::default();
-        let mut config = resource_config();
-        let original = config.store().backend.clone();
-        configure_resource(&mut config, &store, None);
-        assert_eq!(config.store().backend, original);
-    }
-
-    #[kithara::test]
-    fn omitted_layout_leaves_store_layout_none() {
-        let store = StoreOptions::default();
-        let mut config = resource_config();
-        let resolved = resolve_layout(store.layout.as_ref());
-        configure_resource(&mut config, &store, resolved.as_ref());
-        assert!(
-            config.store().layout.is_none(),
-            "None layout must leave store layout untouched (DefaultLayout)"
-        );
-    }
-
-    #[kithara::test]
-    fn custom_layout_reaches_store_layout() {
-        struct FlatLayout;
-        impl FfiAssetLayout for FlatLayout {
-            fn rel_path(&self, _url: String) -> String {
-                "flat/track.mp3".to_string()
-            }
+impl Default for FfiPlayerConfig {
+    fn default() -> Self {
+        Self {
+            eq_band_count: 10,
+            key_options: FfiKeyOptions::default(),
+            store: Arc::new(FfiAssetStore::default()),
         }
-        let store = StoreOptions {
-            cache_dir: None,
-            layout: Some(Arc::new(FlatLayout)),
-        };
-        let mut config = resource_config();
-        let resolved = resolve_layout(store.layout.as_ref());
-        configure_resource(&mut config, &store, resolved.as_ref());
-
-        let layout = config
-            .store()
-            .layout
-            .clone()
-            .expect("custom layout must reach store");
-        let url = Url::parse("https://example.com/song.mp3").unwrap();
-        let rel = layout.rel_path(&url);
-        assert_eq!(rel, "flat/track.mp3");
     }
 }

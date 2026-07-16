@@ -14,10 +14,11 @@ use kithara_platform::{
     sync::{Arc, Mutex, OnceLock},
     tokio::sync::oneshot,
 };
+use url::Url;
 
 use super::{
     delegate::{AppleSessionEvents, StreamState, make_delegate},
-    request::{AppleRequest, accept_encoding_value},
+    request::AppleRequest,
     response::{AppleDataResponse, completion_result, send_once},
     stream::{
         AppleBodyQueue, AppleStreamResponse, StartedStream, wait_for_data, wait_for_stream_head,
@@ -26,23 +27,29 @@ use super::{
 use crate::{
     error::{NetError, NetResult},
     metrics::ConnectionMetrics,
-    types::NetOptions,
+    types::{AcceptEncodingPolicy, NetOptions, accept_encoding_value},
 };
 
 pub(super) type TaskId = NSUInteger;
-type DataStart = (
-    oneshot::Receiver<Result<AppleDataResponse, NetError>>,
-    AppleTask,
-);
+type DataResult = Result<AppleDataResponse, NetError>;
+type DataSender = Arc<Mutex<Option<oneshot::Sender<DataResult>>>>;
+type DataStart = (oneshot::Receiver<DataResult>, AppleTask);
 
 struct DataCompletionSink {
+    accept_encoding: AcceptEncodingPolicy,
     byte_pool: BytePool,
-    sender: Arc<Mutex<Option<oneshot::Sender<Result<AppleDataResponse, NetError>>>>>,
+    sender: DataSender,
+    url: Url,
 }
 
 impl urlsession::DataTaskCompletion for DataCompletionSink {
     fn complete(&self, completion: DataCompletion<'_>) {
-        let result = completion_result(completion, &self.byte_pool);
+        let result = completion_result(
+            &completion,
+            &self.byte_pool,
+            self.accept_encoding,
+            &self.url,
+        );
         send_once(&self.sender, result);
     }
 }
@@ -102,9 +109,13 @@ impl AppleSession {
     fn start_data(&self, request: AppleRequest) -> NetResult<DataStart> {
         let (sender, receiver) = oneshot::channel();
         let sender = Arc::new(Mutex::new(Some(sender)));
+        let accept_encoding = request.accept_encoding();
+        let url = request.url().clone();
         let completion: Arc<dyn urlsession::DataTaskCompletion> = Arc::new(DataCompletionSink {
+            accept_encoding,
             byte_pool: self.byte_pool.clone(),
             sender: Arc::clone(&sender),
+            url,
         });
 
         let request = request.into_ns_request(&self.accept_encoding)?;
@@ -120,6 +131,8 @@ impl AppleSession {
 
     fn start_stream(&self, request: AppleRequest) -> NetResult<StartedStream> {
         let (head_sender, head_receiver) = oneshot::channel();
+        let accept_encoding = request.accept_encoding();
+        let url = request.url().clone();
         let request = request.into_ns_request(&self.accept_encoding)?;
         let data_task = self.shared.session.dataTaskWithRequest(&request);
         let task: AppleTask = data_task.into();
@@ -136,8 +149,10 @@ impl AppleSession {
         self.shared.events.register_stream(
             task_id,
             StreamState {
+                accept_encoding,
                 body_queue: Some(Arc::clone(&body_queue)),
                 head_sender: Some(head_sender),
+                url,
             },
         );
         task.resume();

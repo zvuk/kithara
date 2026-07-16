@@ -3,13 +3,18 @@
 //! receives every `ResourceKey` evicted under its `asset_root`; keys
 //! under a different `asset_root` are not delivered to it; dropping the
 //! returned guard deregisters, so no further keys arrive.
+
+mod support;
+
 use std::num::NonZeroUsize;
 
 use kithara_assets::{
-    AcquisitionResult, AssetStore, AssetStoreBuilder, ResourceKey, StorageBackend, WriteSide,
+    AcquisitionResult, AssetScope, AssetStore, AssetStoreBuilder, ResourceKey, StorageBackend,
+    WriteSide,
 };
 use kithara_platform::{sync::Arc, time::Duration, tokio::sync::mpsc};
 use kithara_test_utils::kithara;
+use support::{Test, resource, source};
 
 const ROOT_A: &str = "asset_root_a";
 const ROOT_B: &str = "asset_root_b";
@@ -34,11 +39,9 @@ fn write_commit(store: &AssetStore, key: &ResourceKey, data: &[u8]) {
         .expect("test commit must succeed");
 }
 
-/// Commit `count` resources under `root` to force LRU displacement.
-fn fill_root(store: &AssetStore, root: &str, count: usize) -> Vec<ResourceKey> {
-    let scope = store.scope(root);
+fn fill_scope(store: &AssetStore, scope: &AssetScope, count: usize) -> Vec<ResourceKey> {
     let keys: Vec<ResourceKey> = (0..count)
-        .map(|i| scope.key(format!("seg_{i}.m4s")))
+        .map(|i| scope.key(&resource(format!("seg_{i}.m4s"))).expect("key"))
         .collect();
     for key in &keys {
         write_commit(store, key, b"data");
@@ -49,13 +52,14 @@ fn fill_root(store: &AssetStore, root: &str, count: usize) -> Vec<ResourceKey> {
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn evicted_key_under_subscribed_root_is_delivered() {
     let store = ephemeral_store(2);
+    let scope = store.scope::<Test>(&source(ROOT_A)).unwrap();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ResourceKey>();
-    let _guard = store.subscribe_eviction(Arc::from(ROOT_A), tx);
+    let _guard = store.subscribe_eviction(Arc::from(scope.asset_root()), tx);
 
     // The 2-slot LRU displaces the oldest key on the third insert; its
     // bytes are gone (ephemeral), so the subscriber must receive it.
-    let keys = fill_root(&store, ROOT_A, 3);
+    let keys = fill_scope(&store, &scope, 3);
 
     let received = rx.try_recv().expect("evicted key must be delivered");
     assert_eq!(received, keys[0]);
@@ -64,12 +68,14 @@ fn evicted_key_under_subscribed_root_is_delivered() {
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn evicted_key_under_other_root_is_not_delivered() {
     let store = ephemeral_store(2);
+    let scope_a = store.scope::<Test>(&source(ROOT_A)).unwrap();
+    let scope_b = store.scope::<Test>(&source(ROOT_B)).unwrap();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ResourceKey>();
-    let _guard = store.subscribe_eviction(Arc::from(ROOT_A), tx);
+    let _guard = store.subscribe_eviction(Arc::from(scope_a.asset_root()), tx);
 
     // Evict under a DIFFERENT root; the ROOT_A subscriber must see nothing.
-    let _keys = fill_root(&store, ROOT_B, 3);
+    let _keys = fill_scope(&store, &scope_b, 3);
 
     assert!(
         rx.try_recv().is_err(),
@@ -80,15 +86,86 @@ fn evicted_key_under_other_root_is_not_delivered() {
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn dropping_guard_deregisters() {
     let store = ephemeral_store(2);
+    let scope = store.scope::<Test>(&source(ROOT_A)).unwrap();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ResourceKey>();
-    let guard = store.subscribe_eviction(Arc::from(ROOT_A), tx);
+    let guard = store.subscribe_eviction(Arc::from(scope.asset_root()), tx);
     drop(guard);
 
-    let _keys = fill_root(&store, ROOT_A, 3);
+    let _keys = fill_scope(&store, &scope, 3);
 
     assert!(
         rx.try_recv().is_err(),
         "after dropping the guard no eviction may be delivered"
     );
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)))]
+fn dropping_first_subscriber_preserves_second() {
+    let store = ephemeral_store(2);
+    let scope = store.scope::<Test>(&source(ROOT_A)).unwrap();
+
+    let (first_tx, mut first_rx) = mpsc::unbounded_channel::<ResourceKey>();
+    let first_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), first_tx);
+    let (second_tx, mut second_rx) = mpsc::unbounded_channel::<ResourceKey>();
+    let _second_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), second_tx);
+
+    let keys = fill_scope(&store, &scope, 3);
+    assert_eq!(
+        first_rx.try_recv().expect("first subscriber must receive"),
+        keys[0]
+    );
+    assert_eq!(
+        second_rx
+            .try_recv()
+            .expect("second subscriber must receive"),
+        keys[0]
+    );
+
+    drop(first_guard);
+    let next = scope.key(&resource("after_first_drop.m4s")).unwrap();
+    write_commit(&store, &next, b"data");
+
+    assert!(first_rx.try_recv().is_err());
+    assert_eq!(
+        second_rx
+            .try_recv()
+            .expect("second subscriber must survive first guard drop"),
+        keys[1]
+    );
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)))]
+fn dropping_second_subscriber_preserves_first() {
+    let store = ephemeral_store(2);
+    let scope = store.scope::<Test>(&source(ROOT_A)).unwrap();
+
+    let (first_tx, mut first_rx) = mpsc::unbounded_channel::<ResourceKey>();
+    let _first_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), first_tx);
+    let (second_tx, mut second_rx) = mpsc::unbounded_channel::<ResourceKey>();
+    let second_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), second_tx);
+
+    let keys = fill_scope(&store, &scope, 3);
+    assert_eq!(
+        first_rx.try_recv().expect("first subscriber must receive"),
+        keys[0]
+    );
+    assert_eq!(
+        second_rx
+            .try_recv()
+            .expect("second subscriber must receive"),
+        keys[0]
+    );
+
+    drop(second_guard);
+    let next = scope.key(&resource("after_second_drop.m4s")).unwrap();
+    write_commit(&store, &next, b"data");
+
+    assert_eq!(
+        first_rx
+            .try_recv()
+            .expect("first subscriber must survive second guard drop"),
+        keys[1]
+    );
+    assert!(second_rx.try_recv().is_err());
 }

@@ -4,7 +4,6 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
     events::{AbrEvent, Event, EventBus, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -45,7 +44,7 @@ async fn test_driver_seek_after_playlist_finished(temp_dir: TestTempDir, rt_canc
     let url = server.url("/master.m3u8");
 
     let config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(rt_cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -114,7 +113,7 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelT
     let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(rt_cancel)
         .events(bus)
         .initial_abr_mode(auto(0))

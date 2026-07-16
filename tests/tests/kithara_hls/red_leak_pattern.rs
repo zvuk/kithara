@@ -8,7 +8,6 @@ use std::{
 
 use kithara::{
     abr::Abr,
-    assets::StoreOptions,
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{
@@ -159,7 +158,7 @@ async fn red_hls_source_drop_leaks_peer(
     {
         let stream = Stream::<Hls>::new(
             HlsConfig::for_url(url.clone())
-                .store(StoreOptions::new(temp_dir.path()))
+                .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
                 .cancel(CancelToken::never())
                 .downloader(downloader.clone())
                 .build(),
@@ -175,7 +174,7 @@ async fn red_hls_source_drop_leaks_peer(
     for i in 0..ITERATIONS {
         let stream = Stream::<Hls>::new(
             HlsConfig::for_url(url.clone())
-                .store(StoreOptions::new(temp_dir.path()))
+                .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
                 .cancel(CancelToken::never())
                 .downloader(downloader.clone())
                 .build(),

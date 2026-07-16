@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     decode::DecoderBackend,
     events::{AudioEvent, Event},
     net::{HttpClient, NetOptions},
@@ -49,7 +48,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let master = created.master_url();
 
     let temp = temp_dir();
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),

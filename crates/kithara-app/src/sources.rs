@@ -78,10 +78,9 @@ pub(crate) fn build_resource_config(
     Some(
         builder
             .downloader(config.downloader.clone())
-            .flush_hub(config.flush_hub.clone())
             .byte_pool(config.byte_pool.clone())
             .pcm_pool(config.pcm_pool.clone())
-            .asset_store(config.asset_store.clone())
+            .store(config.store.clone())
             .keys(keys)
             .maybe_headers(headers)
             .size_probe_method(config.size_probe_method)

@@ -581,6 +581,8 @@ impl Default for AwaitUnderGuardConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RetryFallbackConfig {
+    #[serde(default)]
+    pub(crate) allowed_idents: Vec<String>,
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
 }
@@ -588,6 +590,7 @@ pub(crate) struct RetryFallbackConfig {
 impl Default for RetryFallbackConfig {
     fn default() -> Self {
         Self {
+            allowed_idents: Vec::new(),
             exempt_files: default_exempt_files(),
         }
     }

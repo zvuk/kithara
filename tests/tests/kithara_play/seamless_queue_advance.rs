@@ -3,7 +3,6 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    assets::StoreOptions,
     decode::{GaplessMode, SilenceTrimParams},
     platform::time::{self, Duration, Instant},
     play::{PlayerEvent, Resource, ResourceConfig},
@@ -259,7 +258,7 @@ async fn create_gapless_hls_resource(
         .await
         .expect("create seamless queue HLS fixture");
 
-    let store = StoreOptions::new(cache_dir);
+    let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)

@@ -13,14 +13,14 @@ use kithara_platform::sync::{Arc, Mutex};
 use crate::index::schema::{LruEntryFile, LruIndexFile};
 use crate::{
     error::AssetsResult,
-    flush::{FlushHub, Flushable, flush_sync},
+    index::persistence::{FlushHub, Flushable, flush_sync},
 };
 
 /// Eviction configuration for an assets store decorator.
 #[derive(Clone, Debug, Default)]
-pub struct EvictConfig {
-    pub max_assets: Option<usize>,
-    pub max_bytes: Option<u64>,
+pub(crate) struct EvictConfig {
+    pub(crate) max_assets: Option<usize>,
+    pub(crate) max_bytes: Option<u64>,
 }
 
 /// In-memory + best-effort disk-backed LRU index over `asset_root`.

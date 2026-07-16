@@ -1,7 +1,6 @@
 use std::io::Read;
 
 use kithara::{
-    assets::StoreOptions,
     hls::{AbrMode, Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
@@ -48,13 +47,13 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
 
     let config_a = HlsConfig::for_url(server_a.url("/master.m3u8"))
         .cancel(cancel.clone())
-        .store(StoreOptions::new(&temp_a))
+        .store(kithara_integration_tests::disk_asset_store(&temp_a))
         .initial_abr_mode(AbrMode::manual(0))
         .downloader(downloader.clone())
         .build();
     let config_b = HlsConfig::for_url(server_b.url("/master.m3u8"))
         .cancel(cancel.clone())
-        .store(StoreOptions::new(&temp_b))
+        .store(kithara_integration_tests::disk_asset_store(&temp_b))
         .initial_abr_mode(AbrMode::manual(0))
         .downloader(downloader.clone())
         .build();

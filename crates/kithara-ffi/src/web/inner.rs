@@ -6,9 +6,7 @@ use kithara_queue::Transition;
 use crate::{
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
-    types::{
-        FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus,
-    },
+    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus},
     web::{bridge::WorkerBridge, commands::WorkerCmd},
 };
 
@@ -81,10 +79,6 @@ impl WasmInner {
     const DEFAULT_VOLUME: f32 = 0.5;
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
-
-    pub(crate) fn new(_config: FfiPlayerConfig) -> Self {
-        Self::default()
-    }
 
     pub(crate) fn advance_to_next_item(&self) {
         let Some(current) = self.bridge.current_track_id() else {

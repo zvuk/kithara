@@ -2,7 +2,6 @@
 
 use kithara::{
     abr::AbrMode,
-    assets::StoreOptions,
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     net::{HttpClient, NetOptions},
@@ -124,7 +123,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
     let master = server.url("/master.m3u8");
 
     let temp = temp_dir();
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
@@ -133,7 +132,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
     let cfg = ResourceConfig::for_src(master.as_str())
         .expect("valid master URL")
         .downloader(downloader.clone())
-        .name("t0".to_string())
+        .discriminator("t0".to_string())
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

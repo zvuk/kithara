@@ -1,5 +1,5 @@
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     audio::{Audio, AudioConfig, ChunkOutcome, ReadOutcome},
     decode::DecoderBackend,
     events::{AbrEvent, Event, EventBus},
@@ -67,7 +67,7 @@ async fn create_packaged_abr_fixture() -> (TestServerHelper, url::Url) {
 
 async fn open_packaged_hls_audio(
     url: &url::Url,
-    store: StoreOptions,
+    store: AssetStore,
     abr: AbrMode,
     bus: Option<EventBus>,
 ) -> Audio<Stream<Hls>> {
@@ -131,7 +131,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
 
     let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
@@ -196,7 +196,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
 )]
 async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let (_server, url) = create_packaged_abr_fixture().await;
-    let store = StoreOptions::new(temp_dir.path());
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
 
     let bus = EventBus::new(64);
     let mut hls_rx = bus.subscribe();
@@ -426,7 +426,7 @@ async fn stream_continues_after_seek(
         AbrMode::manual(0)
     };
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(abr_mode)
         .build();
@@ -523,7 +523,7 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
 
     let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -587,7 +587,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
 
     let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
@@ -668,7 +668,7 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let url = server.asset("track.mp3");
 
     let file_config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())
@@ -761,7 +761,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     let url = server.asset("hls/master.m3u8");
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(auto(0))
         .build();
 
@@ -891,7 +891,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     let bus = EventBus::new(8192);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))

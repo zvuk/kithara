@@ -21,12 +21,14 @@ use super::{ResourceConfig, SourceType};
 /// # Example
 ///
 /// ```ignore
+/// use kithara_assets::AssetStoreBuilder;
 /// use kithara_bufpool::{BytePool, PcmPool};
 /// use kithara_play::{Resource, ResourceConfig};
 ///
 /// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
 /// let config = ResourceConfig::new(
 ///     "https://example.com/song.mp3",
+///     AssetStoreBuilder::default().build(),
 ///     BytePool::default(),
 ///     PcmPool::default(),
 /// )?;

@@ -83,6 +83,23 @@ enables `kithara-apple/foundation`, and the Apple backend imports Foundation /
 Objective-C types through that owner crate. HTTP behavior, retry, timeout,
 resumability, header normalization, and `NetError` mapping remain owned here.
 
+### Content-coding contract
+
+On the native reqwest/wreq and Apple paths, `NetOptions::compression` owns
+content-coding negotiation; caller-supplied `Accept-Encoding` headers do not
+override it. Whole-body `get_bytes` and `post_bytes` requests advertise exactly
+the configured set. `stream`, `get_range`, and `head` advertise `identity`,
+because resumable and range offsets are byte-addressed and must stay in the same
+representation as cached bytes and `Content-Length`. A successful response that
+still carries a non-identity `Content-Encoding` under the identity policy is
+rejected as `NetError::Decode` before its body can reach Downloader or an asset
+store. Apple preserves Foundation's auto-decoded whole-body normalization by
+removing stale `Content-Encoding` and encoded `Content-Length` response headers.
+
+The native request-level header is authoritative even under wreq browser
+emulation. Disabling a decoder with `ClientBuilder::no_*` is not sufficient:
+an emulation preset may already have installed its own default header.
+
 `client-apple` timeout note: keep timeout ownership aligned with
 `client-wreq`/`client-reqwest`. The Apple backend wraps data/header establishment
 in the Rust-side `inactivity_timeout`, and streaming body inactivity is still

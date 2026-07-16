@@ -180,7 +180,7 @@ pub(crate) mod phase_oracle {
 
 pub(crate) mod params {
     use kithara::{
-        assets::StoreOptions,
+        assets::AssetStore,
         audio::{Audio, AudioConfig},
         decode::DecoderBackend,
         hls::{AbrMode, Hls, HlsConfig},
@@ -260,7 +260,7 @@ pub(crate) mod params {
     /// rather than a hard-coded constant.
     pub(crate) async fn open_audio(
         url: &url::Url,
-        store: StoreOptions,
+        store: AssetStore,
         abr: AbrMode,
         backend: DecoderBackend,
         prefetch_count: usize,

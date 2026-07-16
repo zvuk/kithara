@@ -48,8 +48,10 @@ enabled = true
 qualified_deref_remaps = [{ field_type = "PathBuf", scoped_name = "Path" }]
 
 [retry_fallback]
-# retry_fallback flags retry/fallback vocabulary (max_retries, should_retry,
-# attempt, ...) to catch try-A-else-B chains that paper over state bugs. The
+# retry_fallback flags retry/fallback vocabulary to catch try-A-else-B chains
+# that paper over state bugs. Exact allowed identifiers are legitimate project
+# vocabulary and are not useful signals for this lexical check.
+allowed_idents = ["attempt", "max_retries"]
 # kithara-net retry subsystem legitimately OWNS that vocabulary and is not a
 # fallback chain — bounded HTTP backoff on 5xx/429/timeout (RetryPolicy /
 # should_retry / RetryExhausted) is degraded-mode network I/O, which AGENTS.md

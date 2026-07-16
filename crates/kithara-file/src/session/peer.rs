@@ -281,7 +281,10 @@ impl FileInner {
 
 #[cfg(test)]
 mod tests {
-    use kithara_assets::{AcquisitionResult, AssetStoreBuilder, StorageBackend};
+    use kithara_assets::{
+        AcquisitionResult, AssetResource, AssetResourceState, AssetSource, AssetStore,
+        AssetStoreBuilder, ResourceKey, StorageBackend,
+    };
     use kithara_events::{Envelope, Event, EventBus};
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_stream::{PlayheadState, SeekState};
@@ -289,16 +292,27 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::coord::FileCoord;
+    use crate::{File, coord::FileCoord};
+
+    fn test_key(store: &AssetStore) -> ResourceKey {
+        let source = AssetSource::Remote {
+            url: Url::parse("https://example.com/remote.dat").expect("test URL"),
+            discriminator: Some("peer-test".to_string()),
+        };
+        let scope = store.scope::<File>(&source).expect("test scope");
+        scope
+            .key(&AssetResource::Source {
+                extension: "dat".to_string(),
+            })
+            .expect("test resource key")
+    }
 
     fn make_inner() -> Arc<FileInner> {
-        let store = Arc::new(
-            AssetStoreBuilder::default()
-                .backend(StorageBackend::Memory)
-                .cancel(CancelToken::never())
-                .build(),
-        );
-        let key = store.scope("test").key("remote.dat");
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cancel(CancelToken::never())
+            .build();
+        let key = test_key(&store);
         let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
             panic!("fresh acquire must be Pending");
         };
@@ -371,6 +385,26 @@ mod tests {
                 event: Event::File(FileEvent::CacheComplete { total_bytes: 12 }),
                 ..
             })
+        ));
+    }
+
+    #[kithara::test]
+    fn terminal_failure_does_not_publish_cache_complete() {
+        let inner = make_inner();
+        let mut rx = inner.source.bus.subscribe();
+        inner.source.coord.set_total_bytes(Some(12));
+        inner.set_phase(FilePhase::Downloading);
+
+        inner.fail_and_evict("fixture terminal failure");
+
+        assert!(rx.try_recv().is_err());
+        assert!(matches!(
+            inner
+                .asset
+                .backend
+                .resource_state(&inner.asset.key)
+                .expect("resource state"),
+            AssetResourceState::Missing
         ));
     }
 }

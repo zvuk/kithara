@@ -352,7 +352,7 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
-// Initial value and increment amount for handles. 
+// Initial value and increment amount for handles.
 // These ensure that SWIFT handles always have the lowest bit set
 fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
 fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
@@ -434,6 +434,22 @@ fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
     }
 
     public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterUInt16: FfiConverterPrimitive {
+    typealias FfiType = UInt16
+    typealias SwiftType = UInt16
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt16 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
     }
 }
@@ -613,14 +629,14 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  * `crate::web::surface`.
  */
 public protocol AudioPlayerProtocol: AnyObject, Sendable {
-    
+
     /**
      * Advance to the next item in the queue, no-op if already on the
      * last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
      * for an immediate cut.
      */
-    func advanceToNextItem() 
-    
+    func advanceToNextItem()
+
     /**
      * Append an item to the tail of the queue. AVQueuePlayer-style
      * counterpart of [`Self::insert`], which follows the iOS protocol
@@ -632,10 +648,10 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * a queue-owned `kithara::play::Source` — same failure surface as
      * [`Self::insert`].
      */
-    func append(item: AudioPlayerItem) throws 
-    
+    func append(item: AudioPlayerItem) throws
+
     func crossfadeDuration()  -> Float
-    
+
     /**
      * Currently playing item (if any). Resolves the queue's current
      * track id against the player's Swift-owned item registry so
@@ -643,18 +659,18 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * to [`Self::insert`].
      */
     func currentItem()  -> AudioPlayerItem?
-    
+
     /**
      * Live playback position in seconds, or `0.0` if no item is loaded.
      * Convenience over [`Self::snapshot`] and
      * [`FfiPlayerSnapshot::current_time`] for hot-path UI updates.
      */
     func currentTime()  -> Double
-    
+
     func eqBandCount()  -> UInt32
-    
+
     func eqGain(band: UInt32)  -> Float
-    
+
     /**
      * Insert an item into the queue.
      *
@@ -671,14 +687,14 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * Returns [`FfiError::InvalidArgument`] if `after` is not currently
      * in the queue, or if the item's URL is malformed.
      */
-    func insert(item: AudioPlayerItem, after: AudioPlayerItem?) throws 
-    
+    func insert(item: AudioPlayerItem, after: AudioPlayerItem?) throws
+
     func isMuted()  -> Bool
-    
+
     func itemCount()  -> UInt32
-    
+
     func items()  -> [AudioPlayerItem]
-    
+
     /**
      * Notify the native player that the platform audio route changed.
      *
@@ -691,12 +707,12 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * Returns [`FfiError`] when the native player cannot schedule the
      * route invalidation.
      */
-    func notifyAudioRouteChanged(reason: String) throws 
-    
-    func pause() 
-    
-    func play() 
-    
+    func notifyAudioRouteChanged(reason: String) throws
+
+    func pause()
+
+    func play()
+
     /**
      * Target playback speed used by `play()`. When the player is
      * playing, the live `rate()` equals this value; on pause it falls
@@ -704,9 +720,9 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * terminology.
      */
     func playingRate()  -> Float
-    
+
     func rate()  -> Float
-    
+
     /**
      * Remove an item from the queue.
      *
@@ -715,10 +731,10 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * Returns [`FfiError::InvalidArgument`] if the item is not in the
      * queue.
      */
-    func remove(item: AudioPlayerItem) throws 
-    
-    func removeAllItems() 
-    
+    func remove(item: AudioPlayerItem) throws
+
+    func removeAllItems()
+
     /**
      * Replace the item at `index` with a freshly-configured one.
      *
@@ -727,15 +743,15 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * Returns [`FfiError::InvalidArgument`] if `index` is out of range
      * or the item's URL is malformed.
      */
-    func replaceItem(index: UInt32, item: AudioPlayerItem) throws 
-    
+    func replaceItem(index: UInt32, item: AudioPlayerItem) throws
+
     /**
      * # Errors
      *
      * Returns error if the engine is not running.
      */
-    func resetEq() throws 
-    
+    func resetEq() throws
+
     /**
      * Seek to a position in the current item.
      *
@@ -748,8 +764,8 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * command was accepted, `false` otherwise (matches `AVPlayer`
      * semantics).
      */
-    func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback) 
-    
+    func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)
+
     /**
      * Select an item in the queue with the given transition.
      *
@@ -765,27 +781,27 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * [`FfiError::NotReady`] if the track's resource is not yet loaded,
      * or [`FfiError::Internal`] if the underlying Queue fails to select.
      */
-    func selectItem(index: UInt32, transition: FfiTransition) throws 
-    
-    func setAbrMode(mode: FfiAbrMode) 
-    
-    func setCrossfadeDuration(seconds: Float) 
-    
+    func selectItem(index: UInt32, transition: FfiTransition) throws
+
+    func setAbrMode(mode: FfiAbrMode)
+
+    func setCrossfadeDuration(seconds: Float)
+
     /**
      * # Errors
      *
      * Returns error if the engine is not running.
      */
-    func setEqGain(band: UInt32, gainDb: Float) throws 
-    
-    func setMuted(muted: Bool) 
-    
-    func setObserver(observer: PlayerObserver) 
-    
-    func setPlayingRate(rate: Float) 
-    
-    func setVolume(volume: Float) 
-    
+    func setEqGain(band: UInt32, gainDb: Float) throws
+
+    func setMuted(muted: Bool)
+
+    func setObserver(observer: PlayerObserver)
+
+    func setPlayingRate(rate: Float)
+
+    func setVolume(volume: Float)
+
     /**
      * Register a runtime DRM key processor for every host (`"*"`).
      *
@@ -798,8 +814,8 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * re-call this method *before* [`Self::insert`] for the new processor
      * to apply.
      */
-    func setupHlsAes(processor: FfiKeyProcessor) 
-    
+    func setupHlsAes(processor: FfiKeyProcessor)
+
     /**
      * Register a runtime DRM key processor with explicit rule control
      * (custom domains, headers, salt). The rule's salt — if any — is
@@ -807,28 +823,28 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      *
      * Items already in the queue keep their original key registry.
      */
-    func setupHlsAesWithRule(rule: FfiKeyRule) 
-    
+    func setupHlsAesWithRule(rule: FfiKeyRule)
+
     /**
      * Player-wide auth header. Stores `auth_token` under
      * `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
      * every subsequent [`Self::insert`]. Pass an empty string to clear.
      */
-    func setupNetwork(authToken: String) 
-    
+    func setupNetwork(authToken: String)
+
     /**
      * Return a snapshot of the player's current state.
      */
     func snapshot()  -> FfiPlayerSnapshot
-    
+
     /**
      * Stop playback: pause the engine and reset the current item's
      * position to the start. The queue is preserved, so a subsequent
      * [`play`](Self::play) resumes the same item from the beginning.
      * To empty the queue instead, use [`remove_all_items`](Self::remove_all_items).
      */
-    func stop() 
-    
+    func stop()
+
     /**
      * Cap the ABR controller's choice by per-network peak bitrate
      * limits (bits/sec). Pass `0.0` for either argument to clear that
@@ -839,10 +855,10 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * limit is exceeded on either link. Caller-side network monitoring
      * can re-call this method on connectivity changes.
      */
-    func updatePeakBitrate(wifiBps: Double, cellularBps: Double) 
-    
+    func updatePeakBitrate(wifiBps: Double, cellularBps: Double)
+
     func volume()  -> Float
-    
+
 }
 /**
  * FFI-facing audio player. A thin facade over the platform-selected
@@ -910,9 +926,9 @@ public convenience init(config: FfiPlayerConfig) {
         try! rustCall { uniffi_kithara_ffi_fn_free_audioplayer(handle, $0) }
     }
 
-    
 
-    
+
+
     /**
      * Advance to the next item in the queue, no-op if already on the
      * last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
@@ -924,7 +940,7 @@ open func advanceToNextItem()  {try! rustCall() {
     )
 }
 }
-    
+
     /**
      * Append an item to the tail of the queue. AVQueuePlayer-style
      * counterpart of [`Self::insert`], which follows the iOS protocol
@@ -943,7 +959,7 @@ open func append(item: AudioPlayerItem)throws   {try rustCallWithError(FfiConver
     )
 }
 }
-    
+
 open func crossfadeDuration() -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_crossfade_duration(
@@ -951,7 +967,7 @@ open func crossfadeDuration() -> Float  {
     )
 })
 }
-    
+
     /**
      * Currently playing item (if any). Resolves the queue's current
      * track id against the player's Swift-owned item registry so
@@ -965,7 +981,7 @@ open func currentItem() -> AudioPlayerItem?  {
     )
 })
 }
-    
+
     /**
      * Live playback position in seconds, or `0.0` if no item is loaded.
      * Convenience over [`Self::snapshot`] and
@@ -978,7 +994,7 @@ open func currentTime() -> Double  {
     )
 })
 }
-    
+
 open func eqBandCount() -> UInt32  {
     return try!  FfiConverterUInt32.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_eq_band_count(
@@ -986,7 +1002,7 @@ open func eqBandCount() -> UInt32  {
     )
 })
 }
-    
+
 open func eqGain(band: UInt32) -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_eq_gain(
@@ -995,7 +1011,7 @@ open func eqGain(band: UInt32) -> Float  {
     )
 })
 }
-    
+
     /**
      * Insert an item into the queue.
      *
@@ -1020,7 +1036,7 @@ open func insert(item: AudioPlayerItem, after: AudioPlayerItem?)throws   {try ru
     )
 }
 }
-    
+
 open func isMuted() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_is_muted(
@@ -1028,7 +1044,7 @@ open func isMuted() -> Bool  {
     )
 })
 }
-    
+
 open func itemCount() -> UInt32  {
     return try!  FfiConverterUInt32.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_item_count(
@@ -1036,7 +1052,7 @@ open func itemCount() -> UInt32  {
     )
 })
 }
-    
+
 open func items() -> [AudioPlayerItem]  {
     return try!  FfiConverterSequenceTypeAudioPlayerItem.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_items(
@@ -1044,7 +1060,7 @@ open func items() -> [AudioPlayerItem]  {
     )
 })
 }
-    
+
     /**
      * Notify the native player that the platform audio route changed.
      *
@@ -1064,21 +1080,21 @@ open func notifyAudioRouteChanged(reason: String)throws   {try rustCallWithError
     )
 }
 }
-    
+
 open func pause()  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_pause(
             self.uniffiCloneHandle(),$0
     )
 }
 }
-    
+
 open func play()  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_play(
             self.uniffiCloneHandle(),$0
     )
 }
 }
-    
+
     /**
      * Target playback speed used by `play()`. When the player is
      * playing, the live `rate()` equals this value; on pause it falls
@@ -1092,7 +1108,7 @@ open func playingRate() -> Float  {
     )
 })
 }
-    
+
 open func rate() -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_rate(
@@ -1100,7 +1116,7 @@ open func rate() -> Float  {
     )
 })
 }
-    
+
     /**
      * Remove an item from the queue.
      *
@@ -1116,14 +1132,14 @@ open func remove(item: AudioPlayerItem)throws   {try rustCallWithError(FfiConver
     )
 }
 }
-    
+
 open func removeAllItems()  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_remove_all_items(
             self.uniffiCloneHandle(),$0
     )
 }
 }
-    
+
     /**
      * Replace the item at `index` with a freshly-configured one.
      *
@@ -1140,7 +1156,7 @@ open func replaceItem(index: UInt32, item: AudioPlayerItem)throws   {try rustCal
     )
 }
 }
-    
+
     /**
      * # Errors
      *
@@ -1152,7 +1168,7 @@ open func resetEq()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift
     )
 }
 }
-    
+
     /**
      * Seek to a position in the current item.
      *
@@ -1174,7 +1190,7 @@ open func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)  {
     )
 }
 }
-    
+
     /**
      * Select an item in the queue with the given transition.
      *
@@ -1198,7 +1214,7 @@ open func selectItem(index: UInt32, transition: FfiTransition)throws   {try rust
     )
 }
 }
-    
+
 open func setAbrMode(mode: FfiAbrMode)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_abr_mode(
             self.uniffiCloneHandle(),
@@ -1206,7 +1222,7 @@ open func setAbrMode(mode: FfiAbrMode)  {try! rustCall() {
     )
 }
 }
-    
+
 open func setCrossfadeDuration(seconds: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_crossfade_duration(
             self.uniffiCloneHandle(),
@@ -1214,7 +1230,7 @@ open func setCrossfadeDuration(seconds: Float)  {try! rustCall() {
     )
 }
 }
-    
+
     /**
      * # Errors
      *
@@ -1228,7 +1244,7 @@ open func setEqGain(band: UInt32, gainDb: Float)throws   {try rustCallWithError(
     )
 }
 }
-    
+
 open func setMuted(muted: Bool)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_muted(
             self.uniffiCloneHandle(),
@@ -1236,7 +1252,7 @@ open func setMuted(muted: Bool)  {try! rustCall() {
     )
 }
 }
-    
+
 open func setObserver(observer: PlayerObserver)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_observer(
             self.uniffiCloneHandle(),
@@ -1244,7 +1260,7 @@ open func setObserver(observer: PlayerObserver)  {try! rustCall() {
     )
 }
 }
-    
+
 open func setPlayingRate(rate: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_playing_rate(
             self.uniffiCloneHandle(),
@@ -1252,7 +1268,7 @@ open func setPlayingRate(rate: Float)  {try! rustCall() {
     )
 }
 }
-    
+
 open func setVolume(volume: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_volume(
             self.uniffiCloneHandle(),
@@ -1260,7 +1276,7 @@ open func setVolume(volume: Float)  {try! rustCall() {
     )
 }
 }
-    
+
     /**
      * Register a runtime DRM key processor for every host (`"*"`).
      *
@@ -1280,7 +1296,7 @@ open func setupHlsAes(processor: FfiKeyProcessor)  {try! rustCall() {
     )
 }
 }
-    
+
     /**
      * Register a runtime DRM key processor with explicit rule control
      * (custom domains, headers, salt). The rule's salt — if any — is
@@ -1295,7 +1311,7 @@ open func setupHlsAesWithRule(rule: FfiKeyRule)  {try! rustCall() {
     )
 }
 }
-    
+
     /**
      * Player-wide auth header. Stores `auth_token` under
      * `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
@@ -1308,7 +1324,7 @@ open func setupNetwork(authToken: String)  {try! rustCall() {
     )
 }
 }
-    
+
     /**
      * Return a snapshot of the player's current state.
      */
@@ -1319,7 +1335,7 @@ open func snapshot() -> FfiPlayerSnapshot  {
     )
 })
 }
-    
+
     /**
      * Stop playback: pause the engine and reset the current item's
      * position to the start. The queue is preserved, so a subsequent
@@ -1332,7 +1348,7 @@ open func stop()  {try! rustCall() {
     )
 }
 }
-    
+
     /**
      * Cap the ABR controller's choice by per-network peak bitrate
      * limits (bits/sec). Pass `0.0` for either argument to clear that
@@ -1351,7 +1367,7 @@ open func updatePeakBitrate(wifiBps: Double, cellularBps: Double)  {try! rustCal
     )
 }
 }
-    
+
 open func volume() -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_volume(
@@ -1359,9 +1375,9 @@ open func volume() -> Float  {
     )
 })
 }
-    
 
-    
+
+
 }
 
 
@@ -1422,33 +1438,33 @@ public func FfiConverterTypeAudioPlayer_lower(_ value: AudioPlayer) -> UInt64 {
  * legacy UUIDv5-derived handle.
  */
 public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
-    
+
     /**
      * Caller-facing content id. Mirrors the iOS
      * `AudioPlayerItemProtocol.audioId: TrackId`.
      */
     func audioId()  -> TrackId
-    
+
     /**
      * Cached item duration in seconds. Defaults to `0.0` until the
      * underlying resource emits a duration update.
      */
     func durationSec()  -> Double
-    
+
     /**
      * Whether this item represents a live HLS feed. The flag is set
      * from [`FfiItemConfig::is_live_stream`] at construction; in the
      * future this getter will also surface auto-detected live streams.
      */
     func isLiveStream()  -> Bool
-    
+
     /**
      * Whether the item is playable at `progress` (seconds) given the
      * caller-supplied buffered `ranges`. Live streams are reported
      * playable unconditionally.
      */
     func isPlayable(progress: Double, ranges: [FfiTimeRange])  -> Bool
-    
+
     /**
      * Resolve `callback` with the item's current load status. If the
      * item has not yet been inserted into a queue (or has been
@@ -1461,21 +1477,21 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
      * it surfaces the cached state once the metadata layer has caught
      * up.
      */
-    func load(callback: ItemLoadCallback) 
-    
+    func load(callback: ItemLoadCallback)
+
     func preferredPeakBitrate()  -> Double
-    
+
     func preferredPeakBitrateForExpensiveNetworks()  -> Double
-    
+
     /**
      * Private queue id used by player-level events to route back to the
      * Swift-owned item instance. High-level Swift maps it back to
      * [`Self::audio_id`] before publishing public events.
      */
     func queueId()  -> TrackId
-    
-    func setObserver(observer: ItemObserver) 
-    
+
+    func setObserver(observer: ItemObserver)
+
     /**
      * Audio source string — either a network URL or an absolute local
      * path, as supplied via [`FfiItemConfig::url`]. The Swift wrapper
@@ -1483,13 +1499,13 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
      * `AudioPlayerItemProtocol.url` contract holds for both cases.
      */
     func url()  -> String
-    
+
     /**
      * Caller-facing queue-item uuid. Maps to
      * `AudioPlayerItemProtocol.uuid: Int64` on iOS.
      */
     func uuidI64()  -> Int64
-    
+
 }
 /**
  * FFI-facing audio player item.
@@ -1568,9 +1584,9 @@ public convenience init(config: FfiItemConfig) {
         try! rustCall { uniffi_kithara_ffi_fn_free_audioplayeritem(handle, $0) }
     }
 
-    
 
-    
+
+
     /**
      * Caller-facing content id. Mirrors the iOS
      * `AudioPlayerItemProtocol.audioId: TrackId`.
@@ -1582,7 +1598,7 @@ open func audioId() -> TrackId  {
     )
 })
 }
-    
+
     /**
      * Cached item duration in seconds. Defaults to `0.0` until the
      * underlying resource emits a duration update.
@@ -1594,7 +1610,7 @@ open func durationSec() -> Double  {
     )
 })
 }
-    
+
     /**
      * Whether this item represents a live HLS feed. The flag is set
      * from [`FfiItemConfig::is_live_stream`] at construction; in the
@@ -1607,7 +1623,7 @@ open func isLiveStream() -> Bool  {
     )
 })
 }
-    
+
     /**
      * Whether the item is playable at `progress` (seconds) given the
      * caller-supplied buffered `ranges`. Live streams are reported
@@ -1622,7 +1638,7 @@ open func isPlayable(progress: Double, ranges: [FfiTimeRange]) -> Bool  {
     )
 })
 }
-    
+
     /**
      * Resolve `callback` with the item's current load status. If the
      * item has not yet been inserted into a queue (or has been
@@ -1642,7 +1658,7 @@ open func load(callback: ItemLoadCallback)  {try! rustCall() {
     )
 }
 }
-    
+
 open func preferredPeakBitrate() -> Double  {
     return try!  FfiConverterDouble.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayeritem_preferred_peak_bitrate(
@@ -1650,7 +1666,7 @@ open func preferredPeakBitrate() -> Double  {
     )
 })
 }
-    
+
 open func preferredPeakBitrateForExpensiveNetworks() -> Double  {
     return try!  FfiConverterDouble.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayeritem_preferred_peak_bitrate_for_expensive_networks(
@@ -1658,7 +1674,7 @@ open func preferredPeakBitrateForExpensiveNetworks() -> Double  {
     )
 })
 }
-    
+
     /**
      * Private queue id used by player-level events to route back to the
      * Swift-owned item instance. High-level Swift maps it back to
@@ -1671,7 +1687,7 @@ open func queueId() -> TrackId  {
     )
 })
 }
-    
+
 open func setObserver(observer: ItemObserver)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayeritem_set_observer(
             self.uniffiCloneHandle(),
@@ -1679,7 +1695,7 @@ open func setObserver(observer: ItemObserver)  {try! rustCall() {
     )
 }
 }
-    
+
     /**
      * Audio source string — either a network URL or an absolute local
      * path, as supplied via [`FfiItemConfig::url`]. The Swift wrapper
@@ -1693,7 +1709,7 @@ open func url() -> String  {
     )
 })
 }
-    
+
     /**
      * Caller-facing queue-item uuid. Maps to
      * `AudioPlayerItemProtocol.uuid: Int64` on iOS.
@@ -1705,9 +1721,9 @@ open func uuidI64() -> Int64  {
     )
 })
 }
-    
 
-    
+
+
 }
 
 
@@ -1757,29 +1773,51 @@ public func FfiConverterTypeAudioPlayerItem_lower(_ value: AudioPlayerItem) -> U
 
 
 /**
- * Foreign on-disk layout callback: maps a resource URL to a relative path
- * inside the asset's cache directory. The URL already carries everything a
- * client scheme encodes (quality, segment number, extension).
+ * Foreign cache layout callback.
  *
- * `rel_path` is a pure function - the same URL must always yield the same
- * path. It runs on arbitrary background threads, must not block and must not
- * throw; a hostile or empty return is rejected store-side with a typed error
- * (never silently rewritten).
+ * Implementations must be pure and deterministic, fast, non-blocking,
+ * non-throwing, and safe to call from arbitrary background threads. Returned
+ * values must not contain query text, credentials, or other secrets.
+ * `root` is called once for each store scope being created. `path` is called
+ * once for each resource key being minted. Cache operations using that key do
+ * not invoke either callback again.
+ * Invalid output fails scope or key creation and never falls back to the
+ * default layout.
+ *
+ * `root` must return exactly one non-empty component and cannot equal
+ * `_index`. `path` must return a non-empty relative path of components
+ * separated by `/`; no component may end in `.tmp`. Components are ASCII,
+ * at most 96 bytes, never `.` or `..`, do not end in a dot or space, are not
+ * Windows device names, and contain neither control bytes nor
+ * `< > : " / \ | ? *`. Comparisons for `_index`, `.tmp`, and device names are
+ * case-insensitive. The store rejects invalid output instead of rewriting it.
  */
 public protocol FfiAssetLayout: AnyObject, Sendable {
-    
-    func relPath(url: String)  -> String
-    
+
+    func root(source: FfiAssetSource)  -> String
+
+    func path(resource: FfiAssetResource)  -> String
+
 }
 /**
- * Foreign on-disk layout callback: maps a resource URL to a relative path
- * inside the asset's cache directory. The URL already carries everything a
- * client scheme encodes (quality, segment number, extension).
+ * Foreign cache layout callback.
  *
- * `rel_path` is a pure function - the same URL must always yield the same
- * path. It runs on arbitrary background threads, must not block and must not
- * throw; a hostile or empty return is rejected store-side with a typed error
- * (never silently rewritten).
+ * Implementations must be pure and deterministic, fast, non-blocking,
+ * non-throwing, and safe to call from arbitrary background threads. Returned
+ * values must not contain query text, credentials, or other secrets.
+ * `root` is called once for each store scope being created. `path` is called
+ * once for each resource key being minted. Cache operations using that key do
+ * not invoke either callback again.
+ * Invalid output fails scope or key creation and never falls back to the
+ * default layout.
+ *
+ * `root` must return exactly one non-empty component and cannot equal
+ * `_index`. `path` must return a non-empty relative path of components
+ * separated by `/`; no component may end in `.tmp`. Components are ASCII,
+ * at most 96 bytes, never `.` or `..`, do not end in a dot or space, are not
+ * Windows device names, and contain neither control bytes nor
+ * `< > : " / \ | ? *`. Comparisons for `_index`, `.tmp`, and device names are
+ * case-insensitive. The store rejects invalid output instead of rewriting it.
  */
 open class FfiAssetLayoutImpl: FfiAssetLayout, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -1831,20 +1869,29 @@ open class FfiAssetLayoutImpl: FfiAssetLayout, @unchecked Sendable {
         try! rustCall { uniffi_kithara_ffi_fn_free_ffiassetlayout(handle, $0) }
     }
 
-    
 
-    
-open func relPath(url: String) -> String  {
+
+
+open func root(source: FfiAssetSource) -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_kithara_ffi_fn_method_ffiassetlayout_rel_path(
+    uniffi_kithara_ffi_fn_method_ffiassetlayout_root(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(url),$0
+        FfiConverterTypeFfiAssetSource_lower(source),$0
     )
 })
 }
-    
 
-    
+open func path(resource: FfiAssetResource) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_ffiassetlayout_path(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiAssetResource_lower(resource),$0
+    )
+})
+}
+
+
+
 }
 
 
@@ -1872,9 +1919,9 @@ fileprivate struct UniffiCallbackInterfaceFfiAssetLayout {
                 fatalError("Uniffi callback interface FfiAssetLayout: handle missing in uniffiClone")
             }
         },
-        relPath: { (
+        root: { (
             uniffiHandle: UInt64,
-            url: RustBuffer,
+            source: RustBuffer,
             uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -1883,12 +1930,36 @@ fileprivate struct UniffiCallbackInterfaceFfiAssetLayout {
                 guard let uniffiObj = try? FfiConverterTypeFfiAssetLayout.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
-                return uniffiObj.relPath(
-                     url: try FfiConverterString.lift(url)
+                return uniffiObj.root(
+                     source: try FfiConverterTypeFfiAssetSource_lift(source)
                 )
             }
 
-            
+
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterString.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        path: { (
+            uniffiHandle: UInt64,
+            resource: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> String in
+                guard let uniffiObj = try? FfiConverterTypeFfiAssetLayout.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.path(
+                     resource: try FfiConverterTypeFfiAssetResource_lift(resource)
+                )
+            }
+
+
             let writeReturn = { uniffiOutReturn.pointee = FfiConverterString.lower($0) }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -1964,6 +2035,269 @@ public func FfiConverterTypeFfiAssetLayout_lower(_ value: FfiAssetLayout) -> UIn
 
 
 /**
+ * Rust-owned registry of protocol-specific asset layouts.
+ */
+public protocol FfiAssetLayoutRegistryProtocol: AnyObject, Sendable {
+
+    /**
+     * Register or replace the layout for `target`.
+     */
+    func register(target: FfiAssetLayoutTarget, layout: FfiAssetLayout)
+
+}
+/**
+ * Rust-owned registry of protocol-specific asset layouts.
+ */
+open class FfiAssetLayoutRegistry: FfiAssetLayoutRegistryProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_kithara_ffi_fn_clone_ffiassetlayoutregistry(self.handle, $0) }
+    }
+    /**
+     * Create an empty registry that uses Kithara's default layout.
+     */
+public convenience init() {
+    let handle =
+        try! rustCall() {
+    uniffi_kithara_ffi_fn_constructor_ffiassetlayoutregistry_new($0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_kithara_ffi_fn_free_ffiassetlayoutregistry(handle, $0) }
+    }
+
+
+
+
+    /**
+     * Register or replace the layout for `target`.
+     */
+open func register(target: FfiAssetLayoutTarget, layout: FfiAssetLayout)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_ffiassetlayoutregistry_register(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiAssetLayoutTarget_lower(target),
+        FfiConverterTypeFfiAssetLayout_lower(layout),$0
+    )
+}
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAssetLayoutRegistry: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiAssetLayoutRegistry
+
+    public static func lift(_ handle: UInt64) throws -> FfiAssetLayoutRegistry {
+        return FfiAssetLayoutRegistry(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: FfiAssetLayoutRegistry) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAssetLayoutRegistry {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiAssetLayoutRegistry, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetLayoutRegistry_lift(_ handle: UInt64) throws -> FfiAssetLayoutRegistry {
+    return try FfiConverterTypeFfiAssetLayoutRegistry.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetLayoutRegistry_lower(_ value: FfiAssetLayoutRegistry) -> UInt64 {
+    return FfiConverterTypeFfiAssetLayoutRegistry.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Shareable Rust-owned asset store used by one or more players.
+ */
+public protocol FfiAssetStoreProtocol: AnyObject, Sendable {
+
+}
+/**
+ * Shareable Rust-owned asset store used by one or more players.
+ */
+open class FfiAssetStore: FfiAssetStoreProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_kithara_ffi_fn_clone_ffiassetstore(self.handle, $0) }
+    }
+    /**
+     * Create an asset store rooted at `root` with a snapshot of `layouts`.
+     */
+public convenience init(root: String?, layouts: FfiAssetLayoutRegistry) {
+    let handle =
+        try! rustCall() {
+    uniffi_kithara_ffi_fn_constructor_ffiassetstore_new(
+        FfiConverterOptionString.lower(root),
+        FfiConverterTypeFfiAssetLayoutRegistry_lower(layouts),$0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_kithara_ffi_fn_free_ffiassetstore(handle, $0) }
+    }
+
+
+
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAssetStore: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiAssetStore
+
+    public static func lift(_ handle: UInt64) throws -> FfiAssetStore {
+        return FfiAssetStore(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: FfiAssetStore) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAssetStore {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiAssetStore, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetStore_lift(_ handle: UInt64) throws -> FfiAssetStore {
+    return try FfiConverterTypeFfiAssetStore.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetStore_lower(_ value: FfiAssetStore) -> UInt64 {
+    return FfiConverterTypeFfiAssetStore.lower(value)
+}
+
+
+
+
+
+
+/**
  * Position-dependent symmetric cipher for DRM key decryption.
  *
  * Wraps `kithara_drm::UniqueBinaryCipher` for use from Swift/Kotlin.
@@ -1971,14 +2305,14 @@ public func FfiConverterTypeFfiAssetLayout_lower(_ value: FfiAssetLayout) -> UIn
  * to `AudioPlayer.setKeyProcessor()`.
  */
 public protocol FfiCipherProtocol: AnyObject, Sendable {
-    
+
     /**
      * Decrypt data using this cipher.
      */
     func decrypt(data: Data)  -> Data
-    
+
     func processKey(key: Data, salt: String)  -> Data
-    
+
 }
 /**
  * Position-dependent symmetric cipher for DRM key decryption.
@@ -2052,9 +2386,9 @@ public convenience init(key: String) {
         try! rustCall { uniffi_kithara_ffi_fn_free_fficipher(handle, $0) }
     }
 
-    
 
-    
+
+
     /**
      * Decrypt data using this cipher.
      */
@@ -2066,7 +2400,7 @@ open func decrypt(data: Data) -> Data  {
     )
 })
 }
-    
+
 open func processKey(key: Data, salt: String) -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_fficipher_process_key(
@@ -2076,9 +2410,9 @@ open func processKey(key: Data, salt: String) -> Data  {
     )
 })
 }
-    
 
-    
+
+
 }
 
 
@@ -2139,9 +2473,9 @@ public func FfiConverterTypeFfiCipher_lower(_ value: FfiCipher) -> UInt64 {
  * hold a pre-built cipher (legacy behaviour) can ignore the argument.
  */
 public protocol FfiKeyProcessor: AnyObject, Sendable {
-    
+
     func processKey(key: Data, salt: String)  -> Data
-    
+
 }
 /**
  * Callback for processing (decrypting) HLS encryption keys.
@@ -2202,9 +2536,9 @@ open class FfiKeyProcessorImpl: FfiKeyProcessor, @unchecked Sendable {
         try! rustCall { uniffi_kithara_ffi_fn_free_ffikeyprocessor(handle, $0) }
     }
 
-    
 
-    
+
+
 open func processKey(key: Data, salt: String) -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_ffikeyprocessor_process_key(
@@ -2214,9 +2548,9 @@ open func processKey(key: Data, salt: String) -> Data  {
     )
 })
 }
-    
 
-    
+
+
 }
 
 
@@ -2262,7 +2596,7 @@ fileprivate struct UniffiCallbackInterfaceFfiKeyProcessor {
                 )
             }
 
-            
+
             let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2341,9 +2675,9 @@ public func FfiConverterTypeFfiKeyProcessor_lower(_ value: FfiKeyProcessor) -> U
  * Callback fired when [`crate::item::AudioPlayerItem::load`] resolves.
  */
 public protocol ItemLoadCallback: AnyObject, Sendable {
-    
-    func onComplete(result: FfiItemLoadResult) 
-    
+
+    func onComplete(result: FfiItemLoadResult)
+
 }
 /**
  * Callback fired when [`crate::item::AudioPlayerItem::load`] resolves.
@@ -2398,9 +2732,9 @@ open class ItemLoadCallbackImpl: ItemLoadCallback, @unchecked Sendable {
         try! rustCall { uniffi_kithara_ffi_fn_free_itemloadcallback(handle, $0) }
     }
 
-    
 
-    
+
+
 open func onComplete(result: FfiItemLoadResult)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_itemloadcallback_on_complete(
             self.uniffiCloneHandle(),
@@ -2408,9 +2742,9 @@ open func onComplete(result: FfiItemLoadResult)  {try! rustCall() {
     )
 }
 }
-    
 
-    
+
+
 }
 
 
@@ -2454,7 +2788,7 @@ fileprivate struct UniffiCallbackInterfaceItemLoadCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2533,9 +2867,9 @@ public func FfiConverterTypeItemLoadCallback_lower(_ value: ItemLoadCallback) ->
  * Receives item-level state changes from Rust.
  */
 public protocol ItemObserver: AnyObject, Sendable {
-    
-    func onEvent(event: FfiItemEvent) 
-    
+
+    func onEvent(event: FfiItemEvent)
+
 }
 /**
  * Receives item-level state changes from Rust.
@@ -2590,9 +2924,9 @@ open class ItemObserverImpl: ItemObserver, @unchecked Sendable {
         try! rustCall { uniffi_kithara_ffi_fn_free_itemobserver(handle, $0) }
     }
 
-    
 
-    
+
+
 open func onEvent(event: FfiItemEvent)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_itemobserver_on_event(
             self.uniffiCloneHandle(),
@@ -2600,9 +2934,9 @@ open func onEvent(event: FfiItemEvent)  {try! rustCall() {
     )
 }
 }
-    
 
-    
+
+
 }
 
 
@@ -2646,7 +2980,7 @@ fileprivate struct UniffiCallbackInterfaceItemObserver {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2728,9 +3062,9 @@ public func FfiConverterTypeItemObserver_lower(_ value: ItemObserver) -> UInt64 
  * Platform bindings must dispatch to the UI thread as needed.
  */
 public protocol PlayerObserver: AnyObject, Sendable {
-    
-    func onEvent(event: FfiPlayerEvent) 
-    
+
+    func onEvent(event: FfiPlayerEvent)
+
 }
 /**
  * Receives player-level state changes from Rust.
@@ -2788,9 +3122,9 @@ open class PlayerObserverImpl: PlayerObserver, @unchecked Sendable {
         try! rustCall { uniffi_kithara_ffi_fn_free_playerobserver(handle, $0) }
     }
 
-    
 
-    
+
+
 open func onEvent(event: FfiPlayerEvent)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_playerobserver_on_event(
             self.uniffiCloneHandle(),
@@ -2798,9 +3132,9 @@ open func onEvent(event: FfiPlayerEvent)  {try! rustCall() {
     )
 }
 }
-    
 
-    
+
+
 }
 
 
@@ -2844,7 +3178,7 @@ fileprivate struct UniffiCallbackInterfacePlayerObserver {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -2923,9 +3257,9 @@ public func FfiConverterTypePlayerObserver_lower(_ value: PlayerObserver) -> UIn
  * Callback for seek completion.
  */
 public protocol SeekCallback: AnyObject, Sendable {
-    
-    func onComplete(finished: Bool) 
-    
+
+    func onComplete(finished: Bool)
+
 }
 /**
  * Callback for seek completion.
@@ -2980,9 +3314,9 @@ open class SeekCallbackImpl: SeekCallback, @unchecked Sendable {
         try! rustCall { uniffi_kithara_ffi_fn_free_seekcallback(handle, $0) }
     }
 
-    
 
-    
+
+
 open func onComplete(finished: Bool)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_seekcallback_on_complete(
             self.uniffiCloneHandle(),
@@ -2990,9 +3324,9 @@ open func onComplete(finished: Bool)  {try! rustCall() {
     )
 }
 }
-    
 
-    
+
+
 }
 
 
@@ -3036,7 +3370,7 @@ fileprivate struct UniffiCallbackInterfaceSeekCallback {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3155,33 +3489,33 @@ public struct FfiItemConfig: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(abrMode: FfiAbrMode?, 
+    public init(abrMode: FfiAbrMode?,
         /**
          * Optional caller-facing content id. When absent, the item exposes
          * its internally allocated queue id as `audioId` for the standalone
          * Kithara API.
-         */audioId: TrackId?, headers: [String: String]?, 
+         */audioId: TrackId?, headers: [String: String]?,
         /**
          * Optional caller-facing queue-item uuid. When absent, the item
          * exposes the legacy UUIDv5-derived handle.
-         */uuidI64: Int64?, 
+         */uuidI64: Int64?,
         /**
          * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
          * `https://…/master.m3u8`) **or** an absolute local file path
          * (`/Users/…/song.flac`). Parsed via
          * [`kithara::play::ResourceConfig::for_src`] at insert time, so the
          * same string flows untouched into the player core.
-         */url: String, 
+         */url: String,
         /**
          * Caller-declared live-stream flag. `true` means the source is a
          * live HLS feed (radio / broadcast); the player skips end-of-stream
          * gating and `is_playable` always returns `true` for the item.
          * Defaults to `false`. Auto-detection from the manifest is a
          * future improvement.
-         */isLiveStream: Bool, 
+         */isLiveStream: Bool,
         /**
          * Peak bitrate ceiling in bits/sec. `0.0` means no cap.
-         */preferredPeakBitrate: Double, 
+         */preferredPeakBitrate: Double,
         /**
          * Peak bitrate ceiling on expensive networks (cellular). `0.0`
          * means no cap.
@@ -3196,9 +3530,9 @@ public struct FfiItemConfig: Equatable, Hashable {
         self.preferredPeakBitrateExpensive = preferredPeakBitrateExpensive
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -3212,13 +3546,13 @@ public struct FfiConverterTypeFfiItemConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiItemConfig {
         return
             try FfiItemConfig(
-                abrMode: FfiConverterOptionTypeFfiAbrMode.read(from: &buf), 
-                audioId: FfiConverterOptionTypeTrackId.read(from: &buf), 
-                headers: FfiConverterOptionDictionaryStringString.read(from: &buf), 
-                uuidI64: FfiConverterOptionInt64.read(from: &buf), 
-                url: FfiConverterString.read(from: &buf), 
-                isLiveStream: FfiConverterBool.read(from: &buf), 
-                preferredPeakBitrate: FfiConverterDouble.read(from: &buf), 
+                abrMode: FfiConverterOptionTypeFfiAbrMode.read(from: &buf),
+                audioId: FfiConverterOptionTypeTrackId.read(from: &buf),
+                headers: FfiConverterOptionDictionaryStringString.read(from: &buf),
+                uuidI64: FfiConverterOptionInt64.read(from: &buf),
+                url: FfiConverterString.read(from: &buf),
+                isLiveStream: FfiConverterBool.read(from: &buf),
+                preferredPeakBitrate: FfiConverterDouble.read(from: &buf),
                 preferredPeakBitrateExpensive: FfiConverterDouble.read(from: &buf)
         )
     }
@@ -3270,7 +3604,7 @@ public struct FfiItemLoadResult: Equatable, Hashable {
     public init(
         /**
          * `true` once the metadata layer recognises encrypted segments.
-         */hasProtectedContent: Bool, 
+         */hasProtectedContent: Bool,
         /**
          * `true` when the item has enough metadata to start playback.
          */isPlayable: Bool) {
@@ -3278,9 +3612,9 @@ public struct FfiItemLoadResult: Equatable, Hashable {
         self.isPlayable = isPlayable
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -3294,7 +3628,7 @@ public struct FfiConverterTypeFfiItemLoadResult: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiItemLoadResult {
         return
             try FfiItemLoadResult(
-                hasProtectedContent: FfiConverterBool.read(from: &buf), 
+                hasProtectedContent: FfiConverterBool.read(from: &buf),
                 isPlayable: FfiConverterBool.read(from: &buf)
         )
     }
@@ -3336,9 +3670,9 @@ public struct FfiKeyOptions {
         self.rules = rules
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -3402,7 +3736,7 @@ public struct FfiKeyRule {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(processor: FfiKeyProcessor, headers: [String: String]?, queryParams: [String: String]?, 
+    public init(processor: FfiKeyProcessor, headers: [String: String]?, queryParams: [String: String]?,
         /**
          * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
          * on every decrypt. `None` is treated as an empty string.
@@ -3410,7 +3744,7 @@ public struct FfiKeyRule {
          * `setup_hls_aes` populates this automatically with a freshly
          * generated 16-character alphanumeric value and mirrors it into
          * [`crate::observer::SALT_HEADER`] in the player-wide header map.
-         */salt: String?, 
+         */salt: String?,
         /**
          * Domain patterns — exact (`"example.com"`), wildcard subdomain
          * (`"*.example.com"`), or match-any (`"*"`).
@@ -3422,9 +3756,9 @@ public struct FfiKeyRule {
         self.domains = domains
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -3438,10 +3772,10 @@ public struct FfiConverterTypeFfiKeyRule: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiKeyRule {
         return
             try FfiKeyRule(
-                processor: FfiConverterTypeFfiKeyProcessor.read(from: &buf), 
-                headers: FfiConverterOptionDictionaryStringString.read(from: &buf), 
-                queryParams: FfiConverterOptionDictionaryStringString.read(from: &buf), 
-                salt: FfiConverterOptionString.read(from: &buf), 
+                processor: FfiConverterTypeFfiKeyProcessor.read(from: &buf),
+                headers: FfiConverterOptionDictionaryStringString.read(from: &buf),
+                queryParams: FfiConverterOptionDictionaryStringString.read(from: &buf),
+                salt: FfiConverterOptionString.read(from: &buf),
                 domains: FfiConverterSequenceString.read(from: &buf)
         )
     }
@@ -3476,14 +3810,13 @@ public func FfiConverterTypeFfiKeyRule_lower(_ value: FfiKeyRule) -> RustBuffer 
  */
 public struct FfiPlayerConfig {
     /**
-     * DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
-     * no DRM is needed.
+     * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
      */
     public let keyOptions: FfiKeyOptions
     /**
-     * Storage options shared by all items (cache directory, etc.).
+     * Shared asset store used by every item created by this player.
      */
-    public let store: StoreOptions
+    public let store: FfiAssetStore
     /**
      * Number of EQ bands (log-spaced). Default: 10.
      */
@@ -3493,12 +3826,11 @@ public struct FfiPlayerConfig {
     // declare one manually.
     public init(
         /**
-         * DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
-         * no DRM is needed.
-         */keyOptions: FfiKeyOptions, 
+         * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
+         */keyOptions: FfiKeyOptions,
         /**
-         * Storage options shared by all items (cache directory, etc.).
-         */store: StoreOptions, 
+         * Shared asset store used by every item created by this player.
+         */store: FfiAssetStore,
         /**
          * Number of EQ bands (log-spaced). Default: 10.
          */eqBandCount: UInt32) {
@@ -3507,9 +3839,9 @@ public struct FfiPlayerConfig {
         self.eqBandCount = eqBandCount
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -3523,15 +3855,15 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlayerConfig {
         return
             try FfiPlayerConfig(
-                keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf), 
-                store: FfiConverterTypeStoreOptions.read(from: &buf), 
+                keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf),
+                store: FfiConverterTypeFfiAssetStore.read(from: &buf),
                 eqBandCount: FfiConverterUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiPlayerConfig, into buf: inout [UInt8]) {
         FfiConverterTypeFfiKeyOptions.write(value.keyOptions, into: &buf)
-        FfiConverterTypeStoreOptions.write(value.store, into: &buf)
+        FfiConverterTypeFfiAssetStore.write(value.store, into: &buf)
         FfiConverterUInt32.write(value.eqBandCount, into: &buf)
     }
 }
@@ -3573,7 +3905,7 @@ public struct FfiPlayerSnapshot: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(status: FfiPlayerStatus, currentTime: Double?, duration: Double?, isMuted: Bool, 
+    public init(status: FfiPlayerStatus, currentTime: Double?, duration: Double?, isMuted: Bool,
         /**
          * Target playback speed (the value used by `play()`). Live `rate`
          * equals this while playing and `0.0` while paused.
@@ -3587,9 +3919,9 @@ public struct FfiPlayerSnapshot: Equatable, Hashable {
         self.volume = volume
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -3603,12 +3935,12 @@ public struct FfiConverterTypeFfiPlayerSnapshot: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlayerSnapshot {
         return
             try FfiPlayerSnapshot(
-                status: FfiConverterTypeFfiPlayerStatus.read(from: &buf), 
-                currentTime: FfiConverterOptionDouble.read(from: &buf), 
-                duration: FfiConverterOptionDouble.read(from: &buf), 
-                isMuted: FfiConverterBool.read(from: &buf), 
-                playingRate: FfiConverterFloat.read(from: &buf), 
-                rate: FfiConverterFloat.read(from: &buf), 
+                status: FfiConverterTypeFfiPlayerStatus.read(from: &buf),
+                currentTime: FfiConverterOptionDouble.read(from: &buf),
+                duration: FfiConverterOptionDouble.read(from: &buf),
+                isMuted: FfiConverterBool.read(from: &buf),
+                playingRate: FfiConverterFloat.read(from: &buf),
+                rate: FfiConverterFloat.read(from: &buf),
                 volume: FfiConverterFloat.read(from: &buf)
         )
     }
@@ -3654,9 +3986,9 @@ public struct FfiTimeRange: Equatable, Hashable {
         self.startSeconds = startSeconds
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -3670,7 +4002,7 @@ public struct FfiConverterTypeFfiTimeRange: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTimeRange {
         return
             try FfiTimeRange(
-                durationSeconds: FfiConverterDouble.read(from: &buf), 
+                durationSeconds: FfiConverterDouble.read(from: &buf),
                 startSeconds: FfiConverterDouble.read(from: &buf)
         )
     }
@@ -3713,9 +4045,9 @@ public struct FfiVariant: Equatable, Hashable {
         self.bandwidthBps = bandwidthBps
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -3729,8 +4061,8 @@ public struct FfiConverterTypeFfiVariant: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiVariant {
         return
             try FfiVariant(
-                name: FfiConverterOptionString.read(from: &buf), 
-                index: FfiConverterUInt32.read(from: &buf), 
+                name: FfiConverterOptionString.read(from: &buf),
+                index: FfiConverterUInt32.read(from: &buf),
                 bandwidthBps: FfiConverterUInt64.read(from: &buf)
         )
     }
@@ -3757,69 +4089,6 @@ public func FfiConverterTypeFfiVariant_lower(_ value: FfiVariant) -> RustBuffer 
     return FfiConverterTypeFfiVariant.lower(value)
 }
 
-
-/**
- * Store configuration forwarded from platform layer to resource creation.
- */
-public struct StoreOptions {
-    public let cacheDir: String?
-    /**
-     * Foreign on-disk layout delegate. `None` == the store's default layout.
-     */
-    public let layout: FfiAssetLayout?
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(cacheDir: String?, 
-        /**
-         * Foreign on-disk layout delegate. `None` == the store's default layout.
-         */layout: FfiAssetLayout? = nil) {
-        self.cacheDir = cacheDir
-        self.layout = layout
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension StoreOptions: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeStoreOptions: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> StoreOptions {
-        return
-            try StoreOptions(
-                cacheDir: FfiConverterOptionString.read(from: &buf), 
-                layout: FfiConverterOptionTypeFfiAssetLayout.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: StoreOptions, into buf: inout [UInt8]) {
-        FfiConverterOptionString.write(value.cacheDir, into: &buf)
-        FfiConverterOptionTypeFfiAssetLayout.write(value.layout, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeStoreOptions_lift(_ buf: RustBuffer) throws -> StoreOptions {
-    return try FfiConverterTypeStoreOptions.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeStoreOptions_lower(_ value: StoreOptions) -> RustBuffer {
-    return FfiConverterTypeStoreOptions.lower(value)
-}
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
@@ -3827,7 +4096,7 @@ public func FfiConverterTypeStoreOptions_lower(_ value: StoreOptions) -> RustBuf
  */
 
 public enum FfiAbrMode: Equatable, Hashable {
-    
+
     case auto
     case manual(variantIndex: UInt32
     )
@@ -3851,28 +4120,28 @@ public struct FfiConverterTypeFfiAbrMode: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAbrMode {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .auto
-        
+
         case 2: return .manual(variantIndex: try FfiConverterUInt32.read(from: &buf)
         )
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FfiAbrMode, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .auto:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case let .manual(variantIndex):
             writeInt(&buf, Int32(2))
             FfiConverterUInt32.write(variantIndex, into: &buf)
-            
+
         }
     }
 }
@@ -3893,14 +4162,1142 @@ public func FfiConverterTypeFfiAbrMode_lower(_ value: FfiAbrMode) -> RustBuffer 
 }
 
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiAdvanceReason: Equatable, Hashable {
+
+    case naturalEof
+    case crossfadePreArm
+    case userSelect
+    case userNext
+    case userPrev
+    case trackFailed
+    case removedCurrent
+    case `repeat`
+    case cancelled
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiAdvanceReason: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAdvanceReason: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAdvanceReason
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAdvanceReason {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .naturalEof
+
+        case 2: return .crossfadePreArm
+
+        case 3: return .userSelect
+
+        case 4: return .userNext
+
+        case 5: return .userPrev
+
+        case 6: return .trackFailed
+
+        case 7: return .removedCurrent
+
+        case 8: return .`repeat`
+
+        case 9: return .cancelled
+
+        case 10: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiAdvanceReason, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .naturalEof:
+            writeInt(&buf, Int32(1))
+
+
+        case .crossfadePreArm:
+            writeInt(&buf, Int32(2))
+
+
+        case .userSelect:
+            writeInt(&buf, Int32(3))
+
+
+        case .userNext:
+            writeInt(&buf, Int32(4))
+
+
+        case .userPrev:
+            writeInt(&buf, Int32(5))
+
+
+        case .trackFailed:
+            writeInt(&buf, Int32(6))
+
+
+        case .removedCurrent:
+            writeInt(&buf, Int32(7))
+
+
+        case .`repeat`:
+            writeInt(&buf, Int32(8))
+
+
+        case .cancelled:
+            writeInt(&buf, Int32(9))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(10))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAdvanceReason_lift(_ buf: RustBuffer) throws -> FfiAdvanceReason {
+    return try FfiConverterTypeFfiAdvanceReason.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAdvanceReason_lower(_ value: FfiAdvanceReason) -> RustBuffer {
+    return FfiConverterTypeFfiAdvanceReason.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Playback protocol whose default asset layout can be replaced.
+ */
+
+public enum FfiAssetLayoutTarget: Equatable, Hashable {
+
+    /**
+     * Direct-file sources and their derived resources.
+     */
+    case file
+    /**
+     * HLS playlists, media resources, keys, and derived resources.
+     */
+    case hls
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiAssetLayoutTarget: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAssetLayoutTarget: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAssetLayoutTarget
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAssetLayoutTarget {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .file
+
+        case 2: return .hls
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiAssetLayoutTarget, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .file:
+            writeInt(&buf, Int32(1))
+
+
+        case .hls:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetLayoutTarget_lift(_ buf: RustBuffer) throws -> FfiAssetLayoutTarget {
+    return try FfiConverterTypeFfiAssetLayoutTarget.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetLayoutTarget_lower(_ value: FfiAssetLayoutTarget) -> RustBuffer {
+    return FfiConverterTypeFfiAssetLayoutTarget.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * FFI representation of one resource within an asset.
+ */
+
+public enum FfiAssetResource: Equatable, Hashable {
+
+    /**
+     * Direct-file source bytes with their resolved extension.
+     */
+    case source(`extension`: String
+    )
+    /**
+     * A URL-addressed resource such as a playlist, init, segment, or key.
+     */
+    case url(url: String
+    )
+    /**
+     * A named derived artifact such as track analysis.
+     */
+    case named(namespace: String, name: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiAssetResource: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAssetResource: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAssetResource
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAssetResource {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .source(extension: try FfiConverterString.read(from: &buf)
+        )
+
+        case 2: return .url(url: try FfiConverterString.read(from: &buf)
+        )
+
+        case 3: return .named(namespace: try FfiConverterString.read(from: &buf), name: try FfiConverterString.read(from: &buf)
+        )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiAssetResource, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case let .source(`extension`):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(`extension`, into: &buf)
+
+
+        case let .url(url):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(url, into: &buf)
+
+
+        case let .named(namespace,name):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(namespace, into: &buf)
+            FfiConverterString.write(name, into: &buf)
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetResource_lift(_ buf: RustBuffer) throws -> FfiAssetResource {
+    return try FfiConverterTypeFfiAssetResource.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetResource_lower(_ value: FfiAssetResource) -> RustBuffer {
+    return FfiConverterTypeFfiAssetResource.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * FFI representation of an asset whose resources share one cache root.
+ */
+
+public enum FfiAssetSource: Equatable, Hashable {
+
+    case remote(url: String, discriminator: String?
+    )
+    case local(path: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiAssetSource: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAssetSource: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAssetSource
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAssetSource {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .remote(url: try FfiConverterString.read(from: &buf), discriminator: try FfiConverterOptionString.read(from: &buf)
+        )
+
+        case 2: return .local(path: try FfiConverterString.read(from: &buf)
+        )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiAssetSource, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case let .remote(url,discriminator):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(url, into: &buf)
+            FfiConverterOptionString.write(discriminator, into: &buf)
+
+
+        case let .local(path):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(path, into: &buf)
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetSource_lift(_ buf: RustBuffer) throws -> FfiAssetSource {
+    return try FfiConverterTypeFfiAssetSource.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetSource_lower(_ value: FfiAssetSource) -> RustBuffer {
+    return FfiConverterTypeFfiAssetSource.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiAudioCodecKind: Equatable, Hashable {
+
+    case aacLc
+    case aacHe
+    case aacHeV2
+    case mp3
+    case flac
+    case vorbis
+    case opus
+    case alac
+    case pcm
+    case adpcm
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiAudioCodecKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAudioCodecKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAudioCodecKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAudioCodecKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .aacLc
+
+        case 2: return .aacHe
+
+        case 3: return .aacHeV2
+
+        case 4: return .mp3
+
+        case 5: return .flac
+
+        case 6: return .vorbis
+
+        case 7: return .opus
+
+        case 8: return .alac
+
+        case 9: return .pcm
+
+        case 10: return .adpcm
+
+        case 11: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiAudioCodecKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .aacLc:
+            writeInt(&buf, Int32(1))
+
+
+        case .aacHe:
+            writeInt(&buf, Int32(2))
+
+
+        case .aacHeV2:
+            writeInt(&buf, Int32(3))
+
+
+        case .mp3:
+            writeInt(&buf, Int32(4))
+
+
+        case .flac:
+            writeInt(&buf, Int32(5))
+
+
+        case .vorbis:
+            writeInt(&buf, Int32(6))
+
+
+        case .opus:
+            writeInt(&buf, Int32(7))
+
+
+        case .alac:
+            writeInt(&buf, Int32(8))
+
+
+        case .pcm:
+            writeInt(&buf, Int32(9))
+
+
+        case .adpcm:
+            writeInt(&buf, Int32(10))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(11))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAudioCodecKind_lift(_ buf: RustBuffer) throws -> FfiAudioCodecKind {
+    return try FfiConverterTypeFfiAudioCodecKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAudioCodecKind_lower(_ value: FfiAudioCodecKind) -> RustBuffer {
+    return FfiConverterTypeFfiAudioCodecKind.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiCancelReason: Equatable, Hashable {
+
+    case epochCancel
+    case peerCancel
+    case downloaderShutdown
+    case beforeStart
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiCancelReason: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiCancelReason: FfiConverterRustBuffer {
+    typealias SwiftType = FfiCancelReason
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCancelReason {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .epochCancel
+
+        case 2: return .peerCancel
+
+        case 3: return .downloaderShutdown
+
+        case 4: return .beforeStart
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiCancelReason, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .epochCancel:
+            writeInt(&buf, Int32(1))
+
+
+        case .peerCancel:
+            writeInt(&buf, Int32(2))
+
+
+        case .downloaderShutdown:
+            writeInt(&buf, Int32(3))
+
+
+        case .beforeStart:
+            writeInt(&buf, Int32(4))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCancelReason_lift(_ buf: RustBuffer) throws -> FfiCancelReason {
+    return try FfiConverterTypeFfiCancelReason.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCancelReason_lower(_ value: FfiCancelReason) -> RustBuffer {
+    return FfiConverterTypeFfiCancelReason.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiContainerKind: Equatable, Hashable {
+
+    case mp4
+    case fmp4
+    case mpegTs
+    case mpegAudio
+    case adts
+    case flac
+    case wav
+    case ogg
+    case caf
+    case mkv
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiContainerKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiContainerKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiContainerKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiContainerKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .mp4
+
+        case 2: return .fmp4
+
+        case 3: return .mpegTs
+
+        case 4: return .mpegAudio
+
+        case 5: return .adts
+
+        case 6: return .flac
+
+        case 7: return .wav
+
+        case 8: return .ogg
+
+        case 9: return .caf
+
+        case 10: return .mkv
+
+        case 11: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiContainerKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .mp4:
+            writeInt(&buf, Int32(1))
+
+
+        case .fmp4:
+            writeInt(&buf, Int32(2))
+
+
+        case .mpegTs:
+            writeInt(&buf, Int32(3))
+
+
+        case .mpegAudio:
+            writeInt(&buf, Int32(4))
+
+
+        case .adts:
+            writeInt(&buf, Int32(5))
+
+
+        case .flac:
+            writeInt(&buf, Int32(6))
+
+
+        case .wav:
+            writeInt(&buf, Int32(7))
+
+
+        case .ogg:
+            writeInt(&buf, Int32(8))
+
+
+        case .caf:
+            writeInt(&buf, Int32(9))
+
+
+        case .mkv:
+            writeInt(&buf, Int32(10))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(11))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiContainerKind_lift(_ buf: RustBuffer) throws -> FfiContainerKind {
+    return try FfiConverterTypeFfiContainerKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiContainerKind_lower(_ value: FfiContainerKind) -> RustBuffer {
+    return FfiConverterTypeFfiContainerKind.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiDecodeErrorClass: Equatable, Hashable {
+
+    case interrupted
+    case variantChange
+    case other
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDecodeErrorClass: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDecodeErrorClass: FfiConverterRustBuffer {
+    typealias SwiftType = FfiDecodeErrorClass
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDecodeErrorClass {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .interrupted
+
+        case 2: return .variantChange
+
+        case 3: return .other
+
+        case 4: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiDecodeErrorClass, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .interrupted:
+            writeInt(&buf, Int32(1))
+
+
+        case .variantChange:
+            writeInt(&buf, Int32(2))
+
+
+        case .other:
+            writeInt(&buf, Int32(3))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(4))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecodeErrorClass_lift(_ buf: RustBuffer) throws -> FfiDecodeErrorClass {
+    return try FfiConverterTypeFfiDecodeErrorClass.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecodeErrorClass_lower(_ value: FfiDecodeErrorClass) -> RustBuffer {
+    return FfiConverterTypeFfiDecodeErrorClass.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiDecodeErrorKind: Equatable, Hashable {
+
+    case io
+    case unsupportedCodec
+    case unsupportedContainer
+    case invalidData
+    case seekFailed
+    case seekOutOfRange
+    case parse
+    case probeFailed
+    case backendUnavailable
+    case invalidSampleRate
+    case backendStatus
+    case interrupted
+    case backend
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDecodeErrorKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDecodeErrorKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiDecodeErrorKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDecodeErrorKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .io
+
+        case 2: return .unsupportedCodec
+
+        case 3: return .unsupportedContainer
+
+        case 4: return .invalidData
+
+        case 5: return .seekFailed
+
+        case 6: return .seekOutOfRange
+
+        case 7: return .parse
+
+        case 8: return .probeFailed
+
+        case 9: return .backendUnavailable
+
+        case 10: return .invalidSampleRate
+
+        case 11: return .backendStatus
+
+        case 12: return .interrupted
+
+        case 13: return .backend
+
+        case 14: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiDecodeErrorKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .io:
+            writeInt(&buf, Int32(1))
+
+
+        case .unsupportedCodec:
+            writeInt(&buf, Int32(2))
+
+
+        case .unsupportedContainer:
+            writeInt(&buf, Int32(3))
+
+
+        case .invalidData:
+            writeInt(&buf, Int32(4))
+
+
+        case .seekFailed:
+            writeInt(&buf, Int32(5))
+
+
+        case .seekOutOfRange:
+            writeInt(&buf, Int32(6))
+
+
+        case .parse:
+            writeInt(&buf, Int32(7))
+
+
+        case .probeFailed:
+            writeInt(&buf, Int32(8))
+
+
+        case .backendUnavailable:
+            writeInt(&buf, Int32(9))
+
+
+        case .invalidSampleRate:
+            writeInt(&buf, Int32(10))
+
+
+        case .backendStatus:
+            writeInt(&buf, Int32(11))
+
+
+        case .interrupted:
+            writeInt(&buf, Int32(12))
+
+
+        case .backend:
+            writeInt(&buf, Int32(13))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(14))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecodeErrorKind_lift(_ buf: RustBuffer) throws -> FfiDecodeErrorKind {
+    return try FfiConverterTypeFfiDecodeErrorKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecodeErrorKind_lower(_ value: FfiDecodeErrorKind) -> RustBuffer {
+    return FfiConverterTypeFfiDecodeErrorKind.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiDecoderBackend: Equatable, Hashable {
+
+    case symphonia
+    case apple
+    case android
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDecoderBackend: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDecoderBackend: FfiConverterRustBuffer {
+    typealias SwiftType = FfiDecoderBackend
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDecoderBackend {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .symphonia
+
+        case 2: return .apple
+
+        case 3: return .android
+
+        case 4: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiDecoderBackend, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .symphonia:
+            writeInt(&buf, Int32(1))
+
+
+        case .apple:
+            writeInt(&buf, Int32(2))
+
+
+        case .android:
+            writeInt(&buf, Int32(3))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(4))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecoderBackend_lift(_ buf: RustBuffer) throws -> FfiDecoderBackend {
+    return try FfiConverterTypeFfiDecoderBackend.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecoderBackend_lower(_ value: FfiDecoderBackend) -> RustBuffer {
+    return FfiConverterTypeFfiDecoderBackend.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiDecoderChangeCause: Equatable, Hashable {
+
+    case initial
+    case variantSwitch
+    case formatBoundary
+    case seekRecreate
+    case recovery
+    case hostRateChange
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDecoderChangeCause: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDecoderChangeCause: FfiConverterRustBuffer {
+    typealias SwiftType = FfiDecoderChangeCause
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDecoderChangeCause {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .initial
+
+        case 2: return .variantSwitch
+
+        case 3: return .formatBoundary
+
+        case 4: return .seekRecreate
+
+        case 5: return .recovery
+
+        case 6: return .hostRateChange
+
+        case 7: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiDecoderChangeCause, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .initial:
+            writeInt(&buf, Int32(1))
+
+
+        case .variantSwitch:
+            writeInt(&buf, Int32(2))
+
+
+        case .formatBoundary:
+            writeInt(&buf, Int32(3))
+
+
+        case .seekRecreate:
+            writeInt(&buf, Int32(4))
+
+
+        case .recovery:
+            writeInt(&buf, Int32(5))
+
+
+        case .hostRateChange:
+            writeInt(&buf, Int32(6))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(7))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecoderChangeCause_lift(_ buf: RustBuffer) throws -> FfiDecoderChangeCause {
+    return try FfiConverterTypeFfiDecoderChangeCause.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDecoderChangeCause_lower(_ value: FfiDecoderChangeCause) -> RustBuffer {
+    return FfiConverterTypeFfiDecoderChangeCause.lower(value)
+}
+
+
 
 /**
  * FFI-friendly error type bridging playback failures into platform bindings.
  */
 public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
-    
-    
+
+
     case NotReady
     case ItemFailed(reason: String
     )
@@ -3912,15 +5309,15 @@ public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErro
     case Internal(description: String
     )
 
-    
 
-    
 
-    
+
+
+
     public var errorDescription: String? {
         String(reflecting: self)
     }
-    
+
 }
 
 #if compiler(>=6)
@@ -3937,9 +5334,9 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        
 
-        
+
+
         case 1: return .NotReady
         case 2: return .ItemFailed(
             reason: try FfiConverterString.read(from: &buf)
@@ -3962,37 +5359,37 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
     public static func write(_ value: FfiError, into buf: inout [UInt8]) {
         switch value {
 
-        
 
-        
-        
+
+
+
         case .NotReady:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case let .ItemFailed(reason):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(reason, into: &buf)
-            
-        
+
+
         case let .SeekFailed(reason):
             writeInt(&buf, Int32(3))
             FfiConverterString.write(reason, into: &buf)
-            
-        
+
+
         case .EngineNotRunning:
             writeInt(&buf, Int32(4))
-        
-        
+
+
         case let .InvalidArgument(reason):
             writeInt(&buf, Int32(5))
             FfiConverterString.write(reason, into: &buf)
-            
-        
+
+
         case let .Internal(description):
             writeInt(&buf, Int32(6))
             FfiConverterString.write(description, into: &buf)
-            
+
         }
     }
 }
@@ -4014,12 +5411,167 @@ public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiEvictReason: Equatable, Hashable {
+
+    case quotaBytes
+    case quotaAssets
+    case displaced
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiEvictReason: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiEvictReason: FfiConverterRustBuffer {
+    typealias SwiftType = FfiEvictReason
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiEvictReason {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .quotaBytes
+
+        case 2: return .quotaAssets
+
+        case 3: return .displaced
+
+        case 4: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiEvictReason, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .quotaBytes:
+            writeInt(&buf, Int32(1))
+
+
+        case .quotaAssets:
+            writeInt(&buf, Int32(2))
+
+
+        case .displaced:
+            writeInt(&buf, Int32(3))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(4))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEvictReason_lift(_ buf: RustBuffer) throws -> FfiEvictReason {
+    return try FfiConverterTypeFfiEvictReason.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEvictReason_lower(_ value: FfiEvictReason) -> RustBuffer {
+    return FfiConverterTypeFfiEvictReason.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiFrameDomain: Equatable, Hashable {
+
+    case source
+    case output
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiFrameDomain: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiFrameDomain: FfiConverterRustBuffer {
+    typealias SwiftType = FfiFrameDomain
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiFrameDomain {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .source
+
+        case 2: return .output
+
+        case 3: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiFrameDomain, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .source:
+            writeInt(&buf, Int32(1))
+
+
+        case .output:
+            writeInt(&buf, Int32(2))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFrameDomain_lift(_ buf: RustBuffer) throws -> FfiFrameDomain {
+    return try FfiConverterTypeFfiFrameDomain.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFrameDomain_lower(_ value: FfiFrameDomain) -> RustBuffer {
+    return FfiConverterTypeFfiFrameDomain.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].
  */
 
 public enum FfiItemEvent: Equatable, Hashable {
-    
+
     case durationChanged(seconds: Double
     )
     /**
@@ -4064,6 +5616,84 @@ public enum FfiItemEvent: Equatable, Hashable {
     case didStall
     case error(error: String
     )
+    /**
+     * Decoder configuration changed for the current item.
+     */
+    case decoderChanged(backend: FfiDecoderBackend, codec: FfiAudioCodecKind?, container: FfiContainerKind?, sampleRate: UInt32, channels: UInt16, bitDepth: UInt16?, bitrate: UInt32?, epoch: UInt64, cause: FfiDecoderChangeCause, variant: UInt32?, baseOffset: UInt64, durationSeconds: Double?, gaplessLeading: UInt64, gaplessTrailing: UInt64, hasGapless: Bool
+    )
+    /**
+     * Decoder reported a non-fatal or fatal decode error.
+     */
+    case decodeError(`class`: FfiDecodeErrorClass, kind: FfiDecodeErrorKind, codec: FfiAudioCodecKind?, detail: String
+    )
+    /**
+     * Decoder resolved gapless trim values for the current item.
+     */
+    case gaplessResolved(leadingFrames: UInt64, trailingFrames: UInt64, domain: FfiFrameDomain, codec: FfiAudioCodecKind?, sampleRate: UInt32
+    )
+    /**
+     * Decoder-side resampler configuration changed for the current item.
+     */
+    case resamplerConfigured(backend: FfiResamplerKind, inputRate: UInt32, outputRate: UInt32, channels: UInt16, bypassed: Bool
+    )
+    case audioFormatDetected(channels: UInt16, sampleRate: UInt32
+    )
+    case audioFormatChanged(oldChannels: UInt16, oldSampleRate: UInt32, newChannels: UInt16, newSampleRate: UInt32
+    )
+    case seekComplete(positionSeconds: Double, epoch: UInt64
+    )
+    case seekRejected(epoch: UInt64, targetSeconds: Double
+    )
+    case decoderReady(baseOffset: UInt64, variant: UInt32?
+    )
+    case trackFailed(reason: FfiTrackFailureKind, epoch: UInt64
+    )
+    case underrunStarted(positionMs: UInt64, epoch: UInt64
+    )
+    case underrunEnded(positionMs: UInt64, epoch: UInt64
+    )
+    case bufferHealth(bufferedMs: UInt64, decodedFrontierMs: UInt64, epoch: UInt64
+    )
+    case engineLoad(load: Float, msPerChunk: Float, realtimeFactor: Float
+    )
+    case playbackResamplerConfigured(backend: FfiPlaybackResamplerKind, hostSampleRate: UInt32, sourceSampleRate: UInt32, active: Bool
+    )
+    case hlsVariantSwitchFenced(fromVariant: UInt32, toVariant: UInt32, crossCodec: Bool
+    )
+    case hlsVariantSwitchAcked(variant: UInt32, generation: UInt64
+    )
+    case hlsCacheComplete(totalBytes: UInt64?
+    )
+    case downloadStarted(requestId: UInt64, waitInQueueSeconds: Double
+    )
+    case downloadSlow(requestId: UInt64, elapsedSeconds: Double
+    )
+    case downloadCompleted(requestId: UInt64, bytesTransferred: UInt64, durationSeconds: Double, bandwidthBps: UInt64
+    )
+    case downloadRetrying(requestId: UInt64, attempt: UInt32, maxRetries: UInt32, error: String, backoffSeconds: Double
+    )
+    case downloadBodyStalled(requestId: UInt64, consumed: UInt64, expected: UInt64?, stallSeconds: Double
+    )
+    case downloadBodyResumed(requestId: UInt64, resumeNumber: UInt32, fromOffset: UInt64, honouredRange: Bool
+    )
+    case downloadRetryExhausted(requestId: UInt64, maxRetries: UInt32, consumed: UInt64, error: String
+    )
+    case downloadFirstByte(requestId: UInt64, ttfbSeconds: Double, status: UInt16, partial: Bool
+    )
+    case downloadCancelled(requestId: UInt64, reason: FfiCancelReason, bytesTransferred: UInt64
+    )
+    case fileOpened(codec: FfiAudioCodecKind?, container: FfiContainerKind?, totalBytes: UInt64?, cached: Bool
+    )
+    case fileTotalBytesResolved(totalBytes: UInt64, source: FfiTotalBytesSource
+    )
+    case fileCacheComplete(totalBytes: UInt64
+    )
+    case drmKeyFetchFailed(keyHost: String?, stage: FfiKeyFailureStage, detail: String
+    )
+    case drmKeyAcquired(keyHost: String?, source: FfiKeySource, bytes: UInt64, latencyMs: UInt64?
+    )
+    case drmSegmentDecryptFailed(variant: UInt32, segmentIndex: UInt32, detail: String
+    )
 
 
 
@@ -4084,88 +5714,431 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiItemEvent {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .durationChanged(seconds: try FfiConverterDouble.read(from: &buf)
         )
-        
+
         case 2: return .loadedRangesChanged(ranges: try FfiConverterSequenceTypeFfiTimeRange.read(from: &buf)
         )
-        
+
         case 3: return .statusChanged(status: try FfiConverterTypeFfiItemStatus.read(from: &buf)
         )
-        
+
         case 4: return .variantsDiscovered(variants: try FfiConverterSequenceTypeFfiVariant.read(from: &buf)
         )
-        
+
         case 5: return .variantSelected(variant: try FfiConverterTypeFfiVariant.read(from: &buf)
         )
-        
+
         case 6: return .variantApplied(variant: try FfiConverterTypeFfiVariant.read(from: &buf)
         )
-        
+
         case 7: return .didReachEnd
-        
+
         case 8: return .didFail
-        
+
         case 9: return .didStall
-        
+
         case 10: return .error(error: try FfiConverterString.read(from: &buf)
         )
-        
+
+        case 11: return .decoderChanged(backend: try FfiConverterTypeFfiDecoderBackend.read(from: &buf), codec: try FfiConverterOptionTypeFfiAudioCodecKind.read(from: &buf), container: try FfiConverterOptionTypeFfiContainerKind.read(from: &buf), sampleRate: try FfiConverterUInt32.read(from: &buf), channels: try FfiConverterUInt16.read(from: &buf), bitDepth: try FfiConverterOptionUInt16.read(from: &buf), bitrate: try FfiConverterOptionUInt32.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf), cause: try FfiConverterTypeFfiDecoderChangeCause.read(from: &buf), variant: try FfiConverterOptionUInt32.read(from: &buf), baseOffset: try FfiConverterUInt64.read(from: &buf), durationSeconds: try FfiConverterOptionDouble.read(from: &buf), gaplessLeading: try FfiConverterUInt64.read(from: &buf), gaplessTrailing: try FfiConverterUInt64.read(from: &buf), hasGapless: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 12: return .decodeError(class: try FfiConverterTypeFfiDecodeErrorClass.read(from: &buf), kind: try FfiConverterTypeFfiDecodeErrorKind.read(from: &buf), codec: try FfiConverterOptionTypeFfiAudioCodecKind.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
+        )
+
+        case 13: return .gaplessResolved(leadingFrames: try FfiConverterUInt64.read(from: &buf), trailingFrames: try FfiConverterUInt64.read(from: &buf), domain: try FfiConverterTypeFfiFrameDomain.read(from: &buf), codec: try FfiConverterOptionTypeFfiAudioCodecKind.read(from: &buf), sampleRate: try FfiConverterUInt32.read(from: &buf)
+        )
+
+        case 14: return .resamplerConfigured(backend: try FfiConverterTypeFfiResamplerKind.read(from: &buf), inputRate: try FfiConverterUInt32.read(from: &buf), outputRate: try FfiConverterUInt32.read(from: &buf), channels: try FfiConverterUInt16.read(from: &buf), bypassed: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 15: return .audioFormatDetected(channels: try FfiConverterUInt16.read(from: &buf), sampleRate: try FfiConverterUInt32.read(from: &buf)
+        )
+
+        case 16: return .audioFormatChanged(oldChannels: try FfiConverterUInt16.read(from: &buf), oldSampleRate: try FfiConverterUInt32.read(from: &buf), newChannels: try FfiConverterUInt16.read(from: &buf), newSampleRate: try FfiConverterUInt32.read(from: &buf)
+        )
+
+        case 17: return .seekComplete(positionSeconds: try FfiConverterDouble.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 18: return .seekRejected(epoch: try FfiConverterUInt64.read(from: &buf), targetSeconds: try FfiConverterDouble.read(from: &buf)
+        )
+
+        case 19: return .decoderReady(baseOffset: try FfiConverterUInt64.read(from: &buf), variant: try FfiConverterOptionUInt32.read(from: &buf)
+        )
+
+        case 20: return .trackFailed(reason: try FfiConverterTypeFfiTrackFailureKind.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 21: return .underrunStarted(positionMs: try FfiConverterUInt64.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 22: return .underrunEnded(positionMs: try FfiConverterUInt64.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 23: return .bufferHealth(bufferedMs: try FfiConverterUInt64.read(from: &buf), decodedFrontierMs: try FfiConverterUInt64.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 24: return .engineLoad(load: try FfiConverterFloat.read(from: &buf), msPerChunk: try FfiConverterFloat.read(from: &buf), realtimeFactor: try FfiConverterFloat.read(from: &buf)
+        )
+
+        case 25: return .playbackResamplerConfigured(backend: try FfiConverterTypeFfiPlaybackResamplerKind.read(from: &buf), hostSampleRate: try FfiConverterUInt32.read(from: &buf), sourceSampleRate: try FfiConverterUInt32.read(from: &buf), active: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 26: return .hlsVariantSwitchFenced(fromVariant: try FfiConverterUInt32.read(from: &buf), toVariant: try FfiConverterUInt32.read(from: &buf), crossCodec: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 27: return .hlsVariantSwitchAcked(variant: try FfiConverterUInt32.read(from: &buf), generation: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 28: return .hlsCacheComplete(totalBytes: try FfiConverterOptionUInt64.read(from: &buf)
+        )
+
+        case 29: return .downloadStarted(requestId: try FfiConverterUInt64.read(from: &buf), waitInQueueSeconds: try FfiConverterDouble.read(from: &buf)
+        )
+
+        case 30: return .downloadSlow(requestId: try FfiConverterUInt64.read(from: &buf), elapsedSeconds: try FfiConverterDouble.read(from: &buf)
+        )
+
+        case 31: return .downloadCompleted(requestId: try FfiConverterUInt64.read(from: &buf), bytesTransferred: try FfiConverterUInt64.read(from: &buf), durationSeconds: try FfiConverterDouble.read(from: &buf), bandwidthBps: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 32: return .downloadRetrying(requestId: try FfiConverterUInt64.read(from: &buf), attempt: try FfiConverterUInt32.read(from: &buf), maxRetries: try FfiConverterUInt32.read(from: &buf), error: try FfiConverterString.read(from: &buf), backoffSeconds: try FfiConverterDouble.read(from: &buf)
+        )
+
+        case 33: return .downloadBodyStalled(requestId: try FfiConverterUInt64.read(from: &buf), consumed: try FfiConverterUInt64.read(from: &buf), expected: try FfiConverterOptionUInt64.read(from: &buf), stallSeconds: try FfiConverterDouble.read(from: &buf)
+        )
+
+        case 34: return .downloadBodyResumed(requestId: try FfiConverterUInt64.read(from: &buf), resumeNumber: try FfiConverterUInt32.read(from: &buf), fromOffset: try FfiConverterUInt64.read(from: &buf), honouredRange: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 35: return .downloadRetryExhausted(requestId: try FfiConverterUInt64.read(from: &buf), maxRetries: try FfiConverterUInt32.read(from: &buf), consumed: try FfiConverterUInt64.read(from: &buf), error: try FfiConverterString.read(from: &buf)
+        )
+
+        case 36: return .downloadFirstByte(requestId: try FfiConverterUInt64.read(from: &buf), ttfbSeconds: try FfiConverterDouble.read(from: &buf), status: try FfiConverterUInt16.read(from: &buf), partial: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 37: return .downloadCancelled(requestId: try FfiConverterUInt64.read(from: &buf), reason: try FfiConverterTypeFfiCancelReason.read(from: &buf), bytesTransferred: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 38: return .fileOpened(codec: try FfiConverterOptionTypeFfiAudioCodecKind.read(from: &buf), container: try FfiConverterOptionTypeFfiContainerKind.read(from: &buf), totalBytes: try FfiConverterOptionUInt64.read(from: &buf), cached: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 39: return .fileTotalBytesResolved(totalBytes: try FfiConverterUInt64.read(from: &buf), source: try FfiConverterTypeFfiTotalBytesSource.read(from: &buf)
+        )
+
+        case 40: return .fileCacheComplete(totalBytes: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 41: return .drmKeyFetchFailed(keyHost: try FfiConverterOptionString.read(from: &buf), stage: try FfiConverterTypeFfiKeyFailureStage.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
+        )
+
+        case 42: return .drmKeyAcquired(keyHost: try FfiConverterOptionString.read(from: &buf), source: try FfiConverterTypeFfiKeySource.read(from: &buf), bytes: try FfiConverterUInt64.read(from: &buf), latencyMs: try FfiConverterOptionUInt64.read(from: &buf)
+        )
+
+        case 43: return .drmSegmentDecryptFailed(variant: try FfiConverterUInt32.read(from: &buf), segmentIndex: try FfiConverterUInt32.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
+        )
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FfiItemEvent, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case let .durationChanged(seconds):
             writeInt(&buf, Int32(1))
             FfiConverterDouble.write(seconds, into: &buf)
-            
-        
+
+
         case let .loadedRangesChanged(ranges):
             writeInt(&buf, Int32(2))
             FfiConverterSequenceTypeFfiTimeRange.write(ranges, into: &buf)
-            
-        
+
+
         case let .statusChanged(status):
             writeInt(&buf, Int32(3))
             FfiConverterTypeFfiItemStatus.write(status, into: &buf)
-            
-        
+
+
         case let .variantsDiscovered(variants):
             writeInt(&buf, Int32(4))
             FfiConverterSequenceTypeFfiVariant.write(variants, into: &buf)
-            
-        
+
+
         case let .variantSelected(variant):
             writeInt(&buf, Int32(5))
             FfiConverterTypeFfiVariant.write(variant, into: &buf)
-            
-        
+
+
         case let .variantApplied(variant):
             writeInt(&buf, Int32(6))
             FfiConverterTypeFfiVariant.write(variant, into: &buf)
-            
-        
+
+
         case .didReachEnd:
             writeInt(&buf, Int32(7))
-        
-        
+
+
         case .didFail:
             writeInt(&buf, Int32(8))
-        
-        
+
+
         case .didStall:
             writeInt(&buf, Int32(9))
-        
-        
+
+
         case let .error(error):
             writeInt(&buf, Int32(10))
             FfiConverterString.write(error, into: &buf)
-            
+
+
+        case let .decoderChanged(backend,codec,container,sampleRate,channels,bitDepth,bitrate,epoch,cause,variant,baseOffset,durationSeconds,gaplessLeading,gaplessTrailing,hasGapless):
+            writeInt(&buf, Int32(11))
+            FfiConverterTypeFfiDecoderBackend.write(backend, into: &buf)
+            FfiConverterOptionTypeFfiAudioCodecKind.write(codec, into: &buf)
+            FfiConverterOptionTypeFfiContainerKind.write(container, into: &buf)
+            FfiConverterUInt32.write(sampleRate, into: &buf)
+            FfiConverterUInt16.write(channels, into: &buf)
+            FfiConverterOptionUInt16.write(bitDepth, into: &buf)
+            FfiConverterOptionUInt32.write(bitrate, into: &buf)
+            FfiConverterUInt64.write(epoch, into: &buf)
+            FfiConverterTypeFfiDecoderChangeCause.write(cause, into: &buf)
+            FfiConverterOptionUInt32.write(variant, into: &buf)
+            FfiConverterUInt64.write(baseOffset, into: &buf)
+            FfiConverterOptionDouble.write(durationSeconds, into: &buf)
+            FfiConverterUInt64.write(gaplessLeading, into: &buf)
+            FfiConverterUInt64.write(gaplessTrailing, into: &buf)
+            FfiConverterBool.write(hasGapless, into: &buf)
+
+
+        case let .decodeError(`class`,kind,codec,detail):
+            writeInt(&buf, Int32(12))
+            FfiConverterTypeFfiDecodeErrorClass.write(`class`, into: &buf)
+            FfiConverterTypeFfiDecodeErrorKind.write(kind, into: &buf)
+            FfiConverterOptionTypeFfiAudioCodecKind.write(codec, into: &buf)
+            FfiConverterString.write(detail, into: &buf)
+
+
+        case let .gaplessResolved(leadingFrames,trailingFrames,domain,codec,sampleRate):
+            writeInt(&buf, Int32(13))
+            FfiConverterUInt64.write(leadingFrames, into: &buf)
+            FfiConverterUInt64.write(trailingFrames, into: &buf)
+            FfiConverterTypeFfiFrameDomain.write(domain, into: &buf)
+            FfiConverterOptionTypeFfiAudioCodecKind.write(codec, into: &buf)
+            FfiConverterUInt32.write(sampleRate, into: &buf)
+
+
+        case let .resamplerConfigured(backend,inputRate,outputRate,channels,bypassed):
+            writeInt(&buf, Int32(14))
+            FfiConverterTypeFfiResamplerKind.write(backend, into: &buf)
+            FfiConverterUInt32.write(inputRate, into: &buf)
+            FfiConverterUInt32.write(outputRate, into: &buf)
+            FfiConverterUInt16.write(channels, into: &buf)
+            FfiConverterBool.write(bypassed, into: &buf)
+
+
+        case let .audioFormatDetected(channels,sampleRate):
+            writeInt(&buf, Int32(15))
+            FfiConverterUInt16.write(channels, into: &buf)
+            FfiConverterUInt32.write(sampleRate, into: &buf)
+
+
+        case let .audioFormatChanged(oldChannels,oldSampleRate,newChannels,newSampleRate):
+            writeInt(&buf, Int32(16))
+            FfiConverterUInt16.write(oldChannels, into: &buf)
+            FfiConverterUInt32.write(oldSampleRate, into: &buf)
+            FfiConverterUInt16.write(newChannels, into: &buf)
+            FfiConverterUInt32.write(newSampleRate, into: &buf)
+
+
+        case let .seekComplete(positionSeconds,epoch):
+            writeInt(&buf, Int32(17))
+            FfiConverterDouble.write(positionSeconds, into: &buf)
+            FfiConverterUInt64.write(epoch, into: &buf)
+
+
+        case let .seekRejected(epoch,targetSeconds):
+            writeInt(&buf, Int32(18))
+            FfiConverterUInt64.write(epoch, into: &buf)
+            FfiConverterDouble.write(targetSeconds, into: &buf)
+
+
+        case let .decoderReady(baseOffset,variant):
+            writeInt(&buf, Int32(19))
+            FfiConverterUInt64.write(baseOffset, into: &buf)
+            FfiConverterOptionUInt32.write(variant, into: &buf)
+
+
+        case let .trackFailed(reason,epoch):
+            writeInt(&buf, Int32(20))
+            FfiConverterTypeFfiTrackFailureKind.write(reason, into: &buf)
+            FfiConverterUInt64.write(epoch, into: &buf)
+
+
+        case let .underrunStarted(positionMs,epoch):
+            writeInt(&buf, Int32(21))
+            FfiConverterUInt64.write(positionMs, into: &buf)
+            FfiConverterUInt64.write(epoch, into: &buf)
+
+
+        case let .underrunEnded(positionMs,epoch):
+            writeInt(&buf, Int32(22))
+            FfiConverterUInt64.write(positionMs, into: &buf)
+            FfiConverterUInt64.write(epoch, into: &buf)
+
+
+        case let .bufferHealth(bufferedMs,decodedFrontierMs,epoch):
+            writeInt(&buf, Int32(23))
+            FfiConverterUInt64.write(bufferedMs, into: &buf)
+            FfiConverterUInt64.write(decodedFrontierMs, into: &buf)
+            FfiConverterUInt64.write(epoch, into: &buf)
+
+
+        case let .engineLoad(load,msPerChunk,realtimeFactor):
+            writeInt(&buf, Int32(24))
+            FfiConverterFloat.write(load, into: &buf)
+            FfiConverterFloat.write(msPerChunk, into: &buf)
+            FfiConverterFloat.write(realtimeFactor, into: &buf)
+
+
+        case let .playbackResamplerConfigured(backend,hostSampleRate,sourceSampleRate,active):
+            writeInt(&buf, Int32(25))
+            FfiConverterTypeFfiPlaybackResamplerKind.write(backend, into: &buf)
+            FfiConverterUInt32.write(hostSampleRate, into: &buf)
+            FfiConverterUInt32.write(sourceSampleRate, into: &buf)
+            FfiConverterBool.write(active, into: &buf)
+
+
+        case let .hlsVariantSwitchFenced(fromVariant,toVariant,crossCodec):
+            writeInt(&buf, Int32(26))
+            FfiConverterUInt32.write(fromVariant, into: &buf)
+            FfiConverterUInt32.write(toVariant, into: &buf)
+            FfiConverterBool.write(crossCodec, into: &buf)
+
+
+        case let .hlsVariantSwitchAcked(variant,generation):
+            writeInt(&buf, Int32(27))
+            FfiConverterUInt32.write(variant, into: &buf)
+            FfiConverterUInt64.write(generation, into: &buf)
+
+
+        case let .hlsCacheComplete(totalBytes):
+            writeInt(&buf, Int32(28))
+            FfiConverterOptionUInt64.write(totalBytes, into: &buf)
+
+
+        case let .downloadStarted(requestId,waitInQueueSeconds):
+            writeInt(&buf, Int32(29))
+            FfiConverterUInt64.write(requestId, into: &buf)
+            FfiConverterDouble.write(waitInQueueSeconds, into: &buf)
+
+
+        case let .downloadSlow(requestId,elapsedSeconds):
+            writeInt(&buf, Int32(30))
+            FfiConverterUInt64.write(requestId, into: &buf)
+            FfiConverterDouble.write(elapsedSeconds, into: &buf)
+
+
+        case let .downloadCompleted(requestId,bytesTransferred,durationSeconds,bandwidthBps):
+            writeInt(&buf, Int32(31))
+            FfiConverterUInt64.write(requestId, into: &buf)
+            FfiConverterUInt64.write(bytesTransferred, into: &buf)
+            FfiConverterDouble.write(durationSeconds, into: &buf)
+            FfiConverterUInt64.write(bandwidthBps, into: &buf)
+
+
+        case let .downloadRetrying(requestId,attempt,maxRetries,error,backoffSeconds):
+            writeInt(&buf, Int32(32))
+            FfiConverterUInt64.write(requestId, into: &buf)
+            FfiConverterUInt32.write(attempt, into: &buf)
+            FfiConverterUInt32.write(maxRetries, into: &buf)
+            FfiConverterString.write(error, into: &buf)
+            FfiConverterDouble.write(backoffSeconds, into: &buf)
+
+
+        case let .downloadBodyStalled(requestId,consumed,expected,stallSeconds):
+            writeInt(&buf, Int32(33))
+            FfiConverterUInt64.write(requestId, into: &buf)
+            FfiConverterUInt64.write(consumed, into: &buf)
+            FfiConverterOptionUInt64.write(expected, into: &buf)
+            FfiConverterDouble.write(stallSeconds, into: &buf)
+
+
+        case let .downloadBodyResumed(requestId,resumeNumber,fromOffset,honouredRange):
+            writeInt(&buf, Int32(34))
+            FfiConverterUInt64.write(requestId, into: &buf)
+            FfiConverterUInt32.write(resumeNumber, into: &buf)
+            FfiConverterUInt64.write(fromOffset, into: &buf)
+            FfiConverterBool.write(honouredRange, into: &buf)
+
+
+        case let .downloadRetryExhausted(requestId,maxRetries,consumed,error):
+            writeInt(&buf, Int32(35))
+            FfiConverterUInt64.write(requestId, into: &buf)
+            FfiConverterUInt32.write(maxRetries, into: &buf)
+            FfiConverterUInt64.write(consumed, into: &buf)
+            FfiConverterString.write(error, into: &buf)
+
+
+        case let .downloadFirstByte(requestId,ttfbSeconds,status,partial):
+            writeInt(&buf, Int32(36))
+            FfiConverterUInt64.write(requestId, into: &buf)
+            FfiConverterDouble.write(ttfbSeconds, into: &buf)
+            FfiConverterUInt16.write(status, into: &buf)
+            FfiConverterBool.write(partial, into: &buf)
+
+
+        case let .downloadCancelled(requestId,reason,bytesTransferred):
+            writeInt(&buf, Int32(37))
+            FfiConverterUInt64.write(requestId, into: &buf)
+            FfiConverterTypeFfiCancelReason.write(reason, into: &buf)
+            FfiConverterUInt64.write(bytesTransferred, into: &buf)
+
+
+        case let .fileOpened(codec,container,totalBytes,cached):
+            writeInt(&buf, Int32(38))
+            FfiConverterOptionTypeFfiAudioCodecKind.write(codec, into: &buf)
+            FfiConverterOptionTypeFfiContainerKind.write(container, into: &buf)
+            FfiConverterOptionUInt64.write(totalBytes, into: &buf)
+            FfiConverterBool.write(cached, into: &buf)
+
+
+        case let .fileTotalBytesResolved(totalBytes,source):
+            writeInt(&buf, Int32(39))
+            FfiConverterUInt64.write(totalBytes, into: &buf)
+            FfiConverterTypeFfiTotalBytesSource.write(source, into: &buf)
+
+
+        case let .fileCacheComplete(totalBytes):
+            writeInt(&buf, Int32(40))
+            FfiConverterUInt64.write(totalBytes, into: &buf)
+
+
+        case let .drmKeyFetchFailed(keyHost,stage,detail):
+            writeInt(&buf, Int32(41))
+            FfiConverterOptionString.write(keyHost, into: &buf)
+            FfiConverterTypeFfiKeyFailureStage.write(stage, into: &buf)
+            FfiConverterString.write(detail, into: &buf)
+
+
+        case let .drmKeyAcquired(keyHost,source,bytes,latencyMs):
+            writeInt(&buf, Int32(42))
+            FfiConverterOptionString.write(keyHost, into: &buf)
+            FfiConverterTypeFfiKeySource.write(source, into: &buf)
+            FfiConverterUInt64.write(bytes, into: &buf)
+            FfiConverterOptionUInt64.write(latencyMs, into: &buf)
+
+
+        case let .drmSegmentDecryptFailed(variant,segmentIndex,detail):
+            writeInt(&buf, Int32(43))
+            FfiConverterUInt32.write(variant, into: &buf)
+            FfiConverterUInt32.write(segmentIndex, into: &buf)
+            FfiConverterString.write(detail, into: &buf)
+
         }
     }
 }
@@ -4193,7 +6166,7 @@ public func FfiConverterTypeFfiItemEvent_lower(_ value: FfiItemEvent) -> RustBuf
  */
 
 public enum FfiItemStatus: Equatable, Hashable {
-    
+
     case unknown
     case readyToPlay
     case failed
@@ -4217,32 +6190,32 @@ public struct FfiConverterTypeFfiItemStatus: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiItemStatus {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .unknown
-        
+
         case 2: return .readyToPlay
-        
+
         case 3: return .failed
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FfiItemStatus, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .unknown:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .readyToPlay:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .failed:
             writeInt(&buf, Int32(3))
-        
+
         }
     }
 }
@@ -4265,6 +6238,256 @@ public func FfiConverterTypeFfiItemStatus_lower(_ value: FfiItemStatus) -> RustB
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiKeyFailureStage: Equatable, Hashable {
+
+    case network
+    case bodyCollect
+    case processor
+    case missing
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiKeyFailureStage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiKeyFailureStage: FfiConverterRustBuffer {
+    typealias SwiftType = FfiKeyFailureStage
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiKeyFailureStage {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .network
+
+        case 2: return .bodyCollect
+
+        case 3: return .processor
+
+        case 4: return .missing
+
+        case 5: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiKeyFailureStage, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .network:
+            writeInt(&buf, Int32(1))
+
+
+        case .bodyCollect:
+            writeInt(&buf, Int32(2))
+
+
+        case .processor:
+            writeInt(&buf, Int32(3))
+
+
+        case .missing:
+            writeInt(&buf, Int32(4))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(5))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiKeyFailureStage_lift(_ buf: RustBuffer) throws -> FfiKeyFailureStage {
+    return try FfiConverterTypeFfiKeyFailureStage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiKeyFailureStage_lower(_ value: FfiKeyFailureStage) -> RustBuffer {
+    return FfiConverterTypeFfiKeyFailureStage.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiKeySource: Equatable, Hashable {
+
+    case network
+    case diskCache
+    case memCache
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiKeySource: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiKeySource: FfiConverterRustBuffer {
+    typealias SwiftType = FfiKeySource
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiKeySource {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .network
+
+        case 2: return .diskCache
+
+        case 3: return .memCache
+
+        case 4: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiKeySource, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .network:
+            writeInt(&buf, Int32(1))
+
+
+        case .diskCache:
+            writeInt(&buf, Int32(2))
+
+
+        case .memCache:
+            writeInt(&buf, Int32(3))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(4))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiKeySource_lift(_ buf: RustBuffer) throws -> FfiKeySource {
+    return try FfiConverterTypeFfiKeySource.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiKeySource_lower(_ value: FfiKeySource) -> RustBuffer {
+    return FfiConverterTypeFfiKeySource.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiPlaybackResamplerKind: Equatable, Hashable {
+
+    case rubato
+    case glide
+    case none
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiPlaybackResamplerKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPlaybackResamplerKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiPlaybackResamplerKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlaybackResamplerKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .rubato
+
+        case 2: return .glide
+
+        case 3: return .none
+
+        case 4: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiPlaybackResamplerKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .rubato:
+            writeInt(&buf, Int32(1))
+
+
+        case .glide:
+            writeInt(&buf, Int32(2))
+
+
+        case .none:
+            writeInt(&buf, Int32(3))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(4))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlaybackResamplerKind_lift(_ buf: RustBuffer) throws -> FfiPlaybackResamplerKind {
+    return try FfiConverterTypeFfiPlaybackResamplerKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlaybackResamplerKind_lower(_ value: FfiPlaybackResamplerKind) -> RustBuffer {
+    return FfiConverterTypeFfiPlaybackResamplerKind.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Typed player event dispatched through [`crate::observer::PlayerObserver::on_event`].
  *
@@ -4277,7 +6500,7 @@ public func FfiConverterTypeFfiItemStatus_lower(_ value: FfiItemStatus) -> RustB
  */
 
 public enum FfiPlayerEvent: Equatable, Hashable {
-    
+
     case timeChanged(seconds: Double
     )
     case rateChanged(rate: Float
@@ -4330,6 +6553,38 @@ public enum FfiPlayerEvent: Equatable, Hashable {
      */
     case crossfadeDurationChanged(seconds: Float
     )
+    case trackAdded(itemId: TrackId, index: UInt64
+    )
+    case trackRemoved(itemId: TrackId
+    )
+    case trackLoadFailed(itemId: TrackId, reason: String, autoSkipped: Bool
+    )
+    case repeatModeChanged(mode: FfiRepeatMode
+    )
+    case nextTrackReady(itemId: TrackId, index: UInt64
+    )
+    case currentItemAdvanced(itemId: TrackId?, reason: FfiAdvanceReason
+    )
+    case engineStarted
+    case engineStopped
+    case crossfadeCompleted
+    case crossfadeCancelled
+    case masterVolumeChanged(volume: Float
+    )
+    case audioRouteChanged(reason: FfiRouteChangeReason
+    )
+    case djBpmDetected(slot: UInt64, bpm: Double, confidence: Float?, firstBeatOffsetSeconds: Double
+    )
+    case djKeylockChanged(on: Bool
+    )
+    case djStretchBackendChanged(kind: FfiStretchBackendKind
+    )
+    case assetCommitted(assetRoot: String, relPath: String, finalLen: UInt64?
+    )
+    case assetFailed(assetRoot: String, relPath: String, reason: String
+    )
+    case assetEvicted(assetRoot: String, reason: FfiEvictReason
+    )
 
 
 
@@ -4350,139 +6605,288 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlayerEvent {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .timeChanged(seconds: try FfiConverterDouble.read(from: &buf)
         )
-        
+
         case 2: return .rateChanged(rate: try FfiConverterFloat.read(from: &buf)
         )
-        
+
         case 3: return .currentItemChanged(itemId: try FfiConverterOptionTypeTrackId.read(from: &buf)
         )
-        
+
         case 4: return .statusChanged(status: try FfiConverterTypeFfiPlayerStatus.read(from: &buf)
         )
-        
+
         case 5: return .timeControlStatusChanged(status: try FfiConverterTypeFfiTimeControlStatus.read(from: &buf)
         )
-        
+
         case 6: return .error(error: try FfiConverterString.read(from: &buf)
         )
-        
+
         case 7: return .durationChanged(seconds: try FfiConverterDouble.read(from: &buf)
         )
-        
+
         case 8: return .bufferedDurationChanged(seconds: try FfiConverterDouble.read(from: &buf)
         )
-        
+
         case 9: return .volumeChanged(volume: try FfiConverterFloat.read(from: &buf)
         )
-        
+
         case 10: return .muteChanged(muted: try FfiConverterBool.read(from: &buf)
         )
-        
+
         case 11: return .itemDidPlayToEnd
-        
+
         case 12: return .itemDidFail(itemId: try FfiConverterOptionTypeTrackId.read(from: &buf)
         )
-        
+
         case 13: return .trackStatusChanged(itemId: try FfiConverterTypeTrackId.read(from: &buf), status: try FfiConverterTypeFfiTrackStatus.read(from: &buf)
         )
-        
+
         case 14: return .queueEnded
-        
+
         case 15: return .crossfadeStarted(durationSeconds: try FfiConverterFloat.read(from: &buf)
         )
-        
+
         case 16: return .crossfadeDurationChanged(seconds: try FfiConverterFloat.read(from: &buf)
         )
-        
+
+        case 17: return .trackAdded(itemId: try FfiConverterTypeTrackId.read(from: &buf), index: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 18: return .trackRemoved(itemId: try FfiConverterTypeTrackId.read(from: &buf)
+        )
+
+        case 19: return .trackLoadFailed(itemId: try FfiConverterTypeTrackId.read(from: &buf), reason: try FfiConverterString.read(from: &buf), autoSkipped: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 20: return .repeatModeChanged(mode: try FfiConverterTypeFfiRepeatMode.read(from: &buf)
+        )
+
+        case 21: return .nextTrackReady(itemId: try FfiConverterTypeTrackId.read(from: &buf), index: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 22: return .currentItemAdvanced(itemId: try FfiConverterOptionTypeTrackId.read(from: &buf), reason: try FfiConverterTypeFfiAdvanceReason.read(from: &buf)
+        )
+
+        case 23: return .engineStarted
+
+        case 24: return .engineStopped
+
+        case 25: return .crossfadeCompleted
+
+        case 26: return .crossfadeCancelled
+
+        case 27: return .masterVolumeChanged(volume: try FfiConverterFloat.read(from: &buf)
+        )
+
+        case 28: return .audioRouteChanged(reason: try FfiConverterTypeFfiRouteChangeReason.read(from: &buf)
+        )
+
+        case 29: return .djBpmDetected(slot: try FfiConverterUInt64.read(from: &buf), bpm: try FfiConverterDouble.read(from: &buf), confidence: try FfiConverterOptionFloat.read(from: &buf), firstBeatOffsetSeconds: try FfiConverterDouble.read(from: &buf)
+        )
+
+        case 30: return .djKeylockChanged(on: try FfiConverterBool.read(from: &buf)
+        )
+
+        case 31: return .djStretchBackendChanged(kind: try FfiConverterTypeFfiStretchBackendKind.read(from: &buf)
+        )
+
+        case 32: return .assetCommitted(assetRoot: try FfiConverterString.read(from: &buf), relPath: try FfiConverterString.read(from: &buf), finalLen: try FfiConverterOptionUInt64.read(from: &buf)
+        )
+
+        case 33: return .assetFailed(assetRoot: try FfiConverterString.read(from: &buf), relPath: try FfiConverterString.read(from: &buf), reason: try FfiConverterString.read(from: &buf)
+        )
+
+        case 34: return .assetEvicted(assetRoot: try FfiConverterString.read(from: &buf), reason: try FfiConverterTypeFfiEvictReason.read(from: &buf)
+        )
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FfiPlayerEvent, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case let .timeChanged(seconds):
             writeInt(&buf, Int32(1))
             FfiConverterDouble.write(seconds, into: &buf)
-            
-        
+
+
         case let .rateChanged(rate):
             writeInt(&buf, Int32(2))
             FfiConverterFloat.write(rate, into: &buf)
-            
-        
+
+
         case let .currentItemChanged(itemId):
             writeInt(&buf, Int32(3))
             FfiConverterOptionTypeTrackId.write(itemId, into: &buf)
-            
-        
+
+
         case let .statusChanged(status):
             writeInt(&buf, Int32(4))
             FfiConverterTypeFfiPlayerStatus.write(status, into: &buf)
-            
-        
+
+
         case let .timeControlStatusChanged(status):
             writeInt(&buf, Int32(5))
             FfiConverterTypeFfiTimeControlStatus.write(status, into: &buf)
-            
-        
+
+
         case let .error(error):
             writeInt(&buf, Int32(6))
             FfiConverterString.write(error, into: &buf)
-            
-        
+
+
         case let .durationChanged(seconds):
             writeInt(&buf, Int32(7))
             FfiConverterDouble.write(seconds, into: &buf)
-            
-        
+
+
         case let .bufferedDurationChanged(seconds):
             writeInt(&buf, Int32(8))
             FfiConverterDouble.write(seconds, into: &buf)
-            
-        
+
+
         case let .volumeChanged(volume):
             writeInt(&buf, Int32(9))
             FfiConverterFloat.write(volume, into: &buf)
-            
-        
+
+
         case let .muteChanged(muted):
             writeInt(&buf, Int32(10))
             FfiConverterBool.write(muted, into: &buf)
-            
-        
+
+
         case .itemDidPlayToEnd:
             writeInt(&buf, Int32(11))
-        
-        
+
+
         case let .itemDidFail(itemId):
             writeInt(&buf, Int32(12))
             FfiConverterOptionTypeTrackId.write(itemId, into: &buf)
-            
-        
+
+
         case let .trackStatusChanged(itemId,status):
             writeInt(&buf, Int32(13))
             FfiConverterTypeTrackId.write(itemId, into: &buf)
             FfiConverterTypeFfiTrackStatus.write(status, into: &buf)
-            
-        
+
+
         case .queueEnded:
             writeInt(&buf, Int32(14))
-        
-        
+
+
         case let .crossfadeStarted(durationSeconds):
             writeInt(&buf, Int32(15))
             FfiConverterFloat.write(durationSeconds, into: &buf)
-            
-        
+
+
         case let .crossfadeDurationChanged(seconds):
             writeInt(&buf, Int32(16))
             FfiConverterFloat.write(seconds, into: &buf)
-            
+
+
+        case let .trackAdded(itemId,index):
+            writeInt(&buf, Int32(17))
+            FfiConverterTypeTrackId.write(itemId, into: &buf)
+            FfiConverterUInt64.write(index, into: &buf)
+
+
+        case let .trackRemoved(itemId):
+            writeInt(&buf, Int32(18))
+            FfiConverterTypeTrackId.write(itemId, into: &buf)
+
+
+        case let .trackLoadFailed(itemId,reason,autoSkipped):
+            writeInt(&buf, Int32(19))
+            FfiConverterTypeTrackId.write(itemId, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
+            FfiConverterBool.write(autoSkipped, into: &buf)
+
+
+        case let .repeatModeChanged(mode):
+            writeInt(&buf, Int32(20))
+            FfiConverterTypeFfiRepeatMode.write(mode, into: &buf)
+
+
+        case let .nextTrackReady(itemId,index):
+            writeInt(&buf, Int32(21))
+            FfiConverterTypeTrackId.write(itemId, into: &buf)
+            FfiConverterUInt64.write(index, into: &buf)
+
+
+        case let .currentItemAdvanced(itemId,reason):
+            writeInt(&buf, Int32(22))
+            FfiConverterOptionTypeTrackId.write(itemId, into: &buf)
+            FfiConverterTypeFfiAdvanceReason.write(reason, into: &buf)
+
+
+        case .engineStarted:
+            writeInt(&buf, Int32(23))
+
+
+        case .engineStopped:
+            writeInt(&buf, Int32(24))
+
+
+        case .crossfadeCompleted:
+            writeInt(&buf, Int32(25))
+
+
+        case .crossfadeCancelled:
+            writeInt(&buf, Int32(26))
+
+
+        case let .masterVolumeChanged(volume):
+            writeInt(&buf, Int32(27))
+            FfiConverterFloat.write(volume, into: &buf)
+
+
+        case let .audioRouteChanged(reason):
+            writeInt(&buf, Int32(28))
+            FfiConverterTypeFfiRouteChangeReason.write(reason, into: &buf)
+
+
+        case let .djBpmDetected(slot,bpm,confidence,firstBeatOffsetSeconds):
+            writeInt(&buf, Int32(29))
+            FfiConverterUInt64.write(slot, into: &buf)
+            FfiConverterDouble.write(bpm, into: &buf)
+            FfiConverterOptionFloat.write(confidence, into: &buf)
+            FfiConverterDouble.write(firstBeatOffsetSeconds, into: &buf)
+
+
+        case let .djKeylockChanged(on):
+            writeInt(&buf, Int32(30))
+            FfiConverterBool.write(on, into: &buf)
+
+
+        case let .djStretchBackendChanged(kind):
+            writeInt(&buf, Int32(31))
+            FfiConverterTypeFfiStretchBackendKind.write(kind, into: &buf)
+
+
+        case let .assetCommitted(assetRoot,relPath,finalLen):
+            writeInt(&buf, Int32(32))
+            FfiConverterString.write(assetRoot, into: &buf)
+            FfiConverterString.write(relPath, into: &buf)
+            FfiConverterOptionUInt64.write(finalLen, into: &buf)
+
+
+        case let .assetFailed(assetRoot,relPath,reason):
+            writeInt(&buf, Int32(33))
+            FfiConverterString.write(assetRoot, into: &buf)
+            FfiConverterString.write(relPath, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
+
+
+        case let .assetEvicted(assetRoot,reason):
+            writeInt(&buf, Int32(34))
+            FfiConverterString.write(assetRoot, into: &buf)
+            FfiConverterTypeFfiEvictReason.write(reason, into: &buf)
+
         }
     }
 }
@@ -4510,7 +6914,7 @@ public func FfiConverterTypeFfiPlayerEvent_lower(_ value: FfiPlayerEvent) -> Rus
  */
 
 public enum FfiPlayerStatus: Equatable, Hashable {
-    
+
     case unknown
     case readyToPlay
     case failed
@@ -4534,32 +6938,32 @@ public struct FfiConverterTypeFfiPlayerStatus: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlayerStatus {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .unknown
-        
+
         case 2: return .readyToPlay
-        
+
         case 3: return .failed
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FfiPlayerStatus, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .unknown:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .readyToPlay:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .failed:
             writeInt(&buf, Int32(3))
-        
+
         }
     }
 }
@@ -4582,12 +6986,364 @@ public func FfiConverterTypeFfiPlayerStatus_lower(_ value: FfiPlayerStatus) -> R
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiRepeatMode: Equatable, Hashable {
+
+    case off
+    case one
+    case all
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiRepeatMode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiRepeatMode: FfiConverterRustBuffer {
+    typealias SwiftType = FfiRepeatMode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRepeatMode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .off
+
+        case 2: return .one
+
+        case 3: return .all
+
+        case 4: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiRepeatMode, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .off:
+            writeInt(&buf, Int32(1))
+
+
+        case .one:
+            writeInt(&buf, Int32(2))
+
+
+        case .all:
+            writeInt(&buf, Int32(3))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(4))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiRepeatMode_lift(_ buf: RustBuffer) throws -> FfiRepeatMode {
+    return try FfiConverterTypeFfiRepeatMode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiRepeatMode_lower(_ value: FfiRepeatMode) -> RustBuffer {
+    return FfiConverterTypeFfiRepeatMode.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiResamplerKind: Equatable, Hashable {
+
+    case rubato
+    case apple
+    case glide
+    case none
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiResamplerKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiResamplerKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiResamplerKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiResamplerKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .rubato
+
+        case 2: return .apple
+
+        case 3: return .glide
+
+        case 4: return .none
+
+        case 5: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiResamplerKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .rubato:
+            writeInt(&buf, Int32(1))
+
+
+        case .apple:
+            writeInt(&buf, Int32(2))
+
+
+        case .glide:
+            writeInt(&buf, Int32(3))
+
+
+        case .none:
+            writeInt(&buf, Int32(4))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(5))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiResamplerKind_lift(_ buf: RustBuffer) throws -> FfiResamplerKind {
+    return try FfiConverterTypeFfiResamplerKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiResamplerKind_lower(_ value: FfiResamplerKind) -> RustBuffer {
+    return FfiConverterTypeFfiResamplerKind.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiRouteChangeReason: Equatable, Hashable {
+
+    case unknown
+    case newDeviceAvailable
+    case oldDeviceUnavailable
+    case categoryChange
+    case override
+    case wakeFromSleep
+    case noSuitableRouteForCategory
+    case routeConfigurationChange
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiRouteChangeReason: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiRouteChangeReason: FfiConverterRustBuffer {
+    typealias SwiftType = FfiRouteChangeReason
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRouteChangeReason {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .unknown
+
+        case 2: return .newDeviceAvailable
+
+        case 3: return .oldDeviceUnavailable
+
+        case 4: return .categoryChange
+
+        case 5: return .override
+
+        case 6: return .wakeFromSleep
+
+        case 7: return .noSuitableRouteForCategory
+
+        case 8: return .routeConfigurationChange
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiRouteChangeReason, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .unknown:
+            writeInt(&buf, Int32(1))
+
+
+        case .newDeviceAvailable:
+            writeInt(&buf, Int32(2))
+
+
+        case .oldDeviceUnavailable:
+            writeInt(&buf, Int32(3))
+
+
+        case .categoryChange:
+            writeInt(&buf, Int32(4))
+
+
+        case .override:
+            writeInt(&buf, Int32(5))
+
+
+        case .wakeFromSleep:
+            writeInt(&buf, Int32(6))
+
+
+        case .noSuitableRouteForCategory:
+            writeInt(&buf, Int32(7))
+
+
+        case .routeConfigurationChange:
+            writeInt(&buf, Int32(8))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiRouteChangeReason_lift(_ buf: RustBuffer) throws -> FfiRouteChangeReason {
+    return try FfiConverterTypeFfiRouteChangeReason.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiRouteChangeReason_lower(_ value: FfiRouteChangeReason) -> RustBuffer {
+    return FfiConverterTypeFfiRouteChangeReason.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiStretchBackendKind: Equatable, Hashable {
+
+    case signalsmith
+    case bungee
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiStretchBackendKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiStretchBackendKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiStretchBackendKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiStretchBackendKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .signalsmith
+
+        case 2: return .bungee
+
+        case 3: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiStretchBackendKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .signalsmith:
+            writeInt(&buf, Int32(1))
+
+
+        case .bungee:
+            writeInt(&buf, Int32(2))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiStretchBackendKind_lift(_ buf: RustBuffer) throws -> FfiStretchBackendKind {
+    return try FfiConverterTypeFfiStretchBackendKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiStretchBackendKind_lower(_ value: FfiStretchBackendKind) -> RustBuffer {
+    return FfiConverterTypeFfiStretchBackendKind.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * FFI-friendly mirror of [`TimeControlStatus`].
  */
 
 public enum FfiTimeControlStatus: Equatable, Hashable {
-    
+
     case paused
     case waitingToPlay
     case playing
@@ -4611,32 +7367,32 @@ public struct FfiConverterTypeFfiTimeControlStatus: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTimeControlStatus {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .paused
-        
+
         case 2: return .waitingToPlay
-        
+
         case 3: return .playing
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FfiTimeControlStatus, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .paused:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .waitingToPlay:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .playing:
             writeInt(&buf, Int32(3))
-        
+
         }
     }
 }
@@ -4659,6 +7415,164 @@ public func FfiConverterTypeFfiTimeControlStatus_lower(_ value: FfiTimeControlSt
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiTotalBytesSource: Equatable, Hashable {
+
+    case committedLen
+    case contentLength
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiTotalBytesSource: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTotalBytesSource: FfiConverterRustBuffer {
+    typealias SwiftType = FfiTotalBytesSource
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTotalBytesSource {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .committedLen
+
+        case 2: return .contentLength
+
+        case 3: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiTotalBytesSource, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .committedLen:
+            writeInt(&buf, Int32(1))
+
+
+        case .contentLength:
+            writeInt(&buf, Int32(2))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(3))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTotalBytesSource_lift(_ buf: RustBuffer) throws -> FfiTotalBytesSource {
+    return try FfiConverterTypeFfiTotalBytesSource.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTotalBytesSource_lower(_ value: FfiTotalBytesSource) -> RustBuffer {
+    return FfiConverterTypeFfiTotalBytesSource.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiTrackFailureKind: Equatable, Hashable {
+
+    case decode
+    case recreateFailed(offset: UInt64
+    )
+    case sourceCancelled
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiTrackFailureKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTrackFailureKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiTrackFailureKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTrackFailureKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .decode
+
+        case 2: return .recreateFailed(offset: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 3: return .sourceCancelled
+
+        case 4: return .unknown
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiTrackFailureKind, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .decode:
+            writeInt(&buf, Int32(1))
+
+
+        case let .recreateFailed(offset):
+            writeInt(&buf, Int32(2))
+            FfiConverterUInt64.write(offset, into: &buf)
+
+
+        case .sourceCancelled:
+            writeInt(&buf, Int32(3))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(4))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTrackFailureKind_lift(_ buf: RustBuffer) throws -> FfiTrackFailureKind {
+    return try FfiConverterTypeFfiTrackFailureKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTrackFailureKind_lower(_ value: FfiTrackFailureKind) -> RustBuffer {
+    return FfiConverterTypeFfiTrackFailureKind.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Track lifecycle state for a queued item.
  *
@@ -4667,7 +7581,7 @@ public func FfiConverterTypeFfiTimeControlStatus_lower(_ value: FfiTimeControlSt
  */
 
 public enum FfiTrackStatus: Equatable, Hashable {
-    
+
     /**
      * The item is known to the queue but loading has not started.
      */
@@ -4717,58 +7631,58 @@ public struct FfiConverterTypeFfiTrackStatus: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTrackStatus {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .pending
-        
+
         case 2: return .loading
-        
+
         case 3: return .slow
-        
+
         case 4: return .loaded
-        
+
         case 5: return .failed(reason: try FfiConverterString.read(from: &buf)
         )
-        
+
         case 6: return .consumed
-        
+
         case 7: return .cancelled
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FfiTrackStatus, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .pending:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .loading:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .slow:
             writeInt(&buf, Int32(3))
-        
-        
+
+
         case .loaded:
             writeInt(&buf, Int32(4))
-        
-        
+
+
         case let .failed(reason):
             writeInt(&buf, Int32(5))
             FfiConverterString.write(reason, into: &buf)
-            
-        
+
+
         case .consumed:
             writeInt(&buf, Int32(6))
-        
-        
+
+
         case .cancelled:
             writeInt(&buf, Int32(7))
-        
+
         }
     }
 }
@@ -4802,7 +7716,7 @@ public func FfiConverterTypeFfiTrackStatus_lower(_ value: FfiTrackStatus) -> Rus
  */
 
 public enum FfiTransition: Equatable, Hashable {
-    
+
     case none
     case crossfade
     case crossfadeWith(seconds: Float
@@ -4827,34 +7741,34 @@ public struct FfiConverterTypeFfiTransition: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTransition {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .none
-        
+
         case 2: return .crossfade
-        
+
         case 3: return .crossfadeWith(seconds: try FfiConverterFloat.read(from: &buf)
         )
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FfiTransition, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .none:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .crossfade:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case let .crossfadeWith(seconds):
             writeInt(&buf, Int32(3))
             FfiConverterFloat.write(seconds, into: &buf)
-            
+
         }
     }
 }
@@ -4878,6 +7792,78 @@ public func FfiConverterTypeFfiTransition_lower(_ value: FfiTransition) -> RustB
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt16: FfiConverterRustBuffer {
+    typealias SwiftType = UInt16?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt16.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt16.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
     typealias SwiftType = Int64?
 
@@ -4894,6 +7880,30 @@ fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionFloat: FfiConverterRustBuffer {
+    typealias SwiftType = Float?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterFloat.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterFloat.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -4974,30 +7984,6 @@ fileprivate struct FfiConverterOptionTypeAudioPlayerItem: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionTypeFfiAssetLayout: FfiConverterRustBuffer {
-    typealias SwiftType = FfiAssetLayout?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterTypeFfiAssetLayout.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterTypeFfiAssetLayout.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterOptionTypeFfiAbrMode: FfiConverterRustBuffer {
     typealias SwiftType = FfiAbrMode?
 
@@ -5014,6 +8000,54 @@ fileprivate struct FfiConverterOptionTypeFfiAbrMode: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeFfiAbrMode.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiAudioCodecKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAudioCodecKind?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiAudioCodecKind.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiAudioCodecKind.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiContainerKind: FfiConverterRustBuffer {
+    typealias SwiftType = FfiContainerKind?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiContainerKind.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiContainerKind.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -5343,7 +8377,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_uuid_i64() != 18592) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_ffiassetlayout_rel_path() != 60234) {
+    if (uniffi_kithara_ffi_checksum_method_ffiassetlayout_root() != 48334) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_ffiassetlayout_path() != 15364) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 2649) {
@@ -5359,6 +8396,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_seekcallback_on_complete() != 52837) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_ffiassetlayoutregistry_register() != 40512) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_fficipher_decrypt() != 15370) {
@@ -5478,10 +8518,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 40748) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 1980) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 30855) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 34400) {
         return InitializationResult.apiChecksumMismatch
     }
 

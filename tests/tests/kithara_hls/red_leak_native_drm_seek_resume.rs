@@ -3,7 +3,7 @@
 use std::{error::Error as StdError, num::NonZeroUsize};
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmControl, PcmRead, PcmSession},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -58,7 +58,7 @@ async fn run_drm_seek_resume_cycle(
     iter_idx: usize,
 ) {
     let url = server.asset("drm/master.m3u8");
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();

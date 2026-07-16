@@ -4,13 +4,14 @@ use kithara::{
     self,
     assets::{
         AcquisitionResult, AssetResourceState, AssetStoreBuilder, BytePool, ChunkSink,
-        DiskAssetStore, EvictConfig, ProcessCtx, ReadSide, ResourceProcessor, StorageBackend,
-        WriteSide,
+        DiskAssetStore, ProcessCtx, ReadSide, ResourceProcessor, StorageBackend, WriteSide,
     },
     platform::{CancelToken, sync::Arc, time::Duration},
 };
 use kithara_integration_tests::{asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt};
 use tempfile::tempdir;
+
+use super::support::{LiteralLayout, literal_layouts, resource, source};
 
 #[derive(Debug)]
 struct XorProcessor {
@@ -80,11 +81,13 @@ fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
+        .layouts(literal_layouts())
         .build()
-        .scope("disk-asset");
+        .scope::<LiteralLayout>(&source("disk-asset"))
+        .expect("scope");
 
-    let key_committed = scope.key("segments/0001.bin");
-    let key_failed = scope.key("segments/0002.bin");
+    let key_committed = scope.key(&resource("segments/0001.bin")).unwrap();
+    let key_failed = scope.key(&resource("segments/0002.bin")).unwrap();
     let committed_path = dir.path().join("disk-asset").join("segments/0001.bin");
 
     assert_eq!(
@@ -132,11 +135,13 @@ fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
             root: (dir.path()).into(),
         })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
+        .layouts(literal_layouts())
         .build()
-        .scope("disk-asset");
+        .scope::<LiteralLayout>(&source("disk-asset"))
+        .expect("scope");
 
-    let key_active = scope.key("segments/active.bin");
-    let key_other = scope.key("segments/other.bin");
+    let key_active = scope.key(&resource("segments/active.bin")).unwrap();
+    let key_other = scope.key(&resource("segments/other.bin")).unwrap();
 
     let active = pending(scope.store().acquire_resource(&key_active, None).unwrap());
     active.write_at(0, b"abcd").unwrap();
@@ -163,10 +168,12 @@ fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
             root: (dir.path()).into(),
         })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
+        .layouts(literal_layouts())
         .build()
-        .scope("disk-asset");
+        .scope::<LiteralLayout>(&source("disk-asset"))
+        .expect("scope");
 
-    let key = scope.key("segments/ghost.bin");
+    let key = scope.key(&resource("segments/ghost.bin")).unwrap();
     let handle = pending(scope.store().acquire_resource(&key, None).unwrap());
     handle.write_at(0, b"abcd").unwrap();
     assert_eq!(
@@ -191,10 +198,12 @@ fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
             root: (dir.path()).into(),
         })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
+        .layouts(literal_layouts())
         .build()
-        .scope("disk-asset");
+        .scope::<LiteralLayout>(&source("disk-asset"))
+        .expect("scope");
 
-    let key = scope.key("segments/missing.bin");
+    let key = scope.key(&resource("segments/missing.bin")).unwrap();
     let path = dir.path().join("disk-asset").join("segments/missing.bin");
 
     assert_eq!(
@@ -229,14 +238,16 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
     let scope = AssetStoreBuilder::default()
         .cache_capacity(NonZeroUsize::new(3).unwrap())
         .backend(StorageBackend::Memory)
+        .layouts(literal_layouts())
         .build()
-        .scope("mem-asset");
+        .scope::<LiteralLayout>(&source("mem-asset"))
+        .expect("scope");
 
-    let key0 = scope.key("segments/0000.bin");
-    let key1 = scope.key("segments/0001.bin");
-    let key2 = scope.key("segments/0002.bin");
-    let key3 = scope.key("segments/0003.bin");
-    let key_failed = scope.key("segments/failed.bin");
+    let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
+    let key1 = scope.key(&resource("segments/0001.bin")).unwrap();
+    let key2 = scope.key(&resource("segments/0002.bin")).unwrap();
+    let key3 = scope.key(&resource("segments/0003.bin")).unwrap();
+    let key_failed = scope.key(&resource("segments/failed.bin")).unwrap();
 
     assert_eq!(
         scope.store().resource_state(&key0).unwrap(),
@@ -262,7 +273,7 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
         scope.store().resource_state(&key_failed).unwrap(),
         AssetResourceState::Failed("boom".to_string())
     );
-    scope.store().remove_resource(&key_failed);
+    scope.store().remove_resource(&key_failed).unwrap();
     assert_eq!(
         scope.store().resource_state(&key_failed).unwrap(),
         AssetResourceState::Missing
@@ -296,19 +307,17 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let dir = tempdir().unwrap();
-    let evict = EvictConfig {
-        max_assets: Some(2),
-        max_bytes: None,
-    };
 
     let scope_a = AssetStoreBuilder::default()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
-        .evict_config(evict.clone())
+        .max_assets(2)
+        .layouts(literal_layouts())
         .build()
-        .scope("asset-a");
-    let key_a = scope_a.key("segments/0001.bin");
+        .scope::<LiteralLayout>(&source("asset-a"))
+        .expect("scope");
+    let key_a = scope_a.key(&resource("segments/0001.bin")).unwrap();
     let proc_a = xor_processor(0x55);
 
     assert_eq!(
@@ -350,10 +359,12 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
-        .evict_config(evict.clone())
+        .max_assets(2)
+        .layouts(literal_layouts())
         .build()
-        .scope("asset-b");
-    let key_b = scope_b.key("segments/0001.bin");
+        .scope::<LiteralLayout>(&source("asset-b"))
+        .expect("scope");
+    let key_b = scope_b.key(&resource("segments/0001.bin")).unwrap();
     let res_b = pending(
         scope_b
             .store()
@@ -380,10 +391,12 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
-        .evict_config(evict.clone())
+        .max_assets(2)
+        .layouts(literal_layouts())
         .build()
-        .scope("asset-c");
-    let key_c = scope_c.key("segments/0001.bin");
+        .scope::<LiteralLayout>(&source("asset-c"))
+        .expect("scope");
+    let key_c = scope_c.key(&resource("segments/0001.bin")).unwrap();
     let res_c = pending(
         scope_c
             .store()
@@ -398,9 +411,11 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
-        .evict_config(evict.clone())
+        .max_assets(2)
+        .layouts(literal_layouts())
         .build()
-        .scope("asset-a");
+        .scope::<LiteralLayout>(&source("asset-a"))
+        .expect("scope");
     assert_eq!(
         scope_a_probe.store().resource_state(&key_a).unwrap(),
         AssetResourceState::Missing

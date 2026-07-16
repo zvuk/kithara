@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig},
     events::EventBus,
     hls::{Hls, HlsConfig},
@@ -122,7 +121,7 @@ async fn abr_auto_switch_during_playback(
     });
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))

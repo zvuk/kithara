@@ -255,6 +255,7 @@ impl crate::api::Equalizer for PlayerImpl {
 
 #[cfg(test)]
 mod tests {
+    use kithara_assets::AssetStoreBuilder;
     use kithara_audio::{StretchControls, generate_log_spaced_bands};
     use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::GaplessMode;
@@ -285,6 +286,7 @@ mod tests {
         );
         let mut config = crate::resource::ResourceConfig::new(
             "https://example.com/song.mp3",
+            AssetStoreBuilder::default().build(),
             BytePool::default(),
             PcmPool::default(),
         )
@@ -305,6 +307,7 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         let mut rc = crate::resource::ResourceConfig::new(
             "https://example.com/song.mp3",
+            AssetStoreBuilder::default().build(),
             BytePool::default(),
             PcmPool::default(),
         )
@@ -334,6 +337,7 @@ mod tests {
         );
         let mut rc = crate::resource::ResourceConfig::new(
             "https://example.com/song.mp3",
+            AssetStoreBuilder::default().build(),
             BytePool::default(),
             PcmPool::default(),
         )

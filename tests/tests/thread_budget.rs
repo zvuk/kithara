@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend},
     audio::{Audio, AudioConfig, AudioWorkerHandle},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -78,7 +78,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let before = active_named_thread_count();
 
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -123,18 +123,19 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let cancel = CancelToken::never();
     let shared_worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let shared_hub = FlushHub::new(cancel.child(), FlushPolicy::default());
-    let shared_store = || {
-        let mut opts = StoreOptions::new(temp_dir.path());
-        opts.flush_hub = Some(shared_hub.clone());
-        opts
-    };
 
-    // Baseline gate: measure `before` only once the shared worker's eager
-    // increment and any prior teardown have quiesced (state-driven).
+    // Baseline gate: include the eager shared audio worker, but measure before
+    // the store registers with the flush hub and starts its worker.
     let before = wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
+    let shared_store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .flush_hub(shared_hub.clone())
+        .build();
 
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
-        .store(shared_store())
+        .store(shared_store.clone())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -146,7 +147,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let a1 = Audio::<Stream<Hls>>::new(config).await;
 
     let hls_config2 = HlsConfig::for_url(server.asset("hls/master.m3u8"))
-        .store(shared_store())
+        .store(shared_store.clone())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(1))
         .build();
@@ -158,7 +159,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let a2 = Audio::<Stream<Hls>>::new(config).await;
 
     let drm_config = HlsConfig::for_url(server.asset("drm/master.m3u8"))
-        .store(shared_store())
+        .store(shared_store)
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -182,10 +183,9 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         a.preload().expect("preload must succeed");
         audios.push(Box::new(a));
     }
-    // Spawn side: the flush-hub worker starts lazily on the first store
-    // registration (during `new()`/`preload()`), and its named-thread increment
-    // is eager/synchronous at the spawn call site — so once the preloads return
-    // the count already reflects it. No settle needed.
+    // Spawn side: the flush-hub worker starts on the first store registration
+    // during `AssetStoreBuilder::build()`, and its named-thread increment is
+    // eager/synchronous at the spawn call site. No settle is needed.
     let after = active_named_thread_count();
     let delta = after.saturating_sub(before);
     info!(

@@ -9,7 +9,7 @@ use kithara::platform::time;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::{DecoderBackend, PcmChunk},
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
@@ -186,7 +186,7 @@ async fn build_live_audio(
     cache_capacity: usize,
 ) -> Audio<Stream<Hls>> {
     let url = server.asset(path);
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"))
         .build();
@@ -319,7 +319,7 @@ async fn live_real_drm_playback_smoke() {
     let server = TestServerHelper::new().await;
     let url = server.asset("drm/master.m3u8");
     info!(%url, "starting real DRM playback smoke");
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
@@ -410,7 +410,7 @@ async fn live_ephemeral_revisit_sequence_regression(
 
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
         .build();
@@ -741,7 +741,7 @@ async fn live_real_stream_random_seek_prefix_regression(
 async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: &str) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
@@ -840,11 +840,14 @@ async fn live_stress_real_stream_seek_read_cache(
     {
         let server = TestServerHelper::new().await;
         let url = server.asset(path);
-        let mut store = StoreOptions::new(temp_dir.path());
-        if ephemeral {
-            store.backend = StorageBackend::Memory;
-            store.cache_capacity = Some(NonZeroUsize::new(24).expect("nonzero"));
-        }
+        let store = if ephemeral {
+            AssetStoreBuilder::default()
+                .backend(StorageBackend::Memory)
+                .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
+                .build()
+        } else {
+            kithara_integration_tests::disk_asset_store(temp_dir.path())
+        };
 
         let hls_config = HlsConfig::for_url(url)
             .store(store)
@@ -1160,7 +1163,7 @@ async fn live_stress_real_stream_seek_read_cache(
 async fn live_ephemeral_small_cache_playback(#[case] path: &str, #[case] label: &str) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
@@ -1257,7 +1260,7 @@ async fn live_ephemeral_small_cache_seek_stress(
     {
         let server = TestServerHelper::new().await;
         let url = server.asset(path);
-        let store = StoreOptions::builder()
+        let store = AssetStoreBuilder::default()
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .build();

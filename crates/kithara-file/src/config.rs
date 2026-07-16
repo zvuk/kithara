@@ -1,10 +1,10 @@
 use std::{fmt, path::PathBuf};
 
 use bon::Builder;
-use kithara_assets::{AssetStore, BytePool, StoreOptions};
+use kithara_assets::{AssetStore, BytePool};
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
 use url::Url;
 
@@ -26,11 +26,6 @@ pub enum FileSrc {
 pub struct FileConfig {
     /// File source (remote URL or local path).
     pub src: FileSrc,
-    /// Externally-owned shared `AssetStore`. When `Some`, the file
-    /// session reuses it and skips building a private store from
-    /// [`Self::store`]. Lets several `Resource`s pointing at the same
-    /// URL share one cached resource and availability surface.
-    pub asset_store: Option<Arc<AssetStore>>,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,
@@ -42,18 +37,14 @@ pub struct FileConfig {
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: Option<u64>,
-    /// Optional name for cache disambiguation.
-    pub name: Option<String>,
+    /// Explicit source-extension hint used before the URL-path extension.
+    pub extension: Option<String>,
+    /// Optional cache discriminator.
+    pub discriminator: Option<String>,
     /// Shared byte pool for cache and fallback network buffers.
     pub pool: Option<BytePool>,
-    /// Storage configuration.
-    ///
-    /// Honoured only when [`Self::asset_store`] is `None` (standalone
-    /// mode). When the caller injects a shared `AssetStore` this field
-    /// is ignored - the two are mutually exclusive modes, not a
-    /// fallback chain.
-    #[builder(default)]
-    pub store: StoreOptions,
+    /// Shared asset store used by local and remote sources.
+    pub store: AssetStore,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
@@ -67,27 +58,20 @@ impl fmt::Debug for FileConfig {
             .field("cancel", &self.cancel)
             .field("headers", &self.headers)
             .field("look_ahead_bytes", &self.look_ahead_bytes)
-            .field("name", &self.name)
+            .field("extension", &self.extension)
+            .field("discriminator", &self.discriminator)
             .field("pool", &self.pool)
             .field("store", &self.store)
-            .field("asset_store", &self.asset_store.is_some())
             .field("event_channel_capacity", &self.event_channel_capacity)
             .finish_non_exhaustive()
-    }
-}
-
-impl Default for FileConfig {
-    fn default() -> Self {
-        let url = Url::parse("http://localhost/audio.mp3").expect("valid default URL");
-        Self::for_src(FileSrc::Remote(url)).build()
     }
 }
 
 impl FileConfig {
     /// Create new file config with source.
     #[must_use]
-    pub fn new(src: FileSrc) -> Self {
-        Self::for_src(src).build()
+    pub fn new(src: FileSrc, store: AssetStore) -> Self {
+        Self::for_src(src).store(store).build()
     }
 
     /// Chainable counterpart to [`FileConfig::new`].
@@ -100,6 +84,7 @@ impl FileConfig {
 mod tests {
     use std::path::Path;
 
+    use kithara_assets::{AssetStoreBuilder, StorageBackend};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -108,11 +93,17 @@ mod tests {
         FileSrc::Remote(Url::parse("http://example.com/audio.mp3").unwrap())
     }
 
+    fn test_store() -> AssetStore {
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build()
+    }
+
     #[kithara::test]
     #[case(test_src())]
     #[case(FileSrc::Local(PathBuf::from("/tmp/song.mp3")))]
     fn test_file_config_new_preserves_source(#[case] src: FileSrc) {
-        let config = FileConfig::new(src.clone());
+        let config = FileConfig::new(src.clone(), test_store());
 
         assert_eq!(config.src, src);
         assert!(config.bus.is_none());
@@ -124,8 +115,7 @@ mod tests {
 
     #[kithara::test]
     fn test_with_store() {
-        let store = StoreOptions::default();
-        let config = FileConfig::for_src(test_src()).store(store).build();
+        let config = FileConfig::for_src(test_src()).store(test_store()).build();
 
         assert!(config.bus.is_none());
     }
@@ -167,18 +157,17 @@ mod tests {
         #[case] apply: fn(FileConfig) -> FileConfig,
         #[case] check: fn(&FileConfig) -> bool,
     ) {
-        let config = apply(FileConfig::new(test_src()));
+        let config = apply(FileConfig::new(test_src(), test_store()));
         assert!(check(&config));
     }
 
     #[kithara::test]
     fn test_builder_chain() {
-        let store = StoreOptions::default();
         let cancel = CancelToken::never();
         let bus = EventBus::new(32);
 
         let config = FileConfig::for_src(test_src())
-            .store(store)
+            .store(test_store())
             .cancel(cancel.clone())
             .events(bus)
             .build();
@@ -190,16 +179,17 @@ mod tests {
     #[kithara::test]
     #[case("stream-a")]
     #[case("stream-b")]
-    fn test_with_name_sets_name(#[case] name: &str) {
+    fn test_with_discriminator_sets_discriminator(#[case] name: &str) {
         let config = FileConfig::for_src(test_src())
-            .name(name.to_string())
+            .store(test_store())
+            .discriminator(name.to_string())
             .build();
-        assert_eq!(config.name.as_deref(), Some(name));
+        assert_eq!(config.discriminator.as_deref(), Some(name));
     }
 
     #[kithara::test]
     fn test_debug_impl() {
-        let config = FileConfig::new(test_src());
+        let config = FileConfig::new(test_src(), test_store());
         let debug_str = format!("{:?}", config);
 
         assert!(debug_str.contains("FileConfig"));
@@ -208,7 +198,10 @@ mod tests {
     #[kithara::test]
     fn test_clone() {
         let bus = EventBus::new(32);
-        let config = FileConfig::for_src(test_src()).events(bus).build();
+        let config = FileConfig::for_src(test_src())
+            .store(test_store())
+            .events(bus)
+            .build();
 
         let cloned = config.clone();
 

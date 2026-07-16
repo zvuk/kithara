@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
@@ -48,7 +47,7 @@ async fn create_hls_audio(
     let cancel = CancelToken::never();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(cache_dir))
+        .store(kithara_integration_tests::disk_asset_store(cache_dir))
         .cancel(cancel)
         .initial_abr_mode(abr)
         .build();

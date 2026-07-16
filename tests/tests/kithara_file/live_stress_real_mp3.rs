@@ -1,7 +1,7 @@
 use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::PcmChunk,
     events::{DownloaderEvent, Event, FileEvent},
@@ -113,12 +113,15 @@ fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) -> Option<PcmChunk> 
 async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("track.mp3");
-    let mut store = StoreOptions::new(temp_dir.path());
-    if ephemeral {
-        store.backend = StorageBackend::Memory;
-        store.cache_capacity = Some(NonZeroUsize::new(8).expect("nonzero"));
-        store.max_assets = Some(10);
-    }
+    let store = if ephemeral {
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
+            .max_assets(10)
+            .build()
+    } else {
+        kithara_integration_tests::disk_asset_store(temp_dir.path())
+    };
 
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     let mut audio = Audio::<Stream<File>>::new(

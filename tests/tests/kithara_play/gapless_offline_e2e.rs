@@ -8,7 +8,6 @@ use std::num::{NonZeroU32, NonZeroUsize};
 ))]
 use kithara::decode::DecoderBackend;
 use kithara::{
-    assets::StoreOptions,
     audio::{ChunkOutcome, PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome},
     bufpool::PcmPool,
     decode::{
@@ -849,7 +848,7 @@ async fn create_resource_with_encoding(
         .expect("create gapless e2e HLS fixture");
 
     let item_id = Arc::<str>::from(item_id);
-    let store = StoreOptions::new(cache_dir);
+    let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)
@@ -907,7 +906,7 @@ async fn create_apple_fused_resource(
         .expect("create Apple fused gapless HLS fixture");
 
     let item_id = Arc::<str>::from(item_id);
-    let store = StoreOptions::new(cache_dir);
+    let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)

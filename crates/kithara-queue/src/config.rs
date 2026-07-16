@@ -1,6 +1,7 @@
 use std::{fmt, num::NonZeroUsize};
 
 use bon::Builder;
+use kithara_assets::AssetStore;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_play::PlayerImpl;
 
@@ -25,13 +26,9 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 /// [`bus`](kithara_play::ResourceConfig::bus)) rather than re-taking
 /// their own construction parameters.
 ///
-/// Network and storage options are owned by
-/// [`ResourceConfig`](kithara_play::ResourceConfig). Callers that need
-/// non-default net/store behavior (custom timeouts, insecure certs,
-/// alternative cache dir) build a configured [`ResourceConfig`] and
-/// pass it via [`TrackSource::Config`](crate::TrackSource::Config).
-/// [`TrackSource::Uri`](crate::TrackSource::Uri) uses the
-/// [`ResourceConfig::new`](kithara_play::ResourceConfig::new) defaults.
+/// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
+/// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
+/// retains its own store.
 #[derive(Clone, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -40,6 +37,10 @@ pub struct QueueConfig {
     /// Max concurrent background prefetch loads. Default: 3.
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
+
+    /// Shared store used for bare URI track sources.
+    #[field(with, option_set_some)]
+    pub store: Option<AssetStore>,
 
     /// Master cancel for the queue. `Some` threads the app master so the
     /// queue subtree cascades from one app-wide owner; `None` falls back
@@ -98,6 +99,7 @@ mod tests {
         let cfg = QueueConfig::default();
         assert_eq!(cfg.max_concurrent_loads.get(), 3);
         assert!(cfg.player.is_none());
+        assert!(cfg.store.is_none());
         assert!((cfg.prefetch_duration - 3.5).abs() < f32::EPSILON);
     }
 }

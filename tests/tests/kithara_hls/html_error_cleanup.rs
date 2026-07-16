@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration},
@@ -113,7 +112,7 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
 
     let cancel = CancelToken::never();
     let config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel.clone())
         .build();
 
@@ -161,7 +160,7 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     let cancel = CancelToken::never();
     let config = HlsConfig::for_url(master.url())
         .events(bus.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel.clone())
         .build();
 

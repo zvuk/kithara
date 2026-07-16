@@ -1,10 +1,12 @@
 use kithara_platform::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::config::FfiPlayerConfig;
 use crate::{
     Inner,
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
-    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerConfig, FfiPlayerSnapshot},
+    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot},
 };
 
 /// FFI-facing audio player. A thin facade over the platform-selected
@@ -23,6 +25,7 @@ pub struct AudioPlayer {
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 impl AudioPlayer {
     #[must_use]
+    #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
         Arc::new(Self {

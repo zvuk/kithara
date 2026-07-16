@@ -67,32 +67,6 @@ pub fn duration_to_seconds(d: Duration) -> f64 {
     d.as_secs_f64()
 }
 
-/// FFI-friendly player configuration.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct FfiPlayerConfig {
-    /// DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
-    /// no DRM is needed.
-    pub key_options: FfiKeyOptions,
-    /// Storage options shared by all items (cache directory, etc.).
-    pub store: crate::config::StoreOptions,
-    /// Number of EQ bands (log-spaced). Default: 10.
-    pub eq_band_count: u32,
-}
-
-/// Default number of log-spaced EQ bands.
-pub const DEFAULT_EQ_BAND_COUNT: u32 = 10;
-
-impl Default for FfiPlayerConfig {
-    fn default() -> Self {
-        Self {
-            eq_band_count: DEFAULT_EQ_BAND_COUNT,
-            key_options: FfiKeyOptions::default(),
-            store: crate::config::StoreOptions::default(),
-        }
-    }
-}
-
 /// FFI-friendly mirror of [`kithara::hls::KeyOptions`].
 ///
 /// Holds domain-scoped DRM rules — providers with different key

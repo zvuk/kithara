@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 
 use kithara::{
-    assets::AssetStore,
     audio::analysis::BeatAnalysisConfig,
     bufpool::PcmPool,
+    decode::DecodeError,
     events::{Envelope, Event, EventReceiver, TrackId},
     prelude::{PlaybackResamplerBackend, ResourceConfig},
 };
@@ -21,7 +21,7 @@ use crate::{
     config::AppConfig,
     sources::build_resource_config,
     state::{UiState, apply_event},
-    wave_cache::{AnalysisKey, TrackAnalysisCache, source_key},
+    wave_cache::{AnalysisTarget, TrackAnalysisCache},
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
 
@@ -42,12 +42,8 @@ pub(crate) async fn listen(
     cancel: CancelToken,
     mut rx: EventReceiver,
 ) {
-    let mut driver = AnalysisController::new(
-        &cancel,
-        Some(Arc::clone(&config.asset_store)),
-        &config.beat_analysis,
-        config.pcm_pool.clone(),
-    );
+    let mut driver =
+        AnalysisController::new(&cancel, &config.beat_analysis, config.pcm_pool.clone());
 
     // Analyse whatever is already loaded; later tracks arrive as events.
     driver.on_tracks_changed(&queue, &state, &config);
@@ -84,8 +80,8 @@ pub(crate) async fn listen(
 /// Results land in the two-tier [`TrackAnalysisCache`];
 pub(crate) struct AnalysisController {
     current: Option<Run>,
-    /// Content key of the analysis currently published to the UI.
-    displayed: Option<AnalysisKey>,
+    /// Store-qualified analysis target currently published to the UI.
+    displayed: Option<AnalysisTarget>,
     cache: TrackAnalysisCache,
     runner: TrackAnalysisRunner,
     /// Tracks waiting for background analysis, current track first.
@@ -95,25 +91,24 @@ pub(crate) struct AnalysisController {
 /// An in-flight analysis: the track it is for (stale-guard), its content cache
 /// key (`None` for an unkeyable source), and its result channel.
 struct Run {
-    key: Option<AnalysisKey>,
+    target: Option<AnalysisTarget>,
     rx: watch::Receiver<Option<TrackAnalysis>>,
     track_id: TrackId,
 }
 
 /// A run that closed with a usable analysis result.
 struct CompletedRun {
-    key: Option<AnalysisKey>,
+    target: Option<AnalysisTarget>,
     analysis: TrackAnalysis,
     track_id: TrackId,
 }
 
 impl AnalysisController {
     /// `cancel` must be a child of the app master so analysis stops on app
-    /// shutdown; `store` is the shared file store whose per-track asset
-    /// scopes hold the durable analysis blobs.
+    /// shutdown. Each source config supplies the store used for its durable
+    /// analysis resource.
     pub(crate) fn new(
         cancel: &CancelToken,
-        store: Option<Arc<AssetStore>>,
         beat_config: &AppBeatAnalysisConfig,
         pcm_pool: PcmPool,
     ) -> Self {
@@ -124,7 +119,7 @@ impl AnalysisController {
                 beat_config.clone(),
                 pcm_pool,
             ),
-            cache: TrackAnalysisCache::new(store, analysis_fingerprint(beat_config)),
+            cache: TrackAnalysisCache::new(analysis_fingerprint(beat_config)),
             current: None,
             displayed: None,
             pending: VecDeque::new(),
@@ -132,8 +127,8 @@ impl AnalysisController {
     }
 
     fn cache_completed(&mut self, completed: &CompletedRun) {
-        if let Some(key) = &completed.key {
-            self.cache.put(key.clone(), completed.analysis.clone());
+        if let Some(target) = &completed.target {
+            self.cache.put(target.clone(), completed.analysis.clone());
         }
     }
 
@@ -146,8 +141,9 @@ impl AnalysisController {
 
         self.cache_completed(&completed);
 
+        let displayed = completed.target;
         if publish_if_current(state, completed.track_id, completed.analysis) {
-            self.displayed = completed.key;
+            self.displayed = displayed;
         }
     }
 
@@ -249,27 +245,32 @@ impl AnalysisController {
                 continue;
             };
 
-            let key = source_key(&source);
+            let Some(cfg) = resource_config_from_source(source, config) else {
+                continue;
+            };
+            let target = match AnalysisTarget::for_config(&cfg) {
+                Ok(target) => Some(target),
+                Err(error) => {
+                    self.reject_target(state, track_id, &error);
+                    continue;
+                }
+            };
             let is_current = current_track_id(state) == Some(track_id);
 
-            match plan_analysis(key.as_ref(), self.displayed.as_ref(), &mut self.cache) {
+            match plan_analysis(target.as_ref(), self.displayed.as_ref(), &mut self.cache) {
                 Plan::Skip => {}
                 Plan::Serve(analysis) => {
                     if is_current {
                         state.lock().set_analysis(Some(analysis));
-                        self.displayed = key;
+                        self.displayed = target;
                     }
                 }
                 Plan::Decode => {
                     // An unkeyable source cannot be cached, so a background
                     // decode would be thrown away; decode it only for display.
-                    if !is_current && key.is_none() {
+                    if !is_current && target.is_none() {
                         continue;
                     }
-
-                    let Some(cfg) = resource_config_from_source(source, config) else {
-                        continue;
-                    };
 
                     if is_current {
                         state.lock().set_analysis(None);
@@ -277,10 +278,34 @@ impl AnalysisController {
                     }
 
                     let rx = self.runner.analyze(cfg);
-                    self.current = Some(Run { key, rx, track_id });
+                    self.current = Some(Run {
+                        target,
+                        rx,
+                        track_id,
+                    });
                     return;
                 }
             }
+        }
+    }
+
+    fn reject_target(&mut self, state: &Mutex<UiState>, track_id: TrackId, error: &DecodeError) {
+        tracing::warn!(
+            %error,
+            ?track_id,
+            "analysis layout rejected the derived resource key"
+        );
+        let cleared = {
+            let mut state = state.lock();
+            if current_track_id_in(&state) != Some(track_id) {
+                false
+            } else {
+                state.set_analysis(None);
+                true
+            }
+        };
+        if cleared {
+            self.displayed = None;
         }
     }
 
@@ -291,7 +316,7 @@ impl AnalysisController {
         Some(CompletedRun {
             analysis,
             track_id: run.track_id,
-            key: run.key,
+            target: run.target,
         })
     }
 }
@@ -317,20 +342,20 @@ enum Plan {
 /// is already shown or cached. An in-flight run needs no guard here: `pump`
 /// returns before planning while one is active.
 fn plan_analysis(
-    key: Option<&AnalysisKey>,
-    displayed: Option<&AnalysisKey>,
+    target: Option<&AnalysisTarget>,
+    displayed: Option<&AnalysisTarget>,
     cache: &mut TrackAnalysisCache,
 ) -> Plan {
-    let Some(key) = key else {
+    let Some(target) = target else {
         // No stable key (the reserved non-exhaustive source seam): cannot
         return Plan::Decode;
     };
 
-    if displayed == Some(key) {
+    if displayed.is_some_and(|displayed| displayed.is_same(target)) {
         return Plan::Skip;
     }
 
-    cache.get(key).map_or(Plan::Decode, Plan::Serve)
+    cache.get(target).map_or(Plan::Decode, Plan::Serve)
 }
 
 /// Library tracks in background-analysis order: the current track first,
@@ -384,19 +409,28 @@ fn resource_config_from_source(
 #[cfg(test)]
 mod tests {
     use ::kithara::{
+        assets::{
+            AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStoreBuilder,
+            StorageBackend,
+        },
         audio::{Waveform, analysis::BeatAnalysisConfig},
-        bufpool::PcmPool,
+        bufpool::{BytePool, PcmPool},
         events::TrackId,
-        prelude::PlaybackResamplerBackend,
+        file::File,
+        prelude::{PlaybackResamplerBackend, ResourceConfig},
     };
-    use kithara_platform::{CancelToken, sync::Mutex, tokio::sync::watch};
+    use kithara_platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        tokio::sync::watch,
+    };
     use kithara_queue::{Queue, QueueConfig};
     use kithara_test_utils::kithara;
 
     use super::{AnalysisController, Plan, Run, pending_order, plan_analysis};
     use crate::{
         state::UiState,
-        wave_cache::{AnalysisKey, TrackAnalysisCache},
+        wave_cache::{AnalysisTarget, TrackAnalysisCache},
         waveform::TrackAnalysis,
     };
 
@@ -411,7 +445,21 @@ mod tests {
     }
 
     fn cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new(None, "test".to_string())
+        TrackAnalysisCache::new("test".to_string())
+    }
+
+    fn target(discriminator: &str) -> AnalysisTarget {
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build();
+        let config = ResourceConfig::for_src("https://analysis.test.invalid/track.mp3")
+            .expect("valid test source")
+            .store(store)
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .discriminator(discriminator.to_string())
+            .build();
+        AnalysisTarget::for_config(&config).expect("test source has an analysis target")
     }
 
     fn state_with_current(ids: &[TrackId], current: usize) -> Mutex<UiState> {
@@ -427,13 +475,12 @@ mod tests {
 
     fn controller_with_run(
         track_id: TrackId,
-        key: AnalysisKey,
+        target: AnalysisTarget,
         value: Option<TrackAnalysis>,
     ) -> (AnalysisController, watch::Sender<Option<TrackAnalysis>>) {
         let cancel = CancelToken::root();
         let mut controller = AnalysisController::new(
             &cancel,
-            None,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
             PcmPool::default(),
         );
@@ -441,25 +488,26 @@ mod tests {
         controller.current = Some(Run {
             track_id,
             rx,
-            key: Some(key),
+            target: Some(target),
         });
         (controller, tx)
     }
 
     #[test]
     fn plan_skips_shown_track() {
-        let a = AnalysisKey::new("root_a");
+        let a = target("root_a");
+        let displayed = a.clone();
         let mut cache = cache();
         assert!(matches!(
-            plan_analysis(Some(&a), Some(&a), &mut cache),
+            plan_analysis(Some(&a), Some(&displayed), &mut cache),
             Plan::Skip
         ));
     }
 
     #[test]
     fn plan_decodes_a_new_or_unkeyable_track() {
-        let a = AnalysisKey::new("root_a");
-        let b = AnalysisKey::new("root_b");
+        let a = target("root_a");
+        let b = target("root_b");
         let mut cache = cache();
         // A different shown track does not block a fresh decode.
         assert!(matches!(
@@ -475,7 +523,7 @@ mod tests {
 
     #[test]
     fn plan_serves_a_cached_track_without_decoding() {
-        let a = AnalysisKey::new("root_a");
+        let a = target("root_a");
         let mut cache = cache();
         cache.put(a.clone(), analysis());
         assert!(matches!(
@@ -504,12 +552,12 @@ mod tests {
     /// Drive `commit` with a run whose result channel already holds `value`,
     /// returning whether the run's key landed in the cache.
     fn commit_caches(value: Option<TrackAnalysis>) -> bool {
-        let key = AnalysisKey::new("root");
-        let (mut controller, tx) = controller_with_run(TrackId::allocate(), key.clone(), value);
+        let target = target("root");
+        let (mut controller, tx) = controller_with_run(TrackId::allocate(), target.clone(), value);
         let state = Mutex::new(UiState::empty());
         controller.commit(&state);
         drop(tx);
-        controller.cache.get(&key).is_some()
+        controller.cache.get(&target).is_some()
     }
 
     #[test]
@@ -530,23 +578,25 @@ mod tests {
 
     #[kithara::test(native, tokio)]
     fn commit_publishes_current_track_and_marks_displayed() {
-        let key = AnalysisKey::new("root_current");
+        let target = target("root_current");
         let analysis = analysis();
         let ids = [
             TrackId::allocate(),
             TrackId::allocate(),
             TrackId::allocate(),
         ];
-        let (mut controller, tx) = controller_with_run(ids[1], key.clone(), Some(analysis));
+        let (mut controller, tx) = controller_with_run(ids[1], target.clone(), Some(analysis));
         let state = state_with_current(&ids, 1);
 
         controller.commit(&state);
 
         let has_analysis = state.lock().analysis.is_some();
         assert!(has_analysis, "current run publishes to the UI");
-        assert_eq!(
-            controller.displayed.as_ref(),
-            Some(&key),
+        assert!(
+            controller
+                .displayed
+                .as_ref()
+                .is_some_and(|displayed| displayed.is_same(&target)),
             "displayed tracks the content key currently shown in the UI"
         );
         drop(tx);
@@ -554,14 +604,14 @@ mod tests {
 
     #[kithara::test(native, tokio)]
     fn commit_caches_stale_track_without_publishing_or_marking_displayed() {
-        let key = AnalysisKey::new("root_stale");
+        let target = target("root_stale");
         let analysis = analysis();
         let ids = [
             TrackId::allocate(),
             TrackId::allocate(),
             TrackId::allocate(),
         ];
-        let (mut controller, tx) = controller_with_run(ids[0], key.clone(), Some(analysis));
+        let (mut controller, tx) = controller_with_run(ids[0], target.clone(), Some(analysis));
         let state = state_with_current(&ids, 1);
 
         controller.commit(&state);
@@ -572,7 +622,7 @@ mod tests {
             "stale run must not replace the current track's analysis"
         );
         assert!(
-            controller.cache.get(&key).is_some(),
+            controller.cache.get(&target).is_some(),
             "stale run is still reusable by content key"
         );
         assert!(
@@ -580,5 +630,50 @@ mod tests {
             "stale cached analysis is not the analysis displayed by the UI"
         );
         drop(tx);
+    }
+
+    #[derive(Debug)]
+    struct InvalidLayout;
+
+    impl AssetLayout for InvalidLayout {
+        fn root(&self, _source: &AssetSource) -> String {
+            "root".to_string()
+        }
+
+        fn path(&self, _resource: &AssetResource) -> String {
+            "../escape".to_string()
+        }
+    }
+
+    #[kithara::test(native, tokio)]
+    fn invalid_layout_for_current_track_clears_previous_analysis() {
+        let layouts = AssetLayoutRegistry::default().with::<File>(Arc::new(InvalidLayout));
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .layouts(layouts)
+            .build();
+        let config = ResourceConfig::for_src("https://analysis.test.invalid/invalid.mp3")
+            .expect("valid test source")
+            .store(store)
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .build();
+        let error = AnalysisTarget::for_config(&config).expect_err("layout must be rejected");
+        let current = TrackId::allocate();
+        let state = state_with_current(&[current], 0);
+        state.lock().set_analysis(Some(analysis()));
+
+        let cancel = CancelToken::root();
+        let mut controller = AnalysisController::new(
+            &cancel,
+            &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
+            PcmPool::default(),
+        );
+        controller.displayed = Some(target("previous"));
+
+        controller.reject_target(&state, current, &error);
+
+        assert!(state.lock().analysis.is_none());
+        assert!(controller.displayed.is_none());
     }
 }

@@ -1,4 +1,4 @@
-use kithara_assets::{AcquisitionResult, AssetResource, ReadSide, WriteSide};
+use kithara_assets::{AcquisitionResult, ReadSide, ResourceAcquisition, WriteSide};
 use kithara_platform::sync::Arc;
 use kithara_storage::ResourceStatus;
 use kithara_stream::dl::{FetchCmd, OnCompleteFn, OnSlowFn, WriterFn};
@@ -18,7 +18,7 @@ impl HlsVariant {
     pub(super) fn build_cmd(
         self: &Arc<Self>,
         url: Url,
-        acq: AssetResource,
+        acq: ResourceAcquisition,
         handle: FetchClaim<Downloading>,
         signal: SizeSignal,
     ) -> Option<FetchCmd> {

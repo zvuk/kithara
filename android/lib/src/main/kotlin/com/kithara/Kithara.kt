@@ -37,15 +37,18 @@ enum class LogLevel {
  */
 object Kithara {
     /**
-     * Cache directory path used by all items created after [initialize].
-     * Empty string if [initialize] has not been called yet.
+     * Process-wide asset store created by [initialize].
+     *
+     * The same native store is shared by every default-configured player.
+     * Access before [initialize] throws [IllegalStateException].
      */
     @Volatile
-    internal var cacheDir: String = ""
-        private set
+    private var initializedStore: AssetStore? = null
 
-    @Volatile
-    private var ready = false
+    val defaultStore: AssetStore
+        get() = checkNotNull(initializedStore) {
+            "Kithara.initialize must be called before accessing the default asset store"
+        }
 
     /**
      * Initialize the native Kithara library.
@@ -57,15 +60,16 @@ object Kithara {
      * @param logLevel Minimum log level forwarded from Rust to logcat. Defaults to [LogLevel.Warn].
      */
     fun initialize(context: Context, logLevel: LogLevel = LogLevel.Warn) {
-        if (ready) return
+        if (initializedStore != null) return
         synchronized(this) {
-            if (ready) return
+            if (initializedStore != null) return
             System.loadLibrary("kithara_ffi")
             nativeInit(context.applicationContext, logLevel.ordinal)
-            cacheDir = context.applicationContext.cacheDir
-                .resolve("kithara")
-                .absolutePath
-            ready = true
+            initializedStore = AssetStore(
+                root = context.applicationContext.cacheDir
+                    .resolve("kithara")
+                    .absolutePath,
+            )
         }
     }
 
