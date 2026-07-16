@@ -1778,6 +1778,9 @@ public func FfiConverterTypeAudioPlayerItem_lower(_ value: AudioPlayerItem) -> U
  * Implementations must be pure and deterministic, fast, non-blocking,
  * non-throwing, and safe to call from arbitrary background threads. Returned
  * values must not contain query text, credentials, or other secrets.
+ * `root` is called once for each store scope being created. `path` is called
+ * once for each resource key being minted. Cache operations using that key do
+ * not invoke either callback again.
  *
  * `root` must return exactly one non-empty component and cannot equal
  * `_index`. `path` must return a non-empty relative path of components
@@ -1800,6 +1803,9 @@ public protocol FfiAssetLayout: AnyObject, Sendable {
  * Implementations must be pure and deterministic, fast, non-blocking,
  * non-throwing, and safe to call from arbitrary background threads. Returned
  * values must not contain query text, credentials, or other secrets.
+ * `root` is called once for each store scope being created. `path` is called
+ * once for each resource key being minted. Cache operations using that key do
+ * not invoke either callback again.
  *
  * `root` must return exactly one non-empty component and cannot equal
  * `_index`. `path` must return a non-empty relative path of components

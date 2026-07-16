@@ -11,6 +11,9 @@ public typealias CacheAssetResource = FfiAssetResource
 /// Implementations must be `Sendable`, pure, deterministic, fast,
 /// non-blocking, and non-throwing. Callbacks may run on background threads.
 /// Returned paths must not contain query parameters, credentials, or secrets.
+/// `root` is called once whenever a store scope is created. `path` is called
+/// once whenever a resource key is minted. Cache reads and writes using that
+/// key do not invoke either callback again.
 /// `root` returns exactly one non-empty component and cannot equal `_index`.
 /// `path` returns a non-empty relative path separated by `/`; no component may
 /// end in `.tmp`. Components are ASCII, at most 96 bytes, never `.` or `..`,

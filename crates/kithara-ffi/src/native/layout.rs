@@ -60,12 +60,15 @@ impl AssetLayout for ForeignLayout {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     #[cfg(unix)]
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use kithara_assets::{
-        AcquisitionResult, AssetLayoutRegistry, AssetStoreBuilder, AssetsError,
+        AcquisitionResult, AssetLayoutRegistry, AssetStoreBuilder, AssetsError, ReadSide,
         ResourceAcquisition, StorageBackend, WriteSide,
     };
     use tempfile::tempdir;
@@ -158,6 +161,99 @@ mod tests {
         writer
             .commit(Some(data.len() as u64))
             .expect("commit resource");
+    }
+
+    #[kithara::test]
+    fn foreign_layout_callbacks_only_mint_scope_and_key() {
+        const PAYLOAD: &[u8] = b"payload";
+
+        struct CountingLayout {
+            root_calls: Arc<AtomicUsize>,
+            path_calls: Arc<AtomicUsize>,
+        }
+
+        impl FfiAssetLayout for CountingLayout {
+            fn root(&self, _source: FfiAssetSource) -> String {
+                self.root_calls.fetch_add(1, Ordering::Relaxed);
+                "callback-root".to_string()
+            }
+
+            fn path(&self, _resource: FfiAssetResource) -> String {
+                self.path_calls.fetch_add(1, Ordering::Relaxed);
+                "callback/resource.bin".to_string()
+            }
+        }
+
+        let root_calls = Arc::new(AtomicUsize::new(0));
+        let path_calls = Arc::new(AtomicUsize::new(0));
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .layouts(AssetLayoutRegistry::new(layout(CountingLayout {
+                root_calls: Arc::clone(&root_calls),
+                path_calls: Arc::clone(&path_calls),
+            })))
+            .build();
+        let resource_url = url("https://example.com/audio.mp3");
+        let source = AssetSource::Remote {
+            url: resource_url.clone(),
+            discriminator: None,
+        };
+
+        let scope = store.scope::<CountingLayout>(&source).expect("valid scope");
+        assert_eq!(root_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(path_calls.load(Ordering::Relaxed), 0);
+
+        let cloned_scope = scope.clone();
+        assert_eq!(root_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(path_calls.load(Ordering::Relaxed), 0);
+        drop(cloned_scope);
+
+        let key = scope
+            .key(&AssetResource::Url(resource_url))
+            .expect("valid key");
+        assert_eq!(root_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(path_calls.load(Ordering::Relaxed), 1);
+
+        store
+            .resource_state(&key)
+            .expect("inspect missing resource");
+        assert!(store.available_ranges(&key).is_empty());
+
+        write_commit(
+            store
+                .acquire_resource(&key, None)
+                .expect("acquire resource"),
+            PAYLOAD,
+        );
+        store
+            .resource_state(&key)
+            .expect("inspect committed resource");
+        assert!(store.contains_range(&key, 0..PAYLOAD.len() as u64));
+        assert!(!store.available_ranges(&key).is_empty());
+
+        let reopened = store.open_resource(&key, None).expect("reopen resource");
+        let mut bytes = [0; PAYLOAD.len()];
+        assert_eq!(
+            reopened.read_at(0, &mut bytes).expect("first read"),
+            PAYLOAD.len()
+        );
+        assert_eq!(
+            reopened.read_at(0, &mut bytes).expect("second read"),
+            PAYLOAD.len()
+        );
+        assert_eq!(bytes.as_slice(), PAYLOAD);
+        store
+            .open_resource(&key, None)
+            .expect("reopen resource again");
+        let AcquisitionResult::Ready(_) = store
+            .acquire_resource(&key, None)
+            .expect("reacquire resource")
+        else {
+            panic!("committed resource must be ready");
+        };
+
+        assert_eq!(root_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(path_calls.load(Ordering::Relaxed), 1);
     }
 
     #[kithara::test(native, timeout(kithara_platform::time::Duration::from_secs(5)))]
