@@ -13,5 +13,5 @@ pub use protocol::{
 
 pub use crate::session::{
     AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionError, SessionHandle,
-    SessionState, StartStreamFn, run_cmd,
+    SessionState, StartStreamFn, TransportPreparationFailure, run_cmd,
 };

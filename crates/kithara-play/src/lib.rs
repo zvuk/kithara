@@ -25,7 +25,8 @@ pub use api::{
     DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection,
     PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionBeatError,
     SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
-    TempoError, TimeControlStatus, TimeRange, TrackBinding, WaitingReason,
+    TempoError, TimeControlStatus, TimeRange, TrackBinding, TransportPreparationFailure,
+    WaitingReason,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,

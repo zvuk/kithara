@@ -8,12 +8,18 @@ mod elastic_source;
 mod fade;
 mod feeder;
 mod read;
+#[cfg(not(target_arch = "wasm32"))]
+mod tempo;
 mod triggers;
 
 pub use core::{PlayerTrack, TrackAxis, TrackParams};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use elastic_renderer::ElasticPreparationOutcome;
+pub(crate) use elastic::ElasticPlanError;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use elastic_renderer::{
+    ElasticPreparationOutcome, ElasticRenderError, ElasticTempoPreparationOutcome,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use feeder::PreparedElasticRenderer;
 pub use feeder::{PlayerResource, ReadOutcome};

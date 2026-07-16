@@ -192,12 +192,12 @@ fn run_auto(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<Of
 }
 
 fn render_block(state: &mut SessionState<OfflineBackend>, frames: usize) -> Vec<f32> {
+    if let Reply::Err(error) = run_cmd(state, Cmd::Tick) {
+        warn!(%error, "offline session graph update failed");
+    }
     let Some(ctx) = state.ctx_mut() else {
         return Vec::new();
     };
-    if let Err(err) = ctx.update() {
-        warn!("offline session graph update failed: {err:?}");
-    }
     ctx.active_backend_mut()
         .map_or_else(Vec::new, |backend| backend.render(frames))
 }

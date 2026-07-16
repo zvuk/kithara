@@ -16,6 +16,7 @@ use tracing::warn;
 
 use super::{
     context::read_render_context,
+    tempo::TempoParticipantState,
     track::{PlayerTrack, TrackRenderMode},
 };
 use crate::{
@@ -82,6 +83,7 @@ pub struct PlayerNodeProcessor {
     pub(super) render: RenderPass,
     pub(super) prefetch_duration: f32,
     context_requirement: ContextRequirement,
+    pub(super) tempo: TempoParticipantState,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
@@ -124,6 +126,7 @@ impl PlayerNodeProcessor {
         pool: &PcmPool,
         context_requirement: ContextRequirement,
     ) -> Self {
+        let tempo = TempoParticipantState::new(inputs.tempo);
         Self {
             cmd_rx: inputs.cmd_rx,
             notif_tx: inputs.notif_tx,
@@ -137,6 +140,7 @@ impl PlayerNodeProcessor {
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
             context_requirement,
+            tempo,
         }
     }
 
@@ -213,6 +217,7 @@ impl PlayerNodeProcessor {
                 continue;
             }
             if let Some(track) = self.tracks.remove_by_index(*idx) {
+                self.tempo.membership_changed();
                 self.discard_track(track);
                 self.notif_tx
                     .try_push(PlayerNotification::Unloaded {
@@ -260,6 +265,7 @@ impl PlayerNodeProcessor {
                     );
                 }
                 if let Some(track) = self.tracks.remove(&key) {
+                    self.tempo.membership_changed();
                     self.discard_track(track);
                     self.notif_tx
                         .try_push(PlayerNotification::Unloaded { src: key })
@@ -324,6 +330,7 @@ impl PlayerNodeProcessor {
     /// Unload a track from the arena.
     pub(super) fn unload_track(&mut self, src: &Arc<str>) {
         if let Some(track) = self.tracks.remove(src) {
+            self.tempo.membership_changed();
             self.discard_track(track);
             self.notif_tx
                 .try_push(PlayerNotification::Unloaded {
@@ -409,7 +416,8 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         self.playback.process_count.fetch_add(1, Ordering::Relaxed);
 
         self.flush_retirement();
-        if !self.retirement_blocked() {
+        self.tempo.receive_commands();
+        if !self.retirement_blocked() && !self.tempo.frozen() {
             self.drain_commands();
             self.cleanup_finished_tracks();
         }
@@ -426,6 +434,11 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
                 }
             },
         };
+
+        if let TrackRenderMode::Session(context) = render_mode {
+            self.tempo
+                .process(self.tracks.iter_mut().map(|(_, track)| track), context);
+        }
 
         let (playback_started, leading_outcome_pos_dur) =
             self.render_with_mode(render_mode, &mut buffers, info.frames, is_playing);

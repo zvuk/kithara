@@ -5,7 +5,10 @@ mod wire {
     use kithara_platform::sync::mpsc;
 
     use crate::{
-        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{
+            SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo,
+            TransportPreparationFailure,
+        },
         bridge::SlotControl,
         rt::StreamShape,
     };
@@ -51,6 +54,19 @@ mod wire {
         /// A different session transport commit is awaiting a render result.
         #[error("session transport commit {revision} is still pending")]
         TransportCommitPending { revision: u64 },
+        /// A graph membership change cannot race an in-flight transport transaction.
+        #[error("session transport commit {revision} freezes graph membership")]
+        TransportGraphMutationPending { revision: u64 },
+        /// One exact slot participant rejected transport preparation.
+        #[error(
+            "session transport preparation {revision} failed for player {player_id}, {slot:?}: {reason}"
+        )]
+        TransportPreparationRejected {
+            player_id: PlayerId,
+            revision: u64,
+            slot: SlotId,
+            reason: TransportPreparationFailure,
+        },
         /// The render graph rejected a session transport commit.
         #[error("session transport commit {revision} was rejected at the render boundary")]
         TransportCommitRejected { revision: u64 },
@@ -348,3 +364,5 @@ pub use handle::{SessionDispatcher, SessionHandle};
 pub use wire::{
     AllocatedSlot, BindingPreparation, Cmd, CmdMsg, PlayerId, Reply, SessionError, StartStreamFn,
 };
+
+pub use crate::api::TransportPreparationFailure;

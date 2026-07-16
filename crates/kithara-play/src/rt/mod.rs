@@ -5,14 +5,19 @@ mod node;
 mod processor;
 mod registry;
 mod render;
+mod tempo;
 pub mod track;
 
 pub(crate) use context::{
-    RenderContextControl, RenderFrame, SessionTransportCommit, TransportCommitResult,
-    TransportCommitStamp, TransportObservation, install_render_context,
+    PresentationFrame, RenderContextControl, RenderFrame, SessionTransportCommit,
+    TransportCommitResult, TransportCommitStamp, TransportObservation, install_render_context,
 };
 pub(crate) use eq::MasterEqNode;
 pub use node::PlayerNode;
 pub use processor::{PlayerNodeProcessor, StreamShape};
 pub(crate) use registry::ArenaRegistry;
 pub(crate) use render::{RenderPass, RenderTargets};
+pub(crate) use tempo::{
+    TempoArm, TempoParticipantControl, TempoParticipantEndpoint, TempoParticipantObservation,
+    TempoParticipantStatus, TempoStage, tempo_participant_channel,
+};

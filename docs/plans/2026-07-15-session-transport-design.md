@@ -49,6 +49,9 @@ not the contract for the new subsystem.
   current anchor, tempo, and sample rate.
 - A tempo change is one transaction at one render-frame boundary. All tracks
   observe the same new transport snapshot.
+- A live tempo transaction is render-driven and nonblocking:
+  `prepare -> arm -> apply`. The active transport remains unchanged until the
+  exact participant set is armed.
 - Track analysis never becomes the session clock. It supplies an immutable
   `TrackBeatMap` used to bind one track to the session.
 - Decoding, streaming, and HLS remain transport-independent. They receive
@@ -232,6 +235,34 @@ Control changes use prepare/commit semantics:
 4. Commit one immutable state change at an exact `PresentationFrame` boundary.
 5. Make stale reads and prepared states harmless through their owning revision.
 
+For a live tempo change, preparation is a per-slot real-time endpoint backed by
+off-real-time source work. The endpoint aggregates every bound track currently
+owned by that slot and publishes a compact revision- and membership-stamped
+observation to `SessionState`. The session does not copy a binding, renderer
+cursor, or source window into its ledger.
+
+Preparation pins a union window covering the old source path through the
+candidate boundary and the new-tempo horizon. Once every slot is ready, an
+`Arm` barrier rechecks the membership epoch. While the transaction is pending,
+commands that could add or remove a participant fail with the typed
+`TransportGraphMutationPending` result and may be retried after the barrier
+finishes. Only an exact `Armed` response from the full frozen set permits the
+common transport schedule to be created. A rejection, stale revision, epoch
+change, route invalidation, or expired boundary broadcasts `Abort`; the
+accepted transport, real-time anchor, graph transport schedule, and bindings
+remain unchanged.
+
+An observation older than the candidate is ignored until that participant has
+processed the current `Prepare`; an observation from a future revision is the
+stale-revision failure. After an abort, the coordinator retains the barrier
+until every participant publishes a terminal acknowledgement, preventing a new
+candidate from replacing cleanup for the rejected revision.
+
+The synchronous control call begins this transaction but never waits for the
+audio callback. Ordinary session updates advance preparation, arming, and
+completion. This keeps the manual offline host deterministic and avoids a
+command/render deadlock or a wall-clock timeout protocol.
+
 The three revision domains are distinct:
 
 - session commit revision: owned by `SessionState`, orders atomic musical state
@@ -338,6 +369,15 @@ Renderers report deterministic algorithmic latency. The session latency map and
 mixer compensate each track against one `PresentationFrame` boundary. A renderer
 is primed before a binding becomes audible; a worker queue cannot make one track
 adopt new tempo later than another.
+
+Latency has separate raw and effective values. A backend's raw latency is the
+history and delayed output it declares before priming. Signalsmith priming feeds
+that history and discards the delayed output, so its effective latency after
+preparation is zero. The session records both values and maps
+`RenderFrame -> PresentationFrame` identically only for this verified
+zero-effective-latency contract. Applying the raw latency again would double
+compensate the track. A future backend with nonzero effective latency must add a
+prepared session-owned delay assignment before it can participate.
 
 Phase correction follows one policy:
 

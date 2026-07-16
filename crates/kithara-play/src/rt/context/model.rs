@@ -46,6 +46,15 @@ impl RenderFrame {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct PresentationFrame(i64);
+
+impl PresentationFrame {
+    pub(crate) const fn new(value: i64) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RenderContext {
     render_frames: Range<RenderFrame>,
@@ -83,12 +92,10 @@ impl RenderContext {
         self.sample_rate
     }
 
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn session_beats(&self) -> Option<&Range<SessionBeat>> {
         self.session_beats.as_ref()
     }
 
-    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) const fn transport_commit(&self) -> Option<SessionTransportCommit> {
         self.transport_commit
     }

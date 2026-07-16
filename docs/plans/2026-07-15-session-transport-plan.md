@@ -19,7 +19,7 @@ coverage through the existing integration-test session.
 - [x] Track bindings use real analysed beat maps and typed coordinate spaces.
 - [x] Every player node receives the same immutable render context for a
       processed graph block.
-- [ ] Two and then four tracks remain phase-aligned through a tempo change.
+- [x] Two and then four tracks remain phase-aligned through a tempo change.
 - [ ] Seek, reverse, and read-ahead obey explicit source-range and revision
       contracts.
 - [x] The integration session renders the real native forward bound path to
@@ -53,8 +53,9 @@ coverage through the existing integration-test session.
 - [x] Slice 5: one native forward bound track, numeric elastic requests,
       independent off-RT preparation, source-authoritative rendering, and
       rolling source windows.
-- [ ] Slice 6: multi-track participant readiness and an all-or-nothing tempo
-      commit at one presentation boundary.
+- [x] Slice 6: multi-track participant readiness and an all-or-nothing tempo
+      commit at one presentation boundary through the locked
+      `prepare -> arm -> apply` protocol below.
 - [ ] Slice 7: transactional session seek and explicit join.
 - [ ] Slice 8: prepared file-source reverse and directional read-ahead.
 
@@ -132,6 +133,47 @@ The approved route remains a Kithara-owned analytical transport plus an
 adapter-scheduled real-time commit on the unchanged Firewheel graph. Firewheel
 musical transport and dynamic keyframes remain outside the contract. No fork,
 private patch, upgrade dependency, or upstream change is allowed.
+
+## 2026-07-16 Slice 6 Checkpoint
+
+Slice 6 closes the native multi-track live-tempo transaction. `SessionState`
+freezes an exact `(PlayerId, SlotId)` participant roster, while each slot's
+real-time endpoint remains the sole owner of its membership, bindings,
+directional cursors, and prepared source windows. The control ledger stores
+only compact participant observations; it does not mirror real-time track
+state.
+
+Every participant proposes one revision-stable boundary at least four declared
+maximum callback blocks ahead. Preparation validates the candidate rate and
+pins the union of the old-tempo path through that boundary and the new-tempo
+horizon. The common transport `Stage` and `Apply` are scheduled only after the
+entire frozen roster reports `Armed` for the exact revision, membership epoch,
+render boundary, and presentation boundary. An older observation is ignored
+until the participant observes the candidate; a future-revision observation is
+a typed rejection.
+
+Signalsmith reports both raw and effective latency. The primed renderer
+consumes its history and discards raw output latency before activation, so its
+effective latency is zero and only that verified backend uses
+`PresentationFrame == RenderFrame`. Continuous rate comparisons allow one ULP
+of floating-point tolerance. The persistent source endpoint quantizes
+accumulated continuous advance to adjacent floor and ceiling endpoints. If a
+one-frame sub-unity block has zero logical advance, the backend reuses a
+non-empty source frame without advancing that persistent cursor. Fractional
+error therefore cannot accumulate into long-run phase drift.
+
+Preparation failure, membership change, graph transport rejection, or route
+invalidation broadcasts `Abort` to every participant and keeps the barrier
+alive until terminal acknowledgement. The accepted and render-observed
+transport remain unchanged throughout rejection and recovery.
+
+The existing manual offline session proves two- and four-track `120 -> 100`
+BPM commits with distinct source tempos, writes the four-track result to WAV,
+and proves an exact-track `120 -> 60` rejection followed by a successful later
+revision. This checkpoint covers native forward rendering only. Prepared seek
+and join remain Slice 7; file reverse remains Slice 8; the browser bound
+renderer and broader platform acceptance remain Slice 11. Paused tempo changes
+are outside the current public live-tempo mutation surface.
 
 ## Affected Paths
 
@@ -441,6 +483,47 @@ tempo change to all of them on one exact render boundary.
 - tracks with different renderer latency align on one `PresentationFrame`;
 - an unsupported tempo or insufficient look-ahead rejects the whole change
   before the Kithara anchor, graph schedule, or any binding mutates.
+
+### Locked transaction protocol
+
+`SessionState` allocates the candidate revision and freezes the exact set of
+allocated slot participants without changing the accepted transport. Each
+slot's real-time endpoint aggregates every bound track it owns; the session
+never mirrors bindings, renderer cursors, or source windows.
+
+1. `Prepare` validates the candidate rate for each bound track and pins one
+   source window covering the old path through the proposed boundary plus the
+   new-tempo horizon.
+2. A revision- and membership-stamped `Ready` response proposes one future
+   render boundary. Pending source work keeps the transaction in preparation;
+   a typed rate, mapping, source, or reserve failure rejects it.
+3. `Arm` rechecks membership and the exact boundary. While the transaction is
+   pending, membership-changing slot commands fail with
+   `TransportGraphMutationPending` and may be retried after the barrier. An
+   epoch mismatch rejects the whole transaction before transport scheduling.
+4. Only after every participant reports `Armed` does `SessionState` enqueue the
+   existing transport `Stage` and `Apply` events in one graph update.
+5. The matching shared `RenderContext` revision promotes every prepared
+   renderer at that boundary. `Abort` releases pins and the graph-mutation
+   freeze without changing the active transport.
+
+The protocol is render-driven and nonblocking. Native, browser, and manual
+offline hosts advance it through their ordinary session update path; no
+timeout, wall-clock polling, or synchronous wait for the audio graph is part of
+the contract.
+
+Signalsmith preparation consumes its declared history and discards its raw
+output latency before activation. Its effective presentation latency is
+therefore zero, even if future backends report a different raw latency.
+Slice 6 records both values and uses the identity mapping
+`PresentationFrame == RenderFrame` only for a fully primed zero-effective-
+latency participant. Raw latency is never applied a second time.
+
+With the current declared rate envelope `[2/3, 4/3]`, different fixed-tempo
+tracks cannot all support a successful `120 -> 60` BPM change. Successful two-
+and four-track acceptance therefore uses `120 -> 100` BPM with distinct source
+tempos. The `120 -> 60` scenario is the all-or-nothing rejection case; widening
+the backend envelope is a separate measured backend decision.
 
 ## Slice 7 - Transactional Session Seek And Explicit Join
 

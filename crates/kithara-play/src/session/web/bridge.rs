@@ -8,7 +8,7 @@ use super::client::WASM_SESSION_STATE;
 use crate::{
     bridge::PlaybackShared,
     session::{
-        dispatch::run_cmd,
+        dispatch::{run_cmd, tick_session},
         protocol::{CmdMsg, Reply},
         state::ensure_ctx,
     },
@@ -39,10 +39,8 @@ pub(crate) fn tick_and_poll_remote(rx: &mpsc::Receiver<CmdMsg>) {
             let _ = msg.reply_tx.send(reply);
         }
 
-        if let Some(ctx) = state.ctx_mut()
-            && let Err(err) = ctx.update()
-        {
-            warn!("session graph update in tick failed: {err:?}");
+        if let Reply::Err(error) = tick_session(state) {
+            warn!(%error, "session graph update in tick failed");
         }
     });
 }

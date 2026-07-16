@@ -19,7 +19,7 @@ use crate::{
         track::{
             elastic_renderer::{
                 ElasticPreparationOutcome, ElasticPrepareError, ElasticRenderError,
-                ElasticRenderOutcome, ElasticRenderer,
+                ElasticRenderOutcome, ElasticRenderer, ElasticTempoPreparationOutcome,
             },
             elastic_source::spawn_elastic_source,
         },
@@ -256,6 +256,32 @@ impl PlayerResource {
             .render(binding, context, range, output);
         self.elastic_renderer = Some(renderer);
         outcome
+    }
+
+    pub(crate) fn prepare_elastic_tempo(
+        &mut self,
+        binding: &TrackBinding,
+        current: &RenderContext,
+        candidate: &RenderContext,
+        revision: u64,
+    ) -> Result<ElasticTempoPreparationOutcome, ElasticRenderError> {
+        self.elastic_renderer
+            .as_mut()
+            .ok_or(ElasticRenderError::NotPrepared)?
+            .renderer_mut()
+            .prepare_tempo(binding, current, candidate, revision)
+    }
+
+    pub(crate) fn abort_elastic_tempo(&mut self, revision: u64) {
+        if let Some(renderer) = self.elastic_renderer.as_mut() {
+            renderer.renderer_mut().abort_tempo(revision);
+        }
+    }
+
+    pub(crate) fn apply_elastic_tempo(&mut self, revision: u64) {
+        if let Some(renderer) = self.elastic_renderer.as_mut() {
+            renderer.renderer_mut().apply_tempo(revision);
+        }
     }
 }
 

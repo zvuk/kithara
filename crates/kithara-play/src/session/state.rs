@@ -16,15 +16,28 @@ use super::{
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::SharedEq,
-    rt::{MasterEqNode, RenderContextControl, SessionTransportCommit, install_render_context},
+    rt::{
+        MasterEqNode, PresentationFrame, RenderContextControl, RenderFrame, SessionTransportCommit,
+        TempoParticipantControl, install_render_context,
+    },
 };
 
-#[derive(Debug)]
 pub(super) struct SlotNodes {
+    pub(super) tempo: TempoParticipantControl,
     pub(super) vol_pan_memo: Memo<VolumePanNode>,
     pub(super) player_node_id: NodeID,
     pub(super) vol_pan_node_id: NodeID,
     pub(super) slot_id: SlotId,
+}
+
+impl std::fmt::Debug for SlotNodes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlotNodes")
+            .field("player_node_id", &self.player_node_id)
+            .field("slot_id", &self.slot_id)
+            .field("vol_pan_node_id", &self.vol_pan_node_id)
+            .finish_non_exhaustive()
+    }
 }
 
 pub(super) struct PlayerState {
@@ -63,15 +76,69 @@ impl PlayerState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TransportCommitPhase {
-    Aborting,
-    Applying,
+pub(super) struct TransportParticipantId {
+    pub(super) player_id: PlayerId,
+    pub(super) slot_id: SlotId,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct PendingTransportCommit {
-    pub(super) phase: TransportCommitPhase,
-    pub(super) revision: u64,
+pub(super) struct TransportBoundary {
+    pub(super) presentation: PresentationFrame,
+    pub(super) render: RenderFrame,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct TransportParticipantReady {
+    pub(super) boundary: TransportBoundary,
+    pub(super) effective_latency_frames: u32,
+    pub(super) max_raw_latency_frames: u32,
+    pub(super) membership_epoch: u64,
+    pub(super) participant_count: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct TransportParticipantLedger {
+    pub(super) id: TransportParticipantId,
+    pub(super) ready: Option<TransportParticipantReady>,
+}
+
+#[derive(Debug)]
+pub(super) struct TransportPreparation {
+    pub(super) boundary: Option<TransportBoundary>,
+    pub(super) candidate: SessionTransportCommit,
+    pub(super) participants: Vec<TransportParticipantLedger>,
+}
+
+#[derive(Debug)]
+pub(super) enum PendingTransportCommit {
+    Preparing(TransportPreparation),
+    Arming(TransportPreparation),
+    Applying {
+        participants: Vec<TransportParticipantLedger>,
+        revision: u64,
+    },
+    AbortingTransport {
+        participants: Vec<TransportParticipantLedger>,
+        revision: u64,
+    },
+    AbortingParticipants {
+        abort_queued: bool,
+        participants: Vec<TransportParticipantLedger>,
+        revision: u64,
+    },
+}
+
+impl PendingTransportCommit {
+    pub(super) const fn revision(&self) -> u64 {
+        match self {
+            Self::Preparing(preparation) | Self::Arming(preparation) => {
+                preparation.candidate.revision()
+            }
+            Self::Applying { revision, .. }
+            | Self::AbortingTransport { revision, .. }
+            | Self::AbortingParticipants { revision, .. } => *revision,
+        }
+    }
 }
 
 #[derive(Debug, Default)]

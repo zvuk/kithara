@@ -134,6 +134,12 @@ pub(crate) enum ElasticPreparationOutcome {
     Pending,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ElasticTempoPreparationOutcome {
+    Pending,
+    Ready { raw_latency_frames: u32 },
+}
+
 #[derive(Clone, Copy, Debug)]
 struct IntegerSegment {
     output_start: usize,
@@ -155,6 +161,12 @@ struct ElasticPreparation {
     warmup: ElasticRequest,
 }
 
+#[derive(Clone, Copy)]
+struct TempoSourcePin {
+    range: SourceFrameRange,
+    revision: u64,
+}
+
 pub(crate) struct ElasticRenderer {
     backend: Box<dyn ElasticBackend>,
     capabilities: ElasticCapabilities,
@@ -174,6 +186,7 @@ pub(crate) struct ElasticRenderer {
     source_generation: u64,
     source_port: Option<ElasticSourcePort>,
     source_window: Option<SourceFrameRange>,
+    tempo_pin: Option<TempoSourcePin>,
     fetch: PcmBuf,
     history: PcmBuf,
     source: PcmBuf,
@@ -246,6 +259,7 @@ impl ElasticRenderer {
             source_generation: 0,
             source_port: None,
             source_window: None,
+            tempo_pin: None,
             fetch: prepared_buffer(pool, sample_count(max_fetch_frames, channels)?)?,
             history: prepared_buffer(pool, sample_count(latency.source_frames(), channels)?)?,
             source: prepared_buffer(pool, sample_count(source_buffer_frames, channels)?)?,
@@ -264,6 +278,147 @@ impl ElasticRenderer {
         if let Some(port) = self.source_port.as_mut() {
             port.set_service_class(class);
         }
+    }
+
+    pub(crate) fn prepare_tempo(
+        &mut self,
+        binding: &TrackBinding,
+        current: &RenderContext,
+        candidate: &RenderContext,
+        revision: u64,
+    ) -> Result<ElasticTempoPreparationOutcome, ElasticRenderError> {
+        if !self.primed {
+            return Err(ElasticRenderError::NotPrepared);
+        }
+        if binding.direction() != PlaybackDirection::Forward {
+            return Err(ElasticRenderError::ReversePreparationRequired);
+        }
+        let active = current
+            .transport_commit()
+            .ok_or(ElasticRenderError::TransportCommitUnavailable)?;
+        let current_beat = current
+            .session_beats()
+            .ok_or(ElasticRenderError::TransportCommitUnavailable)?
+            .end;
+        let candidate_beats = candidate
+            .session_beats()
+            .ok_or(ElasticRenderError::TransportCommitUnavailable)?;
+        let current_track_beat = binding
+            .track_beat_at(current_beat)
+            .map_err(ElasticPlanError::Binding)?;
+        let current_source = binding
+            .map()
+            .source_frame_at(current_track_beat)
+            .ok_or_else(|| ElasticPlanError::OutsideMarkerDomain {
+                beat: current_track_beat.get(),
+            })?
+            .get();
+        let old_output_frames = candidate
+            .render_frames()
+            .start
+            .get()
+            .checked_sub(current.render_frames().end.get())
+            .and_then(|frames| usize::try_from(frames).ok())
+            .ok_or(ElasticRenderError::FrameOverflow)?;
+        let old_context = RenderContext::new(
+            current.render_frames().end..candidate.render_frames().start,
+            current.sample_rate(),
+            Some(current_beat..candidate_beats.start),
+            Some(active),
+        )
+        .ok_or(ElasticPlanError::InvalidOutputRange)?;
+        let candidate_output_frames = candidate
+            .render_frames()
+            .end
+            .get()
+            .checked_sub(candidate.render_frames().start.get())
+            .and_then(|frames| usize::try_from(frames).ok())
+            .ok_or(ElasticRenderError::FrameOverflow)?;
+        let envelope = self.capabilities.rate_envelope();
+        let old_planned = plan_elastic_segments(
+            binding,
+            &old_context,
+            0..old_output_frames,
+            self.request_id,
+            active.revision(),
+            envelope.min_source_frames_per_output()..=envelope.max_source_frames_per_output(),
+        )?;
+        let candidate_planned = plan_elastic_segments(
+            binding,
+            candidate,
+            0..candidate_output_frames,
+            self.request_id,
+            revision,
+            envelope.min_source_frames_per_output()..=envelope.max_source_frames_per_output(),
+        )?;
+        let mut lower = current_source;
+        let mut upper = current_source;
+        for segment in old_planned.iter().chain(&candidate_planned) {
+            lower = lower
+                .min(segment.request.source_start())
+                .min(segment.request.source_end());
+            upper = upper
+                .max(segment.request.source_start())
+                .max(segment.request.source_end());
+        }
+        let start = lower
+            .floor()
+            .to_i64()
+            .ok_or(ElasticRenderError::FrameOverflow)?
+            .saturating_sub(1)
+            .max(0);
+        let end = upper
+            .ceil()
+            .to_i64()
+            .ok_or(ElasticRenderError::FrameOverflow)?
+            .checked_add(1)
+            .ok_or(ElasticRenderError::FrameOverflow)?;
+        let source_end = i64::try_from(self.source_frame_count)
+            .map_err(|_| ElasticRenderError::FrameOverflow)?;
+        let start = u64::try_from(start).map_err(|_| ElasticRenderError::FrameOverflow)?;
+        let end =
+            u64::try_from(end.min(source_end)).map_err(|_| ElasticRenderError::FrameOverflow)?;
+        if start >= end {
+            return Err(ElasticRenderError::FetchWindowMismatch);
+        }
+        self.prepare_tempo_window(revision, SourceFrameRange::new(start, end)?)
+    }
+
+    pub(crate) fn abort_tempo(&mut self, revision: u64) {
+        if self.tempo_pin.is_some_and(|pin| pin.revision == revision) {
+            self.tempo_pin = None;
+        }
+    }
+
+    pub(crate) fn apply_tempo(&mut self, revision: u64) {
+        self.abort_tempo(revision);
+    }
+
+    fn prepare_tempo_window(
+        &mut self,
+        revision: u64,
+        range: SourceFrameRange,
+    ) -> Result<ElasticTempoPreparationOutcome, ElasticRenderError> {
+        self.poll_source_port()?;
+        self.tempo_pin = Some(TempoSourcePin { range, revision });
+        let required = self.pinned_range(range)?;
+        let resident_covers = self
+            .source_window
+            .is_some_and(|window| preparation::range_contains(window, required));
+        let pending_covers = self
+            .pending_request
+            .is_none_or(|request| preparation::range_contains(request.range(), required));
+        if resident_covers && pending_covers {
+            self.schedule_window(required)?;
+            let raw_latency_frames = u32::try_from(self.capabilities.latency().output_frames())
+                .map_err(|_| ElasticRenderError::FrameOverflow)?;
+            return Ok(ElasticTempoPreparationOutcome::Ready { raw_latency_frames });
+        }
+        if let Err(error) = self.schedule_window(required) {
+            self.abort_tempo(revision);
+            return Err(error);
+        }
+        Ok(ElasticTempoPreparationOutcome::Pending)
     }
 }
 
