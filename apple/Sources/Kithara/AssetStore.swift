@@ -1,13 +1,13 @@
 import KitharaFFI
 
-/// Asset identity passed to ``CacheLayoutDelegate/root(source:)``.
-public typealias CacheAssetSource = FfiAssetSource
+/// Asset identity passed to ``AssetLayout/root(source:)``.
+public typealias AssetSource = FfiAssetSource
 
-/// Resource identity passed to ``CacheLayoutDelegate/path(resource:)``.
+/// Resource identity passed to ``AssetLayout/path(resource:)``.
 /// `.source` is direct-file media, `.url` covers HLS playlists, init segments,
 /// media segments, and keys, and `.named` covers analysis and other derived
 /// artifacts.
-public typealias CacheAssetResource = FfiAssetResource
+public typealias AssetResource = FfiAssetResource
 
 /// Maps asset sources and resources to paths inside Kithara's cache.
 ///
@@ -17,7 +17,7 @@ public typealias CacheAssetResource = FfiAssetResource
 /// `root` is called once whenever a store scope is created. `path` is called
 /// once whenever a resource key is minted. Cache reads and writes using that
 /// key do not invoke either callback again.
-/// A `.url` resource contains the full URL. Custom delegates must preserve any
+/// A `.url` resource contains the full URL. Custom layouts must preserve any
 /// required query identity without returning raw query text; Kithara's default
 /// layout uses a bounded query fingerprint and ignores fragments.
 /// `root` returns exactly one non-empty component and cannot equal `_index`.
@@ -27,16 +27,16 @@ public typealias CacheAssetResource = FfiAssetResource
 /// neither control bytes nor `< > : " / \ | ? *`. These reserved-name checks
 /// are case-insensitive. Invalid output fails scope or key creation rather than
 /// being rewritten or replaced with the default layout.
-public typealias CacheLayoutDelegate = FfiAssetLayout
+public typealias AssetLayout = FfiAssetLayout
 
-/// Playback source whose default cache layout can be replaced.
-public enum CacheLayoutTarget: CaseIterable, Hashable, Sendable {
-    /// Direct file playback.
+/// Playback source whose default asset layout can be replaced.
+public enum AssetLayoutTarget: Sendable {
+    /// Direct-file playback.
     case file
     /// HTTP Live Streaming playback.
     case hls
 
-    fileprivate var ffiValue: FfiCacheLayoutTarget {
+    fileprivate var ffiValue: FfiAssetLayoutTarget {
         switch self {
         case .file:
             .file
@@ -46,29 +46,35 @@ public enum CacheLayoutTarget: CaseIterable, Hashable, Sendable {
     }
 }
 
-/// Cache layouts registered before player creation.
+/// Rust-owned registry of protocol-specific asset layouts.
 ///
-/// A target has at most one layout. Registering another layout for the same
-/// target replaces the previous registration.
-public struct CacheLayoutRegistry: Sendable {
-    private var layouts: [CacheLayoutTarget: CacheLayoutDelegate] = [:]
+/// A target has at most one layout. Registration is routed to Rust
+/// immediately, and registering another layout for the same target replaces
+/// the previous registration.
+public final class AssetLayoutRegistry: @unchecked Sendable {
+    let inner: FfiAssetLayoutRegistry
 
     /// Creates an empty registry that keeps Kithara's default layouts.
-    public init() {}
-
-    /// Registers `layout` for `target`, replacing an existing registration.
-    public mutating func register(
-        _ layout: CacheLayoutDelegate,
-        for target: CacheLayoutTarget
-    ) {
-        layouts[target] = layout
+    public init() {
+        self.inner = FfiAssetLayoutRegistry()
     }
 
-    var ffiRegistrations: [FfiCacheLayoutRegistration] {
-        CacheLayoutTarget.allCases.compactMap { target in
-            layouts[target].map {
-                FfiCacheLayoutRegistration(target: target.ffiValue, layout: $0)
-            }
-        }
+    /// Registers `layout` for `target`, replacing an existing registration.
+    public func register(_ layout: AssetLayout, for target: AssetLayoutTarget) {
+        inner.register(target: target.ffiValue, layout: layout)
+    }
+}
+
+/// Rust-owned asset store that can be shared by multiple players.
+///
+/// The store captures a snapshot of `layouts` during initialization. Later
+/// registry changes apply only to stores created afterward.
+public final class AssetStore: @unchecked Sendable {
+    let inner: FfiAssetStore
+
+    /// Creates an asset store rooted at `root` with a snapshot of `layouts`.
+    /// `nil` uses Kithara's platform-default cache directory.
+    public init(root: String? = nil, layouts: AssetLayoutRegistry = .init()) {
+        self.inner = FfiAssetStore(root: root, layouts: layouts.inner)
     }
 }

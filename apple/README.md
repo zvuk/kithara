@@ -106,28 +106,31 @@ player.updatePeakBitrate(wifi: 2_000_000, cellular: 500_000)
 
 ### Cache location and layout
 
-`cacheDir` selects the outer directory for the whole asset store. Register
-layouts by protocol when an application needs a different path contract below
-each asset root:
+`AssetStore` owns the outer cache directory and an immutable snapshot of its
+protocol layouts. The Rust registry owns registrations immediately, and the
+same store can be shared by multiple players:
 
 ```swift
-var layouts = CacheLayoutRegistry()
-layouts.register(MyFileCacheLayout(), for: .file)
-layouts.register(MyHlsCacheLayout(), for: .hls)
+let layouts = AssetLayoutRegistry()
+layouts.register(MyFileAssetLayout(), for: .file)
+layouts.register(MyHlsAssetLayout(), for: .hls)
+
+let store = AssetStore(
+    root: appSupportDirectory.path,
+    layouts: layouts
+)
 
 let player = KitharaPlayer(
-    config: .init(
-        cacheDir: appSupportDirectory.path,
-        layouts: layouts
-    )
+    config: .init(store: store)
 )
 ```
 
-`MyFileCacheLayout` and `MyHlsCacheLayout` implement `CacheLayoutDelegate`.
-Their `root(source:)` and `path(resource:)` callbacks are captured at player
-creation. An empty registry uses Kithara's defaults. Invalid callback output is
-rejected rather than rewritten or replaced with a default path; see the
-protocol documentation for the portable component rules.
+`MyFileAssetLayout` and `MyHlsAssetLayout` implement `AssetLayout`. Their
+`root(source:)` and `path(resource:)` callbacks are retained by Rust. A store
+captures its registry snapshot when it is created, so later registrations
+affect only later stores. An empty registry uses Kithara's defaults. Invalid
+callback output is rejected rather than rewritten or replaced with a default
+path; see the protocol documentation for the portable component rules.
 
 ### Seek
 

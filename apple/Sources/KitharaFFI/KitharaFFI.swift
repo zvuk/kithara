@@ -2035,6 +2035,269 @@ public func FfiConverterTypeFfiAssetLayout_lower(_ value: FfiAssetLayout) -> UIn
 
 
 /**
+ * Rust-owned registry of protocol-specific asset layouts.
+ */
+public protocol FfiAssetLayoutRegistryProtocol: AnyObject, Sendable {
+
+    /**
+     * Register or replace the layout for `target`.
+     */
+    func register(target: FfiAssetLayoutTarget, layout: FfiAssetLayout)
+
+}
+/**
+ * Rust-owned registry of protocol-specific asset layouts.
+ */
+open class FfiAssetLayoutRegistry: FfiAssetLayoutRegistryProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_kithara_ffi_fn_clone_ffiassetlayoutregistry(self.handle, $0) }
+    }
+    /**
+     * Create an empty registry that uses Kithara's default layout.
+     */
+public convenience init() {
+    let handle =
+        try! rustCall() {
+    uniffi_kithara_ffi_fn_constructor_ffiassetlayoutregistry_new($0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_kithara_ffi_fn_free_ffiassetlayoutregistry(handle, $0) }
+    }
+
+
+
+
+    /**
+     * Register or replace the layout for `target`.
+     */
+open func register(target: FfiAssetLayoutTarget, layout: FfiAssetLayout)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_ffiassetlayoutregistry_register(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiAssetLayoutTarget_lower(target),
+        FfiConverterTypeFfiAssetLayout_lower(layout),$0
+    )
+}
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAssetLayoutRegistry: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiAssetLayoutRegistry
+
+    public static func lift(_ handle: UInt64) throws -> FfiAssetLayoutRegistry {
+        return FfiAssetLayoutRegistry(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: FfiAssetLayoutRegistry) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAssetLayoutRegistry {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiAssetLayoutRegistry, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetLayoutRegistry_lift(_ handle: UInt64) throws -> FfiAssetLayoutRegistry {
+    return try FfiConverterTypeFfiAssetLayoutRegistry.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetLayoutRegistry_lower(_ value: FfiAssetLayoutRegistry) -> UInt64 {
+    return FfiConverterTypeFfiAssetLayoutRegistry.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Shareable Rust-owned asset store used by one or more players.
+ */
+public protocol FfiAssetStoreProtocol: AnyObject, Sendable {
+
+}
+/**
+ * Shareable Rust-owned asset store used by one or more players.
+ */
+open class FfiAssetStore: FfiAssetStoreProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_kithara_ffi_fn_clone_ffiassetstore(self.handle, $0) }
+    }
+    /**
+     * Create an asset store rooted at `root` with a snapshot of `layouts`.
+     */
+public convenience init(root: String?, layouts: FfiAssetLayoutRegistry) {
+    let handle =
+        try! rustCall() {
+    uniffi_kithara_ffi_fn_constructor_ffiassetstore_new(
+        FfiConverterOptionString.lower(root),
+        FfiConverterTypeFfiAssetLayoutRegistry_lower(layouts),$0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_kithara_ffi_fn_free_ffiassetstore(handle, $0) }
+    }
+
+
+
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAssetStore: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiAssetStore
+
+    public static func lift(_ handle: UInt64) throws -> FfiAssetStore {
+        return FfiAssetStore(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: FfiAssetStore) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAssetStore {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiAssetStore, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetStore_lift(_ handle: UInt64) throws -> FfiAssetStore {
+    return try FfiConverterTypeFfiAssetStore.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetStore_lower(_ value: FfiAssetStore) -> UInt64 {
+    return FfiConverterTypeFfiAssetStore.lower(value)
+}
+
+
+
+
+
+
+/**
  * Position-dependent symmetric cipher for DRM key decryption.
  *
  * Wraps `kithara_drm::UniqueBinaryCipher` for use from Swift/Kotlin.
@@ -3181,132 +3444,6 @@ public func FfiConverterTypeSeekCallback_lower(_ value: SeekCallback) -> UInt64 
 
 
 /**
- * Cache configuration shared by all resources created by one player.
- */
-public struct FfiCacheConfig {
-    /**
-     * Outer directory containing the entire asset store.
-     */
-    public let cacheDir: String?
-    /**
-     * Protocol-specific layouts. Later registrations replace earlier ones.
-     */
-    public let layouts: [FfiCacheLayoutRegistration]
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(
-        /**
-         * Outer directory containing the entire asset store.
-         */cacheDir: String?,
-        /**
-         * Protocol-specific layouts. Later registrations replace earlier ones.
-         */layouts: [FfiCacheLayoutRegistration]) {
-        self.cacheDir = cacheDir
-        self.layouts = layouts
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension FfiCacheConfig: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiCacheConfig: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCacheConfig {
-        return
-            try FfiCacheConfig(
-                cacheDir: FfiConverterOptionString.read(from: &buf),
-                layouts: FfiConverterSequenceTypeFfiCacheLayoutRegistration.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: FfiCacheConfig, into buf: inout [UInt8]) {
-        FfiConverterOptionString.write(value.cacheDir, into: &buf)
-        FfiConverterSequenceTypeFfiCacheLayoutRegistration.write(value.layouts, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiCacheConfig_lift(_ buf: RustBuffer) throws -> FfiCacheConfig {
-    return try FfiConverterTypeFfiCacheConfig.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiCacheConfig_lower(_ value: FfiCacheConfig) -> RustBuffer {
-    return FfiConverterTypeFfiCacheConfig.lower(value)
-}
-
-
-/**
- * One protocol-specific cache layout registration.
- */
-public struct FfiCacheLayoutRegistration {
-    public let target: FfiCacheLayoutTarget
-    public let layout: FfiAssetLayout
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(target: FfiCacheLayoutTarget, layout: FfiAssetLayout) {
-        self.target = target
-        self.layout = layout
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension FfiCacheLayoutRegistration: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiCacheLayoutRegistration: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCacheLayoutRegistration {
-        return
-            try FfiCacheLayoutRegistration(
-                target: FfiConverterTypeFfiCacheLayoutTarget.read(from: &buf),
-                layout: FfiConverterTypeFfiAssetLayout.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: FfiCacheLayoutRegistration, into buf: inout [UInt8]) {
-        FfiConverterTypeFfiCacheLayoutTarget.write(value.target, into: &buf)
-        FfiConverterTypeFfiAssetLayout.write(value.layout, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiCacheLayoutRegistration_lift(_ buf: RustBuffer) throws -> FfiCacheLayoutRegistration {
-    return try FfiConverterTypeFfiCacheLayoutRegistration.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiCacheLayoutRegistration_lower(_ value: FfiCacheLayoutRegistration) -> RustBuffer {
-    return FfiConverterTypeFfiCacheLayoutRegistration.lower(value)
-}
-
-
-/**
  * FFI-friendly per-item configuration. All fields immutable after
  * [`crate::item::AudioPlayerItem::new`].
  */
@@ -3673,14 +3810,13 @@ public func FfiConverterTypeFfiKeyRule_lower(_ value: FfiKeyRule) -> RustBuffer 
  */
 public struct FfiPlayerConfig {
     /**
-     * DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
-     * no DRM is needed.
+     * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
      */
     public let keyOptions: FfiKeyOptions
     /**
-     * Cache configuration shared by all items.
+     * Shared asset store used by every item created by this player.
      */
-    public let cache: FfiCacheConfig
+    public let store: FfiAssetStore
     /**
      * Number of EQ bands (log-spaced). Default: 10.
      */
@@ -3690,17 +3826,16 @@ public struct FfiPlayerConfig {
     // declare one manually.
     public init(
         /**
-         * DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
-         * no DRM is needed.
+         * DRM key handling. Pass an empty [`FfiKeyOptions`] when no DRM is needed.
          */keyOptions: FfiKeyOptions,
         /**
-         * Cache configuration shared by all items.
-         */cache: FfiCacheConfig,
+         * Shared asset store used by every item created by this player.
+         */store: FfiAssetStore,
         /**
          * Number of EQ bands (log-spaced). Default: 10.
          */eqBandCount: UInt32) {
         self.keyOptions = keyOptions
-        self.cache = cache
+        self.store = store
         self.eqBandCount = eqBandCount
     }
 
@@ -3721,14 +3856,14 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
         return
             try FfiPlayerConfig(
                 keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf),
-                cache: FfiConverterTypeFfiCacheConfig.read(from: &buf),
+                store: FfiConverterTypeFfiAssetStore.read(from: &buf),
                 eqBandCount: FfiConverterUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiPlayerConfig, into buf: inout [UInt8]) {
         FfiConverterTypeFfiKeyOptions.write(value.keyOptions, into: &buf)
-        FfiConverterTypeFfiCacheConfig.write(value.cache, into: &buf)
+        FfiConverterTypeFfiAssetStore.write(value.store, into: &buf)
         FfiConverterUInt32.write(value.eqBandCount, into: &buf)
     }
 }
@@ -4153,6 +4288,82 @@ public func FfiConverterTypeFfiAdvanceReason_lower(_ value: FfiAdvanceReason) ->
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
+ * Playback protocol whose default asset layout can be replaced.
+ */
+
+public enum FfiAssetLayoutTarget: Equatable, Hashable {
+
+    /**
+     * Direct-file sources and their derived resources.
+     */
+    case file
+    /**
+     * HLS playlists, media resources, keys, and derived resources.
+     */
+    case hls
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiAssetLayoutTarget: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAssetLayoutTarget: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAssetLayoutTarget
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAssetLayoutTarget {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .file
+
+        case 2: return .hls
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiAssetLayoutTarget, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .file:
+            writeInt(&buf, Int32(1))
+
+
+        case .hls:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetLayoutTarget_lift(_ buf: RustBuffer) throws -> FfiAssetLayoutTarget {
+    return try FfiConverterTypeFfiAssetLayoutTarget.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAssetLayoutTarget_lower(_ value: FfiAssetLayoutTarget) -> RustBuffer {
+    return FfiConverterTypeFfiAssetLayoutTarget.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
  * FFI representation of one resource within an asset.
  */
 
@@ -4450,82 +4661,6 @@ public func FfiConverterTypeFfiAudioCodecKind_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeFfiAudioCodecKind_lower(_ value: FfiAudioCodecKind) -> RustBuffer {
     return FfiConverterTypeFfiAudioCodecKind.lower(value)
-}
-
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
-/**
- * Protocol whose resources use a registered cache layout.
- */
-
-public enum FfiCacheLayoutTarget: Equatable, Hashable {
-
-    /**
-     * Direct-file sources and their derived resources.
-     */
-    case file
-    /**
-     * HLS playlists, media resources, keys, and derived resources.
-     */
-    case hls
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension FfiCacheLayoutTarget: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiCacheLayoutTarget: FfiConverterRustBuffer {
-    typealias SwiftType = FfiCacheLayoutTarget
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCacheLayoutTarget {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-
-        case 1: return .file
-
-        case 2: return .hls
-
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: FfiCacheLayoutTarget, into buf: inout [UInt8]) {
-        switch value {
-
-
-        case .file:
-            writeInt(&buf, Int32(1))
-
-
-        case .hls:
-            writeInt(&buf, Int32(2))
-
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiCacheLayoutTarget_lift(_ buf: RustBuffer) throws -> FfiCacheLayoutTarget {
-    return try FfiConverterTypeFfiCacheLayoutTarget.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiCacheLayoutTarget_lower(_ value: FfiCacheLayoutTarget) -> RustBuffer {
-    return FfiConverterTypeFfiCacheLayoutTarget.lower(value)
 }
 
 
@@ -8019,31 +8154,6 @@ fileprivate struct FfiConverterSequenceTypeAudioPlayerItem: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeFfiCacheLayoutRegistration: FfiConverterRustBuffer {
-    typealias SwiftType = [FfiCacheLayoutRegistration]
-
-    public static func write(_ value: [FfiCacheLayoutRegistration], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeFfiCacheLayoutRegistration.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiCacheLayoutRegistration] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [FfiCacheLayoutRegistration]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeFfiCacheLayoutRegistration.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterSequenceTypeFfiKeyRule: FfiConverterRustBuffer {
     typealias SwiftType = [FfiKeyRule]
 
@@ -8288,6 +8398,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_seekcallback_on_complete() != 52837) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_ffiassetlayoutregistry_register() != 40512) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_fficipher_decrypt() != 15370) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8405,10 +8518,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 40748) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 1980) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 30855) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 34400) {
         return InitializationResult.apiChecksumMismatch
     }
 

@@ -314,25 +314,19 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         /// Wildcard `"*"` rules must come last — they mask any rule
         /// registered after them.
         public var keyRules: [KeyRule]
-        /// Root directory for the entire asset store. `nil` uses the platform
-        /// default; protocol layouts only control paths below this directory.
-        public var cacheDir: String?
-        /// Per-protocol cache layouts. An empty registry keeps the defaults.
-        /// The registry is captured when the player is created.
-        public var layouts: CacheLayoutRegistry
+        /// Shared Rust-owned asset store used by this player.
+        public var store: AssetStore
 
         /// Construct a player config. All parameters have sensible
         /// defaults; pass DRM `keyRules` for encrypted streams.
         public init(
             eqBandCount: Int = 10,
             keyRules: [KeyRule] = [],
-            cacheDir: String? = nil,
-            layouts: CacheLayoutRegistry = CacheLayoutRegistry()
+            store: AssetStore = AssetStore()
         ) {
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules
-            self.cacheDir = cacheDir
-            self.layouts = layouts
+            self.store = store
         }
     }
 
@@ -349,10 +343,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
         let ffiConfig = FfiPlayerConfig(
             keyOptions: FfiKeyOptions(rules: ffiRules),
-            cache: FfiCacheConfig(
-                cacheDir: config.cacheDir,
-                layouts: config.layouts.ffiRegistrations
-            ),
+            store: config.store.inner,
             eqBandCount: UInt32(config.eqBandCount)
         )
         self._inner = AudioPlayer(config: ffiConfig)
