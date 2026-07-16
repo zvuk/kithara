@@ -6,6 +6,7 @@ pub mod protocol;
 pub mod state;
 #[cfg(test)]
 pub(crate) mod testing;
+mod transport;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;

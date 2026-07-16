@@ -38,6 +38,8 @@ to the single `decoder` field.
   and the shared decode worker.
 - `PlayerImpl` owns playlist and parameter state, transport flow, status, and
   item handover.
+- `Tempo` and `SessionTransportSnapshot` expose the render-driven musical
+  transport shared by every engine in one session.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
 - `PlayerNode` is the public real-time audio graph node.
 - `Equalizer` is the remaining mockable trait surface.

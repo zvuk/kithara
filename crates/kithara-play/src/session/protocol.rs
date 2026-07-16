@@ -5,7 +5,7 @@ mod wire {
     use kithara_platform::sync::mpsc;
 
     use crate::{
-        api::{SessionDuckingMode, SlotId},
+        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::SlotControl,
     };
 
@@ -26,6 +26,24 @@ mod wire {
         SlotNotFound(SlotId),
         #[error("session context not initialised")]
         NoContext,
+        /// The session transport rejected an update.
+        #[error("session transport update failed: {0}")]
+        TransportSync(String),
+        /// The active graph has not processed the session transport yet.
+        #[error("session transport has not been processed")]
+        TransportNotProcessed,
+        /// A different session transport commit is awaiting a render result.
+        #[error("session transport commit {revision} is still pending")]
+        TransportCommitPending { revision: u64 },
+        /// The render graph rejected a session transport commit.
+        #[error("session transport commit {revision} was rejected at the render boundary")]
+        TransportCommitRejected { revision: u64 },
+        /// The monotonic session transport revision cannot advance further.
+        #[error("session transport revision is exhausted")]
+        TransportRevisionExhausted,
+        /// The graph frame used to schedule a transport commit cannot advance further.
+        #[error("session transport frame is exhausted")]
+        TransportFrameExhausted,
         #[error("eq band out of range: {band} (bands: {bands})")]
         EqBandOutOfRange { band: usize, bands: usize },
         #[error("stream start failed: {0}")]
@@ -78,6 +96,12 @@ mod wire {
             mode: SessionDuckingMode,
         },
         SessionDucking,
+        /// Change the tempo of the shared session transport.
+        SetSessionTempo {
+            tempo: Tempo,
+        },
+        /// Query the transport state last processed by the audio graph.
+        SessionTransport,
         InvalidateAudioRoute {
             reason: String,
         },
@@ -95,6 +119,8 @@ mod wire {
         Ok,
         PlayerRegistered(PlayerId),
         SessionDucking(SessionDuckingMode),
+        /// The transport state last processed by the audio graph.
+        SessionTransport(SessionTransportSnapshot),
         SlotAllocated(AllocatedSlot),
         SampleRate(u32),
         Err(SessionError),
@@ -113,7 +139,10 @@ mod handle {
     use kithara_platform::sync::Arc;
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply};
-    use crate::{api::SlotId, error::PlayError};
+    use crate::{
+        api::{SessionTransportSnapshot, SlotId, Tempo},
+        error::PlayError,
+    };
 
     pub trait SessionDispatcher: Send + Sync + 'static {
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
@@ -228,6 +257,19 @@ mod handle {
                 volume,
             })
             .map(|_| ())
+        }
+
+        pub(crate) fn set_session_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SetSessionTempo { tempo }).map(|_| ())
+        }
+
+        pub(crate) fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
+            match self.exec_ok(Cmd::SessionTransport)? {
+                Reply::SessionTransport(snapshot) => Ok(snapshot),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session transport query".into(),
+                )),
+            }
         }
 
         pub fn start_player(

@@ -5,6 +5,7 @@ use super::{
     graph::{controls, lifecycle, player_index, slots},
     protocol::{Cmd, PlayerId, Reply, SessionError},
     state::{SessionState, register_player},
+    transport,
 };
 
 pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply {
@@ -64,6 +65,14 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Reply::Ok
         }
         Cmd::SessionDucking => Reply::SessionDucking(state.session_ducking),
+        Cmd::SetSessionTempo { tempo } => match transport::set_tempo(state, tempo) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
+        Cmd::SessionTransport => match transport::snapshot(state) {
+            Ok(snapshot) => Reply::SessionTransport(snapshot),
+            Err(err) => Reply::Err(err),
+        },
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
         Cmd::QuerySampleRate => {
             let sample_rate = state

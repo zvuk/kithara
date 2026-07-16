@@ -10,14 +10,15 @@ pub(crate) struct PitchBend {
     bend: AtomicF32,
 }
 
-impl PitchBend {
-    #[must_use]
-    pub(crate) fn new() -> Self {
+impl Default for PitchBend {
+    fn default() -> Self {
         Self {
             bend: AtomicF32::new(1.0),
         }
     }
+}
 
+impl PitchBend {
     pub(crate) fn set_bend(&self, bend: f32) {
         self.bend.store(Self::normalize(bend), Ordering::Relaxed);
     }
@@ -41,14 +42,14 @@ mod tests {
 
     #[test]
     fn defaults_to_unity() {
-        let bend = PitchBend::new();
+        let bend = PitchBend::default();
 
         assert_eq!(bend.multiplier(), 1.0);
     }
 
     #[test]
     fn bend_multiplier_is_clamped_and_strictly_positive() {
-        let bend = PitchBend::new();
+        let bend = PitchBend::default();
 
         bend.set_bend(100.0);
         assert_eq!(bend.multiplier(), MAX_AUDIBLE_RATE);

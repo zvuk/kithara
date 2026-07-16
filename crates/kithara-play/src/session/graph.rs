@@ -6,7 +6,7 @@ use tracing::{debug, warn};
 
 use super::{
     protocol::{AllocatedSlot, PlayerId, Reply, SessionError},
-    state::{PlayerState, SessionState, SlotNodes, ensure_ctx},
+    state::{PlayerState, SessionState, SessionTransportState, SlotNodes, ensure_ctx},
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
@@ -171,8 +171,10 @@ pub(super) mod lifecycle {
                 fw_ctx.stop_stream();
             }
             state.ctx = None;
+            state.render_context_control = None;
             state.session_output_node_id = None;
             state.session_output_memo = None;
+            state.transport = SessionTransportState::default();
         }
     }
 }

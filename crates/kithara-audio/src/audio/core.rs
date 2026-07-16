@@ -466,7 +466,7 @@ mod tests {
                     controls: Controls {
                         host_sample_rate: Arc::new(AtomicU32::new(0)),
                         playback_rate: Arc::new(AtomicF32::new(1.0)),
-                        pitch_bend: PitchBend::new(),
+                        pitch_bend: PitchBend::default(),
                         stretch: None,
                         service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
                     },

@@ -16,7 +16,7 @@ use super::{
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::SharedEq,
-    rt::MasterEqNode,
+    rt::{MasterEqNode, RenderContextControl, SessionTransportCommit, install_render_context},
 };
 
 #[derive(Debug)]
@@ -62,8 +62,31 @@ impl PlayerState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TransportCommitPhase {
+    Aborting,
+    Applying,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PendingTransportCommit {
+    pub(super) phase: TransportCommitPhase,
+    pub(super) revision: u64,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct SessionTransportState {
+    pub(super) accepted: Option<SessionTransportCommit>,
+    pub(super) completed_revision: u64,
+    pub(super) last_revision: u64,
+    pub(super) observed: Option<SessionTransportCommit>,
+    pub(super) pending: Option<PendingTransportCommit>,
+    pub(super) rejected: Option<u64>,
+}
+
 pub struct SessionState<B: AudioBackend> {
     pub(super) ctx: Option<FirewheelCtx<B>>,
+    pub(super) render_context_control: Option<RenderContextControl>,
     pub(super) session_output_memo: Option<Memo<VolumePanNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
     pub(super) next_player_id: PlayerId,
@@ -72,6 +95,7 @@ pub struct SessionState<B: AudioBackend> {
     pub(super) players: Vec<PlayerState>,
     pub(super) stream_needs_restart: bool,
     pub(super) sample_rate_hint: u32,
+    pub(super) transport: SessionTransportState,
 }
 
 impl<B: AudioBackend> SessionState<B> {
@@ -82,6 +106,7 @@ impl<B: AudioBackend> SessionState<B> {
         Self {
             start_stream_fn,
             ctx: None,
+            render_context_control: None,
             next_player_id: 1,
             players: Vec::new(),
             sample_rate_hint: Self::DEFAULT_SAMPLE_RATE,
@@ -89,6 +114,7 @@ impl<B: AudioBackend> SessionState<B> {
             session_output_memo: None,
             session_output_node_id: None,
             stream_needs_restart: false,
+            transport: SessionTransportState::default(),
         }
     }
 
@@ -152,8 +178,11 @@ fn create_firewheel_context<B: AudioBackend>(
         ..FirewheelConfig::default()
     };
     let mut ctx = FirewheelCtx::<B>::new(config);
+    let render_context_control = install_render_context(&mut ctx)
+        .map_err(|reason| SessionError::Graph(String::from(reason)))?;
     (state.start_stream_fn)(&mut ctx, sample_rate).map_err(SessionError::StreamStart)?;
     state.ctx = Some(ctx);
+    state.render_context_control = Some(render_context_control);
     state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
     trace_stream_info(state, "start-stream");

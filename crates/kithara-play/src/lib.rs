@@ -21,7 +21,8 @@ pub mod mock;
 
 pub use api::{
     DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlayerEvent,
-    PlayerStatus, RouteChangeReason, SessionDuckingMode, SessionEvent, SlotId, TimeControlStatus,
+    PlayerStatus, RouteChangeReason, SessionBeat, SessionBeatError, SessionDuckingMode,
+    SessionEvent, SessionTransportSnapshot, SlotId, Tempo, TempoError, TimeControlStatus,
     TimeRange, WaitingReason,
 };
 pub use bridge::{

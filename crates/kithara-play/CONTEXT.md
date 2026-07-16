@@ -186,6 +186,41 @@ cross-platform core (`session/{state,dispatch,protocol}.rs`) carries zero
 `#[cfg]`; the structural gates are the cfg lines around `mod native`, `mod web`,
 and their re-exports in `mod.rs`.
 
+## Session Musical Transport
+
+`SessionState` is the sole control-side transport ledger and revision allocator.
+`TransportCommitState` is the sole real-time owner of the analytical anchor
+`(render_frame, session_beat, tempo, playing, revision)`. Every `EngineImpl`
+connected to one session reaches the ledger through the typed session protocol;
+player and queue state do not mirror it. Firewheel owns only the execution
+graph, render clock, sample-rate observation, and event delivery.
+
+`Tempo` rejects non-finite and non-positive values before a commit is created.
+The first tempo command targets the current graph frame. Later changes target
+the current graph frame plus one declared maximum callback, preserving the beat
+at that exact frame and changing only the analytical slope from that frame
+onward. Firewheel musical transport, dynamic keyframes, and transport speed are
+not part of this contract. The current public session mutation surface changes
+tempo only; pause/resume transactions are outside this slice.
+
+Successful tempo commits advance one monotonic revision; repeating the same
+tempo is a no-op. The control side sends an immediate revisioned `Stage` event
+and a scheduled `Apply` event for the target frame. The pre-process adapter
+accepts `Apply` only when its revision, previous commit, sample rate, and graph
+frame match the staged transaction exactly. Late, stale, aborted, duplicate, or
+route-invalidated transactions cannot change the active anchor. Rejection keeps
+the previously observed commit authoritative and is returned as a typed session
+error.
+
+`SessionTransportSnapshot` is published as one render-observed value by the
+same adapter node. It never combines a control-side tempo or revision with an
+independently sampled graph clock. Until a candidate is applied, a query returns
+the last complete snapshot; before the first processed commit it returns
+`TransportNotProcessed`. Stream stop rejects any pending boundary, preserves
+the last processed beat, and reanchors the active commit on the first frame of
+the replacement route. Stopping the final engine ends the session transport
+lifetime and resets the control ledger and real-time state together.
+
 ## Route Changes
 
 `PlayerNodeProcessor::new_stream` is the host-rate bridge. A platform route

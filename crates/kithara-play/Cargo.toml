@@ -114,6 +114,7 @@ smallvec = { workspace = true }
 thiserror = { workspace = true }
 thunderdome = { workspace = true }
 tracing = { workspace = true }
+triple_buffer = { workspace = true }
 
 unimock = { workspace = true }
 url = { workspace = true }

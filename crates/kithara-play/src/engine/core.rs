@@ -174,6 +174,10 @@ impl EngineImpl {
     pub(crate) fn pcm_pool(&self) -> &PcmPool {
         &self.pcm_pool
     }
+
+    pub(super) fn session(&self) -> &SessionHandle {
+        &self.session
+    }
 }
 
 impl Drop for EngineImpl {

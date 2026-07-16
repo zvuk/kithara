@@ -20,4 +20,5 @@ mod red_crossfade_hls_to_mp3_blocks_render;
 mod resource_internal;
 mod resource_regressions;
 mod seamless_queue_advance;
+mod session_transport;
 mod silvercomet_seek_hang;

@@ -5005,6 +5005,7 @@ dependencies = [
  "thiserror 2.0.18",
  "thunderdome",
  "tracing",
+ "triple_buffer",
  "unimock",
  "url",
  "wasm-bindgen-test",

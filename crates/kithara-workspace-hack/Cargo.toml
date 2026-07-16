@@ -21,7 +21,7 @@ clap_builder = { version = "4", default-features = false, features = ["color", "
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
 crossbeam-utils = { version = "0.8" }
 either = { version = "1", default-features = false, features = ["use_std"] }
-firewheel = { version = "0.10", default-features = false, features = ["cpal", "tracing", "wasm-bindgen"] }
+firewheel = { version = "0.10", default-features = false, features = ["cpal", "scheduled_events", "tracing", "wasm-bindgen"] }
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
@@ -223,7 +223,7 @@ clap_builder = { version = "4", default-features = false, features = ["color", "
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
 crossbeam-utils = { version = "0.8" }
 either = { version = "1", default-features = false, features = ["use_std"] }
-firewheel = { version = "0.10", default-features = false, features = ["cpal", "tracing", "wasm-bindgen"] }
+firewheel = { version = "0.10", default-features = false, features = ["cpal", "scheduled_events", "tracing", "wasm-bindgen"] }
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }

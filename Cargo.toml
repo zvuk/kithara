@@ -272,7 +272,7 @@ fdk-aac = "0.8.0"
 fdk-aac-sys = "0.5.0"
 ffmpeg-next = "8.1.0"
 fieldwork = "0.5"
-firewheel = { version = "0.10.0", default-features = false, features = ["std", "tracing"] }
+firewheel = { version = "0.10.0", default-features = false, features = ["scheduled_events", "std", "tracing"] }
 firewheel-web-audio = { version = "0.4.0", default-features = false }
 futures = "0.3.32"
 glob = "0.3"
@@ -360,6 +360,7 @@ tracing-android = "0.2.0"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry"] }
 tracing-wasm = "0.2"
+triple_buffer = "8.1.1"
 uniffi = { version = "0.31.2", default-features = false }
 unimock = { version = "0.6", features = ["std"] }
 url = "2.5.8"

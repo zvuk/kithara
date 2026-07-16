@@ -219,7 +219,7 @@ where
         let metadata = decoder.metadata();
         let epoch = Arc::new(AtomicU64::new(0));
         let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
-        let pitch_bend = PitchBend::new();
+        let pitch_bend = PitchBend::default();
         let effects = create_effects(initial_spec, stretch.as_ref(), &pcm_pool, custom_effects);
         log_pipeline_ready(initial_spec, &host_sample_rate);
 
