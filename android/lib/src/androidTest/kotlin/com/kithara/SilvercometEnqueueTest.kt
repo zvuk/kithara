@@ -56,9 +56,10 @@ class SilvercometEnqueueTest {
     private fun runEnqueueScenario(urls: List<String>) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val cacheDir = File(context.filesDir, "kithara-cache-test").apply { mkdirs() }
+        val store = AssetStore(root = cacheDir.absolutePath)
 
         val player = KitharaPlayer(
-            config = KitharaPlayer.Config(cacheDir = cacheDir.absolutePath),
+            config = KitharaPlayer.Config(store = store),
         )
 
         val terminal = ConcurrentHashMap<String, TrackStatus>()
