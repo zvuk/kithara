@@ -1,7 +1,7 @@
 use anyhow::Result;
 use syn::{
-    Attribute, Field, ImplItemFn, ItemConst, ItemFn, ItemMod, ItemStatic, ItemStruct, Local, Pat,
-    PatIdent,
+    Attribute, Field, ImplItemFn, ItemConst, ItemEnum, ItemFn, ItemMod, ItemStatic, ItemStruct,
+    Local, Pat, PatIdent, Variant,
     visit::{self, Visit},
 };
 
@@ -67,6 +67,9 @@ each fallback hides another underlying failure mode.
 ✅  pick one source (or model the choice as user-facing config), don't \
    chain implementations.
 
+Fields in `*Retrying` and `*RetryExhausted` variants of `*Event` enums are \
+observational telemetry, not retry control state.
+
 Suppress with `// xtask-lint-ignore: retry_fallback` ONLY for legitimate \
 user-facing defaults (e.g. a config field literally named `fallback_url` \
 where the user opted in to two endpoints). Suppression for control flow \
@@ -100,6 +103,8 @@ impl Check for RetryFallback {
                 rel: &rel,
                 suppress: &suppress,
                 out: &mut violations,
+                inside_event_enum: false,
+                inside_retry_event_variant: false,
                 inside_test_mod: false,
             };
             v.visit_file(&file);
@@ -112,6 +117,8 @@ struct IdentVisitor<'a> {
     suppress: &'a Suppressions,
     out: &'a mut Vec<Violation>,
     rel: &'a str,
+    inside_event_enum: bool,
+    inside_retry_event_variant: bool,
     /// `true` while traversing inside a `#[cfg(test)]` module — test code
     /// can legitimately use names like `flags_max_retries_const` that
     /// describe the rule's own behaviour without smelling like a retry.
@@ -168,9 +175,15 @@ fn name_is_forbidden(name: &str) -> bool {
         .any(|sub| lower.contains(*sub))
 }
 
+fn is_retry_event_variant(name: &str) -> bool {
+    name.ends_with("Retrying") || name.ends_with("RetryExhausted")
+}
+
 impl<'ast> Visit<'ast> for IdentVisitor<'_> {
     fn visit_field(&mut self, node: &'ast Field) {
-        if let Some(ident) = &node.ident {
+        if let Some(ident) = &node.ident
+            && !self.inside_retry_event_variant
+        {
             let name = ident.to_string();
             if name_is_forbidden(&name) {
                 self.flag(ident.span().start().line, &name, "field");
@@ -185,6 +198,13 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
             self.flag(node.sig.ident.span().start().line, &name, "fn");
         }
         visit::visit_impl_item_fn(self, node);
+    }
+
+    fn visit_item_enum(&mut self, node: &'ast ItemEnum) {
+        let was_inside = self.inside_event_enum;
+        self.inside_event_enum = node.ident.to_string().ends_with("Event");
+        visit::visit_item_enum(self, node);
+        self.inside_event_enum = was_inside;
     }
 
     fn visit_item_const(&mut self, node: &'ast ItemConst) {
@@ -237,6 +257,14 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
         }
         visit::visit_local(self, node);
     }
+
+    fn visit_variant(&mut self, node: &'ast Variant) {
+        let was_inside = self.inside_retry_event_variant;
+        self.inside_retry_event_variant =
+            self.inside_event_enum && is_retry_event_variant(&node.ident.to_string());
+        visit::visit_variant(self, node);
+        self.inside_retry_event_variant = was_inside;
+    }
 }
 
 #[cfg(test)]
@@ -251,6 +279,8 @@ mod tests {
             rel: "test.rs",
             suppress: &suppress,
             out: &mut out,
+            inside_event_enum: false,
+            inside_retry_event_variant: false,
             inside_test_mod: false,
         };
         v.visit_file(&file);
@@ -278,6 +308,27 @@ mod tests {
     #[test]
     fn flags_let_attempts() {
         let src = "fn f() { let attempts = 0; }\n";
+        assert_eq!(count_violations(src), 1);
+    }
+
+    #[test]
+    fn allows_retry_fields_in_retry_telemetry_event() {
+        let src = "enum DownloadEvent {\n\
+            Retrying { attempt: u32, max_retries: u32 },\n\
+            RetryExhausted { max_retries: u32 },\n\
+        }\n";
+        assert_eq!(count_violations(src), 0);
+    }
+
+    #[test]
+    fn flags_retry_fields_in_other_event_variants() {
+        let src = "enum DownloadEvent { Configured { max_retries: u32 } }\n";
+        assert_eq!(count_violations(src), 1);
+    }
+
+    #[test]
+    fn flags_retry_fields_in_state_enums() {
+        let src = "enum RetryState { Retrying { attempt: u32 } }\n";
         assert_eq!(count_violations(src), 1);
     }
 

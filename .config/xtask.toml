@@ -277,7 +277,7 @@ js_artifact = "kithara-ffi.js"
 
 [quality]
 # Trait directory whose every `pub trait` must carry `#[unimock]`.
-unimock_traits_dir = "crates/kithara-play/src/traits"
+unimock_traits_dir = "crates/kithara-play/src/api"
 
 [ext.apple]
 # Demo app launched by `cargo xtask apple run`.
