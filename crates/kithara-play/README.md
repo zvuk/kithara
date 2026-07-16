@@ -40,6 +40,8 @@ to the single `decoder` field.
   item handover.
 - `Tempo` and `SessionTransportSnapshot` expose the render-driven musical
   transport shared by every engine in one session.
+- `TrackBinding` anchors one active track's analysed beat map to that session
+  transport with an immutable direction.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
 - `PlayerNode` is the public real-time audio graph node.
 - `Equalizer` is the remaining mockable trait surface.

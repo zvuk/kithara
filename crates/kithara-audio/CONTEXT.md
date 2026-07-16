@@ -117,7 +117,11 @@ today and by mobile surfaces (kithara-ffi) next:
 
 - **`Analyzer` / `TrackAnalyzers`** — crate-private streaming analyzer pieces.
   Each analyzer is fed every decoded chunk once; `TrackAnalyzers` stages
-  completion into the public `TrackAnalysis { waveform, beat, source_frames }`.
+  completion into the public `TrackAnalysis`. Alongside waveform, beat grid,
+  and source-frame count, worker-produced snapshots retain the decoded source
+  sample rate that defines the frame axis. One pass accepts one stable decoded
+  source format; a mid-pass channel or sample-rate change aborts that analysis
+  instead of combining incompatible frame axes.
 - **`AnalyzerBuilder`** — the public builder for selecting analysis passes.
   `with_waveform(buckets)` enables waveform extraction, `with_beat()` enables
   the NN beat slot when `beat-nn` is compiled and the model loads, and
@@ -172,6 +176,19 @@ today and by mobile surfaces (kithara-ffi) next:
   `AnalyzerBuilder::with_beat()` is a compile-time no-op. Apple FFI device
   builds intentionally omit `analysis-beat`; NN-only beat fallback for that set
   is future work, not a hidden runtime fallback.
+
+`TrackBeatMap` is the immutable musical-coordinate view derived from a
+`TrackAnalysis`. It converts analysed source-rate markers onto an explicit
+host-rate `SourceFrame` axis and maps them piecewise-linearly to `TrackBeat`.
+Actual beat markers define phase; the grid's aggregate BPM estimate is never
+used to fabricate marker positions. The first analysed downbeat is beat zero,
+so pickup beats remain representable as negative coordinates. Repeated,
+unordered, insufficient, or off-grid markers fail with `BeatMapError` instead
+of producing a guessed map. Markers beyond the decoded source extent are also
+invalid, and mapping is available only between the first and last analysed
+markers; neither boundary is extrapolated. Meter is exposed only when
+consecutive downbeat spans agree.
+
 
 ## Waveform
 

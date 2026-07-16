@@ -20,10 +20,10 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlayerEvent,
-    PlayerStatus, RouteChangeReason, SessionBeat, SessionBeatError, SessionDuckingMode,
-    SessionEvent, SessionTransportSnapshot, SlotId, Tempo, TempoError, TimeControlStatus,
-    TimeRange, WaitingReason,
+    DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection,
+    PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionBeatError,
+    SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
+    TempoError, TimeControlStatus, TimeRange, TrackBinding, WaitingReason,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,

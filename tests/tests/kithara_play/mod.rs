@@ -22,3 +22,4 @@ mod resource_regressions;
 mod seamless_queue_advance;
 mod session_transport;
 mod silvercomet_seek_hang;
+mod track_binding;

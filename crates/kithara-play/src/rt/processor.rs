@@ -309,8 +309,8 @@ impl PlayerNodeProcessor {
 
     fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.tracks
-            .iter()
-            .for_each(|(_, track)| track.resource().set_host_sample_rate(sample_rate));
+            .iter_mut()
+            .for_each(|(_, track)| track.update_host_sample_rate(sample_rate));
     }
 
     fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {

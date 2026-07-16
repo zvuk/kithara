@@ -221,6 +221,22 @@ the last processed beat, and reanchors the active commit on the first frame of
 the replacement route. Stopping the final engine ends the session transport
 lifetime and resets the control ledger and real-time state together.
 
+`kithara-audio::TrackBeatMap` owns the immutable analysed relationship between
+track beats and host-rate source frames. Each active `PlayerTrack` may own one
+`TrackBinding`, which composes that map with a session anchor, track anchor,
+and playback direction. In forward playback the track phase is
+`track_anchor + (session - session_anchor)`; reverse playback changes only that
+sign. The session owns no per-track map, and the binding is coordinate state
+rather than another tempo or clock. Missing or invalid analysis is a typed
+`SyncUnavailable` result, never a BPM-derived fallback.
+
+`TrackAxis` makes the active binding and its host sample rate one construction
+value, so a `PlayerTrack` cannot start with mismatched coordinate axes. A bound
+track cannot mutate that axis after a host sample-rate change: it retains the
+prepared rate and fails closed against the new session context until it is
+re-prepared. Unbound tracks update through the ordinary route-change path.
+
+
 ## Route Changes
 
 `PlayerNodeProcessor::new_stream` is the host-rate bridge. A platform route

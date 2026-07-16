@@ -53,6 +53,8 @@ processed chunks to the caller through lock-free rings.
   `kithara-stretch` backend is compiled.
 - `AnalyzerBuilder` / `AnalysisWorker` / `TrackAnalysis` — source-signal
   waveform and optional beat analysis.
+- `TrackBeatMap` / `TrackBeat` / `SourceFrame` — validated musical mapping from
+  analysed beat markers to an explicit host-rate source axis.
 - `Waveform` / `BeatGrid` — analysis artifacts; public blob I/O uses
   `Vec::<u8>::from(&artifact)` and `Artifact::try_from(&[u8])`.
 - `EngineLoad` / `EngineLoadSnapshot` — live decode/effects cost meter.

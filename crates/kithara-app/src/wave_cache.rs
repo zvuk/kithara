@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     io::{Error as IoError, ErrorKind},
+    num::NonZeroU32,
 };
 
 use kithara::{
@@ -22,7 +23,7 @@ use crate::waveform::TrackAnalysis;
 struct Consts;
 
 impl Consts {
-    const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0004;
+    const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0005;
     /// Analysis artifact resource under the track's asset scope. One blob per
     /// track: the active config fingerprint is checked inside it.
     const ANALYSIS_REL_PATH: &str = "analysis/track.analysis";
@@ -215,7 +216,7 @@ fn analysis_to_bytes(
     let waveform = analysis.waveform().map(Vec::<u8>::from).unwrap_or_default();
     let beat = analysis.beat().map(Vec::<u8>::from).unwrap_or_default();
     let mut out =
-        Vec::with_capacity(4 + 4 + fingerprint.len() + 8 + waveform.len() + 8 + beat.len() + 8);
+        Vec::with_capacity(4 + 4 + fingerprint.len() + 8 + waveform.len() + 8 + beat.len() + 8 + 4);
     out.extend_from_slice(&Consts::ANALYSIS_BYTES_VERSION.to_le_bytes());
     let fingerprint_len =
         u32::try_from(fingerprint.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
@@ -224,6 +225,8 @@ fn analysis_to_bytes(
     write_section(&mut out, &waveform)?;
     write_section(&mut out, &beat)?;
     out.extend_from_slice(&analysis.source_frames().to_le_bytes());
+    let source_sample_rate = analysis.source_sample_rate().map_or(0, NonZeroU32::get);
+    out.extend_from_slice(&source_sample_rate.to_le_bytes());
     Ok(out)
 }
 
@@ -248,6 +251,7 @@ fn analysis_from_bytes(
     let waveform_bytes = read_section(bytes, &mut cursor)?;
     let beat_bytes = read_section(bytes, &mut cursor)?;
     let source_frames = read_u64(bytes, &mut cursor)?;
+    let source_sample_rate = NonZeroU32::new(read_u32(bytes, &mut cursor)?);
     if cursor != bytes.len() {
         return Err(AnalysisBytesError::Corrupt);
     }
@@ -260,7 +264,12 @@ fn analysis_from_bytes(
         .then(|| BeatGrid::try_from(beat_bytes))
         .transpose()
         .map_err(|_| AnalysisBytesError::Corrupt)?;
-    Ok(TrackAnalysis::new(beat, waveform, source_frames))
+    Ok(match source_sample_rate {
+        Some(sample_rate) => {
+            TrackAnalysis::with_source_rate(beat, waveform, source_frames, sample_rate)
+        }
+        None => TrackAnalysis::new(beat, waveform, source_frames),
+    })
 }
 
 fn write_section(out: &mut Vec<u8>, section: &[u8]) -> Result<(), AnalysisBytesError> {
@@ -310,7 +319,7 @@ fn read_array<const N: usize>(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{num::NonZeroU32, path::Path};
 
     // The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
@@ -339,14 +348,19 @@ mod tests {
     fn grid() -> BeatGrid {
         BeatGrid::new(
             128.0,
-            vec![0, 10_000, 20_000],
+            vec![0, 10_000, 20_000, 30_000, 40_000],
             vec![0, 40_000],
             vec![GridSegment::new(0, 40_000, 1.01)],
         )
     }
 
     fn full_analysis() -> TrackAnalysis {
-        TrackAnalysis::new(Some(grid()), Some(wave()), 1_234_567)
+        TrackAnalysis::with_source_rate(
+            Some(grid()),
+            Some(wave()),
+            1_234_567,
+            NonZeroU32::new(44_100).expect("test rate"),
+        )
     }
 
     fn wave_only() -> TrackAnalysis {
@@ -380,6 +394,11 @@ mod tests {
             1_234_567,
             "source_frames must survive the round-trip"
         );
+        assert_eq!(
+            back.source_sample_rate(),
+            NonZeroU32::new(44_100),
+            "source sample rate must survive the round-trip"
+        );
     }
 
     #[kithara::test]
@@ -392,11 +411,17 @@ mod tests {
 
     #[kithara::test]
     fn codec_round_trips_beat_only() {
-        let analysis = TrackAnalysis::new(Some(grid()), None, 0);
+        let analysis = TrackAnalysis::with_source_rate(
+            Some(grid()),
+            None,
+            40_000,
+            NonZeroU32::new(48_000).expect("test rate"),
+        );
         let bytes = analysis_to_bytes(&analysis, FP).expect("encodes");
         let back = analysis_from_bytes(&bytes, FP).expect("decodes");
         assert!(back.waveform().is_none());
         assert_eq!(back.beat().expect("beat grid survives"), &grid());
+        assert_eq!(back.source_sample_rate(), NonZeroU32::new(48_000));
     }
 
     #[kithara::test]

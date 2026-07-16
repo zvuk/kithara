@@ -17,6 +17,7 @@ pub mod effects;
 mod exports;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
+mod musical;
 mod pipeline;
 mod region;
 pub(crate) mod renderer;
@@ -34,6 +35,7 @@ pub use exports::*;
 pub use kithara_resampler::{
     NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality,
 };
+pub use musical::{BeatMapError, CoordinateError, SourceFrame, TrackBeat, TrackBeatMap};
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, DecoderResamplerSettings},
     fetch::{EpochValidator, Fetch},

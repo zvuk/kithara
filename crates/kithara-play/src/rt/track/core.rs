@@ -7,18 +7,45 @@ use kithara_platform::sync::Arc;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
-use crate::bridge::TrackState;
+use crate::{api::TrackBinding, bridge::TrackState};
+
+/// Canonical host-frame axis and optional musical binding for a track.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TrackAxis {
+    binding: Option<TrackBinding>,
+    host_sample_rate: NonZeroU32,
+}
+
+impl From<NonZeroU32> for TrackAxis {
+    fn from(host_sample_rate: NonZeroU32) -> Self {
+        Self {
+            binding: None,
+            host_sample_rate,
+        }
+    }
+}
+
+impl From<TrackBinding> for TrackAxis {
+    fn from(binding: TrackBinding) -> Self {
+        Self {
+            host_sample_rate: binding.map().host_sample_rate(),
+            binding: Some(binding),
+        }
+    }
+}
 
 /// Parameters used to create a track around an owned resource.
 #[derive(Builder)]
 pub struct TrackParams {
+    #[builder(into)]
+    axis: TrackAxis,
     item_id: Option<Arc<str>>,
     src: Arc<str>,
     #[builder(default)]
     fade_duration: f32,
     #[builder(default)]
     prefetch_duration: f32,
-    sample_rate: NonZeroU32,
     #[builder(default = FadeCurve::SquareRoot)]
     fade_curve: FadeCurve,
 }
@@ -31,6 +58,7 @@ pub struct TrackParams {
 #[fieldwork(opt_in, get)]
 pub struct PlayerTrack {
     pub(super) resource: Box<PlayerResource>,
+    pub(super) binding: Option<TrackBinding>,
     pub(super) fade: TrackFade,
     pub(super) item_id: Option<Arc<str>>,
     #[field(get, copy)]
@@ -74,16 +102,22 @@ impl PlayerTrack {
     #[must_use]
     pub fn new(resource: Box<PlayerResource>, params: TrackParams) -> Self {
         let TrackParams {
+            axis,
             item_id,
             src: _src,
             fade_duration,
             prefetch_duration,
-            sample_rate,
             fade_curve,
         } = params;
+        let TrackAxis {
+            binding,
+            host_sample_rate: sample_rate,
+        } = axis;
+        resource.set_host_sample_rate(sample_rate);
         let observed_duration = resource.duration();
         let track = Self {
             resource,
+            binding,
             item_id,
             state: TrackState::Preloading,
             state_dirty: false,
@@ -103,6 +137,12 @@ impl PlayerTrack {
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
         self.resource.decoded_frontier()
+    }
+
+    /// Returns the immutable synchronization binding owned by this active track.
+    #[must_use]
+    pub fn binding(&self) -> Option<&TrackBinding> {
+        self.binding.as_ref()
     }
 
     /// Current visible (post-gapless-trim) duration in seconds.
@@ -191,9 +231,33 @@ impl PlayerTrack {
 
     /// Re-create the `MixDSP` with a new fade duration.
     pub fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
+        self.apply_host_sample_rate(sample_rate);
         self.fade
             .update_duration(fade_duration, sample_rate, self.state.is_leading());
+    }
+
+    pub(crate) fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        if self.apply_host_sample_rate(sample_rate) {
+            let fade_duration = self.fade.duration();
+            self.fade
+                .update_duration(fade_duration, sample_rate, self.state.is_leading());
+        }
+    }
+
+    fn apply_host_sample_rate(&mut self, sample_rate: NonZeroU32) -> bool {
+        if self.sample_rate == sample_rate.get() {
+            return false;
+        }
+        if self
+            .binding
+            .as_ref()
+            .is_some_and(|binding| binding.map().host_sample_rate() != sample_rate)
+        {
+            return false;
+        }
+        self.resource.set_host_sample_rate(sample_rate);
         self.sample_rate = sample_rate.get();
+        true
     }
 
     /// Map track state to worker scheduling priority and push the update.

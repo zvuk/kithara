@@ -25,6 +25,7 @@ where
             beat: self.beat.build(spec, &self.pcm_pool),
             waveform: waveform::build(&self.waveform, spec),
             source_frames: 0,
+            source_spec: spec,
         }
     }
 
@@ -103,18 +104,26 @@ mod tests {
     use unimock::{MockFn, Unimock, matching};
 
     use super::{
-        super::{session::TrackAnalyzers, track::TrackAnalysis},
+        super::{
+            session::{AnalysisInputError, TrackAnalyzers},
+            track::TrackAnalysis,
+        },
         AnalyzerBuilder,
     };
     use crate::analysis::beat::{BeatDetector, BeatDetectorMock, GridParams, RawBeats};
 
     fn chunk(frames: usize, channels: u16) -> PcmChunk {
+        chunk_at_rate(frames, channels, 44_100)
+    }
+
+    fn chunk_at_rate(frames: usize, channels: u16, sample_rate: u32) -> PcmChunk {
         let samples = vec![0.0_f32; frames * usize::from(channels)];
         PcmChunk::new(
             PcmMeta {
                 spec: PcmSpec {
                     channels,
-                    sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
+                    sample_rate: NonZeroU32::new(sample_rate)
+                        .expect("test sample rate is non-zero"),
                 },
                 frames: u32::try_from(frames).unwrap_or(0),
                 ..Default::default()
@@ -128,13 +137,20 @@ mod tests {
         mut detector: Option<crate::analysis::slots::beat::Detector>,
     ) -> Vec<TrackAnalysis> {
         let source_frames = analyzers.source_frames();
+        let source_sample_rate = analyzers.source_sample_rate();
         let waveform = analyzers.finish_waveform();
-        let mut out = vec![TrackAnalysis::new(None, waveform.clone(), source_frames)];
+        let mut out = vec![TrackAnalysis::with_source_rate(
+            None,
+            waveform.clone(),
+            source_frames,
+            source_sample_rate,
+        )];
         if analyzers.has_beat() {
-            out.push(TrackAnalysis::new(
+            out.push(TrackAnalysis::with_source_rate(
                 analyzers.finish_beat(detector.as_mut()),
                 waveform,
                 source_frames,
+                source_sample_rate,
             ));
         }
         out
@@ -162,7 +178,9 @@ mod tests {
         let mut analyzers = AnalyzerBuilder::<NoResamplerBackend>::default()
             .with_waveform(8)
             .build(spec);
-        analyzers.push(&chunk(64, 2), None);
+        analyzers
+            .push(&chunk(64, 2), None)
+            .expect("stable input format");
 
         let stages = collect(analyzers, None);
         assert_eq!(stages.len(), 1, "waveform-only emits exactly once");
@@ -181,7 +199,9 @@ mod tests {
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder.build(spec);
-        analyzers.push(&chunk(8192, 2), detector.as_mut());
+        analyzers
+            .push(&chunk(8192, 2), detector.as_mut())
+            .expect("stable input format");
 
         let stages = collect(analyzers, detector);
         assert_eq!(
@@ -201,5 +221,46 @@ mod tests {
             second.waveform().map(Vec::<u8>::from),
             "both stages share the same waveform"
         );
+    }
+
+    #[test]
+    fn analysis_rejects_mid_pass_format_change() {
+        let spec = PcmSpec {
+            channels: 2,
+            sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
+        };
+        let mut analyzers = AnalyzerBuilder::<NoResamplerBackend>::default()
+            .with_waveform(8)
+            .build(spec);
+
+        let error = analyzers
+            .push(&chunk_at_rate(64, 2, 48_000), None)
+            .expect_err("one analysis pass has one source format");
+
+        assert!(matches!(
+            error,
+            AnalysisInputError::FormatChanged { expected, actual }
+                if expected == spec && actual.sample_rate.get() == 48_000
+        ));
+        assert_eq!(analyzers.source_frames(), 0);
+    }
+
+    #[test]
+    fn analysis_rejects_source_frame_count_overflow() {
+        let spec = PcmSpec {
+            channels: 2,
+            sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
+        };
+        let mut analyzers = AnalyzerBuilder::<NoResamplerBackend>::default()
+            .with_waveform(8)
+            .build(spec);
+        analyzers.source_frames = u64::MAX;
+
+        let error = analyzers
+            .push(&chunk(1, 2), None)
+            .expect_err("source extent must not saturate");
+
+        assert_eq!(error, AnalysisInputError::SourceFrameCountOverflow);
+        assert_eq!(analyzers.source_frames(), u64::MAX);
     }
 }

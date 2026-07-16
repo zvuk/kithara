@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 
 use super::{
     processor::PlayerNodeProcessor,
-    track::{PlayerResource, PlayerTrack, TrackParams},
+    track::{PlayerResource, PlayerTrack, TrackAxis, TrackParams},
 };
 use crate::bridge::{PlayerCmd, PlayerNotification, TrackState, TrackTransition};
 
@@ -183,12 +183,11 @@ impl PlayerNodeProcessor {
 
         self.evict_tracks_if_needed();
 
-        resource.set_host_sample_rate(self.sample_rate);
-
         let loaded_src = src.clone();
+        let axis = TrackAxis::from(self.sample_rate);
         let params = TrackParams::builder()
+            .axis(axis)
             .src(src.clone())
-            .sample_rate(self.sample_rate)
             .maybe_item_id(item_id)
             .fade_duration(self.crossfade.duration)
             .prefetch_duration(self.prefetch_duration)
