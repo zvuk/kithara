@@ -516,6 +516,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
 #[kithara::test(
     tokio,
     browser,
+    flash(false),
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
