@@ -22,6 +22,38 @@ not enable `resample-rubato`, `analysis-beat`, or `analysis-waveform`.
 fixed-ratio rubato stage and beat analysis enabled; Android does not use the
 Apple fused SRC path.
 
+## Cache ownership and layouts
+
+`FfiPlayerConfig.cache: FfiCacheConfig` is the only native cache
+configuration input. Player construction creates one `AssetStore`; cheap
+clones of that same `Arc`-backed handle are passed to every file, HLS, playback,
+and analysis resource owned by the player. `cache_dir` selects the outer disk
+root, while `layouts` independently controls paths within each asset root.
+
+Each `FfiCacheLayoutRegistration` targets either the file or HLS protocol
+marker. Registrations are applied in order, so the last registration for a
+target wins. An unregistered target uses `DefaultLayout`; there is no parallel
+options type, per-item store builder, or singular fallback layout.
+
+Foreign `root` and `path` callbacks receive complete owned FFI values. `root`
+is invoked once per store scope and `path` once per resource key derivation.
+After a key is minted, cloning the scope and all acquire, open, read, write,
+seek, state, availability, demand, and eviction operations stay in Rust and do
+not cross the FFI callback boundary. Repeating scope or key derivation invokes
+the corresponding callback again.
+
+Callbacks must be deterministic, fast, non-blocking, non-throwing, and safe on
+background threads. Invalid output fails scope or key creation; it is neither
+sanitized nor replaced with the default layout. A URL resource contains the
+full URL, so custom delegates must preserve any required query identity without
+writing query text, credentials, or other secrets into a path. The default
+layout uses a bounded query fingerprint and ignores fragments.
+
+The Apple wrapper exposes this contract as
+`KitharaPlayer.Config(cacheDir:layouts:)` and `CacheLayoutRegistry`. The
+registry is converted to an immutable FFI registration list when the player is
+created.
+
 ## Web target
 
 `src/lib.rs` gates the high-level target split: `mod native` for non-wasm and

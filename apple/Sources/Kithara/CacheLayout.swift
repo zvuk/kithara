@@ -4,6 +4,9 @@ import KitharaFFI
 public typealias CacheAssetSource = FfiAssetSource
 
 /// Resource identity passed to ``CacheLayoutDelegate/path(resource:)``.
+/// `.source` is direct-file media, `.url` covers HLS playlists, init segments,
+/// media segments, and keys, and `.named` covers analysis and other derived
+/// artifacts.
 public typealias CacheAssetResource = FfiAssetResource
 
 /// Maps asset sources and resources to paths inside Kithara's cache.
@@ -14,12 +17,16 @@ public typealias CacheAssetResource = FfiAssetResource
 /// `root` is called once whenever a store scope is created. `path` is called
 /// once whenever a resource key is minted. Cache reads and writes using that
 /// key do not invoke either callback again.
+/// A `.url` resource contains the full URL. Custom delegates must preserve any
+/// required query identity without returning raw query text; Kithara's default
+/// layout uses a bounded query fingerprint and ignores fragments.
 /// `root` returns exactly one non-empty component and cannot equal `_index`.
 /// `path` returns a non-empty relative path separated by `/`; no component may
 /// end in `.tmp`. Components are ASCII, at most 96 bytes, never `.` or `..`,
 /// do not end in a dot or space, are not Windows device names, and contain
 /// neither control bytes nor `< > : " / \ | ? *`. These reserved-name checks
-/// are case-insensitive. Invalid output is rejected rather than rewritten.
+/// are case-insensitive. Invalid output fails scope or key creation rather than
+/// being rewritten or replaced with the default layout.
 public typealias CacheLayoutDelegate = FfiAssetLayout
 
 /// Playback source whose default cache layout can be replaced.

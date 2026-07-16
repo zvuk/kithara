@@ -1781,6 +1781,8 @@ public func FfiConverterTypeAudioPlayerItem_lower(_ value: AudioPlayerItem) -> U
  * `root` is called once for each store scope being created. `path` is called
  * once for each resource key being minted. Cache operations using that key do
  * not invoke either callback again.
+ * Invalid output fails scope or key creation and never falls back to the
+ * default layout.
  *
  * `root` must return exactly one non-empty component and cannot equal
  * `_index`. `path` must return a non-empty relative path of components
@@ -1806,6 +1808,8 @@ public protocol FfiAssetLayout: AnyObject, Sendable {
  * `root` is called once for each store scope being created. `path` is called
  * once for each resource key being minted. Cache operations using that key do
  * not invoke either callback again.
+ * Invalid output fails scope or key creation and never falls back to the
+ * default layout.
  *
  * `root` must return exactly one non-empty component and cannot equal
  * `_index`. `path` must return a non-empty relative path of components
@@ -3180,6 +3184,9 @@ public func FfiConverterTypeSeekCallback_lower(_ value: SeekCallback) -> UInt64 
  * Cache configuration shared by all resources created by one player.
  */
 public struct FfiCacheConfig {
+    /**
+     * Outer directory containing the entire asset store.
+     */
     public let cacheDir: String?
     /**
      * Protocol-specific layouts. Later registrations replace earlier ones.
@@ -3188,7 +3195,10 @@ public struct FfiCacheConfig {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(cacheDir: String?,
+    public init(
+        /**
+         * Outer directory containing the entire asset store.
+         */cacheDir: String?,
         /**
          * Protocol-specific layouts. Later registrations replace earlier ones.
          */layouts: [FfiCacheLayoutRegistration]) {
@@ -4148,10 +4158,19 @@ public func FfiConverterTypeFfiAdvanceReason_lower(_ value: FfiAdvanceReason) ->
 
 public enum FfiAssetResource: Equatable, Hashable {
 
+    /**
+     * Direct-file source bytes with their resolved extension.
+     */
     case source(`extension`: String
     )
+    /**
+     * A URL-addressed resource such as a playlist, init, segment, or key.
+     */
     case url(url: String
     )
+    /**
+     * A named derived artifact such as track analysis.
+     */
     case named(namespace: String, name: String
     )
 
@@ -4442,7 +4461,13 @@ public func FfiConverterTypeFfiAudioCodecKind_lower(_ value: FfiAudioCodecKind) 
 
 public enum FfiCacheLayoutTarget: Equatable, Hashable {
 
+    /**
+     * Direct-file sources and their derived resources.
+     */
     case file
+    /**
+     * HLS playlists, media resources, keys, and derived resources.
+     */
     case hls
 
 

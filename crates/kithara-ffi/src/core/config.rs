@@ -8,7 +8,9 @@ use crate::layout::FfiAssetLayout;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiCacheLayoutTarget {
+    /// Direct-file sources and their derived resources.
     File,
+    /// HLS playlists, media resources, keys, and derived resources.
     Hls,
 }
 
@@ -33,6 +35,7 @@ impl fmt::Debug for FfiCacheLayoutRegistration {
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiCacheConfig {
+    /// Outer directory containing the entire asset store.
     pub cache_dir: Option<String>,
     /// Protocol-specific layouts. Later registrations replace earlier ones.
     pub layouts: Vec<FfiCacheLayoutRegistration>,

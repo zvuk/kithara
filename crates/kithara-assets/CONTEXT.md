@@ -9,24 +9,71 @@ Detailed contracts and invariants for the kithara-assets crate; the README is th
 ## Key mapping (normative)
 
 Disk mapping is `<cache_root>/<layout.root(source)>/<layout.path(resource)>`.
-Higher layers describe an `AssetSource` and `AssetResource`; they do not supply
-an already-formed relative cache path. Assets validates both layout outputs
-before constructing a `ResourceKey`.
+`cache_root` belongs to `StorageBackend::Disk`; a layout cannot escape or
+replace it. Higher layers describe an `AssetSource` and `AssetResource`; they do
+not supply an already-formed relative cache path. The store validates both
+layout outputs before constructing a `ResourceKey`.
+
+An absolute `ResourceKey` is the separate read-in-place capability for local
+source media. It points to the original file and therefore does not describe a
+cache file. Cached resources derived from a local source still use
+`AssetSource::Local` and the normal layout mapping under `cache_root`.
 
 ### Layout
 
 The `AssetStore` owns an immutable `AssetLayoutRegistry`, configured through
-`AssetStoreBuilder::layouts`. `AssetStore::scope::<T>(&AssetSource)` selects the
-layout once and resolves its root; `AssetScope::key(&AssetResource)` invokes the
-selected layout once to mint the `ResourceKey` used by cache, leases, eviction,
-demand, and availability. Switching layouts does not migrate existing cache
-entries.
+`AssetStoreBuilder::layouts`. A registration is keyed by the exact protocol
+marker type; an absent marker uses the registry default, and registering the
+same marker again replaces its previous layout. The selected layout is a
+snapshot of store construction. Changing a registry later has no effect and
+switching layouts does not migrate existing cache entries.
 
-`DefaultLayout` maps source bytes to `track/track.<ext>`, URL resources to a
-safe authority/path mirror under `track/`, and named resources to their
-namespace and name. Non-empty URL queries add a bounded fingerprint before the
-leaf extension. Any registered custom layout is subject to the same root/path
-validation and invalid output returns `AssetsError::InvalidKey`.
+`AssetStore::scope::<T>(&AssetSource)` performs one registry lookup and invokes
+`AssetLayout::root` once. Each `AssetScope::key(&AssetResource)` invokes
+`AssetLayout::path` once. The resulting `ResourceKey` carries both resolved
+components, so acquire, open, read, write, seek, state, availability, demand,
+and eviction operations do not consult the registry or call the layout again.
+Calling `scope` or `key` again is a new derivation and invokes its callback
+again.
+
+`DefaultLayout` has the following stable mapping:
+
+| Resource | Default path below `<cache_root>/<asset_root>` |
+|---|---|
+| Direct remote file bytes | `track/track.<safe-ext>` |
+| URL resource (playlist, init, segment, key) | `track/<encoded-authority>/<encoded-server-path>` |
+| Named or derived resource | `<encoded-namespace>/<encoded-name>` |
+
+The default remote `asset_root` is a 128-bit SHA-256 prefix over the canonical
+source URL with query and fragment removed. An explicit discriminator is folded
+into a domain-separated root identity. The default local root is a
+domain-separated hash of the absolute lexical path; it performs no
+canonicalization or filesystem I/O.
+
+For a URL resource, every path and authority component is encoded portably.
+Cross-origin HLS resources therefore cannot alias one another. A non-empty
+query is represented by an ordered, bounded fingerprint inserted before the
+leaf extension; query text and credentials are never written to disk, and a
+fragment does not affect the path. Direct-file `AssetResource::Source` does not
+carry a query, so callers must set `AssetSource::Remote.discriminator` when two
+query variants of one canonical URL identify different file bytes.
+
+`AssetResource::Named` is the extension point for analysis and other derived
+artifacts. For example, analysis is the ordinary layout-owned resource
+`Named { namespace: "analysis", name: "track.analysis" }`; it does not bypass
+the default layout. The reserved `track` namespace is encoded separately so a
+named resource cannot alias direct source bytes. `_index/` is store metadata,
+not an asset resource, and is reserved outside every layout-owned asset root.
+Likewise, `<resource>.tmp` is a transient atomic-write companion rather than a
+second semantic resource; layouts cannot mint names ending in `.tmp`.
+
+Custom layouts must be deterministic, non-blocking, and secret-free. A root is
+one non-empty portable component and cannot be `_index`; a path is a non-empty
+relative sequence of portable components. Components are ASCII, at most 96
+bytes, cannot be `.` or `..`, cannot use Windows device names or reserved path
+characters, and cannot end in a dot, space, or `.tmp`. Invalid output returns
+`AssetsError::InvalidKey`; the store neither rewrites it nor falls back to a
+different layout.
 
 Auto-pin (lease) semantics: all resources opened through the leasing decorator (`LeaseAssets`) are automatically pinned by `asset_root` for the lifetime of the returned handle. The pin is an RAII guard stored inside the `LeaseWriter` / `LeaseReader`; drop the handle to release the pin.
 
@@ -125,13 +172,13 @@ All indices use `Atomic<R>` for crash-safe writes. **Availability persistence is
 `AssetStore` is the sole authoritative answer to "which bytes of this resource are present?". Callers query it through three read-only methods that are safe to invoke from high-frequency hot paths (e.g. the HLS decoder read loop):
 
 ```rust
-let scope = store.scope(asset_root);
-scope.store().contains_range(&key, 0..4096); // bool: every byte in range
-scope.store().available_ranges(&key);        // RangeSet<u64>: full snapshot
-scope.store().final_len(&key);               // Option<u64>: committed size
+store.contains_range(&key, 0..4096); // bool: every byte in range
+store.available_ranges(&key);        // RangeSet<u64>: full snapshot
+store.final_len(&key);               // Option<u64>: committed size
 ```
 
-Internally these sit on top of an aggregate `AvailabilityIndex` keyed by `(asset_root, ResourceKey)`:
+Internally these sit on top of an aggregate `AvailabilityIndex` keyed by the
+`asset_root` and relative path already carried inside each `ResourceKey`:
 
 - **Updated** by a `ScopedAvailabilityObserver` attached to every `Resource` opened through `DiskAssetStore` / `MemAssetStore`. Each `Resource::write_at` fires `on_write(range)` and each successful `Resource::commit(Some(len))` fires `on_commit(len)`. Opening a pre-existing committed file also seeds `0..final_len`.
 - **Queried** with a fast path first (`DashMap::get → Arc::clone → Mutex::lock`, with the shard guard released before the inner lock). A cold miss on `Disk` falls back once to `resource_state` so pre-existing committed files on disk are still discoverable before the observer has ever fired.
@@ -146,9 +193,9 @@ Decrypt-readiness is a **phantom typestate** on a split acquisition handle, not 
 - `ProcessedWriter` (Pending, **non-`Clone`**) owns the write+decrypt capability: `write_at` streams raw ciphertext to disk; `commit(self, final_len)` reads it back in chunks, transforms each via the resource's `ChunkSink` (no allocation, e.g. AES-128-CBC), writes the plaintext back, and **consumes** the writer into a `ProcessedReader`. `fail(self)` — or dropping the writer without committing — fails the gate so no waiting reader deadlocks. The writer exposes **no reads**: `read_at` on a Pending handle is a compile error.
 - `ProcessedReader` (Ready, `Clone`) exposes `read_at`/`wait_range`/`contains_range`/`len`/`next_gap`/`path` over already-processed bytes. `reactivate(self)` consumes the reader into a fresh `ProcessedWriter` carrying a **new** readiness gate.
 
-The Pending/Ready split is not confined to the processing layer — it is the shape of the whole `Assets` contract. `acquire_resource*` returns `AcquisitionResult<ActiveRes: WriteSide, ReadyRes: ReadSide>`; `open_resource*` returns the `ReadyRes` reader directly. Every decorator carries the split through mutually-recursive associated types (`WriteSide::Reader: ReadSide<Writer = Self>` ↔ `ReadSide::Writer: WriteSide<Reader = Self>`): `BaseWriter`/`BaseReader` (storage seam, `resource.rs`) → `ProcessedWriter`/`Reader` → `CachedWriter`/`Reader` → `LeaseWriter`/`Reader`, surfaced at the facade as `AssetWriter` / `AssetReader`. Because the commit owner is non-`Clone` but a streaming download closure needs a clone-able byte sink, `WriteSide::raw_write_handle()` yields a `RawWriteHandle` (a clone-able raw-write path into the writer's generation) decoupled from the single `commit`-owning writer. The cache stores **only `ReadyRes` readers** of the current generation; an acquire that hits a non-committed slot `reactivate`s a fresh writer and re-keys the cache entry, so prior committed reader clones keep their generation's gate.
+The Pending/Ready split is not confined to the processing layer — it is the shape of the whole `Assets` contract. `acquire_resource*` returns `AcquisitionResult<ActiveRes: WriteSide, ReadyRes: ReadSide>`; `open_resource*` returns the `ReadyRes` reader directly. Every decorator carries the split through mutually-recursive associated types (`WriteSide::Reader: ReadSide<Writer = Self>` ↔ `ReadSide::Writer: WriteSide<Reader = Self>`): `BaseWriter`/`BaseReader` (storage seam, `resource/handle.rs`) → `ProcessedWriter`/`Reader` → `CachedWriter`/`Reader` → `LeaseWriter`/`Reader`, surfaced at the facade as `AssetWriter` / `AssetReader`. Because the commit owner is non-`Clone` but a streaming download closure needs a clone-able byte sink, `WriteSide::raw_write_handle()` yields a `RawWriteHandle` (a clone-able raw-write path into the writer's generation) decoupled from the single `commit`-owning writer. The cache stores **only `ReadyRes` readers** of the current generation; an acquire that hits a non-committed slot `reactivate`s a fresh writer and re-keys the cache entry, so prior committed reader clones keep their generation's gate.
 
-This replaces the former runtime `ReadinessGate` (a `processed: Mutex<bool>` + `Condvar` shared across `Clone`s of one `ProcessedResource`). That shared gate was the root of the DRM read-before-ready race: a re-fetching writer's `reactivate` flipped the gate for an extant reader's committed clone, so `read_at` hit `StorageError::NotReadable` mid-playback (`live_ephemeral_small_cache_playback_drm`; the older `local_queue_playlist_behavior_*` post-seek hang). The fresh-gate-on-`reactivate` plus the non-`Clone` writer make that race unrepresentable — a reacquiring writer gets its own gate and a committed reader's type-level readiness is never revoked. The gate survives **privately** inside `process.rs` only as the writer↔reader handoff primitive, reachable through `commit`/`await_ready`. Storage lifecycle `status()` stays a runtime `&self` facade (see "Decorator Chain"); the two axes are independent.
+This replaces the former runtime `ReadinessGate` (a `processed: Mutex<bool>` + `Condvar` shared across `Clone`s of one `ProcessedResource`). That shared gate was the root of the DRM read-before-ready race: a re-fetching writer's `reactivate` flipped the gate for an extant reader's committed clone, so `read_at` hit `StorageError::NotReadable` mid-playback (`live_ephemeral_small_cache_playback_drm`; the older `local_queue_playlist_behavior_*` post-seek hang). The fresh-gate-on-`reactivate` plus the non-`Clone` writer make that race unrepresentable — a reacquiring writer gets its own gate and a committed reader's type-level readiness is never revoked. The gate survives **privately** inside `decorator/processing/gate.rs` only as the writer↔reader handoff primitive, reachable through `commit`/`await_ready`. Storage lifecycle `status()` stays a runtime `&self` facade (see "Decorator Chain"); the two axes are independent.
 
 ## Per-acquire processing (`ProcessCtx`)
 

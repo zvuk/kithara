@@ -35,10 +35,33 @@ flowchart LR
 
 ## Local Files
 
-When `FileSrc::Local(path)` is used, the crate opens the file via `AssetStore` with an absolute `ResourceKey`, skips all network activity, and produces a fully-cached `FileSource` with no peer / downloader.
+When `FileSrc::Local(path)` is used, the crate opens the source via `AssetStore`
+with an absolute `ResourceKey`, skips all network activity, and produces a
+local `FileSource` with no peer or downloader. The media bytes are read in
+place; they are not copied below the store's cache directory and no layout
+callback is needed for that absolute key.
+
+Derived resources are different: `ResourceConfig::asset_key` describes the
+same path as `AssetSource::Local`, selects the store's `File` layout, and mints
+an ordinary relative key such as the default `analysis/track.analysis`. Thus a
+custom file layout governs local-track analysis and future derived artifacts,
+while the original local media file remains untouched.
 
 ## Remote Files
 
 For `FileSrc::Remote(url)`, downloading is pull-driven: the peer requests fetches as the reader advances, with backpressure controlled by the read-demand cell shared between `FileCoord` and the asset demand lease. A missing range advances that demand and wakes the elected producer; each successful HTTP chunk write wakes the audio worker through `WorkerWake` so a parked probe re-runs when bytes arrive instead of waiting for the scheduler backstop. Seek miss enqueues an explicit range fetch for the requested offset.
 
-Remote file cache naming is owned by the layout registered for the `File` marker in `kithara-assets`. The stream binds `AssetSource::Remote { url, discriminator: config.name }` through `store.scope::<File>()`, then mints one `AssetResource::Source` using the final safe URL-path extension (or `bin`). The default layout stores it at `<hash>/track/track.<ext>`. Query parameters are not an implicit discriminator; callers use `config.name` when the canonical URL needs an additional identity. A standalone `StoreOptions::layout` becomes the registry default, while an injected store uses its existing registry.
+Remote file cache naming is owned by the layout registered for the `File`
+marker in the shared `AssetStore`. The stream binds
+`AssetSource::Remote { url, discriminator: config.discriminator }` through
+`store.scope::<File>()`, then mints one `AssetResource::Source`. Its extension
+comes from the explicit `config.extension` hint, then the final safe URL-path
+extension, and finally `bin`.
+
+The default layout stores the file at `<hash>/track/track.<ext>`. The root hash
+uses the canonical URL without query or fragment and folds in the explicit
+discriminator when present. Query parameters are therefore not an implicit
+identity for direct files; callers must set `config.discriminator` when two
+query variants of one canonical URL represent different bytes. Layouts are
+registered once through `AssetStoreBuilder::layouts`; every `FileConfig` holds
+a cheap clone of that same store handle.

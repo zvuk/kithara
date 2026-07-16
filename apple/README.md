@@ -104,6 +104,31 @@ player.setupNetwork(authToken: "<token>")
 player.updatePeakBitrate(wifi: 2_000_000, cellular: 500_000)
 ```
 
+### Cache location and layout
+
+`cacheDir` selects the outer directory for the whole asset store. Register
+layouts by protocol when an application needs a different path contract below
+each asset root:
+
+```swift
+var layouts = CacheLayoutRegistry()
+layouts.register(MyFileCacheLayout(), for: .file)
+layouts.register(MyHlsCacheLayout(), for: .hls)
+
+let player = KitharaPlayer(
+    config: .init(
+        cacheDir: appSupportDirectory.path,
+        layouts: layouts
+    )
+)
+```
+
+`MyFileCacheLayout` and `MyHlsCacheLayout` implement `CacheLayoutDelegate`.
+Their `root(source:)` and `path(resource:)` callbacks are captured at player
+creation. An empty registry uses Kithara's defaults. Invalid callback output is
+rejected rather than rewritten or replaced with a default path; see the
+protocol documentation for the portable component rules.
+
 ### Seek
 
 ```swift

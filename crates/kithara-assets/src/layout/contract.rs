@@ -3,6 +3,8 @@ use std::fmt;
 use super::{AssetResource, AssetSource};
 
 /// Policy that owns every cache-relative asset and resource path.
+///
+/// Implementations must be deterministic, non-blocking, and secret-free.
 pub trait AssetLayout: fmt::Debug + Send + Sync {
     /// Return the single cache-root component for `source`.
     ///

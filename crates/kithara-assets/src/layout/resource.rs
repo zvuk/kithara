@@ -16,9 +16,10 @@ pub enum AssetResource {
         /// Extension without the leading dot.
         extension: String,
     },
-    /// A resource addressed by its server URL.
+    /// A resource addressed by its full server URL.
+    /// The layout owns safe query identity; the default ignores fragments.
     Url(Url),
-    /// A logical or derived resource with two semantic components.
+    /// A logical or derived artifact with two semantic components.
     Named {
         /// Resource namespace, such as `analysis`.
         namespace: String,

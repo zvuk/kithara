@@ -15,8 +15,11 @@ pub enum FfiAssetSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiAssetResource {
+    /// Direct-file source bytes with their resolved extension.
     Source { extension: String },
+    /// A URL-addressed resource such as a playlist, init, segment, or key.
     Url { url: String },
+    /// A named derived artifact such as track analysis.
     Named { namespace: String, name: String },
 }
 
@@ -28,6 +31,8 @@ pub enum FfiAssetResource {
 /// `root` is called once for each store scope being created. `path` is called
 /// once for each resource key being minted. Cache operations using that key do
 /// not invoke either callback again.
+/// Invalid output fails scope or key creation and never falls back to the
+/// default layout.
 ///
 /// `root` must return exactly one non-empty component and cannot equal
 /// `_index`. `path` must return a non-empty relative path of components

@@ -314,9 +314,11 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         /// Wildcard `"*"` rules must come last — they mask any rule
         /// registered after them.
         public var keyRules: [KeyRule]
-        /// Optional cache directory path. `nil` uses the platform default.
+        /// Root directory for the entire asset store. `nil` uses the platform
+        /// default; protocol layouts only control paths below this directory.
         public var cacheDir: String?
         /// Per-protocol cache layouts. An empty registry keeps the defaults.
+        /// The registry is captured when the player is created.
         public var layouts: CacheLayoutRegistry
 
         /// Construct a player config. All parameters have sensible
