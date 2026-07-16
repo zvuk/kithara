@@ -431,10 +431,7 @@ where
         demuxer.set_gapless(probed_gapless);
     }
     let codec_impl = WebCodecsCodec::open(demuxer.track_info(), config.gapless)?;
-    let pool = config
-        .pcm_pool
-        .clone()
-        .unwrap_or_else(|| PcmPool::default().clone());
+    let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
