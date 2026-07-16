@@ -18,7 +18,7 @@ use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
-use support::{key as test_key, scope as test_scope};
+use support::{Test, resource, source};
 use tempfile::tempdir;
 
 const ROOT: &str = "processed-asset";
@@ -138,11 +138,11 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
         })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
-    let scope = test_scope(&store, ROOT);
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
     let proc = xor_processor(Arc::clone(&call_count));
 
-    let key0 = test_key(&scope, "segments/0000.bin");
-    let key1 = test_key(&scope, "segments/0001.bin");
+    let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
+    let key1 = scope.key(&resource("segments/0001.bin")).unwrap();
     let plaintext = b"segment-0-payload";
     let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
 
@@ -199,11 +199,11 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
         })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
-    let scope = test_scope(&store, ROOT);
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
     let proc = xor_processor(Arc::clone(&call_count));
 
-    let key0 = test_key(&scope, "segments/0000.bin");
-    let key1 = test_key(&scope, "segments/0001.bin");
+    let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
+    let key1 = scope.key(&resource("segments/0001.bin")).unwrap();
     let plaintext = b"segment-0-payload";
     let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
 
@@ -246,11 +246,11 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
         })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
-    let scope = test_scope(&store, ROOT);
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
     let proc = xor_processor(Arc::clone(&call_count));
 
-    let key0 = test_key(&scope, "segments/0000.bin");
-    let key1 = test_key(&scope, "segments/0001.bin");
+    let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
+    let key1 = scope.key(&resource("segments/0001.bin")).unwrap();
     let plaintext: Vec<u8> = (0u8..=u8::MAX).cycle().take(512 * 1024 + 37).collect();
     let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
 
@@ -292,12 +292,12 @@ fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_b
         })
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
-    let scope = test_scope(&store, DRM_ROOT);
+    let scope = store.scope::<Test>(&source(DRM_ROOT)).unwrap();
 
     let key = [0x41u8; 16];
     let iv = [0x17u8; 16];
-    let key0 = test_key(&scope, "segments/0000.bin");
-    let key1 = test_key(&scope, "segments/0001.bin");
+    let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
+    let key1 = scope.key(&resource("segments/0001.bin")).unwrap();
     let plaintext: Vec<u8> = (0u8..=u8::MAX).cycle().take(512 * 1024 + 37).collect();
     let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
     let other_plaintext = b"other-segment";

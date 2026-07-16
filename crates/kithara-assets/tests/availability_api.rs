@@ -6,7 +6,7 @@ mod support;
 use kithara_assets::{AcquisitionResult, AssetStoreBuilder, StorageBackend, WriteSide};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
-use support::{key as test_key, scope as test_scope};
+use support::{Test, resource, source};
 use tempfile::tempdir;
 
 const ROOT: &str = "availability-p2";
@@ -19,9 +19,9 @@ fn disk_store_empty_aggregate_returns_empty() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = test_scope(&store, ROOT);
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
 
-    let key = test_key(&scope, "segments/0001.bin");
+    let key = scope.key(&resource("segments/0001.bin")).unwrap();
     assert!(scope.store().available_ranges(&key).is_empty());
     assert!(!scope.store().contains_range(&key, 0..1));
     assert!(
@@ -36,9 +36,9 @@ fn mem_store_empty_aggregate_returns_empty() {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope = test_scope(&store, ROOT);
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
 
-    let key = test_key(&scope, "segments/0001.bin");
+    let key = scope.key(&resource("segments/0001.bin")).unwrap();
     assert!(scope.store().available_ranges(&key).is_empty());
     assert!(!scope.store().contains_range(&key, 0..100));
     assert_eq!(scope.store().final_len(&key), None);
@@ -52,9 +52,9 @@ fn disk_store_slow_path_finds_committed_file() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = test_scope(&store, ROOT);
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
 
-    let key = test_key(&scope, "segments/0001.bin");
+    let key = scope.key(&resource("segments/0001.bin")).unwrap();
     let AcquisitionResult::Pending(res) = scope.store().acquire_resource(&key, None).unwrap()
     else {
         panic!("fresh acquire must be Pending");
@@ -80,9 +80,9 @@ fn disk_store_missing_resource_returns_empty() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = test_scope(&store, ROOT);
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
 
-    let key = test_key(&scope, "segments/ghost.bin");
+    let key = scope.key(&resource("segments/ghost.bin")).unwrap();
     assert!(scope.store().available_ranges(&key).is_empty());
     assert!(!scope.store().contains_range(&key, 0..1));
     assert_eq!(scope.store().final_len(&key), None);
@@ -96,9 +96,9 @@ fn remove_resource_clears_aggregate_remove_call() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = test_scope(&store, ROOT);
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
 
-    let key = test_key(&scope, "segments/0001.bin");
+    let key = scope.key(&resource("segments/0001.bin")).unwrap();
     let AcquisitionResult::Pending(res) = scope.store().acquire_resource(&key, None).unwrap()
     else {
         panic!("fresh acquire must be Pending");

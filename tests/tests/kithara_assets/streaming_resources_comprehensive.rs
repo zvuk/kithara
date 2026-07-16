@@ -8,7 +8,7 @@ use kithara::{
 };
 use kithara_integration_tests::temp_dir;
 
-use super::support::{AssetScopeTestKeyExt, AssetStoreTestScopeExt, literal_layouts};
+use super::support::{LiteralLayout, literal_layouts, resource, source};
 
 /// Helper to read bytes from resource into a new Vec
 fn read_bytes<R: ReadSide>(res: &R, offset: u64, len: usize) -> Vec<u8> {
@@ -37,7 +37,8 @@ fn asset_scope_with_root(
             })
             .layouts(literal_layouts())
             .build()
-            .test_scope(asset_root)
+            .scope::<LiteralLayout>(&source(asset_root))
+            .expect("scope")
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -46,7 +47,8 @@ fn asset_scope_with_root(
             .backend(StorageBackend::Memory)
             .layouts(literal_layouts())
             .build()
-            .test_scope(asset_root)
+            .scope::<LiteralLayout>(&source(asset_root))
+            .expect("scope")
     }
 }
 
@@ -63,7 +65,7 @@ fn streaming_resource_complex_write_patterns(
 ) {
     let scope = asset_scope_with_root(&temp_dir, "streaming-complex");
 
-    let key = scope.test_key("data.bin");
+    let key = scope.key(&resource("data.bin")).unwrap();
 
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
     let reader = writer.reader();
@@ -99,7 +101,7 @@ fn streaming_resource_concurrent_writes(
 ) {
     let scope = asset_scope_with_root(&temp_dir, "streaming-concurrent");
 
-    let key = scope.test_key("concurrent.bin");
+    let key = scope.key(&resource("concurrent.bin")).unwrap();
 
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
 
@@ -139,7 +141,7 @@ fn streaming_resource_edge_case_reads(
 ) {
     let scope = asset_scope_with_root(&temp_dir, "streaming-edge-reads");
 
-    let key = scope.test_key("edge.bin");
+    let key = scope.key(&resource("edge.bin")).unwrap();
 
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
     let reader = writer.reader();
@@ -173,7 +175,7 @@ fn streaming_resource_multiple_range_operations(
 ) {
     let scope = asset_scope_with_root(&temp_dir, "streaming-multi-range");
 
-    let key = scope.test_key("multi.bin");
+    let key = scope.key(&resource("multi.bin")).unwrap();
 
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
     let reader = writer.reader();
@@ -209,7 +211,7 @@ fn streaming_resource_commit_behavior(
 ) {
     let scope = asset_scope_with_root(&temp_dir, "streaming-commit");
 
-    let key = scope.test_key("commit.bin");
+    let key = scope.key(&resource("commit.bin")).unwrap();
 
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
     let reader = writer.reader();
@@ -265,7 +267,7 @@ fn streaming_resource_zero_length_operations(
 ) {
     let scope = asset_scope_with_root(&temp_dir, "streaming-zero-length");
 
-    let key = scope.test_key("zero.bin");
+    let key = scope.key(&resource("zero.bin")).unwrap();
 
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
     let reader = writer.reader();

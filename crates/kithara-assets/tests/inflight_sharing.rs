@@ -13,7 +13,7 @@ use kithara_assets::{
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
-use support::{key as test_key, scope as test_scope};
+use support::{Test, resource, source};
 use tempfile::tempdir;
 
 /// Extract the Pending writer or panic.
@@ -29,8 +29,8 @@ fn one_store_same_url_same_identity_shares_inner() {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope = test_scope(&store, "asset_a");
-    let key = test_key(&scope, "audio.mp3");
+    let scope = store.scope::<Test>(&source("asset_a")).unwrap();
+    let key = scope.key(&resource("audio.mp3")).unwrap();
     let id = RequestIdentity::from_headers([("authorization", b"Bearer x".as_slice())]);
 
     let w = pending(scope.store().acquire_resource(&key, Some(&id)).unwrap());
@@ -53,8 +53,8 @@ fn one_store_same_url_different_identity_yields_different_inner() {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope = test_scope(&store, "asset_a");
-    let key = test_key(&scope, "audio.mp3");
+    let scope = store.scope::<Test>(&source("asset_a")).unwrap();
+    let key = scope.key(&resource("audio.mp3")).unwrap();
     let id1 = RequestIdentity::from_headers([("authorization", b"Bearer a".as_slice())]);
     let id2 = RequestIdentity::from_headers([("authorization", b"Bearer b".as_slice())]);
 
@@ -80,10 +80,10 @@ fn one_store_two_asset_roots_isolated() {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope_a = test_scope(&store, "root_a");
-    let scope_b = test_scope(&store, "root_b");
-    let key_a = test_key(&scope_a, "audio.mp3");
-    let key_b = test_key(&scope_b, "audio.mp3");
+    let scope_a = store.scope::<Test>(&source("root_a")).unwrap();
+    let scope_b = store.scope::<Test>(&source("root_b")).unwrap();
+    let key_a = scope_a.key(&resource("audio.mp3")).unwrap();
+    let key_b = scope_b.key(&resource("audio.mp3")).unwrap();
     let id = RequestIdentity::empty();
 
     let w_a = pending(store.acquire_resource(&key_a, Some(&id)).unwrap());
@@ -109,10 +109,10 @@ fn two_stores_isolated_even_with_same_identity() {
     let store_b = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope_a = test_scope(&store_a, "root");
-    let scope_b = test_scope(&store_b, "root");
-    let key_a = test_key(&scope_a, "audio.mp3");
-    let key_b = test_key(&scope_b, "audio.mp3");
+    let scope_a = store_a.scope::<Test>(&source("root")).unwrap();
+    let scope_b = store_b.scope::<Test>(&source("root")).unwrap();
+    let key_a = scope_a.key(&resource("audio.mp3")).unwrap();
+    let key_b = scope_b.key(&resource("audio.mp3")).unwrap();
     let id = RequestIdentity::empty();
 
     let w_a = pending(store_a.acquire_resource(&key_a, Some(&id)).unwrap());
@@ -138,8 +138,8 @@ fn drop_first_leaves_second_alive() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = test_scope(&store, "root");
-    let key = test_key(&scope, "audio.mp3");
+    let scope = store.scope::<Test>(&source("root")).unwrap();
+    let key = scope.key(&resource("audio.mp3")).unwrap();
     let id = RequestIdentity::empty();
 
     let w1 = pending(scope.store().acquire_resource(&key, Some(&id)).unwrap());
@@ -169,8 +169,8 @@ fn shared_inner_propagates_commit_and_final_len() {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope = test_scope(&store, "asset_a");
-    let key = test_key(&scope, "audio.mp3");
+    let scope = store.scope::<Test>(&source("asset_a")).unwrap();
+    let key = scope.key(&resource("audio.mp3")).unwrap();
 
     let w1 = pending(scope.store().acquire_resource(&key, None).unwrap());
     let r2 = w1.reader();

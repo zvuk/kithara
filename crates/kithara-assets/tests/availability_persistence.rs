@@ -14,7 +14,7 @@ use kithara_platform::{
     time::{Duration, Instant},
 };
 use kithara_test_utils::kithara;
-use support::{key as test_key, scope as test_scope};
+use support::{Test, resource, source};
 use tempfile::tempdir;
 
 /// Stream `data` through a Pending writer and commit it.
@@ -63,8 +63,8 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = test_scope(&store, root);
-        let key = test_key(&scope, "segments/0001.bin");
+        let scope = store.scope::<Test>(&source(root)).unwrap();
+        let key = scope.key(&resource("segments/0001.bin")).unwrap();
         write_commit(
             scope.store().acquire_resource(&key, None).unwrap(),
             b"hello world",
@@ -77,8 +77,8 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = test_scope(&store, root);
-    let key = test_key(&scope, "segments/0001.bin");
+    let scope = store.scope::<Test>(&source(root)).unwrap();
+    let key = scope.key(&resource("segments/0001.bin")).unwrap();
 
     assert_eq!(scope.store().final_len(&key), Some(11));
     assert!(scope.store().contains_range(&key, 0..11));
@@ -100,8 +100,8 @@ fn remove_resource_persists_availability_deletion_across_rebuild() {
                 root: dir.path().into(),
             })
             .build();
-        let scope = test_scope(&store, root);
-        let key = test_key(&scope, key_name);
+        let scope = store.scope::<Test>(&source(root)).unwrap();
+        let key = scope.key(&resource(key_name)).unwrap();
         write_commit(
             scope.store().acquire_resource(&key, None).unwrap(),
             b"poisoned",
@@ -115,8 +115,8 @@ fn remove_resource_persists_availability_deletion_across_rebuild() {
                 root: dir.path().into(),
             })
             .build();
-        let scope = test_scope(&store, root);
-        let key = test_key(&scope, key_name);
+        let scope = store.scope::<Test>(&source(root)).unwrap();
+        let key = scope.key(&resource(key_name)).unwrap();
         assert!(store.contains_range(&key, 0..8));
         store.remove_resource(&key).unwrap();
         assert!(!store.contains_range(&key, 0..8));
@@ -128,8 +128,8 @@ fn remove_resource_persists_availability_deletion_across_rebuild() {
             root: dir.path().into(),
         })
         .build();
-    let scope = test_scope(&reopened, root);
-    let key = test_key(&scope, key_name);
+    let scope = reopened.scope::<Test>(&source(root)).unwrap();
+    let key = scope.key(&resource(key_name)).unwrap();
     assert!(!reopened.contains_range(&key, 0..8));
 }
 
@@ -145,8 +145,8 @@ fn delete_asset_persists_availability_deletion_across_rebuild() {
                 root: dir.path().into(),
             })
             .build();
-        let scope = test_scope(&store, root);
-        let key = test_key(&scope, key_name);
+        let scope = store.scope::<Test>(&source(root)).unwrap();
+        let key = scope.key(&resource(key_name)).unwrap();
         write_commit(
             scope.store().acquire_resource(&key, None).unwrap(),
             b"poisoned",
@@ -160,8 +160,8 @@ fn delete_asset_persists_availability_deletion_across_rebuild() {
                 root: dir.path().into(),
             })
             .build();
-        let scope = test_scope(&store, root);
-        let key = test_key(&scope, key_name);
+        let scope = store.scope::<Test>(&source(root)).unwrap();
+        let key = scope.key(&resource(key_name)).unwrap();
         assert!(store.contains_range(&key, 0..8));
         scope.delete_asset().unwrap();
         assert!(!store.contains_range(&key, 0..8));
@@ -173,8 +173,8 @@ fn delete_asset_persists_availability_deletion_across_rebuild() {
             root: dir.path().into(),
         })
         .build();
-    let scope = test_scope(&reopened, root);
-    let key = test_key(&scope, key_name);
+    let scope = reopened.scope::<Test>(&source(root)).unwrap();
+    let key = scope.key(&resource(key_name)).unwrap();
     assert!(!reopened.contains_range(&key, 0..8));
 }
 
@@ -197,8 +197,8 @@ fn worker_persists_resource_deletion_without_checkpoint() {
         })
         .flush_hub(hub)
         .build();
-    let scope = test_scope(&store, root);
-    let key = test_key(&scope, key_name);
+    let scope = store.scope::<Test>(&source(root)).unwrap();
+    let key = scope.key(&resource(key_name)).unwrap();
     let resource_path = dir
         .path()
         .join(scope.asset_root())
@@ -235,8 +235,8 @@ fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = test_scope(&store, root);
-        let key = test_key(&scope, "segments/partial.bin");
+        let scope = store.scope::<Test>(&source(root)).unwrap();
+        let key = scope.key(&resource("segments/partial.bin")).unwrap();
         let res = pending(scope.store().acquire_resource(&key, None).unwrap());
         res.write_at(0, b"aaa").unwrap();
         res.write_at(10, b"bbb").unwrap();
@@ -249,8 +249,8 @@ fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = test_scope(&store, root);
-    let key = test_key(&scope, "segments/partial.bin");
+    let scope = store.scope::<Test>(&source(root)).unwrap();
+    let key = scope.key(&resource("segments/partial.bin")).unwrap();
 
     let ranges = scope.store().available_ranges(&key);
     let pairs: Vec<_> = ranges.iter().map(|r| (r.start, r.end)).collect();
@@ -280,8 +280,8 @@ fn disk_checkpoint_without_prior_writes_is_noop() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope2 = test_scope(&store2, root);
-    let key = test_key(&scope2, "ghost.bin");
+    let scope2 = store2.scope::<Test>(&source(root)).unwrap();
+    let key = scope2.key(&resource("ghost.bin")).unwrap();
 
     assert!(scope2.store().available_ranges(&key).is_empty());
     assert_eq!(scope2.store().final_len(&key), None);
@@ -298,8 +298,8 @@ fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = test_scope(&store, root);
-        let key = test_key(&scope, "segments/slow.bin");
+        let scope = store.scope::<Test>(&source(root)).unwrap();
+        let key = scope.key(&resource("segments/slow.bin")).unwrap();
         write_commit(scope.store().acquire_resource(&key, None).unwrap(), b"xyz");
     }
 
@@ -308,8 +308,8 @@ fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = test_scope(&store, root);
-    let key = test_key(&scope, "segments/slow.bin");
+    let scope = store.scope::<Test>(&source(root)).unwrap();
+    let key = scope.key(&resource("segments/slow.bin")).unwrap();
 
     assert_eq!(scope.store().final_len(&key), Some(3));
     assert!(scope.store().contains_range(&key, 0..3));
@@ -323,8 +323,8 @@ fn mem_checkpoint_is_noop_and_aggregate_is_ephemeral() {
         let store = AssetStoreBuilder::default()
             .backend(StorageBackend::Memory)
             .build();
-        let scope = test_scope(&store, root);
-        let key = test_key(&scope, "segments/mem.bin");
+        let scope = store.scope::<Test>(&source(root)).unwrap();
+        let key = scope.key(&resource("segments/mem.bin")).unwrap();
         write_commit(scope.store().acquire_resource(&key, None).unwrap(), b"abcd");
         store.checkpoint().unwrap();
     }
@@ -332,8 +332,8 @@ fn mem_checkpoint_is_noop_and_aggregate_is_ephemeral() {
     let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .build();
-    let scope = test_scope(&store, root);
-    let key = test_key(&scope, "segments/mem.bin");
+    let scope = store.scope::<Test>(&source(root)).unwrap();
+    let key = scope.key(&resource("segments/mem.bin")).unwrap();
     assert!(scope.store().available_ranges(&key).is_empty());
     assert_eq!(scope.store().final_len(&key), None);
 }
@@ -348,8 +348,8 @@ fn disk_checkpoint_is_idempotent() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = test_scope(&store, root);
-    let key = test_key(&scope, "segments/idempotent.bin");
+    let scope = store.scope::<Test>(&source(root)).unwrap();
+    let key = scope.key(&resource("segments/idempotent.bin")).unwrap();
     write_commit(
         scope.store().acquire_resource(&key, None).unwrap(),
         b"hello",
@@ -364,6 +364,6 @@ fn disk_checkpoint_is_idempotent() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope2 = test_scope(&store2, root);
+    let scope2 = store2.scope::<Test>(&source(root)).unwrap();
     assert_eq!(scope2.store().final_len(&key), Some(5));
 }
