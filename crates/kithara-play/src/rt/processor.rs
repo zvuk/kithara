@@ -14,7 +14,10 @@ use ringbuf::{HeapCons, HeapProd, traits::Producer};
 use thunderdome::Index;
 use tracing::warn;
 
-use super::track::PlayerTrack;
+use super::{
+    context::read_render_context,
+    track::{PlayerTrack, TrackRenderMode},
+};
 use crate::{
     bridge::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
@@ -26,6 +29,13 @@ use crate::{
 pub(crate) enum CrossfadeCurve {
     #[default]
     EqualPower,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ContextRequirement {
+    #[default]
+    Standalone,
+    Session,
 }
 
 fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
@@ -70,6 +80,7 @@ pub struct PlayerNodeProcessor {
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) render: RenderPass,
     pub(super) prefetch_duration: f32,
+    context_requirement: ContextRequirement,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
@@ -89,6 +100,15 @@ impl PlayerNodeProcessor {
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
     pub fn new(inputs: NodeInputs, shape: StreamShape, pool: &PcmPool) -> Self {
+        Self::with_context_requirement(inputs, shape, pool, ContextRequirement::Standalone)
+    }
+
+    pub(super) fn with_context_requirement(
+        inputs: NodeInputs,
+        shape: StreamShape,
+        pool: &PcmPool,
+        context_requirement: ContextRequirement,
+    ) -> Self {
         Self {
             cmd_rx: inputs.cmd_rx,
             notif_tx: inputs.notif_tx,
@@ -100,6 +120,7 @@ impl PlayerNodeProcessor {
             prefetch_duration: 0.0,
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
+            context_requirement,
         }
     }
 
@@ -243,7 +264,18 @@ impl PlayerNodeProcessor {
         frames: usize,
         is_playing: bool,
     ) -> (bool, Option<(f64, f64)>) {
+        self.render_with_mode(TrackRenderMode::Standalone, buffers, frames, is_playing)
+    }
+
+    fn render_with_mode(
+        &mut self,
+        mode: TrackRenderMode<'_>,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+        is_playing: bool,
+    ) -> (bool, Option<(f64, f64)>) {
         self.render.render_audio(
+            mode,
             RenderTargets {
                 tracks: &mut self.tracks,
                 notification_tx: &mut self.notif_tx,
@@ -337,7 +369,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         info: &ProcInfo,
         mut buffers: ProcBuffers,
         _events: &mut ProcEvents,
-        _extra: &mut ProcExtra,
+        extra: &mut ProcExtra,
     ) -> ProcessStatus {
         self.playback.process_count.fetch_add(1, Ordering::Relaxed);
 
@@ -347,8 +379,19 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let is_playing = self.playback.playing.load(Ordering::SeqCst);
 
+        let render_mode = match self.context_requirement {
+            ContextRequirement::Standalone => TrackRenderMode::Standalone,
+            ContextRequirement::Session => match read_render_context(&extra.store, info) {
+                Ok(context) => TrackRenderMode::Session(context),
+                Err(reason) => {
+                    let _ = extra.logger.try_error(reason.message());
+                    return ProcessStatus::ClearAllOutputs;
+                }
+            },
+        };
+
         let (playback_started, leading_outcome_pos_dur) =
-            self.render_audio(&mut buffers, info.frames, is_playing);
+            self.render_with_mode(render_mode, &mut buffers, info.frames, is_playing);
 
         self.update_position_duration(leading_outcome_pos_dur);
 

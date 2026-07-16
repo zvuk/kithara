@@ -7,6 +7,8 @@ use kithara_platform::sync::Arc;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
+#[cfg(test)]
+use crate::rt::context::RenderContext;
 use crate::{api::TrackBinding, bridge::TrackState};
 
 /// Canonical host-frame axis and optional musical binding for a track.
@@ -92,6 +94,8 @@ pub struct PlayerTrack {
     /// decoder's pre-buffered position (which can be ~200 ms ahead of the
     /// mixer thanks to `PlayerResource`'s scratch buffer).
     pub(super) served_frames: u64,
+    #[cfg(test)]
+    pub(super) last_render_context: Option<(usize, RenderContext)>,
 }
 
 impl PlayerTrack {
@@ -128,6 +132,8 @@ impl PlayerTrack {
             served_frames: 0,
             observed_duration,
             ended_at_eof: false,
+            #[cfg(test)]
+            last_render_context: None,
         };
         track.update_service_class(TrackState::Preloading);
         track
@@ -143,6 +149,13 @@ impl PlayerTrack {
     #[must_use]
     pub fn binding(&self) -> Option<&TrackBinding> {
         self.binding.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_render_context(&self) -> Option<(usize, &RenderContext)> {
+        self.last_render_context
+            .as_ref()
+            .map(|(address, context)| (*address, context))
     }
 
     /// Current visible (post-gapless-trim) duration in seconds.

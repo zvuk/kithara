@@ -6,7 +6,7 @@ use firewheel::{
 use kithara_bufpool::PcmPool;
 use kithara_platform::sync::{Arc, Mutex};
 
-use super::processor::{PlayerNodeProcessor, StreamShape};
+use super::processor::{ContextRequirement, PlayerNodeProcessor, StreamShape};
 use crate::bridge::{NodeInputs, SharedEq, slot_channels};
 
 /// A player source node that outputs mixed audio from loaded tracks.
@@ -26,6 +26,9 @@ pub struct PlayerNode {
     /// PCM buffer pool for scratch buffer allocation.
     #[diff(skip)]
     pcm_pool: PcmPool,
+
+    #[diff(skip)]
+    context_requirement: ContextRequirement,
 }
 
 impl PlayerNode {
@@ -34,8 +37,14 @@ impl PlayerNode {
         Self {
             pcm_pool,
             active: true,
+            context_requirement: ContextRequirement::Standalone,
             inputs: Arc::new(Mutex::new(Some(inputs))),
         }
+    }
+
+    pub(crate) fn with_session_context(mut self) -> Self {
+        self.context_requirement = ContextRequirement::Session;
+        self
     }
 }
 
@@ -58,7 +67,12 @@ impl AudioNode for PlayerNode {
             .lock()
             .take()
             .unwrap_or_else(|| slot_channels(SharedEq::new(0)).0);
-        PlayerNodeProcessor::new(inputs, shape, &self.pcm_pool)
+        PlayerNodeProcessor::with_context_requirement(
+            inputs,
+            shape,
+            &self.pcm_pool,
+            self.context_requirement,
+        )
     }
 
     fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {

@@ -8,7 +8,10 @@ use super::{
     PlayerTrack, ReadOutcome,
     triggers::{TrackTriggers, TriggerInput},
 };
-use crate::bridge::{PlayerNotification, TrackPlaybackStopReason, TrackState};
+use crate::{
+    bridge::{PlayerNotification, TrackPlaybackStopReason, TrackState},
+    rt::context::RenderContext,
+};
 
 struct TrackReadContext<'a> {
     notification_tx: &'a mut HeapProd<PlayerNotification>,
@@ -48,7 +51,39 @@ pub enum TrackReadOutcome {
     Failed,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum TrackRenderMode<'a> {
+    Standalone,
+    Session(&'a RenderContext),
+}
+
 impl PlayerTrack {
+    pub(crate) fn render(
+        &mut self,
+        mode: TrackRenderMode<'_>,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        notification_tx: &mut HeapProd<PlayerNotification>,
+    ) -> TrackReadOutcome {
+        if let TrackRenderMode::Session(context) = mode
+            && (context.sample_rate().get() != self.sample_rate
+                || context.for_output_range(range.clone()).is_none())
+        {
+            self.handle_failed_end(notification_tx);
+            return TrackReadOutcome::Failed;
+        }
+        #[cfg(test)]
+        if let TrackRenderMode::Session(context) = mode {
+            self.last_render_context = Some((std::ptr::from_ref(context).addr(), context.clone()));
+        }
+        if self.binding().is_some() {
+            self.handle_failed_end(notification_tx);
+            return TrackReadOutcome::Failed;
+        }
+        self.read(scratch_bufs, mix_bufs, range, notification_tx)
+    }
+
     fn advance_served_frames(&mut self, frames: u64) {
         self.served_frames = self.served_frames.saturating_add(frames);
     }

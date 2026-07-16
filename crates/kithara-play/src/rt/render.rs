@@ -7,7 +7,7 @@ use thunderdome::Index;
 
 use super::{
     processor::PlayerNodeProcessor,
-    track::{PlayerTrack, TrackReadOutcome},
+    track::{PlayerTrack, TrackReadOutcome, TrackRenderMode},
 };
 use crate::{
     bridge::{PlayerNotification, TrackState},
@@ -52,6 +52,7 @@ impl RenderPass {
     /// Render audio for all active tracks into the output buffers.
     pub(crate) fn render_audio(
         &mut self,
+        mode: TrackRenderMode<'_>,
         targets: RenderTargets<'_>,
         buffers: &mut ProcBuffers,
         frames: usize,
@@ -115,7 +116,13 @@ impl RenderPass {
 
             let mut read_outcome = {
                 let Some(outcome) = tracks.get_by_index_mut(*track_handle).map(|track| {
-                    track.read(&mut read_bufs, &mut mix_bufs, 0..frames, notification_tx)
+                    track.render(
+                        mode,
+                        &mut read_bufs,
+                        &mut mix_bufs,
+                        0..frames,
+                        notification_tx,
+                    )
                 }) else {
                     continue;
                 };
@@ -145,7 +152,8 @@ impl RenderPass {
                     }
 
                     let Some(outcome) = tracks.get_by_index_mut(*next_handle).map(|track| {
-                        track.read(
+                        track.render(
+                            mode,
                             &mut read_bufs,
                             &mut mix_bufs,
                             offset..frames,
@@ -181,7 +189,8 @@ impl RenderPass {
                             continue;
                         };
                         next_track.play();
-                        next_track.read(
+                        next_track.render(
+                            mode,
                             &mut read_bufs,
                             &mut mix_bufs,
                             offset..frames,

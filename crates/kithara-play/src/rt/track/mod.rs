@@ -8,3 +8,4 @@ pub use core::{PlayerTrack, TrackAxis, TrackParams};
 
 pub use feeder::{PlayerResource, ReadOutcome};
 pub use read::TrackReadOutcome;
+pub(crate) use read::TrackRenderMode;

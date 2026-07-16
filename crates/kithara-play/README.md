@@ -43,7 +43,8 @@ to the single `decoder` field.
 - `TrackBinding` anchors one active track's analysed beat map to that session
   transport with an immutable direction.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
-- `PlayerNode` is the public real-time audio graph node.
+- `PlayerNode` is the public standalone real-time audio graph node. Nodes owned
+  by a `SessionState` additionally consume its shared render context.
 - `Equalizer` is the remaining mockable trait surface.
 
 ## Orientation

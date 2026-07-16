@@ -200,7 +200,8 @@ pub(super) mod slots {
         state.players[idx].next_slot_id += 1;
         let shared_eq = state.players[idx].shared_eq.clone();
         let (inputs, control) = slot_channels(shared_eq);
-        let player_node = PlayerNode::new(inputs, state.players[idx].pcm_pool.clone());
+        let player_node =
+            PlayerNode::new(inputs, state.players[idx].pcm_pool.clone()).with_session_context();
         let player_node_id = fw_ctx.add_node(player_node, None);
         let slot_vol_pan = VolumePanNode::from_volume(Volume::Linear(1.0));
         let slot_vol_pan_memo = Memo::new(slot_vol_pan);

@@ -236,6 +236,27 @@ track cannot mutate that axis after a host sample-rate change: it retains the
 prepared rate and fails closed against the new session context until it is
 re-prepared. Unbound tracks update through the ordinary route-change path.
 
+One zero-I/O Kithara graph-adapter node, executed as a Firewheel pre-process
+node, creates the immutable `RenderContext` for each processed graph block.
+`ProcStore` is only its preallocated delivery
+slot: the pre-process node is the sole writer, and every session-created player
+node reads the same value before passing it unchanged to each `PlayerTrack`.
+The context owns the signed render-frame range, host sample rate, optional
+session-beat range, and the matching immutable session transport commit. An
+absent or paused transport is valid and produces no beat range. Subranges retain
+the same commit. The public standalone `PlayerNode` and
+`PlayerNodeProcessor::new` keep their context-free render contract; only
+`SessionState` opts nodes into the required session context.
+
+The slot distinguishes unwritten, valid, and invalid state. Every callback
+replaces the prior state, so invalid input cannot reuse a stale snapshot.
+Player processing also requires an exact render-frame and sample-rate match;
+node-local scheduled-event sub-blocks are fail-closed until their context
+derivation has an explicit contract. Handover subranges derive matching signed
+frame and session-beat intervals from the callback snapshot; using the full
+callback beat range for a partial render is a phase error. Musical context stops
+at the track render boundary and does not enter resource, stream, HLS, or decode
+reads.
 
 ## Route Changes
 

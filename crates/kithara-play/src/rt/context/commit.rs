@@ -182,6 +182,12 @@ impl TransportObservationInput {
     }
 }
 
+#[derive(Debug)]
+pub(super) struct TransportFrame {
+    pub(super) commit: Option<SessionTransportCommit>,
+    pub(super) session_beats: Option<Range<SessionBeat>>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TransportProcessError {
     AbortMismatch,
@@ -211,7 +217,7 @@ pub(super) fn process_transport(
     info: &ProcInfo,
     events: &mut ProcEvents,
     store: &mut ProcStore,
-) -> Result<(), TransportProcessError> {
+) -> Result<TransportFrame, TransportProcessError> {
     let result = store
         .try_get_mut::<TransportCommitState>()
         .ok_or(TransportProcessError::MissingState)?
@@ -277,14 +283,17 @@ impl TransportCommitState {
         &mut self,
         info: &ProcInfo,
         events: &mut ProcEvents,
-    ) -> Result<(), TransportProcessError> {
+    ) -> Result<TransportFrame, TransportProcessError> {
         self.reanchor(info)?;
         self.validate_frame(info)?;
         self.apply_events(info, events)?;
         let session_beats = self.session_beats(info)?;
         self.boundary = Self::next_boundary(info, session_beats.as_ref(), self.boundary)?;
         self.snapshot = Self::next_snapshot(self.active, session_beats.as_ref(), self.snapshot)?;
-        Ok(())
+        Ok(TransportFrame {
+            commit: self.active,
+            session_beats,
+        })
     }
 
     fn apply_events(
