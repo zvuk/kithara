@@ -54,10 +54,18 @@ class KitharaPlayer(config: Config = Config()) {
     data class Config(
         val eqBandCount: Int = 10,
         val keyRules: List<KeyRule> = emptyList(),
+        /**
+         * Outer directory for the entire asset store. `null` uses the directory
+         * established by [Kithara.initialize].
+         */
         val cacheDir: String? = null,
+        /** Per-protocol layouts captured when the player is created. */
+        val layouts: CacheLayoutRegistry = CacheLayoutRegistry(),
     )
 
-    private val inner: FfiAudioPlayer = FfiAudioPlayer(config.toFfi())
+    private val inner: FfiAudioPlayer = FfiAudioPlayer(
+        config.toFfi(Kithara.cacheDir.takeIf(String::isNotEmpty))
+    )
     private val observer = PlayerObserverBridge(this)
     private val eventsFlow = MutableSharedFlow<KitharaPlayerEvent>(extraBufferCapacity = 16)
     private val stateFlow = MutableStateFlow(PlayerState())
@@ -460,7 +468,7 @@ private class ClosureKeyProcessorBridge(
         decrypt(key, salt) ?: key
 }
 
-private fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
+internal fun KitharaPlayer.Config.toFfi(defaultCacheDir: String?): FfiPlayerConfig {
     val ffiRules = keyRules.map { rule ->
         FfiKeyRule(
             processor = KeyProcessorBridge(rule.processor),
@@ -472,7 +480,10 @@ private fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
     }
     return FfiPlayerConfig(
         keyOptions = FfiKeyOptions(rules = ffiRules),
-        cache = FfiCacheConfig(cacheDir = cacheDir, layouts = emptyList()),
+        cache = FfiCacheConfig(
+            cacheDir = cacheDir ?: defaultCacheDir,
+            layouts = layouts.toFfiRegistrations(),
+        ),
         eqBandCount = eqBandCount.toUInt(),
     )
 }

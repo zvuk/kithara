@@ -50,9 +50,10 @@ writing query text, credentials, or other secrets into a path. The default
 layout uses a bounded query fingerprint and ignores fragments.
 
 The Apple wrapper exposes this contract as
-`KitharaPlayer.Config(cacheDir:layouts:)` and `CacheLayoutRegistry`. The
-registry is converted to an immutable FFI registration list when the player is
-created.
+`KitharaPlayer.Config(cacheDir:layouts:)` and `CacheLayoutRegistry`. The Android
+wrapper exposes the corresponding `KitharaPlayer.Config(cacheDir, layouts)` and
+`CacheLayoutRegistry`. Each SDK converts its registry to an immutable FFI
+registration list when the player is created.
 
 ## Web target
 

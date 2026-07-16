@@ -79,6 +79,33 @@ player.pause()
 player.playingRate = 1.5f   // target playback speed
 ```
 
+### Cache Location and Layout
+
+`Kithara.initialize` uses `<application cacheDir>/kithara` as the default outer
+directory for the whole asset store. A player can replace that directory and
+register path layouts by playback protocol:
+
+```kotlin
+val layouts = CacheLayoutRegistry().apply {
+    register(MyFileCacheLayout(), CacheLayoutTarget.File)
+    register(MyHlsCacheLayout(), CacheLayoutTarget.Hls)
+}
+
+val player = KitharaPlayer(
+    config = KitharaPlayer.Config(
+        cacheDir = application.filesDir.resolve("kithara-cache").absolutePath,
+        layouts = layouts,
+    )
+)
+```
+
+`MyFileCacheLayout` and `MyHlsCacheLayout` implement `CacheLayout`. Their
+`root(source)` and `path(resource)` callbacks control paths below the outer
+cache directory and are captured when the player is created. An empty registry
+uses Kithara's defaults. Invalid callback output is rejected rather than
+rewritten or replaced with a default path; see the `CacheLayout` API contract
+for the portable component rules.
+
 ### Seek
 
 ```kotlin
