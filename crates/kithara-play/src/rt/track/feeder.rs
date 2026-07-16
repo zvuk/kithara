@@ -5,23 +5,32 @@ use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
 use tracing::warn;
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "../native.rs"]
+mod native;
+#[cfg(target_arch = "wasm32")]
+#[path = "../wasm.rs"]
+mod wasm;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use native::PreparedElasticRenderer;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use wasm::PreparedElasticRenderer;
+
 #[rustfmt::skip]
 use crate::resource::Resource;
 
-/// RT-safe resource wrapper with internal scratch buffers.
-///
-/// Wraps a [`Resource`] and maintains per-channel scratch buffers
-/// that are filled from the underlying `PcmReader`. The audio thread
-/// reads from these buffers, avoiding direct interaction with the
-/// potentially-blocking decoder on every callback.
+/// RT-safe wrapper for standalone and bound elastic playback.
+/// Standalone resources own pooled scratch buffers; elastic resources use prepared renderer
+/// storage.
 pub struct PlayerResource {
     src: Arc<str>,
     resource: WasmSend<Resource>,
-    channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
+    channel_buffers: Option<[PcmBuf; Self::STEREO_CHANNELS]>,
     eof_seen: bool,
     failed: bool,
     write_len: usize,
     write_pos: usize,
+    elastic_renderer: Option<PreparedElasticRenderer>,
 }
 
 /// Result of a bounded audio-thread read from [`PlayerResource`].
@@ -62,8 +71,6 @@ impl PlayerResource {
             pub(crate) fn set_playback_rate(&self, rate: f32);
             /// Set the transport pitch-bend multiplier.
             pub(crate) fn set_transport_bend(&self, bend: f32);
-            /// Update the scheduling priority hint for the shared worker.
-            pub(crate) fn set_service_class(&self, class: ServiceClass);
         }
     }
 
@@ -96,13 +103,31 @@ impl PlayerResource {
 
         Self {
             resource: WasmSend::new(resource),
-            channel_buffers,
+            channel_buffers: Some(channel_buffers),
             src,
             write_len: 0,
             write_pos: 0,
             eof_seen: false,
             failed: false,
+            elastic_renderer: None,
         }
+    }
+
+    pub(crate) fn release(self) -> (Resource, Option<PreparedElasticRenderer>) {
+        let Self {
+            resource,
+            elastic_renderer,
+            ..
+        } = self;
+        (resource.into_inner(), elastic_renderer)
+    }
+
+    pub(crate) fn set_service_class(&mut self, class: ServiceClass) {
+        if let Some(renderer) = self.elastic_renderer.as_mut() {
+            renderer.set_service_class(class);
+            return;
+        }
+        self.resource.get().set_service_class(class);
     }
 
     /// Source identifier attached to this resource.
@@ -115,19 +140,25 @@ impl PlayerResource {
     /// and is ready to play (always `>=` the served playback position).
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
+        if let Some(renderer) = self.elastic_renderer.as_ref() {
+            return renderer.decoded_frontier();
+        }
         self.resource.get().decoded_frontier().as_secs_f64()
     }
 
     fn fill_scratch(&mut self, target_frames: usize) -> bool {
+        let Some(channel_buffers) = self.channel_buffers.as_mut() else {
+            self.failed = true;
+            return false;
+        };
         let mut eof_reached = self.eof_seen;
 
         while target_frames > self.write_len && !eof_reached {
-            let avail = self.channel_buffers[0].len() - self.write_pos;
+            let avail = channel_buffers[0].len() - self.write_pos;
             if avail == 0 {
                 break;
             }
 
-            let channel_buffers = &mut self.channel_buffers;
             let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
             let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
@@ -178,6 +209,12 @@ impl PlayerResource {
     /// That silence is not a terminal condition and must not trigger track
     /// advancement.
     pub fn read(&mut self, output: &mut [&mut [f32]], range: Range<usize>) -> ReadOutcome {
+        if self.channel_buffers.is_none() {
+            for channel in output.iter_mut() {
+                channel[..range.len()].fill(0.0);
+            }
+            return ReadOutcome::Failed;
+        }
         let frames_to_read = range.end - range.start;
         let mut eof_reached = self.fill_scratch(frames_to_read);
 
@@ -192,19 +229,23 @@ impl PlayerResource {
         if self.write_len > 0 {
             let frames_to_write = frames_to_read.min(self.write_len);
             let tail_size = self.write_len - frames_to_write;
+            let Some(channel_buffers) = self.channel_buffers.as_mut() else {
+                for channel in output.iter_mut() {
+                    channel[..range.len()].fill(0.0);
+                }
+                return ReadOutcome::Failed;
+            };
 
             if output.len() >= Self::STEREO_CHANNELS {
                 output[0][..frames_to_write]
-                    .copy_from_slice(&self.channel_buffers[0][..frames_to_write]);
+                    .copy_from_slice(&channel_buffers[0][..frames_to_write]);
                 output[1][..frames_to_write]
-                    .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
+                    .copy_from_slice(&channel_buffers[1][..frames_to_write]);
             }
 
             if tail_size > 0 {
-                self.channel_buffers[0]
-                    .copy_within(frames_to_write..frames_to_write + tail_size, 0);
-                self.channel_buffers[1]
-                    .copy_within(frames_to_write..frames_to_write + tail_size, 0);
+                channel_buffers[0].copy_within(frames_to_write..frames_to_write + tail_size, 0);
+                channel_buffers[1].copy_within(frames_to_write..frames_to_write + tail_size, 0);
             }
 
             self.write_len -= frames_to_write;
@@ -241,21 +282,30 @@ impl PlayerResource {
         }
     }
 
-    /// Seek to the given position in seconds.
-    ///
-    /// Clears the internal scratch buffers on success.
-    pub fn seek(&mut self, seconds: f64) {
+    /// Seeks standalone playback and clears its scratch state.
+    /// Returns `false` for bound elastic playback or source seek failure.
+    #[must_use]
+    pub fn seek(&mut self, seconds: f64) -> bool {
+        if self.elastic_renderer.is_some() {
+            return false;
+        }
         let position = Duration::from_secs_f64(seconds);
         match self.resource.get_mut().seek(position) {
             Ok(_) => {
-                self.write_len = 0;
-                self.write_pos = 0;
-                self.eof_seen = false;
-                self.failed = false;
+                self.reset_read_state();
+                true
             }
             Err(err) => {
                 warn!("failed to seek: {err}");
+                false
             }
         }
+    }
+
+    fn reset_read_state(&mut self) {
+        self.write_len = 0;
+        self.write_pos = 0;
+        self.eof_seen = false;
+        self.failed = false;
     }
 }

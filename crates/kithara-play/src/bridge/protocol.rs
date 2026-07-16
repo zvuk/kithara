@@ -2,12 +2,15 @@ use std::fmt;
 
 use kithara_platform::sync::Arc;
 
-use crate::rt::track::PlayerResource;
+use crate::{api::TrackBinding, error::PlayError, rt::track::PlayerResource};
 
 /// Commands sent from the main thread to the processor.
+#[non_exhaustive]
 pub enum PlayerCmd {
     /// Load a track into the processor arena.
     LoadTrack {
+        /// Immutable session-grid binding for synchronized rendering.
+        binding: Option<TrackBinding>,
         resource: Box<PlayerResource>,
         item_id: Option<Arc<str>>,
     },
@@ -32,11 +35,21 @@ pub enum PlayerCmd {
     SetPitchBend(f32),
 }
 
+pub(crate) struct RejectedPlayerCmd {
+    pub(crate) command: Box<PlayerCmd>,
+    pub(crate) error: PlayError,
+}
+
 impl fmt::Debug for PlayerCmd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::LoadTrack { item_id, resource } => f
+            Self::LoadTrack {
+                binding,
+                item_id,
+                resource,
+            } => f
                 .debug_struct("LoadTrack")
+                .field("bound", &binding.is_some())
                 .field("item_id", item_id)
                 .field("src", resource.src())
                 .finish_non_exhaustive(),

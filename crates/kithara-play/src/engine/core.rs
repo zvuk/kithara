@@ -9,18 +9,26 @@ use kithara_platform::{
     tokio::runtime::Handle as RuntimeHandle,
 };
 use portable_atomic::AtomicF32;
-use ringbuf::traits::{Consumer, Producer};
+use ringbuf::traits::{Consumer, Observer, Producer};
 use tracing::{debug, info, warn};
 
 use super::{config::EngineConfig, session::default_session_handle, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SlotId},
-    bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl},
+    bridge::{
+        PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl,
+        protocol::RejectedPlayerCmd,
+    },
     error::PlayError,
     session::{PlayerId, SessionHandle},
 };
 
 type SlotHandle = SlotControl;
+
+pub(crate) enum DeferredPlayerCmdError {
+    Unsent(PlayError),
+    Rejected(RejectedPlayerCmd),
+}
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -117,15 +125,53 @@ impl EngineImpl {
         self.runtime.as_ref()
     }
 
-    pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
+    pub(crate) fn try_send_slot_cmd(
+        &self,
+        slot: SlotId,
+        cmd: PlayerCmd,
+    ) -> Result<(), RejectedPlayerCmd> {
         let mut slots = self.slots.lock();
         let result = match slots.get_mut(slot) {
             Some(handle) => handle
                 .cmd_tx
                 .try_push(cmd)
-                .map_err(|_| PlayError::SlotChannelFull { slot }),
-            None => Err(PlayError::SlotNotFound(slot)),
+                .map_err(|command| RejectedPlayerCmd {
+                    command: Box::new(command),
+                    error: PlayError::SlotChannelFull { slot },
+                }),
+            None => Err(RejectedPlayerCmd {
+                command: Box::new(cmd),
+                error: PlayError::SlotNotFound(slot),
+            }),
         };
+        drop(slots);
+        result
+    }
+
+    pub(crate) fn try_send_slot_cmd_deferred<F>(
+        &self,
+        slot: SlotId,
+        build: F,
+    ) -> Result<(), DeferredPlayerCmdError>
+    where
+        F: FnOnce() -> Result<PlayerCmd, PlayError>,
+    {
+        let mut slots = self.slots.lock();
+        let handle = slots
+            .get_mut(slot)
+            .ok_or_else(|| DeferredPlayerCmdError::Unsent(PlayError::SlotNotFound(slot)))?;
+        if handle.cmd_tx.is_full() {
+            return Err(DeferredPlayerCmdError::Unsent(PlayError::SlotChannelFull {
+                slot,
+            }));
+        }
+        let command = build().map_err(DeferredPlayerCmdError::Unsent)?;
+        let result = handle.cmd_tx.try_push(command).map_err(|command| {
+            DeferredPlayerCmdError::Rejected(RejectedPlayerCmd {
+                command: Box::new(command),
+                error: PlayError::SlotChannelFull { slot },
+            })
+        });
         drop(slots);
         result
     }
@@ -329,9 +375,12 @@ impl EngineImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::bridge::{SharedEq, slot_channels};
 
     #[kithara::test]
     fn engine_creates_worker() {
@@ -354,5 +403,48 @@ mod tests {
         let worker_clone = engine.worker().clone();
         drop(engine);
         worker_clone.wake();
+    }
+
+    #[kithara::test]
+    fn deferred_command_is_not_built_for_a_missing_slot() {
+        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
+        let built = Cell::new(false);
+
+        let result = engine.try_send_slot_cmd_deferred(SlotId::new(0), || {
+            built.set(true);
+            Ok(PlayerCmd::SetPaused(false))
+        });
+
+        assert!(matches!(
+            result,
+            Err(DeferredPlayerCmdError::Unsent(PlayError::SlotNotFound(_)))
+        ));
+        assert!(!built.get());
+    }
+
+    #[kithara::test]
+    fn deferred_command_is_not_built_for_a_full_slot_lane() {
+        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
+        let slot = SlotId::new(0);
+        let (_inputs, control) = slot_channels(SharedEq::new(0));
+        engine.slots.lock().insert(slot, control);
+        while engine
+            .try_send_slot_cmd(slot, PlayerCmd::SetPaused(false))
+            .is_ok()
+        {}
+        let built = Cell::new(false);
+
+        let result = engine.try_send_slot_cmd_deferred(slot, || {
+            built.set(true);
+            Ok(PlayerCmd::SetPaused(false))
+        });
+
+        assert!(matches!(
+            result,
+            Err(DeferredPlayerCmdError::Unsent(
+                PlayError::SlotChannelFull { .. }
+            ))
+        ));
+        assert!(!built.get());
     }
 }

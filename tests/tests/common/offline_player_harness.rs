@@ -6,7 +6,7 @@ use kithara::{
     decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
     platform::sync::{Arc, Mutex},
-    play::{PlayerConfig, PlayerImpl, SessionDispatcher},
+    play::{Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, SessionDispatcher, Tempo},
 };
 use kithara_integration_tests::offline::OfflineSession;
 
@@ -54,6 +54,16 @@ impl OfflinePlayerHarness {
 
     pub(crate) fn player(&self) -> &Arc<PlayerImpl> {
         &self.player
+    }
+
+    pub(crate) fn set_session_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
+        match self.session.exec(Cmd::SetSessionTempo { tempo })? {
+            Reply::Ok => Ok(()),
+            Reply::Err(error) => Err(PlayError::Session(error)),
+            _ => Err(PlayError::Internal(
+                "unexpected reply for offline session tempo update".into(),
+            )),
+        }
     }
 
     /// Synchronously render `frames` of audio.

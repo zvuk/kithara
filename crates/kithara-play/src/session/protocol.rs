@@ -7,11 +7,24 @@ mod wire {
     use crate::{
         api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::SlotControl,
+        rt::StreamShape,
     };
 
     pub type PlayerId = u64;
 
     pub type StartStreamFn<B> = fn(&mut FirewheelCtx<B>, u32) -> Result<(), String>;
+
+    /// Transport commit and stream dimensions captured by one session command.
+    #[derive(Clone, Copy)]
+    #[non_exhaustive]
+    pub struct BindingPreparation {
+        /// Render-observed session transport revision.
+        pub revision: u64,
+        /// Stream dimensions paired with the observed revision.
+        pub shape: StreamShape,
+        /// Session tempo paired with the observed revision.
+        pub tempo: Tempo,
+    }
 
     #[derive(Debug, Clone, thiserror::Error)]
     #[non_exhaustive]
@@ -32,6 +45,9 @@ mod wire {
         /// The active graph has not processed the session transport yet.
         #[error("session transport has not been processed")]
         TransportNotProcessed,
+        /// A bound track cannot be prepared before the session has a tempo.
+        #[error("session transport has not been configured")]
+        TransportNotConfigured,
         /// A different session transport commit is awaiting a render result.
         #[error("session transport commit {revision} is still pending")]
         TransportCommitPending { revision: u64 },
@@ -102,10 +118,14 @@ mod wire {
         },
         /// Query the transport state last processed by the audio graph.
         SessionTransport,
+        /// Query one canonical transport and stream-shape preparation snapshot.
+        BindingPreparation,
         InvalidateAudioRoute {
             reason: String,
         },
         QuerySampleRate,
+        /// Query the active stream dimensions.
+        QueryStreamShape,
         Tick,
     }
 
@@ -121,8 +141,12 @@ mod wire {
         SessionDucking(SessionDuckingMode),
         /// The transport state last processed by the audio graph.
         SessionTransport(SessionTransportSnapshot),
+        /// Canonical preparation values captured by one session command.
+        BindingPreparation(BindingPreparation),
         SlotAllocated(AllocatedSlot),
         SampleRate(u32),
+        /// Active stream dimensions.
+        StreamShape(StreamShape),
         Err(SessionError),
     }
 
@@ -138,10 +162,11 @@ mod handle {
     use kithara_bufpool::PcmPool;
     use kithara_platform::sync::Arc;
 
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply};
+    use super::wire::{AllocatedSlot, BindingPreparation, Cmd, PlayerId, Reply};
     use crate::{
         api::{SessionTransportSnapshot, SlotId, Tempo},
         error::PlayError,
+        rt::StreamShape,
     };
 
     pub trait SessionDispatcher: Send + Sync + 'static {
@@ -272,6 +297,24 @@ mod handle {
             }
         }
 
+        pub(crate) fn binding_preparation(&self) -> Result<BindingPreparation, PlayError> {
+            match self.exec_ok(Cmd::BindingPreparation)? {
+                Reply::BindingPreparation(preparation) => Ok(preparation),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for binding preparation query".into(),
+                )),
+            }
+        }
+
+        pub(crate) fn query_stream_shape(&self) -> Result<StreamShape, PlayError> {
+            match self.exec_ok(Cmd::QueryStreamShape)? {
+                Reply::StreamShape(shape) => Ok(shape),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session stream-shape query".into(),
+                )),
+            }
+        }
+
         pub fn start_player(
             &self,
             player_id: PlayerId,
@@ -302,4 +345,6 @@ mod handle {
 }
 
 pub use handle::{SessionDispatcher, SessionHandle};
-pub use wire::{AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionError, StartStreamFn};
+pub use wire::{
+    AllocatedSlot, BindingPreparation, Cmd, CmdMsg, PlayerId, Reply, SessionError, StartStreamFn,
+};

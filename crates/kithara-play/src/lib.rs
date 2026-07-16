@@ -4,6 +4,8 @@
 
 mod error;
 mod guard;
+#[cfg(test)]
+mod test_support;
 
 pub mod api;
 pub mod bridge;
@@ -40,7 +42,7 @@ pub use kithara_audio::{
 pub use kithara_net::Headers;
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
 pub use resource::{
-    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
+    PlaybackResamplerBackend, Resource, ResourceBlueprint, ResourceConfig, ResourceSrc, SourceType,
     default_resource_decoder_config,
 };
 pub use rt::PlayerNode;

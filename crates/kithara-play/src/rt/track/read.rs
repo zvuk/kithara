@@ -4,6 +4,8 @@ use kithara_platform::sync::Arc;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 use ringbuf::{HeapProd, traits::Producer};
 
+#[cfg(not(target_arch = "wasm32"))]
+use super::elastic_renderer::ElasticRenderOutcome;
 use super::{
     PlayerTrack, ReadOutcome,
     triggers::{TrackTriggers, TriggerInput},
@@ -78,8 +80,19 @@ impl PlayerTrack {
             self.last_render_context = Some((std::ptr::from_ref(context).addr(), context.clone()));
         }
         if self.binding().is_some() {
-            self.handle_failed_end(notification_tx);
-            return TrackReadOutcome::Failed;
+            #[cfg(target_arch = "wasm32")]
+            {
+                self.handle_failed_end(notification_tx);
+                return TrackReadOutcome::Failed;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let TrackRenderMode::Session(context) = mode else {
+                    self.handle_failed_end(notification_tx);
+                    return TrackReadOutcome::Failed;
+                };
+                return self.read_elastic(context, scratch_bufs, mix_bufs, range, notification_tx);
+            }
         }
         self.read(scratch_bufs, mix_bufs, range, notification_tx)
     }
@@ -261,6 +274,33 @@ impl PlayerTrack {
         }
 
         let read_outcome = self.read_resource(scratch_bufs, range.clone());
+        self.finish_read(scratch_bufs, mix_bufs, range, notification_tx, read_outcome)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_elastic(
+        &mut self,
+        context: &RenderContext,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        notification_tx: &mut HeapProd<PlayerNotification>,
+    ) -> TrackReadOutcome {
+        if self.state == TrackState::Finished {
+            return TrackReadOutcome::Eof;
+        }
+        let read_outcome = self.read_elastic_resource(context, scratch_bufs, range.clone());
+        self.finish_read(scratch_bufs, mix_bufs, range, notification_tx, read_outcome)
+    }
+
+    fn finish_read(
+        &mut self,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        notification_tx: &mut HeapProd<PlayerNotification>,
+        read_outcome: TrackReadOutcome,
+    ) -> TrackReadOutcome {
         match read_outcome {
             TrackReadOutcome::Full { .. } => self.handle_full_read(
                 scratch_bufs,
@@ -286,6 +326,40 @@ impl PlayerTrack {
             }
             TrackReadOutcome::Failed => {
                 self.handle_failed_end(notification_tx);
+                TrackReadOutcome::Failed
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_elastic_resource(
+        &mut self,
+        context: &RenderContext,
+        scratch_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+    ) -> TrackReadOutcome {
+        let Some(binding) = self.binding.as_ref() else {
+            return TrackReadOutcome::Failed;
+        };
+        let duration = self.resource.duration();
+        match self
+            .resource
+            .render_elastic(binding, context, range.clone(), scratch_bufs)
+        {
+            Ok(ElasticRenderOutcome::Ready { frames }) if frames == range.len() => {
+                TrackReadOutcome::Full {
+                    duration,
+                    frames,
+                    frames_until_eof: None,
+                    position: 0.0,
+                }
+            }
+            Ok(ElasticRenderOutcome::Eof) => {
+                fill_silence(scratch_bufs, range);
+                TrackReadOutcome::Eof
+            }
+            Ok(ElasticRenderOutcome::Ready { .. }) | Err(_) => {
+                fill_silence(scratch_bufs, range);
                 TrackReadOutcome::Failed
             }
         }
@@ -347,5 +421,12 @@ impl PlayerTrack {
             current => current,
         };
         self.set_state(new_state);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_silence(output: &mut [&mut [f32]], range: Range<usize>) {
+    for channel in output {
+        channel[range.clone()].fill(0.0);
     }
 }

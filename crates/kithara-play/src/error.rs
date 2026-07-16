@@ -29,8 +29,60 @@ pub enum PlayError {
     #[error("item failed to load: {reason}")]
     ItemFailed { reason: String },
 
+    /// Bound-track elastic preparation failed.
+    #[error("bound-track elastic preparation failed: {reason}")]
+    ElasticPreparation {
+        /// Backend or source preparation failure.
+        reason: String,
+    },
+
+    /// The target cannot provide the elastic rendering backend.
+    #[error("bound-track elastic rendering is unavailable on this target")]
+    ElasticBackendUnavailable,
+
+    /// Bound-track preparation was cancelled before publication.
+    #[error("bound-track preparation was cancelled")]
+    BindingPreparationCancelled,
+
+    /// The session preparation snapshot changed before publication.
+    #[error("session transport or stream shape changed during bound-track preparation")]
+    BindingPreparationContextChanged,
+
+    /// The analysed track axis does not match the session stream rate.
+    #[error(
+        "track binding sample rate {binding_sample_rate} does not match stream sample rate {stream_sample_rate}"
+    )]
+    BindingSampleRateMismatch {
+        /// Host rate used to build the track binding.
+        binding_sample_rate: u32,
+        /// Active session stream rate.
+        stream_sample_rate: u32,
+    },
+
+    /// A bound queue item has no prepared elastic state.
+    #[error("item {index} requires bound-track preparation before activation")]
+    BindingPreparationRequired {
+        /// Queue index of the unprepared item.
+        index: usize,
+    },
+
+    /// A bound queue item was prepared for an obsolete session snapshot.
+    #[error("item {index} was prepared for a different session transport or stream shape")]
+    BindingPreparationStale {
+        /// Queue index of the stale item.
+        index: usize,
+    },
+
+    /// The resource cannot open an independent preparation reader.
+    #[error("bound item cannot open an independent preparation reader")]
+    BindingSourceNotReopenable,
+
     #[error("seek failed to position {position:?}")]
     SeekFailed { position: Duration },
+
+    /// Bound playback can only seek through a session transport transaction.
+    #[error("bound-track seek requires a transactional session transport operation")]
+    BoundTrackSeekRequiresSessionTransport,
 
     #[error("engine not running")]
     EngineNotRunning,

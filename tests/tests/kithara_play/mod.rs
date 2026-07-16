@@ -2,6 +2,8 @@
 #[path = "../common/offline_player_harness.rs"]
 mod offline_player_harness;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod elastic_offline;
 mod engine_tests;
 mod gapless_offline_e2e;
 mod gapless_startup_regressions;

@@ -1,16 +1,16 @@
 use std::num::NonZeroU32;
 
-use firewheel::{backend::AudioBackend, error::UpdateError};
+use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 
 use super::{
-    protocol::SessionError,
-    state::{PendingTransportCommit, SessionState, TransportCommitPhase},
+    protocol::{BindingPreparation, SessionError},
+    state::{PendingTransportCommit, SessionState, SessionTransportState, TransportCommitPhase},
 };
 use crate::{
     api::{SessionTransportSnapshot, Tempo},
     rt::{
-        RenderFrame, SessionTransportCommit, TransportCommitResult, TransportCommitStamp,
-        TransportObservation,
+        RenderFrame, SessionTransportCommit, StreamShape, TransportCommitResult,
+        TransportCommitStamp, TransportObservation,
     },
 };
 
@@ -131,6 +131,50 @@ pub(super) fn snapshot<B: AudioBackend>(
         .ok_or(SessionError::TransportNotProcessed)
 }
 
+pub(super) fn binding_preparation<B: AudioBackend>(
+    state: &mut SessionState<B>,
+) -> Result<BindingPreparation, SessionError> {
+    let _ = refresh_observation(state)?;
+    let commit = preparation_commit(&state.transport)?;
+    let stream_info = state
+        .ctx
+        .as_ref()
+        .and_then(FirewheelCtx::stream_info)
+        .ok_or(SessionError::NoContext)?;
+    Ok(BindingPreparation {
+        revision: commit.revision(),
+        shape: StreamShape {
+            sample_rate: stream_info.sample_rate,
+            max_block_frames: stream_info.max_block_frames,
+        },
+        tempo: commit.tempo(),
+    })
+}
+
+pub(super) fn stream_shape<B: AudioBackend>(
+    state: &SessionState<B>,
+) -> Result<StreamShape, SessionError> {
+    let stream_info = state
+        .ctx
+        .as_ref()
+        .and_then(FirewheelCtx::stream_info)
+        .ok_or(SessionError::NoContext)?;
+    Ok(StreamShape {
+        sample_rate: stream_info.sample_rate,
+        max_block_frames: stream_info.max_block_frames,
+    })
+}
+
+fn preparation_commit(
+    transport: &SessionTransportState,
+) -> Result<SessionTransportCommit, SessionError> {
+    match (transport.observed, transport.accepted) {
+        (Some(commit), _) => Ok(commit),
+        (None, Some(initial)) => Ok(initial),
+        (None, None) => Err(SessionError::TransportNotConfigured),
+    }
+}
+
 fn refresh_observation<B: AudioBackend>(
     state: &mut SessionState<B>,
 ) -> Result<TransportObservation, SessionError> {
@@ -191,4 +235,67 @@ fn apply_completion<B: AudioBackend>(
     state.transport.accepted = accepted;
     state.transport.completed_revision = revision;
     state.transport.pending = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit(tempo: f64, revision: u64) -> SessionTransportCommit {
+        SessionTransportCommit::new(Tempo::new(tempo).expect("valid tempo"), true, revision)
+    }
+
+    #[test]
+    fn preparation_uses_initial_accepted_commit_before_first_render() {
+        let transport = SessionTransportState {
+            accepted: Some(commit(120.0, 1)),
+            ..SessionTransportState::default()
+        };
+
+        assert_eq!(
+            preparation_commit(&transport).expect("initial commit is preparable"),
+            commit(120.0, 1)
+        );
+    }
+
+    #[test]
+    fn preparation_uses_observed_active_commit() {
+        let active = commit(120.0, 1);
+        let transport = SessionTransportState {
+            accepted: Some(active),
+            observed: Some(active),
+            ..SessionTransportState::default()
+        };
+
+        assert_eq!(
+            preparation_commit(&transport).expect("active commit is preparable"),
+            active
+        );
+    }
+
+    #[test]
+    fn preparation_keeps_observed_commit_while_a_future_revision_is_pending() {
+        let transport = SessionTransportState {
+            accepted: Some(commit(90.0, 2)),
+            observed: Some(commit(120.0, 1)),
+            pending: Some(PendingTransportCommit {
+                phase: TransportCommitPhase::Applying,
+                revision: 2,
+            }),
+            ..SessionTransportState::default()
+        };
+
+        assert_eq!(
+            preparation_commit(&transport).expect("active commit is preparable"),
+            commit(120.0, 1)
+        );
+    }
+
+    #[test]
+    fn preparation_requires_a_configured_transport() {
+        assert!(matches!(
+            preparation_commit(&SessionTransportState::default()),
+            Err(SessionError::TransportNotConfigured)
+        ));
+    }
 }

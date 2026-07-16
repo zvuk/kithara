@@ -212,6 +212,9 @@ pub(crate) enum SourceAudioCommand {
         role: SourceAudioRole,
         spec: PcmSpec,
     },
+    Deactivate {
+        lane_id: NonZeroU64,
+    },
     Demand(SourceAudioDemand),
 }
 

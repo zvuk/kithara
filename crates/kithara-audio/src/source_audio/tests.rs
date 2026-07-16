@@ -98,6 +98,105 @@ fn demand_tokens_are_rejected_across_reader_lanes() {
 }
 
 #[kithara::test]
+#[cfg(not(target_arch = "wasm32"))]
+fn source_activity_wakes_when_data_becomes_ready() {
+    let mut fixture = Fixture::new(2, 4, mono());
+    let activity = fixture
+        .reader
+        .take_activity()
+        .expect("source activity ownership");
+    assert!(fixture.reader.take_activity().is_none());
+    let range = SourceFrameRange::new(0, 2).expect("valid source range");
+    let demand = fixture.reader.request(range, 0, 1).expect("source demand");
+    fixture.tap.service().expect("install demand");
+    let snapshot = activity.snapshot();
+
+    let chunk = fixture.chunk(mono(), 0, &[1.0, 2.0]);
+    assert_eq!(
+        fixture.tap.capture(&chunk, 1),
+        Ok(SourceAudioCaptureOutcome::Captured)
+    );
+    activity.wait(snapshot);
+
+    let mut output = [0.0; 2];
+    assert_eq!(
+        fixture.reader.read_into(&demand, &mut output),
+        Ok(SourceAudioReadOutcome::Ready { frames: 2 })
+    );
+    assert_eq!(output, [1.0, 2.0]);
+}
+
+#[kithara::test]
+#[cfg(not(target_arch = "wasm32"))]
+fn source_activity_wakes_when_terminal_status_arrives() {
+    let mut fixture = Fixture::new(2, 4, mono());
+    fixture
+        .reader
+        .activate_authoritative(mono())
+        .expect("authoritative activation");
+    fixture.tap.service().expect("install activation");
+    let activity = fixture
+        .reader
+        .take_activity()
+        .expect("source activity ownership");
+    let range = SourceFrameRange::new(0, 2).expect("valid source range");
+    let demand = fixture.reader.request(range, 0, 1).expect("source demand");
+    fixture.tap.service().expect("install demand");
+    let snapshot = activity.snapshot();
+
+    assert!(fixture.tap.finish(1, super::SourceAudioTerminal::Eof));
+    assert_ne!(activity.snapshot(), snapshot);
+    activity.wait(snapshot);
+
+    let mut output = [0.0; 2];
+    assert_eq!(
+        fixture.reader.read_into(&demand, &mut output),
+        Ok(SourceAudioReadOutcome::Eof)
+    );
+}
+
+#[kithara::test]
+fn deactivation_stops_capture_and_keeps_cached_ranges_reusable() {
+    let mut fixture = Fixture::new(2, 4, mono());
+    let range = SourceFrameRange::new(0, 2).expect("valid source range");
+    let demand = fixture.reader.request(range, 0, 1).expect("source demand");
+    fixture.tap.service().expect("install demand");
+    let cached = fixture.chunk(mono(), 0, &[1.0, 2.0]);
+    fixture
+        .tap
+        .capture(&cached, 1)
+        .expect("capture source range");
+    let mut output = [0.0; 2];
+    assert_eq!(
+        fixture.reader.read_into(&demand, &mut output),
+        Ok(SourceAudioReadOutcome::Ready { frames: 2 })
+    );
+
+    fixture.reader.deactivate().expect("deactivate source lane");
+    fixture.tap.service().expect("install deactivation");
+    assert_eq!(
+        fixture.reader.request(range, 0, 2),
+        Err(SourceAudioError::Inactive)
+    );
+    assert_eq!(
+        fixture.tap.capture(&cached, 1),
+        Ok(SourceAudioCaptureOutcome::Ignored)
+    );
+
+    fixture
+        .reader
+        .activate(mono())
+        .expect("reactivate source lane");
+    fixture.tap.service().expect("install reactivation");
+    let reused = fixture.reader.request(range, 0, 2).expect("reused demand");
+    assert_eq!(
+        fixture.reader.read_into(&reused, &mut output),
+        Ok(SourceAudioReadOutcome::Ready { frames: 2 })
+    );
+    assert_eq!(output, [1.0, 2.0]);
+}
+
+#[kithara::test]
 fn stale_seek_epoch_packets_are_retired_without_discarding_cached_audio() {
     let mut fixture = Fixture::new(2, 4, mono());
     let range = SourceFrameRange::new(0, 2).expect("valid source range");
@@ -273,6 +372,37 @@ fn returned_source_buffers_release_data_backpressure() {
         fixture.tap.capture(&third, 3),
         Ok(SourceAudioCaptureOutcome::Captured)
     );
+}
+
+#[kithara::test]
+#[cfg(not(target_arch = "wasm32"))]
+fn closed_capture_lane_fails_an_uncached_demand() {
+    let pool = PcmPool::default();
+    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    let (mut reader, mut tap) = connect_source_audio(
+        &pool,
+        NonZeroUsize::new(1).expect("non-zero test capacity"),
+        NonZeroUsize::new(2).expect("non-zero test frame limit"),
+        worker.clone(),
+    )
+    .expect("source audio connection");
+    let activity = reader.take_activity().expect("source activity ownership");
+    reader.activate(mono()).expect("source audio activation");
+    tap.service().expect("install activation");
+    let range = SourceFrameRange::new(0, 2).expect("valid source range");
+    let demand = reader.request(range, 0, 1).expect("source demand");
+    tap.service().expect("install demand");
+    let snapshot = activity.snapshot();
+    drop(tap);
+    assert_ne!(activity.snapshot(), snapshot);
+    activity.wait(snapshot);
+
+    let mut output = [0.0; 2];
+    assert_eq!(
+        reader.read_into(&demand, &mut output),
+        Err(SourceAudioError::SourceFailed)
+    );
+    worker.shutdown();
 }
 
 #[kithara::test]

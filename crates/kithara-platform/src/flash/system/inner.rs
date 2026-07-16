@@ -169,8 +169,8 @@ pub(in crate::flash) struct Scheduler {
     /// minimum deadline is `first_key_value`; ties share the same deadline and
     /// differ only by id. The map doubles as entry storage.
     pub(super) timed: BTreeMap<(u64, WaiterId), Entry>,
-    /// Untimed waiters (no deadline) keyed by unique id; woken only by a signal
-    /// ([`FlashInner::signal_condvar`]), never by a clock jump.
+    /// Untimed waiters keyed by unique id; woken by their explicit signal or
+    /// unpark path, never by a clock jump.
     pub(super) indef: BTreeMap<WaiterId, Entry>,
     /// Cooperative-yield waiters (sim `thread::yield_now` AND
     /// `tokio::task::yield_now`): a busy-poll loop that relinquishes the engine so
@@ -181,7 +181,7 @@ pub(in crate::flash) struct Scheduler {
     /// releases while it waits. Keyed by id.
     pub(super) yielders: BTreeMap<WaiterId, Wake>,
     /// Thread ids whose `unpark` arrived while not parked: the next
-    /// `park_timed_unparkable` for that id consumes the flag and returns at once.
+    /// thread park for that id consumes the flag and returns at once.
     pub(super) unpark_pending: BTreeSet<ThreadKey>,
     /// Condvar ids whose `notify_one` arrived while no waiter
     /// was registered: the next `notified()` first-poll for that cvid consumes

@@ -119,7 +119,7 @@ impl PlayerTrack {
         } = axis;
         resource.set_host_sample_rate(sample_rate);
         let observed_duration = resource.duration();
-        let track = Self {
+        let mut track = Self {
             resource,
             binding,
             item_id,
@@ -203,14 +203,18 @@ impl PlayerTrack {
         &self.resource
     }
 
-    /// Seek the underlying resource and re-sync the served-frame counter
-    /// so trigger thresholds reflect the new playback origin.
-    pub fn seek(&mut self, seconds: f64) {
-        self.resource.seek(seconds);
+    /// Seeks standalone playback and updates its served-frame origin.
+    /// Returns `false` when the session transport owns the cursor or seek fails.
+    #[must_use]
+    pub fn seek(&mut self, seconds: f64) -> bool {
+        if !self.resource.seek(seconds) {
+            return false;
+        }
         let frames = seek_frame_index(seconds, self.sample_rate, self.observed_duration);
         self.served_frames = frames;
         self.triggers.reset();
         self.ended_at_eof = false;
+        true
     }
 
     /// Update the prefetch lead time used for the preload trigger.
@@ -240,6 +244,7 @@ impl PlayerTrack {
     pub fn stop(&mut self) {
         self.set_state(TrackState::Finished);
         self.fade.stop();
+        self.ended_at_eof = false;
     }
 
     /// Re-create the `MixDSP` with a new fade duration.
@@ -274,7 +279,7 @@ impl PlayerTrack {
     }
 
     /// Map track state to worker scheduling priority and push the update.
-    fn update_service_class(&self, state: TrackState) {
+    fn update_service_class(&mut self, state: TrackState) {
         self.resource
             .set_service_class(service_class_for_state(state));
     }
@@ -314,15 +319,34 @@ fn service_class_for_state(state: TrackState) -> ServiceClass {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::PcmPool;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_support::empty_resource;
 
     #[kithara::test]
     fn seek_frame_index_clamps_unrepresentable_targets() {
         assert_eq!(seek_frame_index(f64::INFINITY, 44_100, 10.0), 441_000);
         assert_eq!(seek_frame_index(f64::INFINITY, 44_100, 0.0), 0);
         assert_eq!(seek_frame_index(f64::NAN, 44_100, 10.0), 0);
+    }
+
+    #[kithara::test]
+    fn explicit_stop_clears_natural_end_retention() {
+        let src: Arc<str> = Arc::from("ended.wav");
+        let resource =
+            PlayerResource::new(empty_resource(&src), Arc::clone(&src), &PcmPool::default());
+        let params = TrackParams::builder()
+            .axis(NonZeroU32::new(44_100).expect("static sample rate"))
+            .src(src)
+            .build();
+        let mut track = PlayerTrack::new(Box::new(resource), params);
+        track.ended_at_eof = true;
+
+        track.stop();
+
+        assert!(!track.ended_at_eof());
     }
 
     #[kithara::test]

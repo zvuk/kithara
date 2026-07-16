@@ -73,6 +73,10 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Ok(snapshot) => Reply::SessionTransport(snapshot),
             Err(err) => Reply::Err(err),
         },
+        Cmd::BindingPreparation => match transport::binding_preparation(state) {
+            Ok(preparation) => Reply::BindingPreparation(preparation),
+            Err(err) => Reply::Err(err),
+        },
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
         Cmd::QuerySampleRate => {
             let sample_rate = state
@@ -83,6 +87,10 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             trace_stream_info(state, "query-sample-rate");
             Reply::SampleRate(sample_rate)
         }
+        Cmd::QueryStreamShape => match transport::stream_shape(state) {
+            Ok(shape) => Reply::StreamShape(shape),
+            Err(error) => Reply::Err(error),
+        },
         Cmd::Tick => tick_session(state),
     }
 }
@@ -238,9 +246,12 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::session::{
-        protocol::{Cmd, Reply, SessionError},
-        state::SessionState,
+    use crate::{
+        api::Tempo,
+        session::{
+            protocol::{Cmd, Reply, SessionError},
+            state::SessionState,
+        },
     };
 
     #[derive(Default)]
@@ -361,6 +372,44 @@ mod tests {
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }
+    }
+
+    #[kithara::test]
+    fn binding_preparation_captures_transport_and_full_stream_shape() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let player_id = register_player(&mut state);
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::StartPlayer {
+                    player_id,
+                    sample_rate: 48_000,
+                    master_volume: 1.0,
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetSessionTempo {
+                    tempo: Tempo::new(123.0).expect("valid tempo"),
+                },
+            ),
+            Reply::Ok
+        ));
+
+        let Reply::BindingPreparation(preparation) = run_cmd(&mut state, Cmd::BindingPreparation)
+        else {
+            panic!("binding preparation command returned an unexpected reply");
+        };
+
+        assert_eq!(preparation.tempo, Tempo::new(123.0).expect("valid tempo"));
+        assert_eq!(preparation.revision, 1);
+        assert_eq!(preparation.shape.sample_rate.get(), 48_000);
+        assert_eq!(preparation.shape.max_block_frames.get(), 512);
     }
 
     #[kithara::test]

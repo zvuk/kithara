@@ -244,7 +244,7 @@ async fn seek_clears_buffered_samples() {
     }
     assert!(left[0] < 1024.0, "pre-seek sample should be near frame 0");
 
-    pr.seek(0.5);
+    assert!(pr.seek(0.5));
 
     let mut left2 = vec![0.0f32; 128];
     let mut right2 = vec![0.0f32; 128];

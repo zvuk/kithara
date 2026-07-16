@@ -8,7 +8,10 @@ use super::{
     processor::PlayerNodeProcessor,
     track::{PlayerResource, PlayerTrack, TrackAxis, TrackParams},
 };
-use crate::bridge::{PlayerCmd, PlayerNotification, TrackState, TrackTransition};
+use crate::{
+    api::TrackBinding,
+    bridge::{PlayerCmd, PlayerNotification, TrackState, TrackTransition},
+};
 
 impl PlayerNodeProcessor {
     fn apply_fade_duration(&mut self, duration: f32) {
@@ -34,16 +37,18 @@ impl PlayerNodeProcessor {
         for (_, track) in self.tracks.iter_mut() {
             match track.state() {
                 TrackState::FadingIn | TrackState::Playing => {
-                    track.seek(seconds);
-                    track.play();
+                    if track.seek(seconds) {
+                        track.play();
+                    }
                 }
                 TrackState::FadingOut => {
                     track.stop();
                 }
                 TrackState::Finished if track.ended_at_eof() && seconds < track.duration() => {
-                    track.seek(seconds);
-                    track.play();
-                    revived = true;
+                    if track.seek(seconds) {
+                        track.play();
+                        revived = true;
+                    }
                 }
                 _ => {}
             }
@@ -54,12 +59,18 @@ impl PlayerNodeProcessor {
     }
 
     fn clear_all_tracks(&mut self) {
+        for (_, track) in self.tracks.iter_mut() {
+            track.stop();
+        }
         let keys: SmallVec<[Arc<str>; Self::MAX_TRACKS]> = self
             .tracks
             .iter_keys()
             .map(|(key, _)| Arc::clone(key))
             .collect();
         for key in keys {
+            if self.retirement_blocked() {
+                break;
+            }
             self.unload_track(&key);
         }
         self.tracks_transitions.clear();
@@ -71,10 +82,17 @@ impl PlayerNodeProcessor {
 
     /// Drain all pending commands from the channel.
     pub fn drain_commands(&mut self) {
-        while let Some(cmd) = self.cmd_rx.try_pop() {
+        while !self.retirement_blocked() {
+            let Some(cmd) = self.cmd_rx.try_pop() else {
+                break;
+            };
             match cmd {
-                PlayerCmd::LoadTrack { resource, item_id } => {
-                    self.load_track(resource, item_id);
+                PlayerCmd::LoadTrack {
+                    binding,
+                    resource,
+                    item_id,
+                } => {
+                    self.load_track(resource, item_id, binding);
                 }
                 PlayerCmd::UnloadTrack { src } => {
                     self.unload_track(&src);
@@ -148,7 +166,7 @@ impl PlayerNodeProcessor {
                 match transition {
                     TrackTransition::FadeIn(_) => {
                         if track.position() > Self::FADE_IN_SEEK_THRESHOLD {
-                            track.seek(0.0);
+                            let _ = track.seek(0.0);
                         }
                         track.fade_in();
                         playback.position.store(track.position(), Ordering::Relaxed);
@@ -172,7 +190,12 @@ impl PlayerNodeProcessor {
         }
     }
 
-    fn load_track(&mut self, resource: Box<PlayerResource>, item_id: Option<Arc<str>>) {
+    fn load_track(
+        &mut self,
+        resource: Box<PlayerResource>,
+        item_id: Option<Arc<str>>,
+        binding: Option<TrackBinding>,
+    ) {
         let src = Arc::clone(resource.src());
         if let Some(track) = self.tracks.remove(&src) {
             self.discard_track(track);
@@ -184,7 +207,7 @@ impl PlayerNodeProcessor {
         self.evict_tracks_if_needed();
 
         let loaded_src = src.clone();
-        let axis = TrackAxis::from(self.sample_rate);
+        let axis = binding.map_or_else(|| TrackAxis::from(self.sample_rate), TrackAxis::from);
         let params = TrackParams::builder()
             .axis(axis)
             .src(src.clone())

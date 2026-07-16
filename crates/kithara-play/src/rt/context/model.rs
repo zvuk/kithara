@@ -83,12 +83,12 @@ impl RenderContext {
         self.sample_rate
     }
 
-    #[cfg(test)]
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn session_beats(&self) -> Option<&Range<SessionBeat>> {
         self.session_beats.as_ref()
     }
 
-    #[cfg(test)]
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) const fn transport_commit(&self) -> Option<SessionTransportCommit> {
         self.transport_commit
     }

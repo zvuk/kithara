@@ -2,6 +2,8 @@ use super::EngineImpl;
 use crate::{
     api::{SessionTransportSnapshot, Tempo},
     error::PlayError,
+    rt::StreamShape,
+    session::protocol::BindingPreparation,
 };
 
 impl EngineImpl {
@@ -15,5 +17,13 @@ impl EngineImpl {
     /// Returns an error before the active graph has processed a render block.
     pub fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
         self.session().session_transport()
+    }
+
+    pub(crate) fn binding_preparation(&self) -> Result<BindingPreparation, PlayError> {
+        self.session().binding_preparation()
+    }
+
+    pub(crate) fn stream_shape(&self) -> Result<StreamShape, PlayError> {
+        self.session().query_stream_shape()
     }
 }

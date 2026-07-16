@@ -1,6 +1,7 @@
 use std::ops::Deref;
 
 use kithara_platform::{sync::Arc, time::Duration};
+use tracing::warn;
 
 use super::super::{
     core::PlayerImpl,
@@ -113,11 +114,19 @@ impl Handover<'_> {
             let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: prev_src });
         }
 
-        let (src, duration_seconds) = self.enqueue_to_processor(index)?;
+        let item = match self.enqueue_to_processor(index) {
+            Ok(item) => item,
+            Err(error) => {
+                warn!(index, %error, "failed to prepare next track");
+                return None;
+            }
+        };
+        let item = item?;
+        let src = item.src;
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
                 index,
-                duration_seconds,
+                duration_seconds: item.duration_seconds,
                 src: src.clone(),
                 state: PendingNextState::Armed,
             });

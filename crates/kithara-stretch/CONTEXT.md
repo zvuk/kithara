@@ -24,6 +24,19 @@ in `kithara-audio`. The audio graph passes its existing `PcmPool` through
 `kithara-stretch` depends downward on `kithara-bufpool` for backend scratch
 storage and on `kithara-workspace-hack` for native workspace unification.
 
+The crate also owns the transport-facing numeric elastic DSP contract.
+`ElasticBackend` processes one exact source-frame span into one exact output
+span, while `ElasticCapabilities` declares the supported rate envelope,
+algorithmic latency, channel/sample-rate identity, and prepared block limits.
+`ElasticRequest` contains only frame counts; session beats, track bindings,
+phase correction, source-window policy, and graph scheduling remain in
+`kithara-play`.
+
+`ElasticBackend` is sealed. Other crates consume it through trait objects, but
+concrete adapters and the validated capability values they publish are owned
+here. Adding an elastic backend therefore changes this crate rather than
+opening an externally constructed capability surface.
+
 ## Backend Contract
 
 Backends process interleaved `f32` PCM. `set_ratio` and `set_pitch` are
@@ -48,6 +61,13 @@ cannot expose a true tail drain must document that behavior in its adapter.
 swap. A spec change is handled by the caller rebuilding the backend with the
 new scalar sample rate and channel count; the backend trait intentionally does
 not depend on `kithara-decode::PcmSpec`.
+
+`SignalsmithElastic` is prepared for fixed maximum source and output blocks.
+Every numeric request is checked against those limits and the declared rate
+envelope before processing. `prime` resets the algorithm, consumes the required
+warm-up span, and discards the reported output latency so the caller can align
+the first audible frame to its presentation boundary. The backend never chooses
+a transport rate or repairs phase on its own.
 
 ## Adding A Backend
 

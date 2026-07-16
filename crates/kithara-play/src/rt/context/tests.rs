@@ -232,6 +232,7 @@ fn load_playing_track(
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
+                binding: None,
                 resource,
                 item_id: None,
             })

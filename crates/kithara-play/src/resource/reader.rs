@@ -5,13 +5,18 @@ use kithara_audio::{
     Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
     ServiceClass, SourceAudioReader,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_audio::{
+    SourceAudioActivity, SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome,
+    SourceFrameRange,
+};
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_stream::{Stream, StreamType};
 use tracing::warn;
 
-use super::{ResourceConfig, SourceType};
+use super::{ResourceBlueprint, ResourceConfig, SourceType};
 
 /// Type-erased audio resource wrapping any `PcmReader`.
 ///
@@ -43,6 +48,7 @@ use super::{ResourceConfig, SourceType};
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
     source_audio: Option<SourceAudioReader>,
+    blueprint: Option<ResourceBlueprint>,
     #[field(get, deref = false)]
     src: Arc<str>,
     /// Drop guard for the per-track cancel — the token passed as
@@ -132,6 +138,16 @@ impl Resource {
     where
         B: Default + ResamplerBackend,
     {
+        ResourceBlueprint::new(config).open().await
+    }
+
+    pub(crate) async fn open_config<B>(
+        config: ResourceConfig<B>,
+        blueprint: ResourceBlueprint,
+    ) -> DecodeResult<Self>
+    where
+        B: Default + ResamplerBackend,
+    {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
         // Capture the per-track cancel before `build_*_config` consumes `config`
@@ -148,6 +164,7 @@ impl Resource {
             }
         };
         resource.cancel = CancelGuard(cancel);
+        resource.blueprint = Some(blueprint);
         Ok(resource)
     }
 
@@ -183,6 +200,7 @@ impl Resource {
         Self {
             inner,
             source_audio,
+            blueprint: None,
             bus,
             src,
             cancel: CancelGuard(None),
@@ -255,6 +273,65 @@ impl Resource {
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
     }
+
+    /// Returns the reusable recipe for this stream-backed resource.
+    /// Custom-reader resources have no implicit reconstruction contract.
+    #[must_use]
+    pub fn blueprint(&self) -> Option<ResourceBlueprint> {
+        self.blueprint.clone()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn activate_source_audio_authoritative(&mut self) -> Result<bool, SourceAudioError> {
+        let Some(source_audio) = self.source_audio.as_mut() else {
+            return Ok(false);
+        };
+        source_audio.activate_authoritative(self.inner.spec())?;
+        Ok(true)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_source_audio_activity(&mut self) -> Option<SourceAudioActivity> {
+        self.source_audio
+            .as_mut()
+            .and_then(SourceAudioReader::take_activity)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn deactivate_source_audio(&mut self) -> Result<(), SourceAudioError> {
+        if let Some(source_audio) = self.source_audio.as_mut() {
+            source_audio.deactivate()?;
+            source_audio.poll();
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn request_source_audio(
+        &mut self,
+        range: SourceFrameRange,
+        look_ahead_frames: u64,
+    ) -> Result<Option<SourceAudioDemand>, SourceAudioError> {
+        let Some(source_audio) = self.source_audio.as_mut() else {
+            return Ok(None);
+        };
+        source_audio
+            .request(range, look_ahead_frames, self.inner.preload_epoch())
+            .map(Some)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn read_source_audio(
+        &mut self,
+        demand: &SourceAudioDemand,
+        range: SourceFrameRange,
+        output: &mut [f32],
+    ) -> Result<Option<SourceAudioReadOutcome>, SourceAudioError> {
+        self.source_audio
+            .as_mut()
+            .map(|source_audio| source_audio.read_range_into(demand, range, output))
+            .transpose()
+    }
 }
 
 /// Unwrap a `Resource` into its underlying reader, e.g. to hand the opened
@@ -275,11 +352,13 @@ impl From<Resource> for Box<dyn PcmReader> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{num::NonZeroU32, path::Path};
 
     use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_platform::CancelToken;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -377,5 +456,37 @@ mod tests {
     fn drop_without_cancel_is_passive() {
         let resource = Resource::from_reader(EofReader::default(), None);
         drop(resource);
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn into_reader_does_not_cancel_the_opened_resource_subtree() {
+        let owner = CancelToken::never();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/silence_1s.wav")
+            .to_string_lossy()
+            .into_owned();
+        let mut config = ResourceConfig::new(fixture, BytePool::default(), PcmPool::default())
+            .expect("fixture path must be a valid local resource");
+        config.cancel = Some(owner.clone());
+
+        let resource = Resource::new(config)
+            .await
+            .expect("fixture resource must open");
+        let reader_cancel = resource
+            .cancel
+            .0
+            .as_ref()
+            .expect("opened resource must own its cancel token")
+            .clone();
+
+        let reader: Box<dyn PcmReader> = resource.into();
+
+        assert!(
+            !reader_cancel.is_cancelled(),
+            "consuming the Resource must not cancel the live reader"
+        );
+        owner.cancel();
+        assert!(reader_cancel.is_cancelled());
+        drop(reader);
     }
 }

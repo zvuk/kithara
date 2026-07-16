@@ -148,6 +148,12 @@ allocation-, free-, and lock-free: scratch buffers are pre-sized at stream
 start, and evicted tracks are handed to a bounded deferred-drop channel (drained
 on the main thread) instead of being freed on the audio thread.
 
+If that deferred-drop channel is full, the processor retains exactly one track
+in `pending_retirement` and pauses command draining, cleanup, and further
+eviction until the track can be handed off unchanged. Rendering continues.
+Explicit stop and clear remove the natural-EOF retention marker first, so
+backpressure cannot turn a cleared track into a warm end-of-queue survivor.
+
 **Worker produce-core - verified-after-refactor.** The audio worker's
 `produce_pass` (`kithara-audio` scheduler) is `#[rtsan_forbid_blocking]`: the
 decode core reads/seeks without malloc/lock/syscall. Off-core work is pushed to
@@ -235,6 +241,67 @@ value, so a `PlayerTrack` cannot start with mismatched coordinate axes. A bound
 track cannot mutate that axis after a host sample-rate change: it retains the
 prepared rate and fails closed against the new session context until it is
 re-prepared. Unbound tracks update through the ordinary route-change path.
+
+The playlist carries an optional immutable `TrackBinding` beside its resource.
+For a bound stream-backed item, `ResourceBlueprint` opens an independent reader
+and prepares its source-audio lane and elastic renderer off the audio callback.
+The prepared renderer is transferred to the active `PlayerTrack`. A blueprint is
+a passive recipe: every opened `Resource` owns a separate cancellation child,
+and dropping the recipe cannot cancel an opened reader. Internal preparation
+also opens with an isolated event bus, so its decoder seeks and lifecycle events
+cannot enter the application-facing resource event scope. Custom readers have
+no reconstruction contract: unbound custom readers retain the compatibility
+path, while bound insertion returns `BindingSourceNotReopenable`.
+
+`PlayerImpl::insert_with_binding` owns this asynchronous preparation. Success
+means the queued item already has a fully primed renderer stamped with one
+atomic `(transport revision, sample rate, maximum block size)` snapshot.
+Preparation failure leaves the playlist unchanged. Slot existence and command
+capacity are checked before activation; either rejection restores the dormant
+renderer, while activation failure restores the same complete queue entry. The
+playlist lock spans take through command publication, so insert, remove, and
+replacement linearize entirely before or after the load; rollback cannot target
+a shifted or replaced coordinate.
+
+`ElasticRenderer` is the sole owner of the audible directional source cursor.
+For each render range it derives the desired source path from `TrackBinding` and
+the shared `RenderContext`, then submits an integer source/output span to a
+pitch-preserving backend. The backend declares its rate envelope and
+deterministic latency, is primed before activation, and reads immutable bounded
+source windows from a dedicated non-real-time worker. Decoder position, legacy
+pitch bend, and the processed-audio compatibility ring are not parallel phase
+authorities for a bound item.
+
+The source worker is a dedicated named platform thread started only after the
+slot command lane accepts activation. Its lifetime is independent of Tokio and
+is owned by the source port's cancellation and activity signal. It snapshots
+`SourceAudioActivity` before probing cancellation, requests, source readiness,
+or reply capacity and parks only while the predicate remains unresolved.
+Successful request, recycle, service, and reply-consume edges signal the same
+activity from the real-time side through nonblocking `ThreadGate::signal`;
+decoded data, terminal status, and producer close are signaled by
+`kithara-audio`. No periodic timer or runtime `Notify` participates in this
+path.
+
+Bound elastic rendering supports native forward playback. Activation requires a
+session-created node and its shared `RenderContext`; browser WASM and reverse
+preparation return typed capability errors. Ordinary track-local seek is
+rejected for a bound current item because only a session relocation transaction
+may move the session-owned audible cursor and renderer state.
+
+Inter-block phase correction is bounded in the source-frame domain. An error of
+at most one source frame is corrected continuously at no more than one frame per
+maximum render block, scaled for sub-blocks and constrained by the backend rate
+envelope. The integer span always begins at the previous cursor, so correction
+cannot jump over source. A larger error requires prepared relocation; absence of
+rate-envelope headroom is a typed failure rather than silent drift.
+
+Ordinary bound preparation uses the transport commit already observed by the
+render graph. Before the session has any active commit, it may use the first
+accepted commit because that commit targets the initial render boundary. Once an
+active commit exists, a later accepted-but-pending tempo never replaces it in a
+preparation query. A multi-track transaction must stage every participant before
+publishing a later revision.
 
 One zero-I/O Kithara graph-adapter node, executed as a Firewheel pre-process
 node, creates the immutable `RenderContext` for each processed graph block.
@@ -334,7 +401,9 @@ dedup state to `None`, so the next `play()` re-announces.
 
 The offline render backend for deterministic engine/player tests lives in
 `kithara-integration-tests::offline`, not here. Enable `mock` for trait-level
-`unimock` testing.
+`unimock` testing. Bound-render acceptance uses that existing integration
+session to write a WAV artifact; it is a validation surface, not a product
+offline-rendering feature.
 
 ## Integration
 

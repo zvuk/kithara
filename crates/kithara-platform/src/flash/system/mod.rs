@@ -44,7 +44,8 @@ pub(in crate::flash) use inner::{
 pub(in crate::flash) use pace::{real_io_enter, real_io_exit};
 pub(in crate::flash) use sched::{
     AsyncHandle, async_acquire, cancel_async_wait, cancel_yield, describe_cvid, dump,
-    next_condvar_id, park_timed_unparkable, register_channel_async, register_condvar_timed,
-    register_condvar_untimed, register_notify_async, register_sleep_async, register_yield_async,
-    signal_channel, signal_condvar, signal_notify, sleep_timed, unpark, yield_until_advance,
+    next_condvar_id, park_timed_unparkable, park_unparkable, register_channel_async,
+    register_condvar_timed, register_condvar_untimed, register_notify_async, register_sleep_async,
+    register_yield_async, signal_channel, signal_condvar, signal_notify, sleep_timed, unpark,
+    yield_until_advance,
 };

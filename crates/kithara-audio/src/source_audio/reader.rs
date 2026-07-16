@@ -6,7 +6,8 @@ use std::{
 use kithara_decode::PcmSpec;
 
 use super::{
-    SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome, SourceFrameRange,
+    SourceAudioActivity, SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome,
+    SourceFrameRange,
     cache::{SourceAudioCache, SourceAudioCacheInsert},
     model::{
         SourceAudioCommand, SourceAudioPacket, SourceAudioRole, SourceAudioStatus,
@@ -32,6 +33,7 @@ pub struct SourceAudioReader {
     cache: SourceAudioCache,
     pending_retirement: Option<SourceAudioWindow>,
     terminal: Option<SourceAudioStatus>,
+    activity: Option<SourceAudioActivity>,
 }
 
 impl SourceAudioReader {
@@ -42,6 +44,7 @@ impl SourceAudioReader {
         status_inlet: Inlet<SourceAudioStatus>,
         trash_outlet: Outlet<SourceAudioWindow>,
         cache: SourceAudioCache,
+        activity: SourceAudioActivity,
     ) -> Self {
         Self {
             lane_id,
@@ -56,7 +59,15 @@ impl SourceAudioReader {
             cache,
             pending_retirement: None,
             terminal: None,
+            activity: Some(activity),
         }
+    }
+
+    /// Transfer the activity edge to the external waiter.
+    /// Returns `None` after the handle has already been taken.
+    #[must_use = "the source activity handle can be taken only once"]
+    pub fn take_activity(&mut self) -> Option<SourceAudioActivity> {
+        self.activity.take()
     }
 
     /// Activate capture for one decoded audio format.
@@ -102,6 +113,23 @@ impl SourceAudioReader {
         self.spec = Some(spec);
         self.demand = None;
         self.terminal = None;
+        Ok(())
+    }
+
+    /// Stop new capture while retaining immutable cached ranges.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceAudioError::CommandBackpressure`] when the command cannot be queued.
+    pub fn deactivate(&mut self) -> Result<(), SourceAudioError> {
+        let command = SourceAudioCommand::Deactivate {
+            lane_id: self.lane_id,
+        };
+        self.command_outlet
+            .try_push(command)
+            .map_err(|_| SourceAudioError::CommandBackpressure)?;
+        self.active = false;
+        self.demand = None;
         Ok(())
     }
 
@@ -200,6 +228,7 @@ impl SourceAudioReader {
                     terminal: SourceAudioTerminal::Failed,
                     ..
                 }) => Err(SourceAudioError::SourceFailed),
+                None if !self.data_inlet.has_producer() => Err(SourceAudioError::SourceFailed),
                 None => Ok(SourceAudioReadOutcome::Pending),
             };
         }

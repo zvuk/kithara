@@ -60,12 +60,13 @@ impl PlayerImpl {
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
     /// in `PlayerResource`, and sends `LoadTrack` + `FadeIn` to the processor.
-    fn load_current_item(&self) {
+    fn load_current_item(&self) -> Result<(), PlayError> {
         let index = self.current_index();
-        if let Some((src, duration_seconds)) = self.enqueue_to_processor(index) {
-            self.publish_current_track_snapshot(duration_seconds);
-            self.start_playback(src);
+        if let Some(item) = self.enqueue_to_processor(index)? {
+            self.publish_current_track_snapshot(item.duration_seconds);
+            self.start_playback(item.src);
         }
+        Ok(())
     }
 
     /// Pause playback (sets rate to 0.0).
@@ -97,7 +98,10 @@ impl PlayerImpl {
 
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
-        self.load_current_item();
+        if let Err(error) = self.load_current_item() {
+            warn!(%error, "failed to load current item");
+            return;
+        }
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
         let bend = self.core.params.pitch_bend();
         self.set_pitch_bend(bend);
@@ -128,6 +132,10 @@ impl PlayerImpl {
         let Some(playback) = self.core.engine.slot_playback(slot_id) else {
             return Err(PlayError::SlotNotFound(slot_id));
         };
+
+        if self.core.items.current_has_binding() {
+            return Err(PlayError::BoundTrackSeekRequiresSessionTransport);
+        }
 
         let seek_epoch = playback.next_seek_epoch();
         playback.seek_epoch.store(seek_epoch, Ordering::SeqCst);
@@ -229,9 +237,13 @@ impl PlayerImpl {
         if armed_for_index {
             self.commit_next(index)?;
         } else if !reselecting_current {
+            let item = self.enqueue_to_processor(index)?;
             self.unarm_next_internal(Some(index));
             self.core.items.set_current(index);
-            self.load_current_item();
+            if let Some(item) = item {
+                self.publish_current_track_snapshot(item.duration_seconds);
+                self.start_playback(item.src);
+            }
             self.announce_current_item(index);
         }
 

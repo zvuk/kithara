@@ -4995,6 +4995,7 @@ dependencies = [
  "kithara-platform",
  "kithara-play",
  "kithara-stream",
+ "kithara-stretch",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",

@@ -4,7 +4,7 @@ use kithara_bufpool::PcmBuf;
 use kithara_decode::{PcmChunk, PcmSpec};
 
 use super::{
-    SourceAudioDemand, SourceAudioError, SourceFrameRange,
+    SourceAudioActivity, SourceAudioDemand, SourceAudioError, SourceFrameRange,
     model::{
         SourceAudioCaptureOutcome, SourceAudioCommand, SourceAudioPacket, SourceAudioRole,
         SourceAudioStatus, SourceAudioTerminal, SourceAudioWindow, sample_count,
@@ -15,8 +15,7 @@ use crate::runtime::{Inlet, Outlet};
 pub(crate) struct SourceAudioTap {
     lane_id: NonZeroU64,
     command_inlet: Inlet<SourceAudioCommand>,
-    data_outlet: Outlet<SourceAudioPacket>,
-    status_outlet: Outlet<SourceAudioStatus>,
+    outputs: SourceAudioOutputs,
     trash_inlet: Inlet<SourceAudioWindow>,
     buffers: Vec<PcmBuf>,
     required_frames: NonZeroUsize,
@@ -32,8 +31,7 @@ impl SourceAudioTap {
     pub(crate) fn new(
         lane_id: NonZeroU64,
         command_inlet: Inlet<SourceAudioCommand>,
-        data_outlet: Outlet<SourceAudioPacket>,
-        status_outlet: Outlet<SourceAudioStatus>,
+        outputs: SourceAudioOutputs,
         trash_inlet: Inlet<SourceAudioWindow>,
         buffers: Vec<PcmBuf>,
         initial_frames: NonZeroUsize,
@@ -41,8 +39,7 @@ impl SourceAudioTap {
         Self {
             lane_id,
             command_inlet,
-            data_outlet,
-            status_outlet,
+            outputs,
             trash_inlet,
             buffers,
             required_frames: initial_frames,
@@ -79,6 +76,10 @@ impl SourceAudioTap {
                     self.demand = None;
                     self.terminal_sent = None;
                 }
+                SourceAudioCommand::Deactivate { lane_id } if lane_id == self.lane_id => {
+                    self.active_spec = None;
+                    self.demand = None;
+                }
                 SourceAudioCommand::Demand(demand)
                     if demand.lane_id == self.lane_id && self.active_spec.is_some() =>
                 {
@@ -108,7 +109,7 @@ impl SourceAudioTap {
             return false;
         }
         if !self.command_inlet.has_producer()
-            || !self.data_outlet.has_consumer()
+            || !self.outputs.data.has_consumer()
             || self.active_spec.is_none()
             || self.demand.is_none()
         {
@@ -128,7 +129,7 @@ impl SourceAudioTap {
         let Some(demand) = self.demand else {
             return Ok(SourceAudioCaptureOutcome::Ignored);
         };
-        if !self.data_outlet.has_consumer() {
+        if !self.outputs.data.has_consumer() {
             return Ok(SourceAudioCaptureOutcome::Ignored);
         }
         if decode_seek_epoch != demand.decode_seek_epoch {
@@ -179,7 +180,7 @@ impl SourceAudioTap {
         samples[..capture_samples].copy_from_slice(&chunk.samples);
         let window = SourceAudioWindow::validated(chunk_range, spec, samples, capture_samples);
         let packet = SourceAudioPacket { demand, window };
-        if let Err(packet) = self.data_outlet.try_push(packet) {
+        if let Err(packet) = self.outputs.data.try_push(packet) {
             self.buffers.push(packet.window.release_samples());
             return Err(SourceAudioError::DataBackpressure);
         }
@@ -187,11 +188,11 @@ impl SourceAudioTap {
     }
 
     fn reclaim_pending_data(&mut self) {
-        if self.data_outlet.has_consumer() {
-            let _ = self.data_outlet.flush();
+        if self.outputs.data.has_consumer() {
+            let _ = self.outputs.data.flush();
             return;
         }
-        if let Some(packet) = self.data_outlet.take_pending() {
+        if let Some(packet) = self.outputs.data.take_pending() {
             self.buffers.push(packet.window.release_samples());
         }
         self.active_spec = None;
@@ -220,7 +221,7 @@ impl SourceAudioTap {
         self.active_spec == self.prepared_spec
             && self.required_frames.get() <= self.prepared_frames
             && !self.buffers.is_empty()
-            && self.data_outlet.flush()
+            && self.outputs.data.flush()
     }
 
     pub(crate) fn is_authoritative(&self) -> bool {
@@ -228,10 +229,10 @@ impl SourceAudioTap {
     }
 
     pub(crate) fn finish(&mut self, decode_seek_epoch: u64, terminal: SourceAudioTerminal) -> bool {
-        if !self.is_authoritative() || !self.status_outlet.has_consumer() {
+        if !self.is_authoritative() || !self.outputs.status.has_consumer() {
             return true;
         }
-        if !self.status_outlet.flush() {
+        if !self.outputs.status.flush() {
             return false;
         }
         if self.terminal_sent == Some((decode_seek_epoch, terminal)) {
@@ -242,15 +243,43 @@ impl SourceAudioTap {
             lane_id: self.lane_id,
             terminal,
         };
-        if self.status_outlet.try_push(status).is_err() {
+        if self.outputs.status.try_push(status).is_err() {
             return false;
         }
         self.terminal_sent = Some((decode_seek_epoch, terminal));
-        !self.status_outlet.has_pending()
+        !self.outputs.status.has_pending()
     }
 
     #[cfg(test)]
     pub(crate) fn available_buffers(&self) -> usize {
         self.buffers.len()
+    }
+}
+
+pub(crate) struct SourceAudioOutputs {
+    data: Outlet<SourceAudioPacket>,
+    status: Outlet<SourceAudioStatus>,
+    _close_guard: SourceAudioCloseGuard,
+}
+
+impl SourceAudioOutputs {
+    pub(crate) fn new(
+        data: Outlet<SourceAudioPacket>,
+        status: Outlet<SourceAudioStatus>,
+        activity: SourceAudioActivity,
+    ) -> Self {
+        Self {
+            data,
+            status,
+            _close_guard: SourceAudioCloseGuard(activity),
+        }
+    }
+}
+
+struct SourceAudioCloseGuard(SourceAudioActivity);
+
+impl Drop for SourceAudioCloseGuard {
+    fn drop(&mut self) {
+        self.0.signal();
     }
 }

@@ -76,6 +76,7 @@ pub struct PlayerNodeProcessor {
     pub(super) cmd_rx: HeapCons<PlayerCmd>,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
     trash_tx: HeapProd<PlayerTrack>,
+    pending_retirement: Option<PlayerTrack>,
     pub(super) sample_rate: NonZeroU32,
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) render: RenderPass,
@@ -84,10 +85,24 @@ pub struct PlayerNodeProcessor {
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct StreamShape {
+    /// Output sample rate observed by the render graph.
     pub sample_rate: NonZeroU32,
+    /// Maximum frames the graph may request in one render block.
     pub max_block_frames: NonZeroU32,
+}
+
+impl StreamShape {
+    /// Creates a stream shape from validated non-zero dimensions.
+    #[must_use]
+    pub const fn new(sample_rate: NonZeroU32, max_block_frames: NonZeroU32) -> Self {
+        Self {
+            sample_rate,
+            max_block_frames,
+        }
+    }
 }
 
 impl PlayerNodeProcessor {
@@ -113,6 +128,7 @@ impl PlayerNodeProcessor {
             cmd_rx: inputs.cmd_rx,
             notif_tx: inputs.notif_tx,
             trash_tx: inputs.trash_tx,
+            pending_retirement: None,
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
             render: RenderPass::new(pool, shape.max_block_frames.get().as_()),
@@ -124,9 +140,25 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Update fade duration for all tracks.
+    /// Hand a retired track to the control thread without dropping it here.
     pub(super) fn discard_track(&mut self, track: PlayerTrack) {
-        let _ = self.trash_tx.try_push(track);
+        debug_assert!(self.pending_retirement.is_none());
+        if let Err(track) = self.trash_tx.try_push(track) {
+            self.pending_retirement = Some(track);
+        }
+    }
+
+    pub(super) fn retirement_blocked(&self) -> bool {
+        self.pending_retirement.is_some()
+    }
+
+    fn flush_retirement(&mut self) {
+        let Some(track) = self.pending_retirement.take() else {
+            return;
+        };
+        if let Err(track) = self.trash_tx.try_push(track) {
+            self.pending_retirement = Some(track);
+        }
     }
 
     /// Clean up finished tracks.
@@ -173,6 +205,9 @@ impl PlayerNodeProcessor {
         };
 
         for entry in finished[..count].iter().flatten() {
+            if self.retirement_blocked() {
+                break;
+            }
             let (key, idx) = entry;
             if Some(*idx) == retain {
                 continue;
@@ -203,7 +238,7 @@ impl PlayerNodeProcessor {
     /// same state (e.g. all Playing), eviction order is non-deterministic
     /// because `HashMap` iteration order is undefined.
     pub(super) fn evict_tracks_if_needed(&mut self) {
-        while self.tracks.len() >= Self::MAX_TRACKS {
+        while self.tracks.len() >= Self::MAX_TRACKS && !self.retirement_blocked() {
             let eviction_candidate = self
                 .tracks
                 .iter_keys()
@@ -373,9 +408,11 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
     ) -> ProcessStatus {
         self.playback.process_count.fetch_add(1, Ordering::Relaxed);
 
-        self.drain_commands();
-
-        self.cleanup_finished_tracks();
+        self.flush_retirement();
+        if !self.retirement_blocked() {
+            self.drain_commands();
+            self.cleanup_finished_tracks();
+        }
 
         let is_playing = self.playback.playing.load(Ordering::SeqCst);
 
@@ -400,5 +437,75 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         } else {
             ProcessStatus::ClearAllOutputs
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ringbuf::traits::{Consumer, Producer};
+
+    use super::*;
+    use crate::{
+        bridge::{PlayerCmd, SharedEq, SlotControl, slot_channels},
+        rt::track::PlayerResource,
+        test_support::empty_resource,
+    };
+
+    fn processor_and_control() -> (PlayerNodeProcessor, SlotControl) {
+        let (inputs, control) = slot_channels(SharedEq::new(0));
+        let shape = StreamShape {
+            sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
+            max_block_frames: NonZeroU32::new(512).expect("static block size"),
+        };
+        (
+            PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
+            control,
+        )
+    }
+
+    fn load(src: &Arc<str>) -> PlayerCmd {
+        let resource =
+            PlayerResource::new(empty_resource(src), Arc::clone(src), &PcmPool::default());
+        PlayerCmd::LoadTrack {
+            binding: None,
+            resource: Box::new(resource),
+            item_id: None,
+        }
+    }
+
+    #[kithara::test]
+    fn saturated_retirement_lane_preserves_the_pending_track_and_command_order() {
+        let (mut processor, mut control) = processor_and_control();
+        let src: Arc<str> = Arc::from("replace.wav");
+
+        for _ in 0..66 {
+            control
+                .cmd_tx
+                .try_push(load(&src))
+                .expect("load command capacity is drained each iteration");
+            processor.drain_commands();
+        }
+        assert!(processor.retirement_blocked());
+        assert_eq!(processor.track_count(), 1);
+
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::SetPaused(false))
+            .expect("one command remains available");
+        processor.drain_commands();
+        assert!(!processor.playback.playing.load(Ordering::SeqCst));
+
+        let mut retired = 0;
+        while control.trash_rx.try_pop().is_some() {
+            retired += 1;
+        }
+        assert_eq!(retired, 64);
+
+        processor.flush_retirement();
+        assert!(!processor.retirement_blocked());
+        processor.drain_commands();
+        assert!(processor.playback.playing.load(Ordering::SeqCst));
+        assert!(control.trash_rx.try_pop().is_some());
+        assert!(control.trash_rx.try_pop().is_none());
     }
 }

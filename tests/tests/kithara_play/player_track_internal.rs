@@ -200,7 +200,7 @@ async fn track_initial_position_and_duration() {
 async fn track_seek_position_is_derived_from_served_frames() {
     let mut track = make_track();
     let seconds = 9.791_337;
-    track.seek(seconds);
+    assert!(track.seek(seconds));
 
     let sample_rate = 44_100.0;
     let expected = (seconds * sample_rate).floor() / sample_rate;
@@ -373,7 +373,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(9.79);
+    assert!(track.seek(9.79));
 
     let mut handover_count = 0;
     let mut saw_eof_stop = false;
@@ -603,7 +603,7 @@ async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(8.5);
+    assert!(track.seek(8.5));
 
     let _ = track.read(
         &mut scratch_bufs,
@@ -645,7 +645,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(8.5);
+    assert!(track.seek(8.5));
 
     let _ = track.read(
         &mut scratch_bufs,
@@ -665,7 +665,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
             .all(|notification| !matches!(notification, PlayerNotification::HandoverRequested))
     );
 
-    track.seek(9.79);
+    assert!(track.seek(9.79));
 
     let mut saw_handover = false;
     for _ in 0..4 {
@@ -737,7 +737,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(5.0);
+    assert!(track.seek(5.0));
     let _ = track.read(
         &mut scratch_bufs,
         &mut mix_bufs,
@@ -750,7 +750,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
         PlayerNotification::Requested | PlayerNotification::HandoverRequested
     )));
 
-    track.seek(9.79);
+    assert!(track.seek(9.79));
     let mut prefetch_count = 0;
     let mut handover_count = 0;
     for _ in 0..4 {

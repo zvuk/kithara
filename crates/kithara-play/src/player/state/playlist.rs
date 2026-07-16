@@ -1,10 +1,47 @@
 use kithara_platform::sync::Arc;
 
-use crate::resource::Resource;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::rt::track::PreparedElasticRenderer;
+use crate::{api::TrackBinding, resource::Resource, rt::StreamShape};
 
-/// A queued resource plus its optional queue-item identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PreparedBindingStamp {
+    pub(crate) shape: StreamShape,
+    pub(crate) transport_revision: u64,
+}
+
+impl PreparedBindingStamp {
+    pub(crate) const fn new(shape: StreamShape, transport_revision: u64) -> Self {
+        Self {
+            shape,
+            transport_revision,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct PreparedBindingResource {
+    pub(crate) renderer: PreparedElasticRenderer,
+    pub(crate) stamp: PreparedBindingStamp,
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) struct PreparedBindingResource {
+    pub(crate) stamp: PreparedBindingStamp,
+}
+
+/// A queue entry that retains metadata while its resource is checked out by a load transaction.
 pub(crate) struct QueuedResource {
+    pub(crate) binding: Option<TrackBinding>,
     pub(crate) item_id: Option<Arc<str>>,
+    pub(crate) prepared: Option<PreparedBindingResource>,
+    pub(crate) resource: Option<Resource>,
+}
+
+pub(crate) struct QueuedLoad {
+    pub(crate) binding: Option<TrackBinding>,
+    pub(crate) item_id: Option<Arc<str>>,
+    pub(crate) prepared: Option<PreparedBindingResource>,
     pub(crate) resource: Resource,
 }
 
@@ -43,7 +80,14 @@ impl Playlist {
     }
 
     pub(crate) fn has_resource(&self, index: usize) -> bool {
-        self.items.get(index).is_some_and(Option::is_some)
+        self.items
+            .get(index)
+            .and_then(Option::as_ref)
+            .is_some_and(|queued| queued.resource.is_some())
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<&QueuedResource> {
+        self.items.get(index).and_then(Option::as_ref)
     }
 
     pub(crate) fn insert(&mut self, q: QueuedResource, at: Option<usize>) -> usize {
@@ -101,14 +145,65 @@ impl Playlist {
         self.current = index;
     }
 
-    pub(crate) fn take(&mut self, index: usize) -> Option<QueuedResource> {
-        self.items.get_mut(index).and_then(Option::take)
+    pub(crate) fn take(&mut self, index: usize) -> Option<QueuedLoad> {
+        let queued = self.items.get_mut(index)?.as_mut()?;
+        let resource = queued.resource.take()?;
+        Some(QueuedLoad {
+            binding: queued.binding.clone(),
+            item_id: queued.item_id.clone(),
+            prepared: queued.prepared.take(),
+            resource,
+        })
+    }
+
+    pub(crate) fn restore(
+        &mut self,
+        index: usize,
+        prepared: Option<PreparedBindingResource>,
+        resource: Resource,
+    ) -> bool {
+        let Some(queued) = self.items.get_mut(index).and_then(Option::as_mut) else {
+            return false;
+        };
+        if queued.resource.is_some() {
+            return false;
+        }
+        queued.prepared = prepared;
+        queued.resource = Some(resource);
+        true
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use super::Playlist;
+    use crate::{player::state::PreparedBindingStamp, rt::StreamShape};
+
+    fn stamp(
+        sample_rate: u32,
+        max_block_frames: u32,
+        transport_revision: u64,
+    ) -> PreparedBindingStamp {
+        PreparedBindingStamp::new(
+            StreamShape {
+                sample_rate: NonZeroU32::new(sample_rate).expect("static sample rate"),
+                max_block_frames: NonZeroU32::new(max_block_frames).expect("static block size"),
+            },
+            transport_revision,
+        )
+    }
+
+    #[test]
+    fn prepared_binding_stamp_requires_revision_and_full_stream_shape() {
+        let prepared = stamp(44_100, 512, 7);
+
+        assert_eq!(prepared, stamp(44_100, 512, 7));
+        assert_ne!(prepared, stamp(44_100, 512, 8));
+        assert_ne!(prepared, stamp(48_000, 512, 7));
+        assert_ne!(prepared, stamp(44_100, 1_024, 7));
+    }
 
     #[test]
     fn remove_at_shifts_current_and_reopens_announce() {

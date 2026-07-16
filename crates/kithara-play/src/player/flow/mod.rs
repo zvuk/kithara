@@ -1,3 +1,4 @@
+mod binding;
 mod control;
 mod handover;
 mod notify;

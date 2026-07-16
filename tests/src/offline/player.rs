@@ -75,6 +75,7 @@ impl OfflinePlayer {
         self.control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
+                binding: None,
                 resource: Box::new(pr),
                 item_id: None,
             })

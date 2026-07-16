@@ -103,7 +103,7 @@ impl WaitGate for CondvarGate<u64> {
     }
 }
 
-/// Single-waiter edge gate with a non-blocking signal path and timed backstop.
+/// Single-waiter edge gate with a non-blocking signal path.
 /// Sequence and waiter registration share one atomic to prevent lost wakeups.
 pub struct ThreadGate {
     backend: thread::GateBackend,
@@ -156,6 +156,17 @@ impl ThreadGate {
 
     fn sequence(state: u64) -> u64 {
         state & Self::SEQUENCE_MASK
+    }
+
+    /// Block until the edge counter differs from `since`.
+    /// Snapshot `since` before checking the caller's predicate so a signal
+    /// racing that check cannot be lost.
+    pub fn wait(&self, since: u64) {
+        self.register();
+        while Self::sequence(self.state.load(Ordering::SeqCst)) == since {
+            self.backend.park();
+        }
+        self.state.fetch_and(Self::SEQUENCE_MASK, Ordering::SeqCst);
     }
 }
 
@@ -275,6 +286,31 @@ mod tests {
         // counter bump alone must make the next wait return immediately.
         g.signal();
         assert!(g.wait_timeout(s0, Duration::from_millis(10)));
+    }
+
+    #[kithara::test(loom)]
+    fn thread_gate_signal_before_untimed_wait_is_not_lost() {
+        let g = ThreadGate::default();
+        let since = g.current();
+        g.signal();
+        g.wait(since);
+    }
+
+    #[kithara::test(loom)]
+    fn thread_gate_untimed_wait_wakes_on_cross_thread_signal() {
+        let gate = Arc::new(ThreadGate::default());
+        let waiter_gate = Arc::clone(&gate);
+        let waiter = thread::spawn_named("threadgate-untimed-waiter", move || {
+            let since = waiter_gate.current();
+            waiter_gate.wait(since);
+        });
+
+        while gate.state.load(Ordering::Acquire) & ThreadGate::WAITING == 0 {
+            thread::yield_now();
+        }
+        gate.signal();
+
+        waiter.join().expect("untimed waiter thread");
     }
 
     #[kithara::test(flash(false))]

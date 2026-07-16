@@ -11,10 +11,10 @@ use tracing::debug;
 
 use super::{
     config::PlayerConfig,
-    state::{ItemQueue, PlayerParams, PlayerPhase},
+    state::{ItemLoadContext, ItemQueue, PlayerParams, PlayerPhase, PreparedBindingStamp},
 };
 use crate::{
-    api::{PlayerEvent, PlayerStatus},
+    api::{PlayerEvent, PlayerStatus, TrackBinding},
     bridge::PlayerCmd,
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
@@ -35,15 +35,13 @@ pub(crate) struct PlayerCore {
     pub(crate) timestretch: Arc<StretchControls>,
     pub(crate) gapless_mode: GaplessMode,
     pub(crate) byte_pool: BytePool,
-    /// Engine drops last — worker shutdown happens after all tracks
-    /// unregister and after `items` releases their resources.
-    pub(crate) engine: EngineImpl,
-    /// Items drop before engine — Audio tracks unregister from worker
-    /// while it is still alive.
-    pub(crate) items: ItemQueue,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
+    /// Items drop before engine, while the audio worker is still alive.
+    pub(crate) items: ItemQueue,
+    /// Engine drops last; its `Drop` shuts the audio worker down.
+    pub(crate) engine: EngineImpl,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -61,6 +59,11 @@ pub(crate) struct PlayerCore {
 pub struct PlayerImpl {
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore,
+}
+
+pub(crate) struct EnqueuedTrack {
+    pub(crate) duration_seconds: f64,
+    pub(crate) src: Arc<str>,
 }
 
 impl PlayerImpl {
@@ -160,21 +163,71 @@ impl PlayerImpl {
         self.core.items.insert(resource, item_id, at_position);
     }
 
-    pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(Arc<str>, f64)> {
-        let item = self.core.items.take_for_load(
+    /// Prepares and queues a stream-backed resource for session-bound elastic
+    /// playback. Failure leaves the playlist unchanged.
+    pub async fn insert_with_binding(
+        &self,
+        resource: Resource,
+        item_id: Option<Arc<str>>,
+        binding: TrackBinding,
+        at_position: Option<usize>,
+    ) -> Result<(), PlayError> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            drop((resource, item_id, binding, at_position));
+            Err(PlayError::ElasticBackendUnavailable)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let prepared = self.prepare_bound_resource(&resource, &binding).await?;
+            self.core
+                .items
+                .insert_with_binding(resource, item_id, binding, prepared, at_position);
+            Ok(())
+        }
+    }
+
+    pub(crate) fn enqueue_to_processor(
+        &self,
+        index: usize,
+    ) -> Result<Option<EnqueuedTrack>, PlayError> {
+        let slot_id = self
+            .require_active_slot()
+            .map_err(|_| PlayError::NoActiveSlot)?;
+        let (shape, transport_revision) = if self.core.items.has_binding(index) {
+            let preparation = self.core.engine.binding_preparation()?;
+            (preparation.shape, preparation.revision)
+        } else {
+            (self.core.engine.stream_shape()?, 0)
+        };
+        let stamp = PreparedBindingStamp::new(shape, transport_revision);
+        let cancel = self
+            .core
+            .engine
+            .cancel_token()
+            .ok_or_else(|| PlayError::Internal("player load has no cancel owner".into()))?
+            .child();
+        let dispatched = self.core.items.dispatch_load(
             index,
-            self.core.timestretch.speed(),
-            self.core.params.pitch_bend(),
-            self.core.engine.master_sample_rate(),
-            self.core.engine.pcm_pool(),
+            ItemLoadContext {
+                rate: self.core.timestretch.speed(),
+                pitch_bend: self.core.params.pitch_bend(),
+                shape,
+                pool: self.core.engine.pcm_pool(),
+                stamp,
+                cancel,
+            },
+            &self.core.engine,
+            slot_id,
         )?;
-        self.phase.lock().set_abr_handle(item.abr_handle);
-        let src = Arc::clone(item.player_resource.src());
-        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
-            item_id: item.item_id,
-            resource: Box::new(item.player_resource),
-        });
-        Some((src, item.duration_seconds))
+        let Some(dispatched) = dispatched else {
+            return Ok(None);
+        };
+        self.phase.lock().set_abr_handle(dispatched.abr_handle);
+        Ok(Some(EnqueuedTrack {
+            duration_seconds: dispatched.duration_seconds,
+            src: dispatched.src,
+        }))
     }
 
     /// Remove item at index. Returns the removed resource, or `None` if out of
@@ -185,7 +238,7 @@ impl PlayerImpl {
         self.core
             .items
             .remove_at(index)
-            .map(|queued| queued.resource)
+            .and_then(|queued| queued.resource)
     }
 
     /// Remove all items from the queue.
@@ -264,7 +317,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{api::SlotId, bridge::PlayerCmd, session::testing};
+    use crate::{bridge::PlayerCmd, session::testing, test_support::empty_resource};
 
     #[derive(Clone, Copy)]
     enum PlayerBasicScenario {
@@ -378,6 +431,53 @@ mod tests {
                 assert!(result.is_err());
             }
         }
+    }
+
+    #[kithara::test]
+    fn rejected_load_restores_the_queue_resource() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .session(testing::test_session())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .build(),
+        );
+        player
+            .ensure_engine_started()
+            .expect("engine start must succeed");
+        player.ensure_slot().expect("slot allocation must succeed");
+        player.insert(empty_resource("restore.wav"), None, None);
+
+        let mut channel_filled = false;
+        for _ in 0..64 {
+            match player.send_to_slot(PlayerCmd::SetPaused(true)) {
+                Ok(()) => {}
+                Err(PlayError::SlotChannelFull { .. }) => {
+                    channel_filled = true;
+                    break;
+                }
+                Err(error) => panic!("unexpected slot failure: {error}"),
+            }
+        }
+        assert!(
+            channel_filled,
+            "test must saturate the load command channel"
+        );
+
+        assert!(matches!(
+            player.enqueue_to_processor(0),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+        assert!(player.core.items.has_resource(0));
+        assert_eq!(
+            player
+                .remove_at(0)
+                .expect("rejected load restores its resource")
+                .src()
+                .as_ref(),
+            "restore.wav"
+        );
+        player.worker().shutdown();
     }
 
     #[kithara::test]
@@ -580,23 +680,6 @@ mod tests {
         assert!(!player.is_playing());
         assert!(player.current_abr_handle().is_none());
         assert!(player.armed_next().is_none());
-    }
-
-    #[kithara::test]
-    fn drop_player_releases_tracks_before_engine() {
-        // Worker-registered tracks live in `engine`; undelivered resources in
-        // `playlist` carry worker references. The phase (slot/abr/pending) holds
-        // no worker-registered track directly. This pins that constructing,
-        // arming a phase, and dropping does not panic / UAF: `phase` and
-        // `core.items` must drop before `core.engine`.
-        let player = PlayerImpl::new(PlayerConfig::default());
-        *player.phase.lock() = PlayerPhase::Playing {
-            slot: SlotId::new(0),
-            abr_handle: None,
-            pending: None,
-        };
-        player.worker().shutdown();
-        drop(player);
     }
 
     #[kithara::test]

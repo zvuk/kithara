@@ -1,18 +1,178 @@
-use std::num::NonZeroU32;
-
+use kithara_abr::AbrHandle;
+use kithara_audio::ServiceClass;
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex, MutexGuard},
+};
 use tracing::debug;
 
-use super::{QueuedResource, playlist::Playlist};
-use crate::{api::PlayerEvent, resource::Resource, rt::track::PlayerResource};
+use super::{
+    PreparedBindingResource, PreparedBindingStamp, QueuedResource,
+    playlist::{Playlist, QueuedLoad},
+};
+use crate::{
+    api::{PlayerEvent, SlotId, TrackBinding},
+    bridge::PlayerCmd,
+    engine::{DeferredPlayerCmdError, EngineImpl},
+    error::PlayError,
+    resource::Resource,
+    rt::{StreamShape, track::PlayerResource},
+};
 
-pub(crate) struct TakenItem {
-    pub(crate) item_id: Option<Arc<str>>,
-    pub(crate) player_resource: PlayerResource,
-    pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
+pub(crate) struct DispatchedLoad {
+    pub(crate) abr_handle: Option<AbrHandle>,
     pub(crate) duration_seconds: f64,
+    pub(crate) src: Arc<str>,
+}
+
+#[must_use = "load transactions must be dispatched"]
+struct LoadTransaction<'a> {
+    playlist: MutexGuard<'a, Playlist>,
+    index: usize,
+    binding: Option<TrackBinding>,
+    item_id: Option<Arc<str>>,
+    player_resource: PlayerResource,
+    prepared_stamp: Option<PreparedBindingStamp>,
+    abr_handle: Option<AbrHandle>,
+    activation: Option<(CancelToken, PcmPool)>,
+    duration_seconds: f64,
+}
+
+impl LoadTransaction<'_> {
+    fn dispatch(self, engine: &EngineImpl, slot: SlotId) -> Result<DispatchedLoad, PlayError> {
+        let Self {
+            mut playlist,
+            index,
+            binding,
+            item_id,
+            player_resource,
+            prepared_stamp,
+            abr_handle,
+            mut activation,
+            duration_seconds,
+        } = self;
+        let src = Arc::clone(player_resource.src());
+        let mut player_resource = Some(player_resource);
+        let result = engine.try_send_slot_cmd_deferred(slot, || {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some((cancel, pool)) = activation.take() {
+                player_resource
+                    .as_mut()
+                    .ok_or_else(|| {
+                        PlayError::Internal("load transaction lost its resource".into())
+                    })?
+                    .activate_prepared_elastic(cancel, pool)
+                    .map_err(|error| PlayError::ElasticPreparation {
+                        reason: error.to_string(),
+                    })?;
+            }
+            #[cfg(target_arch = "wasm32")]
+            drop(activation.take());
+            let resource = player_resource
+                .take()
+                .ok_or_else(|| PlayError::Internal("load transaction lost its resource".into()))?;
+            Ok(PlayerCmd::LoadTrack {
+                binding: binding.clone(),
+                item_id: item_id.clone(),
+                resource: Box::new(resource),
+            })
+        });
+        match result {
+            Ok(()) => {
+                drop(playlist);
+                Ok(DispatchedLoad {
+                    abr_handle,
+                    duration_seconds,
+                    src,
+                })
+            }
+            Err(DeferredPlayerCmdError::Unsent(error)) => {
+                let resource = player_resource.ok_or_else(|| {
+                    PlayError::Internal("unsent load consumed its queue resource".into())
+                })?;
+                restore_queue_resource(
+                    &mut playlist,
+                    index,
+                    binding.is_some(),
+                    resource,
+                    prepared_stamp,
+                )?;
+                Err(error)
+            }
+            Err(DeferredPlayerCmdError::Rejected(rejected)) => {
+                let error = rejected.error;
+                let PlayerCmd::LoadTrack {
+                    binding, resource, ..
+                } = *rejected.command
+                else {
+                    return Err(PlayError::Internal(
+                        "load dispatch rejected a non-load command".into(),
+                    ));
+                };
+                restore_queue_resource(
+                    &mut playlist,
+                    index,
+                    binding.is_some(),
+                    *resource,
+                    prepared_stamp,
+                )?;
+                Err(error)
+            }
+        }
+    }
+}
+
+fn restore_queue_resource(
+    playlist: &mut Playlist,
+    index: usize,
+    bound: bool,
+    mut player_resource: PlayerResource,
+    prepared_stamp: Option<PreparedBindingStamp>,
+) -> Result<(), PlayError> {
+    player_resource.set_service_class(ServiceClass::Idle);
+    let (resource, renderer) = player_resource.release();
+    #[cfg(not(target_arch = "wasm32"))]
+    let prepared = match (bound, renderer, prepared_stamp) {
+        (true, Some(renderer), Some(stamp)) => Some(PreparedBindingResource { renderer, stamp }),
+        (false, None, None) => None,
+        _ => {
+            return Err(PlayError::Internal(
+                "rejected load returned inconsistent binding state".into(),
+            ));
+        }
+    };
+    #[cfg(target_arch = "wasm32")]
+    let prepared = {
+        drop((bound, renderer, prepared_stamp));
+        None
+    };
+    restore_queued_resource(playlist, index, prepared, resource)
+}
+
+fn restore_queued_resource(
+    playlist: &mut Playlist,
+    index: usize,
+    prepared: Option<PreparedBindingResource>,
+    resource: Resource,
+) -> Result<(), PlayError> {
+    if playlist.restore(index, prepared, resource) {
+        Ok(())
+    } else {
+        Err(PlayError::Internal(
+            "load transaction could not restore its queue resource".into(),
+        ))
+    }
+}
+
+pub(crate) struct ItemLoadContext<'a> {
+    pub(crate) rate: f32,
+    pub(crate) pitch_bend: f32,
+    pub(crate) shape: StreamShape,
+    pub(crate) pool: &'a PcmPool,
+    pub(crate) stamp: PreparedBindingStamp,
+    pub(crate) cancel: CancelToken,
 }
 
 pub(crate) struct ItemQueue {
@@ -61,9 +221,41 @@ impl ItemQueue {
         item_id: Option<Arc<str>>,
         at_position: Option<usize>,
     ) {
+        self.insert_queued(
+            QueuedResource {
+                binding: None,
+                item_id,
+                prepared: None,
+                resource: Some(resource),
+            },
+            at_position,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn insert_with_binding(
+        &self,
+        resource: Resource,
+        item_id: Option<Arc<str>>,
+        binding: TrackBinding,
+        prepared: PreparedBindingResource,
+        at_position: Option<usize>,
+    ) {
+        self.insert_queued(
+            QueuedResource {
+                binding: Some(binding),
+                item_id,
+                prepared: Some(prepared),
+                resource: Some(resource),
+            },
+            at_position,
+        );
+    }
+
+    fn insert_queued(&self, queued: QueuedResource, at_position: Option<usize>) {
         let (count, pos) = {
             let mut playlist = self.playlist.lock();
-            let pos = playlist.insert(QueuedResource { item_id, resource }, at_position);
+            let pos = playlist.insert(queued, at_position);
             (playlist.len(), pos)
         };
         debug!(count, pos, "item inserted");
@@ -86,7 +278,15 @@ impl ItemQueue {
     ) {
         let mut playlist = self.playlist.lock();
         if index < playlist.len() {
-            playlist.replace(index, QueuedResource { item_id, resource });
+            playlist.replace(
+                index,
+                QueuedResource {
+                    binding: None,
+                    item_id,
+                    prepared: None,
+                    resource: Some(resource),
+                },
+            );
             drop(playlist);
             debug!(index, "item replaced");
         }
@@ -97,40 +297,116 @@ impl ItemQueue {
         debug!(count, "slots reserved");
     }
 
-    pub(crate) fn take_for_load(
+    pub(crate) fn dispatch_load(
         &self,
         index: usize,
-        rate: f32,
-        pitch_bend: f32,
-        host_sample_rate: u32,
-        pool: &PcmPool,
-    ) -> Option<TakenItem> {
+        context: ItemLoadContext<'_>,
+        engine: &EngineImpl,
+        slot: SlotId,
+    ) -> Result<Option<DispatchedLoad>, PlayError> {
+        self.take_for_load(index, context)?
+            .map(|transaction| transaction.dispatch(engine, slot))
+            .transpose()
+    }
+
+    fn take_for_load(
+        &self,
+        index: usize,
+        context: ItemLoadContext<'_>,
+    ) -> Result<Option<LoadTransaction<'_>>, PlayError> {
+        let ItemLoadContext {
+            rate,
+            pitch_bend,
+            shape,
+            pool,
+            stamp: current_stamp,
+            cancel,
+        } = context;
         let mut playlist = self.playlist.lock();
         if index >= playlist.len() {
-            return None;
+            return Ok(None);
         }
 
-        let queued = playlist.take(index)?;
-        let (item_id, resource) = (queued.item_id, queued.resource);
+        let Some(queued) = playlist.take(index) else {
+            return Ok(None);
+        };
+        let QueuedLoad {
+            binding,
+            item_id,
+            prepared,
+            resource,
+        } = queued;
         let duration_seconds = resource
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64());
-        let abr_handle = resource.abr_handle();
-        resource.set_playback_rate(rate);
-        resource.set_transport_bend(pitch_bend);
-        if let Some(sample_rate) = NonZeroU32::new(host_sample_rate) {
-            resource.set_host_sample_rate(sample_rate);
-        }
-        let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src), pool);
-        drop(playlist);
+        let (player_resource, prepared_stamp, abr_handle, activation) = if binding.is_some() {
+            let Some(prepared) = prepared else {
+                restore_queued_resource(&mut playlist, index, None, resource)?;
+                return Err(PlayError::BindingPreparationRequired { index });
+            };
+            if prepared.stamp != current_stamp {
+                restore_queued_resource(&mut playlist, index, Some(prepared), resource)?;
+                return Err(PlayError::BindingPreparationStale { index });
+            }
 
-        Some(TakenItem {
+            #[cfg(target_arch = "wasm32")]
+            {
+                drop(cancel);
+                restore_queued_resource(&mut playlist, index, Some(prepared), resource)?;
+                return Err(PlayError::ElasticBackendUnavailable);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let PreparedBindingResource {
+                    renderer,
+                    stamp: prepared_stamp,
+                } = prepared;
+                let abr_handle = renderer.abr_handle();
+                resource.set_playback_rate(rate);
+                resource.set_transport_bend(pitch_bend);
+                resource.set_host_sample_rate(shape.sample_rate);
+                resource.set_service_class(ServiceClass::Idle);
+                let src = Arc::clone(resource.src());
+                let mut player_resource = PlayerResource::new_elastic(resource, src);
+                player_resource.install_prepared_elastic(renderer);
+                (
+                    player_resource,
+                    Some(prepared_stamp),
+                    abr_handle,
+                    Some((cancel, pool.clone())),
+                )
+            }
+        } else {
+            let abr_handle = resource.abr_handle();
+            resource.set_playback_rate(rate);
+            resource.set_transport_bend(pitch_bend);
+            resource.set_host_sample_rate(shape.sample_rate);
+            let src = Arc::clone(resource.src());
+            drop(cancel);
+            (
+                PlayerResource::new(resource, src, pool),
+                None,
+                abr_handle,
+                None,
+            )
+        };
+
+        player_resource.set_playback_rate(rate);
+        player_resource.set_transport_bend(pitch_bend);
+        player_resource.set_host_sample_rate(shape.sample_rate);
+
+        Ok(Some(LoadTransaction {
+            playlist,
+            index,
+            binding,
             item_id,
             player_resource,
+            prepared_stamp,
             abr_handle,
+            activation,
             duration_seconds,
-        })
+        }))
     }
 
     pub(crate) fn clear_all(&self) {
@@ -143,6 +419,20 @@ impl ItemQueue {
 
     pub(crate) fn has_resource(&self, index: usize) -> bool {
         self.playlist.lock().has_resource(index)
+    }
+
+    pub(crate) fn has_binding(&self, index: usize) -> bool {
+        self.playlist
+            .lock()
+            .get(index)
+            .is_some_and(|item| item.binding.is_some())
+    }
+
+    pub(crate) fn current_has_binding(&self) -> bool {
+        let playlist = self.playlist.lock();
+        playlist
+            .get(playlist.current())
+            .is_some_and(|item| item.binding.is_some())
     }
 
     pub(crate) fn is_announced(&self, index: usize) -> bool {
@@ -162,12 +452,20 @@ impl ItemQueue {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
+    use kithara_audio::{
+        BeatGrid, PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome, TrackBeat,
+        analysis::TrackAnalysis,
+    };
+    use kithara_bufpool::PcmPool;
     use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
     use kithara_events::{Envelope, Event, PlayerEvent};
-    use kithara_platform::time::Duration;
+    use kithara_platform::{CancelScope, time::Duration};
 
     use super::*;
+    use crate::{
+        api::{PlaybackDirection, SessionBeat, SlotId},
+        engine::EngineConfig,
+    };
 
     struct EofReader {
         bus: EventBus,
@@ -237,6 +535,44 @@ mod tests {
         Resource::from_reader(EofReader::default(), Some(Arc::from(src)))
     }
 
+    fn binding() -> TrackBinding {
+        let sample_rate = NonZeroU32::new(44_100).expect("static rate");
+        let analysis = TrackAnalysis::with_source_rate(
+            Some(BeatGrid::new(
+                120.0,
+                vec![0, 22_050, 44_100],
+                vec![0],
+                Vec::new(),
+            )),
+            None,
+            44_100,
+            sample_rate,
+        );
+        TrackBinding::new(
+            &analysis,
+            sample_rate,
+            SessionBeat::new(0.0).expect("finite session beat"),
+            TrackBeat::new(0.0).expect("finite track beat"),
+            PlaybackDirection::Forward,
+        )
+        .expect("valid binding")
+    }
+
+    fn load_context(pool: &PcmPool, cancel: CancelToken) -> ItemLoadContext<'_> {
+        let shape = StreamShape {
+            sample_rate: NonZeroU32::new(44_100).expect("static rate"),
+            max_block_frames: NonZeroU32::new(512).expect("static block size"),
+        };
+        ItemLoadContext {
+            rate: 1.0,
+            pitch_bend: 1.0,
+            shape,
+            pool,
+            stamp: PreparedBindingStamp::new(shape, 0),
+            cancel,
+        }
+    }
+
     #[test]
     fn insert_and_remove_preserve_resource() {
         let queue = ItemQueue::new(EventBus::default());
@@ -244,8 +580,64 @@ mod tests {
 
         let removed = queue.remove_at(0).expect("inserted resource");
 
-        assert_eq!(removed.resource.src().as_ref(), "first");
+        assert_eq!(
+            removed.resource.expect("inserted resource").src().as_ref(),
+            "first"
+        );
         assert_eq!(queue.item_count(), 0);
+    }
+
+    #[test]
+    fn taking_a_bound_resource_retains_its_queue_coordinate_metadata() {
+        let queue = ItemQueue::new(EventBus::default());
+        queue.insert_queued(
+            QueuedResource {
+                binding: Some(binding()),
+                item_id: None,
+                prepared: None,
+                resource: Some(resource("bound")),
+            },
+            None,
+        );
+
+        let taken = queue
+            .playlist
+            .lock()
+            .take(0)
+            .expect("bound resource is available");
+
+        assert_eq!(taken.resource.src().as_ref(), "bound");
+        assert!(!queue.has_resource(0));
+        assert!(queue.current_has_binding());
+    }
+
+    #[test]
+    fn load_transaction_serializes_queue_mutation_and_restores_rejection() {
+        let queue = ItemQueue::new(EventBus::default());
+        queue.insert(resource("original"), None, None);
+        let pool = PcmPool::default();
+        let scope = CancelScope::new(None);
+        let transaction = queue
+            .take_for_load(0, load_context(&pool, scope.token()))
+            .expect("load preparation succeeds")
+            .expect("original resource is available");
+
+        assert!(queue.playlist.try_lock().is_err());
+        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
+        let result = transaction.dispatch(&engine, SlotId::new(0));
+
+        assert!(matches!(result, Err(PlayError::SlotNotFound(_))));
+        assert!(queue.playlist.try_lock().is_ok());
+        assert_eq!(
+            queue
+                .remove_at(0)
+                .and_then(|item| item.resource)
+                .expect("rejected resource is restored")
+                .src()
+                .as_ref(),
+            "original"
+        );
+        engine.worker().shutdown();
     }
 
     #[test]
