@@ -49,6 +49,10 @@ Output:
 - `android/lib/build/generated/jniLibs/` — native `.so` libraries per ABI
 - `android/lib/build/generated/uniffi/kotlin/` — generated Kotlin bindings
 
+The Android SDK target graph excludes `kithara-workspace-hack`; host feature
+unification must not leak into NDK builds. The build must not modify
+`Cargo.lock` or the generated workspace-hack manifest.
+
 Run the build once before opening the project in Android Studio.
 
 ## Quick Start

@@ -37,9 +37,11 @@ tracing-subscriber = { workspace = true }
 unimock = { workspace = true, optional = true }
 url = { workspace = true }
 
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+usdt = { workspace = true, optional = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 backtrace = { workspace = true }
-usdt = { workspace = true, optional = true }
 
 [target.'cfg(rtsan)'.dependencies]
 pin-project-lite = { workspace = true }

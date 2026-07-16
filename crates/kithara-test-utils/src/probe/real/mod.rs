@@ -1,5 +1,9 @@
 #![cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 
+#[cfg(target_os = "android")]
+#[path = "noop.rs"]
+mod usdt_wire;
+#[cfg(not(target_os = "android"))]
 mod usdt_wire;
 mod wire;
 
