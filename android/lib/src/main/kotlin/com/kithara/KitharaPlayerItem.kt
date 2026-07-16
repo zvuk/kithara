@@ -204,6 +204,40 @@ class KitharaPlayerItem(
                 ) }
                 eventsFlow.tryEmit(KitharaItemEvent.Error(event.error))
             }
+
+            is FfiItemEvent.DecoderChanged,
+            is FfiItemEvent.DecodeError,
+            is FfiItemEvent.GaplessResolved,
+            is FfiItemEvent.ResamplerConfigured,
+            is FfiItemEvent.AudioFormatDetected,
+            is FfiItemEvent.AudioFormatChanged,
+            is FfiItemEvent.SeekComplete,
+            is FfiItemEvent.SeekRejected,
+            is FfiItemEvent.DecoderReady,
+            is FfiItemEvent.TrackFailed,
+            is FfiItemEvent.UnderrunStarted,
+            is FfiItemEvent.UnderrunEnded,
+            is FfiItemEvent.BufferHealth,
+            is FfiItemEvent.EngineLoad,
+            is FfiItemEvent.PlaybackResamplerConfigured,
+            is FfiItemEvent.HlsVariantSwitchFenced,
+            is FfiItemEvent.HlsVariantSwitchAcked,
+            is FfiItemEvent.HlsCacheComplete,
+            is FfiItemEvent.DownloadStarted,
+            is FfiItemEvent.DownloadSlow,
+            is FfiItemEvent.DownloadCompleted,
+            is FfiItemEvent.DownloadRetrying,
+            is FfiItemEvent.DownloadBodyStalled,
+            is FfiItemEvent.DownloadBodyResumed,
+            is FfiItemEvent.DownloadRetryExhausted,
+            is FfiItemEvent.DownloadFirstByte,
+            is FfiItemEvent.DownloadCancelled,
+            is FfiItemEvent.FileOpened,
+            is FfiItemEvent.FileTotalBytesResolved,
+            is FfiItemEvent.FileCacheComplete,
+            is FfiItemEvent.DrmKeyFetchFailed,
+            is FfiItemEvent.DrmKeyAcquired,
+            is FfiItemEvent.DrmSegmentDecryptFailed -> Unit
         }
     }
 

@@ -207,9 +207,7 @@ impl NativeInner {
             .session(super::session::handle().dispatcher())
             .build();
         let player = Arc::new(PlayerImpl::new(player_config));
-        let layout = super::layout::resolve_layout(config.store.layout.as_ref());
-        let store =
-            native_config::build_store(&config.store, layout, cancel.child(), region.byte_pool());
+        let store = native_config::build_store(&config.cache, cancel.child(), region.byte_pool());
         let queue_config = QueueConfig::builder()
             .player(player)
             .store(store.clone())

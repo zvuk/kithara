@@ -74,8 +74,8 @@ pub struct FfiPlayerConfig {
     /// DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
     /// no DRM is needed.
     pub key_options: FfiKeyOptions,
-    /// Storage options shared by all items (cache directory, etc.).
-    pub store: crate::config::StoreOptions,
+    /// Cache configuration shared by all items.
+    pub cache: crate::config::FfiCacheConfig,
     /// Number of EQ bands (log-spaced). Default: 10.
     pub eq_band_count: u32,
 }
@@ -88,7 +88,7 @@ impl Default for FfiPlayerConfig {
         Self {
             eq_band_count: DEFAULT_EQ_BAND_COUNT,
             key_options: FfiKeyOptions::default(),
-            store: crate::config::StoreOptions::default(),
+            cache: crate::config::FfiCacheConfig::default(),
         }
     }
 }

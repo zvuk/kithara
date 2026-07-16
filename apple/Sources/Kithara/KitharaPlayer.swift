@@ -80,6 +80,25 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return .crossfadeStarted(durationSeconds: durationSeconds)
         case .crossfadeDurationChanged(let seconds):
             return .crossfadeDurationChanged(seconds: seconds)
+        case .trackAdded,
+             .trackRemoved,
+             .trackLoadFailed,
+             .repeatModeChanged,
+             .nextTrackReady,
+             .currentItemAdvanced,
+             .engineStarted,
+             .engineStopped,
+             .crossfadeCompleted,
+             .crossfadeCancelled,
+             .masterVolumeChanged,
+             .audioRouteChanged,
+             .djBpmDetected,
+             .djKeylockChanged,
+             .djStretchBackendChanged,
+             .assetCommitted,
+             .assetFailed,
+             .assetEvicted:
+            return nil
         }
     }
 
@@ -140,7 +159,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             .eraseToAnyPublisher()
     }
 
-    private func playerError(from event: FfiPlayerEvent) -> KitharaPlayerError? {
+    func playerError(from event: FfiPlayerEvent) -> KitharaPlayerError? {
         switch event {
         case let .error(message):
             return .playback(.playerError(message), itemId: currentAudioItem?.audioId)
@@ -149,6 +168,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
                 .itemFailed(itemId.map(String.init) ?? "<unknown>"),
                 itemId: itemId.flatMap(audioId(for:))
             )
+        case let .trackLoadFailed(itemId, reason, _):
+            return .playback(.itemFailed(reason), itemId: audioId(for: itemId))
         default:
             return nil
         }
@@ -285,10 +306,6 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
-    /// App-side cache layout delegate: maps a resource URL to a relative path inside the
-    /// cache directory. Must be pure (same URL -> same path), fast, non-blocking, non-throwing.
-    public typealias CacheLayoutDelegate = FfiAssetLayout
-
     /// Configuration for player creation.
     public struct Config: Sendable {
         /// Number of EQ bands (log-spaced). Default: 10.
@@ -299,8 +316,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         public var keyRules: [KeyRule]
         /// Optional cache directory path. `nil` uses the platform default.
         public var cacheDir: String?
-        /// On-disk cache layout delegate; `nil` keeps the default URL-mirror layout.
-        public var layout: CacheLayoutDelegate?
+        /// Per-protocol cache layouts. An empty registry keeps the defaults.
+        public var layouts: CacheLayoutRegistry
 
         /// Construct a player config. All parameters have sensible
         /// defaults; pass DRM `keyRules` for encrypted streams.
@@ -308,12 +325,12 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             eqBandCount: Int = 10,
             keyRules: [KeyRule] = [],
             cacheDir: String? = nil,
-            layout: CacheLayoutDelegate? = nil
+            layouts: CacheLayoutRegistry = CacheLayoutRegistry()
         ) {
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules
             self.cacheDir = cacheDir
-            self.layout = layout
+            self.layouts = layouts
         }
     }
 
@@ -330,7 +347,10 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
         let ffiConfig = FfiPlayerConfig(
             keyOptions: FfiKeyOptions(rules: ffiRules),
-            store: StoreOptions(cacheDir: config.cacheDir, layout: config.layout),
+            cache: FfiCacheConfig(
+                cacheDir: config.cacheDir,
+                layouts: config.layouts.ffiRegistrations
+            ),
             eqBandCount: UInt32(config.eqBandCount)
         )
         self._inner = AudioPlayer(config: ffiConfig)

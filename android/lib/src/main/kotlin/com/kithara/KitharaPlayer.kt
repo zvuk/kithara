@@ -1,6 +1,7 @@
 package com.kithara
 
 import com.kithara.ffi.AudioPlayer as FfiAudioPlayer
+import com.kithara.ffi.FfiCacheConfig
 import com.kithara.ffi.FfiException
 import com.kithara.ffi.FfiKeyOptions
 import com.kithara.ffi.FfiKeyProcessor
@@ -12,7 +13,6 @@ import com.kithara.ffi.FfiTrackStatus
 import com.kithara.ffi.FfiTransition
 import com.kithara.ffi.PlayerObserver
 import com.kithara.ffi.SeekCallback
-import com.kithara.ffi.StoreOptions as FfiStoreOptions
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -375,7 +375,25 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.MuteChanged,
             is FfiPlayerEvent.ItemDidPlayToEnd,
             is FfiPlayerEvent.CrossfadeStarted,
-            is FfiPlayerEvent.CrossfadeDurationChanged -> Unit
+            is FfiPlayerEvent.CrossfadeDurationChanged,
+            is FfiPlayerEvent.TrackAdded,
+            is FfiPlayerEvent.TrackRemoved,
+            is FfiPlayerEvent.TrackLoadFailed,
+            is FfiPlayerEvent.RepeatModeChanged,
+            is FfiPlayerEvent.NextTrackReady,
+            is FfiPlayerEvent.CurrentItemAdvanced,
+            is FfiPlayerEvent.EngineStarted,
+            is FfiPlayerEvent.EngineStopped,
+            is FfiPlayerEvent.CrossfadeCompleted,
+            is FfiPlayerEvent.CrossfadeCancelled,
+            is FfiPlayerEvent.MasterVolumeChanged,
+            is FfiPlayerEvent.AudioRouteChanged,
+            is FfiPlayerEvent.DjBpmDetected,
+            is FfiPlayerEvent.DjKeylockChanged,
+            is FfiPlayerEvent.DjStretchBackendChanged,
+            is FfiPlayerEvent.AssetCommitted,
+            is FfiPlayerEvent.AssetFailed,
+            is FfiPlayerEvent.AssetEvicted -> Unit
         }
     }
 
@@ -454,7 +472,7 @@ private fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
     }
     return FfiPlayerConfig(
         keyOptions = FfiKeyOptions(rules = ffiRules),
-        store = FfiStoreOptions(cacheDir = cacheDir),
+        cache = FfiCacheConfig(cacheDir = cacheDir, layouts = emptyList()),
         eqBandCount = eqBandCount.toUInt(),
     )
 }
