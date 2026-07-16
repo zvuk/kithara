@@ -447,7 +447,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         playback_resampler_backend: "none",
         recreate_on_host_rate_change: false,
     }
-    .into_parts(effects, shared_stream.seek_observe().epoch());
+    .into_parts(effects, shared_stream.seek_observe().epoch(), None);
     let parts = SourceParts::new(
         &shared_stream,
         decode,

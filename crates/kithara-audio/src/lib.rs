@@ -22,6 +22,7 @@ mod pipeline;
 mod region;
 pub(crate) mod renderer;
 mod runtime;
+mod source_audio;
 mod traits;
 mod waveform;
 
@@ -43,6 +44,10 @@ pub use pipeline::{
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
 pub use renderer::{
     AudioWorkerHandle, AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass,
+};
+pub use source_audio::{
+    SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome, SourceAudioReader,
+    SourceFrameRange,
 };
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,

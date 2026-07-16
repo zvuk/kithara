@@ -237,7 +237,12 @@ impl Node for DecoderNode {
     fn tick(&mut self) -> TickResult {
         self.sync_seek_epoch();
 
-        if !self.outlet.flush() {
+        if !self.source.source_audio_ready() {
+            return TickResult::Backpressured;
+        }
+
+        let processed_output_required = self.source.processed_output_required();
+        if processed_output_required && !self.outlet.flush() {
             return TickResult::Backpressured;
         }
 
@@ -250,8 +255,10 @@ impl Node for DecoderNode {
             TrackStep::Produced(fetch) => {
                 self.record_load(start.elapsed(), &fetch);
                 self.runtime.eof_sent = false;
-                let _ = self.outlet.try_push(fetch);
-                self.mark_preload_progress();
+                if processed_output_required {
+                    let _ = self.outlet.try_push(fetch);
+                    self.mark_preload_progress();
+                }
                 TickResult::Progress
             }
 
@@ -266,6 +273,15 @@ impl Node for DecoderNode {
             },
 
             TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
+
+            TrackStep::Eof if !processed_output_required => {
+                let epoch = self.source.decode_epoch();
+                if self.source.finish_source_audio_eof(epoch) {
+                    self.complete_preload();
+                    self.runtime.eof_sent = true;
+                }
+                TickResult::Progress
+            }
 
             TrackStep::Eof => {
                 let epoch = self.source.decode_epoch();
@@ -282,20 +298,29 @@ impl Node for DecoderNode {
 
             TrackStep::Failed => {
                 let epoch = self.source.decode_epoch();
-                let marker = Fetch::failure(epoch);
-                if let Ok(()) = self.outlet.try_push(marker) {
-                    self.complete_preload();
-                    if self.outlet.has_pending() {
-                        TickResult::Progress
-                    } else {
+                if !processed_output_required {
+                    if self.source.finish_source_audio_failed(epoch) {
+                        self.complete_preload();
                         TickResult::Done
+                    } else {
+                        TickResult::Progress
                     }
                 } else {
-                    debug_assert!(
-                        false,
-                        "Failed marker rejected — overflow invariant violated"
-                    );
-                    TickResult::Waiting
+                    let marker = Fetch::failure(epoch);
+                    if let Ok(()) = self.outlet.try_push(marker) {
+                        self.complete_preload();
+                        if self.outlet.has_pending() {
+                            TickResult::Progress
+                        } else {
+                            TickResult::Done
+                        }
+                    } else {
+                        debug_assert!(
+                            false,
+                            "Failed marker rejected - overflow invariant violated"
+                        );
+                        TickResult::Waiting
+                    }
                 }
             }
         };

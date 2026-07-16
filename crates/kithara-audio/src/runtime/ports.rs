@@ -38,6 +38,11 @@ pub(crate) struct Outlet<T> {
 }
 
 impl<T> Outlet<T> {
+    /// Whether the read end of this port is still owned by a consumer.
+    pub(crate) fn has_consumer(&self) -> bool {
+        self.producer.read_is_held()
+    }
+
     /// Try to drain the parked overflow item into the ring buffer.
     ///
     /// Returns `true` if the overflow slot is empty after the call (either
@@ -146,6 +151,11 @@ pub(crate) struct Inlet<T> {
 }
 
 impl<T> Inlet<T> {
+    /// Whether the write end of this port is still owned by a producer.
+    pub(crate) fn has_producer(&self) -> bool {
+        self.consumer.write_is_held()
+    }
+
     delegate::delegate! {
         to self.consumer {
             /// Check if the inlet is empty.

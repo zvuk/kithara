@@ -55,6 +55,8 @@ processed chunks to the caller through lock-free rings.
   waveform and optional beat analysis.
 - `TrackBeatMap` / `TrackBeat` / `SourceFrame` — validated musical mapping from
   analysed beat markers to an explicit host-rate source axis.
+- `SourceAudioReader` / `SourceFrameRange` — opt-in transport-neutral access to
+  bounded post-gapless, host-rate source windows before playback effects.
 - `Waveform` / `BeatGrid` — analysis artifacts; public blob I/O uses
   `Vec::<u8>::from(&artifact)` and `Artifact::try_from(&[u8])`.
 - `EngineLoad` / `EngineLoadSnapshot` — live decode/effects cost meter.

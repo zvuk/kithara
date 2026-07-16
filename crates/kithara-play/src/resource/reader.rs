@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use delegate::delegate;
 use kithara_audio::{
     Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
-    ServiceClass,
+    ServiceClass, SourceAudioReader,
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
@@ -42,6 +42,7 @@ use super::{ResourceConfig, SourceType};
 #[fieldwork(opt_in, get)]
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
+    source_audio: Option<SourceAudioReader>,
     #[field(get, deref = false)]
     src: Arc<str>,
     /// Drop guard for the per-track cancel — the token passed as
@@ -101,13 +102,6 @@ impl Resource {
             /// Get current playback position.
             #[must_use]
             pub fn position(&self) -> Duration;
-            /// Read interleaved PCM samples.
-            pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
-            /// Read deinterleaved (planar) PCM samples.
-            pub fn read_planar<'a>(
-                &mut self,
-                output: &'a mut [&'a mut [f32]],
-            ) -> Result<ReadOutcome, DecodeError>;
             /// Seek to position.
             pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
             /// Set the target sample rate of the audio host.
@@ -172,6 +166,14 @@ impl Resource {
     /// `"unknown"`.
     #[must_use]
     pub fn from_reader<R: PcmReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
+        Self::from_reader_parts(reader, src, None)
+    }
+
+    fn from_reader_parts<R: PcmReader + 'static>(
+        reader: R,
+        src: Option<Arc<str>>,
+        source_audio: Option<SourceAudioReader>,
+    ) -> Self {
         let bus = reader.event_bus().clone();
         let mut inner: Box<dyn PcmReader> = Box::new(reader);
         let src = src.unwrap_or_else(|| Arc::from("unknown"));
@@ -180,6 +182,7 @@ impl Resource {
         }
         Self {
             inner,
+            source_audio,
             bus,
             src,
             cancel: CancelGuard(None),
@@ -200,8 +203,32 @@ impl Resource {
         B: ResamplerBackend,
         Audio<Stream<T>>: PcmReader + 'static,
     {
-        let audio = Audio::<Stream<T>>::new(config).await?;
-        Ok(Self::from_reader(audio, Some(src)))
+        let mut audio = Audio::<Stream<T>>::new(config).await?;
+        let source_audio = audio.take_source_audio();
+        Ok(Self::from_reader_parts(audio, Some(src), source_audio))
+    }
+
+    /// Read interleaved audio while servicing the optional decoded source sidecar.
+    pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        let outcome = self.inner.read(buf);
+        self.poll_source_audio();
+        outcome
+    }
+
+    /// Read deinterleaved audio while servicing the optional decoded source sidecar.
+    pub fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        let outcome = self.inner.read_planar(output);
+        self.poll_source_audio();
+        outcome
+    }
+
+    fn poll_source_audio(&mut self) {
+        if let Some(source_audio) = self.source_audio.as_mut() {
+            source_audio.poll();
+        }
     }
 
     /// Wait for first decoded chunk to be available, then move it to internal buffer.

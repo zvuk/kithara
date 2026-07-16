@@ -189,6 +189,39 @@ invalid, and mapping is available only between the first and last analysed
 markers; neither boundary is extrapolated. Meter is exposed only when
 consecutive downbeat spans agree.
 
+## Source Audio
+
+`SourceAudio` is the transport-neutral signal after gapless normalization and
+fixed host-rate conversion, but before time stretch and custom playback
+effects. It is indexed by checked, half-open `SourceFrameRange` values derived
+from the post-normalization chunk metadata. Session beats, tempo, direction,
+bindings, and render context never cross this boundary.
+
+Stream-backed readers may expose an opt-in `SourceAudioReader` sidecar. The
+decoder worker owns the source tap and a fixed bank of copy buffers; the
+resource side owns the bounded immutable cache and non-blocking range reader.
+The ordinary processed-audio ring remains unchanged. Custom readers do not
+fabricate source audio from their already-rendered output.
+
+Demand identity is separate from the normal seek and codec epochs. A demand
+token contains its lane, generation, and the decoder seek epoch it expects.
+Stale packets cannot complete a newer demand, while compatible ranges already
+in the cache remain reusable across demand changes and seeks. The tap copies a
+complete normalized decoder window whenever it intersects demand coverage;
+window identity therefore does not depend on request rounding. When windows
+overlap, reads retain the first cached samples for the common interval and use
+the newer window only for uncovered range. A reader activation owns one output
+format. A bound session track retains its prepared axis and fails closed after
+a host-format change until the track is re-prepared; it never guesses a
+conversion.
+
+Source buffer owners are allocated at connection time. If a real decoder emits
+a larger window than the warm size, the checked path parks that epoch-tagged
+chunk and the worker shell grows the fixed buffer bank before retrying it.
+Activation/demand, data, and retirement use separate bounded SPSC ports; cache
+polling and reads copy no ownership. The Slice 4 sidecar is bounded by the
+ordinary processed-audio ring. A later session-source ownership transfer is
+required before arbitrary reverse prefetch can drive decode independently.
 
 ## Waveform
 

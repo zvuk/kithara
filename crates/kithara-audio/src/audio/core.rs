@@ -21,7 +21,7 @@ use super::{
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
 };
-use crate::effects::transport::PitchBend;
+use crate::{SourceAudioReader, effects::transport::PitchBend};
 
 /// Pull-based PCM facade backed by a shared renderer worker.
 pub struct Audio<S> {
@@ -31,6 +31,7 @@ pub struct Audio<S> {
     events: AudioEvents,
     session: Session,
     controls: Controls,
+    source_audio: Option<SourceAudioReader>,
     _marker: PhantomData<S>,
 }
 
@@ -39,6 +40,7 @@ pub(super) struct AudioParts<S> {
     pub(super) ring: RingConsumer,
     pub(super) session: Session,
     pub(super) controls: Controls,
+    pub(super) source_audio: Option<SourceAudioReader>,
     pub(super) pcm_pool: PcmPool,
     pub(super) spec: PcmSpec,
     pub(super) emit: Arc<kithara_events::DeferredBus<kithara_events::Event>>,
@@ -93,12 +95,21 @@ impl<S> From<AudioParts<S>> for Audio<S> {
             events: AudioEvents::new(parts.emit.bus().clone()),
             session: parts.session,
             controls: parts.controls,
+            source_audio: parts.source_audio,
             _marker: parts.marker,
         }
     }
 }
 
 impl<S> Audio<S> {
+    /// Detaches the optional decoded source-audio sidecar from this reader.
+    ///
+    /// Stream-backed readers return it at most once. Readers without the
+    /// sidecar return `None`.
+    pub fn take_source_audio(&mut self) -> Option<SourceAudioReader> {
+        self.source_audio.take()
+    }
+
     #[must_use]
     /// Returns the adaptive-bitrate handle for adaptive sources.
     pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
@@ -470,6 +481,7 @@ mod tests {
                         stretch: None,
                         service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
                     },
+                    source_audio: None,
                     pcm_pool,
                     spec: PcmMeta::default().spec,
                     emit,

@@ -457,7 +457,7 @@ async fn test_source(variant: u32) -> RebuildFixture {
         playback_resampler_backend: "none",
         recreate_on_host_rate_change: true,
     }
-    .into_parts(Vec::new(), shared_stream.seek_observe().epoch());
+    .into_parts(Vec::new(), shared_stream.seek_observe().epoch(), None);
     let parts = SourceParts::new(
         &shared_stream,
         decode,
@@ -511,7 +511,7 @@ async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
         playback_resampler_backend: "none",
         recreate_on_host_rate_change: true,
     }
-    .into_parts(Vec::new(), shared_stream.seek_observe().epoch());
+    .into_parts(Vec::new(), shared_stream.seek_observe().epoch(), None);
     let parts = SourceParts::new(
         &shared_stream,
         decode,
