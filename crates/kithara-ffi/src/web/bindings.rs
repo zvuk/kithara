@@ -1,5 +1,5 @@
 use kithara_platform::thread::set_wasm_shim_name;
-use kithara_play::wasm_support;
+use kithara_play::wasm;
 use tracing_log::LogTracer;
 use tracing_wasm::WASMLayerConfigBuilder;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -18,7 +18,7 @@ pub fn setup() {
         return;
     }
 
-    wasm_support::spawn_webcodecs_probe();
+    wasm::spawn_webcodecs_probe();
 
     let _ = LogTracer::init();
     let config = WASMLayerConfigBuilder::new()
