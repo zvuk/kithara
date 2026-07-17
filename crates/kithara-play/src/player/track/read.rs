@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     bridge::{PlayerNotification, TrackPlaybackStopReason, TrackState},
-    rt::context::RenderContext,
+    session::render::RenderContext,
 };
 
 struct TrackReadContext<'a> {

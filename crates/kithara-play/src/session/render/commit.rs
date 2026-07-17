@@ -10,7 +10,7 @@ use firewheel::{
 use num_traits::ToPrimitive;
 use triple_buffer::{Input, Output};
 
-use super::model::{RenderFrame, SessionTransportCommit};
+use super::context::{RenderFrame, SessionTransportCommit};
 use crate::api::{SessionBeat, SessionTransportSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq)]

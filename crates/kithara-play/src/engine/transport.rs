@@ -2,7 +2,7 @@ use super::EngineImpl;
 use crate::{
     api::{SessionTransportSnapshot, Tempo},
     error::PlayError,
-    rt::StreamShape,
+    player::node::StreamShape,
     session::protocol::BindingPreparation,
 };
 

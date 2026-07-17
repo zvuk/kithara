@@ -2,7 +2,7 @@ use std::fmt;
 
 use kithara_platform::sync::Arc;
 
-use crate::{api::TrackBinding, error::PlayError, rt::track::PlayerResource};
+use crate::{api::TrackBinding, error::PlayError, player::track::PlayerResource};
 
 /// Commands sent from the main thread to the processor.
 #[non_exhaustive]

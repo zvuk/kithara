@@ -14,8 +14,8 @@ use super::super::{
 use crate::{
     api::{Tempo, TrackBinding},
     error::PlayError,
+    player::track::{ElasticPreparationOutcome, PlayerResource},
     resource::Resource,
-    rt::track::{ElasticPreparationOutcome, PlayerResource},
 };
 
 impl PlayerImpl {

@@ -7,7 +7,7 @@ mod wire {
     use crate::{
         api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::SlotControl,
-        rt::StreamShape,
+        player::node::StreamShape,
     };
 
     pub type PlayerId = u64;
@@ -166,7 +166,7 @@ mod handle {
     use crate::{
         api::{SessionTransportSnapshot, SlotId, Tempo},
         error::PlayError,
-        rt::StreamShape,
+        player::node::StreamShape,
     };
 
     pub trait SessionDispatcher: Send + Sync + 'static {

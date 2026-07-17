@@ -11,8 +11,8 @@ use super::super::{
 use crate::{
     api::TrackBinding,
     error::PlayError,
+    player::track::{PlayerResource, PreparedElasticRenderer},
     resource::Resource,
-    rt::track::{PlayerResource, PreparedElasticRenderer},
 };
 
 pub(crate) enum PreparedBindingResource {}

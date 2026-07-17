@@ -12,7 +12,6 @@ pub mod bridge;
 pub mod engine;
 pub mod player;
 pub mod resource;
-pub mod rt;
 pub mod session;
 
 #[cfg(target_arch = "wasm32")]
@@ -40,9 +39,10 @@ pub use kithara_audio::{
     AudioWorkerHandle, EngineLoadSnapshot, SeekOutcome, ServiceClass, StretchControls,
 };
 pub use kithara_net::Headers;
-pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
+pub use player::{
+    PlayerConfig, PlayerImpl, PlayerNode, PlayerNodeProcessor, SelectTransition, StreamShape,
+};
 pub use resource::{
     PlaybackResamplerBackend, Resource, ResourceBlueprint, ResourceConfig, ResourceSrc, SourceType,
     default_resource_decoder_config,
 };
-pub use rt::PlayerNode;

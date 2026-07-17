@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use crate::{
     api::{SyncUnavailable, TrackBinding},
-    rt::context::RenderContext,
+    session::render::RenderContext,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -253,7 +253,7 @@ mod tests {
     use super::*;
     use crate::{
         api::{PlaybackDirection, SessionBeat, Tempo, TrackBinding},
-        rt::context::{RenderContext, RenderFrame, SessionTransportCommit},
+        session::render::{RenderContext, RenderFrame, SessionTransportCommit},
     };
 
     struct TestSpec;

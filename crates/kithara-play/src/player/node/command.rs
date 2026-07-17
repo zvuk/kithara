@@ -4,13 +4,11 @@ use kithara_platform::sync::Arc;
 use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
 
-use super::{
-    processor::PlayerNodeProcessor,
-    track::{PlayerResource, PlayerTrack, TrackAxis, TrackParams},
-};
+use super::processor::PlayerNodeProcessor;
 use crate::{
     api::TrackBinding,
     bridge::{PlayerCmd, PlayerNotification, TrackState, TrackTransition},
+    player::track::{PlayerResource, PlayerTrack, TrackAxis, TrackParams},
 };
 
 impl PlayerNodeProcessor {

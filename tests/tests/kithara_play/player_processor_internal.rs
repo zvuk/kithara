@@ -23,7 +23,10 @@ use kithara::{
         PlaybackDirection, PlayerNotification, Resource, SessionBeat, SharedEq, TrackBinding,
         TrackState, TrackTransition,
         bridge::{PlayerCmd, SlotControl, slot_channels},
-        rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+        player::{
+            node::{PlayerNodeProcessor, StreamShape},
+            track::PlayerResource,
+        },
     },
 };
 use kithara_integration_tests::audio_mock::{

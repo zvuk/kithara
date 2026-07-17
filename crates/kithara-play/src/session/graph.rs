@@ -5,13 +5,14 @@ use firewheel::{
 use tracing::{debug, warn};
 
 use super::{
+    eq::MasterEqNode,
     protocol::{AllocatedSlot, PlayerId, Reply, SessionError},
     state::{PlayerState, SessionState, SessionTransportState, SlotNodes, ensure_ctx},
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::slot_channels,
-    rt::{MasterEqNode, PlayerNode},
+    player::node::PlayerNode,
 };
 pub(super) fn ducking_gain(mode: SessionDuckingMode) -> f32 {
     match mode {

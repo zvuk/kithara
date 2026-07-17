@@ -137,8 +137,8 @@ private patch, upgrade dependency, or upstream change is allowed.
 
 The dedicated Slice 6 participant barrier and the uncommitted Slice 7 control
 plane were rejected. They duplicated player-owned membership, preparation,
-binding, and queue state across `session` and `rt` and made the transport a
-parallel player implementation.
+binding, and queue state across session and callback modules and made the
+transport a parallel player implementation.
 
 The existing ownership chain remains canonical:
 
@@ -149,9 +149,9 @@ The existing ownership chain remains canonical:
 
 Slices 6 and 7 must extend this path directly. The session may select one shared
 render boundary and publish one immutable context, but it must not own a copy of
-slot membership or per-track preparation. New `rt/tempo`, participant registry,
-processor-transaction, track-transaction, and parallel elastic control planes
-are forbidden.
+slot membership or per-track preparation. New player-node tempo owners,
+participant registries, processor transactions, track transactions, and
+parallel elastic control planes are forbidden.
 
 Rejected alternatives:
 
@@ -166,7 +166,7 @@ Rejected alternatives:
 - `crates/kithara-play/src/api`
 - `crates/kithara-play/src/session`
 - `crates/kithara-play/src/engine`
-- `crates/kithara-play/src/rt`
+- `crates/kithara-play/src/player`
 - `crates/kithara-play/CONTEXT.md`
 - `crates/kithara-audio/src/analysis` and `crates/kithara-audio/src/musical`
   as the analysis and beat-map owners

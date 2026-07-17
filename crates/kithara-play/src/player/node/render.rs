@@ -5,13 +5,10 @@ use ringbuf::HeapProd;
 use smallvec::SmallVec;
 use thunderdome::Index;
 
-use super::{
-    processor::PlayerNodeProcessor,
-    track::{PlayerTrack, TrackReadOutcome, TrackRenderMode},
-};
+use super::{ArenaRegistry, processor::PlayerNodeProcessor};
 use crate::{
     bridge::{PlayerNotification, TrackState},
-    rt::ArenaRegistry,
+    player::track::{PlayerTrack, TrackReadOutcome, TrackRenderMode},
 };
 
 type ActiveTrackEntry = (usize, Index, bool);

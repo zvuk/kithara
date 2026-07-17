@@ -8,7 +8,7 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
 #[cfg(test)]
-use crate::rt::context::RenderContext;
+use crate::session::render::RenderContext;
 use crate::{api::TrackBinding, bridge::TrackState};
 
 /// Canonical host-frame axis and optional musical binding for a track.

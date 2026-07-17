@@ -12,11 +12,11 @@ use super::super::{
 use crate::{
     api::TrackBinding,
     error::PlayError,
-    resource::Resource,
-    rt::{
-        StreamShape,
+    player::{
+        node::StreamShape,
         track::{PlayerResource, PreparedElasticRenderer},
     },
+    resource::Resource,
 };
 
 pub(crate) struct PreparedBindingResource {

@@ -1,8 +1,10 @@
 //! Session hosting: protocol, state, graph dispatch, and platform clients.
 
 mod dispatch;
+mod eq;
 mod graph;
 pub mod protocol;
+pub(crate) mod render;
 pub mod state;
 #[cfg(test)]
 pub(crate) mod testing;

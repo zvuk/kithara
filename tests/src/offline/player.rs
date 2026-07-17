@@ -7,7 +7,7 @@ use kithara::{
     play::{
         PlayerNode, Resource, SharedEq, TrackTransition,
         bridge::{PlaybackShared, PlayerCmd, SlotControl, slot_channels},
-        rt::track::PlayerResource,
+        player::track::PlayerResource,
     },
 };
 use ringbuf::traits::{Consumer, Producer};

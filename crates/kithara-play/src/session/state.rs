@@ -10,13 +10,14 @@ use tracing::{debug, warn};
 
 use super::{
     dispatch::{restart_stream, trace_stream_info},
+    eq::MasterEqNode,
     graph::ducking_gain,
     protocol::{PlayerId, SessionError, StartStreamFn},
+    render::{RenderContextControl, SessionTransportCommit, install_render_context},
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::SharedEq,
-    rt::{MasterEqNode, RenderContextControl, SessionTransportCommit, install_render_context},
 };
 
 #[derive(Debug)]

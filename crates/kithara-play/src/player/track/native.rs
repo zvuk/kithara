@@ -12,10 +12,8 @@ use num_traits::cast::AsPrimitive;
 use super::PlayerResource;
 use crate::{
     api::{Tempo, TrackBinding},
-    resource::Resource,
-    rt::{
-        StreamShape,
-        context::RenderContext,
+    player::{
+        node::StreamShape,
         track::{
             elastic_renderer::{
                 ElasticPreparationOutcome, ElasticPrepareError, ElasticRenderError,
@@ -24,6 +22,8 @@ use crate::{
             elastic_source::spawn_elastic_source,
         },
     },
+    resource::Resource,
+    session::render::RenderContext,
 };
 
 enum ElasticSourceOwnership {

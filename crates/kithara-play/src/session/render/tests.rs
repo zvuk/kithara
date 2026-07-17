@@ -25,14 +25,17 @@ use super::{
         TransportCommitEvent, TransportCommitStamp, TransportCommitState, TransportObservation,
         TransportObservationInput,
     },
-    model::{RenderFrame, SessionTransportCommit},
+    context::{RenderFrame, SessionTransportCommit},
     node::{RenderContextProcessor, RenderContextSlot, RenderContextUnavailable},
     read_render_context,
 };
 use crate::{
     Resource, SessionBeat, Tempo,
     bridge::{PlayerCmd, SharedEq, SlotControl, slot_channels},
-    rt::{PlayerNodeProcessor, StreamShape, processor::ContextRequirement, track::PlayerResource},
+    player::{
+        node::{ContextRequirement, PlayerNodeProcessor, StreamShape},
+        track::PlayerResource,
+    },
 };
 
 const BLOCK_FRAMES: usize = 480;
@@ -570,7 +573,7 @@ fn render_context_rejects_beats_without_a_playing_commit() {
     let beats =
         SessionBeat::new(0.0).expect("finite beat")..SessionBeat::new(0.02).expect("finite beat");
     assert!(
-        super::model::RenderContext::new(
+        super::context::RenderContext::new(
             RenderFrame::new(0)..RenderFrame::new(BLOCK_FRAMES as i64),
             sample_rate(),
             Some(beats),

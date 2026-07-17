@@ -75,10 +75,12 @@ policy and reacts to `HandoverRequested` by selecting the loaded successor via
 `api/` owns stable public shapes; `bridge/` owns cross-plane protocol and shared
 RT handles; `resource/` owns source, config, and reader construction; `player/`
 owns main-thread playlist and parameter state in `state/` and transitions in
-`flow/`; `engine/` owns session and slot registration; `rt/` owns lock-free
-audio-node rendering, with per-track state under `rt/track/`; and `session/`
-owns protocol, state, graph dispatch, and platform clients. `wasm` is the
-target-gated browser binding surface.
+`flow/`, while its callback-side node, processor, and render pass live under
+`player/node/` and per-track state under `player/track/`; `engine/` owns session and slot registration;
+and `session/` owns protocol, state, graph dispatch, shared render context,
+master EQ, and platform clients. Real-time execution is a property of the
+callback processors, not a separate ownership plane. `wasm` is the target-gated
+browser binding surface.
 
 `player`, `engine`, and `session` are intentional orchestration planes: their
 entry files import several sibling modules to bind API state, RT controls, and
@@ -142,8 +144,8 @@ Two distinct real-time surfaces carry the `#[kithara::rtsan_forbid_blocking]`
 contract; both are verified by RealtimeSanitizer (gated by `--cfg rtsan`, so
 stable/production builds are byte-identical).
 
-**Consumer `process()` - permanent.** `PlayerNodeProcessor::process` and
-`MasterEqProcessor::process` run on the Firewheel audio thread and stay
+**Consumer `process()` - permanent.** The player-node and master-EQ processors
+run on the Firewheel audio thread and stay
 allocation-, free-, and lock-free: scratch buffers are pre-sized at stream
 start, and evicted tracks are handed to a bounded deferred-drop channel (drained
 on the main thread) instead of being freed on the audio thread.

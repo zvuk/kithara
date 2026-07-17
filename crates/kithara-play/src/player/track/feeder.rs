@@ -5,19 +5,14 @@ use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
 use tracing::warn;
 
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "../native.rs"]
-mod native;
-#[cfg(target_arch = "wasm32")]
-#[path = "../wasm.rs"]
-mod wasm;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use native::PreparedElasticRenderer;
-#[cfg(target_arch = "wasm32")]
-pub(crate) use wasm::PreparedElasticRenderer;
+#[cfg_attr(target_arch = "wasm32", path = "../platform/browser.rs")]
+#[cfg_attr(not(target_arch = "wasm32"), path = "native.rs")]
+mod platform;
 
 #[rustfmt::skip]
 use crate::resource::Resource;
+
+pub(crate) use platform::PreparedElasticRenderer;
 
 /// RT-safe wrapper for standalone and bound elastic playback.
 /// Standalone resources own pooled scratch buffers; elastic resources use prepared renderer

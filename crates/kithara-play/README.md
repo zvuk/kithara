@@ -71,7 +71,8 @@ File and HLS pipelines are unconditional; cpal output is the default backend.
 Enable `mock` for `EqualizerMock`.
 
 The role-first source tree is organized as `api/`, `bridge/`, `engine/`,
-`player/{state,flow}/`, `resource/`, `rt/{track}/`, `session/{web}/`, plus the
-target-gated `wasm` surface.
+`player/{state,flow,node,track}/`, `resource/`, `session/{render,web}/`, plus the
+target-gated `wasm` surface. Audio-callback code stays with its player or session
+owner instead of forming a separate real-time subsystem.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

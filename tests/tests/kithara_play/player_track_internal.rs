@@ -22,7 +22,7 @@ use kithara::{
     play::{
         PlaybackDirection, PlayerNotification, Resource, SessionBeat, TrackBinding,
         TrackPlaybackStopReason, TrackState,
-        rt::track::{PlayerResource, PlayerTrack, TrackAxis, TrackParams, TrackReadOutcome},
+        player::track::{PlayerResource, PlayerTrack, TrackAxis, TrackParams, TrackReadOutcome},
     },
 };
 use kithara_integration_tests::audio_mock::{

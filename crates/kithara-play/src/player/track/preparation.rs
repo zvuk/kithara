@@ -331,7 +331,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::rt::{StreamShape, track::elastic_source::elastic_source_test_pair};
+    use crate::player::{node::StreamShape, track::elastic_source::elastic_source_test_pair};
 
     #[kithara::test]
     fn recycle_backpressure_preserves_multiple_ready_windows() {

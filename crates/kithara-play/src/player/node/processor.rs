@@ -14,15 +14,13 @@ use ringbuf::{HeapCons, HeapProd, traits::Producer};
 use thunderdome::Index;
 use tracing::warn;
 
-use super::{
-    context::read_render_context,
-    track::{PlayerTrack, TrackRenderMode},
-};
+use super::{ArenaRegistry, RenderPass, RenderTargets};
 use crate::{
     bridge::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
     },
-    rt::{ArenaRegistry, RenderPass, RenderTargets},
+    player::track::{PlayerTrack, TrackRenderMode},
+    session::render::read_render_context,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -32,7 +30,7 @@ pub(crate) enum CrossfadeCurve {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum ContextRequirement {
+pub(crate) enum ContextRequirement {
     #[default]
     Standalone,
     Session,
@@ -118,7 +116,7 @@ impl PlayerNodeProcessor {
         Self::with_context_requirement(inputs, shape, pool, ContextRequirement::Standalone)
     }
 
-    pub(super) fn with_context_requirement(
+    pub(crate) fn with_context_requirement(
         inputs: NodeInputs,
         shape: StreamShape,
         pool: &PcmPool,
@@ -447,7 +445,7 @@ mod tests {
     use super::*;
     use crate::{
         bridge::{PlayerCmd, SharedEq, SlotControl, slot_channels},
-        rt::track::PlayerResource,
+        player::track::PlayerResource,
         test_support::empty_resource,
     };
 

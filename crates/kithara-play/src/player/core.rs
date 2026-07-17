@@ -49,7 +49,7 @@ pub(crate) struct PlayerCore {
 /// Owns an [`EngineImpl`] and sends commands to the active slot's processor.
 /// When `play()` is called, the engine is lazily started and a slot is
 /// allocated. The current queue item is taken out of the queue, wrapped in
-/// [`PlayerResource`](crate::rt::track::PlayerResource), and sent
+/// [`PlayerResource`](crate::player::track::PlayerResource), and sent
 /// to the processor via `PlayerCmd::LoadTrack`.
 ///
 /// Internally the player is a phase-split typestate: `phase` is a typed

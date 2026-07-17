@@ -1,7 +1,7 @@
 use kithara_platform::sync::Arc;
 
 use super::super::platform::PreparedBindingResource;
-use crate::{api::TrackBinding, resource::Resource, rt::StreamShape};
+use crate::{api::TrackBinding, player::node::StreamShape, resource::Resource};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PreparedBindingStamp {
@@ -167,7 +167,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use super::Playlist;
-    use crate::{player::state::PreparedBindingStamp, rt::StreamShape};
+    use crate::player::{node::StreamShape, state::PreparedBindingStamp};
 
     fn stamp(
         sample_rate: u32,

@@ -4,14 +4,15 @@ use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 
 use super::{
     protocol::{BindingPreparation, SessionError},
+    render::{
+        RenderFrame, SessionTransportCommit, TransportCommitResult, TransportCommitStamp,
+        TransportObservation,
+    },
     state::{PendingTransportCommit, SessionState, SessionTransportState, TransportCommitPhase},
 };
 use crate::{
     api::{SessionTransportSnapshot, Tempo},
-    rt::{
-        RenderFrame, SessionTransportCommit, StreamShape, TransportCommitResult,
-        TransportCommitStamp, TransportObservation,
-    },
+    player::node::StreamShape,
 };
 
 pub(super) fn set_tempo<B: AudioBackend>(

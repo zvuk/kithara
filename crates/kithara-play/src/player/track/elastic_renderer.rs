@@ -25,7 +25,8 @@ use super::{
 };
 use crate::{
     api::{PlaybackDirection, SessionBeat, SyncUnavailable, Tempo, TrackBinding},
-    rt::{StreamShape, context::RenderContext},
+    player::node::StreamShape,
+    session::render::RenderContext,
 };
 
 #[derive(Debug, thiserror::Error)]

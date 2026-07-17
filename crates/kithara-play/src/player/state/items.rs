@@ -18,8 +18,8 @@ use crate::{
     bridge::PlayerCmd,
     engine::{DeferredPlayerCmdError, EngineImpl},
     error::PlayError,
+    player::{node::StreamShape, track::PlayerResource},
     resource::Resource,
-    rt::{StreamShape, track::PlayerResource},
 };
 
 pub(crate) struct DispatchedLoad {
