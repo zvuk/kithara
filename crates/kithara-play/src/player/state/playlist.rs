@@ -1,7 +1,6 @@
 use kithara_platform::sync::Arc;
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::rt::track::PreparedElasticRenderer;
+use super::super::platform::PreparedBindingResource;
 use crate::{api::TrackBinding, resource::Resource, rt::StreamShape};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,17 +16,6 @@ impl PreparedBindingStamp {
             transport_revision,
         }
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) struct PreparedBindingResource {
-    pub(crate) renderer: PreparedElasticRenderer,
-    pub(crate) stamp: PreparedBindingStamp,
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) struct PreparedBindingResource {
-    pub(crate) stamp: PreparedBindingStamp,
 }
 
 /// A queue entry that retains metadata while its resource is checked out by a load transaction.

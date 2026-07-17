@@ -9,6 +9,7 @@ use kithara_platform::{
 use tracing::debug;
 
 use super::{
+    super::platform::{activate_load, prepare_bound_load, restore_prepared_binding},
     PreparedBindingResource, PreparedBindingStamp, QueuedResource,
     playlist::{Playlist, QueuedLoad},
 };
@@ -25,6 +26,13 @@ pub(crate) struct DispatchedLoad {
     pub(crate) abr_handle: Option<AbrHandle>,
     pub(crate) duration_seconds: f64,
     pub(crate) src: Arc<str>,
+}
+
+pub(in crate::player) struct BoundLoad {
+    pub(in crate::player) player_resource: PlayerResource,
+    pub(in crate::player) prepared_stamp: Option<PreparedBindingStamp>,
+    pub(in crate::player) abr_handle: Option<AbrHandle>,
+    pub(in crate::player) activation: Option<(CancelToken, PcmPool)>,
 }
 
 #[must_use = "load transactions must be dispatched"]
@@ -56,20 +64,7 @@ impl LoadTransaction<'_> {
         let src = Arc::clone(player_resource.src());
         let mut player_resource = Some(player_resource);
         let result = engine.try_send_slot_cmd_deferred(slot, || {
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some((cancel, pool)) = activation.take() {
-                player_resource
-                    .as_mut()
-                    .ok_or_else(|| {
-                        PlayError::Internal("load transaction lost its resource".into())
-                    })?
-                    .activate_prepared_elastic(cancel, pool)
-                    .map_err(|error| PlayError::ElasticPreparation {
-                        reason: error.to_string(),
-                    })?;
-            }
-            #[cfg(target_arch = "wasm32")]
-            drop(activation.take());
+            activate_load(&mut player_resource, &mut activation)?;
             let resource = player_resource
                 .take()
                 .ok_or_else(|| PlayError::Internal("load transaction lost its resource".into()))?;
@@ -133,25 +128,11 @@ fn restore_queue_resource(
 ) -> Result<(), PlayError> {
     player_resource.set_service_class(ServiceClass::Idle);
     let (resource, renderer) = player_resource.release();
-    #[cfg(not(target_arch = "wasm32"))]
-    let prepared = match (bound, renderer, prepared_stamp) {
-        (true, Some(renderer), Some(stamp)) => Some(PreparedBindingResource { renderer, stamp }),
-        (false, None, None) => None,
-        _ => {
-            return Err(PlayError::Internal(
-                "rejected load returned inconsistent binding state".into(),
-            ));
-        }
-    };
-    #[cfg(target_arch = "wasm32")]
-    let prepared = {
-        drop((bound, renderer, prepared_stamp));
-        None
-    };
+    let prepared = restore_prepared_binding(bound, renderer, prepared_stamp)?;
     restore_queued_resource(playlist, index, prepared, resource)
 }
 
-fn restore_queued_resource(
+pub(in crate::player) fn restore_queued_resource(
     playlist: &mut Playlist,
     index: usize,
     prepared: Option<PreparedBindingResource>,
@@ -232,27 +213,11 @@ impl ItemQueue {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn insert_with_binding(
+    pub(in crate::player) fn insert_queued(
         &self,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-        binding: TrackBinding,
-        prepared: PreparedBindingResource,
+        queued: QueuedResource,
         at_position: Option<usize>,
     ) {
-        self.insert_queued(
-            QueuedResource {
-                binding: Some(binding),
-                item_id,
-                prepared: Some(prepared),
-                resource: Some(resource),
-            },
-            at_position,
-        );
-    }
-
-    fn insert_queued(&self, queued: QueuedResource, at_position: Option<usize>) {
         let (count, pos) = {
             let mut playlist = self.playlist.lock();
             let pos = playlist.insert(queued, at_position);
@@ -314,14 +279,6 @@ impl ItemQueue {
         index: usize,
         context: ItemLoadContext<'_>,
     ) -> Result<Option<LoadTransaction<'_>>, PlayError> {
-        let ItemLoadContext {
-            rate,
-            pitch_bend,
-            shape,
-            pool,
-            stamp: current_stamp,
-            cancel,
-        } = context;
         let mut playlist = self.playlist.lock();
         if index >= playlist.len() {
             return Ok(None);
@@ -339,57 +296,37 @@ impl ItemQueue {
         let duration_seconds = resource
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64());
-        let (player_resource, prepared_stamp, abr_handle, activation) = if binding.is_some() {
-            let Some(prepared) = prepared else {
-                restore_queued_resource(&mut playlist, index, None, resource)?;
-                return Err(PlayError::BindingPreparationRequired { index });
-            };
-            if prepared.stamp != current_stamp {
-                restore_queued_resource(&mut playlist, index, Some(prepared), resource)?;
-                return Err(PlayError::BindingPreparationStale { index });
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                drop(cancel);
-                restore_queued_resource(&mut playlist, index, Some(prepared), resource)?;
-                return Err(PlayError::ElasticBackendUnavailable);
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let PreparedBindingResource {
-                    renderer,
-                    stamp: prepared_stamp,
-                } = prepared;
-                let abr_handle = renderer.abr_handle();
-                resource.set_playback_rate(rate);
-                resource.set_transport_bend(pitch_bend);
-                resource.set_host_sample_rate(shape.sample_rate);
-                resource.set_service_class(ServiceClass::Idle);
-                let src = Arc::clone(resource.src());
-                let mut player_resource = PlayerResource::new_elastic(resource, src);
-                player_resource.install_prepared_elastic(renderer);
-                (
-                    player_resource,
-                    Some(prepared_stamp),
-                    abr_handle,
-                    Some((cancel, pool.clone())),
-                )
-            }
+        let rate = context.rate;
+        let pitch_bend = context.pitch_bend;
+        let shape = context.shape;
+        let BoundLoad {
+            player_resource,
+            prepared_stamp,
+            abr_handle,
+            activation,
+        } = if binding.is_some() {
+            prepare_bound_load(&mut playlist, index, resource, prepared, context)?
         } else {
+            let ItemLoadContext {
+                rate,
+                pitch_bend,
+                shape,
+                pool,
+                stamp: _,
+                cancel,
+            } = context;
             let abr_handle = resource.abr_handle();
             resource.set_playback_rate(rate);
             resource.set_transport_bend(pitch_bend);
             resource.set_host_sample_rate(shape.sample_rate);
             let src = Arc::clone(resource.src());
             drop(cancel);
-            (
-                PlayerResource::new(resource, src, pool),
-                None,
+            BoundLoad {
+                player_resource: PlayerResource::new(resource, src, pool),
+                prepared_stamp: None,
                 abr_handle,
-                None,
-            )
+                activation: None,
+            }
         };
 
         player_resource.set_playback_rate(rate);

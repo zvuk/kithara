@@ -1,0 +1,73 @@
+use kithara_bufpool::PcmPool;
+use kithara_platform::{CancelToken, sync::Arc};
+
+use super::super::{
+    core::PlayerImpl,
+    state::{
+        items::{BoundLoad, ItemLoadContext, restore_queued_resource},
+        playlist::{Playlist, PreparedBindingStamp},
+    },
+};
+use crate::{
+    api::TrackBinding,
+    error::PlayError,
+    resource::Resource,
+    rt::track::{PlayerResource, PreparedElasticRenderer},
+};
+
+pub(crate) enum PreparedBindingResource {}
+
+impl PlayerImpl {
+    /// Rejects session-bound elastic insertion because the browser backend
+    /// does not provide the required renderer.
+    pub async fn insert_with_binding(
+        &self,
+        _resource: Resource,
+        _item_id: Option<Arc<str>>,
+        _binding: TrackBinding,
+        _at_position: Option<usize>,
+    ) -> Result<(), PlayError> {
+        Err(PlayError::ElasticBackendUnavailable)
+    }
+}
+
+pub(crate) fn activate_load(
+    _player_resource: &mut Option<PlayerResource>,
+    activation: &mut Option<(CancelToken, PcmPool)>,
+) -> Result<(), PlayError> {
+    if activation.take().is_none() {
+        Ok(())
+    } else {
+        Err(PlayError::Internal(
+            "browser load unexpectedly requested elastic activation".into(),
+        ))
+    }
+}
+
+pub(crate) fn prepare_bound_load(
+    playlist: &mut Playlist,
+    index: usize,
+    resource: Resource,
+    prepared: Option<PreparedBindingResource>,
+    context: ItemLoadContext<'_>,
+) -> Result<BoundLoad, PlayError> {
+    let _ = context.stamp;
+    drop((prepared, context));
+    restore_queued_resource(playlist, index, None, resource)?;
+    Err(PlayError::Internal(
+        "browser queue unexpectedly contained a bound resource".into(),
+    ))
+}
+
+pub(crate) fn restore_prepared_binding(
+    bound: bool,
+    renderer: Option<PreparedElasticRenderer>,
+    stamp: Option<PreparedBindingStamp>,
+) -> Result<Option<PreparedBindingResource>, PlayError> {
+    match (bound, renderer, stamp) {
+        (false, None, None) => Ok(None),
+        _ => Err(PlayError::Internal(
+            "browser load returned inconsistent binding state".into(),
+        )),
+    }
+}

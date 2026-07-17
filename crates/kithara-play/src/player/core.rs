@@ -14,7 +14,7 @@ use super::{
     state::{ItemLoadContext, ItemQueue, PlayerParams, PlayerPhase, PreparedBindingStamp},
 };
 use crate::{
-    api::{PlayerEvent, PlayerStatus, TrackBinding},
+    api::{PlayerEvent, PlayerStatus},
     bridge::PlayerCmd,
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
@@ -161,30 +161,6 @@ impl PlayerImpl {
         at_position: Option<usize>,
     ) {
         self.core.items.insert(resource, item_id, at_position);
-    }
-
-    /// Prepares and queues a stream-backed resource for session-bound elastic
-    /// playback. Failure leaves the playlist unchanged.
-    pub async fn insert_with_binding(
-        &self,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-        binding: TrackBinding,
-        at_position: Option<usize>,
-    ) -> Result<(), PlayError> {
-        #[cfg(target_arch = "wasm32")]
-        {
-            drop((resource, item_id, binding, at_position));
-            Err(PlayError::ElasticBackendUnavailable)
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let prepared = self.prepare_bound_resource(&resource, &binding).await?;
-            self.core
-                .items
-                .insert_with_binding(resource, item_id, binding, prepared, at_position);
-            Ok(())
-        }
     }
 
     pub(crate) fn enqueue_to_processor(

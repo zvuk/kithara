@@ -1,9 +1,11 @@
-mod items;
+pub(super) mod items;
 mod params;
 pub(crate) mod phase;
-mod playlist;
+pub(super) mod playlist;
 
 pub(crate) use items::{ItemLoadContext, ItemQueue};
 pub(crate) use params::PlayerParams;
 pub(crate) use phase::{PendingNext, PendingNextState, PlayerPhase};
-pub(crate) use playlist::{PreparedBindingResource, PreparedBindingStamp, QueuedResource};
+pub(crate) use playlist::{PreparedBindingStamp, QueuedResource};
+
+pub(crate) use super::platform::PreparedBindingResource;

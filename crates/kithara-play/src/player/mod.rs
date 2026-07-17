@@ -1,6 +1,7 @@
 mod config;
 mod core;
 mod flow;
+mod platform;
 mod state;
 
 pub use core::PlayerImpl;
