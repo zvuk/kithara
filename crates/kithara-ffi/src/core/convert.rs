@@ -84,8 +84,9 @@ impl TryFrom<&DecoderEvent> for FfiItemEvent {
                 gapless,
             } => {
                 let (gapless_leading, gapless_trailing, has_gapless) = gapless
-                    .map(|span| (span.leading_frames, span.trailing_frames, true))
-                    .unwrap_or((0, 0, false));
+                    .map_or((0, 0, false), |span| {
+                        (span.leading_frames, span.trailing_frames, true)
+                    });
                 Ok(Self::DecoderChanged {
                     backend: (*backend).into(),
                     codec: codec.map(Into::into),

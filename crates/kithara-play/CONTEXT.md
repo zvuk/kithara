@@ -202,50 +202,21 @@ player and queue state do not mirror it. Firewheel owns only the execution
 graph, render clock, sample-rate observation, and event delivery.
 
 `Tempo` rejects non-finite and non-positive values before a commit is created.
-The first tempo command targets the current graph frame and may send its
-revisioned `Stage` and `Apply` directly because no active bound renderer can
-observe a prior slope. Every later live tempo change is a render-driven,
-nonblocking `prepare -> arm -> apply` transaction. It preserves the beat at one
-exact boundary and changes only the analytical slope from that boundary onward.
-Firewheel musical transport, dynamic keyframes, and transport speed are not
-part of this contract. The current public session mutation surface changes live
-tempo only; paused tempo changes and pause/resume transactions remain outside
-this slice.
-
-`SessionState` allocates the candidate revision and freezes an exact
-`(PlayerId, SlotId)` roster. Each slot's real-time endpoint is the canonical
-owner of its participant membership, bindings, renderer cursors, and source
-windows; it aggregates all bound tracks in that slot and returns only a compact
-revision- and membership-stamped observation. The session ledger never mirrors
-that real-time state. While a transaction is pending, commands that can change
-the roster fail with `TransportGraphMutationPending` and may be retried after
-the barrier finishes. A membership-epoch mismatch rejects the entire
-transaction.
-
-Each participant proposes one revision-stable boundary at least four declared
-maximum callback blocks ahead. It validates every bound track's candidate rate
-and pins one immutable source window that covers both the old-tempo path through
-the boundary and the new-tempo preparation horizon. Pending source work remains
-`Preparing`; it cannot vote `Ready`. Once the complete roster agrees on the
-same boundary, `Arm` rechecks the revision and membership epoch. Only the exact
-`Armed` response from every participant allows the control side to enqueue the
-common transport `Stage` and `Apply` in one graph update.
+The first tempo command targets the current graph frame. Later changes target
+the current graph frame plus one declared maximum callback, preserving the beat
+at that exact frame and changing only the analytical slope from that frame
+onward. Firewheel musical transport, dynamic keyframes, and transport speed are
+not part of this contract. The current public session mutation surface changes
+tempo only; pause/resume transactions are outside this slice.
 
 Successful tempo commits advance one monotonic revision; repeating the same
-tempo is a no-op. The pre-process adapter accepts `Apply` only when its revision,
-previous commit, sample rate, and graph frame match the staged transaction
-exactly. A participant observation from an older revision is ignored until that
-participant observes the current candidate; a future-revision observation is a
-typed stale-revision failure. Late, aborted, duplicate, route-invalidated, or
-graph-rejected transactions cannot change the active anchor.
-
-Any participant preparation error, membership change, route invalidation, or
-transport scheduling rejection broadcasts `Abort` to the full frozen roster.
-The barrier remains owned until every participant publishes a terminal
-acknowledgement, so a later candidate cannot overwrite pinned cleanup. The
-accepted and render-observed transport, graph schedule, bindings, and active
-renderers remain unchanged throughout rejection. Preparation errors identify
-the exact player and slot in the typed session error.
+tempo is a no-op. The control side sends an immediate revisioned `Stage` event
+and a scheduled `Apply` event for the target frame. The pre-process adapter
+accepts `Apply` only when its revision, previous commit, sample rate, and graph
+frame match the staged transaction exactly. Late, stale, aborted, duplicate, or
+route-invalidated transactions cannot change the active anchor. Rejection keeps
+the previously observed commit authoritative and is returned as a typed session
+error.
 
 `SessionTransportSnapshot` is published as one render-observed value by the
 same adapter node. It never combines a control-side tempo or revision with an
@@ -301,23 +272,6 @@ source windows from a dedicated non-real-time worker. Decoder position, legacy
 pitch bend, and the processed-audio compatibility ring are not parallel phase
 authorities for a bound item.
 
-Renderer latency has separate raw and effective values. Signalsmith
-preparation consumes its required history and discards its raw output latency
-before activation, so the prepared renderer has zero effective presentation
-latency. `PresentationFrame == RenderFrame` is valid only for that verified
-zero-effective-latency participant; raw latency is never compensated twice.
-Tempo preparation records both values so a future backend can expose a
-different mapping without changing the transaction contract.
-
-Rate-envelope validation uses a continuous ratio with at most one ULP of
-comparison tolerance. The persistent integer endpoint is quantized from the
-accumulated continuous endpoint, so fractional source advance is carried across
-block boundaries. A one-frame sub-unity block may have zero logical source
-advance; the backend still receives non-empty input by reusing the current
-source frame without advancing the persistent cursor. Exact integer boundaries
-do not widen, and arbitrary block partitioning cannot accumulate long-run phase
-drift.
-
 The source worker is a dedicated named platform thread started only after the
 slot command lane accepts activation. Its lifetime is independent of Tokio and
 is owned by the source port's cancellation and activity signal. It snapshots
@@ -348,14 +302,6 @@ accepted commit because that commit targets the initial render boundary. Once an
 active commit exists, a later accepted-but-pending tempo never replaces it in a
 preparation query. A multi-track transaction must stage every participant before
 publishing a later revision.
-
-The manual offline session advances the same command, participant, and render
-paths as the native host. Integration acceptance covers two and four bound
-tracks committing `120 -> 100` BPM, a four-track WAV artifact, and a
-participant-specific `120 -> 60` rejection followed by recovery at a later
-valid revision. This is a deterministic test surface, not a product offline
-rendering feature. Browser bound rendering, prepared seek/join, and reverse
-playback remain later slices.
 
 One zero-I/O Kithara graph-adapter node, executed as a Firewheel pre-process
 node, creates the immutable `RenderContext` for each processed graph block.

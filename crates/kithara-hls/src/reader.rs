@@ -147,10 +147,8 @@ impl ReaderEventSink for HlsReaderEventSink {
                 self.maybe_publish_read_progress(cursor);
                 self.last_cursor = cursor;
             }
-            ReaderChunkSignal::Eof => {
-                if self.last_segment.take().is_some() {
-                    self.bus.enqueue(HlsEvent::EndOfStream);
-                }
+            ReaderChunkSignal::Eof if self.last_segment.take().is_some() => {
+                self.bus.enqueue(HlsEvent::EndOfStream);
             }
             _ => {}
         }

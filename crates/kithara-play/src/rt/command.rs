@@ -44,11 +44,13 @@ impl PlayerNodeProcessor {
                 TrackState::FadingOut => {
                     track.stop();
                 }
-                TrackState::Finished if track.ended_at_eof() && seconds < track.duration() => {
-                    if track.seek(seconds) {
-                        track.play();
-                        revived = true;
-                    }
+                TrackState::Finished
+                    if track.ended_at_eof()
+                        && seconds < track.duration()
+                        && track.seek(seconds) =>
+                {
+                    track.play();
+                    revived = true;
                 }
                 _ => {}
             }
@@ -198,7 +200,6 @@ impl PlayerNodeProcessor {
     ) {
         let src = Arc::clone(resource.src());
         if let Some(track) = self.tracks.remove(&src) {
-            self.tempo.membership_changed();
             self.discard_track(track);
             self.notif_tx
                 .try_push(PlayerNotification::Unloaded { src: src.clone() })
@@ -219,8 +220,6 @@ impl PlayerNodeProcessor {
             .build();
         let track = PlayerTrack::new(resource, params);
         self.tracks.insert(src, track);
-        self.tempo.membership_changed();
-
         self.notif_tx
             .try_push(PlayerNotification::Loaded { src: loaded_src })
             .ok();

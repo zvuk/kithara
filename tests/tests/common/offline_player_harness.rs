@@ -6,10 +6,7 @@ use kithara::{
     decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
     platform::sync::{Arc, Mutex},
-    play::{
-        Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, SessionDispatcher,
-        SessionTransportSnapshot, Tempo,
-    },
+    play::{Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, SessionDispatcher, Tempo},
 };
 use kithara_integration_tests::offline::OfflineSession;
 
@@ -32,14 +29,6 @@ pub(crate) struct OfflinePlayerOptions {
 impl OfflinePlayerHarness {
     pub(crate) fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
         let session = Arc::new(OfflineSession::new_manual());
-        Self::in_session(options, sample_rate, session)
-    }
-
-    pub(crate) fn in_session(
-        options: OfflinePlayerOptions,
-        sample_rate: u32,
-        session: Arc<OfflineSession>,
-    ) -> Self {
         let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
         let region = Region::default();
         let player_config = PlayerConfig::builder()
@@ -73,26 +62,6 @@ impl OfflinePlayerHarness {
             Reply::Err(error) => Err(PlayError::Session(error)),
             _ => Err(PlayError::Internal(
                 "unexpected reply for offline session tempo update".into(),
-            )),
-        }
-    }
-
-    pub(crate) fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
-        match self.session.exec(Cmd::SessionTransport)? {
-            Reply::SessionTransport(snapshot) => Ok(snapshot),
-            Reply::Err(error) => Err(PlayError::Session(error)),
-            _ => Err(PlayError::Internal(
-                "unexpected reply for offline session transport query".into(),
-            )),
-        }
-    }
-
-    pub(crate) fn tick_session(&self) -> Result<(), PlayError> {
-        match self.session.exec(Cmd::Tick)? {
-            Reply::Ok => Ok(()),
-            Reply::Err(error) => Err(PlayError::Session(error)),
-            _ => Err(PlayError::Internal(
-                "unexpected reply for offline session tick".into(),
             )),
         }
     }

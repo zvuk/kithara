@@ -31,7 +31,7 @@ pub(crate) fn connect_source_audio(
         .ok_or(SourceAudioError::CapacityOverflow)?;
     let lane_id = next_lane_id()?;
     let worker_wake: Arc<dyn WakeSignal> = Arc::new(SourceAudioWorkerWake(worker));
-    let activity = SourceAudioActivity::new();
+    let activity = SourceAudioActivity::for_connection();
     let activity_wake: Arc<dyn WakeSignal> = Arc::new(SourceAudioActivityWake(activity.clone()));
     let (command_outlet, command_inlet) =
         connect::<SourceAudioCommand>(capacity, Some(Arc::clone(&worker_wake)));

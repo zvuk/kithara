@@ -20,10 +20,6 @@ pub(super) struct SourceCopy<'a> {
     pub(super) source_frame_count: u64,
 }
 
-const CONTINUITY_EPSILON: f64 = 1.0e-6;
-const MAX_CONTINUOUS_PHASE_ERROR: f64 = 1.0;
-const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
-
 #[derive(Clone, Copy)]
 struct ContinuousSegment {
     output_start: usize,
@@ -41,6 +37,10 @@ struct PhasePlan {
 }
 
 impl PhasePlan {
+    const CONTINUITY_EPSILON: f64 = 1.0e-6;
+    const MAX_CONTINUOUS_PHASE_ERROR: f64 = 1.0;
+    const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
+
     fn corrected_end(
         self,
         source_end: f64,
@@ -244,10 +244,9 @@ fn quantize_segments(
             .checked_add(segment.output_frames)
             .ok_or(ElasticRenderError::FrameOverflow)?;
         let corrected_end = phase.corrected_end(segment.source_end, cumulative_output_frames)?;
-        let next_boundary = quantize_source(corrected_end)?;
-        let source_end = quantize_endpoint(
+        let end = quantize_endpoint(
             boundary,
-            next_boundary,
+            corrected_end,
             segment.output_frames,
             minimum_rate,
             maximum_rate,
@@ -256,9 +255,9 @@ fn quantize_segments(
             output_start: segment.output_start,
             output_frames: segment.output_frames,
             source_start: boundary,
-            source_end,
+            source_end: end,
         });
-        boundary = next_boundary;
+        boundary = end;
     }
     let last = segments.last().ok_or(ElasticRenderError::FrameOverflow)?;
     Ok((
@@ -272,7 +271,7 @@ fn quantize_segments(
 
 fn validate_continuity(segments: &[ContinuousSegment]) -> Result<(), ElasticRenderError> {
     for pair in segments.windows(2) {
-        if (pair[0].source_end - pair[1].source_start).abs() > CONTINUITY_EPSILON {
+        if (pair[0].source_end - pair[1].source_start).abs() > PhasePlan::CONTINUITY_EPSILON {
             return Err(ElasticRenderError::DiscontinuousSource {
                 expected: pair[0].source_end,
                 actual: pair[1].source_start,
@@ -297,21 +296,23 @@ fn plan_phase(
     })?;
     let cursor_origin = cursor.map_or(first.source_start, |cursor| cursor.continuous);
     let error = first.source_start - cursor_origin;
-    if error.abs() > MAX_CONTINUOUS_PHASE_ERROR {
+    if error.abs() > PhasePlan::MAX_CONTINUOUS_PHASE_ERROR {
         return Err(ElasticRenderError::RelocationRequired {
             error,
-            limit: MAX_CONTINUOUS_PHASE_ERROR,
+            limit: PhasePlan::MAX_CONTINUOUS_PHASE_ERROR,
         });
     }
     let correction_budget = output_frames
         .to_f64()
         .zip(max_output_frames.to_f64())
-        .map(|(output, maximum)| (output / maximum).min(MAX_CORRECTION_PER_BLOCK))
+        .map(|(output, maximum)| (output / maximum).min(PhasePlan::MAX_CORRECTION_PER_BLOCK))
         .filter(|budget| budget.is_finite() && *budget > 0.0)
         .ok_or(ElasticRenderError::FrameOverflow)?;
     let desired = error.clamp(-correction_budget, correction_budget);
     let correction = constrain_correction(segments, desired, minimum_rate, maximum_rate)?;
-    if error.abs() > CONTINUITY_EPSILON && correction.abs() <= CONTINUITY_EPSILON {
+    if error.abs() > PhasePlan::CONTINUITY_EPSILON
+        && correction.abs() <= PhasePlan::CONTINUITY_EPSILON
+    {
         return Err(ElasticRenderError::PhaseCorrectionUnavailable { error });
     }
     Ok(PhasePlan {
@@ -358,7 +359,7 @@ fn constrain_correction(
 
 fn quantize_endpoint(
     boundary: i64,
-    quantized_end: i64,
+    continuous_end: f64,
     output_frames: usize,
     minimum_rate: f64,
     maximum_rate: f64,
@@ -367,15 +368,14 @@ fn quantize_endpoint(
         .to_f64()
         .ok_or(ElasticRenderError::FrameOverflow)?;
     let minimum_span = (minimum_rate * output_frames)
-        .floor()
-        .to_i64()
-        .ok_or(ElasticRenderError::FrameOverflow)?
-        .max(1);
-    let maximum_span = (maximum_rate * output_frames)
         .ceil()
         .to_i64()
         .ok_or(ElasticRenderError::FrameOverflow)?;
-    if minimum_span > maximum_span {
+    let maximum_span = (maximum_rate * output_frames)
+        .floor()
+        .to_i64()
+        .ok_or(ElasticRenderError::FrameOverflow)?;
+    if minimum_span <= 0 || minimum_span > maximum_span {
         return Err(ElasticRenderError::FrameOverflow);
     }
     let minimum_end = boundary
@@ -384,7 +384,7 @@ fn quantize_endpoint(
     let maximum_end = boundary
         .checked_add(maximum_span)
         .ok_or(ElasticRenderError::FrameOverflow)?;
-    Ok(quantized_end.clamp(minimum_end, maximum_end))
+    Ok(quantize_source(continuous_end)?.clamp(minimum_end, maximum_end))
 }
 
 pub(super) fn copy_source(copy: SourceCopy<'_>) -> Result<(), ElasticCopyError> {
@@ -462,9 +462,13 @@ fn copy_forward(
 mod tests {
     use super::*;
 
-    const MAX_OUTPUT_FRAMES: usize = 480;
-    const MINIMUM_RATE: f64 = 2.0 / 3.0;
-    const MAXIMUM_RATE: f64 = 4.0 / 3.0;
+    struct Consts;
+
+    impl Consts {
+        const MAX_OUTPUT_FRAMES: usize = 480;
+        const MINIMUM_RATE: f64 = 2.0 / 3.0;
+        const MAXIMUM_RATE: f64 = 4.0 / 3.0;
+    }
 
     fn segment(source_start: f64, source_end: f64, output_frames: usize) -> ContinuousSegment {
         ContinuousSegment {
@@ -482,15 +486,15 @@ mod tests {
         quantize_segments(
             segments,
             cursor,
-            MAX_OUTPUT_FRAMES,
-            MINIMUM_RATE,
-            MAXIMUM_RATE,
+            Consts::MAX_OUTPUT_FRAMES,
+            Consts::MINIMUM_RATE,
+            Consts::MAXIMUM_RATE,
         )
     }
 
     fn assert_close(actual: f64, expected: f64) {
         assert!(
-            (actual - expected).abs() <= CONTINUITY_EPSILON,
+            (actual - expected).abs() <= PhasePlan::CONTINUITY_EPSILON,
             "expected {expected}, received {actual}"
         );
     }
@@ -570,7 +574,7 @@ mod tests {
         assert!(matches!(
             error,
             ElasticRenderError::RelocationRequired { error, limit }
-                if error > limit && limit == MAX_CONTINUOUS_PHASE_ERROR
+                if error > limit && limit == PhasePlan::MAX_CONTINUOUS_PHASE_ERROR
         ));
     }
 
@@ -585,7 +589,7 @@ mod tests {
         assert!(matches!(
             error,
             ElasticRenderError::PhaseCorrectionUnavailable { error }
-                if (error - 0.75).abs() <= CONTINUITY_EPSILON
+                if (error - 0.75).abs() <= PhasePlan::CONTINUITY_EPSILON
         ));
 
         let (integer, corrected) = quantize(&[segment(0.75, 160.65, 120)], cursor)
@@ -593,114 +597,6 @@ mod tests {
         assert_eq!(integer[0].source_end - integer[0].source_start, 160);
         assert_close(corrected.continuous, 160.0);
         assert_close(160.65 - corrected.continuous, 0.65);
-    }
-
-    #[test]
-    fn endpoint_quantization_dithers_the_maximum_rate_without_phase_drift() {
-        const OUTPUT_FRAMES: usize = 128;
-        let rate = MAXIMUM_RATE;
-        let mut cursor = None;
-        let mut spans = Vec::new();
-
-        for block in 0..12 {
-            let source_start = (block * OUTPUT_FRAMES)
-                .to_f64()
-                .expect("test frame count is representable")
-                * rate;
-            let source_end = ((block + 1) * OUTPUT_FRAMES)
-                .to_f64()
-                .expect("test frame count is representable")
-                * rate;
-            let (integer, next) =
-                quantize(&[segment(source_start, source_end, OUTPUT_FRAMES)], cursor)
-                    .expect("maximum-rate boundary is quantizable");
-            spans.push(integer[0].source_end - integer[0].source_start);
-            cursor = Some(next);
-        }
-
-        assert!(spans.contains(&170));
-        assert!(spans.contains(&171));
-        let cursor = cursor.expect("the loop produced a cursor");
-        assert_eq!(cursor.integer, 2048);
-        assert_close(cursor.continuous, 2048.0);
-    }
-
-    #[test]
-    fn endpoint_quantization_dithers_the_minimum_rate_without_phase_drift() {
-        const OUTPUT_FRAMES: usize = 128;
-        let rate = MINIMUM_RATE;
-        let mut cursor = None;
-        let mut spans = Vec::new();
-
-        for block in 0..12 {
-            let source_start = (block * OUTPUT_FRAMES)
-                .to_f64()
-                .expect("test frame count is representable")
-                * rate;
-            let source_end = ((block + 1) * OUTPUT_FRAMES)
-                .to_f64()
-                .expect("test frame count is representable")
-                * rate;
-            let (integer, next) =
-                quantize(&[segment(source_start, source_end, OUTPUT_FRAMES)], cursor)
-                    .expect("minimum-rate boundary is quantizable");
-            spans.push(integer[0].source_end - integer[0].source_start);
-            cursor = Some(next);
-        }
-
-        assert!(spans.contains(&85));
-        assert!(spans.contains(&86));
-        let cursor = cursor.expect("the loop produced a cursor");
-        assert_eq!(cursor.integer, 1024);
-        assert_close(cursor.continuous, 1024.0);
-    }
-
-    #[test]
-    fn minimum_rate_quantization_keeps_a_one_frame_output_non_empty() {
-        let (integer, _) = quantize(&[segment(0.0, MINIMUM_RATE, 1)], None)
-            .expect("a one-frame output has a representable source span");
-
-        assert_eq!(integer[0].source_end - integer[0].source_start, 1);
-    }
-
-    #[test]
-    fn repeated_one_frame_minimum_rate_requests_are_partition_equivalent_without_drift() {
-        const OUTPUT_FRAMES: usize = 96;
-        let source_end = OUTPUT_FRAMES
-            .to_f64()
-            .expect("test frame count is representable")
-            * MINIMUM_RATE;
-        let (_, whole_cursor) = quantize(&[segment(0.0, source_end, OUTPUT_FRAMES)], None)
-            .expect("whole minimum-rate request is quantizable");
-        let mut cursor = None;
-
-        for output_frame in 0..OUTPUT_FRAMES {
-            let source_start = output_frame
-                .to_f64()
-                .expect("test frame count is representable")
-                * MINIMUM_RATE;
-            let source_end = (output_frame + 1)
-                .to_f64()
-                .expect("test frame count is representable")
-                * MINIMUM_RATE;
-            let (integer, next) = quantize(&[segment(source_start, source_end, 1)], cursor)
-                .expect("one-frame minimum-rate request is quantizable");
-            assert_eq!(
-                integer[0].source_end - integer[0].source_start,
-                1,
-                "every backend request must receive non-empty input"
-            );
-            let (_, whole_prefix_cursor) =
-                quantize(&[segment(0.0, source_end, output_frame + 1)], None)
-                    .expect("whole minimum-rate prefix is quantizable");
-            assert_close(next.continuous, whole_prefix_cursor.continuous);
-            assert_eq!(next.integer, whole_prefix_cursor.integer);
-            cursor = Some(next);
-        }
-
-        let cursor = cursor.expect("the partitioned requests produced a cursor");
-        assert_close(cursor.continuous, whole_cursor.continuous);
-        assert_eq!(cursor.integer, whole_cursor.integer);
     }
 
     #[test]

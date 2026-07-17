@@ -67,10 +67,8 @@ fn to_nanoseconds(value: &str) -> Option<f64> {
         (num, 1_000.0)
     } else if let Some(num) = value.strip_suffix("ms") {
         (num, 1_000_000.0)
-    } else if let Some(num) = value.strip_suffix('s') {
-        (num, 1_000_000_000.0)
     } else {
-        return None;
+        (value.strip_suffix('s')?, 1_000_000_000.0)
     };
 
     let num: f64 = num_str.parse().ok()?;

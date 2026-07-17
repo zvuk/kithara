@@ -73,26 +73,6 @@ fn renders_the_requested_output_frame_count() {
 }
 
 #[test]
-fn renders_floor_and_ceil_quantizations_at_rate_boundaries() {
-    const OUTPUT_FRAMES: usize = 128;
-    let config = ElasticConfig::new(48_000, CHANNELS, 512, OUTPUT_FRAMES)
-        .expect("the test configuration is valid");
-    let mut backend = SignalsmithElastic::prepare(config).expect("Signalsmith prepares");
-
-    for source_frames in [85, 86, 170, 171] {
-        let request =
-            ElasticRequest::new(source_frames, OUTPUT_FRAMES).expect("the request is non-empty");
-        let source = interleaved_signal(source_frames);
-        let mut output = vec![f32::NAN; OUTPUT_FRAMES * CHANNELS];
-
-        backend
-            .process(request, &source, &mut output)
-            .expect("boundary quantization stays inside the prepared envelope");
-        assert!(output.iter().all(|sample| sample.is_finite()));
-    }
-}
-
-#[test]
 fn unity_render_exposes_the_declared_source_and_output_latency() {
     const FRAMES: usize = 8192;
 

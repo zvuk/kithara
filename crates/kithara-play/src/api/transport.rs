@@ -72,32 +72,6 @@ pub struct SessionBeatError {
     value: f64,
 }
 
-/// Typed reason why a slot could not join one atomic transport change.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[non_exhaustive]
-pub enum TransportPreparationFailure {
-    #[error("the proposed presentation boundary expired")]
-    BoundaryExpired,
-    #[error("participants proposed different commit boundaries")]
-    BoundaryMismatch,
-    #[error("a bound track is unavailable")]
-    BindingUnavailable,
-    #[error("the participant command lane is unavailable")]
-    CommandLaneUnavailable,
-    #[error("required look-ahead is unavailable")]
-    LookAheadUnavailable,
-    #[error("slot membership changed")]
-    MembershipChanged,
-    #[error("the renderer is unavailable")]
-    RendererUnavailable,
-    #[error("the audio route was invalidated")]
-    RouteInvalidated,
-    #[error("the participant returned a stale revision")]
-    StaleRevision,
-    #[error("the requested elastic rate is unsupported")]
-    UnsupportedRate,
-}
-
 /// The last session transport position processed by the audio graph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]

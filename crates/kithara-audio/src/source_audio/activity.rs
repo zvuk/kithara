@@ -9,7 +9,7 @@ pub struct SourceAudioActivity {
 }
 
 impl SourceAudioActivity {
-    pub(crate) fn new() -> Self {
+    pub(super) fn for_connection() -> Self {
         Self {
             gate: Arc::new(ThreadGate::default()),
         }
@@ -19,7 +19,7 @@ impl SourceAudioActivity {
     #[cfg(any(test, feature = "probe"))]
     #[must_use]
     pub fn for_test() -> Self {
-        Self::new()
+        Self::for_connection()
     }
 
     /// Capture the edge observed before a nonblocking read.

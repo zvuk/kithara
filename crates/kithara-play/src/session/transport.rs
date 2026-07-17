@@ -2,15 +2,9 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 
-mod transaction;
-
-pub(super) use transaction::{advance, ensure_graph_mutation_allowed, invalidate_pending};
-
 use super::{
     protocol::{BindingPreparation, SessionError},
-    state::{
-        PendingTransportCommit, SessionState, SessionTransportState, TransportParticipantLedger,
-    },
+    state::{PendingTransportCommit, SessionState, SessionTransportState, TransportCommitPhase},
 };
 use crate::{
     api::{SessionTransportSnapshot, Tempo},
@@ -25,13 +19,13 @@ pub(super) fn set_tempo<B: AudioBackend>(
     tempo: Tempo,
 ) -> Result<(), SessionError> {
     let _ = refresh_observation(state)?;
-    if let Some(pending) = state.transport.pending.as_ref() {
-        return Err(SessionError::TransportCommitPending {
-            revision: pending.revision(),
-        });
-    }
     if state.transport.accepted.map(SessionTransportCommit::tempo) == Some(tempo) {
         return Ok(());
+    }
+    if let Some(pending) = state.transport.pending {
+        return Err(SessionError::TransportCommitPending {
+            revision: pending.revision,
+        });
     }
 
     let revision = state
@@ -39,26 +33,21 @@ pub(super) fn set_tempo<B: AudioBackend>(
         .last_revision
         .checked_add(1)
         .ok_or(SessionError::TransportRevisionExhausted)?;
-    let next = SessionTransportCommit::new(tempo, true, revision);
-    if let Some(active) = state.transport.observed
-        && transaction::begin(state, next, active)?
-    {
-        return Ok(());
-    }
-
     let (target_frame, sample_rate) = commit_boundary(state)?;
+    let next = SessionTransportCommit::new(tempo, true, revision);
     let stamp =
         TransportCommitStamp::new(state.transport.observed, next, target_frame, sample_rate);
+
     queue_stamp(state, stamp)?;
     state.transport.last_revision = revision;
     if let Err(error) = update_context(state) {
-        abort_commit(state, revision, Vec::new());
+        abort_commit(state, revision);
         return Err(error);
     }
 
     state.transport.accepted = Some(next);
-    state.transport.pending = Some(PendingTransportCommit::Applying {
-        participants: Vec::new(),
+    state.transport.pending = Some(PendingTransportCommit {
+        phase: TransportCommitPhase::Applying,
         revision,
     });
     Ok(())
@@ -104,13 +93,9 @@ fn update_context<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), Se
         .map_err(|error| SessionError::TransportSync(sync_error_reason(error)))
 }
 
-fn abort_commit<B: AudioBackend>(
-    state: &mut SessionState<B>,
-    revision: u64,
-    participants: Vec<TransportParticipantLedger>,
-) {
-    state.transport.pending = Some(PendingTransportCommit::AbortingTransport {
-        participants,
+fn abort_commit<B: AudioBackend>(state: &mut SessionState<B>, revision: u64) {
+    state.transport.pending = Some(PendingTransportCommit {
+        phase: TransportCommitPhase::Aborting,
         revision,
     });
     if let (Some(ctx), Some(control)) = (state.ctx.as_mut(), state.render_context_control.as_ref())
@@ -207,7 +192,7 @@ fn refresh_observation<B: AudioBackend>(
     Ok(observation)
 }
 
-pub(super) fn apply_completion<B: AudioBackend>(
+fn apply_completion<B: AudioBackend>(
     state: &mut SessionState<B>,
     completion: TransportCommitResult,
 ) {
@@ -215,15 +200,14 @@ pub(super) fn apply_completion<B: AudioBackend>(
     if revision <= state.transport.completed_revision {
         return;
     }
-    let mut rejected_participants = None;
-    let accepted = match (completion, state.transport.pending.as_ref()) {
+    let accepted = match (completion, state.transport.pending) {
         (
             TransportCommitResult::Applied(_),
-            Some(PendingTransportCommit::Applying {
+            Some(PendingTransportCommit {
+                phase: TransportCommitPhase::Applying,
                 revision: pending_revision,
-                ..
             }),
-        ) if *pending_revision == revision => {
+        ) if pending_revision == revision => {
             if let Some(accepted) = state
                 .transport
                 .accepted
@@ -238,25 +222,12 @@ pub(super) fn apply_completion<B: AudioBackend>(
         }
         (
             TransportCommitResult::Aborted(_),
-            Some(PendingTransportCommit::AbortingTransport {
+            Some(PendingTransportCommit {
+                phase: TransportCommitPhase::Aborting,
                 revision: pending_revision,
-                ..
             }),
-        ) if *pending_revision == revision => state.transport.observed,
+        ) if pending_revision == revision => state.transport.observed,
         _ => {
-            rejected_participants = match state.transport.pending.as_ref() {
-                Some(
-                    PendingTransportCommit::Applying {
-                        participants,
-                        revision: pending_revision,
-                    }
-                    | PendingTransportCommit::AbortingTransport {
-                        participants,
-                        revision: pending_revision,
-                    },
-                ) if *pending_revision == revision => Some(participants.clone()),
-                _ => None,
-            };
             state.transport.rejected = Some(revision);
             state.transport.observed
         }
@@ -264,9 +235,6 @@ pub(super) fn apply_completion<B: AudioBackend>(
     state.transport.accepted = accepted;
     state.transport.completed_revision = revision;
     state.transport.pending = None;
-    if let Some(participants) = rejected_participants {
-        transaction::abort_after_transport_rejection(state, participants, revision);
-    }
 }
 
 #[cfg(test)]
@@ -310,8 +278,8 @@ mod tests {
         let transport = SessionTransportState {
             accepted: Some(commit(90.0, 2)),
             observed: Some(commit(120.0, 1)),
-            pending: Some(PendingTransportCommit::Applying {
-                participants: Vec::new(),
+            pending: Some(PendingTransportCommit {
+                phase: TransportCommitPhase::Applying,
                 revision: 2,
             }),
             ..SessionTransportState::default()

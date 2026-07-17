@@ -9,18 +9,6 @@ use super::{
 };
 
 pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply {
-    if matches!(
-        &cmd,
-        Cmd::UnregisterPlayer { .. }
-            | Cmd::StartPlayer { .. }
-            | Cmd::StopPlayer { .. }
-            | Cmd::AllocateSlot { .. }
-            | Cmd::ReleaseSlot { .. }
-    ) && let Err(error) = transport::ensure_graph_mutation_allowed(state)
-    {
-        return Reply::Err(error);
-    }
-
     match cmd {
         Cmd::RegisterPlayer {
             eq_layout,
@@ -121,14 +109,11 @@ pub(super) fn tick_session<B: AudioBackend>(state: &mut SessionState<B>) -> Repl
         }
     }
 
-    let update = state.ctx_mut().map(FirewheelCtx::update);
+    let update = state.ctx.as_mut().map(FirewheelCtx::update);
     if let Some(Err(err)) = update {
         return handle_update_error(state, err);
     }
-    match transport::advance(state) {
-        Ok(()) => Reply::Ok,
-        Err(error) => Reply::Err(error),
-    }
+    Reply::Ok
 }
 
 fn unregister_player<B: AudioBackend>(
@@ -155,7 +140,6 @@ pub(super) fn handle_update_error<B: AudioBackend>(
 ) -> Reply {
     match err {
         UpdateError::StreamStoppedUnexpectedly(reason) => {
-            let transport_error = transport::invalidate_pending(state);
             state.stream_needs_restart = true;
             warn!(
                 ?reason,
@@ -167,7 +151,7 @@ pub(super) fn handle_update_error<B: AudioBackend>(
                 "[KITHARA-ROUTE] firewheel update reported stopped stream"
             );
             match restart_stream(state, state.sample_rate_hint) {
-                Ok(()) => transport_error.map_or(Reply::Ok, Reply::Err),
+                Ok(()) => Reply::Ok,
                 Err(restart_err) => Reply::Err(SessionError::RestartFailed {
                     reason: format!("{reason:?}"),
                     r#source: restart_err.to_string(),
@@ -194,10 +178,9 @@ pub(super) fn invalidate_audio_route<B: AudioBackend>(
     if state.ctx.is_none() {
         return Reply::Ok;
     }
-    let transport_error = transport::invalidate_pending(state);
     state.stream_needs_restart = true;
     match restart_stream(state, state.sample_rate_hint) {
-        Ok(()) => transport_error.map_or(Reply::Ok, Reply::Err),
+        Ok(()) => Reply::Ok,
         Err(err) => Reply::Err(SessionError::RestartFailed {
             reason: reason.to_owned(),
             r#source: err.to_string(),
@@ -264,17 +247,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        api::{SlotId, Tempo},
-        rt::{
-            SessionTransportCommit, TempoParticipantObservation, TempoParticipantStatus,
-            TransportCommitResult, tempo_participant_channel,
-        },
+        api::Tempo,
         session::{
-            protocol::{Cmd, Reply, SessionError, TransportPreparationFailure},
-            state::{
-                PendingTransportCommit, SessionState, TransportParticipantId,
-                TransportParticipantLedger, TransportPreparation,
-            },
+            protocol::{Cmd, Reply, SessionError},
+            state::SessionState,
         },
     };
 
@@ -399,37 +375,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn pending_transport_rejects_graph_membership_commands() {
-        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
-        state.transport.pending = Some(PendingTransportCommit::Applying {
-            participants: Vec::new(),
-            revision: 7,
-        });
-
-        let commands = [
-            Cmd::UnregisterPlayer { player_id: 1 },
-            Cmd::StartPlayer {
-                master_volume: 1.0,
-                player_id: 1,
-                sample_rate: 44_100,
-            },
-            Cmd::StopPlayer { player_id: 1 },
-            Cmd::AllocateSlot { player_id: 1 },
-            Cmd::ReleaseSlot {
-                player_id: 1,
-                slot: SlotId::new(1),
-            },
-        ];
-
-        for command in commands {
-            assert!(matches!(
-                run_cmd(&mut state, command),
-                Reply::Err(SessionError::TransportGraphMutationPending { revision: 7 })
-            ));
-        }
-    }
-
-    #[kithara::test]
     fn binding_preparation_captures_transport_and_full_stream_shape() {
         route_loss(RouteLossProbe::reset);
 
@@ -532,151 +477,6 @@ mod tests {
             "session must accept future slots after explicit route restart"
         );
         assert!(!state.stream_needs_restart);
-    }
-
-    #[kithara::test]
-    fn route_invalidation_aborts_pending_participants_and_preserves_active_transport() {
-        route_loss(RouteLossProbe::reset);
-
-        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
-        let player_id = register_player(&mut state);
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::StartPlayer {
-                    player_id,
-                    sample_rate: 44_100,
-                    master_volume: 1.0,
-                },
-            ),
-            Reply::Ok
-        ));
-        let Reply::SlotAllocated(allocated) = run_cmd(&mut state, Cmd::AllocateSlot { player_id })
-        else {
-            panic!("slot allocation failed");
-        };
-        let active =
-            SessionTransportCommit::new(Tempo::new(120.0).expect("valid active tempo"), true, 1);
-        let candidate =
-            SessionTransportCommit::new(Tempo::new(100.0).expect("valid candidate tempo"), true, 2);
-        state.transport.accepted = Some(active);
-        state.transport.observed = Some(active);
-        state.transport.last_revision = 2;
-        state.transport.pending = Some(PendingTransportCommit::Preparing(TransportPreparation {
-            boundary: None,
-            candidate,
-            participants: vec![TransportParticipantLedger {
-                id: TransportParticipantId {
-                    player_id,
-                    slot_id: allocated.slot,
-                },
-                ready: None,
-            }],
-        }));
-
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::InvalidateAudioRoute {
-                    reason: String::from("oldDeviceUnavailable"),
-                },
-            ),
-            Reply::Err(SessionError::TransportPreparationRejected {
-                player_id: rejected_player_id,
-                revision: 2,
-                slot,
-                reason: TransportPreparationFailure::RouteInvalidated,
-            }) if rejected_player_id == player_id && slot == allocated.slot
-        ));
-        assert_eq!(state.transport.accepted, Some(active));
-        assert_eq!(state.transport.observed, Some(active));
-        assert!(state.transport.pending.is_none());
-        assert_eq!(
-            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
-            2
-        );
-    }
-
-    #[kithara::test]
-    fn rejected_transport_aborts_participants_until_their_terminal_ack() {
-        route_loss(RouteLossProbe::reset);
-
-        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
-        let player_id = register_player(&mut state);
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::StartPlayer {
-                    player_id,
-                    sample_rate: 44_100,
-                    master_volume: 1.0,
-                },
-            ),
-            Reply::Ok
-        ));
-        let Reply::SlotAllocated(allocated) = run_cmd(&mut state, Cmd::AllocateSlot { player_id })
-        else {
-            panic!("slot allocation failed");
-        };
-        let (mut endpoint, control) = tempo_participant_channel();
-        state.players[0].slots[0].tempo = control;
-
-        let active =
-            SessionTransportCommit::new(Tempo::new(120.0).expect("valid active tempo"), true, 1);
-        let candidate =
-            SessionTransportCommit::new(Tempo::new(100.0).expect("valid candidate tempo"), true, 2);
-        let participants = vec![TransportParticipantLedger {
-            id: TransportParticipantId {
-                player_id,
-                slot_id: allocated.slot,
-            },
-            ready: None,
-        }];
-        state.transport.accepted = Some(candidate);
-        state.transport.observed = Some(active);
-        state.transport.last_revision = 2;
-        state.transport.pending = Some(PendingTransportCommit::Applying {
-            participants,
-            revision: 2,
-        });
-
-        transport::apply_completion(&mut state, TransportCommitResult::Rejected(2));
-
-        assert!(
-            endpoint.receive().is_some(),
-            "participant abort was not queued"
-        );
-        assert_eq!(state.transport.accepted, Some(active));
-        assert_eq!(state.transport.observed, Some(active));
-        assert!(matches!(
-            state.transport.pending,
-            Some(PendingTransportCommit::AbortingParticipants {
-                abort_queued: true,
-                revision: 2,
-                ..
-            })
-        ));
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
-            Reply::Err(SessionError::TransportGraphMutationPending { revision: 2 })
-        ));
-        assert!(matches!(
-            transport::advance(&mut state),
-            Err(SessionError::TransportCommitRejected { revision: 2 })
-        ));
-
-        endpoint.publish(TempoParticipantObservation::terminal(
-            2,
-            0,
-            0,
-            TempoParticipantStatus::Aborted,
-        ));
-        assert!(transport::advance(&mut state).is_ok());
-        assert!(state.transport.pending.is_none());
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
-            Reply::SlotAllocated(..)
-        ));
     }
 
     #[kithara::test]

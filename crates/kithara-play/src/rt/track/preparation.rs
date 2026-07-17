@@ -198,10 +198,7 @@ impl ElasticRenderer {
         Err(ElasticRenderError::SourceWindowDeadlineMissed)
     }
 
-    pub(super) fn schedule_window(
-        &mut self,
-        range: SourceFrameRange,
-    ) -> Result<(), ElasticRenderError> {
+    fn schedule_window(&mut self, range: SourceFrameRange) -> Result<(), ElasticRenderError> {
         if self.pending_request.is_some() {
             return Ok(());
         }
@@ -210,12 +207,9 @@ impl ElasticRenderer {
             .checked_mul(Self::RENEWAL_BLOCKS)
             .ok_or(ElasticRenderError::FrameOverflow)?;
         let renewal = u64::try_from(renewal).map_err(|_| ElasticRenderError::FrameOverflow)?;
-        let range = self.pinned_range(range)?;
         let needs_window = self.source_window.is_none_or(|window| {
-            window.start() > range.start()
-                || range.end() > window.end()
-                || (window.end() < self.source_frame_count
-                    && window.end().saturating_sub(range.end()) <= renewal)
+            window.end() < self.source_frame_count
+                && window.end().saturating_sub(range.end()) <= renewal
         });
         if !needs_window {
             return Ok(());
@@ -226,15 +220,14 @@ impl ElasticRenderer {
             .ok_or(ElasticRenderError::FrameOverflow)?;
         let window_frames =
             u64::try_from(window_frames).map_err(|_| ElasticRenderError::FrameOverflow)?;
-        let request_end = range
-            .start()
-            .checked_add(window_frames)
-            .ok_or(ElasticRenderError::FrameOverflow)?
-            .min(self.source_frame_count);
-        if range.end() > request_end {
-            return Err(ElasticRenderError::FetchWindowMismatch);
-        }
-        let request_range = SourceFrameRange::new(range.start(), request_end)?;
+        let request_range = SourceFrameRange::new(
+            range.start(),
+            range
+                .start()
+                .checked_add(window_frames)
+                .ok_or(ElasticRenderError::FrameOverflow)?
+                .min(self.source_frame_count),
+        )?;
         let generation = self
             .source_generation
             .checked_add(1)
@@ -251,21 +244,7 @@ impl ElasticRenderer {
         Ok(())
     }
 
-    pub(super) fn pinned_range(
-        &self,
-        range: SourceFrameRange,
-    ) -> Result<SourceFrameRange, ElasticRenderError> {
-        let Some(pin) = self.tempo_pin else {
-            return Ok(range);
-        };
-        SourceFrameRange::new(
-            range.start().min(pin.range.start()),
-            range.end().max(pin.range.end()),
-        )
-        .map_err(ElasticRenderError::Source)
-    }
-
-    pub(super) fn poll_source_port(&mut self) -> Result<(), ElasticRenderError> {
+    fn poll_source_port(&mut self) -> Result<(), ElasticRenderError> {
         if self.source_port.is_none() {
             return Err(ElasticRenderError::SourceWorkerUnavailable);
         }
@@ -302,17 +281,6 @@ impl ElasticRenderer {
                 ElasticSourceReply::Ready(window) => {
                     let range = window.range();
                     let request = pending.ok_or(ElasticRenderError::SourceWorkerFailed)?;
-                    if self
-                        .tempo_pin
-                        .is_some_and(|pin| !range_contains(range, pin.range))
-                    {
-                        self.recycle_window(window);
-                        self.pending_request = None;
-                        if self.pending_retirement.is_some() {
-                            return Ok(());
-                        }
-                        continue;
-                    }
                     let advances = self
                         .source_window
                         .is_none_or(|current| range.end() > current.end());
@@ -354,125 +322,16 @@ impl ElasticRenderer {
     }
 }
 
-pub(super) const fn range_contains(
-    container: SourceFrameRange,
-    required: SourceFrameRange,
-) -> bool {
-    container.start() <= required.start() && required.end() <= container.end()
-}
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{BeatGrid, TrackBeat, analysis::TrackAnalysis};
     use kithara_bufpool::PcmPool;
     use kithara_platform::CancelScope;
     use kithara_test_utils::kithara;
-    use num_traits::ToPrimitive;
 
-    use super::{
-        super::{ElasticTempoPreparationOutcome, TempoSourcePin},
-        *,
-    };
-    use crate::{
-        api::{SessionBeat, Tempo, TrackBinding},
-        rt::{
-            RenderFrame, StreamShape,
-            context::{RenderContext, SessionTransportCommit},
-            track::{
-                elastic::ElasticPlanError,
-                elastic_source::{ElasticSourceRequest, elastic_source_test_pair},
-            },
-        },
-    };
-
-    fn tempo_test_binding(source_tempo: f64, sample_rate: NonZeroU32) -> TrackBinding {
-        let frames_per_beat = (60.0 * f64::from(sample_rate.get()) / source_tempo)
-            .to_u64()
-            .expect("source tempo resolves to an integer frame grid");
-        let analysis = TrackAnalysis::with_source_rate(
-            Some(BeatGrid::new(
-                source_tempo,
-                (0..=6).map(|beat| beat * frames_per_beat).collect(),
-                vec![0],
-                Vec::new(),
-            )),
-            None,
-            frames_per_beat * 6,
-            sample_rate,
-        );
-        TrackBinding::new(
-            &analysis,
-            sample_rate,
-            SessionBeat::new(0.0).expect("valid session anchor"),
-            TrackBeat::new(0.0).expect("valid track anchor"),
-            PlaybackDirection::Forward,
-        )
-        .expect("valid tempo test binding")
-    }
-
-    fn playing_context(
-        frames: std::ops::Range<i64>,
-        beats: std::ops::Range<f64>,
-        tempo: f64,
-        revision: u64,
-        sample_rate: NonZeroU32,
-    ) -> RenderContext {
-        RenderContext::new(
-            RenderFrame::new(frames.start)..RenderFrame::new(frames.end),
-            sample_rate,
-            Some(
-                SessionBeat::new(beats.start).expect("valid beat start")
-                    ..SessionBeat::new(beats.end).expect("valid beat end"),
-            ),
-            Some(SessionTransportCommit::new(
-                Tempo::new(tempo).expect("valid tempo"),
-                true,
-                revision,
-            )),
-        )
-        .expect("valid playing context")
-    }
-
-    #[kithara::test]
-    fn tempo_preparation_rejects_an_unsupported_candidate_rate() {
-        let pool = PcmPool::default();
-        let sample_rate = NonZeroU32::new(48_000).expect("static sample rate");
-        let shape = StreamShape {
-            sample_rate,
-            max_block_frames: NonZeroU32::new(512).expect("static block size"),
-        };
-        let mut renderer = ElasticRenderer::prepare(sample_rate, 1, 172_800, shape, &pool)
-            .expect("elastic renderer preparation");
-        renderer.primed = true;
-        let current_end = 512.0 * 120.0 / (48_000.0 * 60.0);
-        let boundary_beat = 2_560.0 * 120.0 / (48_000.0 * 60.0);
-        let candidate_end = boundary_beat + 1_024.0 * 60.0 / (48_000.0 * 60.0);
-        let current = playing_context(0..512, 0.0..current_end, 120.0, 1, sample_rate);
-        let candidate = playing_context(
-            2_560..3_584,
-            boundary_beat..candidate_end,
-            60.0,
-            2,
-            sample_rate,
-        );
-
-        let error = renderer
-            .prepare_tempo(
-                &tempo_test_binding(100.0, sample_rate),
-                &current,
-                &candidate,
-                2,
-            )
-            .expect_err("source rate 0.6 is below the supported envelope");
-        assert!(matches!(
-            error,
-            ElasticRenderError::Plan(ElasticPlanError::UnsupportedRate { rate, .. })
-                if (rate - 0.6).abs() < 1.0e-9
-        ));
-        assert!(renderer.tempo_pin.is_none());
-    }
+    use super::*;
+    use crate::rt::{StreamShape, track::elastic_source::elastic_source_test_pair};
 
     #[kithara::test]
     fn recycle_backpressure_preserves_multiple_ready_windows() {
@@ -523,86 +382,6 @@ mod tests {
                 .expect("test source port")
                 .receive()
                 .is_none()
-        );
-    }
-
-    #[kithara::test]
-    fn tempo_window_stays_pinned_until_its_revision_finishes() {
-        let pool = PcmPool::default();
-        let sample_rate = NonZeroU32::new(48_000).expect("static sample rate");
-        let mut renderer = ElasticRenderer::prepare(
-            sample_rate,
-            1,
-            48_000,
-            StreamShape {
-                sample_rate,
-                max_block_frames: NonZeroU32::new(512).expect("static block size"),
-            },
-            &pool,
-        )
-        .expect("elastic renderer preparation");
-        renderer.tempo_pin = Some(TempoSourcePin {
-            range: SourceFrameRange::new(1_000, 2_000).expect("valid pinned range"),
-            revision: 7,
-        });
-
-        let required = renderer
-            .pinned_range(SourceFrameRange::new(1_500, 2_500).expect("valid render range"))
-            .expect("combined source range");
-        assert_eq!(required.start(), 1_000);
-        assert_eq!(required.end(), 2_500);
-
-        renderer.abort_tempo(6);
-        assert!(renderer.tempo_pin.is_some());
-        renderer.apply_tempo(7);
-        assert!(renderer.tempo_pin.is_none());
-    }
-
-    #[kithara::test]
-    fn tempo_window_waits_for_and_discards_an_incompatible_pending_reply() {
-        let pool = PcmPool::default();
-        let sample_rate = NonZeroU32::new(48_000).expect("static sample rate");
-        let mut renderer = ElasticRenderer::prepare(
-            sample_rate,
-            1,
-            48_000,
-            StreamShape {
-                sample_rate,
-                max_block_frames: NonZeroU32::new(512).expect("static block size"),
-            },
-            &pool,
-        )
-        .expect("elastic renderer preparation");
-        let scope = CancelScope::new(None);
-        let (port, mut peer) = elastic_source_test_pair(scope.token());
-        renderer.source_port = Some(port);
-        renderer.source_window =
-            Some(SourceFrameRange::new(500, 2_500).expect("resident window covers candidate"));
-        let incompatible = SourceFrameRange::new(3_000, 4_000).expect("valid incompatible range");
-        renderer.pending_request = Some(ElasticSourceRequest::new(1, incompatible));
-        let required = SourceFrameRange::new(1_000, 2_000).expect("valid tempo range");
-
-        assert_eq!(
-            renderer
-                .prepare_tempo_window(7, required)
-                .expect("incompatible request remains pending"),
-            ElasticTempoPreparationOutcome::Pending
-        );
-        assert!(peer.push_ready(1, incompatible, pool.get()));
-        assert!(matches!(
-            renderer
-                .prepare_tempo_window(7, required)
-                .expect("incompatible reply is discarded"),
-            ElasticTempoPreparationOutcome::Ready { .. }
-        ));
-        assert_eq!(
-            renderer.source_window.expect("resident window retained"),
-            SourceFrameRange::new(500, 2_500).expect("valid resident range")
-        );
-        assert!(
-            renderer
-                .pending_request
-                .is_none_or(|request| range_contains(request.range(), required))
         );
     }
 }

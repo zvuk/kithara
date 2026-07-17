@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
-    bridge::channels::session_slot_channels,
+    bridge::slot_channels,
     rt::{MasterEqNode, PlayerNode},
 };
 pub(super) fn ducking_gain(mode: SessionDuckingMode) -> f32 {
@@ -199,7 +199,7 @@ pub(super) mod slots {
         let slot_id = SlotId::new(state.players[idx].next_slot_id);
         state.players[idx].next_slot_id += 1;
         let shared_eq = state.players[idx].shared_eq.clone();
-        let (inputs, control, tempo) = session_slot_channels(shared_eq);
+        let (inputs, control) = slot_channels(shared_eq);
         let player_node =
             PlayerNode::new(inputs, state.players[idx].pcm_pool.clone()).with_session_context();
         let player_node_id = fw_ctx.add_node(player_node, None);
@@ -218,7 +218,6 @@ pub(super) mod slots {
             );
         }
         state.players[idx].slots.push(SlotNodes {
-            tempo,
             slot_id,
             player_node_id,
             vol_pan_memo: slot_vol_pan_memo,
