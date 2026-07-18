@@ -26,7 +26,7 @@ coverage through the existing integration-test session.
       memory and to WAV.
 - [x] The same integration session renders the real reverse path to memory and
       to WAV after directional preparation is implemented.
-- [ ] Legacy entertainment-role event naming is migrated to transport and
+- [x] Legacy entertainment-role event naming is migrated to transport and
       synchronization vocabulary before new sync events become public.
 - [x] Existing forward playback and legacy pitch bend do not regress.
 - [x] The transport and unchanged graph adapter compile and pass their shared
@@ -61,6 +61,8 @@ coverage through the existing integration-test session.
 - [x] Slice 10: queued successor prefetch and tempo retarget without source reload.
 - [x] Slice 11: deterministic artifact, real-time and boundedness checks, Apple,
       Android, browser WASM, and repository acceptance gates.
+- [x] Slice 12: transport and synchronization event vocabulary, publication,
+      FFI mapping, and wire-compatible platform generation.
 
 ## 2026-07-16 Slice 5 Checkpoint
 
@@ -98,10 +100,10 @@ The current limits are intentional and typed:
 - custom readers cannot be reopened for bound preparation and return
   `BindingSourceNotReopenable`.
 
-Slice 11 is complete. Slice 12 remains required and owns event vocabulary
-migration.
+Slices 11 and 12 are complete. The transport plan is closed; the boundaries
+below remain explicit follow-up work rather than unfinished slices.
 
-Open implementation boundaries retained for the next slices:
+Open implementation boundaries retained as follow-ups:
 
 - define natural end behavior at the analysed marker domain instead of letting
   `OutsideMarkerDomain` become a track failure;
@@ -276,6 +278,26 @@ with 145 skipped. Its first run exposed one unrelated pitch-bend zero-crossing
 flake; the same release binary passed 21/21 isolated repeats, and the complete
 workspace rerun passed 3807/3807.
 
+### 2026-07-18 Slice 12 Checkpoint
+
+`kithara-events` now owns new session lifecycle facts as `TransportEvent` and
+new track synchronization facts as `SyncEvent`. The existing session and
+player-node owners publish committed tempo, play-state, seek, failure, and
+binding facts through their registered player buses; no participant registry,
+parallel control plane, or second player abstraction was introduced.
+
+FFI conversion uses appended `Transport*` and `Sync*` variants while preserving
+all existing UniFFI discriminants, including the legacy `Dj*` variants that
+remain limited to their existing BPM, key-lock, and stretch-backend events.
+Apple, Android, and WASM mappings are exhaustive, and native platform wrappers
+do not widen their public `PlayerEvent` API in this slice.
+
+Formatting, Clippy, architecture ratchets, and WASM compilation are green. The
+final workspace harness passed 3820/3820 tests with 145 skipped. Apple and
+Android generated-binding builds were green. A fresh browser-runtime retry was
+blocked before test execution by an HTTP 404 during the WebDriver handshake;
+the earlier Slice 11 browser acceptance remains 12/12.
+
 ## Affected Paths
 
 - `Cargo.toml`
@@ -288,6 +310,8 @@ workspace rerun passed 3807/3807.
 - `crates/kithara-audio/src/analysis` and `crates/kithara-audio/src/musical`
   as the analysis and beat-map owners
 - `crates/kithara-audio` as the `SourceAudio` and cache contract owner
+- `crates/kithara-events` as the transport and synchronization vocabulary owner
+- `crates/kithara-ffi`, Apple bindings, and Android bindings for wire migration
 - `tests/tests/kithara_play`
 - offline render/WAV fixtures in the existing integration-test owners
 
