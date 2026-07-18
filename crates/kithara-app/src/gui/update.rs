@@ -60,15 +60,18 @@ fn handle_player(state: &mut Kithara, message: &Message) {
     }
 }
 
-fn handle_window_close_requested(state: &Kithara, id: window::Id) -> Task<Message> {
-    if state.window_id == Some(id) {
+fn handle_window_close_requested(state: &mut Kithara, id: window::Id) -> Task<Message> {
+    if state.settings_window_id == Some(id) {
+        state.settings_window_id = None;
+        window::close(id)
+    } else if state.window_id == Some(id) {
         iced::exit()
     } else {
         window::close(id)
     }
 }
 
-fn handle_toggle_play_pause(state: &Kithara) {
+pub(in crate::gui) fn handle_toggle_play_pause(state: &Kithara) {
     if state.ui_state.playing {
         state.controller.queue().pause();
     } else {
@@ -107,7 +110,7 @@ fn handle_seek_released(state: &Kithara) {
     }
 }
 
-fn handle_seek_to(state: &Kithara, pos: f64) {
+pub(in crate::gui) fn handle_seek_to(state: &Kithara, pos: f64) {
     state.controller.mutate(|st| {
         st.is_seeking = false;
         st.seek_position = pos;
@@ -118,7 +121,7 @@ fn handle_seek_to(state: &Kithara, pos: f64) {
     }
 }
 
-fn handle_volume_changed(state: &mut Kithara, vol: f32) {
+pub(in crate::gui) fn handle_volume_changed(state: &mut Kithara, vol: f32) {
     state.controller.queue().set_volume(vol);
     state.controller.mutate(|st| st.volume = vol);
     if vol > 0.0 {
@@ -204,7 +207,7 @@ fn handle_eq_reset_all(state: &Kithara) {
     });
 }
 
-fn handle_select_track(state: &mut Kithara, idx: usize) {
+pub(in crate::gui) fn handle_select_track(state: &mut Kithara, idx: usize) {
     if state.selected_track_index != Some(idx) {
         state.selected_track_index = Some(idx);
         return;

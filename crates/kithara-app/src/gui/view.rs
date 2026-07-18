@@ -10,10 +10,6 @@ use iced::{
         column, container,
         container::Style as ContainerStyle,
         row, scrollable, slider,
-        slider::{
-            Handle as SliderHandle, HandleShape as SliderHandleShape, Rail as SliderRail,
-            Status as SliderStatus, Style as SliderStyle,
-        },
         svg::{Handle as SvgHandle, Svg},
         text, vertical_slider,
     },
@@ -47,10 +43,6 @@ impl Consts {
     const ALPHA_PLAYLIST_SELECTED_HOVER: f32 = 0.24;
     const ALPHA_PLAYLIST_SELECTED_PRESSED: f32 = 0.32;
     const ALPHA_SECTION_BG: f32 = 0.45;
-    const ALPHA_SLIDER_ACTIVE_RAIL: f32 = 0.95;
-    const ALPHA_SLIDER_DRAGGED_RAIL: f32 = 0.85;
-    const ALPHA_SLIDER_HANDLE_BORDER: f32 = 0.65;
-    const ALPHA_SLIDER_INACTIVE_RAIL: f32 = 0.35;
     const ALPHA_SPEED_FILL: f32 = 0.4;
 
     const ALPHA_TAB_ACTIVE_BASE: f32 = 0.12;
@@ -122,10 +114,6 @@ impl Consts {
     const SEEK_STEP: f32 = 0.1;
     const SETTINGS_BODY_FONT: f32 = 13.0;
     const SETTINGS_LABEL_FONT: f32 = 10.0;
-    const SLIDER_HANDLE_BORDER: f32 = 1.0;
-    const SLIDER_HANDLE_RADIUS: f32 = 7.0;
-    const SLIDER_RAIL_RADIUS: f32 = 4.0;
-    const SLIDER_RAIL_WIDTH: f32 = 4.0;
     const SMALL_FONT: f32 = 13.0;
     const SPEED_PADDING_X: f32 = 12.0;
     const SPEED_PADDING_Y: f32 = 8.0;
@@ -152,7 +140,7 @@ impl Consts {
 
 pub(crate) fn view(state: &Kithara, window: iced::window::Id) -> Element<'_, Message> {
     if state.settings_window_id == Some(window) {
-        return text("view settings").into();
+        return modular::render_settings(state);
     }
     match state.view_mode {
         ViewMode::Compact => {}
@@ -315,7 +303,7 @@ fn view_seek(state: &Kithara) -> Element<'_, Message> {
     let seek = slider(0.0..=slider_max, progress, Message::SeekChanged)
         .step(Consts::SEEK_STEP)
         .on_release(Message::SeekReleased)
-        .style(slider_style(p))
+        .style(widgets::slider_style(p))
         .width(Length::Fill);
 
     container(
@@ -463,7 +451,7 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
         Message::VolumeChanged,
     )
     .step(Consts::VOLUME_STEP_SIZE)
-    .style(slider_style(p))
+    .style(widgets::slider_style(p))
     .width(Length::Fill);
 
     container(
@@ -623,9 +611,9 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
                     Message::EqBandChanged(index, v)
                 })
                 .step(Consts::EQ_STEP)
-                .width(Consts::SLIDER_RAIL_WIDTH)
+                .width(widgets::SLIDER_RAIL_WIDTH)
                 .height(Length::Fill)
-                .style(slider_style(p)),
+                .style(widgets::slider_style(p)),
             )
             .width(Length::Fill)
             .height(Length::Fill)
@@ -767,7 +755,7 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
     let cf_slider = slider(0.0..=Consts::CROSSFADE_MAX, secs, Message::CrossfadeChanged)
         .step(Consts::CROSSFADE_STEP)
         .width(Length::Fill)
-        .style(slider_style(p));
+        .style(widgets::slider_style(p));
     col = col.push(cf_slider);
 
     container(col)
@@ -1084,35 +1072,6 @@ fn playlist_item_style(p: GuiPalette, selected: bool, status: ButtonStatus) -> B
         text_color: p.text,
         border: Border::default().rounded(Consts::BORDER_RADIUS_BUTTON),
         ..ButtonStyle::default()
-    }
-}
-
-fn slider_style(p: GuiPalette) -> impl Fn(&Theme, SliderStatus) -> SliderStyle {
-    move |_theme, status| {
-        let active = match status {
-            SliderStatus::Active => p.accent,
-            SliderStatus::Hovered => with_alpha(p.accent, Consts::ALPHA_SLIDER_ACTIVE_RAIL),
-            SliderStatus::Dragged => with_alpha(p.accent, Consts::ALPHA_SLIDER_DRAGGED_RAIL),
-        };
-
-        SliderStyle {
-            rail: SliderRail {
-                backgrounds: (
-                    Background::Color(active),
-                    Background::Color(with_alpha(p.muted, Consts::ALPHA_SLIDER_INACTIVE_RAIL)),
-                ),
-                width: Consts::SLIDER_RAIL_WIDTH,
-                border: Border::default().rounded(Consts::SLIDER_RAIL_RADIUS),
-            },
-            handle: SliderHandle {
-                shape: SliderHandleShape::Circle {
-                    radius: Consts::SLIDER_HANDLE_RADIUS,
-                },
-                background: Background::Color(p.text),
-                border_width: Consts::SLIDER_HANDLE_BORDER,
-                border_color: with_alpha(p.bg, Consts::ALPHA_SLIDER_HANDLE_BORDER),
-            },
-        }
     }
 }
 

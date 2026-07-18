@@ -1,5 +1,17 @@
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum ModularMsg {
     Enter,
     Exit,
+    SelectPreset(String),
+    ToggleModule(String),
+    OpenSettings,
+    CloseSettings,
+    Control { path: String, action: ControlAction },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ControlAction {
+    Activate,
+    SetScalar(f64),
+    SelectIndex(usize),
 }

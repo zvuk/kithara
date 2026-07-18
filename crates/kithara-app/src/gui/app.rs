@@ -8,7 +8,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
     dj::DjView,
-    frontend::window_settings,
+    frontend::{WindowMode, window_settings},
     message::{Message, Tab},
     modular::{ModularView, ViewMode},
     subscription::subscription_config,
@@ -37,8 +37,8 @@ pub(crate) struct Kithara {
 
     pub(crate) palette: gui::GuiPalette,
     pub(crate) selected_track_index: Option<usize>,
-    /// Currently live window. One window is open at a time; the DJ-mode
-    /// swap opens the new window and closes this one.
+    /// Currently live main window; mode swaps replace this ID while the
+    /// optional settings window is tracked separately.
     pub(crate) window_id: Option<window::Id>,
     pub(crate) active_tab: Tab,
     pub(crate) ui_state: UiState,
@@ -72,7 +72,7 @@ impl Kithara {
             window_id: None,
         };
 
-        let (id, open) = window::open(window_settings(state.dj.open));
+        let (id, open) = window::open(window_settings(WindowMode::Compact));
         state.window_id = Some(id);
 
         (state, open.discard())

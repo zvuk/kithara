@@ -1,41 +1,139 @@
-use iced::Task;
-use kithara_ui::{builtin, compile::compile, source::Limits};
+use iced::{Size, Task, window, window::Settings};
+use kithara_ui::{
+    builtin,
+    compile::{CompiledUi, compile},
+    source::Limits,
+};
 use tracing::error;
 
-use super::{ModularMsg, ViewMode, endpoints};
-use crate::gui::{app::Kithara, message::Message};
+use super::{ModularMsg, ModularView, ViewMode, dispatch, endpoints};
+use crate::gui::{
+    app::Kithara,
+    frontend::{WindowMode, window_settings},
+    message::Message,
+};
 
 pub(crate) fn update(state: &mut Kithara, message: ModularMsg) -> Task<Message> {
     match message {
         ModularMsg::Enter => {
-            state.modular.preset = builtin::MICRO_PRESET.to_owned();
-            match compile(
-                builtin::MICRO_PRESET,
-                &builtin::resolver(),
-                &endpoints::catalog(),
-                &endpoints::registry(),
-                &Limits::default(),
-            ) {
-                Ok(compiled) => {
-                    state.modular.compiled = Some(compiled);
-                    state.modular.error = None;
-                    state.view_mode = ViewMode::Modular;
-                }
-                Err(error) => {
-                    error!(
-                        error = %error,
-                        preset = builtin::MICRO_PRESET,
-                        "modular preset compile failed"
-                    );
-                    state.modular.compiled = None;
-                    state.modular.error = Some(error.to_string());
-                }
-            }
+            let preset = state.modular.preset.clone();
+            select_preset(state, &preset)
         }
-        ModularMsg::Exit => {
-            state.view_mode = ViewMode::Compact;
-            state.dj.open = false;
+        ModularMsg::Exit => exit(state),
+        ModularMsg::SelectPreset(preset) => select_preset(state, &preset),
+        ModularMsg::ToggleModule(instance) => {
+            if !state.modular.hidden.remove(&instance) {
+                state.modular.hidden.insert(instance);
+            }
+            Task::none()
+        }
+        ModularMsg::OpenSettings => open_settings(state),
+        ModularMsg::CloseSettings => close_settings(state),
+        ModularMsg::Control { path, action } => {
+            dispatch::apply(state, &path, &action);
+            Task::none()
         }
     }
-    Task::none()
+}
+
+fn select_preset(state: &mut Kithara, preset: &str) -> Task<Message> {
+    match compile_preset(preset) {
+        Ok(compiled) => {
+            commit_preset(&mut state.modular, preset, compiled);
+            state.view_mode = ViewMode::Modular;
+            state.dj.open = false;
+            replace_main_window(state, preset_window_mode(preset))
+        }
+        Err(error) => {
+            error!(error = %error, preset, "modular preset compile failed");
+            state.modular.error = Some(error);
+            Task::none()
+        }
+    }
+}
+
+fn compile_preset(preset: &str) -> Result<CompiledUi, String> {
+    compile(
+        preset,
+        &builtin::resolver(),
+        &endpoints::catalog(),
+        &endpoints::registry(),
+        &Limits::default(),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn commit_preset(modular: &mut ModularView, preset: &str, compiled: CompiledUi) {
+    if modular.preset != preset {
+        modular.hidden.clear();
+    }
+    modular.preset = preset.to_owned();
+    modular.compiled = Some(compiled);
+    modular.error = None;
+}
+
+fn preset_window_mode(preset: &str) -> WindowMode {
+    if preset == builtin::PLAYER_PRESET {
+        WindowMode::ModularPlayer
+    } else {
+        WindowMode::ModularMicro
+    }
+}
+
+fn exit(state: &mut Kithara) -> Task<Message> {
+    state.view_mode = ViewMode::Compact;
+    state.dj.open = false;
+    replace_main_window(state, WindowMode::Compact)
+}
+
+fn replace_main_window(state: &mut Kithara, mode: WindowMode) -> Task<Message> {
+    let old = state.window_id;
+    let (new_id, open) = window::open(window_settings(mode));
+    state.window_id = Some(new_id);
+    let close_old = old.map_or_else(Task::none, window::close);
+    open.discard().chain(close_old)
+}
+
+fn open_settings(state: &mut Kithara) -> Task<Message> {
+    if state.settings_window_id.is_some() {
+        return Task::none();
+    }
+    let settings = Settings {
+        size: Size::new(420.0, 380.0),
+        min_size: Some(Size::new(380.0, 320.0)),
+        exit_on_close_request: false,
+        ..Settings::default()
+    };
+    let (id, open) = window::open(settings);
+    state.settings_window_id = Some(id);
+    open.discard()
+}
+
+fn close_settings(state: &mut Kithara) -> Task<Message> {
+    state
+        .settings_window_id
+        .take()
+        .map_or_else(Task::none, window::close)
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use kithara_ui::builtin;
+
+    use super::{commit_preset, compile_preset};
+    use crate::gui::modular::ModularView;
+
+    #[kithara::test]
+    fn preset_change_clears_hidden_modules() {
+        let mut modular = ModularView::default();
+        modular.hidden.insert("deck-a".to_owned());
+        let compiled = compile_preset(builtin::PLAYER_PRESET)
+            .unwrap_or_else(|error| panic!("player preset must compile: {error}"));
+
+        commit_preset(&mut modular, builtin::PLAYER_PRESET, compiled);
+
+        assert!(modular.hidden.is_empty());
+        assert_eq!(modular.preset, builtin::PLAYER_PRESET);
+    }
 }

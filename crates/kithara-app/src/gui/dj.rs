@@ -5,7 +5,11 @@ use kithara::events::{DjEvent, StretchBackendKind};
 use kithara::prelude::StretchKind;
 
 use super::{
-    app::Kithara, frontend::window_settings, message::Message, modular::ViewMode, widgets::Viewport,
+    app::Kithara,
+    frontend::{WindowMode, window_settings},
+    message::Message,
+    modular::ViewMode,
+    widgets::Viewport,
 };
 use crate::gui::widgets::WaveMsg;
 
@@ -148,7 +152,12 @@ fn handle_toggle(state: &mut Kithara) -> Task<Message> {
     };
 
     let old = state.window_id;
-    let (new_id, open) = window::open(window_settings(state.dj.open));
+    let mode = if state.dj.open {
+        WindowMode::Studio
+    } else {
+        WindowMode::Compact
+    };
+    let (new_id, open) = window::open(window_settings(mode));
     state.window_id = Some(new_id);
     let close_old = old.map_or_else(Task::none, window::close);
     open.discard().chain(close_old)
