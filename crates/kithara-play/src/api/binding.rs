@@ -1,19 +1,9 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{BeatMapError, SourceFrame, TrackBeat, TrackBeatMap, analysis::TrackAnalysis};
+use kithara_events::PlaybackDirection;
 
 use super::SessionBeat;
-
-/// Audible movement through a track's beat map.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum PlaybackDirection {
-    /// Session beats advance toward higher track beats.
-    #[default]
-    Forward,
-    /// Session beats advance toward lower track beats.
-    Reverse,
-}
 
 /// A track cannot participate in session synchronization.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]

@@ -23,8 +23,8 @@ pub mod mock;
 pub use api::{
     DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection,
     PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionBeatError,
-    SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
-    TempoError, TimeControlStatus, TimeRange, TrackBinding, WaitingReason,
+    SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncEvent, SyncUnavailable,
+    Tempo, TempoError, TimeControlStatus, TimeRange, TrackBinding, TransportEvent, WaitingReason,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,

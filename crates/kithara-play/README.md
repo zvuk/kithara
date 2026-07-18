@@ -60,7 +60,7 @@ to the single `decoder` field.
   live, mid-track.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
   `engine.subscribe()` (`PlayerEvent`, `ItemEvent`, `EngineEvent`,
-  `SessionEvent`, `DjEvent`).
+  `SessionEvent`, `TransportEvent`, `SyncEvent`, `DjEvent`).
 - **Queue auto-advance:** `PlayerImpl` publishes `PrefetchRequested` /
   `HandoverRequested`; `kithara-queue::Queue` disables the built-in linear policy
   and selects the loaded successor itself.
