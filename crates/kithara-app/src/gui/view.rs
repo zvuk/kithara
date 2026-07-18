@@ -465,6 +465,7 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
                     } else {
                         p.accent
                     },
+                    palette: p,
                     padding: Consts::TOGGLE_ICON_PADDING,
                 },
                 Message::ToggleMute
@@ -773,11 +774,12 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
     }
 }
 
-/// Glyph, size, tint, and padding for a ghost [`icon_button`].
+/// Glyph, size, tint, palette, and padding for a ghost [`icon_button`].
 #[derive(Clone, Copy)]
 struct IconButtonStyle {
     color: Color,
     icon: Icon,
+    palette: GuiPalette,
     padding: f32,
     size: f32,
 }
@@ -787,12 +789,12 @@ fn icon_button(style: IconButtonStyle, message: Message) -> Element<'static, Mes
         icon,
         size,
         color,
+        palette,
         padding,
     } = style;
-    let p = GuiPalette::from(crate::theme::Palette::default());
     button(icon.view(size, color))
         .padding(padding)
-        .style(ghost_button_style(p))
+        .style(ghost_button_style(palette))
         .on_press(message)
         .into()
 }
