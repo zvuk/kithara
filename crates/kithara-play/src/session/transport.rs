@@ -348,13 +348,15 @@ fn apply_completion<B: AudioBackend>(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     fn commit(tempo: f64, revision: u64) -> SessionTransportCommit {
         SessionTransportCommit::new(Tempo::new(tempo).expect("valid tempo"), true, revision)
     }
 
-    #[test]
+    #[kithara::test]
     fn preparation_uses_initial_accepted_commit_before_first_render() {
         let transport = SessionTransportState {
             accepted: Some(commit(120.0, 1)),
@@ -367,7 +369,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn preparation_uses_observed_active_commit() {
         let active = commit(120.0, 1);
         let transport = SessionTransportState {
@@ -382,7 +384,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn preparation_rejects_while_a_future_revision_is_pending() {
         let transport = SessionTransportState {
             accepted: Some(commit(90.0, 2)),
@@ -400,7 +402,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test]
     fn preparation_requires_a_configured_transport() {
         assert!(matches!(
             preparation_commit(&SessionTransportState::default()),

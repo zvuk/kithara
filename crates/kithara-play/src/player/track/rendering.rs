@@ -681,6 +681,8 @@ pub(super) fn copy_source(copy: SourceCopy<'_>) -> Result<(), ElasticCopyError> 
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
     use crate::api::{SessionBeat, Tempo};
 
@@ -701,7 +703,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn seek_relocation_does_not_match_a_tempo_commit_with_the_same_revision() {
         let target = SessionBeat::new(2.0).expect("finite seek target");
         let tempo = Tempo::new(120.0).expect("valid tempo");
@@ -759,7 +761,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn forward_copy_indexes_from_the_actual_window_start() {
         let range = SourceFrameRange::new(2, 6).expect("valid source range");
         let source = [20.0, 30.0, 40.0, 50.0];
@@ -780,7 +782,7 @@ mod tests {
         assert_eq!(output, [40.0, 50.0]);
     }
 
-    #[test]
+    #[kithara::test]
     fn reverse_copy_consumes_an_ascending_window_in_descending_order() {
         let range = SourceFrameRange::new(2, 6).expect("valid source range");
         let source = [20.0, 30.0, 40.0, 50.0];
@@ -801,7 +803,7 @@ mod tests {
         assert_eq!(output, [50.0, 40.0, 30.0]);
     }
 
-    #[test]
+    #[kithara::test]
     fn reverse_copy_reaches_source_start_without_wrapping() {
         let range = SourceFrameRange::new(0, 2).expect("valid source range");
         let source = [10.0, 20.0];
@@ -822,7 +824,7 @@ mod tests {
         assert_eq!(output, [20.0, 10.0, 0.0, 0.0]);
     }
 
-    #[test]
+    #[kithara::test]
     fn reverse_quantization_keeps_a_descending_cursor_inside_the_rate_envelope() {
         let (integer, cursor) = quantize_direction(
             &[segment(360.0, 240.0, 120), segment(240.0, 120.0, 120)],
@@ -839,7 +841,7 @@ mod tests {
         assert_close(cursor.continuous, 120.0);
     }
 
-    #[test]
+    #[kithara::test]
     fn reverse_phase_error_converges_without_a_source_jump() {
         let mut cursor = SourceCursor {
             continuous: 360.0,
@@ -862,7 +864,7 @@ mod tests {
         assert_eq!(residuals, vec![-0.75, -0.5, -0.25, 0.0]);
     }
 
-    #[test]
+    #[kithara::test]
     fn small_phase_error_converges_without_a_source_jump_and_is_partition_independent() {
         let mut cursor = SourceCursor {
             continuous: 0.0,
@@ -893,7 +895,7 @@ mod tests {
         assert_eq!(whole.integer, cursor.integer);
     }
 
-    #[test]
+    #[kithara::test]
     fn negative_phase_error_converges_without_overshoot() {
         let mut cursor = SourceCursor {
             continuous: 0.75,
@@ -911,7 +913,7 @@ mod tests {
         assert_eq!(residuals, vec![-0.75, -0.5, -0.25, 0.0]);
     }
 
-    #[test]
+    #[kithara::test]
     fn one_frame_error_is_continuous_but_larger_error_requires_relocation() {
         let cursor = Some(SourceCursor {
             continuous: 0.0,
@@ -930,7 +932,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test]
     fn correction_respects_backend_rate_headroom() {
         let cursor = Some(SourceCursor {
             continuous: 0.0,
@@ -951,7 +953,7 @@ mod tests {
         assert_close(160.65 - corrected.continuous, 0.65);
     }
 
-    #[test]
+    #[kithara::test]
     fn planned_segment_gap_is_not_treated_as_phase_error() {
         let error = quantize(
             &[segment(0.0, 120.0, 120), segment(120.5, 240.5, 120)],

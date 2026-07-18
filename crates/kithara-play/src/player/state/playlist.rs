@@ -171,6 +171,8 @@ impl Playlist {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_test_utils::kithara;
+
     use super::Playlist;
     use crate::player::{node::StreamShape, state::PreparedBindingStamp};
 
@@ -188,7 +190,7 @@ mod tests {
         )
     }
 
-    #[test]
+    #[kithara::test]
     fn prepared_binding_stamp_requires_revision_and_full_stream_shape() {
         let prepared = stamp(44_100, 512, 7);
 
@@ -198,7 +200,7 @@ mod tests {
         assert_ne!(prepared, stamp(44_100, 1_024, 7));
     }
 
-    #[test]
+    #[kithara::test]
     fn remove_at_shifts_current_and_reopens_announce() {
         let mut playlist = Playlist::default();
         playlist.reserve(3);
@@ -211,7 +213,7 @@ mod tests {
         assert!(playlist.mark_announced(1));
     }
 
-    #[test]
+    #[kithara::test]
     fn clear_resets_cursor_and_announce() {
         let mut playlist = Playlist::default();
         playlist.reserve(2);
@@ -225,7 +227,7 @@ mod tests {
         assert!(playlist.mark_announced(0));
     }
 
-    #[test]
+    #[kithara::test]
     fn advance_stops_at_end() {
         let mut playlist = Playlist::default();
         playlist.reserve(2);
@@ -235,7 +237,7 @@ mod tests {
         assert_eq!(playlist.current(), 1);
     }
 
-    #[test]
+    #[kithara::test]
     fn mark_announced_uses_swap_semantics() {
         let mut playlist = Playlist::default();
 
