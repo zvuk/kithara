@@ -27,7 +27,8 @@ storage and on `kithara-workspace-hack` for native workspace unification.
 The crate also owns the transport-facing numeric elastic DSP contract.
 `ElasticBackend` processes one exact source-frame span into one exact output
 span, while `ElasticCapabilities` declares the supported rate envelope,
-algorithmic latency, channel/sample-rate identity, and prepared block limits.
+algorithmic latency, channel/sample-rate identity, prepared block limits, and
+whether caller-ordered reverse input is supported.
 `ElasticRequest` contains only frame counts; session beats, track bindings,
 phase correction, source-window policy, and graph scheduling remain in
 `kithara-play`.
@@ -67,7 +68,10 @@ Every numeric request is checked against those limits and the declared rate
 envelope before processing. `prime` resets the algorithm, consumes the required
 warm-up span, and discards the reported output latency so the caller can align
 the first audible frame to its presentation boundary. The backend never chooses
-a transport rate or repairs phase on its own. Envelope comparisons admit one
+a transport rate, direction, or phase on its own. It declares reverse support
+because the caller may supply history, warmup, and steady source spans already
+ordered in reverse audible time without changing the numeric request shape.
+Envelope comparisons admit one
 floating-point rounding step at a declared boundary, but reject the next
 representable value; coordinate interpolation therefore cannot reject an exact
 2/3 or 4/3 contract edge as a real rate violation.

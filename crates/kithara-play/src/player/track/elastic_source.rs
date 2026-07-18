@@ -92,7 +92,7 @@ struct SourceWorker {
 pub(super) struct ElasticSourceTestPeer {
     reply_tx: HeapProd<ElasticSourceReply>,
     recycle_rx: HeapCons<PcmBuf>,
-    _request_rx: HeapCons<ElasticSourceRequest>,
+    request_rx: HeapCons<ElasticSourceRequest>,
     _service_rx: HeapCons<ServiceClass>,
 }
 
@@ -115,6 +115,10 @@ impl ElasticSourceTestPeer {
 
     pub(super) fn pop_recycled(&mut self) -> Option<PcmBuf> {
         self.recycle_rx.try_pop()
+    }
+
+    pub(super) fn pop_request(&mut self) -> Option<ElasticSourceRequest> {
+        self.request_rx.try_pop()
     }
 }
 
@@ -205,7 +209,7 @@ pub(super) fn elastic_source_test_pair(
         ElasticSourceTestPeer {
             reply_tx,
             recycle_rx,
-            _request_rx: request_rx,
+            request_rx,
             _service_rx: service_rx,
         },
     )

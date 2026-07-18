@@ -49,6 +49,7 @@ pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
     source_audio: Option<SourceAudioReader>,
     blueprint: Option<ResourceBlueprint>,
+    pub(super) supports_reverse_source: bool,
     #[field(get, deref = false)]
     src: Arc<str>,
     /// Drop guard for the per-track cancel — the token passed as
@@ -153,6 +154,10 @@ impl Resource {
         // Capture the per-track cancel before `build_*_config` consumes `config`
         // (it is cloned by identity into both the inner stream and the Audio).
         let cancel = config.cancel.clone();
+        let supports_reverse_source = matches!(
+            &source_type,
+            SourceType::RemoteFile(_) | SourceType::LocalFile(_)
+        );
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio_config = config.build_file_config();
@@ -165,6 +170,7 @@ impl Resource {
         };
         resource.cancel = CancelGuard(cancel);
         resource.blueprint = Some(blueprint);
+        resource.supports_reverse_source = supports_reverse_source;
         Ok(resource)
     }
 
@@ -201,6 +207,7 @@ impl Resource {
             inner,
             source_audio,
             blueprint: None,
+            supports_reverse_source: false,
             bus,
             src,
             cancel: CancelGuard(None),

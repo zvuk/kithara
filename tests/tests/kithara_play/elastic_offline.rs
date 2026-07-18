@@ -5,6 +5,7 @@ use std::{fs, iter::from_fn, mem::size_of, num::NonZeroU32, path::Path};
 use kithara::{
     assets::StoreOptions,
     audio::{BeatGrid, ReadOutcome, TrackBeat, analysis::TrackAnalysis},
+    decode::PcmSpec,
     events::{AudioEvent, Event, EventBus},
     platform::{
         sync::Arc,
@@ -17,8 +18,12 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir, wav::create_wav_header,
+    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir,
+    audio_mock::TestPcmReader,
+    kithara,
+    offline::{OfflineSession, resource_from_reader},
+    temp_dir,
+    wav::create_wav_header,
 };
 use num_traits::ToPrimitive;
 
@@ -55,6 +60,20 @@ fn binding(session_anchor: SessionBeat) -> TrackBinding {
 }
 
 fn exact_binding(session_anchor: SessionBeat, source_tempo: u32) -> TrackBinding {
+    directional_binding(
+        session_anchor,
+        source_tempo,
+        TrackBeat::new(0.0).expect("finite track anchor"),
+        PlaybackDirection::Forward,
+    )
+}
+
+fn directional_binding(
+    session_anchor: SessionBeat,
+    source_tempo: u32,
+    track_anchor: TrackBeat,
+    direction: PlaybackDirection,
+) -> TrackBinding {
     let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("static sample rate");
     let frames_per_minute = 60 * u64::from(SAMPLE_RATE);
     assert_eq!(frames_per_minute % u64::from(source_tempo), 0);
@@ -75,10 +94,10 @@ fn exact_binding(session_anchor: SessionBeat, source_tempo: u32) -> TrackBinding
         &analysis,
         sample_rate,
         session_anchor,
-        TrackBeat::new(0.0).expect("finite track anchor"),
-        PlaybackDirection::Forward,
+        track_anchor,
+        direction,
     )
-    .expect("exact source grid can be bound")
+    .expect("directional source grid can be bound")
 }
 
 async fn insert_bound_sine(
@@ -278,6 +297,36 @@ fn write_rendered_wav(path: &Path, rendered: &[f32]) {
         wav.extend_from_slice(&quantized.to_le_bytes());
     }
     fs::write(path, wav).expect("write offline elastic artifact");
+}
+
+fn write_marker_source_wav(path: &Path) {
+    const MARKERS: [f32; 8] = [-0.7, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.7];
+    let frames_per_beat = usize::try_from(60 * SAMPLE_RATE / 120).expect("beat span fits usize");
+    let data_bytes = FIXTURE_FRAMES * usize::from(CHANNELS) * size_of::<i16>();
+    let mut wav = create_wav_header(SAMPLE_RATE, CHANNELS, Some(data_bytes));
+    wav.reserve(data_bytes);
+    for frame in 0..FIXTURE_FRAMES {
+        let sample = MARKERS[frame / frames_per_beat];
+        let quantized = (sample * f32::from(i16::MAX))
+            .round()
+            .to_i16()
+            .expect("marker sample fits i16");
+        for _ in 0..CHANNELS {
+            wav.extend_from_slice(&quantized.to_le_bytes());
+        }
+    }
+    fs::write(path, wav).expect("write reverse marker source");
+}
+
+fn channel_mean(rendered: &[f32], frames: std::ops::Range<usize>) -> f32 {
+    let channels = usize::from(CHANNELS);
+    let samples = rendered[frames.start * channels..frames.end * channels]
+        .chunks_exact(channels)
+        .map(|frame| frame[0]);
+    let (sum, count) = samples.fold((0.0_f32, 0usize), |(sum, count), sample| {
+        (sum + sample, count + 1)
+    });
+    sum / count.to_f32().expect("marker window is non-empty")
 }
 
 fn positive_crossing_frequency(rendered: &[f32]) -> Option<f64> {
@@ -925,6 +974,150 @@ async fn bound_track_renders_elastic_audio_to_an_offline_wav(temp_dir: TestTempD
             > 44,
         "offline WAV must contain audio data"
     );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn reverse_bound_file_prepares_before_activation_and_renders_markers_to_wav(
+    temp_dir: TestTempDir,
+) {
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    );
+    let source = temp_dir.path().join("reverse-markers.wav");
+    write_marker_source_wav(&source);
+    let config = ResourceConfig::for_src(source.to_string_lossy())
+        .expect("valid marker fixture path")
+        .byte_pool(harness.player().byte_pool().clone())
+        .pcm_pool(harness.player().pcm_pool().clone())
+        .build();
+    let mut resource = Resource::new(harness.player().prepare_config(config))
+        .await
+        .expect("open marker fixture");
+    resource.preload().await.expect("preload marker fixture");
+
+    harness
+        .player()
+        .ensure_engine_started()
+        .expect("offline engine starts");
+    harness
+        .player()
+        .ensure_slot()
+        .expect("offline player slot is allocated");
+    harness
+        .set_session_tempo(Tempo::new(120.0).expect("valid session tempo"))
+        .expect("session tempo accepted");
+    let _ = harness.render(1);
+    let anchor = harness
+        .session_transport()
+        .expect("initial transport commit")
+        .position();
+    let binding = directional_binding(
+        anchor,
+        120,
+        TrackBeat::new(6.0).expect("finite reverse anchor"),
+        PlaybackDirection::Reverse,
+    );
+    harness
+        .player()
+        .insert_with_binding(resource, None, binding, None)
+        .await
+        .expect("reverse file prepares before queue publication");
+    harness
+        .player()
+        .select_item(0, true)
+        .expect("activate prepared reverse file");
+
+    let frames_per_beat = usize::try_from(60 * SAMPLE_RATE / 120).expect("beat span fits usize");
+    let target_frames = frames_per_beat * 4 + BLOCK_FRAMES * 2;
+    let mut rendered = Vec::with_capacity(target_frames * usize::from(CHANNELS));
+    while rendered.len() / usize::from(CHANNELS) < target_frames {
+        rendered.extend(harness.render(BLOCK_FRAMES));
+        let _ = harness.tick_and_drain();
+        sleep(Duration::from_millis(1)).await;
+    }
+
+    let measured: Vec<_> = (0..4)
+        .map(|beat| {
+            let start = beat * frames_per_beat + frames_per_beat / 4;
+            let end = beat * frames_per_beat + frames_per_beat * 3 / 4;
+            channel_mean(&rendered, start..end)
+        })
+        .collect();
+    let expected = [0.3_f32, 0.1, -0.1, -0.3];
+    let gain = measured[0] / expected[0];
+    assert!(gain.is_finite() && gain > 0.1);
+    assert!(
+        measured
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| (actual - expected * gain).abs() <= 0.02),
+        "reverse marker order differs: {measured:?}"
+    );
+    assert!(measured.windows(2).all(|pair| pair[0] > pair[1]));
+
+    let artifact = temp_dir.path().join("bound-elastic-reverse-offline.wav");
+    write_rendered_wav(&artifact, &rendered);
+    assert!(
+        fs::metadata(&artifact)
+            .expect("reverse offline artifact metadata")
+            .len()
+            > 44
+    );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn reverse_binding_rejects_a_source_without_range_capability() {
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    );
+    harness
+        .player()
+        .ensure_engine_started()
+        .expect("offline engine starts");
+    harness
+        .player()
+        .ensure_slot()
+        .expect("offline player slot is allocated");
+    harness
+        .set_session_tempo(Tempo::new(120.0).expect("valid session tempo"))
+        .expect("session tempo accepted");
+    let _ = harness.render(1);
+    let anchor = harness
+        .session_transport()
+        .expect("initial transport commit")
+        .position();
+    let resource = resource_from_reader(TestPcmReader::new(
+        PcmSpec::new(
+            CHANNELS,
+            NonZeroU32::new(SAMPLE_RATE).expect("static sample rate"),
+        ),
+        4.0,
+    ));
+
+    let error = harness
+        .player()
+        .insert_with_binding(
+            resource,
+            None,
+            directional_binding(
+                anchor,
+                120,
+                TrackBeat::new(6.0).expect("finite reverse anchor"),
+                PlaybackDirection::Reverse,
+            ),
+            None,
+        )
+        .await
+        .expect_err("custom reader cannot satisfy reverse range demand");
+
+    assert!(matches!(error, PlayError::ReverseSourceUnavailable));
+    assert_eq!(harness.player().item_count(), 0);
 }
 
 #[kithara::test(tokio, flash(false))]

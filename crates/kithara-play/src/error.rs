@@ -77,6 +77,10 @@ pub enum PlayError {
     #[error("bound item cannot open an independent preparation reader")]
     BindingSourceNotReopenable,
 
+    /// The resource cannot satisfy bounded reverse source-range demand.
+    #[error("bound item source does not support reverse range demand")]
+    ReverseSourceUnavailable,
+
     #[error("seek failed to position {position:?}")]
     SeekFailed { position: Duration },
 

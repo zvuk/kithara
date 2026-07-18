@@ -55,6 +55,15 @@ fn assert_exact_samples(actual: &[f32], expected: &[f32]) {
 }
 
 #[test]
+fn signalsmith_declares_reverse_input_support() {
+    let config =
+        ElasticConfig::new(48_000, CHANNELS, 512, 512).expect("the test configuration is valid");
+    let backend = SignalsmithElastic::prepare(config).expect("Signalsmith prepares");
+
+    assert!(backend.capabilities().supports_reverse());
+}
+
+#[test]
 fn renders_the_requested_output_frame_count() {
     let config =
         ElasticConfig::new(48_000, CHANNELS, 8192, 8192).expect("the test configuration is valid");

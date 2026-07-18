@@ -53,8 +53,8 @@ pub(crate) enum ElasticPrepareError {
     SourceSeek,
     #[error("decoded source ended before elastic preparation completed")]
     SourceEnded,
-    #[error("reverse playback requires separately prepared directional state")]
-    ReversePreparationRequired,
+    #[error("the elastic backend does not support reverse input")]
+    ReverseUnsupported,
     #[error("source-audio reader returned an unsupported preparation outcome")]
     UnsupportedSourceOutcome,
     #[error("elastic preparation source range is outside the prepared fetch window")]
@@ -91,8 +91,8 @@ pub(crate) enum ElasticRenderError {
     OutputChannelMismatch,
     #[error("elastic renderer was not prepared for this resource")]
     NotPrepared,
-    #[error("reverse playback requires separately prepared directional state")]
-    ReversePreparationRequired,
+    #[error("elastic renderer history was prepared for a different playback direction")]
+    DirectionMismatch,
     #[error("elastic source preparation worker is unavailable")]
     SourceWorkerUnavailable,
     #[error("elastic source preparation worker failed")]
@@ -158,6 +158,7 @@ struct SourceCursor {
 #[derive(Clone, Copy)]
 struct ElasticPreparation {
     anchor: SourceCursor,
+    direction: PlaybackDirection,
     fetch_range: SourceFrameRange,
     warmup: ElasticRequest,
 }
@@ -181,6 +182,7 @@ pub(crate) struct ElasticRenderer {
     revision: u64,
     demand: Option<SourceAudioDemand>,
     cursor: Option<SourceCursor>,
+    direction: Option<PlaybackDirection>,
     pending_request: Option<ElasticSourceRequest>,
     pending_relocation_request: Option<ElasticSourceRequest>,
     pending_retirement: Option<PcmBuf>,
@@ -257,6 +259,7 @@ impl ElasticRenderer {
             revision: 0,
             demand: None,
             cursor: None,
+            direction: None,
             pending_request: None,
             pending_relocation_request: None,
             pending_retirement: None,

@@ -12,7 +12,7 @@ use super::super::{
     state::{PreparedBindingResource, PreparedBindingStamp},
 };
 use crate::{
-    api::{SessionBeat, Tempo, TrackBinding},
+    api::{PlaybackDirection, SessionBeat, Tempo, TrackBinding},
     error::PlayError,
     player::track::{ElasticPreparationOutcome, PlayerResource},
     resource::Resource,
@@ -50,6 +50,10 @@ impl PlayerImpl {
             });
         }
         ensure_preparation_active(&cancel)?;
+        if binding.direction() == PlaybackDirection::Reverse && !resource.supports_reverse_source()
+        {
+            return Err(PlayError::ReverseSourceUnavailable);
+        }
         let blueprint = resource
             .blueprint()
             .ok_or(PlayError::BindingSourceNotReopenable)?;

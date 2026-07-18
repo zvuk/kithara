@@ -14,6 +14,7 @@ pub struct ElasticCapabilities {
     latency: ElasticLatency,
     max_source_frames: usize,
     max_output_frames: usize,
+    supports_reverse: bool,
 }
 
 impl ElasticCapabilities {
@@ -26,6 +27,7 @@ impl ElasticCapabilities {
             latency,
             max_source_frames: config.max_source_frames(),
             max_output_frames: config.max_output_frames(),
+            supports_reverse: true,
         }
     }
 
@@ -63,6 +65,12 @@ impl ElasticCapabilities {
     #[must_use]
     pub const fn max_output_frames(self) -> usize {
         self.max_output_frames
+    }
+
+    /// Whether the engine accepts source prepared in reverse audible order.
+    #[must_use]
+    pub const fn supports_reverse(self) -> bool {
+        self.supports_reverse
     }
 
     /// Builds a priming request independently of steady-state block limits.

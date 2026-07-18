@@ -15,6 +15,7 @@ use crate::session::render::SessionTransportCommit;
 pub(super) struct SourceCopy<'a> {
     pub(super) start: i64,
     pub(super) frames: usize,
+    pub(super) direction: PlaybackDirection,
     pub(super) fetch_range: SourceFrameRange,
     pub(super) fetch: &'a [f32],
     pub(super) target: &'a mut [f32],
@@ -68,8 +69,8 @@ impl ElasticRenderer {
         if !self.primed {
             return Err(ElasticRenderError::NotPrepared);
         }
-        if binding.direction() != PlaybackDirection::Forward {
-            return Err(ElasticRenderError::ReversePreparationRequired);
+        if self.direction != Some(binding.direction()) {
+            return Err(ElasticRenderError::DirectionMismatch);
         }
         if output.len() != 2 {
             return Err(ElasticRenderError::OutputChannelMismatch);
@@ -98,17 +99,18 @@ impl ElasticRenderer {
             revision,
             envelope,
         )?;
-        let (segments, staged_cursor) = self.integer_segments(&planned, revision)?;
-        let first = segments
-            .first()
-            .copied()
+        let direction = binding.direction();
+        let (segments, staged_cursor) = self.integer_segments(&planned, revision, direction)?;
+        let source_start = segments
+            .iter()
+            .flat_map(|segment| [segment.source_start, segment.source_end])
+            .min()
             .ok_or(ElasticRenderError::FrameOverflow)?;
-        let last = segments
-            .last()
-            .copied()
+        let source_end = segments
+            .iter()
+            .flat_map(|segment| [segment.source_start, segment.source_end])
+            .max()
             .ok_or(ElasticRenderError::FrameOverflow)?;
-        let source_start = first.source_start;
-        let source_end = last.source_end;
         let source_extent = i64::try_from(self.source_frame_count)
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
         if source_end <= 0 || source_start >= source_extent {
@@ -122,7 +124,7 @@ impl ElasticRenderer {
             return Ok(ElasticRenderOutcome::Eof);
         }
         let fetch_range = SourceFrameRange::new(source_start, source_end)?;
-        self.ensure_window(fetch_range)?;
+        self.ensure_window(fetch_range, direction)?;
         let source_window = self
             .source_window
             .ok_or(ElasticRenderError::FetchWindowMismatch)?;
@@ -134,7 +136,7 @@ impl ElasticRenderer {
         let fetch_samples = sample_count(fetch_frames, self.channels)
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
         for segment in &segments {
-            self.render_segment(*segment, source_window, fetch_samples, output)?;
+            self.render_segment(*segment, direction, source_window, fetch_samples, output)?;
         }
 
         self.cursor = Some(staged_cursor);
@@ -155,6 +157,7 @@ impl ElasticRenderer {
         &self,
         planned: &[ElasticRenderSegment],
         revision: u64,
+        direction: PlaybackDirection,
     ) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
         let mut continuous = SmallVec::<[ContinuousSegment; 4]>::new();
         for segment in planned {
@@ -175,12 +178,14 @@ impl ElasticRenderer {
             self.capabilities.max_output_frames(),
             envelope.min_source_frames_per_output(),
             envelope.max_source_frames_per_output(),
+            direction,
         )
     }
 
     fn render_segment(
         &mut self,
         segment: IntegerSegment,
+        direction: PlaybackDirection,
         fetch_range: SourceFrameRange,
         fetch_samples: usize,
         output: &mut [&mut [f32]],
@@ -193,6 +198,7 @@ impl ElasticRenderer {
         copy_source(SourceCopy {
             start: segment.source_start,
             frames: source_frames,
+            direction,
             fetch_range,
             fetch: &self.fetch[..fetch_samples],
             target: &mut self.source,
@@ -233,8 +239,10 @@ impl ElasticRenderer {
         tempo: Tempo,
         revision: u64,
     ) -> Result<(), ElasticPrepareError> {
-        if binding.direction() != PlaybackDirection::Forward {
-            return Err(ElasticPrepareError::ReversePreparationRequired);
+        if binding.direction() == PlaybackDirection::Reverse
+            && !self.capabilities.supports_reverse()
+        {
+            return Err(ElasticPrepareError::ReverseUnsupported);
         }
         let preparation =
             self.plan_preparation(binding, target, tempo, Self::RELOCATION_PREFETCH_BLOCKS)?;
@@ -309,6 +317,7 @@ impl ElasticRenderer {
         self.prime(relocation.preparation, fetch_samples)
             .map_err(|_| ElasticRenderError::RelocationPreparationFailed)?;
         self.cursor = Some(relocation.preparation.anchor);
+        self.direction = Some(relocation.preparation.direction);
         self.source_window = Some(range);
         self.revision = revision;
         self.primed = true;
@@ -417,6 +426,7 @@ fn quantize_segments(
     max_output_frames: usize,
     minimum_rate: f64,
     maximum_rate: f64,
+    direction: PlaybackDirection,
 ) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
     let first = segments.first().ok_or(ElasticRenderError::FrameOverflow)?;
     validate_continuity(segments)?;
@@ -426,6 +436,7 @@ fn quantize_segments(
         max_output_frames,
         minimum_rate,
         maximum_rate,
+        direction,
     )?;
     let mut boundary = cursor.map_or_else(
         || quantize_source(first.source_start),
@@ -444,6 +455,7 @@ fn quantize_segments(
             segment.output_frames,
             minimum_rate,
             maximum_rate,
+            direction,
         )?;
         result.push(IntegerSegment {
             output_start: segment.output_start,
@@ -481,6 +493,7 @@ fn plan_phase(
     max_output_frames: usize,
     minimum_rate: f64,
     maximum_rate: f64,
+    direction: PlaybackDirection,
 ) -> Result<PhasePlan, ElasticRenderError> {
     let first = segments.first().ok_or(ElasticRenderError::FrameOverflow)?;
     let output_frames = segments.iter().try_fold(0usize, |total, segment| {
@@ -503,7 +516,8 @@ fn plan_phase(
         .filter(|budget| budget.is_finite() && *budget > 0.0)
         .ok_or(ElasticRenderError::FrameOverflow)?;
     let desired = error.clamp(-correction_budget, correction_budget);
-    let correction = constrain_correction(segments, desired, minimum_rate, maximum_rate)?;
+    let correction =
+        constrain_correction(segments, desired, minimum_rate, maximum_rate, direction)?;
     if error.abs() > PhasePlan::CONTINUITY_EPSILON
         && correction.abs() <= PhasePlan::CONTINUITY_EPSILON
     {
@@ -522,6 +536,7 @@ fn constrain_correction(
     desired: f64,
     minimum_rate: f64,
     maximum_rate: f64,
+    direction: PlaybackDirection,
 ) -> Result<f64, ElasticRenderError> {
     let total_frames = segments
         .iter()
@@ -531,12 +546,13 @@ fn constrain_correction(
         .ok_or(ElasticRenderError::FrameOverflow)?;
     let mut positive_headroom = f64::INFINITY;
     let mut negative_headroom = f64::INFINITY;
+    let sign = direction_sign(direction);
     for segment in segments {
         let frames = segment
             .output_frames
             .to_f64()
             .ok_or(ElasticRenderError::FrameOverflow)?;
-        let nominal = segment.source_end - segment.source_start;
+        let nominal = (segment.source_end - segment.source_start) * sign;
         if !nominal.is_finite() || nominal <= 0.0 {
             return Err(ElasticRenderError::FrameOverflow);
         }
@@ -544,11 +560,13 @@ fn constrain_correction(
         positive_headroom = positive_headroom.min((maximum_rate * frames - nominal) * scale);
         negative_headroom = negative_headroom.min((nominal - minimum_rate * frames) * scale);
     }
-    if desired > 0.0 {
-        Ok(desired.min(positive_headroom.max(0.0)))
+    let desired = desired * sign;
+    let correction = if desired > 0.0 {
+        desired.min(positive_headroom.max(0.0))
     } else {
-        Ok(desired.max(-negative_headroom.max(0.0)))
-    }
+        desired.max(-negative_headroom.max(0.0))
+    };
+    Ok(correction * sign)
 }
 
 fn quantize_endpoint(
@@ -557,6 +575,7 @@ fn quantize_endpoint(
     output_frames: usize,
     minimum_rate: f64,
     maximum_rate: f64,
+    direction: PlaybackDirection,
 ) -> Result<i64, ElasticRenderError> {
     let output_frames = output_frames
         .to_f64()
@@ -572,45 +591,45 @@ fn quantize_endpoint(
     if minimum_span <= 0 || minimum_span > maximum_span {
         return Err(ElasticRenderError::FrameOverflow);
     }
-    let minimum_end = boundary
-        .checked_add(minimum_span)
-        .ok_or(ElasticRenderError::FrameOverflow)?;
-    let maximum_end = boundary
-        .checked_add(maximum_span)
-        .ok_or(ElasticRenderError::FrameOverflow)?;
+    let (minimum_end, maximum_end) = match direction {
+        PlaybackDirection::Forward => (
+            boundary
+                .checked_add(minimum_span)
+                .ok_or(ElasticRenderError::FrameOverflow)?,
+            boundary
+                .checked_add(maximum_span)
+                .ok_or(ElasticRenderError::FrameOverflow)?,
+        ),
+        PlaybackDirection::Reverse => (
+            boundary
+                .checked_sub(maximum_span)
+                .ok_or(ElasticRenderError::FrameOverflow)?,
+            boundary
+                .checked_sub(minimum_span)
+                .ok_or(ElasticRenderError::FrameOverflow)?,
+        ),
+    };
     Ok(quantize_source(continuous_end)?.clamp(minimum_end, maximum_end))
+}
+
+const fn direction_sign(direction: PlaybackDirection) -> f64 {
+    match direction {
+        PlaybackDirection::Forward => 1.0,
+        PlaybackDirection::Reverse => -1.0,
+    }
 }
 
 pub(super) fn copy_source(copy: SourceCopy<'_>) -> Result<(), ElasticCopyError> {
     let SourceCopy {
         start,
         frames,
+        direction,
         fetch_range,
         fetch,
         target,
         channels,
         source_frame_count,
     } = copy;
-    copy_forward(
-        start,
-        frames,
-        fetch_range,
-        fetch,
-        target,
-        channels,
-        source_frame_count,
-    )
-}
-
-fn copy_forward(
-    start: i64,
-    frames: usize,
-    fetch_range: SourceFrameRange,
-    fetch: &[f32],
-    target: &mut [f32],
-    channels: usize,
-    source_frame_count: u64,
-) -> Result<(), ElasticCopyError> {
     let samples = frames
         .checked_mul(channels)
         .ok_or(ElasticCopyError::FrameOverflow)?;
@@ -618,9 +637,14 @@ fn copy_forward(
         return Err(ElasticCopyError::FrameOverflow);
     }
     for frame in 0..frames {
-        let coordinate = start
-            .checked_add(i64::try_from(frame).map_err(|_| ElasticCopyError::FrameOverflow)?)
-            .ok_or(ElasticCopyError::FrameOverflow)?;
+        let offset = i64::try_from(frame).map_err(|_| ElasticCopyError::FrameOverflow)?;
+        let coordinate = match direction {
+            PlaybackDirection::Forward => start.checked_add(offset),
+            PlaybackDirection::Reverse => start
+                .checked_sub(offset)
+                .and_then(|value| value.checked_sub(1)),
+        }
+        .ok_or(ElasticCopyError::FrameOverflow)?;
         let target_start = frame
             .checked_mul(channels)
             .ok_or(ElasticCopyError::FrameOverflow)?;
@@ -684,6 +708,7 @@ mod tests {
                     continuous: 0.0,
                     integer: 0,
                 },
+                direction: PlaybackDirection::Forward,
                 fetch_range: SourceFrameRange::new(0, 1).expect("valid source range"),
                 warmup: ElasticRequest::new(1, 1).expect("valid elastic request"),
             },
@@ -706,12 +731,21 @@ mod tests {
         segments: &[ContinuousSegment],
         cursor: Option<SourceCursor>,
     ) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
+        quantize_direction(segments, cursor, PlaybackDirection::Forward)
+    }
+
+    fn quantize_direction(
+        segments: &[ContinuousSegment],
+        cursor: Option<SourceCursor>,
+        direction: PlaybackDirection,
+    ) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
         quantize_segments(
             segments,
             cursor,
             Consts::MAX_OUTPUT_FRAMES,
             Consts::MINIMUM_RATE,
             Consts::MAXIMUM_RATE,
+            direction,
         )
     }
 
@@ -728,9 +762,101 @@ mod tests {
         let source = [20.0, 30.0, 40.0, 50.0];
         let mut output = [0.0; 2];
 
-        copy_forward(4, 2, range, &source, &mut output, 1, 6).expect("forward copy succeeds");
+        copy_source(SourceCopy {
+            start: 4,
+            frames: 2,
+            direction: PlaybackDirection::Forward,
+            fetch_range: range,
+            fetch: &source,
+            target: &mut output,
+            channels: 1,
+            source_frame_count: 6,
+        })
+        .expect("forward copy succeeds");
 
         assert_eq!(output, [40.0, 50.0]);
+    }
+
+    #[test]
+    fn reverse_copy_consumes_an_ascending_window_in_descending_order() {
+        let range = SourceFrameRange::new(2, 6).expect("valid source range");
+        let source = [20.0, 30.0, 40.0, 50.0];
+        let mut output = [0.0; 3];
+
+        copy_source(SourceCopy {
+            start: 6,
+            frames: 3,
+            direction: PlaybackDirection::Reverse,
+            fetch_range: range,
+            fetch: &source,
+            target: &mut output,
+            channels: 1,
+            source_frame_count: 6,
+        })
+        .expect("reverse copy succeeds");
+
+        assert_eq!(output, [50.0, 40.0, 30.0]);
+    }
+
+    #[test]
+    fn reverse_copy_reaches_source_start_without_wrapping() {
+        let range = SourceFrameRange::new(0, 2).expect("valid source range");
+        let source = [10.0, 20.0];
+        let mut output = [f32::NAN; 4];
+
+        copy_source(SourceCopy {
+            start: 2,
+            frames: 4,
+            direction: PlaybackDirection::Reverse,
+            fetch_range: range,
+            fetch: &source,
+            target: &mut output,
+            channels: 1,
+            source_frame_count: 2,
+        })
+        .expect("reverse copy reaches source start");
+
+        assert_eq!(output, [20.0, 10.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn reverse_quantization_keeps_a_descending_cursor_inside_the_rate_envelope() {
+        let (integer, cursor) = quantize_direction(
+            &[segment(360.0, 240.0, 120), segment(240.0, 120.0, 120)],
+            None,
+            PlaybackDirection::Reverse,
+        )
+        .expect("reverse source path is quantized");
+
+        assert_eq!(integer[0].source_start, 360);
+        assert_eq!(integer[0].source_end, 240);
+        assert_eq!(integer[1].source_start, 240);
+        assert_eq!(integer[1].source_end, 120);
+        assert_eq!(cursor.integer, 120);
+        assert_close(cursor.continuous, 120.0);
+    }
+
+    #[test]
+    fn reverse_phase_error_converges_without_a_source_jump() {
+        let mut cursor = SourceCursor {
+            continuous: 360.0,
+            integer: 360,
+        };
+        let mut residuals = vec![-0.75];
+        for start in [359.25, 239.25, 119.25] {
+            let desired_end = start - 120.0;
+            let (integer, next) = quantize_direction(
+                &[segment(start, desired_end, 120)],
+                Some(cursor),
+                PlaybackDirection::Reverse,
+            )
+            .expect("reverse phase error is correctable");
+            assert_eq!(integer[0].source_start, cursor.integer);
+            residuals.push(desired_end - next.continuous);
+            cursor = next;
+        }
+
+        assert_eq!(residuals, vec![-0.75, -0.5, -0.25, 0.0]);
     }
 
     #[test]

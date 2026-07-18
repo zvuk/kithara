@@ -24,7 +24,7 @@ coverage through the existing integration-test session.
       contracts.
 - [x] The integration session renders the real native forward bound path to
       memory and to WAV.
-- [ ] The same integration session renders the real reverse path to memory and
+- [x] The same integration session renders the real reverse path to memory and
       to WAV after directional preparation is implemented.
 - [ ] Legacy entertainment-role event naming is migrated to transport and
       synchronization vocabulary before new sync events become public.
@@ -56,7 +56,7 @@ coverage through the existing integration-test session.
 - [x] Slice 6: multi-track participant readiness and an all-or-nothing tempo
       commit at one presentation boundary.
 - [x] Slice 7: transactional session seek and explicit join.
-- [ ] Slice 8: prepared file-source reverse and directional read-ahead.
+- [x] Slice 8: prepared file-source reverse and directional read-ahead.
 
 ## 2026-07-16 Slice 5 Checkpoint
 
@@ -202,6 +202,23 @@ starts within that callback without mutating session transport. The WASM
 implementation is structurally separate and returns the typed elastic backend
 capability error. No participant registry, second renderer, session binding
 mirror, or alternate real-time control plane is introduced.
+
+### 2026-07-18 Slice 8 Checkpoint
+
+File-source reverse extends the same `PlayerImpl` -> `PlayerTrack` ->
+`ElasticRenderer` path used by forward playback. The renderer requests one
+bounded ascending source range, primes Signalsmith history in reverse audible
+order, and consumes the cached window from high frames to low frames without
+wrapping at source start. Direction-aware rolling windows still issue only
+ascending range requests.
+
+Prepared renderer state records its direction and rejects a mismatched render
+until that history has been prepared. File resources declare reverse source
+access explicitly; HLS and custom readers return a typed capability error
+before playlist publication. Native source access lives in one native module,
+while the existing WASM player implementation remains structurally separate.
+The integration session proves reverse marker order through the real file
+reader and writes the rendered result to WAV. HLS reverse remains Slice 9.
 
 ## Affected Paths
 

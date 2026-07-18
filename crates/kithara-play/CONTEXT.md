@@ -347,11 +347,18 @@ decoded data, terminal status, and producer close are signaled by
 `kithara-audio`. No periodic timer or runtime `Notify` participates in this
 path.
 
-Bound elastic rendering supports native forward playback. Activation requires a
-session-created node and its shared `RenderContext`; browser WASM and reverse
-preparation return typed capability errors. Ordinary track-local seek is
-rejected for a bound current item because only a session relocation transaction
-may move the session-owned audible cursor and renderer state.
+Bound elastic rendering supports native forward and file-source reverse
+playback. Activation requires a session-created node and its shared
+`RenderContext`; browser WASM returns a typed backend capability error. Every
+source-worker request remains one bounded ascending `SourceFrameRange`. A
+reverse renderer primes history in reverse audible order, consumes each window
+toward lower frames, and renews with an earlier ascending range. Reaching source
+frame zero produces the defined end boundary and never wraps. Resources that do
+not declare reverse range access fail with `ReverseSourceUnavailable` before
+playlist publication; HLS remains unsupported until its protocol-specific
+range contract lands. Ordinary track-local seek is rejected for a bound current
+item because only a session relocation transaction may move the session-owned
+audible cursor and renderer state.
 
 Inter-block phase correction is bounded in the source-frame domain. An error of
 at most one source frame is corrected continuously at no more than one frame per
