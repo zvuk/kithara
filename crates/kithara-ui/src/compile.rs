@@ -1,6 +1,6 @@
 use crate::{
     error::UiDocError,
-    expand::{ExpandedNode, expand_module},
+    expand::{Budget, ExpandedNode, expand_module},
     ids::{InstanceId, SourceUri},
     layout::{Axis, LayoutNode, parse_layout},
     registry::{ControlCatalog, EndpointRegistry},
@@ -40,9 +40,17 @@ pub fn compile(
     limits: &Limits,
 ) -> Result<CompiledUi, UiDocError> {
     let loaded = resolver.load(None, entry)?;
+    let bytes = loaded.text.len();
+    if bytes > limits.max_bytes {
+        return Err(UiDocError::TooLarge {
+            origin: loaded.uri,
+            bytes,
+            max: limits.max_bytes,
+        });
+    }
     let document = parse_layout(&loaded.text, &loaded.uri)?;
     validate::check_layout_instances(&document, &loaded.uri)?;
-    let mut count = 0;
+    let mut budget = Budget::new(limits.max_nodes);
     let root = build(
         &document.root,
         &loaded.uri,
@@ -50,15 +58,8 @@ pub fn compile(
         catalog,
         endpoints,
         limits,
-        &mut count,
+        &mut budget,
     )?;
-    if count > limits.max_nodes {
-        return Err(UiDocError::NodesExceeded {
-            origin: loaded.uri,
-            count,
-            max: limits.max_nodes,
-        });
-    }
     Ok(CompiledUi { root })
 }
 
@@ -69,8 +70,9 @@ fn build(
     catalog: &dyn ControlCatalog,
     endpoints: &dyn EndpointRegistry,
     limits: &Limits,
-    count: &mut usize,
+    budget: &mut Budget,
 ) -> Result<CompiledNode, UiDocError> {
+    budget.charge(layout_uri)?;
     match node {
         LayoutNode::Split { axis, children } => Ok(CompiledNode::Split {
             axis: *axis,
@@ -86,7 +88,7 @@ fn build(
                             catalog,
                             endpoints,
                             limits,
-                            count,
+                            budget,
                         )?,
                     ))
                 })
@@ -97,30 +99,42 @@ fn build(
             source,
             with,
         } => {
+            for value in with.values() {
+                if !value.starts_with("$$")
+                    && let Some(name) = value.strip_prefix('$')
+                {
+                    return Err(UiDocError::UnresolvedParam {
+                        origin: layout_uri.clone(),
+                        name: name.to_owned(),
+                        path: instance.0.clone(),
+                    });
+                }
+            }
+            let args = with
+                .iter()
+                .map(|(key, value)| {
+                    let value = value
+                        .strip_prefix("$$")
+                        .map_or_else(|| value.clone(), |literal| format!("${literal}"));
+                    (key.clone(), value)
+                })
+                .collect();
             let (module_uri, set) = load_module_graph(resolver, Some(layout_uri), source, limits)?;
             let root = expand_module(
                 &set,
                 &module_uri,
-                with,
+                &args,
                 &instance.0,
+                limits.max_depth,
+                budget,
                 &mut |control, origin| {
                     validate::check_controls(control, origin, catalog, endpoints)
                 },
             )?;
-            *count += count_controls(&root);
             Ok(CompiledNode::Module {
                 instance: instance.clone(),
                 root: Box::new(root),
             })
         }
-    }
-}
-
-fn count_controls(node: &ExpandedNode) -> usize {
-    match node {
-        ExpandedNode::Row { children, .. }
-        | ExpandedNode::Column { children, .. }
-        | ExpandedNode::Slot { children, .. } => children.iter().map(count_controls).sum(),
-        ExpandedNode::Control { .. } => 1,
     }
 }

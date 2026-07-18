@@ -45,16 +45,21 @@ fn walk_layout(
     match node {
         LayoutNode::Split { children, .. } => {
             for (index, child) in children.iter().enumerate() {
-                walk_layout(
-                    &child.node,
-                    &path.push(format!("Split[{index}]")),
-                    origin,
-                    seen,
-                )?;
+                let child_path = path.push(format!("Split[{index}]"));
+                let weight = child.weight;
+                if !weight.is_finite() || weight <= 0.0 {
+                    return Err(UiDocError::InvalidWeight {
+                        origin: origin.clone(),
+                        path: child_path.render(),
+                        value: format!("{weight}"),
+                    });
+                }
+                walk_layout(&child.node, &child_path, origin, seen)?;
             }
             Ok(())
         }
         LayoutNode::Module { instance, .. } => {
+            check_id(&instance.0, origin)?;
             if !seen.insert(instance.0.clone()) {
                 return Err(UiDocError::DuplicateId {
                     origin: origin.clone(),
@@ -65,6 +70,26 @@ fn walk_layout(
             Ok(())
         }
     }
+}
+
+pub(crate) fn check_id(id: &str, origin: &SourceUri) -> Result<(), UiDocError> {
+    let reason = if id.is_empty() {
+        Some("id must not be empty")
+    } else if id.contains('/') {
+        Some("id must not contain '/'")
+    } else if id.starts_with('$') {
+        Some("id must not start with '$'")
+    } else {
+        None
+    };
+    if let Some(reason) = reason {
+        return Err(UiDocError::InvalidId {
+            origin: origin.clone(),
+            id: id.to_owned(),
+            reason: reason.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 pub(crate) fn check_module_node_ids(doc: &ModuleDoc, origin: &SourceUri) -> Result<(), UiDocError> {
@@ -78,6 +103,7 @@ fn record(
     origin: &SourceUri,
     seen: &mut BTreeSet<String>,
 ) -> Result<(), UiDocError> {
+    check_id(id, origin)?;
     if !seen.insert(id.to_owned()) {
         return Err(UiDocError::DuplicateId {
             origin: origin.clone(),
@@ -303,6 +329,16 @@ fn check_binding(
             });
         }
     }
+    for scope in with.keys() {
+        if !endpoint.scopes.contains(scope) {
+            return Err(UiDocError::UnknownScope {
+                origin: origin.clone(),
+                id: id.0.clone(),
+                scope: scope.clone(),
+                path: path.to_owned(),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -378,6 +414,59 @@ mod tests {
     }
 
     #[kithara::test]
+    fn layout_instance_with_path_separator_is_rejected() {
+        let text = r#"(schema: "kithara.layout", version: 1, id: "invalid",
+            root: Module(instance: "deck/a", source: "m.ron"))"#;
+        let doc = parse_layout(text, &origin()).unwrap();
+        let error = check_layout_instances(&doc, &origin()).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::InvalidId { id, reason, .. }
+                if id == "deck/a" && reason.contains('/')
+        ));
+    }
+
+    #[kithara::test]
+    fn negative_split_weight_is_rejected() {
+        let text = r#"(schema: "kithara.layout", version: 1, id: "invalid",
+            root: Split(axis: Horizontal, children: [
+                (weight: -1.0, node: Module(instance: "deck-a", source: "m.ron")),
+            ]))"#;
+        let doc = parse_layout(text, &origin()).unwrap();
+        let error = check_layout_instances(&doc, &origin()).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::InvalidWeight { path, value, .. }
+                if path == "root/Split[0]" && value == "-1"
+        ));
+    }
+
+    #[kithara::test]
+    fn zero_split_weight_is_rejected() {
+        let text = r#"(schema: "kithara.layout", version: 1, id: "invalid",
+            root: Split(axis: Horizontal, children: [
+                (weight: 0.0, node: Module(instance: "deck-a", source: "m.ron")),
+            ]))"#;
+        let doc = parse_layout(text, &origin()).unwrap();
+        let error = check_layout_instances(&doc, &origin()).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::InvalidWeight { path, value, .. }
+                if path == "root/Split[0]" && value == "0"
+        ));
+    }
+
+    #[kithara::test]
+    fn empty_and_parameter_like_ids_are_rejected() {
+        for id in ["", "$deck"] {
+            assert!(matches!(
+                check_id(id, &origin()),
+                Err(UiDocError::InvalidId { id: invalid, .. }) if invalid == id
+            ));
+        }
+    }
+
+    #[kithara::test]
     fn duplicate_control_id_reports_path() {
         let text = r#"(schema: "kithara.module", version: 1, id: "m",
             root: Row(children: [
@@ -387,6 +476,19 @@ mod tests {
         let doc = parse_module(text, &origin()).unwrap();
         let error = check_module_node_ids(&doc, &origin()).unwrap_err();
         assert!(error.to_string().contains("Control(play)"));
+    }
+
+    #[kithara::test]
+    fn control_id_with_path_separator_is_rejected() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Control(id: "transport/play", kind: "button"))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::InvalidId { id, reason, .. }
+                if id == "transport/play" && reason.contains('/')
+        ));
     }
 
     #[kithara::test]
@@ -419,6 +521,10 @@ mod tests {
             ControlKindDesc::new(Some(ValueKind::Bool), Some(ValueKind::Trigger))
                 .with_prop("label", PropKind::Text),
         );
+        catalog.insert(
+            "fader",
+            ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
+        );
         catalog
     }
 
@@ -428,6 +534,11 @@ mod tests {
             EndpointCategory::Command,
             "deck.transport.toggle_play",
             EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+        );
+        registry.insert(
+            EndpointCategory::Parameter,
+            "player.output.volume",
+            EndpointDesc::new(ValueKind::Scalar),
         );
         registry
     }
@@ -455,6 +566,52 @@ mod tests {
         assert!(matches!(
             error,
             UiDocError::MissingScope { scope, .. } if scope == "deck"
+        ));
+    }
+
+    #[kithara::test]
+    fn undeclared_command_scope_is_reported() {
+        let mut with = with_deck();
+        with.insert("sidechain".to_owned(), "1".to_owned());
+        let node = button_control(BindingRef::Command {
+            id: EndpointId("deck.transport.toggle_play".into()),
+            with,
+        });
+        let error = check_controls(&node, &origin(), &catalog(), &registry()).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::UnknownScope {
+                id,
+                scope,
+                path,
+                ..
+            } if id == "deck.transport.toggle_play" && scope == "sidechain" && path == "play"
+        ));
+    }
+
+    #[kithara::test]
+    fn scope_on_unscoped_parameter_is_reported() {
+        let node = ExpandedNode::Control {
+            path: "volume".into(),
+            id: NodeId("volume".into()),
+            kind: ControlKind("fader".into()),
+            props: BTreeMap::new(),
+            read: None,
+            write: Some(BindingRef::Parameter {
+                id: EndpointId("player.output.volume".into()),
+                with: with_deck(),
+            }),
+            adaptive: AdaptivePolicy::default(),
+        };
+        let error = check_controls(&node, &origin(), &catalog(), &registry()).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::UnknownScope {
+                id,
+                scope,
+                path,
+                ..
+            } if id == "player.output.volume" && scope == "deck" && path == "volume"
         ));
     }
 

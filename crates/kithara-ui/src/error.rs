@@ -32,6 +32,24 @@ pub enum UiDocError {
         id: String,
         path: String,
     },
+    #[error("{origin}: invalid id {id:?}: {reason}")]
+    InvalidId {
+        origin: SourceUri,
+        id: String,
+        reason: String,
+    },
+    #[error("{origin}: invalid split weight {value} at {path}")]
+    InvalidWeight {
+        origin: SourceUri,
+        path: String,
+        value: String,
+    },
+    #[error("{origin}: source is {bytes} bytes, exceeds limit {max}")]
+    TooLarge {
+        origin: SourceUri,
+        bytes: usize,
+        max: usize,
+    },
     #[error("{origin}: source not found: {rel:?}")]
     NotFound { origin: SourceUri, rel: String },
     #[error("{origin}: source {rel:?} escapes configured root")]
@@ -57,8 +75,12 @@ pub enum UiDocError {
         name: String,
         path: String,
     },
-    #[error("{origin}: argument {name:?} is not declared in module parameters")]
-    UnknownParam { origin: SourceUri, name: String },
+    #[error("{origin}: argument {name:?} is not declared in module parameters (at {path})")]
+    UnknownParam {
+        origin: SourceUri,
+        name: String,
+        path: String,
+    },
     #[error("{origin}: unknown control kind {kind:?} at {path}")]
     UnknownControlKind {
         origin: SourceUri,
@@ -94,6 +116,13 @@ pub enum UiDocError {
         scope: String,
         path: String,
     },
+    #[error("{origin}: binding {id:?} at {path}: unknown scope arg {scope:?}")]
+    UnknownScope {
+        origin: SourceUri,
+        id: String,
+        scope: String,
+        path: String,
+    },
     #[error(
         "{origin}: binding {id:?} at {path}: control expects {expected}, endpoint provides {got}"
     )]
@@ -111,7 +140,7 @@ pub enum UiDocError {
         path: String,
         detail: String,
     },
-    #[error("{origin}: compiled control count {count} exceeds limit {max}")]
+    #[error("{origin}: compiled node count {count} exceeds limit {max}")]
     NodesExceeded {
         origin: SourceUri,
         count: usize,

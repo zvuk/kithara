@@ -35,6 +35,29 @@ pub enum ExpandedNode {
 
 type ControlVisitor<'a> = dyn FnMut(&ExpandedNode, &SourceUri) -> Result<(), UiDocError> + 'a;
 
+pub(crate) struct Budget {
+    nodes: usize,
+    max: usize,
+}
+
+impl Budget {
+    pub(crate) fn new(max: usize) -> Self {
+        Self { nodes: 0, max }
+    }
+
+    pub(crate) fn charge(&mut self, origin: &SourceUri) -> Result<(), UiDocError> {
+        self.nodes += 1;
+        if self.nodes > self.max {
+            return Err(UiDocError::NodesExceeded {
+                origin: origin.clone(),
+                count: self.nodes,
+                max: self.max,
+            });
+        }
+        Ok(())
+    }
+}
+
 struct Context<'a> {
     set: &'a ModuleSet,
     origin: SourceUri,
@@ -42,14 +65,29 @@ struct Context<'a> {
     prefix: String,
 }
 
+/// Cross-cutting expansion state threaded through the recursion: the include
+/// depth cap, the shared node budget, and the per-control validation visitor.
+struct Machine<'m, 'v> {
+    max_depth: usize,
+    budget: &'m mut Budget,
+    visitor: &'m mut ControlVisitor<'v>,
+}
+
 pub(crate) fn expand_module(
     set: &ModuleSet,
     entry: &SourceUri,
     args: &BTreeMap<String, String>,
     prefix: &str,
+    max_depth: usize,
+    budget: &mut Budget,
     visitor: &mut ControlVisitor<'_>,
 ) -> Result<ExpandedNode, UiDocError> {
-    expand_at(set, entry, args.clone(), prefix.to_owned(), visitor)
+    let mut machine = Machine {
+        max_depth,
+        budget,
+        visitor,
+    };
+    expand_at(set, entry, args.clone(), prefix.to_owned(), 0, &mut machine)
 }
 
 fn expand_at(
@@ -57,8 +95,16 @@ fn expand_at(
     uri: &SourceUri,
     args: BTreeMap<String, String>,
     prefix: String,
-    visitor: &mut ControlVisitor<'_>,
+    depth: usize,
+    machine: &mut Machine<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
+    if depth > machine.max_depth {
+        return Err(UiDocError::DepthExceeded {
+            origin: uri.clone(),
+            depth,
+            max: machine.max_depth,
+        });
+    }
     let doc = set.defs.get(uri).ok_or_else(|| UiDocError::NotFound {
         origin: uri.clone(),
         rel: uri.0.clone(),
@@ -68,6 +114,7 @@ fn expand_at(
             return Err(UiDocError::UnknownParam {
                 origin: uri.clone(),
                 name: name.clone(),
+                path: prefix.clone(),
             });
         }
     }
@@ -77,10 +124,13 @@ fn expand_at(
         args,
         prefix,
     };
-    walk(&context, &doc.root, visitor)
+    walk(&context, &doc.root, depth, machine)
 }
 
 fn substitute(context: &Context<'_>, value: &str, path: &str) -> Result<String, UiDocError> {
+    if let Some(literal) = value.strip_prefix("$$") {
+        return Ok(format!("${literal}"));
+    }
     let Some(name) = value.strip_prefix('$') else {
         return Ok(value.to_owned());
     };
@@ -142,30 +192,40 @@ fn child_path(prefix: &str, id: &NodeId) -> String {
 fn walk(
     context: &Context<'_>,
     node: &ControlNode,
-    visitor: &mut ControlVisitor<'_>,
+    depth: usize,
+    machine: &mut Machine<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     match node {
-        ControlNode::Row { id, children } => Ok(ExpandedNode::Row {
-            id: id.clone(),
-            children: children
-                .iter()
-                .map(|child| walk(context, child, visitor))
-                .collect::<Result<_, _>>()?,
-        }),
-        ControlNode::Column { id, children } => Ok(ExpandedNode::Column {
-            id: id.clone(),
-            children: children
-                .iter()
-                .map(|child| walk(context, child, visitor))
-                .collect::<Result<_, _>>()?,
-        }),
-        ControlNode::Slot { id, default } => Ok(ExpandedNode::Slot {
-            id: id.clone(),
-            children: default
-                .iter()
-                .map(|child| walk(context, child, visitor))
-                .collect::<Result<_, _>>()?,
-        }),
+        ControlNode::Row { id, children } => {
+            machine.budget.charge(&context.origin)?;
+            Ok(ExpandedNode::Row {
+                id: id.clone(),
+                children: children
+                    .iter()
+                    .map(|child| walk(context, child, depth, machine))
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+        ControlNode::Column { id, children } => {
+            machine.budget.charge(&context.origin)?;
+            Ok(ExpandedNode::Column {
+                id: id.clone(),
+                children: children
+                    .iter()
+                    .map(|child| walk(context, child, depth, machine))
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+        ControlNode::Slot { id, default } => {
+            machine.budget.charge(&context.origin)?;
+            Ok(ExpandedNode::Slot {
+                id: id.clone(),
+                children: default
+                    .iter()
+                    .map(|child| walk(context, child, depth, machine))
+                    .collect::<Result<_, _>>()?,
+            })
+        }
         ControlNode::Include { id, source, with } => {
             let path = child_path(&context.prefix, id);
             let args = substitute_map(context, with, &path)?;
@@ -176,7 +236,7 @@ fn walk(
                         origin: context.origin.clone(),
                         rel: source.clone(),
                     })?;
-            expand_at(context.set, &target, args, path, visitor)
+            expand_at(context.set, &target, args, path, depth + 1, machine)
         }
         ControlNode::Control {
             id,
@@ -186,6 +246,7 @@ fn walk(
             write,
             adaptive,
         } => {
+            machine.budget.charge(&context.origin)?;
             let path = child_path(&context.prefix, id);
             let props = props
                 .iter()
@@ -214,7 +275,7 @@ fn walk(
                 write,
                 adaptive: adaptive.clone(),
             };
-            visitor(&node, &context.origin)?;
+            (machine.visitor)(&node, &context.origin)?;
             Ok(node)
         }
     }
@@ -265,7 +326,67 @@ mod tests {
         uri: &SourceUri,
         args: &BTreeMap<String, String>,
     ) -> Result<ExpandedNode, UiDocError> {
-        expand_module(set, uri, args, "", &mut |_, _| Ok(()))
+        let mut budget = Budget::new(Limits::default().max_nodes);
+        expand_module(
+            set,
+            uri,
+            args,
+            "",
+            Limits::default().max_depth,
+            &mut budget,
+            &mut |_, _| Ok(()),
+        )
+    }
+
+    fn expand_with_depth(
+        set: &ModuleSet,
+        uri: &SourceUri,
+        max_depth: usize,
+    ) -> Result<ExpandedNode, UiDocError> {
+        let mut budget = Budget::new(Limits::default().max_nodes);
+        expand_module(
+            set,
+            uri,
+            &BTreeMap::new(),
+            "",
+            max_depth,
+            &mut budget,
+            &mut |_, _| Ok(()),
+        )
+    }
+
+    fn depth_fixture(reverse: bool) -> MemResolver {
+        let shallow = r#"Include(id: "shallow", source: "c.kmodule.ron")"#;
+        let deep = r#"Include(id: "deep", source: "b.kmodule.ron")"#;
+        let children = if reverse {
+            format!("{deep}, {shallow}")
+        } else {
+            format!("{shallow}, {deep}")
+        };
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "a.kmodule.ron",
+            &format!(
+                r#"(schema: "kithara.module", version: 1, id: "a",
+                    root: Row(children: [{children}]))"#
+            ),
+        );
+        resolver.insert(
+            "b.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "b",
+                root: Include(id: "c", source: "c.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "c.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "c",
+                root: Include(id: "d", source: "d.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "d.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "d",
+                root: Control(id: "leaf", kind: "text"))"#,
+        );
+        resolver
     }
 
     #[kithara::test]
@@ -313,5 +434,85 @@ mod tests {
             error,
             UiDocError::UnknownParam { name, .. } if name == "bogus"
         ));
+    }
+
+    #[kithara::test]
+    fn undeclared_include_argument_reports_instance_path() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "deck.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "deck", parameters: ["deck"],
+                root: Include(id: "transport", source: "transport.kmodule.ron", with: {
+                    "deck": "$deck",
+                    "bogus": "1",
+                }))"#,
+        );
+        resolver.insert(
+            "transport.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "transport", parameters: ["deck"],
+                root: Control(id: "play", kind: "button"))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "deck.kmodule.ron", &Limits::default()).unwrap();
+        let limits = Limits::default();
+        let mut budget = Budget::new(limits.max_nodes);
+
+        let error = expand_module(
+            &set,
+            &uri,
+            &args(&[("deck", "a")]),
+            "deck-a",
+            limits.max_depth,
+            &mut budget,
+            &mut |_, _| Ok(()),
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(matches!(
+            error,
+            UiDocError::UnknownParam { name, .. } if name == "bogus"
+        ));
+        assert!(message.contains("deck-a/transport"), "{message}");
+    }
+
+    #[kithara::test]
+    fn doubled_dollar_expands_to_literal_dollar() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "price.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "price",
+                root: Control(id: "price", kind: "text", props: {
+                    "text": Text("$$5.99"),
+                }))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "price.kmodule.ron", &Limits::default()).unwrap();
+
+        let root = expand(&set, &uri, &BTreeMap::new()).unwrap();
+        let ExpandedNode::Control { props, .. } = root else {
+            panic!("expected control");
+        };
+        assert_eq!(
+            props.get("text"),
+            Some(&PropValue::Text("$5.99".to_owned()))
+        );
+    }
+
+    #[kithara::test]
+    fn expansion_depth_limit_is_independent_of_include_order() {
+        for reverse in [false, true] {
+            let resolver = depth_fixture(reverse);
+            let (uri, set) =
+                load_module_graph(&resolver, None, "a.kmodule.ron", &Limits::default()).unwrap();
+            let error = expand_with_depth(&set, &uri, 2).unwrap_err();
+            assert!(matches!(
+                error,
+                UiDocError::DepthExceeded {
+                    origin,
+                    depth: 3,
+                    max: 2,
+                } if origin.0 == "d.kmodule.ron"
+            ));
+        }
     }
 }

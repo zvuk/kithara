@@ -73,7 +73,7 @@ pub(crate) fn player_catalog() -> TestCatalog {
     catalog
 }
 
-pub(crate) fn player_registry(_decks: &[&str]) -> TestRegistry {
+pub(crate) fn player_registry() -> TestRegistry {
     let mut registry = TestRegistry::default();
     registry.insert(
         EndpointCategory::Command,

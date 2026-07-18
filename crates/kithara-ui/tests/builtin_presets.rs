@@ -9,7 +9,7 @@ fn micro_preset_compiles_against_player_registry() {
         builtin::MICRO_PRESET,
         &builtin::resolver(),
         &common::player_catalog(),
-        &common::player_registry(&["a"]),
+        &common::player_registry(),
         &Limits::default(),
     )
     .unwrap();
@@ -21,7 +21,7 @@ fn player_preset_compiles_against_player_registry() {
         builtin::PLAYER_PRESET,
         &builtin::resolver(),
         &common::player_catalog(),
-        &common::player_registry(&["a"]),
+        &common::player_registry(),
         &Limits::default(),
     )
     .unwrap();

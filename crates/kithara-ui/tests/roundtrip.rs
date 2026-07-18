@@ -44,6 +44,63 @@ const DECK_MODULE: &str = r#"(
     ),
 )"#;
 
+const ROUNDTRIP_MODULE: &str = r#"(
+    schema: "kithara.module",
+    version: 1,
+    id: "roundtrip",
+    parameters: ["deck"],
+    root: Column(
+        id: "root",
+        children: [
+            Row(
+                children: [
+                    Control(
+                        id: "play",
+                        kind: "button",
+                        props: {
+                            "enabled": Bool(true),
+                            "gain": Num(0.5),
+                            "label": Text("PLAY"),
+                        },
+                        read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
+                        write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
+                        adaptive: (priority: Required, min_w: 96.0, min_h: 32.0),
+                    ),
+                    Control(
+                        id: "volume",
+                        kind: "fader.horizontal",
+                        read: Parameter(id: "player.output.volume"),
+                        write: Parameter(id: "player.output.volume"),
+                        adaptive: (priority: High, min_w: 120.0),
+                    ),
+                    Control(
+                        id: "tracks",
+                        kind: "track_list",
+                        read: Model(id: "library.visible_tracks"),
+                        adaptive: (priority: Low, min_h: 160.0),
+                    ),
+                ],
+            ),
+            Include(
+                id: "transport",
+                source: "deck/transport.kmodule.ron",
+                with: { "deck": "$deck" },
+            ),
+            Slot(
+                id: "extra",
+                default: [
+                    Column(
+                        id: "nested",
+                        children: [
+                            Control(id: "status", kind: "text", adaptive: (priority: Normal)),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)"#;
+
 fn to_ron_pretty<T: serde::Serialize>(value: &T) -> String {
     ron::Options::default()
         .with_default_extension(Extensions::IMPLICIT_SOME)
@@ -107,6 +164,15 @@ fn module_parses_with_implicit_some_bindings() {
     };
     assert!(read.is_some());
     assert_eq!(adaptive.priority, Priority::Required);
+}
+
+#[kithara::test]
+fn module_roundtrip_is_semantically_stable() {
+    let doc = parse_module(ROUNDTRIP_MODULE, &module_origin()).unwrap();
+    let printed = to_ron_pretty(&doc);
+    let reparsed = parse_module(&printed, &module_origin()).unwrap();
+    assert_eq!(doc, reparsed);
+    assert_eq!(printed, to_ron_pretty(&reparsed));
 }
 
 #[kithara::test]

@@ -35,6 +35,14 @@ fn load_rec(
     depth: usize,
 ) -> Result<SourceUri, UiDocError> {
     let loaded = resolver.load(base, rel)?;
+    let bytes = loaded.text.len();
+    if bytes > limits.max_bytes {
+        return Err(UiDocError::TooLarge {
+            origin: loaded.uri,
+            bytes,
+            max: limits.max_bytes,
+        });
+    }
     if stack.contains(&loaded.uri) {
         let mut chain = stack.clone();
         chain.push(loaded.uri);
@@ -213,5 +221,32 @@ mod tests {
         );
 
         load_module_graph(&resolver, None, "a.kmodule.ron", &Limits::default()).unwrap();
+    }
+
+    #[kithara::test]
+    fn oversized_included_source_is_rejected() {
+        let entry = module("a", r#"Include(id: "b", source: "b.kmodule.ron")"#);
+        let child = module(
+            "b",
+            &format!(
+                r#"Control(id: "text", kind: "text", props: {{ "text": Text("{}") }})"#,
+                "x".repeat(256)
+            ),
+        );
+        assert!(child.len() > entry.len());
+        let mut resolver = MemResolver::default();
+        resolver.insert("a.kmodule.ron", &entry);
+        resolver.insert("b.kmodule.ron", &child);
+        let limits = Limits {
+            max_bytes: entry.len(),
+            ..Limits::default()
+        };
+
+        let error = load_module_graph(&resolver, None, "a.kmodule.ron", &limits).unwrap_err();
+        assert!(matches!(
+            error,
+            UiDocError::TooLarge { origin, bytes, max }
+                if origin.0 == "b.kmodule.ron" && bytes == child.len() && max == entry.len()
+        ));
     }
 }
