@@ -225,11 +225,7 @@ unsafe extern "C" {
         name: *const c_char,
         out: *mut i64,
     ) -> bool;
-    pub(crate) fn AMediaFormat_setInt32(
-        format: *mut AMediaFormat,
-        name: *const c_char,
-        value: i32,
-    ) -> bool;
+    pub(crate) fn AMediaFormat_setInt32(format: *mut AMediaFormat, name: *const c_char, value: i32);
     /// `AMediaFormat_getBuffer` — fetch a byte-buffer property (e.g.
     /// `csd-0`). Returns `false` when the key is absent; on success
     /// `*data` / `*size` borrow from the format's internal storage and
