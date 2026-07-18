@@ -653,10 +653,11 @@ wasm MODE="check":
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       test)
+        cargo +nightly build -p kithara-integration-tests --bin test_server
         CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
         WASM_BINDGEN_TEST_TIMEOUT=300 \
         WASM_BINDGEN_USE_BROWSER=1 \
-        cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
+        cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests --test suite_wasm
         ;;
       build)
         cargo xtask wasm build

@@ -33,6 +33,8 @@ rustflags = [
   "-C",
   "link-arg=--max-memory=1610612736",
   "-C",
+  "link-arg=--export=__heap_base",
+  "-C",
   "link-arg=--export=__wasm_init_tls",
   "-C",
   "link-arg=--export=__tls_size",
