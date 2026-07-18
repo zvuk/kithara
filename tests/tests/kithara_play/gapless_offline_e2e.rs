@@ -911,6 +911,8 @@ async fn create_apple_fused_resource(
     let config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Apple)
