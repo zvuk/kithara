@@ -2,6 +2,7 @@ mod wire {
     use firewheel::FirewheelCtx;
     use kithara_audio::EqBandConfig;
     use kithara_bufpool::PcmPool;
+    use kithara_events::EventBus;
     use kithara_platform::sync::mpsc;
 
     use crate::{
@@ -82,6 +83,7 @@ mod wire {
     #[non_exhaustive]
     pub enum Cmd {
         RegisterPlayer {
+            bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
             pcm_pool: PcmPool,
         },
@@ -183,6 +185,7 @@ mod wire {
 mod handle {
     use kithara_audio::EqBandConfig;
     use kithara_bufpool::PcmPool;
+    use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
 
     use super::wire::{AllocatedSlot, BindingPreparation, Cmd, PlayerId, Reply};
@@ -255,10 +258,12 @@ mod handle {
 
         pub fn register_player(
             &self,
+            bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
             pcm_pool: PcmPool,
         ) -> Result<PlayerId, PlayError> {
             match self.exec_ok(Cmd::RegisterPlayer {
+                bus,
                 eq_layout,
                 pcm_pool,
             })? {

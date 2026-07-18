@@ -6,6 +6,7 @@ use firewheel::{
 };
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
+use kithara_events::EventBus;
 use tracing::{debug, warn};
 
 use super::{
@@ -29,6 +30,7 @@ pub(super) struct SlotNodes {
 }
 
 pub(super) struct PlayerState {
+    pub(super) bus: EventBus,
     pub(super) master_eq_memo: Option<Memo<MasterEqNode>>,
     pub(super) master_eq_node_id: Option<NodeID>,
     pub(super) master_vol_pan_memo: Option<Memo<VolumePanNode>>,
@@ -44,9 +46,15 @@ pub(super) struct PlayerState {
 }
 
 impl PlayerState {
-    fn new(player_id: PlayerId, eq_layout: Vec<EqBandConfig>, pcm_pool: PcmPool) -> Self {
+    fn new(
+        player_id: PlayerId,
+        bus: EventBus,
+        eq_layout: Vec<EqBandConfig>,
+        pcm_pool: PcmPool,
+    ) -> Self {
         let band_count = eq_layout.len();
         Self {
+            bus,
             eq_layout,
             pcm_pool,
             player_id,
@@ -126,6 +134,7 @@ impl<B: AudioBackend> SessionState<B> {
 
 pub(super) fn register_player<B: AudioBackend>(
     state: &mut SessionState<B>,
+    bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
     pcm_pool: PcmPool,
 ) -> PlayerId {
@@ -133,7 +142,7 @@ pub(super) fn register_player<B: AudioBackend>(
     state.next_player_id += 1;
     state
         .players
-        .push(PlayerState::new(player_id, eq_layout, pcm_pool));
+        .push(PlayerState::new(player_id, bus, eq_layout, pcm_pool));
     debug!(
         player_id,
         players = state.players.len(),

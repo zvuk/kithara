@@ -11,9 +11,10 @@ use super::{
 pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply {
     match cmd {
         Cmd::RegisterPlayer {
+            bus,
             eq_layout,
             pcm_pool,
-        } => Reply::PlayerRegistered(register_player(state, eq_layout, pcm_pool)),
+        } => Reply::PlayerRegistered(register_player(state, bus, eq_layout, pcm_pool)),
         Cmd::UnregisterPlayer { player_id } => match unregister_player(state, player_id) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
@@ -273,6 +274,7 @@ mod tests {
 
     use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
     use kithara_bufpool::PcmPool;
+    use kithara_events::EventBus;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -394,6 +396,7 @@ mod tests {
         match run_cmd(
             state,
             Cmd::RegisterPlayer {
+                bus: EventBus::default(),
                 eq_layout: Vec::new(),
                 pcm_pool: PcmPool::default().clone(),
             },

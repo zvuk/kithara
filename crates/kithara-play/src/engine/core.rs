@@ -106,9 +106,11 @@ impl EngineImpl {
             return Ok(id);
         }
 
-        let id = self
-            .session
-            .register_player(self.config.eq_layout.clone(), self.pcm_pool.clone())?;
+        let id = self.session.register_player(
+            self.bus.clone(),
+            self.config.eq_layout.clone(),
+            self.pcm_pool.clone(),
+        )?;
         *player_id = Some(id);
         drop(player_id);
         Ok(id)

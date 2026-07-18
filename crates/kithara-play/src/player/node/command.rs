@@ -319,6 +319,13 @@ impl PlayerNodeProcessor {
         self.evict_tracks_if_needed();
 
         let loaded_src = src.clone();
+        let binding_event = binding.as_ref().map(|binding| {
+            (
+                binding.direction(),
+                binding.session_anchor().get(),
+                binding.track_anchor().get(),
+            )
+        });
         let axis = binding.map_or_else(|| TrackAxis::from(self.sample_rate), TrackAxis::from);
         let params = TrackParams::builder()
             .axis(axis)
@@ -336,5 +343,14 @@ impl PlayerNodeProcessor {
         self.notif_tx
             .try_push(PlayerNotification::Loaded { src: loaded_src })
             .ok();
+        if let Some((direction, session_anchor_beats, track_anchor_beats)) = binding_event {
+            self.notif_tx
+                .try_push(PlayerNotification::BindingCommitted {
+                    direction,
+                    session_anchor_beats,
+                    track_anchor_beats,
+                })
+                .ok();
+        }
     }
 }

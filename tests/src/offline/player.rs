@@ -141,6 +141,7 @@ impl OfflinePlayer {
             use kithara::play::PlayerNotification as N;
             out.push(match n {
                 N::Loaded { .. } => NotificationKind::Loaded,
+                N::BindingCommitted { .. } => NotificationKind::BindingCommitted,
                 N::Unloaded { .. } => NotificationKind::Unloaded,
                 N::HandoverRequested => NotificationKind::HandoverRequested,
                 N::PlaybackStarted { .. } => NotificationKind::PlaybackStarted,
@@ -160,6 +161,7 @@ impl OfflinePlayer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationKind {
     Loaded,
+    BindingCommitted,
     Unloaded,
     HandoverRequested,
     PlaybackStarted,

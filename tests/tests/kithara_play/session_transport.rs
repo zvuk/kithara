@@ -2,8 +2,8 @@
 
 use kithara::{
     bufpool::PcmPool,
-    events::EventBus,
-    platform::sync::Arc,
+    events::{Event, EventBus, EventReceiver, TransportEvent},
+    platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
     play::{
         EngineConfig, EngineImpl, PlayError, SessionDispatcher, SessionError,
         SessionTransportSnapshot, Tempo,
@@ -23,9 +23,26 @@ fn engine_config(session: &Arc<OfflineSession>) -> EngineConfig {
 }
 
 fn start_engine(session: &Arc<OfflineSession>) -> EngineImpl {
-    let engine = EngineImpl::new(engine_config(session), EventBus::default());
+    start_engine_with_bus(session, EventBus::default())
+}
+
+fn start_engine_with_bus(session: &Arc<OfflineSession>, bus: EventBus) -> EngineImpl {
+    let engine = EngineImpl::new(engine_config(session), bus);
     engine.start().expect("offline engine starts");
     engine
+}
+
+fn drain_transport_events(events: &mut EventReceiver) -> Vec<TransportEvent> {
+    let mut transport = Vec::new();
+    loop {
+        match events.try_recv().map(|envelope| envelope.event) {
+            Ok(Event::Transport(event)) => transport.push(event),
+            Ok(_) => {}
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            Err(TryRecvError::Lagged(_)) => continue,
+        }
+    }
+    transport
 }
 
 fn render_frames(session: &OfflineSession, mut frames: usize, block_frames: usize) {
@@ -75,6 +92,35 @@ fn manual_session_transport_is_shared_and_render_driven() {
 
     let one_sample = 120.0 / (f64::from(SAMPLE_RATE) * 60.0);
     assert!((position(left_snapshot) - 1.0).abs() <= one_sample);
+}
+
+#[kithara::test]
+fn transport_commit_is_published_to_every_registered_player_bus() {
+    let session = Arc::new(OfflineSession::new_manual());
+    let left_bus = EventBus::default();
+    let right_bus = EventBus::default();
+    let mut left_events = left_bus.subscribe();
+    let mut right_events = right_bus.subscribe();
+    let left = start_engine_with_bus(&session, left_bus);
+    let _right = start_engine_with_bus(&session, right_bus);
+
+    left.set_session_tempo(Tempo::new(120.0).expect("valid tempo"))
+        .expect("tempo accepted");
+    render_frames(&session, 1, 1);
+    let snapshot = left.session_transport().expect("transport commit observed");
+
+    let expected = vec![
+        TransportEvent::TempoCommitted {
+            beats_per_minute: 120.0,
+            revision: snapshot.revision(),
+        },
+        TransportEvent::PlayStateCommitted {
+            playing: true,
+            revision: snapshot.revision(),
+        },
+    ];
+    assert_eq!(drain_transport_events(&mut left_events), expected);
+    assert_eq!(drain_transport_events(&mut right_events), expected);
 }
 
 #[kithara::test]

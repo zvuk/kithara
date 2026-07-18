@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
+use kithara_events::TransportEvent;
 
 use super::{
     PlayerId,
@@ -143,6 +144,13 @@ fn schedule_commit<B: AudioBackend>(
     queue_stamp(state, stamp)?;
     state.transport.last_revision = revision;
     if let Err(error) = update_context(state) {
+        publish_transport_event(
+            state,
+            &TransportEvent::Failed {
+                revision: Some(revision),
+                reason: error.to_string(),
+            },
+        );
         abort_commit(state, revision);
         return Err(error);
     }
@@ -309,6 +317,8 @@ fn apply_completion<B: AudioBackend>(
     if revision <= state.transport.completed_revision {
         return;
     }
+    let previous = state.transport.observed;
+    let mut committed = None;
     let accepted = match (completion, state.transport.pending) {
         (
             TransportCommitResult::Applied(_),
@@ -323,6 +333,7 @@ fn apply_completion<B: AudioBackend>(
                 .filter(|commit| commit.revision() == revision)
             {
                 state.transport.observed = Some(accepted);
+                committed = Some(accepted);
                 Some(accepted)
             } else {
                 state.transport.rejected = Some(revision);
@@ -344,6 +355,59 @@ fn apply_completion<B: AudioBackend>(
     state.transport.accepted = accepted;
     state.transport.completed_revision = revision;
     state.transport.pending = None;
+    if let Some(next) = committed {
+        publish_transport_commit(state, previous, next);
+    } else if state.transport.rejected == Some(revision) {
+        publish_transport_event(
+            state,
+            &TransportEvent::Failed {
+                revision: Some(revision),
+                reason: "render graph rejected transport commit".to_owned(),
+            },
+        );
+    }
+}
+
+fn publish_transport_commit<B: AudioBackend>(
+    state: &SessionState<B>,
+    previous: Option<SessionTransportCommit>,
+    next: SessionTransportCommit,
+) {
+    for event in transport_events(previous, next).into_iter().flatten() {
+        publish_transport_event(state, &event);
+    }
+}
+
+fn transport_events(
+    previous: Option<SessionTransportCommit>,
+    next: SessionTransportCommit,
+) -> [Option<TransportEvent>; 3] {
+    let revision = next.revision();
+    let tempo = previous
+        .is_none_or(|commit| commit.tempo() != next.tempo())
+        .then(|| TransportEvent::TempoCommitted {
+            beats_per_minute: next.tempo().beats_per_minute(),
+            revision,
+        });
+    let play_state = previous
+        .is_none_or(|commit| commit.is_playing() != next.is_playing())
+        .then(|| TransportEvent::PlayStateCommitted {
+            playing: next.is_playing(),
+            revision,
+        });
+    let seek = next
+        .seek_target()
+        .map(|target| TransportEvent::SeekCommitted {
+            position_beats: target.get(),
+            revision,
+        });
+    [tempo, play_state, seek]
+}
+
+fn publish_transport_event<B: AudioBackend>(state: &SessionState<B>, event: &TransportEvent) {
+    for player in &state.players {
+        player.bus.publish(event.clone());
+    }
 }
 
 #[cfg(test)]
@@ -408,5 +472,25 @@ mod tests {
             preparation_commit(&SessionTransportState::default()),
             Err(SessionError::TransportNotConfigured)
         ));
+    }
+
+    #[kithara::test]
+    fn seek_commit_uses_only_transport_seek_vocabulary() {
+        let current = commit(120.0, 1);
+        let target = SessionBeat::new(16.0).expect("finite target");
+        let next =
+            SessionTransportCommit::new_at_beat(current.tempo(), current.is_playing(), 2, target);
+
+        assert_eq!(
+            transport_events(Some(current), next),
+            [
+                None,
+                None,
+                Some(TransportEvent::SeekCommitted {
+                    position_beats: 16.0,
+                    revision: 2,
+                }),
+            ]
+        );
     }
 }

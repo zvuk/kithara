@@ -3,7 +3,7 @@ use std::fmt;
 use kithara_platform::sync::Arc;
 
 use crate::{
-    api::{SessionBeat, Tempo, TrackBinding},
+    api::{PlaybackDirection, SessionBeat, Tempo, TrackBinding},
     error::PlayError,
     player::track::PlayerResource,
 };
@@ -175,6 +175,12 @@ pub enum TrackPlaybackStopReason {
 pub enum PlayerNotification {
     /// A track was successfully loaded into the processor arena.
     Loaded { src: Arc<str> },
+    /// A bound track was accepted by the audio node.
+    BindingCommitted {
+        direction: PlaybackDirection,
+        session_anchor_beats: f64,
+        track_anchor_beats: f64,
+    },
     /// A track was removed from the processor arena.
     Unloaded { src: Arc<str> },
     /// A track started audible playback (fade-in completed or `play()`).
@@ -222,7 +228,10 @@ impl PlayerNotification {
             | Self::FadingIn { src }
             | Self::FadingOut { src }
             | Self::PlaybackStopped { src, .. } => Some(src),
-            Self::PlaybackStarted { .. } | Self::Requested | Self::HandoverRequested => None,
+            Self::BindingCommitted { .. }
+            | Self::PlaybackStarted { .. }
+            | Self::Requested
+            | Self::HandoverRequested => None,
         }
     }
 }
