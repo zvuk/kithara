@@ -222,7 +222,7 @@ rtsan-async FILTER="no_block":
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
         cargo +nightly test -p kithara-integration-tests --test suite_light \
-        --features kithara/no-block,kithara-test-utils/no-block --target "$target" -- --nocapture {{FILTER}}
+        --features no-block --target "$target" -- --nocapture {{FILTER}}
 
 # RTSan mock produce-core lane (suite_light, fast tripwire).
 rtsan FILTER="offline_harness": (_rtsan "suite_light" FILTER)
