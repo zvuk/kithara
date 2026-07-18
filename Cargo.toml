@@ -27,6 +27,7 @@ members = [
     "crates/kithara-stretch",
     "crates/kithara-test-macros",
     "crates/kithara-test-utils",
+    "crates/kithara-ui",
     "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
@@ -36,24 +37,25 @@ default-members = [
     "crates/kithara",
     "crates/kithara-abr",
     "crates/kithara-apple",
+    "crates/kithara-assets",
+    "crates/kithara-audio",
+    "crates/kithara-bufpool",
+    "crates/kithara-decode",
     "crates/kithara-drm",
+    "crates/kithara-encode",
     "crates/kithara-events",
-    "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
-    "crates/kithara-audio",
-    "crates/kithara-encode",
-    "crates/kithara-decode",
-    "crates/kithara-stream",
-    "crates/kithara-storage",
-    "crates/kithara-assets",
-    "crates/kithara-bufpool",
+    "crates/kithara-net",
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-queue",
     "crates/kithara-resampler",
-    "crates/kithara-test-utils",
+    "crates/kithara-storage",
+    "crates/kithara-stream",
     "crates/kithara-test-macros",
+    "crates/kithara-test-utils",
+    "crates/kithara-ui",
     "tests",
 ]
 
@@ -320,6 +322,7 @@ regex = "1"
 reqwest = { version = "0.13.4", default-features = false }
 ringbuf = "0.5.0"
 rkyv = "0.8.17"
+ron = "0.12"
 roxmltree = "0.20"
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 # Beat detection NN inference (kithara-beat).

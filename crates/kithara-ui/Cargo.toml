@@ -1,0 +1,24 @@
+[package]
+name = "kithara-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Serializable modular UI model: layout and module documents, registries, compiler."
+keywords = ["ui", "layout", "modular", "serde", "ron"]
+categories = ["gui", "config"]
+
+[dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+derive_more = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+kithara-test-utils = { path = "../kithara-test-utils" }
+
+[lints]
+workspace = true
