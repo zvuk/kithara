@@ -4,25 +4,58 @@ use kithara_platform::{CancelToken, sync::Arc};
 use super::super::{
     core::PlayerImpl,
     state::{
-        items::{BoundLoad, ItemLoadContext, restore_queued_resource},
+        items::{BoundLoad, restore_queued_resource},
         playlist::{Playlist, PreparedBindingStamp},
     },
 };
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding},
     error::PlayError,
-    player::track::{PlayerResource, PreparedElasticRenderer},
+    player::{
+        node::StreamShape,
+        track::{PlayerResource, PreparedElasticRenderer},
+    },
     resource::Resource,
 };
 
 pub(crate) enum PreparedBindingResource {}
+
+pub(crate) struct ItemLoadContext<'a> {
+    pub(crate) rate: f32,
+    pub(crate) pitch_bend: f32,
+    pub(crate) shape: StreamShape,
+    pub(crate) pool: &'a PcmPool,
+    pub(crate) stamp: PreparedBindingStamp,
+    pub(crate) cancel: CancelToken,
+}
+
+impl<'a> ItemLoadContext<'a> {
+    pub(crate) const fn new(
+        rate: f32,
+        pitch_bend: f32,
+        _tempo: Option<Tempo>,
+        shape: StreamShape,
+        pool: &'a PcmPool,
+        stamp: PreparedBindingStamp,
+        cancel: CancelToken,
+    ) -> Self {
+        Self {
+            rate,
+            pitch_bend,
+            shape,
+            pool,
+            stamp,
+            cancel,
+        }
+    }
+}
 
 impl PlayerImpl {
     pub(in crate::player) fn validate_session_tempo(
         &self,
         _snapshot: SessionTransportSnapshot,
         _tempo: Tempo,
-        _shape: crate::player::node::StreamShape,
+        _shape: StreamShape,
         binding: Option<&TrackBinding>,
     ) -> Result<(), PlayError> {
         if binding.is_some() {
@@ -37,10 +70,26 @@ impl PlayerImpl {
         _target: SessionBeat,
         _tempo: Tempo,
         _revision: u64,
-        _shape: crate::player::node::StreamShape,
+        _shape: StreamShape,
         binding: Option<&TrackBinding>,
     ) -> Result<(), PlayError> {
         if binding.is_some() {
+            Err(PlayError::ElasticBackendUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(in crate::player) fn validate_successor_tempo(
+        playlist: &Playlist,
+        _tempo: Tempo,
+        _shape: StreamShape,
+    ) -> Result<(), PlayError> {
+        if (playlist.current().saturating_add(1)..playlist.len()).any(|index| {
+            playlist
+                .get(index)
+                .is_some_and(|queued| queued.binding.is_some())
+        }) {
             Err(PlayError::ElasticBackendUnavailable)
         } else {
             Ok(())
@@ -87,6 +136,7 @@ pub(crate) fn prepare_bound_load(
     playlist: &mut Playlist,
     index: usize,
     resource: Resource,
+    _binding: &TrackBinding,
     prepared: Option<PreparedBindingResource>,
     context: ItemLoadContext<'_>,
 ) -> Result<BoundLoad, PlayError> {

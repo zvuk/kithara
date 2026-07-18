@@ -142,6 +142,25 @@ impl PreparedElasticRenderer {
         self.renderer.decoded_frontier()
     }
 
+    pub(crate) fn validate_retarget(
+        &self,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
+        tempo: Tempo,
+    ) -> Result<(), ElasticPrepareError> {
+        self.renderer.validate_retarget(binding, anchor, tempo)
+    }
+
+    pub(crate) fn retarget(
+        &mut self,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
+        tempo: Tempo,
+        revision: u64,
+    ) -> Result<(), ElasticPrepareError> {
+        self.renderer.retarget(binding, anchor, tempo, revision)
+    }
+
     pub(super) fn set_service_class(&mut self, class: ServiceClass) {
         self.renderer.set_service_class(class);
     }

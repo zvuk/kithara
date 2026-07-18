@@ -11,7 +11,8 @@ use tracing::debug;
 
 use super::{
     config::PlayerConfig,
-    state::{ItemLoadContext, ItemQueue, PlayerParams, PlayerPhase, PreparedBindingStamp},
+    platform::ItemLoadContext,
+    state::{ItemQueue, PlayerParams, PlayerPhase, PreparedBindingStamp},
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus},
@@ -170,11 +171,15 @@ impl PlayerImpl {
         let slot_id = self
             .require_active_slot()
             .map_err(|_| PlayError::NoActiveSlot)?;
-        let (shape, transport_revision) = if self.core.items.has_binding(index) {
+        let (shape, transport_revision, tempo) = if self.core.items.has_binding(index) {
             let preparation = self.core.engine.binding_preparation()?;
-            (preparation.shape, preparation.revision)
+            (
+                preparation.shape,
+                preparation.revision,
+                Some(preparation.tempo),
+            )
         } else {
-            (self.core.engine.stream_shape()?, 0)
+            (self.core.engine.stream_shape()?, 0, None)
         };
         let stamp = PreparedBindingStamp::new(shape, transport_revision);
         let cancel = self
@@ -185,14 +190,15 @@ impl PlayerImpl {
             .child();
         let dispatched = self.core.items.dispatch_load(
             index,
-            ItemLoadContext {
-                rate: self.core.timestretch.speed(),
-                pitch_bend: self.core.params.pitch_bend(),
+            ItemLoadContext::new(
+                self.core.timestretch.speed(),
+                self.core.params.pitch_bend(),
+                tempo,
                 shape,
-                pool: self.core.engine.pcm_pool(),
+                self.core.engine.pcm_pool(),
                 stamp,
                 cancel,
-            },
+            ),
             &self.core.engine,
             slot_id,
         )?;

@@ -3,5 +3,6 @@
 mod imp;
 
 pub(crate) use imp::{
-    PreparedBindingResource, activate_load, prepare_bound_load, restore_prepared_binding,
+    ItemLoadContext, PreparedBindingResource, activate_load, prepare_bound_load,
+    restore_prepared_binding,
 };

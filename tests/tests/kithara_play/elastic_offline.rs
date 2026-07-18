@@ -6,7 +6,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{BeatGrid, ReadOutcome, TrackBeat, analysis::TrackAnalysis},
     decode::PcmSpec,
-    events::{AudioEvent, Event, EventBus},
+    events::{AudioEvent, Event, EventBus, PlayerEvent},
     platform::{
         sync::Arc,
         time::{Duration, sleep},
@@ -18,7 +18,8 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, SignalFormat, SignalSpec,
+    SignalSpecLength, TestServerHelper, TestTempDir,
     audio_mock::TestPcmReader,
     kithara,
     offline::{OfflineSession, resource_from_reader},
@@ -678,6 +679,175 @@ async fn explicit_join_is_silent_before_its_beat_and_uses_the_existing_transport
     assert!(
         (frequency - 440.0).abs() < 10.0,
         "frequency was {frequency}"
+    );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn queued_bound_successor_retargets_after_tempo_commit_without_reload(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    );
+    harness
+        .player()
+        .ensure_engine_started()
+        .expect("offline engine starts");
+    harness
+        .player()
+        .ensure_slot()
+        .expect("offline player slot is allocated");
+    harness
+        .set_session_tempo(Tempo::new(120.0).expect("valid initial tempo"))
+        .expect("initial tempo accepted");
+    let _ = harness.render(1);
+    let anchor = harness
+        .session_transport()
+        .expect("initial tempo committed")
+        .position();
+
+    let active = insert_bound_sine(&harness, &server, &temp_dir, 120, 220.0, anchor).await;
+    harness
+        .player()
+        .select_item(active, true)
+        .expect("active bound fixture selected");
+    for _ in 0..8 {
+        let _ = harness.render(BLOCK_FRAMES);
+        harness.tick_and_drain();
+        sleep(Duration::from_millis(1)).await;
+    }
+    let before_successor = harness
+        .session_transport()
+        .expect("transport before successor prefetch");
+    let changed_tempo = Tempo::new(100.0).expect("valid successor tempo");
+    let current_slope =
+        before_successor.tempo().beats_per_minute() / (f64::from(SAMPLE_RATE) * 60.0);
+    let successor_anchor = SessionBeat::new(
+        before_successor.position().get()
+            + BLOCK_FRAMES.to_f64().expect("block boundary fits f64") * current_slope,
+    )
+    .expect("next transport boundary is finite");
+
+    let successor = server.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(marker_source_wav()),
+            content_type: Some("audio/wav"),
+        },
+        delivery: Delivery::Range,
+    });
+    let config = ResourceConfig::for_src(successor.child_url("successor.wav").as_str())
+        .expect("valid successor URL")
+        .store(StoreOptions::new(temp_dir.path()))
+        .byte_pool(harness.player().byte_pool().clone())
+        .pcm_pool(harness.player().pcm_pool().clone())
+        .build();
+    let mut resource = Resource::new(harness.player().prepare_config(config))
+        .await
+        .expect("open successor fixture");
+    resource.preload().await.expect("preload successor fixture");
+    harness
+        .player()
+        .insert_with_binding(resource, None, exact_binding(successor_anchor, 120), None)
+        .await
+        .expect("successor prepares at its join anchor");
+    let requests_after_prefetch = successor.request_count();
+
+    let (_, committed) = commit_tempo_change(std::slice::from_ref(&harness), changed_tempo);
+    assert_eq!(committed.tempo(), changed_tempo);
+    assert!(
+        (committed.position().get() - successor_anchor.get()).abs() <= current_slope,
+        "tempo commit at {} missed successor boundary {} (slope {current_slope})",
+        committed.position().get(),
+        successor_anchor.get()
+    );
+
+    harness
+        .player()
+        .select_item(1, true)
+        .expect("prepared successor retargets to the committed tempo revision");
+    assert_eq!(
+        successor.request_count(),
+        requests_after_prefetch,
+        "tempo retarget must reuse the successor's prepared decoded windows"
+    );
+    let mut events = Vec::new();
+    for _ in 0..4 {
+        let _ = harness.render(BLOCK_FRAMES);
+        events.extend(harness.tick_and_drain());
+        sleep(Duration::from_millis(1)).await;
+    }
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, PlayerEvent::PlaybackStarted { .. })),
+        "prepared successor did not start at selection: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, PlayerEvent::ItemDidFail { .. })),
+        "prepared successor failed after selection: {events:?}"
+    );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn queued_bound_successor_rejects_unsupported_tempo_before_commit(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    );
+    harness
+        .player()
+        .ensure_engine_started()
+        .expect("offline engine starts");
+    harness
+        .player()
+        .ensure_slot()
+        .expect("offline player slot is allocated");
+    harness
+        .set_session_tempo(Tempo::new(120.0).expect("valid initial tempo"))
+        .expect("initial tempo accepted");
+    let _ = harness.render(1);
+    let anchor = harness
+        .session_transport()
+        .expect("initial tempo committed")
+        .position();
+    let active = insert_bound_sine(&harness, &server, &temp_dir, 100, 220.0, anchor).await;
+    harness
+        .player()
+        .select_item(active, true)
+        .expect("active bound fixture selected");
+    for _ in 0..8 {
+        let _ = harness.render(BLOCK_FRAMES);
+        harness.tick_and_drain();
+        sleep(Duration::from_millis(1)).await;
+    }
+    let successor = bound_sine_resource(&harness, &server, &temp_dir, 440.0).await;
+    harness
+        .player()
+        .insert_with_binding(successor, None, exact_binding(anchor, 120), None)
+        .await
+        .expect("successor prepares at its join anchor");
+    let before = harness
+        .session_transport()
+        .expect("transport before rejected successor tempo");
+
+    let error = harness
+        .player()
+        .set_session_tempo(&[], Tempo::new(70.0).expect("finite rejected tempo"))
+        .expect_err("unsupported successor must reject the tempo transaction");
+
+    assert!(matches!(error, PlayError::SessionTempoUnsupported { .. }));
+    assert_eq!(
+        harness
+            .session_transport()
+            .expect("transport after rejected successor tempo"),
+        before
     );
 }
 

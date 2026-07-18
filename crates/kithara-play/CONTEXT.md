@@ -327,6 +327,19 @@ playlist lock spans take through command publication, so insert, remove, and
 replacement linearize entirely before or after the load; rollback cannot target
 a shifted or replaced coordinate.
 
+`ItemQueue` also owns successor demand. A future bound entry keeps one binding,
+one prepared renderer, and its original resource; the binding session anchor is
+its expected join beat. Initial preparation retains the maximum backend warm-up
+history together with the normal directional look-ahead. The exact-tempo range
+and only the additional envelope history are fetched as separate bounded demands
+into the same prepared PCM window. Before a tempo commit, the player validates
+every future bound renderer against the candidate tempo and current stream
+shape. When a later selection observes the committed revision, it re-primes
+that same dormant renderer from the retained PCM window and updates its stamp
+without reopening the resource or duplicating cached source audio. Replacement
+and removal discard the whole queue entry, so no stale successor demand survives
+either mutation.
+
 `ElasticRenderer` is the sole owner of the audible directional source cursor.
 For each render range it derives the desired source path from `TrackBinding` and
 the shared `RenderContext`, then submits an integer source/output span to a

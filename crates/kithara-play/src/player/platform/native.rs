@@ -1,13 +1,13 @@
 use kithara_audio::ServiceClass;
 use kithara_bufpool::PcmPool;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_stretch::{ElasticRateEnvelope, SignalsmithElastic};
+use kithara_stretch::{ElasticError, ElasticRateEnvelope, SignalsmithElastic};
 
 use super::super::{
     core::PlayerImpl,
     state::{
         items::{
-            BoundLoad, DispatchedLoad, ItemLoadContext, ItemQueue, JoinLoad, LoadTransaction,
+            BoundLoad, DispatchedLoad, ItemQueue, JoinLoad, LoadTransaction,
             restore_queued_resource,
         },
         playlist::{Playlist, PreparedBindingStamp, QueuedResource},
@@ -19,7 +19,10 @@ use crate::{
     error::PlayError,
     player::{
         node::StreamShape,
-        track::{ElasticPlanError, PlayerResource, PreparedElasticRenderer, plan_elastic_segments},
+        track::{
+            ElasticPlanError, ElasticPrepareError, PlayerResource, PreparedElasticRenderer,
+            plan_elastic_segments,
+        },
     },
     resource::Resource,
     session::render::{RenderContext, RenderFrame, SessionTransportCommit},
@@ -28,6 +31,38 @@ use crate::{
 pub(crate) struct PreparedBindingResource {
     pub(crate) renderer: PreparedElasticRenderer,
     pub(crate) stamp: PreparedBindingStamp,
+}
+
+pub(crate) struct ItemLoadContext<'a> {
+    pub(crate) rate: f32,
+    pub(crate) pitch_bend: f32,
+    pub(crate) tempo: Option<Tempo>,
+    pub(crate) shape: StreamShape,
+    pub(crate) pool: &'a PcmPool,
+    pub(crate) stamp: PreparedBindingStamp,
+    pub(crate) cancel: CancelToken,
+}
+
+impl<'a> ItemLoadContext<'a> {
+    pub(crate) const fn new(
+        rate: f32,
+        pitch_bend: f32,
+        tempo: Option<Tempo>,
+        shape: StreamShape,
+        pool: &'a PcmPool,
+        stamp: PreparedBindingStamp,
+        cancel: CancelToken,
+    ) -> Self {
+        Self {
+            rate,
+            pitch_bend,
+            tempo,
+            shape,
+            pool,
+            stamp,
+            cancel,
+        }
+    }
 }
 
 impl PlayerImpl {
@@ -71,6 +106,33 @@ impl PlayerImpl {
             shape,
             SignalsmithElastic::rate_envelope(),
         )?;
+        Ok(())
+    }
+
+    pub(in crate::player) fn validate_successor_tempo(
+        playlist: &Playlist,
+        tempo: Tempo,
+        shape: StreamShape,
+    ) -> Result<(), PlayError> {
+        for index in playlist.current().saturating_add(1)..playlist.len() {
+            let Some(queued) = playlist.get(index) else {
+                continue;
+            };
+            let Some(binding) = queued.binding.as_ref() else {
+                continue;
+            };
+            let prepared = queued
+                .prepared
+                .as_ref()
+                .ok_or(PlayError::BindingPreparationRequired { index })?;
+            if prepared.stamp.shape != shape {
+                return Err(PlayError::BindingPreparationStale { index });
+            }
+            prepared
+                .renderer
+                .validate_retarget(binding, binding.session_anchor(), tempo)
+                .map_err(map_successor_retarget_error)?;
+        }
         Ok(())
     }
 
@@ -127,14 +189,15 @@ impl PlayerImpl {
                 prepared: Some(prepared),
                 resource: Some(resource),
             },
-            ItemLoadContext {
-                rate: self.core.timestretch.speed(),
-                pitch_bend: self.core.params.pitch_bend(),
-                shape: stamp.shape,
-                pool: self.core.engine.pcm_pool(),
+            ItemLoadContext::new(
+                self.core.timestretch.speed(),
+                self.core.params.pitch_bend(),
+                Some(current.tempo()),
+                stamp.shape,
+                self.core.engine.pcm_pool(),
                 stamp,
                 cancel,
-            },
+            ),
             &self.core.engine,
             slot,
             target,
@@ -362,16 +425,35 @@ pub(crate) fn prepare_bound_load(
     playlist: &mut Playlist,
     index: usize,
     resource: Resource,
+    binding: &TrackBinding,
     prepared: Option<PreparedBindingResource>,
     context: ItemLoadContext<'_>,
 ) -> Result<BoundLoad, PlayError> {
-    let Some(prepared) = prepared else {
+    let Some(mut prepared) = prepared else {
         restore_queued_resource(playlist, index, None, resource)?;
         return Err(PlayError::BindingPreparationRequired { index });
     };
-    if prepared.stamp != context.stamp {
+    if prepared.stamp.shape != context.stamp.shape {
         restore_queued_resource(playlist, index, Some(prepared), resource)?;
         return Err(PlayError::BindingPreparationStale { index });
+    }
+    if prepared.stamp.transport_revision != context.stamp.transport_revision {
+        let Some(tempo) = context.tempo else {
+            restore_queued_resource(playlist, index, Some(prepared), resource)?;
+            return Err(PlayError::Internal(
+                "bound load has no session tempo".into(),
+            ));
+        };
+        if let Err(error) = prepared.renderer.retarget(
+            binding,
+            binding.session_anchor(),
+            tempo,
+            context.stamp.transport_revision,
+        ) {
+            restore_queued_resource(playlist, index, Some(prepared), resource)?;
+            return Err(map_successor_retarget_error(error));
+        }
+        prepared.stamp = context.stamp;
     }
 
     let PreparedBindingResource {
@@ -390,6 +472,22 @@ pub(crate) fn prepare_bound_load(
         abr_handle,
         activation: Some((context.cancel, context.pool.clone())),
     })
+}
+
+fn map_successor_retarget_error(error: ElasticPrepareError) -> PlayError {
+    match error {
+        ElasticPrepareError::Backend(ElasticError::InvalidRate(rate)) => {
+            let envelope = SignalsmithElastic::rate_envelope();
+            PlayError::SessionTempoUnsupported {
+                rate,
+                minimum: envelope.min_source_frames_per_output(),
+                maximum: envelope.max_source_frames_per_output(),
+            }
+        }
+        error => PlayError::ElasticPreparation {
+            reason: error.to_string(),
+        },
+    }
 }
 
 pub(crate) fn restore_prepared_binding(

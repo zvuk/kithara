@@ -9,7 +9,9 @@ use kithara_platform::{
 use tracing::debug;
 
 use super::{
-    super::platform::{activate_load, prepare_bound_load, restore_prepared_binding},
+    super::platform::{
+        ItemLoadContext, activate_load, prepare_bound_load, restore_prepared_binding,
+    },
     PreparedBindingResource, PreparedBindingStamp, QueuedResource,
     playlist::{Playlist, QueuedLoad},
 };
@@ -18,7 +20,7 @@ use crate::{
     bridge::PlayerCmd,
     engine::{DeferredPlayerCmdError, EngineImpl},
     error::PlayError,
-    player::{node::StreamShape, track::PlayerResource},
+    player::track::PlayerResource,
     resource::Resource,
 };
 
@@ -181,15 +183,6 @@ pub(in crate::player) fn restore_queued_resource(
             "load transaction could not restore its queue resource".into(),
         ))
     }
-}
-
-pub(crate) struct ItemLoadContext<'a> {
-    pub(crate) rate: f32,
-    pub(crate) pitch_bend: f32,
-    pub(crate) shape: StreamShape,
-    pub(crate) pool: &'a PcmPool,
-    pub(crate) stamp: PreparedBindingStamp,
-    pub(crate) cancel: CancelToken,
 }
 
 pub(crate) struct ItemQueue {
@@ -362,28 +355,20 @@ impl ItemQueue {
             prepared_stamp,
             abr_handle,
             activation,
-        } = if binding.is_some() {
-            match prepare_bound_load(&mut playlist, index, resource, prepared, context) {
+        } = if let Some(binding) = binding.as_ref() {
+            match prepare_bound_load(&mut playlist, index, resource, binding, prepared, context) {
                 Ok(load) => load,
                 Err(error) => return Err((playlist, error)),
             }
         } else {
-            let ItemLoadContext {
-                rate,
-                pitch_bend,
-                shape,
-                pool,
-                stamp: _,
-                cancel,
-            } = context;
             let abr_handle = resource.abr_handle();
             resource.set_playback_rate(rate);
             resource.set_transport_bend(pitch_bend);
             resource.set_host_sample_rate(shape.sample_rate);
             let src = Arc::clone(resource.src());
-            drop(cancel);
+            drop(context.cancel);
             BoundLoad {
-                player_resource: PlayerResource::new(resource, src, pool),
+                player_resource: PlayerResource::new(resource, src, context.pool),
                 prepared_stamp: None,
                 abr_handle,
                 activation: None,
@@ -464,11 +449,13 @@ mod tests {
     use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
     use kithara_events::{Envelope, Event, PlayerEvent};
     use kithara_platform::{CancelScope, time::Duration};
+    use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        api::{PlaybackDirection, SessionBeat, SlotId},
+        api::{PlaybackDirection, SessionBeat, SlotId, Tempo},
         engine::EngineConfig,
+        player::node::StreamShape,
     };
 
     struct EofReader {
@@ -567,17 +554,18 @@ mod tests {
             sample_rate: NonZeroU32::new(44_100).expect("static rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
-        ItemLoadContext {
-            rate: 1.0,
-            pitch_bend: 1.0,
+        ItemLoadContext::new(
+            1.0,
+            1.0,
+            Some(Tempo::new(120.0).expect("valid tempo")),
             shape,
             pool,
-            stamp: PreparedBindingStamp::new(shape, 0),
+            PreparedBindingStamp::new(shape, 0),
             cancel,
-        }
+        )
     }
 
-    #[test]
+    #[kithara::test]
     fn insert_and_remove_preserve_resource() {
         let queue = ItemQueue::new(EventBus::default());
         queue.insert(resource("first"), None, None);
@@ -591,7 +579,41 @@ mod tests {
         assert_eq!(queue.item_count(), 0);
     }
 
-    #[test]
+    #[kithara::test]
+    fn replacement_and_removal_invalidate_queued_binding_demand() {
+        let queue = ItemQueue::new(EventBus::default());
+        queue.insert_queued(
+            QueuedResource {
+                binding: Some(binding()),
+                item_id: None,
+                prepared: None,
+                resource: Some(resource("bound-successor")),
+            },
+            None,
+        );
+        assert!(queue.has_binding(0));
+
+        queue.replace_item_tagged(0, resource("replacement"), None);
+        assert!(!queue.has_binding(0));
+        let replacement = queue.remove_at(0).expect("replacement remains queued");
+        assert!(replacement.binding.is_none());
+        assert!(replacement.prepared.is_none());
+
+        queue.insert_queued(
+            QueuedResource {
+                binding: Some(binding()),
+                item_id: None,
+                prepared: None,
+                resource: Some(resource("removed-successor")),
+            },
+            None,
+        );
+        let removed = queue.remove_at(0).expect("bound successor is removed");
+        assert!(removed.binding.is_some());
+        assert_eq!(queue.item_count(), 0);
+    }
+
+    #[kithara::test]
     fn taking_a_bound_resource_retains_its_queue_coordinate_metadata() {
         let queue = ItemQueue::new(EventBus::default());
         queue.insert_queued(
@@ -615,7 +637,7 @@ mod tests {
         assert!(queue.current_has_binding());
     }
 
-    #[test]
+    #[kithara::test]
     fn load_transaction_serializes_queue_mutation_and_restores_rejection() {
         let queue = ItemQueue::new(EventBus::default());
         queue.insert(resource("original"), None, None);
@@ -644,7 +666,7 @@ mod tests {
         engine.worker().shutdown();
     }
 
-    #[test]
+    #[kithara::test]
     fn announce_deduplicates_current_item_event() {
         let bus = EventBus::default();
         let mut events = bus.subscribe();

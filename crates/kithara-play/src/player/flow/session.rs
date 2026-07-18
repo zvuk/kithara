@@ -52,6 +52,7 @@ impl PlayerImpl {
         let shape = preparation.shape;
         for ((_, player), playlist) in participants.iter().zip(&playlists) {
             player.validate_session_tempo(snapshot, tempo, shape, playlist.current_binding())?;
+            Self::validate_successor_tempo(playlist, tempo, shape)?;
         }
         let player_ids = participants
             .iter()

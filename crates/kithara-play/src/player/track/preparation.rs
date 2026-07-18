@@ -7,6 +7,40 @@ use super::{
     copy_source, sample_count,
 };
 
+fn expand_preparation_history(
+    max_warm_frames: usize,
+    source_frame_count: u64,
+    preparation: &mut ElasticPreparation,
+) -> Result<Option<SourceFrameRange>, ElasticPrepareError> {
+    let additional = max_warm_frames
+        .checked_sub(preparation.warmup.source_frames())
+        .ok_or(ElasticPrepareError::FrameOverflow)?;
+    let additional = u64::try_from(additional).map_err(|_| ElasticPrepareError::FrameOverflow)?;
+    let range = preparation.fetch_range;
+    let extension = match preparation.direction {
+        PlaybackDirection::Forward => {
+            let start = range.start().saturating_sub(additional);
+            (start < range.start()).then(|| SourceFrameRange::new(start, range.start()))
+        }
+        PlaybackDirection::Reverse => {
+            let end = range
+                .end()
+                .checked_add(additional)
+                .ok_or(ElasticPrepareError::FrameOverflow)?
+                .min(source_frame_count);
+            (range.end() < end).then(|| SourceFrameRange::new(range.end(), end))
+        }
+    }
+    .transpose()?;
+    if let Some(extension) = extension {
+        preparation.fetch_range = SourceFrameRange::new(
+            range.start().min(extension.start()),
+            range.end().max(extension.end()),
+        )?;
+    }
+    Ok(extension)
+}
+
 impl ElasticRenderer {
     pub(crate) fn begin_prefetch(
         &mut self,
@@ -24,15 +58,15 @@ impl ElasticRenderer {
         if self.relocation.is_some() {
             return Err(ElasticPrepareError::RelocationPending);
         }
-        let preparation = self.plan_preparation(binding, anchor, tempo, Self::PREFETCH_BLOCKS)?;
-        let start = preparation.fetch_range.start();
-        resource
-            .seek_source_frame(start)
-            .map_err(|_| ElasticPrepareError::SourceSeek)?;
-        self.demand = resource.request_source_audio(preparation.fetch_range, 0)?;
-        if self.demand.is_none() {
-            return Err(ElasticPrepareError::SourceUnavailable);
-        }
+        let mut preparation =
+            self.plan_preparation(binding, anchor, tempo, Self::PREFETCH_BLOCKS)?;
+        let request = preparation.fetch_range;
+        self.preparation_extension = expand_preparation_history(
+            self.max_warm_frames,
+            self.source_frame_count,
+            &mut preparation,
+        )?;
+        self.request_preparation_range(resource, request)?;
         self.revision = revision;
         self.preparation = Some(preparation);
         Ok(())
@@ -114,6 +148,56 @@ impl ElasticRenderer {
         })
     }
 
+    pub(crate) fn validate_retarget(
+        &self,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
+        tempo: Tempo,
+    ) -> Result<(), ElasticPrepareError> {
+        self.retarget_preparation(binding, anchor, tempo).map(drop)
+    }
+
+    pub(crate) fn retarget(
+        &mut self,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
+        tempo: Tempo,
+        revision: u64,
+    ) -> Result<(), ElasticPrepareError> {
+        let preparation = self.retarget_preparation(binding, anchor, tempo)?;
+        let fetch_frames = usize::try_from(preparation.fetch_range.len())
+            .map_err(|_| ElasticPrepareError::FrameOverflow)?;
+        let fetch_samples = sample_count(fetch_frames, self.channels)?;
+        self.prime(preparation, fetch_samples)?;
+        self.cursor = Some(preparation.anchor);
+        self.direction = Some(preparation.direction);
+        self.revision = revision;
+        Ok(())
+    }
+
+    fn retarget_preparation(
+        &self,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
+        tempo: Tempo,
+    ) -> Result<ElasticPreparation, ElasticPrepareError> {
+        if !self.primed || self.preparation.is_some() {
+            return Err(ElasticPrepareError::SourceUnavailable);
+        }
+        let mut preparation =
+            self.plan_preparation(binding, anchor, tempo, Self::PREFETCH_BLOCKS)?;
+        let fetch_range = self
+            .source_window
+            .ok_or(ElasticPrepareError::SourceUnavailable)?;
+        if fetch_range.start() > preparation.fetch_range.start()
+            || fetch_range.end() < preparation.fetch_range.end()
+        {
+            return Err(ElasticPrepareError::FetchWindowMismatch);
+        }
+        preparation.fetch_range = fetch_range;
+        Ok(preparation)
+    }
+
     pub(crate) fn poll_preparation(
         &mut self,
         resource: &mut PlayerResource,
@@ -133,11 +217,26 @@ impl ElasticRenderer {
             return Err(ElasticPrepareError::FetchWindowMismatch);
         }
         let fetch_samples = sample_count(fetch_frames, self.channels)?;
+        let request = self
+            .preparation_request
+            .ok_or(ElasticPrepareError::SourceUnavailable)?;
+        let request_frames =
+            usize::try_from(request.len()).map_err(|_| ElasticPrepareError::FrameOverflow)?;
+        let request_offset = request
+            .start()
+            .checked_sub(preparation.fetch_range.start())
+            .ok_or(ElasticPrepareError::FetchWindowMismatch)?;
+        let request_offset =
+            usize::try_from(request_offset).map_err(|_| ElasticPrepareError::FrameOverflow)?;
+        let request_sample_start = sample_count(request_offset, self.channels)?;
+        let request_sample_end = request_sample_start
+            .checked_add(sample_count(request_frames, self.channels)?)
+            .ok_or(ElasticPrepareError::FrameOverflow)?;
         let demand = self.demand.ok_or(ElasticPrepareError::SourceUnavailable)?;
         match resource.read_source_audio(
             &demand,
-            preparation.fetch_range,
-            &mut self.fetch[..fetch_samples],
+            request,
+            &mut self.fetch[request_sample_start..request_sample_end],
         )? {
             Some(SourceAudioReadOutcome::Ready { .. }) => {}
             Some(SourceAudioReadOutcome::Pending) => {
@@ -147,6 +246,11 @@ impl ElasticRenderer {
             Some(_) => return Err(ElasticPrepareError::UnsupportedSourceOutcome),
             None => return Err(ElasticPrepareError::SourceUnavailable),
         }
+        if let Some(extension) = self.preparation_extension.take() {
+            self.request_preparation_range(resource, extension)?;
+            return Ok(ElasticPreparationOutcome::Pending);
+        }
+        self.preparation_request = None;
         self.prime(preparation, fetch_samples)?;
         self.cursor = Some(preparation.anchor);
         self.direction = Some(preparation.direction);
@@ -165,6 +269,22 @@ impl ElasticRenderer {
         self.demand = None;
         self.preparation_buffers.clear();
         Ok(ElasticPreparationOutcome::Ready)
+    }
+
+    fn request_preparation_range(
+        &mut self,
+        resource: &mut PlayerResource,
+        range: SourceFrameRange,
+    ) -> Result<(), ElasticPrepareError> {
+        resource
+            .seek_source_frame(range.start())
+            .map_err(|_| ElasticPrepareError::SourceSeek)?;
+        self.demand = resource.request_source_audio(range, 0)?;
+        if self.demand.is_none() {
+            return Err(ElasticPrepareError::SourceUnavailable);
+        }
+        self.preparation_request = Some(range);
+        Ok(())
     }
 
     fn poll_preparation_window(
@@ -384,6 +504,38 @@ mod tests {
         assert_eq!(anchor - preparation.fetch_range.start(), prefetch);
         assert_eq!(preparation.fetch_range.end() - anchor, history);
         assert!(preparation.fetch_range.end() <= source_frames());
+    }
+
+    #[kithara::test]
+    fn reverse_preparation_fetches_extra_tempo_history_as_a_separate_range() {
+        let pool = PcmPool::default();
+        let renderer = renderer(&pool);
+        let mut preparation = renderer
+            .plan_preparation(
+                &binding(PlaybackDirection::Reverse),
+                SessionBeat::new(0.0).expect("finite anchor"),
+                Tempo::new(120.0).expect("valid tempo"),
+                ElasticRenderer::PREFETCH_BLOCKS,
+            )
+            .expect("reverse preparation plan");
+        let request = preparation.fetch_range;
+
+        let extension = expand_preparation_history(
+            renderer.max_warm_frames,
+            renderer.source_frame_count,
+            &mut preparation,
+        )
+        .expect("expanded preparation history")
+        .expect("maximum rate needs additional history");
+
+        assert_eq!(extension.start(), request.end());
+        assert_eq!(preparation.fetch_range.start(), request.start());
+        assert_eq!(preparation.fetch_range.end(), extension.end());
+        assert_eq!(
+            extension.len(),
+            u64::try_from(renderer.max_warm_frames - preparation.warmup.source_frames())
+                .expect("history extension fits u64")
+        );
     }
 
     #[kithara::test]

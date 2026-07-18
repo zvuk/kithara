@@ -57,6 +57,8 @@ coverage through the existing integration-test session.
       commit at one presentation boundary.
 - [x] Slice 7: transactional session seek and explicit join.
 - [x] Slice 8: prepared file-source reverse and directional read-ahead.
+- [x] Slice 9: single-variant HLS reverse and bounded directional look-ahead.
+- [x] Slice 10: queued successor prefetch and tempo retarget without source reload.
 
 ## 2026-07-16 Slice 5 Checkpoint
 
@@ -94,9 +96,9 @@ The current limits are intentional and typed:
 - custom readers cannot be reopened for bound preparation and return
   `BindingSourceNotReopenable`.
 
-Slices 10-12 remain required. Slice 10 owns successor prefetch. Slice 11 owns
-full offline, real-time, performance, and device/platform acceptance, and Slice
-12 owns event vocabulary migration.
+Slices 11-12 remain required. Slice 11 owns full offline, real-time,
+performance, and device/platform acceptance, and Slice 12 owns event vocabulary
+migration.
 
 Open implementation boundaries retained for the next slices:
 
@@ -241,6 +243,37 @@ Publishing the maximum frontier across the active window and ready FIFO fixed
 the contract; the focused elastic suite passed 16/16 and the final workspace
 harness passed 3803/3803 with 145 skipped. Native lint, formatting, architecture
 ratchets, and the structurally separate WASM lane are green.
+
+### 2026-07-18 Slice 10 Checkpoint
+
+`kithara-play::ItemQueue` remains the sole owner of queued successor demand.
+Each bound queue entry carries its immutable binding, one prepared renderer,
+and its original resource. The binding session anchor is the expected join
+beat; renderer preparation derives direction and bounded look-ahead from that
+same binding without adding transport state to `kithara-queue`.
+
+Initial preparation retains enough source history for the maximum supported
+backend rate. The exact-tempo range and its additional envelope history use two
+bounded demands into the same prepared PCM window, preserving the existing
+reverse file and HLS preparation limits. A later in-envelope tempo revision
+therefore re-primes the same dormant renderer from its retained PCM window when
+the item is selected; it does not reopen the resource or duplicate cached source
+audio. Tempo preflight validates every future bound entry before the session
+commit, so an unsupported successor rejects the transaction without changing
+transport. Stream-shape changes remain stale-preparation errors.
+
+Replacement and removal linearize on the existing playlist lock and discard
+the complete queued entry, including its binding and prepared renderer. The
+focused successor tests prove readiness after a tempo commit, unchanged HTTP
+request count across retarget, atomic rejection for an unsupported successor,
+and invalidation on replacement or removal. The WASM player remains a separate
+implementation and retains the typed elastic-backend capability rejection.
+
+Native and WASM lint, formatting, architecture ratchets, and the full workspace
+harness are green. The final isolated-target acceptance passed 3807/3807 tests
+with 145 skipped. Its first run exposed one unrelated pitch-bend zero-crossing
+flake; the same release binary passed 21/21 isolated repeats, and the complete
+workspace rerun passed 3807/3807.
 
 ## Affected Paths
 
