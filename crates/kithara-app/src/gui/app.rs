@@ -10,6 +10,7 @@ use super::{
     dj::DjView,
     frontend::window_settings,
     message::{Message, Tab},
+    modular::{ModularView, ViewMode},
     subscription::subscription_config,
     theme,
     url_bar::UrlBar,
@@ -30,6 +31,9 @@ pub(crate) struct Kithara {
     pub(crate) controller: Arc<StateController>,
     /// View-local DJ Studio state (open / closed).
     pub(crate) dj: DjView,
+    pub(crate) view_mode: ViewMode,
+    pub(crate) modular: ModularView,
+    pub(crate) settings_window_id: Option<window::Id>,
 
     pub(crate) palette: gui::GuiPalette,
     pub(crate) selected_track_index: Option<usize>,
@@ -62,6 +66,9 @@ impl Kithara {
             blink_counter: 0,
             url: UrlBar::default(),
             dj: DjView::default(),
+            view_mode: ViewMode::Compact,
+            modular: ModularView::default(),
+            settings_window_id: None,
             window_id: None,
         };
 
@@ -102,11 +109,14 @@ impl Kithara {
     }
 
     /// Window title, reflecting the active mode.
-    pub(crate) fn title(&self, _window: window::Id) -> String {
-        if self.dj.open {
-            "Kithara - DJ Studio".to_string()
-        } else {
-            "Kithara".to_string()
+    pub(crate) fn title(&self, window: window::Id) -> String {
+        if self.settings_window_id == Some(window) {
+            return "Kithara - View settings".to_owned();
+        }
+        match self.view_mode {
+            ViewMode::Compact => "Kithara".to_owned(),
+            ViewMode::Studio => "Kithara - DJ Studio".to_owned(),
+            ViewMode::Modular => "Kithara - Modular".to_owned(),
         }
     }
 }

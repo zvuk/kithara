@@ -18,7 +18,13 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-kithara-test-utils = { path = "../kithara-test-utils" }
+kithara-test-utils = { path = "../kithara-test-utils", features = [
+    "client-reqwest",
+    "probe",
+    "tls-rustls",
+] }
+
+ron = { workspace = true }
 
 [lints]
 workspace = true

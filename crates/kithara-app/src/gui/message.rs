@@ -46,6 +46,8 @@ pub(crate) enum Message {
     Tick,
     /// DJ Studio control event (grouped to keep this enum thin).
     Dj(super::dj::DjMsg),
+    /// Modular UI control event.
+    Modular(super::modular::ModularMsg),
     /// System close button on a window. Exits the app only for the live
     /// window; the mode-swap window is closed programmatically.
     WindowCloseRequested(iced::window::Id),

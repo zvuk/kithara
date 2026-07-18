@@ -4,6 +4,7 @@ mod fonts;
 mod frontend;
 mod icons;
 mod message;
+mod modular;
 mod studio;
 mod subscription;
 mod theme;

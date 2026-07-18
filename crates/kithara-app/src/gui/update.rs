@@ -7,7 +7,7 @@ use super::{
     app::Kithara,
     dj,
     message::{Message, Tab},
-    url_bar,
+    modular, url_bar,
 };
 
 fn track_id_at(state: &Kithara, index: usize) -> Option<TrackId> {
@@ -17,6 +17,7 @@ fn track_id_at(state: &Kithara, index: usize) -> Option<TrackId> {
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
         Message::Dj(msg) => dj::handle(state, &msg),
+        Message::Modular(msg) => modular::update(state, msg),
         Message::Url(msg) => url_bar::handle(state, msg),
         Message::WindowCloseRequested(id) => handle_window_close_requested(state, id),
         other => {
@@ -52,7 +53,10 @@ fn handle_player(state: &mut Kithara, message: &Message) {
         Message::TabSelected(tab) => handle_tab_selected(state, tab),
         Message::SetAbrMode(variant) => handle_set_abr_mode(state, variant),
         Message::Tick => handle_tick(state),
-        Message::Dj(_) | Message::Url(_) | Message::WindowCloseRequested(_) => {}
+        Message::Dj(_)
+        | Message::Modular(_)
+        | Message::Url(_)
+        | Message::WindowCloseRequested(_) => {}
     }
 }
 

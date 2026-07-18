@@ -1,0 +1,29 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "deck-transport",
+    parameters: ["deck"],
+    root: Row(
+        children: [
+            Control(
+                id: "play",
+                kind: "button",
+                props: { "label": Text("PLAY") },
+                read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
+                write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
+                adaptive: (priority: Required),
+            ),
+            Control(
+                id: "position",
+                kind: "telemetry.scalar",
+                read: Telemetry(id: "deck.playback.position_normalized", with: { "deck": "$deck" }),
+            ),
+            Control(
+                id: "volume",
+                kind: "fader.horizontal",
+                read: Parameter(id: "player.output.volume"),
+                write: Parameter(id: "player.output.volume"),
+            ),
+        ],
+    ),
+)

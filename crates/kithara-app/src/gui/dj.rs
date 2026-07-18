@@ -4,7 +4,9 @@ use kithara::events::{DjEvent, StretchBackendKind};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara::prelude::StretchKind;
 
-use super::{app::Kithara, frontend::window_settings, message::Message, widgets::Viewport};
+use super::{
+    app::Kithara, frontend::window_settings, message::Message, modular::ViewMode, widgets::Viewport,
+};
 use crate::gui::widgets::WaveMsg;
 
 /// View-local DJ Studio state.
@@ -139,6 +141,11 @@ fn stretch_backend_kind(kind: StretchKind) -> StretchBackendKind {
 /// the old one closes so the daemon always has a window in flight.
 fn handle_toggle(state: &mut Kithara) -> Task<Message> {
     state.dj.open = !state.dj.open;
+    state.view_mode = if state.dj.open {
+        ViewMode::Studio
+    } else {
+        ViewMode::Compact
+    };
 
     let old = state.window_id;
     let (new_id, open) = window::open(window_settings(state.dj.open));

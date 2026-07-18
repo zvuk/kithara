@@ -1,0 +1,25 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "deck",
+    parameters: ["deck"],
+    root: Column(
+        children: [
+            Control(
+                id: "title",
+                kind: "text",
+                props: { "style": Text("track-title") },
+                read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
+                adaptive: (priority: Required),
+            ),
+            Control(
+                id: "wave",
+                kind: "waveform.mini",
+                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+            ),
+            Include(id: "transport", source: "deck/transport.kmodule.ron", with: { "deck": "$deck" }),
+            Slot(id: "extra-controls"),
+        ],
+    ),
+)

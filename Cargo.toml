@@ -206,6 +206,7 @@ kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha4", def
 kithara-stretch = { path = "crates/kithara-stretch", version = "0.0.1-alpha4", default-features = false }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha4" }
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha4", default-features = false }
+kithara-ui = { path = "crates/kithara-ui", version = "0.0.1-alpha4" }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha4" }
 
 # misc

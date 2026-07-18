@@ -27,6 +27,7 @@ use super::{
     fonts,
     icons::Icon,
     message::{Message, Tab},
+    modular::{self, ModularMsg, ViewMode},
     tokens::gap,
     widgets,
 };
@@ -149,9 +150,14 @@ impl Consts {
     const VOLUME_STEP_SIZE: f32 = 0.01;
 }
 
-pub(crate) fn view(state: &Kithara, _window: iced::window::Id) -> Element<'_, Message> {
-    if state.dj.open {
-        return super::studio::view_dj_studio(state);
+pub(crate) fn view(state: &Kithara, window: iced::window::Id) -> Element<'_, Message> {
+    if state.settings_window_id == Some(window) {
+        return text("view settings").into();
+    }
+    match state.view_mode {
+        ViewMode::Compact => {}
+        ViewMode::Studio => return super::studio::view_dj_studio(state),
+        ViewMode::Modular => return modular::view::render(state, window),
     }
 
     let p = state.palette;
@@ -197,6 +203,7 @@ fn view_header(state: &Kithara) -> Element<'_, Message> {
             super::studio::brand_mark(p, "PLAYER"),
             Space::new().width(Length::Fill),
             dj_studio_button(p),
+            modular_button(p),
         ]
         .align_y(Alignment::Center)
         .spacing(gap::SECTION),
@@ -219,6 +226,22 @@ fn dj_studio_button(p: GuiPalette) -> Element<'static, Message> {
     .padding([Consts::DJ_LAUNCH_PADDING_Y, Consts::DJ_LAUNCH_PADDING_X])
     .style(super::studio::ghost_button_style(p))
     .on_press(Message::Dj(DjMsg::Toggle))
+    .into()
+}
+
+/// Compact-header entry point to the modular workspace preview.
+fn modular_button(p: GuiPalette) -> Element<'static, Message> {
+    button(
+        row![
+            Icon::Disc.view(Consts::DJ_LAUNCH_ICON, p.accent),
+            text("Modular").size(Consts::SMALL_FONT).color(p.text),
+        ]
+        .spacing(Consts::DJ_LAUNCH_GAP)
+        .align_y(Alignment::Center),
+    )
+    .padding([Consts::DJ_LAUNCH_PADDING_Y, Consts::DJ_LAUNCH_PADDING_X])
+    .style(super::studio::ghost_button_style(p))
+    .on_press(Message::Modular(ModularMsg::Enter))
     .into()
 }
 
