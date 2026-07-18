@@ -116,6 +116,7 @@ pub(crate) fn run_build(profile: BuildProfile, android: &AndroidConfig) -> Resul
     cmd.arg("ndk")
         .arg("-P")
         .arg(api_level)
+        .arg("--link-libcxx-shared")
         .args(&ndk_targets)
         .arg("-o")
         .arg(&jni_dir)
