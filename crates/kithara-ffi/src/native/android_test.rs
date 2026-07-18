@@ -13,6 +13,7 @@ use jni::{
 };
 use kithara::{
     audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
+    bufpool::{BytePool, PcmPool},
     file::{File as FileSource, FileConfig, FileSrc},
     stream::Stream,
 };
@@ -129,6 +130,8 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
     let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
         .hint("mp3".to_string())
         .worker(worker)
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .build();
 
     let mut audio = match Audio::<Stream<FileSource>>::new(audio_cfg).await {
@@ -170,7 +173,7 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         let frames_wanted = (target_frames - rendered_frames).min(Consts::BLOCK_FRAMES);
         let tick = Instant::now();
         let outcome = audio.read(&mut samples[..frames_wanted * channels]);
-        let frames_written = match outcome {
+        let samples_written = match outcome {
             Ok(ReadOutcome::Frames { count, .. }) => count.get(),
             Ok(ReadOutcome::Pending { .. }) => {
                 sleep(Duration::from_millis(5)).await;
@@ -182,10 +185,17 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
                 return Consts::RC_AUDIO_BUILD;
             }
         };
+        if !samples_written.is_multiple_of(channels) {
+            error!(
+                samples_written,
+                channels, "audio read returned partial frame"
+            );
+            return Consts::RC_AUDIO_BUILD;
+        }
+        let frames_written = samples_written / channels;
 
-        let written_samples = frames_written * channels;
         byte_buf.clear();
-        for sample in &samples[..written_samples] {
+        for sample in &samples[..samples_written] {
             byte_buf.extend_from_slice(&sample.to_le_bytes());
         }
         if let Err(err) = file.write_all(&byte_buf) {
@@ -241,7 +251,7 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeProbeAndroidAudio<'local>(
         return Consts::FMT_ERR_NO_DEVICE;
     };
 
-    let device_name = device.name().unwrap_or_else(|_| "<unknown>".to_owned());
+    let device_name = device.to_string();
     info!(device = %device_name, "cpal default output device");
 
     let default_cfg = match device.default_output_config() {
