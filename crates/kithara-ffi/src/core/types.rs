@@ -1,8 +1,8 @@
 use kithara_events::{
     AdvanceReason, AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass, DecodeErrorKind,
     DecoderBackend, DecoderChangeCause, EvictReason, FrameDomain, KeyFailureStage, KeySource,
-    PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, RouteChangeReason, StretchBackendKind,
-    TotalBytesSource, TrackFailureKind, TrackId, TrackStatus as TS,
+    PlaybackDirection, PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, RouteChangeReason,
+    StretchBackendKind, TotalBytesSource, TrackFailureKind, TrackId, TrackStatus as TS,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
@@ -357,6 +357,22 @@ pub enum FfiStretchBackendKind {
     Unknown,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FfiPlaybackDirection {
+    Forward,
+    Reverse,
+}
+
+impl From<PlaybackDirection> for FfiPlaybackDirection {
+    fn from(value: PlaybackDirection) -> Self {
+        match value {
+            PlaybackDirection::Forward => Self::Forward,
+            PlaybackDirection::Reverse => Self::Reverse,
+        }
+    }
+}
+
 impl From<StretchBackendKind> for FfiStretchBackendKind {
     fn from(value: StretchBackendKind) -> Self {
         match value {
@@ -467,6 +483,21 @@ pub enum FfiPlayerEvent {
     AssetCommitted { asset_root: String, rel_path: String, final_len: Option<u64> },
     AssetFailed { asset_root: String, rel_path: String, reason: String },
     AssetEvicted { asset_root: String, reason: FfiEvictReason },
+    TransportTempoCommitted { beats_per_minute: f64, revision: u64 },
+    TransportPlayStateCommitted { playing: bool, revision: u64 },
+    TransportSeekCommitted { position_beats: f64, revision: u64 },
+    TransportFailed { revision: Option<u64>, reason: String },
+    SyncBindingCommitted {
+        slot: u64,
+        session_anchor_beats: f64,
+        track_anchor_beats: f64,
+        direction: FfiPlaybackDirection,
+    },
+    SyncLockAcquired { slot: u64, revision: u64 },
+    SyncLockLost { slot: u64, revision: u64 },
+    SyncRelockCommitted { slot: u64, position_beats: f64, revision: u64 },
+    SyncDirectionCommitted { slot: u64, direction: FfiPlaybackDirection, revision: u64 },
+    SyncUnavailable { slot: u64, reason: String },
 }
 
 /// Transition style for a track switch.

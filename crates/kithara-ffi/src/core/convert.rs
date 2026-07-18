@@ -35,6 +35,8 @@ impl TryFrom<&Event> for FfiPlayerEvent {
         match event {
             Event::Engine(e) => Self::try_from(e),
             Event::Session(e) => Self::try_from(e),
+            Event::Transport(e) => Self::try_from(e),
+            Event::Sync(e) => Self::try_from(e),
             Event::Dj(e) => Self::try_from(e),
             Event::Asset(e) => Self::try_from(e),
             _ => Err(NotForwarded),
@@ -599,16 +601,17 @@ mod tests {
 
     use kithara_events::{
         AssetEvent, CancelReason, DownloaderEvent, DrmEvent, EngineEvent, Event, EvictReason,
-        FileEvent, KeyFailureStage, KeySource, QueueEvent, RequestId, RouteChangeReason,
-        SessionEvent, StretchBackendKind, TotalBytesSource, TrackId,
+        FileEvent, KeyFailureStage, KeySource, PlaybackDirection, QueueEvent, RequestId,
+        RouteChangeReason, SessionEvent, StretchBackendKind, SyncEvent, TotalBytesSource, TrackId,
+        TransportEvent,
     };
     use kithara_platform::time::Duration;
     use kithara_play::PlayerEvent;
 
     use super::{FfiError, FfiItemEvent, FfiPlayerEvent, NotForwarded};
     use crate::types::{
-        FfiCancelReason, FfiEvictReason, FfiKeyFailureStage, FfiKeySource, FfiRouteChangeReason,
-        FfiStretchBackendKind, FfiTotalBytesSource,
+        FfiCancelReason, FfiEvictReason, FfiKeyFailureStage, FfiKeySource, FfiPlaybackDirection,
+        FfiRouteChangeReason, FfiStretchBackendKind, FfiTotalBytesSource,
     };
 
     fn request_id(value: u64) -> RequestId {
@@ -772,6 +775,42 @@ mod tests {
             }),
             Ok(FfiPlayerEvent::AudioRouteChanged {
                 reason: FfiRouteChangeReason::CategoryChange,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn transport_event_to_ffi_uses_transport_vocabulary() {
+        let event = Event::Transport(TransportEvent::TempoCommitted {
+            beats_per_minute: 128.0,
+            revision: 7,
+        });
+
+        assert!(matches!(
+            FfiPlayerEvent::try_from(&event),
+            Ok(FfiPlayerEvent::TransportTempoCommitted {
+                beats_per_minute: 128.0,
+                revision: 7,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn sync_event_to_ffi_uses_sync_vocabulary() {
+        let event = Event::Sync(SyncEvent::BindingCommitted {
+            slot: kithara_events::SlotId::new(4),
+            session_anchor_beats: 8.0,
+            track_anchor_beats: 16.0,
+            direction: PlaybackDirection::Reverse,
+        });
+
+        assert!(matches!(
+            FfiPlayerEvent::try_from(&event),
+            Ok(FfiPlayerEvent::SyncBindingCommitted {
+                slot: 4,
+                session_anchor_beats: 8.0,
+                track_anchor_beats: 16.0,
+                direction: FfiPlaybackDirection::Reverse,
             })
         ));
     }

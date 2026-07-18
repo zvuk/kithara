@@ -4,8 +4,9 @@ use super::marshal::{
     discriminant, get_bool, get_f64, get_id_req, get_opt_id, get_str, narrow_f32,
 };
 use crate::types::{
-    FfiAdvanceReason, FfiEvictReason, FfiPlayerEvent, FfiPlayerStatus, FfiRepeatMode,
-    FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus, FfiTrackStatus,
+    FfiAdvanceReason, FfiEvictReason, FfiPlaybackDirection, FfiPlayerEvent, FfiPlayerStatus,
+    FfiRepeatMode, FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus,
+    FfiTrackStatus,
 };
 
 pub(crate) fn decode(data: &JsValue) -> Option<FfiPlayerEvent> {
@@ -101,6 +102,50 @@ pub(crate) fn decode(data: &JsValue) -> Option<FfiPlayerEvent> {
         "DjStretchBackendChanged" => FfiPlayerEvent::DjStretchBackendChanged {
             kind: decode_stretch_backend_kind(get_str(data, "kind")),
         },
+        "TransportTempoCommitted" => FfiPlayerEvent::TransportTempoCommitted {
+            beats_per_minute: get_f64(data, "beats_per_minute")?,
+            revision: num_traits::cast(get_f64(data, "revision")?).unwrap_or(0),
+        },
+        "TransportPlayStateCommitted" => FfiPlayerEvent::TransportPlayStateCommitted {
+            playing: get_bool(data, "playing")?,
+            revision: num_traits::cast(get_f64(data, "revision")?).unwrap_or(0),
+        },
+        "TransportSeekCommitted" => FfiPlayerEvent::TransportSeekCommitted {
+            position_beats: get_f64(data, "position_beats")?,
+            revision: num_traits::cast(get_f64(data, "revision")?).unwrap_or(0),
+        },
+        "TransportFailed" => FfiPlayerEvent::TransportFailed {
+            revision: get_f64(data, "revision").map(|value| num_traits::cast(value).unwrap_or(0)),
+            reason: get_str(data, "reason").unwrap_or_default(),
+        },
+        "SyncBindingCommitted" => FfiPlayerEvent::SyncBindingCommitted {
+            slot: num_traits::cast(get_f64(data, "slot")?).unwrap_or(0),
+            session_anchor_beats: get_f64(data, "session_anchor_beats")?,
+            track_anchor_beats: get_f64(data, "track_anchor_beats")?,
+            direction: decode_playback_direction(get_str(data, "direction")),
+        },
+        "SyncLockAcquired" => FfiPlayerEvent::SyncLockAcquired {
+            slot: num_traits::cast(get_f64(data, "slot")?).unwrap_or(0),
+            revision: num_traits::cast(get_f64(data, "revision")?).unwrap_or(0),
+        },
+        "SyncLockLost" => FfiPlayerEvent::SyncLockLost {
+            slot: num_traits::cast(get_f64(data, "slot")?).unwrap_or(0),
+            revision: num_traits::cast(get_f64(data, "revision")?).unwrap_or(0),
+        },
+        "SyncRelockCommitted" => FfiPlayerEvent::SyncRelockCommitted {
+            slot: num_traits::cast(get_f64(data, "slot")?).unwrap_or(0),
+            position_beats: get_f64(data, "position_beats")?,
+            revision: num_traits::cast(get_f64(data, "revision")?).unwrap_or(0),
+        },
+        "SyncDirectionCommitted" => FfiPlayerEvent::SyncDirectionCommitted {
+            slot: num_traits::cast(get_f64(data, "slot")?).unwrap_or(0),
+            direction: decode_playback_direction(get_str(data, "direction")),
+            revision: num_traits::cast(get_f64(data, "revision")?).unwrap_or(0),
+        },
+        "SyncUnavailable" => FfiPlayerEvent::SyncUnavailable {
+            slot: num_traits::cast(get_f64(data, "slot")?).unwrap_or(0),
+            reason: get_str(data, "reason").unwrap_or_default(),
+        },
         "AssetCommitted" => FfiPlayerEvent::AssetCommitted {
             asset_root: get_str(data, "asset_root").unwrap_or_default(),
             rel_path: get_str(data, "rel_path").unwrap_or_default(),
@@ -191,6 +236,13 @@ fn decode_stretch_backend_kind(value: Option<String>) -> FfiStretchBackendKind {
         Some("Signalsmith") => FfiStretchBackendKind::Signalsmith,
         Some("Bungee") => FfiStretchBackendKind::Bungee,
         _ => FfiStretchBackendKind::Unknown,
+    }
+}
+
+fn decode_playback_direction(value: Option<String>) -> FfiPlaybackDirection {
+    match value.as_deref() {
+        Some("Reverse") => FfiPlaybackDirection::Reverse,
+        _ => FfiPlaybackDirection::Forward,
     }
 }
 
