@@ -316,7 +316,7 @@ impl SourceAudioReader {
 
 pub(crate) fn next_lane_id() -> Result<NonZeroU64, SourceAudioError> {
     let lane_id = NEXT_LANE_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .map_err(|_| SourceAudioError::LaneExhausted)?;
