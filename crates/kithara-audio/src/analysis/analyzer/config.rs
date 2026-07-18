@@ -116,10 +116,11 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_test_utils::kithara;
 
     use super::BeatAnalysisConfig;
 
-    #[test]
+    #[kithara::test]
     fn default_beat_config_reports_configured_backend() {
         assert_eq!(
             BeatAnalysisConfig::<RubatoBackend>::default().resampler_backend_name(),

@@ -38,16 +38,18 @@ impl PitchBend {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn defaults_to_unity() {
         let bend = PitchBend::default();
 
         assert_eq!(bend.multiplier(), 1.0);
     }
 
-    #[test]
+    #[kithara::test]
     fn bend_multiplier_is_clamped_and_strictly_positive() {
         let bend = PitchBend::default();
 

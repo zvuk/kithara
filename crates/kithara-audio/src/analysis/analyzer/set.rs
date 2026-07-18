@@ -101,6 +101,7 @@ mod tests {
     use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
     use kithara_platform::sync::Arc;
     use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
+    use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
     use super::{
@@ -169,7 +170,7 @@ mod tests {
         Box::new(mock)
     }
 
-    #[test]
+    #[kithara::test]
     fn finish_staged_emits_once_without_a_beat_pass() {
         let spec = PcmSpec {
             channels: 2,
@@ -188,7 +189,7 @@ mod tests {
         assert!(stages[0].beat().is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn finish_staged_emits_waveform_then_waveform_plus_beat() {
         let spec = PcmSpec {
             channels: 2,
@@ -223,7 +224,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn analysis_rejects_mid_pass_format_change() {
         let spec = PcmSpec {
             channels: 2,
@@ -245,7 +246,7 @@ mod tests {
         assert_eq!(analyzers.source_frames(), 0);
     }
 
-    #[test]
+    #[kithara::test]
     fn analysis_rejects_source_frame_count_overflow() {
         let spec = PcmSpec {
             channels: 2,

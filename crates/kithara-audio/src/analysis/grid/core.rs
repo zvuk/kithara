@@ -122,6 +122,8 @@ fn bar_to_bpm(bar_samples: f64, sr: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     struct Consts;
@@ -164,7 +166,7 @@ mod tests {
         best
     }
 
-    #[test]
+    #[kithara::test]
     fn clean_track_is_one_on_grid_segment() {
         let grid = build_grid(
             &raw(steady(1.0, 2.0, 64)),
@@ -192,7 +194,7 @@ mod tests {
         assert!(seg.end_frame().abs_diff(last) < Consts::TOL_20MS);
     }
 
-    #[test]
+    #[kithara::test]
     fn drifting_track_splits_into_phrase_aligned_segments() {
         // 32 bars at 2.00 s, then 32 bars at 2.06 s (3 % drift, not outlier).
         let mut db = Vec::new();
@@ -249,7 +251,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn double_detections_are_filtered() {
         // Clean 64-bar track plus spurious half-bar downbeats (halving error).
         let mut db = steady(1.0, 2.0, 64);
@@ -268,7 +270,7 @@ mod tests {
         assert!((grid.bpm() - 120.0).abs() < 0.2);
     }
 
-    #[test]
+    #[kithara::test]
     fn fade_out_garbage_does_not_bend_the_grid() {
         // Clean 64 bars, then a sparse fade-out tail with bogus gaps.
         let mut db = steady(1.0, 2.0, 64);
@@ -288,7 +290,7 @@ mod tests {
         assert!(!grid.segments().is_empty());
     }
 
-    #[test]
+    #[kithara::test]
     fn short_track_yields_tempo_without_segments() {
         let beats = vec![0.5f32, 1.0, 1.5];
         let grid = build_grid(
