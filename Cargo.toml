@@ -148,7 +148,7 @@ short-version = "0.0.1"
 # iOS 15 floor: consumer apps (e.g. Zvuk) still ship an iOS 15 minimum, and a
 # module built for iOS 16 cannot be imported by an iOS 15 target.
 deployment-target = "15.0"
-autolink-frameworks = ["AudioToolbox", "CoreAudio", "AVFoundation", "Security", "SystemConfiguration"]
+autolink-frameworks = ["Accelerate", "AudioToolbox", "CoreAudio", "AVFoundation", "Security", "SystemConfiguration"]
 
 [workspace.package]
 version = "0.0.1-alpha4"
