@@ -368,9 +368,29 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.QueueEnded ->
                 eventsFlow.tryEmit(KitharaPlayerEvent.QueueEnded)
 
+            is FfiPlayerEvent.TrackRemoved ->
+                eventsFlow.tryEmit(KitharaPlayerEvent.QueueItemRemoved(event.itemId.toString()))
+
             // Per-track failure is surfaced via TrackStatusChanged(Failed) and item-side DidFail.
+            is FfiPlayerEvent.AssetCommitted,
+            is FfiPlayerEvent.AssetEvicted,
+            is FfiPlayerEvent.AssetFailed,
+            is FfiPlayerEvent.AudioRouteChanged,
+            is FfiPlayerEvent.CrossfadeCancelled,
+            is FfiPlayerEvent.CrossfadeCompleted,
+            is FfiPlayerEvent.CurrentItemAdvanced,
+            is FfiPlayerEvent.DjBpmDetected,
+            is FfiPlayerEvent.DjKeylockChanged,
+            is FfiPlayerEvent.DjStretchBackendChanged,
+            is FfiPlayerEvent.EngineStarted,
+            is FfiPlayerEvent.EngineStopped,
             is FfiPlayerEvent.ItemDidFail,
+            is FfiPlayerEvent.MasterVolumeChanged,
+            is FfiPlayerEvent.NextTrackReady,
+            is FfiPlayerEvent.RepeatModeChanged,
             is FfiPlayerEvent.TimeControlStatusChanged,
+            is FfiPlayerEvent.TrackAdded,
+            is FfiPlayerEvent.TrackLoadFailed,
             is FfiPlayerEvent.VolumeChanged,
             is FfiPlayerEvent.MuteChanged,
             is FfiPlayerEvent.ItemDidPlayToEnd,
