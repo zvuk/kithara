@@ -134,6 +134,7 @@ pub(crate) struct DecodeCore {
     source_audio: Option<SourceAudioTap>,
     source_audio_error: Option<SourceAudioError>,
     pending_gapless: Option<(u64, PcmChunk)>,
+    retired_chunk: Option<PcmChunk>,
 }
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
@@ -180,6 +181,7 @@ impl DecodeCore {
             source_audio,
             source_audio_error: None,
             pending_gapless: None,
+            retired_chunk: None,
         }
     }
 
@@ -194,7 +196,9 @@ impl DecodeCore {
     pub(crate) fn reset(&mut self) {
         reset_effects(&mut self.effects);
         self.drain.reset();
-        self.pending_gapless = None;
+        if let Some((_, chunk)) = self.pending_gapless.take() {
+            self.retire_chunk(chunk);
+        }
     }
 
     pub(crate) fn notify_seek(&mut self) {
@@ -225,10 +229,14 @@ impl DecodeCore {
             return Err(source_audio_decode_error(&error));
         }
         loop {
-            let pending = self
-                .pending_gapless
-                .take()
-                .and_then(|(epoch, chunk)| (epoch == decode_seek_epoch).then_some(chunk));
+            let pending = match self.pending_gapless.take() {
+                Some((epoch, chunk)) if epoch == decode_seek_epoch => Some(chunk),
+                Some((_, chunk)) => {
+                    self.retire_chunk(chunk);
+                    return Ok(GaplessStep::SourceProgress);
+                }
+                None => None,
+            };
             let Some(chunk) = pending.or_else(|| self.gapless.next()) else {
                 break;
             };
@@ -236,11 +244,20 @@ impl DecodeCore {
                 .source_audio
                 .as_ref()
                 .is_some_and(SourceAudioTap::is_authoritative);
-            let capture = match self.source_audio.as_mut() {
-                Some(source_audio) => source_audio
-                    .capture(&chunk, decode_seek_epoch)
-                    .map_err(|error| source_audio_decode_error(&error))?,
-                None => SourceAudioCaptureOutcome::Ignored,
+            let capture = self.source_audio.as_mut().map_or_else(
+                || Ok(SourceAudioCaptureOutcome::Ignored),
+                |source_audio| {
+                    source_audio
+                        .capture(&chunk, decode_seek_epoch)
+                        .map_err(|error| source_audio_decode_error(&error))
+                },
+            );
+            let capture = match capture {
+                Ok(capture) => capture,
+                Err(error) => {
+                    self.retire_chunk(chunk);
+                    return Err(error);
+                }
             };
             if matches!(
                 capture,
@@ -251,6 +268,7 @@ impl DecodeCore {
                 return Ok(GaplessStep::SourceProgress);
             }
             if source_audio_authoritative {
+                self.retire_chunk(chunk);
                 return Ok(GaplessStep::SourceProgress);
             }
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
@@ -352,6 +370,7 @@ impl DecodeCore {
     }
 
     pub(crate) fn flush_reader_signals(&mut self) {
+        drop(self.retired_chunk.take());
         if self.source_audio_error.is_none()
             && let Some(source_audio) = self.source_audio.as_mut()
             && let Err(error) = source_audio.service()
@@ -359,6 +378,11 @@ impl DecodeCore {
             self.source_audio_error = Some(error);
         }
         self.session.decoder.flush_reader_signals();
+    }
+
+    fn retire_chunk(&mut self, chunk: PcmChunk) {
+        debug_assert!(self.retired_chunk.is_none());
+        self.retired_chunk = Some(chunk);
     }
 
     pub(crate) fn source_audio_ready(&mut self) -> bool {

@@ -54,7 +54,7 @@ fn chunk(pool: &PcmPool, spec: PcmSpec, offset: u64, samples: [f32; 2]) -> PcmCh
 #[kithara::test]
 fn authoritative_demand_boundary_parks_next_decoder_window_without_processed_output() {
     let spec = PcmSpec::new(1, NonZeroU32::new(48_000).expect("static sample rate"));
-    let pool = PcmPool::default();
+    let pool = PcmPool::new(8, 0);
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let (mut reader, mut tap) = connect_source_audio(
         &pool,
@@ -90,12 +90,25 @@ fn authoritative_demand_boundary_parks_next_decoder_window_without_processed_out
         Vec::new(),
         Some(tap),
     );
+    pool.pre_warm(1, |samples| samples.resize(2, 0.0));
+    let put_drops = pool.stats().put_drops;
 
     core.push(chunk(&pool, spec, 0, [1.0, 2.0]));
     assert!(matches!(
         core.next_gapless(7),
         Ok(GaplessStep::SourceProgress)
     ));
+    assert_eq!(
+        pool.stats().put_drops,
+        put_drops,
+        "authoritative input stays owned until the worker shell"
+    );
+    core.flush_reader_signals();
+    assert_eq!(
+        pool.stats().put_drops,
+        put_drops + 1,
+        "worker shell retires the authoritative input"
+    );
     let mut first_output = [0.0; 2];
     assert_eq!(
         reader.read_into(&first_demand, &mut first_output),

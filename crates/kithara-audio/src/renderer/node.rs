@@ -77,6 +77,7 @@ pub(crate) struct DecoderNode {
     /// tick's decode+effects wall time against the audio it yielded.
     engine_load: Option<Arc<EngineLoad>>,
     outlet: Outlet<Fetch<PcmChunk>>,
+    retired_fetch: Option<Fetch<PcmChunk>>,
     preload_chunks: usize,
 }
 
@@ -165,6 +166,11 @@ impl DecoderNode {
         self.maybe_emit_engine_load(now);
     }
 
+    fn retire_fetch(&mut self, fetch: Fetch<PcmChunk>) {
+        debug_assert!(self.retired_fetch.is_none());
+        self.retired_fetch = Some(fetch);
+    }
+
     /// Reset preload state when a new seek epoch arrives.
     ///
     /// Fast path: `SeekObserve::take_decoder_seek` is a one-shot
@@ -187,7 +193,9 @@ impl DecoderNode {
             return;
         }
 
-        let _ = self.outlet.take_pending();
+        if let Some(fetch) = self.outlet.take_pending() {
+            self.retire_fetch(fetch);
+        }
         self.preload_gate.rearm();
         self.runtime = DecoderRuntime {
             seek_epoch: current,
@@ -211,6 +219,7 @@ impl From<TrackRegistration> for DecoderNode {
             preload_gate: reg.preload_gate,
             preload_chunks: reg.preload_chunks,
             engine_load: reg.engine_load,
+            retired_fetch: None,
             runtime: DecoderRuntime {
                 seek_epoch,
                 ..Default::default()
@@ -225,6 +234,7 @@ impl Node for DecoderNode {
     }
 
     fn recycle(&mut self) {
+        drop(self.retired_fetch.take());
         while self.trash_inlet.try_pop().is_some() {}
         self.source.flush_deferred();
         self.outlet.flush_wake_signals();
@@ -258,6 +268,8 @@ impl Node for DecoderNode {
                 if processed_output_required {
                     let _ = self.outlet.try_push(fetch);
                     self.mark_preload_progress();
+                } else {
+                    self.retire_fetch(fetch);
                 }
                 TickResult::Progress
             }
@@ -374,6 +386,7 @@ mod tests {
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             preload_chunks: 1,
             engine_load: None,
+            retired_fetch: None,
             runtime: DecoderRuntime::default(),
         }
     }
@@ -452,6 +465,7 @@ mod tests {
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             preload_chunks: 1,
             engine_load: Some(Arc::clone(&meter)),
+            retired_fetch: None,
             runtime: DecoderRuntime::default(),
         };
 
@@ -489,6 +503,7 @@ mod tests {
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             preload_chunks: 1,
             engine_load: Some(meter),
+            retired_fetch: None,
             runtime: DecoderRuntime::default(),
         };
 
@@ -718,6 +733,50 @@ mod tests {
         assert!(
             gate.is_ready_for_epoch(epoch),
             "post-seek refill must open the new seek epoch",
+        );
+    }
+
+    #[kithara::test]
+    fn decoder_node_retires_invalidated_overflow_in_the_worker_shell() {
+        let pool = PcmPool::new(8, 0);
+        let (mut outlet, _inlet) = connect::<Fetch<PcmChunk>>(1, None);
+        outlet
+            .try_push(Fetch::data(empty_chunk(), 0))
+            .expect("fill output ring");
+        outlet
+            .try_push(Fetch::data(
+                PcmChunk::new(PcmMeta::default(), pool.attach(vec![0.0])),
+                0,
+            ))
+            .expect("park seek-invalidated overflow");
+        pool.pre_warm(1, |samples| samples.push(0.0));
+        let put_drops = pool.stats().put_drops;
+
+        let seek_state = Arc::new(SeekState::new());
+        let source = Box::new(Unimock::new(
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::StateChanged),
+        ));
+        let mut node = test_node(
+            source,
+            outlet,
+            Arc::new(PreloadGate::default()),
+            Arc::clone(&seek_state) as Arc<dyn SeekObserve>,
+        );
+        SeekControl::begin(&*seek_state, Duration::from_secs(1));
+
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert_eq!(
+            pool.stats().put_drops,
+            put_drops,
+            "checked tick keeps the invalidated buffer owned"
+        );
+        node.recycle();
+        assert_eq!(
+            pool.stats().put_drops,
+            put_drops + 1,
+            "worker shell retires the invalidated buffer"
         );
     }
 }
