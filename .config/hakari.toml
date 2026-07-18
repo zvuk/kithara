@@ -10,12 +10,14 @@ dep-format-version = "4"
 # Workspace resolver v2 (edition 2021+).
 resolver = "2"
 
-# Target platforms for feature unification.
+# Target platforms for feature unification. wasm32 is included so non-wasm
+# dependencies are target-gated instead of landing in base dependencies.
 platforms = [
   "x86_64-unknown-linux-gnu",
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
   "aarch64-apple-ios",
+  "wasm32-unknown-unknown",
 ]
 
 # Exclude test-only and non-publishable crates from traversal.

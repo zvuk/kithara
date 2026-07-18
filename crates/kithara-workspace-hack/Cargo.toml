@@ -26,10 +26,11 @@ firewheel = { version = "0.10", default-features = false, features = ["cpal", "t
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
+futures-core = { version = "0.3", default-features = false, features = ["std"] }
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
-futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
+futures-task = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
@@ -72,9 +73,11 @@ futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
 futures-sink = { version = "0.3" }
+futures-util = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -110,6 +113,8 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+futures-util = { version = "0.3" }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -129,6 +134,12 @@ zstd = { version = "0.13" }
 zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
+[target.wasm32-unknown-unknown.dependencies]
+futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
+futures-util = { version = "0.3" }
+web-sys = { version = "0.3", features = ["AbortController", "AbortSignal", "AudioBuffer", "AudioBufferSourceNode", "AudioContext", "AudioContextOptions", "AudioContextState", "AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioDestinationNode", "AudioParam", "AudioSampleFormat", "AudioWorklet", "AudioWorkletGlobalScope", "AudioWorkletNode", "AudioWorkletNodeOptions", "BlobPropertyBag", "BroadcastChannel", "CanvasRenderingContext2d", "DedicatedWorkerGlobalScope", "Document", "DomRect", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "ErrorEvent", "File", "FileList", "FileReader", "FormData", "Headers", "HtmlCanvasElement", "HtmlInputElement", "MediaDevices", "MediaStream", "MediaStreamAudioSourceNode", "MediaStreamAudioSourceOptions", "MediaStreamConstraints", "MessageEvent", "MessagePort", "Navigator", "Performance", "QueuingStrategy", "ReadableByteStreamController", "ReadableStream", "ReadableStreamByobReader", "ReadableStreamByobRequest", "ReadableStreamDefaultController", "ReadableStreamDefaultReader", "ReadableStreamGetReaderOptions", "ReadableStreamReadResult", "ReadableStreamReaderMode", "ReadableStreamType", "ReadableWritablePair", "Request", "RequestCache", "RequestCredentials", "RequestInit", "RequestMode", "Response", "ServiceWorkerGlobalScope", "StreamPipeOptions", "TransformStream", "TransformStreamDefaultController", "Transformer", "UnderlyingSink", "UnderlyingSource", "Url", "Window", "Worker", "WorkerOptions", "WorkerType", "WritableStream", "WritableStreamDefaultController", "WritableStreamDefaultWriter", "console"] }
+
 [target.x86_64-apple-darwin.dependencies]
 aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
@@ -144,9 +155,11 @@ futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
 futures-sink = { version = "0.3" }
+futures-util = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -186,10 +199,12 @@ futures-core = { version = "0.3" }
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
 futures-io = { version = "0.3" }
 futures-sink = { version = "0.3" }
+futures-util = { version = "0.3" }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -229,10 +244,11 @@ firewheel = { version = "0.10", default-features = false, features = ["cpal", "t
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
+futures-core = { version = "0.3", default-features = false, features = ["std"] }
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
-futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
+futures-task = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
@@ -277,9 +293,11 @@ futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
 futures-sink = { version = "0.3" }
+futures-util = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hotpath-macros = { version = "0.19", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
@@ -318,6 +336,8 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+futures-util = { version = "0.3" }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hotpath-macros = { version = "0.19", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
@@ -339,6 +359,12 @@ zstd = { version = "0.13" }
 zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
+[target.wasm32-unknown-unknown.build-dependencies]
+futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
+futures-util = { version = "0.3" }
+web-sys = { version = "0.3", features = ["AbortController", "AbortSignal", "AudioBuffer", "AudioBufferSourceNode", "AudioContext", "AudioContextOptions", "AudioContextState", "AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioDestinationNode", "AudioParam", "AudioSampleFormat", "AudioWorklet", "AudioWorkletGlobalScope", "AudioWorkletNode", "AudioWorkletNodeOptions", "BlobPropertyBag", "BroadcastChannel", "CanvasRenderingContext2d", "DedicatedWorkerGlobalScope", "Document", "DomRect", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "ErrorEvent", "File", "FileList", "FileReader", "FormData", "Headers", "HtmlCanvasElement", "HtmlInputElement", "MediaDevices", "MediaStream", "MediaStreamAudioSourceNode", "MediaStreamAudioSourceOptions", "MediaStreamConstraints", "MessageEvent", "MessagePort", "Navigator", "Performance", "QueuingStrategy", "ReadableByteStreamController", "ReadableStream", "ReadableStreamByobReader", "ReadableStreamByobRequest", "ReadableStreamDefaultController", "ReadableStreamDefaultReader", "ReadableStreamGetReaderOptions", "ReadableStreamReadResult", "ReadableStreamReaderMode", "ReadableStreamType", "ReadableWritablePair", "Request", "RequestCache", "RequestCredentials", "RequestInit", "RequestMode", "Response", "ServiceWorkerGlobalScope", "StreamPipeOptions", "TransformStream", "TransformStreamDefaultController", "Transformer", "UnderlyingSink", "UnderlyingSource", "Url", "Window", "Worker", "WorkerOptions", "WorkerType", "WritableStream", "WritableStreamDefaultController", "WritableStreamDefaultWriter", "console"] }
+
 [target.x86_64-apple-darwin.build-dependencies]
 aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
@@ -356,9 +382,11 @@ futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
 futures-sink = { version = "0.3" }
+futures-util = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hotpath-macros = { version = "0.19", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
@@ -402,10 +430,12 @@ futures-core = { version = "0.3" }
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
 futures-io = { version = "0.3" }
 futures-sink = { version = "0.3" }
+futures-util = { version = "0.3" }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 hotpath-macros = { version = "0.19", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }

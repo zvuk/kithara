@@ -62,7 +62,6 @@ delegate = { workspace = true }
 derive_more = { workspace = true }
 fdk-aac = { workspace = true, optional = true }
 fieldwork = { workspace = true }
-hotpath = { workspace = true, optional = true }
 num-traits = { workspace = true }
 re_mp4 = { workspace = true }
 smallvec = { workspace = true }
@@ -80,6 +79,10 @@ kithara-apple = { workspace = true, optional = true }
 
 core-foundation = { workspace = true, optional = true }
 core-foundation-sys = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
+hotpath = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true, optional = true }
