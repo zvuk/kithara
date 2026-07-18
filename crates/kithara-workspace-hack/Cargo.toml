@@ -41,7 +41,6 @@ quote = { version = "1" }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
-reqwest = { version = "0.13", default-features = false, features = ["brotli", "cookies", "deflate", "gzip", "native-tls", "rustls", "stream", "zstd"] }
 ringbuf = { version = "0.4", features = ["portable-atomic"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
@@ -74,8 +73,6 @@ futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hyper = { version = "1", features = ["client", "http1", "server"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -85,19 +82,14 @@ objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
-rustls-pki-types = { version = "1", features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["codec", "io"] }
-tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
-zstd = { version = "0.13" }
-zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
 [target.aarch64-apple-ios.dependencies]
 aho-corasick = { version = "1" }
@@ -109,8 +101,6 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
-hyper = { version = "1", features = ["client", "http1", "server"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -121,12 +111,47 @@ slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["codec", "io"] }
-tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
-zstd = { version = "0.13" }
-zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
+
+[target.aarch64-linux-android.dependencies]
+aho-corasick = { version = "1" }
+bit-set = { version = "0.8" }
+bit-vec = { version = "0.8" }
+bitflags = { version = "2", default-features = false, features = ["std"] }
+dasp_sample = { version = "0.11" }
+derive_more = { version = "2", features = ["deref", "display", "from", "is_variant"] }
+errno = { version = "0.3" }
+form_urlencoded = { version = "1" }
+futures = { version = "0.3", features = ["thread-pool"] }
+futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
+futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
+futures-sink = { version = "0.3" }
+getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
+half = { version = "2", features = ["num-traits"] }
+hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+idna = { version = "1" }
+itertools = { version = "0.13" }
+libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
+mio = { version = "1", features = ["net", "os-ext"] }
+ndk = { version = "0.9", features = ["audio"] }
+percent-encoding = { version = "2" }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
+rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
+simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
+slab = { version = "0.4" }
+sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
+time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+toml_datetime = { version = "1", features = ["serde"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
+tracing = { version = "0.1", features = ["log"] }
+winnow = { version = "1" }
 
 [target.x86_64-apple-darwin.dependencies]
 aho-corasick = { version = "1" }
@@ -146,8 +171,6 @@ futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hyper = { version = "1", features = ["client", "http1", "server"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -157,19 +180,53 @@ objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
-rustls-pki-types = { version = "1", features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["codec", "io"] }
-tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
-zstd = { version = "0.13" }
-zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
+
+[target.x86_64-linux-android.dependencies]
+aho-corasick = { version = "1" }
+bit-set = { version = "0.8" }
+bit-vec = { version = "0.8" }
+bitflags = { version = "2", default-features = false, features = ["std"] }
+dasp_sample = { version = "0.11" }
+derive_more = { version = "2", features = ["deref", "display", "from", "is_variant"] }
+errno = { version = "0.3" }
+form_urlencoded = { version = "1" }
+futures = { version = "0.3", features = ["thread-pool"] }
+futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
+futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
+futures-sink = { version = "0.3" }
+getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
+half = { version = "2", features = ["num-traits"] }
+hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+idna = { version = "1" }
+itertools = { version = "0.13" }
+libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
+mio = { version = "1", features = ["net", "os-ext"] }
+ndk = { version = "0.9", features = ["audio"] }
+percent-encoding = { version = "2" }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
+rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
+simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
+slab = { version = "0.4" }
+sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
+time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+toml_datetime = { version = "1", features = ["serde"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
+tracing = { version = "0.1", features = ["log"] }
+winnow = { version = "1" }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 aho-corasick = { version = "1" }
@@ -189,8 +246,6 @@ getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-f
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hyper = { version = "1", features = ["client", "http1", "server"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -206,14 +261,10 @@ slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["codec", "io"] }
 toml_datetime = { version = "1", features = ["serde"] }
-tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
 winnow = { version = "1" }
-zstd = { version = "0.13" }
-zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
 [build-dependencies]
 arrayvec = { version = "0.7" }
@@ -243,7 +294,6 @@ quote = { version = "1" }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
-reqwest = { version = "0.13", default-features = false, features = ["brotli", "cookies", "deflate", "gzip", "native-tls", "rustls", "stream", "zstd"] }
 ringbuf = { version = "0.4", features = ["portable-atomic"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
@@ -279,8 +329,6 @@ getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-f
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath-macros = { version = "0.19", features = ["hotpath"] }
-hyper = { version = "1", features = ["client", "http1", "server"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -291,19 +339,14 @@ percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
-rustls-pki-types = { version = "1", features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["codec", "io"] }
-tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
-zstd = { version = "0.13" }
-zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
 [target.aarch64-apple-ios.build-dependencies]
 aho-corasick = { version = "1" }
@@ -317,8 +360,6 @@ futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 hotpath-macros = { version = "0.19", features = ["hotpath"] }
-hyper = { version = "1", features = ["client", "http1", "server"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -330,12 +371,51 @@ slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["codec", "io"] }
-tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
-zstd = { version = "0.13" }
-zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
+
+[target.aarch64-linux-android.build-dependencies]
+aho-corasick = { version = "1" }
+bit-set = { version = "0.8" }
+bit-vec = { version = "0.8" }
+bitflags = { version = "2", default-features = false, features = ["std"] }
+clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
+dasp_sample = { version = "0.11" }
+derive_more = { version = "2", features = ["deref", "display", "from", "is_variant"] }
+derive_more-impl = { version = "2", features = ["deref", "display", "from", "is_variant"] }
+errno = { version = "0.3" }
+form_urlencoded = { version = "1" }
+futures = { version = "0.3", features = ["thread-pool"] }
+futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
+futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
+futures-sink = { version = "0.3" }
+getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
+half = { version = "2", features = ["num-traits"] }
+hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+hotpath-macros = { version = "0.19", features = ["hotpath"] }
+idna = { version = "1" }
+itertools = { version = "0.13" }
+libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
+mio = { version = "1", features = ["net", "os-ext"] }
+ndk = { version = "0.9", features = ["audio"] }
+percent-encoding = { version = "2" }
+prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
+rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
+simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
+slab = { version = "0.4" }
+sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
+time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+toml_datetime = { version = "1", features = ["serde"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
+tracing = { version = "0.1", features = ["log"] }
+winnow = { version = "1" }
 
 [target.x86_64-apple-darwin.build-dependencies]
 aho-corasick = { version = "1" }
@@ -358,8 +438,6 @@ getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-f
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath-macros = { version = "0.19", features = ["hotpath"] }
-hyper = { version = "1", features = ["client", "http1", "server"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -370,19 +448,57 @@ percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
-rustls-pki-types = { version = "1", features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["codec", "io"] }
-tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
-zstd = { version = "0.13" }
-zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
+
+[target.x86_64-linux-android.build-dependencies]
+aho-corasick = { version = "1" }
+bit-set = { version = "0.8" }
+bit-vec = { version = "0.8" }
+bitflags = { version = "2", default-features = false, features = ["std"] }
+clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
+dasp_sample = { version = "0.11" }
+derive_more = { version = "2", features = ["deref", "display", "from", "is_variant"] }
+derive_more-impl = { version = "2", features = ["deref", "display", "from", "is_variant"] }
+errno = { version = "0.3" }
+form_urlencoded = { version = "1" }
+futures = { version = "0.3", features = ["thread-pool"] }
+futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
+futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
+futures-sink = { version = "0.3" }
+getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
+half = { version = "2", features = ["num-traits"] }
+hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+hotpath-macros = { version = "0.19", features = ["hotpath"] }
+idna = { version = "1" }
+itertools = { version = "0.13" }
+libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
+mio = { version = "1", features = ["net", "os-ext"] }
+ndk = { version = "0.9", features = ["audio"] }
+percent-encoding = { version = "2" }
+prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
+rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
+simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
+slab = { version = "0.4" }
+sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
+time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+toml_datetime = { version = "1", features = ["serde"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
+tracing = { version = "0.1", features = ["log"] }
+winnow = { version = "1" }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 aho-corasick = { version = "1" }
@@ -405,8 +521,6 @@ getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-f
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath-macros = { version = "0.19", features = ["hotpath"] }
-hyper = { version = "1", features = ["client", "http1", "server"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -423,13 +537,9 @@ slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["codec", "io"] }
 toml_datetime = { version = "1", features = ["serde"] }
-tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
 winnow = { version = "1" }
-zstd = { version = "0.13" }
-zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
 ### END HAKARI SECTION
