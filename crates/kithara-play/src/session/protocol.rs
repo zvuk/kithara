@@ -5,7 +5,7 @@ mod wire {
     use kithara_platform::sync::mpsc;
 
     use crate::{
-        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::SlotControl,
         player::node::StreamShape,
     };
@@ -132,6 +132,13 @@ mod wire {
             expected_shape: StreamShape,
             player_ids: Vec<PlayerId>,
         },
+        /// Commit a prepared session seek while its revision and player roster remain current.
+        SeekSessionChecked {
+            target: SessionBeat,
+            expected_revision: u64,
+            expected_shape: StreamShape,
+            player_ids: Vec<PlayerId>,
+        },
         /// Query the transport state last processed by the audio graph.
         SessionTransport,
         /// Query one canonical transport and stream-shape preparation snapshot.
@@ -180,7 +187,7 @@ mod handle {
 
     use super::wire::{AllocatedSlot, BindingPreparation, Cmd, PlayerId, Reply};
     use crate::{
-        api::{SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionBeat, SessionTransportSnapshot, SlotId, Tempo},
         error::PlayError,
         player::node::StreamShape,
     };
@@ -326,6 +333,22 @@ mod handle {
         ) -> Result<(), PlayError> {
             self.exec_ok(Cmd::SetSessionTempoChecked {
                 tempo,
+                expected_revision,
+                expected_shape,
+                player_ids,
+            })
+            .map(|_| ())
+        }
+
+        pub(crate) fn seek_session_checked(
+            &self,
+            target: SessionBeat,
+            expected_revision: u64,
+            expected_shape: StreamShape,
+            player_ids: Vec<PlayerId>,
+        ) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SeekSessionChecked {
+                target,
                 expected_revision,
                 expected_shape,
                 player_ids,

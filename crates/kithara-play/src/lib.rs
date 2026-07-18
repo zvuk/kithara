@@ -40,7 +40,8 @@ pub use kithara_audio::{
 };
 pub use kithara_net::Headers;
 pub use player::{
-    PlayerConfig, PlayerImpl, PlayerNode, PlayerNodeProcessor, SelectTransition, StreamShape,
+    PlayerConfig, PlayerImpl, PlayerNode, PlayerNodeProcessor, SelectTransition,
+    SessionTrackControl, StreamShape,
 };
 pub use resource::{
     PlaybackResamplerBackend, Resource, ResourceBlueprint, ResourceConfig, ResourceSrc, SourceType,

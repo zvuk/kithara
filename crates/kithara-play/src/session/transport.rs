@@ -12,7 +12,7 @@ use super::{
     state::{PendingTransportCommit, SessionState, SessionTransportState, TransportCommitPhase},
 };
 use crate::{
-    api::{SessionTransportSnapshot, Tempo},
+    api::{SessionBeat, SessionTransportSnapshot, Tempo},
     player::node::StreamShape,
 };
 
@@ -31,11 +31,49 @@ pub(super) fn set_tempo_checked<B: AudioBackend>(
     expected_shape: StreamShape,
     player_ids: &[PlayerId],
 ) -> Result<(), SessionError> {
+    let _ = validate_checked_transport(state, expected_revision, expected_shape, player_ids)?;
+    set_tempo_after_refresh(state, tempo)
+}
+
+pub(super) fn seek_checked<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    target: SessionBeat,
+    expected_revision: u64,
+    expected_shape: StreamShape,
+    player_ids: &[PlayerId],
+) -> Result<(), SessionError> {
+    let snapshot =
+        validate_checked_transport(state, expected_revision, expected_shape, player_ids)?;
+    ensure_no_pending_commit(state)?;
+    let revision = next_revision(state)?;
+    let (target_frame, sample_rate) = commit_boundary(state)?;
+    let next = SessionTransportCommit::new_at_beat(
+        snapshot.tempo(),
+        snapshot.is_playing(),
+        revision,
+        target,
+    );
+    let stamp = TransportCommitStamp::new_at_beat(
+        state.transport.observed,
+        next,
+        target_frame,
+        target,
+        sample_rate,
+    );
+    schedule_commit(state, next, stamp)
+}
+
+fn validate_checked_transport<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    expected_revision: u64,
+    expected_shape: StreamShape,
+    player_ids: &[PlayerId],
+) -> Result<SessionTransportSnapshot, SessionError> {
     let observation = refresh_observation(state)?;
-    let actual_revision = observation
+    let snapshot = observation
         .snapshot()
-        .ok_or(SessionError::TransportNotProcessed)?
-        .revision();
+        .ok_or(SessionError::TransportNotProcessed)?;
+    let actual_revision = snapshot.revision();
     if actual_revision != expected_revision {
         return Err(SessionError::TransportRevisionChanged {
             expected: expected_revision,
@@ -58,7 +96,7 @@ pub(super) fn set_tempo_checked<B: AudioBackend>(
             actual: active.len(),
         });
     }
-    set_tempo_after_refresh(state, tempo)
+    Ok(snapshot)
 }
 
 fn set_tempo_after_refresh<B: AudioBackend>(
@@ -68,21 +106,39 @@ fn set_tempo_after_refresh<B: AudioBackend>(
     if state.transport.accepted.map(SessionTransportCommit::tempo) == Some(tempo) {
         return Ok(());
     }
+    ensure_no_pending_commit(state)?;
+    let revision = next_revision(state)?;
+    let (target_frame, sample_rate) = commit_boundary(state)?;
+    let next = SessionTransportCommit::new(tempo, true, revision);
+    let stamp =
+        TransportCommitStamp::new(state.transport.observed, next, target_frame, sample_rate);
+
+    schedule_commit(state, next, stamp)
+}
+
+fn ensure_no_pending_commit<B: AudioBackend>(state: &SessionState<B>) -> Result<(), SessionError> {
     if let Some(pending) = state.transport.pending {
         return Err(SessionError::TransportCommitPending {
             revision: pending.revision,
         });
     }
+    Ok(())
+}
 
-    let revision = state
+fn next_revision<B: AudioBackend>(state: &SessionState<B>) -> Result<u64, SessionError> {
+    state
         .transport
         .last_revision
         .checked_add(1)
-        .ok_or(SessionError::TransportRevisionExhausted)?;
-    let (target_frame, sample_rate) = commit_boundary(state)?;
-    let next = SessionTransportCommit::new(tempo, true, revision);
-    let stamp =
-        TransportCommitStamp::new(state.transport.observed, next, target_frame, sample_rate);
+        .ok_or(SessionError::TransportRevisionExhausted)
+}
+
+fn schedule_commit<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    next: SessionTransportCommit,
+    stamp: TransportCommitStamp,
+) -> Result<(), SessionError> {
+    let revision = next.revision();
 
     queue_stamp(state, stamp)?;
     state.transport.last_revision = revision;

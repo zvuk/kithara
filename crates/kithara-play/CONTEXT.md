@@ -208,8 +208,9 @@ The first tempo command targets the current graph frame. Later changes target
 the current graph frame plus one declared maximum callback, preserving the beat
 at that exact frame and changing only the analytical slope from that frame
 onward. Firewheel musical transport, dynamic keyframes, and transport speed are
-not part of this contract. The current public session mutation surface changes
-tempo only; pause/resume transactions are outside this slice.
+not part of this contract. The public session mutation surface changes tempo
+and performs transactional session seek; pause/resume transactions are outside
+this slice.
 
 Successful tempo commits advance one monotonic revision; repeating the same
 tempo is a no-op. The control side sends an immediate revisioned `Stage` event
@@ -236,6 +237,24 @@ commit is observed. A local player handover with two audible tracks rejects a
 tempo change explicitly because one control-side current binding cannot
 describe both callback tracks. These are transient checks over player- and
 session-owned state; the session stores no copy of player bindings or readiness.
+
+`SessionTrackControl::seek_session` is implemented by `PlayerImpl`; it owns no
+state and introduces no alternate command or rendering path. The implementation
+acquires the existing participant `ItemQueue` locks in `PlayerId` order,
+captures each current binding and slot, and publishes `PrepareSessionSeek`
+through the existing slot command lanes while queue identities remain stable.
+It releases the playlist locks before waiting for callback-side preparation,
+then reacquires them and verifies the exact slot, current index, binding,
+transport revision, and stream shape before the checked session commit.
+
+Preparation uses the existing track's `ElasticRenderer`. A second source port
+fills a dormant relocation window while the first port continues serving the
+audible cursor; there is no second renderer or phase authority. The transport
+commit carries the requested seek target as well as its revision, so stale seek
+work cannot match an unrelated tempo commit that allocates the same next
+revision. Any failure after preparation starts sends `CancelSessionSeek`
+through each original slot lane, leaves the session transport unchanged, and
+allows a later retry.
 
 Each prepared elastic renderer consumes its declared source history and
 discards its declared output latency before becoming audible. The resulting

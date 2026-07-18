@@ -9,7 +9,11 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
 #[cfg(test)]
 use crate::session::render::RenderContext;
-use crate::{api::TrackBinding, bridge::TrackState};
+use crate::{
+    api::{SessionBeat, Tempo, TrackBinding},
+    bridge::TrackState,
+    error::PlayError,
+};
 
 /// Canonical host-frame axis and optional musical binding for a track.
 #[derive(Clone, Debug, PartialEq)]
@@ -215,6 +219,33 @@ impl PlayerTrack {
         self.triggers.reset();
         self.ended_at_eof = false;
         true
+    }
+
+    pub(crate) fn begin_session_seek(
+        &mut self,
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: u64,
+    ) -> Result<(), PlayError> {
+        let Some(binding) = self.binding.as_ref() else {
+            return Ok(());
+        };
+        self.resource
+            .begin_session_seek(binding, target, tempo, revision)
+    }
+
+    pub(crate) fn poll_session_seek(&mut self, revision: u64) -> Result<bool, PlayError> {
+        if self.binding.is_none() {
+            return Ok(true);
+        }
+        self.resource.poll_session_seek(revision)
+    }
+
+    pub(crate) fn cancel_session_seek(&mut self, revision: u64) -> Result<(), PlayError> {
+        if self.binding.is_none() {
+            return Ok(());
+        }
+        self.resource.cancel_session_seek(revision)
     }
 
     /// Update the prefetch lead time used for the preload trigger.

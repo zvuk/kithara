@@ -45,6 +45,31 @@ impl PlayerImpl {
         validate_tempo_change(binding, snapshot, tempo, shape, available)
     }
 
+    pub(in crate::player) fn validate_session_seek(
+        &self,
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: u64,
+        shape: StreamShape,
+        binding: Option<&TrackBinding>,
+    ) -> Result<(), PlayError> {
+        let Some(binding) = binding else {
+            return Ok(());
+        };
+        let playback = self.playback_snapshot().ok_or(PlayError::NotReady)?;
+        if playback.has_multiple_tracks() {
+            return Err(PlayError::SessionSeekHandoverActive);
+        }
+        let context = tempo_context(target, tempo, revision, shape)?;
+        required_source_frame(
+            binding,
+            &context,
+            shape,
+            SignalsmithElastic::rate_envelope(),
+        )?;
+        Ok(())
+    }
+
     /// Prepares and queues a stream-backed resource for session-bound elastic
     /// playback. Failure leaves the playlist unchanged.
     pub async fn insert_with_binding(

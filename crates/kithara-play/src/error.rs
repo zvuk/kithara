@@ -122,6 +122,14 @@ pub enum PlayError {
     #[error("session tempo cannot change during a player track handover")]
     SessionTempoHandoverActive,
 
+    /// A player has more than one audible track during a local handover.
+    #[error("session seek cannot commit during a player track handover")]
+    SessionSeekHandoverActive,
+
+    /// At least one participating player could not prepare the seek target.
+    #[error("session seek preparation failed before the transport boundary")]
+    SessionSeekPreparationFailed,
+
     #[error("slot not found: {0:?}")]
     SlotNotFound(SlotId),
 

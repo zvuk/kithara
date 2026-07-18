@@ -5,9 +5,8 @@ use num_traits::ToPrimitive;
 use super::{
     ElasticPreparation, ElasticPreparationOutcome, ElasticPrepareError, ElasticRenderError,
     ElasticRenderer, ElasticSourcePort, ElasticSourceReply, ElasticSourceRequest,
-    ElasticSourceWindow, PcmBuf, PlaybackDirection, PlayerResource, SessionBeat,
-    SourceAudioReadOutcome, SourceCopy, SourceCursor, SourceFrameRange, Tempo, TrackBinding,
-    copy_source, sample_count,
+    PlaybackDirection, PlayerResource, SessionBeat, SourceAudioReadOutcome, SourceCopy,
+    SourceCursor, SourceFrameRange, Tempo, TrackBinding, copy_source, sample_count,
 };
 
 impl ElasticRenderer {
@@ -21,8 +20,37 @@ impl ElasticRenderer {
         if binding.direction() != PlaybackDirection::Forward {
             return Err(ElasticPrepareError::ReversePreparationRequired);
         }
+        if self.relocation.is_some() {
+            return Err(ElasticPrepareError::RelocationPending);
+        }
+        let preparation = self.plan_preparation(
+            binding,
+            binding.session_anchor(),
+            tempo,
+            Self::PREFETCH_BLOCKS,
+        )?;
+        let start = preparation.fetch_range.start();
+        resource
+            .seek_source_frame(start)
+            .map_err(|_| ElasticPrepareError::SourceSeek)?;
+        self.demand = resource.request_source_audio(preparation.fetch_range, 0)?;
+        if self.demand.is_none() {
+            return Err(ElasticPrepareError::SourceUnavailable);
+        }
+        self.revision = revision;
+        self.preparation = Some(preparation);
+        Ok(())
+    }
+
+    pub(super) fn plan_preparation(
+        &self,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
+        tempo: Tempo,
+        prefetch_blocks: usize,
+    ) -> Result<ElasticPreparation, ElasticPrepareError> {
         let anchor_continuous = binding
-            .source_frame_at(binding.session_anchor())?
+            .source_frame_at(anchor)?
             .ok_or(ElasticPrepareError::AnchorOutsideMarkerDomain)?
             .get();
         let anchor_integer = anchor_continuous
@@ -35,7 +63,7 @@ impl ElasticRenderer {
             .ok_or(ElasticPrepareError::FrameOverflow)?;
         let beat_advance = output_frames_f64 * tempo.beats_per_minute()
             / (f64::from(binding.map().host_sample_rate().get()) * 60.0);
-        let horizon = SessionBeat::new(binding.session_anchor().get() + beat_advance)
+        let horizon = SessionBeat::new(anchor.get() + beat_advance)
             .map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let horizon_source = binding
             .source_frame_at(horizon)?
@@ -52,7 +80,7 @@ impl ElasticRenderer {
         let before = i64::try_from(before).map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let after = self
             .max_source_frames
-            .checked_mul(Self::PREFETCH_BLOCKS)
+            .checked_mul(prefetch_blocks)
             .ok_or(ElasticPrepareError::FrameOverflow)?;
         let after = i64::try_from(after).map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let source_end = i64::try_from(self.source_frame_count)
@@ -67,24 +95,15 @@ impl ElasticRenderer {
         }
         let start = u64::try_from(start).map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let end = u64::try_from(end).map_err(|_| ElasticPrepareError::FrameOverflow)?;
-        resource
-            .seek_source_frame(start)
-            .map_err(|_| ElasticPrepareError::SourceSeek)?;
         let range = SourceFrameRange::new(start, end)?;
-        self.demand = resource.request_source_audio(range, 0)?;
-        if self.demand.is_none() {
-            return Err(ElasticPrepareError::SourceUnavailable);
-        }
-        self.revision = revision;
-        self.preparation = Some(ElasticPreparation {
+        Ok(ElasticPreparation {
             anchor: SourceCursor {
                 continuous: anchor_continuous,
                 integer: anchor_integer,
             },
             fetch_range: range,
             warmup,
-        });
-        Ok(())
+        })
     }
 
     pub(crate) fn poll_preparation(
@@ -124,8 +143,7 @@ impl ElasticRenderer {
         self.source_window = Some(preparation.fetch_range);
         Ok(ElasticPreparationOutcome::Ready)
     }
-
-    fn prime(
+    pub(super) fn prime(
         &mut self,
         preparation: ElasticPreparation,
         fetch_samples: usize,
@@ -178,8 +196,13 @@ impl ElasticRenderer {
         Ok(())
     }
 
-    pub(crate) fn attach_source_port(&mut self, port: ElasticSourcePort) {
+    pub(crate) fn attach_source_ports(
+        &mut self,
+        port: ElasticSourcePort,
+        relocation_port: ElasticSourcePort,
+    ) {
         self.source_port = Some(port);
+        self.relocation_port = Some(relocation_port);
     }
 
     pub(super) fn ensure_window(
@@ -199,9 +222,6 @@ impl ElasticRenderer {
     }
 
     fn schedule_window(&mut self, range: SourceFrameRange) -> Result<(), ElasticRenderError> {
-        if self.pending_request.is_some() {
-            return Ok(());
-        }
         let renewal = self
             .max_source_frames
             .checked_mul(Self::RENEWAL_BLOCKS)
@@ -212,6 +232,9 @@ impl ElasticRenderer {
                 && window.end().saturating_sub(range.end()) <= renewal
         });
         if !needs_window {
+            return Ok(());
+        }
+        if self.pending_request.is_some() {
             return Ok(());
         }
         let window_frames = self
@@ -266,7 +289,7 @@ impl ElasticRenderer {
         {
             let pending = self
                 .pending_request
-                .filter(|request| request.generation() == reply.generation());
+                .filter(|pending| pending.generation() == reply.generation());
             let expected = pending.is_some();
             if !expected {
                 if let ElasticSourceReply::Ready(window) = reply {
@@ -280,16 +303,21 @@ impl ElasticRenderer {
             match reply {
                 ElasticSourceReply::Ready(window) => {
                     let range = window.range();
-                    let request = pending.ok_or(ElasticRenderError::SourceWorkerFailed)?;
-                    let advances = self
-                        .source_window
-                        .is_none_or(|current| range.end() > current.end());
-                    if range != request.range() || !advances {
+                    let pending = pending.ok_or(ElasticRenderError::SourceWorkerFailed)?;
+                    if range != pending.range() {
                         self.recycle_window(window);
                         self.pending_request = None;
                         return Err(ElasticRenderError::SourceWorkerFailed);
                     }
                     let samples = window.release_samples();
+                    let advances = self
+                        .source_window
+                        .is_none_or(|current| range.end() > current.end());
+                    if !advances {
+                        self.recycle_samples(samples);
+                        self.pending_request = None;
+                        return Err(ElasticRenderError::SourceWorkerFailed);
+                    }
                     let old = mem::replace(&mut self.fetch, samples);
                     self.recycle_samples(old);
                     self.source_window = Some(range);
@@ -305,20 +333,6 @@ impl ElasticRenderer {
             }
         }
         Ok(())
-    }
-
-    fn recycle_window(&mut self, window: ElasticSourceWindow) {
-        self.recycle_samples(window.release_samples());
-    }
-
-    fn recycle_samples(&mut self, samples: PcmBuf) {
-        let Some(port) = self.source_port.as_mut() else {
-            self.pending_retirement = Some(samples);
-            return;
-        };
-        if let Err(samples) = port.recycle(samples) {
-            self.pending_retirement = Some(samples);
-        }
     }
 }
 

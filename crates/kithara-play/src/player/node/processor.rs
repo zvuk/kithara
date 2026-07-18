@@ -16,6 +16,7 @@ use tracing::warn;
 
 use super::{ArenaRegistry, RenderPass, RenderTargets};
 use crate::{
+    api::SessionBeat,
     bridge::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
     },
@@ -80,6 +81,7 @@ pub struct PlayerNodeProcessor {
     pub(super) render: RenderPass,
     pub(super) prefetch_duration: f32,
     context_requirement: ContextRequirement,
+    pub(super) session_seek: Option<(u64, SessionBeat)>,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
@@ -135,6 +137,7 @@ impl PlayerNodeProcessor {
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
             context_requirement,
+            session_seek: None,
         }
     }
 
@@ -320,12 +323,23 @@ impl PlayerNodeProcessor {
         self.playback
             .multiple_tracks
             .store(multiple_tracks, Ordering::SeqCst);
+        if let TrackRenderMode::Session(context) = mode
+            && self.session_seek.is_some_and(|(revision, target)| {
+                context.transport_revision() == Some(revision)
+                    && context.transport_seek_target() == Some(target)
+            })
+        {
+            self.session_seek = None;
+        }
         (playback_started, leading_outcome)
     }
 
     /// Unload a track from the arena.
     pub(super) fn unload_track(&mut self, src: &Arc<str>) {
         if let Some(track) = self.tracks.remove(src) {
+            if let Some((revision, _)) = self.session_seek {
+                self.fail_session_seek(revision);
+            }
             self.discard_track(track);
             self.notif_tx
                 .try_push(PlayerNotification::Unloaded {
@@ -431,6 +445,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let (playback_started, leading_outcome_pos_dur) =
             self.render_with_mode(render_mode, &mut buffers, info.frames, is_playing);
+        self.poll_session_seek();
 
         self.update_position_duration(leading_outcome_pos_dur);
 
@@ -473,6 +488,76 @@ mod tests {
             resource: Box::new(resource),
             item_id: None,
         }
+    }
+
+    fn assert_track_mutation_aborts_pending_seek(command: PlayerCmd) {
+        let (mut processor, mut control) = processor_and_control();
+        let src: Arc<str> = Arc::from("pending-seek.wav");
+        control
+            .cmd_tx
+            .try_push(load(&src))
+            .expect("load command fits");
+        processor.drain_commands();
+        processor.session_seek = Some((7, SessionBeat::new(1.0).expect("finite pending target")));
+
+        control
+            .cmd_tx
+            .try_push(command)
+            .expect("mutation command fits");
+        processor.drain_commands();
+
+        assert_eq!(processor.session_seek, None);
+        assert_eq!(
+            processor
+                .playback
+                .session_seek_failed
+                .load(Ordering::SeqCst),
+            7
+        );
+    }
+
+    #[kithara::test]
+    fn track_mutations_abort_a_pending_session_seek() {
+        let src: Arc<str> = Arc::from("pending-seek.wav");
+        assert_track_mutation_aborts_pending_seek(PlayerCmd::UnloadTrack {
+            src: Arc::clone(&src),
+        });
+        assert_track_mutation_aborts_pending_seek(PlayerCmd::Transition(TrackTransition::FadeIn(
+            Arc::clone(&src),
+        )));
+        assert_track_mutation_aborts_pending_seek(PlayerCmd::Clear);
+        assert_track_mutation_aborts_pending_seek(load(&src));
+    }
+
+    #[kithara::test]
+    fn session_seek_cancel_clears_the_matching_preparation() {
+        let (mut processor, mut control) = processor_and_control();
+        let src: Arc<str> = Arc::from("cancel-seek.wav");
+        control
+            .cmd_tx
+            .try_push(load(&src))
+            .expect("load command fits");
+        processor.drain_commands();
+        processor.session_seek = Some((7, SessionBeat::new(1.0).expect("finite pending target")));
+        processor
+            .playback
+            .session_seek_prepared
+            .store(7, Ordering::SeqCst);
+
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::CancelSessionSeek { revision: 7 })
+            .expect("cancel command fits");
+        processor.drain_commands();
+
+        assert_eq!(processor.session_seek, None);
+        assert_eq!(
+            processor
+                .playback
+                .session_seek_prepared
+                .load(Ordering::SeqCst),
+            0
+        );
     }
 
     #[kithara::test]

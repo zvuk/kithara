@@ -2,7 +2,11 @@ use std::fmt;
 
 use kithara_platform::sync::Arc;
 
-use crate::{api::TrackBinding, error::PlayError, player::track::PlayerResource};
+use crate::{
+    api::{SessionBeat, Tempo, TrackBinding},
+    error::PlayError,
+    player::track::PlayerResource,
+};
 
 /// Commands sent from the main thread to the processor.
 #[non_exhaustive]
@@ -23,6 +27,14 @@ pub enum PlayerCmd {
     Transition(TrackTransition),
     /// Seek active tracks to the given position in seconds.
     Seek { seconds: f64, seek_epoch: u64 },
+    /// Prepare the active bound track for a session-owned seek revision.
+    PrepareSessionSeek {
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: u64,
+    },
+    /// Cancel staged seek work for one session revision.
+    CancelSessionSeek { revision: u64 },
     /// Set the paused state.
     SetPaused(bool),
     /// Update the fade duration.
@@ -63,6 +75,20 @@ impl fmt::Debug for PlayerCmd {
                 .debug_struct("Seek")
                 .field("seconds", seconds)
                 .field("seek_epoch", seek_epoch)
+                .finish(),
+            Self::PrepareSessionSeek {
+                target,
+                tempo,
+                revision,
+            } => f
+                .debug_struct("PrepareSessionSeek")
+                .field("target", target)
+                .field("tempo", tempo)
+                .field("revision", revision)
+                .finish(),
+            Self::CancelSessionSeek { revision } => f
+                .debug_struct("CancelSessionSeek")
+                .field("revision", revision)
                 .finish(),
             Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),

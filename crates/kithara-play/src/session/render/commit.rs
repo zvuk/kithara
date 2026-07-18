@@ -18,6 +18,7 @@ pub(crate) struct TransportCommitStamp {
     next: SessionTransportCommit,
     previous: Option<SessionTransportCommit>,
     sample_rate: NonZeroU32,
+    target_beat: Option<SessionBeat>,
     target_frame: RenderFrame,
 }
 
@@ -32,6 +33,23 @@ impl TransportCommitStamp {
             next,
             previous,
             sample_rate,
+            target_beat: None,
+            target_frame,
+        }
+    }
+
+    pub(crate) const fn new_at_beat(
+        previous: Option<SessionTransportCommit>,
+        next: SessionTransportCommit,
+        target_frame: RenderFrame,
+        target_beat: SessionBeat,
+        sample_rate: NonZeroU32,
+    ) -> Self {
+        Self {
+            next,
+            previous,
+            sample_rate,
+            target_beat: Some(target_beat),
             target_frame,
         }
     }
@@ -404,12 +422,15 @@ impl TransportCommitState {
             self.reject_revision(revision);
             return Ok(());
         }
-        let beat = match stamp.previous {
-            Some(_) => self
+        let beat = match (stamp.target_beat, stamp.previous) {
+            (Some(target), _) => target,
+            (None, Some(_)) => self
                 .anchor
                 .ok_or(TransportProcessError::InvalidBeatRange)?
                 .beat_at(stamp.target_frame)?,
-            None => SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?,
+            (None, None) => {
+                SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?
+            }
         };
         self.active = Some(stamp.next);
         self.anchor = Some(TransportAnchor {

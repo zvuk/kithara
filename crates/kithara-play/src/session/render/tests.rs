@@ -406,6 +406,54 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
 }
 
 #[kithara::test]
+fn seek_commit_reanchors_the_matching_render_boundary() {
+    let old = SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, 1);
+    let target = SessionBeat::new(3.0).expect("finite seek target");
+    let next = SessionTransportCommit::new_at_beat(
+        Tempo::new(120.0).expect("valid tempo"),
+        true,
+        2,
+        target,
+    );
+    let mut extra = proc_extra(Some(120.0));
+    let mut processor = RenderContextProcessor;
+    process_context(&mut processor, &proc_info_at(0), &mut extra);
+
+    let stage = proc_info_at(BLOCK_FRAMES as i64);
+    let stamp = TransportCommitStamp::new_at_beat(
+        Some(old),
+        next,
+        RenderFrame::new((BLOCK_FRAMES * 2) as i64),
+        target,
+        sample_rate(),
+    );
+    process_context_event(
+        &mut processor,
+        &stage,
+        &mut extra,
+        Some(NodeEventType::custom(TransportCommitEvent::Stage(stamp))),
+    );
+
+    let matching = proc_info_at((BLOCK_FRAMES * 2) as i64);
+    process_context_event(
+        &mut processor,
+        &matching,
+        &mut extra,
+        Some(NodeEventType::custom(TransportCommitEvent::Apply(2))),
+    );
+    let context = read_render_context(&extra.store, &matching).expect("seek context becomes valid");
+    let beats = context.session_beats().expect("seek beat range");
+    assert_eq!(context.transport_commit(), Some(next));
+    assert_eq!(
+        context
+            .transport_commit()
+            .and_then(SessionTransportCommit::seek_target),
+        Some(target)
+    );
+    assert!((beats.start.get() - target.get()).abs() <= f64::EPSILON);
+}
+
+#[kithara::test]
 fn inactive_transport_is_a_valid_render_context() {
     let info = proc_info();
     let mut extra = proc_extra(None);

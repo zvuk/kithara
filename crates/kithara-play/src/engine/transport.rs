@@ -1,6 +1,6 @@
 use super::EngineImpl;
 use crate::{
-    api::{SessionTransportSnapshot, Tempo},
+    api::{SessionBeat, SessionTransportSnapshot, Tempo},
     error::PlayError,
     player::node::StreamShape,
     session::{PlayerId, protocol::BindingPreparation},
@@ -26,6 +26,17 @@ impl EngineImpl {
             expected_shape,
             player_ids,
         )
+    }
+
+    pub(crate) fn seek_session_checked(
+        &self,
+        target: SessionBeat,
+        expected_revision: u64,
+        expected_shape: StreamShape,
+        player_ids: Vec<PlayerId>,
+    ) -> Result<(), PlayError> {
+        self.session()
+            .seek_session_checked(target, expected_revision, expected_shape, player_ids)
     }
 
     /// Returns the last transport state processed by the audio graph.

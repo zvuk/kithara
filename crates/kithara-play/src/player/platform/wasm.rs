@@ -9,7 +9,7 @@ use super::super::{
     },
 };
 use crate::{
-    api::{SessionTransportSnapshot, Tempo, TrackBinding},
+    api::{SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding},
     error::PlayError,
     player::track::{PlayerResource, PreparedElasticRenderer},
     resource::Resource,
@@ -22,6 +22,21 @@ impl PlayerImpl {
         &self,
         _snapshot: SessionTransportSnapshot,
         _tempo: Tempo,
+        _shape: crate::player::node::StreamShape,
+        binding: Option<&TrackBinding>,
+    ) -> Result<(), PlayError> {
+        if binding.is_some() {
+            Err(PlayError::ElasticBackendUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(in crate::player) fn validate_session_seek(
+        &self,
+        _target: SessionBeat,
+        _tempo: Tempo,
+        _revision: u64,
         _shape: crate::player::node::StreamShape,
         binding: Option<&TrackBinding>,
     ) -> Result<(), PlayError> {

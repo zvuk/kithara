@@ -36,6 +36,10 @@ pub struct PlaybackShared {
     pub sample_rate: AtomicU32,
     /// Whether more than one player track is audible.
     pub multiple_tracks: AtomicBool,
+    /// Latest session-seek revision prepared by the active callback track.
+    pub(crate) session_seek_prepared: AtomicU64,
+    /// Latest session-seek revision rejected by the active callback track.
+    pub(crate) session_seek_failed: AtomicU64,
     /// Number of audio-thread process calls.
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
@@ -120,6 +124,8 @@ mod tests {
         assert_eq!(playback.duration.load(Ordering::Relaxed), 0.0);
         assert_eq!(playback.sample_rate.load(Ordering::Relaxed), 0);
         assert!(!playback.multiple_tracks.load(Ordering::Relaxed));
+        assert_eq!(playback.session_seek_prepared.load(Ordering::Relaxed), 0);
+        assert_eq!(playback.session_seek_failed.load(Ordering::Relaxed), 0);
     }
 
     #[kithara::test]

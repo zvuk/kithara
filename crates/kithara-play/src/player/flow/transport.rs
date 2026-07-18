@@ -6,7 +6,7 @@ use tracing::{debug, warn};
 
 use super::super::core::PlayerImpl;
 use crate::{
-    api::{PlayerEvent, PlayerStatus, Tempo},
+    api::{PlayerEvent, PlayerStatus},
     bridge::{PlayerCmd, TrackTransition},
     error::PlayError,
 };
@@ -21,49 +21,6 @@ pub struct SelectTransition {
 }
 
 impl PlayerImpl {
-    /// Changes the shared session tempo for this player and its participating peers.
-    pub fn set_session_tempo(&self, peers: &[&Self], tempo: Tempo) -> Result<(), PlayError> {
-        if peers
-            .iter()
-            .any(|peer| !self.core.engine.shares_session_with(&peer.core.engine))
-        {
-            return Err(PlayError::SessionMismatch);
-        }
-        let mut participants = Vec::with_capacity(peers.len() + 1);
-        participants.push((
-            self.core.engine.player_id().ok_or(PlayError::NotReady)?,
-            self,
-        ));
-        for peer in peers {
-            participants.push((
-                peer.core.engine.player_id().ok_or(PlayError::NotReady)?,
-                *peer,
-            ));
-        }
-        participants.sort_unstable_by_key(|(player_id, _)| *player_id);
-        participants.dedup_by_key(|(player_id, _)| *player_id);
-        let playlists: Vec<_> = participants
-            .iter()
-            .map(|(_, player)| player.core.items.lock_playlist())
-            .collect();
-        let snapshot = self.core.engine.session_transport()?;
-        let preparation = self.core.engine.binding_preparation()?;
-        if preparation.revision != snapshot.revision() || preparation.tempo != snapshot.tempo() {
-            return Err(PlayError::BindingPreparationContextChanged);
-        }
-        let shape = preparation.shape;
-        for ((_, player), playlist) in participants.iter().zip(&playlists) {
-            player.validate_session_tempo(snapshot, tempo, shape, playlist.current_binding())?;
-        }
-        let player_ids = participants
-            .iter()
-            .map(|(player_id, _)| *player_id)
-            .collect();
-        self.core
-            .engine
-            .set_session_tempo_checked(tempo, snapshot.revision(), shape, player_ids)
-    }
-
     /// Ensure the audio engine is started.
     pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
         if self.core.engine.is_running() {

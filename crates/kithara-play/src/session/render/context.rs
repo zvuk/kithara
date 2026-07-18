@@ -8,6 +8,7 @@ use crate::api::{SessionBeat, Tempo};
 pub(crate) struct SessionTransportCommit {
     playing: bool,
     revision: u64,
+    seek_target: Option<SessionBeat>,
     tempo: Tempo,
 }
 
@@ -16,6 +17,21 @@ impl SessionTransportCommit {
         Self {
             playing,
             revision,
+            seek_target: None,
+            tempo,
+        }
+    }
+
+    pub(crate) const fn new_at_beat(
+        tempo: Tempo,
+        playing: bool,
+        revision: u64,
+        seek_target: SessionBeat,
+    ) -> Self {
+        Self {
+            playing,
+            revision,
+            seek_target: Some(seek_target),
             tempo,
         }
     }
@@ -26,6 +42,10 @@ impl SessionTransportCommit {
 
     pub(crate) const fn revision(self) -> u64 {
         self.revision
+    }
+
+    pub(crate) const fn seek_target(self) -> Option<SessionBeat> {
+        self.seek_target
     }
 
     pub(crate) const fn tempo(self) -> Tempo {
@@ -81,6 +101,20 @@ impl RenderContext {
 
     pub(crate) const fn sample_rate(&self) -> NonZeroU32 {
         self.sample_rate
+    }
+
+    pub(crate) const fn transport_revision(&self) -> Option<u64> {
+        match self.transport_commit {
+            Some(commit) => Some(commit.revision()),
+            None => None,
+        }
+    }
+
+    pub(crate) const fn transport_seek_target(&self) -> Option<SessionBeat> {
+        match self.transport_commit {
+            Some(commit) => commit.seek_target(),
+            None => None,
+        }
     }
 
     #[cfg(any(not(target_arch = "wasm32"), test))]

@@ -11,7 +11,8 @@ use num_traits::cast::AsPrimitive;
 
 use super::PlayerResource;
 use crate::{
-    api::{Tempo, TrackBinding},
+    api::{SessionBeat, Tempo, TrackBinding},
+    error::PlayError,
     player::{
         node::StreamShape,
         track::{
@@ -28,8 +29,13 @@ use crate::{
 
 enum ElasticSourceOwnership {
     Preparing,
-    Dormant(Box<WasmSend<Resource>>),
-    Active { abr_handle: Option<AbrHandle> },
+    Dormant {
+        source: Box<WasmSend<Resource>>,
+        relocation_source: Box<WasmSend<Resource>>,
+    },
+    Active {
+        abr_handle: Option<AbrHandle>,
+    },
 }
 
 pub(crate) struct PreparedElasticRenderer {
@@ -45,7 +51,11 @@ impl PreparedElasticRenderer {
         }
     }
 
-    fn into_dormant(self, source: WasmSend<Resource>) -> Result<Self, ElasticPrepareError> {
+    fn into_dormant(
+        self,
+        source: WasmSend<Resource>,
+        relocation_source: Resource,
+    ) -> Result<Self, ElasticPrepareError> {
         let Self {
             renderer,
             source: ownership,
@@ -55,7 +65,10 @@ impl PreparedElasticRenderer {
         }
         Ok(Self {
             renderer,
-            source: ElasticSourceOwnership::Dormant(Box::new(source)),
+            source: ElasticSourceOwnership::Dormant {
+                source: Box::new(source),
+                relocation_source: Box::new(WasmSend::new(relocation_source)),
+            },
         })
     }
 
@@ -66,19 +79,38 @@ impl PreparedElasticRenderer {
     ) -> Result<(), ElasticPrepareError> {
         let source = mem::replace(&mut self.source, ElasticSourceOwnership::Preparing);
         match source {
-            ElasticSourceOwnership::Dormant(mut resource) => {
-                let Some(activity) = resource.get_mut().take_source_audio_activity() else {
-                    self.source = ElasticSourceOwnership::Dormant(resource);
+            ElasticSourceOwnership::Dormant {
+                mut source,
+                mut relocation_source,
+            } => {
+                let Some(activity) = source.get_mut().take_source_audio_activity() else {
+                    self.source = ElasticSourceOwnership::Dormant {
+                        source,
+                        relocation_source,
+                    };
                     return Err(ElasticPrepareError::SourceUnavailable);
                 };
-                let abr_handle = resource.get().abr_handle();
-                resource.get().set_service_class(ServiceClass::Warm);
-                self.renderer.attach_source_port(spawn_elastic_source(
-                    (*resource).into_inner(),
-                    cancel,
+                let Some(relocation_activity) =
+                    relocation_source.get_mut().take_source_audio_activity()
+                else {
+                    return Err(ElasticPrepareError::SourceUnavailable);
+                };
+                let abr_handle = source.get().abr_handle();
+                source.get().set_service_class(ServiceClass::Warm);
+                relocation_source
+                    .get()
+                    .set_service_class(ServiceClass::Warm);
+                let relocation_cancel = cancel.child();
+                let source_port =
+                    spawn_elastic_source((*source).into_inner(), cancel, pool.clone(), activity);
+                let relocation_port = spawn_elastic_source(
+                    (*relocation_source).into_inner(),
+                    relocation_cancel,
                     pool,
-                    activity,
-                ));
+                    relocation_activity,
+                );
+                self.renderer
+                    .attach_source_ports(source_port, relocation_port);
                 self.source = ElasticSourceOwnership::Active { abr_handle };
                 Ok(())
             }
@@ -92,7 +124,7 @@ impl PreparedElasticRenderer {
 
     pub(crate) fn abr_handle(&self) -> Option<AbrHandle> {
         match &self.source {
-            ElasticSourceOwnership::Dormant(resource) => resource.get().abr_handle(),
+            ElasticSourceOwnership::Dormant { source, .. } => source.get().abr_handle(),
             ElasticSourceOwnership::Active { abr_handle } => abr_handle.clone(),
             ElasticSourceOwnership::Preparing => None,
         }
@@ -133,6 +165,56 @@ impl PlayerResource {
         self.resource
             .get_mut()
             .activate_source_audio_authoritative()
+    }
+
+    pub(crate) fn begin_session_seek(
+        &mut self,
+        binding: &TrackBinding,
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: u64,
+    ) -> Result<(), PlayError> {
+        let renderer = self
+            .elastic_renderer
+            .as_mut()
+            .filter(|renderer| renderer.is_active())
+            .ok_or(PlayError::NotReady)?;
+        renderer
+            .renderer_mut()
+            .begin_relocation(binding, target, tempo, revision)
+            .map_err(|error| PlayError::ElasticPreparation {
+                reason: error.to_string(),
+            })
+    }
+
+    pub(crate) fn poll_session_seek(&mut self, revision: u64) -> Result<bool, PlayError> {
+        let renderer = self
+            .elastic_renderer
+            .as_mut()
+            .filter(|renderer| renderer.is_active())
+            .ok_or(PlayError::NotReady)?;
+        renderer
+            .renderer_mut()
+            .poll_relocation(revision)
+            .map(|outcome| outcome == ElasticPreparationOutcome::Ready)
+            .map_err(|error| PlayError::ElasticPreparation {
+                reason: error.to_string(),
+            })
+    }
+
+    pub(crate) fn cancel_session_seek(&mut self, revision: u64) -> Result<(), PlayError> {
+        let renderer = self
+            .elastic_renderer
+            .as_mut()
+            .filter(|renderer| renderer.is_active())
+            .ok_or(PlayError::NotReady)?;
+        renderer
+            .renderer_mut()
+            .discard_relocation(revision)
+            .map(|_| ())
+            .map_err(|error| PlayError::ElasticPreparation {
+                reason: error.to_string(),
+            })
     }
 
     pub(crate) fn deactivate_source_audio(&mut self) -> Result<(), SourceAudioError> {
@@ -211,6 +293,7 @@ impl PlayerResource {
 
     pub(crate) fn finish_elastic_preparation(
         self,
+        relocation_source: Resource,
     ) -> Result<PreparedElasticRenderer, ElasticPrepareError> {
         let Self {
             resource,
@@ -219,7 +302,7 @@ impl PlayerResource {
         } = self;
         elastic_renderer
             .ok_or(ElasticPrepareError::SourceUnavailable)?
-            .into_dormant(resource)
+            .into_dormant(resource, relocation_source)
     }
 
     pub(crate) fn install_prepared_elastic(&mut self, prepared: PreparedElasticRenderer) {

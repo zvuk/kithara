@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 
 use super::processor::PlayerNodeProcessor;
 use crate::{
-    api::TrackBinding,
+    api::{SessionBeat, Tempo, TrackBinding},
     bridge::{PlayerCmd, PlayerNotification, TrackState, TrackTransition},
     player::track::{PlayerResource, PlayerTrack, TrackAxis, TrackParams},
 };
@@ -58,7 +58,86 @@ impl PlayerNodeProcessor {
         }
     }
 
+    fn begin_session_seek(&mut self, target: SessionBeat, tempo: Tempo, revision: u64) {
+        self.session_seek = Some((revision, target));
+        let leading_count = self
+            .tracks
+            .iter()
+            .filter(|(_, track)| track.state().is_leading())
+            .count();
+        if leading_count != 1 {
+            self.fail_session_seek(revision);
+            return;
+        }
+        let result = self
+            .tracks
+            .iter_mut()
+            .find(|(_, track)| track.state().is_leading())
+            .ok_or(())
+            .and_then(|(_, track)| {
+                track
+                    .begin_session_seek(target, tempo, revision)
+                    .map_err(|_| ())
+            });
+        if result.is_err() {
+            self.fail_session_seek(revision);
+        }
+    }
+
+    pub(super) fn poll_session_seek(&mut self) {
+        let Some((revision, _)) = self.session_seek else {
+            return;
+        };
+        let result = self
+            .tracks
+            .iter_mut()
+            .find(|(_, track)| track.state().is_leading())
+            .ok_or(())
+            .and_then(|(_, track)| track.poll_session_seek(revision).map_err(|_| ()));
+        match result {
+            Ok(true) => self
+                .playback
+                .session_seek_prepared
+                .store(revision, Ordering::SeqCst),
+            Ok(false) => {}
+            Err(()) => self.fail_session_seek(revision),
+        }
+    }
+
+    pub(super) fn fail_session_seek(&mut self, revision: u64) {
+        self.playback
+            .session_seek_failed
+            .store(revision, Ordering::SeqCst);
+        self.session_seek = None;
+    }
+
+    fn cancel_session_seek(&mut self, revision: u64) {
+        let result = self
+            .tracks
+            .iter_mut()
+            .try_for_each(|(_, track)| track.cancel_session_seek(revision));
+        if result.is_err() {
+            self.fail_session_seek(revision);
+            return;
+        }
+        if self
+            .session_seek
+            .is_some_and(|(pending, _)| pending == revision)
+        {
+            self.session_seek = None;
+        }
+        let _ = self.playback.session_seek_prepared.compare_exchange(
+            revision,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
     fn clear_all_tracks(&mut self) {
+        if let Some((revision, _)) = self.session_seek {
+            self.fail_session_seek(revision);
+        }
         for (_, track) in self.tracks.iter_mut() {
             track.stop();
         }
@@ -110,6 +189,16 @@ impl PlayerNodeProcessor {
                 } => {
                     self.apply_seek(seconds, seek_epoch);
                 }
+                PlayerCmd::PrepareSessionSeek {
+                    target,
+                    tempo,
+                    revision,
+                } => {
+                    self.begin_session_seek(target, tempo, revision);
+                }
+                PlayerCmd::CancelSessionSeek { revision } => {
+                    self.cancel_session_seek(revision);
+                }
                 PlayerCmd::SetPaused(paused) => {
                     let playing = !paused;
                     self.playback.playing.store(playing, Ordering::SeqCst);
@@ -135,6 +224,9 @@ impl PlayerNodeProcessor {
     }
 
     fn handle_transition(&mut self, transition: TrackTransition) {
+        if let Some((revision, _)) = self.session_seek {
+            self.fail_session_seek(revision);
+        }
         let (mut old_track, mut new_track) = (None, None);
 
         if let TrackTransition::FadeIn(ref nt) = transition {
@@ -197,6 +289,9 @@ impl PlayerNodeProcessor {
         item_id: Option<Arc<str>>,
         binding: Option<TrackBinding>,
     ) {
+        if let Some((revision, _)) = self.session_seek {
+            self.fail_session_seek(revision);
+        }
         let src = Arc::clone(resource.src());
         if let Some(track) = self.tracks.remove(&src) {
             self.discard_track(track);

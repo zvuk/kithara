@@ -12,7 +12,8 @@ use kithara::{
     },
     play::{
         PlayError, PlaybackDirection, Resource, ResourceBlueprint, ResourceConfig,
-        SelectTransition, SessionBeat, SessionError, SessionTransportSnapshot, Tempo, TrackBinding,
+        SelectTransition, SessionBeat, SessionError, SessionTrackControl, SessionTransportSnapshot,
+        Tempo, TrackBinding,
     },
 };
 use kithara_integration_tests::{
@@ -322,6 +323,169 @@ async fn two_bound_players_commit_one_tempo_revision(temp_dir: TestTempDir) {
             .all(|harness| harness.player().is_playing())
     );
     assert_player_phase_aligned(&harnesses);
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn two_bound_players_commit_one_session_seek_revision(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 120]).await;
+    let before = harnesses[0]
+        .session_transport()
+        .expect("transport before session seek");
+    let target = SessionBeat::new(2.0).expect("finite seek target");
+    let players: Vec<_> = harnesses
+        .iter()
+        .map(|harness| Arc::clone(harness.player()))
+        .collect();
+    let seek = kithara::platform::tokio::task::spawn(async move {
+        let peers: Vec<_> = players[1..].iter().map(AsRef::as_ref).collect();
+        players[0].seek_session(&peers, target).await
+    });
+
+    for _ in 0..512 {
+        if seek.is_finished() {
+            break;
+        }
+        let _ = harnesses[0].render(1);
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert!(seek.is_finished(), "session seek preparation stays bounded");
+    seek.await
+        .expect("session seek task joins")
+        .expect("session seek preparation commits");
+
+    let after = (0..BLOCK_FRAMES * 8)
+        .find_map(|_| {
+            let _ = harnesses[0].render(1);
+            harnesses[0]
+                .tick_session()
+                .expect("session seek transaction progresses");
+            let snapshot = harnesses[0]
+                .session_transport()
+                .expect("transport after session seek render");
+            (snapshot.revision() != before.revision()).then_some(snapshot)
+        })
+        .expect("session seek commits within the render budget");
+
+    let one_frame = after.tempo().beats_per_minute() / (f64::from(SAMPLE_RATE) * 60.0);
+    assert_eq!(after.revision(), before.revision() + 1);
+    assert!((after.position().get() - target.get() - one_frame).abs() <= one_frame);
+    for harness in &harnesses {
+        assert_eq!(harness.session_transport().expect("shared snapshot"), after);
+    }
+    assert_player_phase_aligned(&harnesses);
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn failed_session_seek_leaves_the_transport_unchanged(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 120]).await;
+    let before = harnesses[0]
+        .session_transport()
+        .expect("transport before rejected session seek");
+    let peers: Vec<_> = harnesses[1..]
+        .iter()
+        .map(|harness| harness.player().as_ref())
+        .collect();
+    let target = SessionBeat::new(7.0).expect("finite out-of-domain target");
+
+    let error = harnesses[0]
+        .player()
+        .seek_session(&peers, target)
+        .await
+        .expect_err("out-of-domain seek is rejected");
+
+    assert!(matches!(error, PlayError::ElasticPreparation { .. }));
+    for harness in &harnesses {
+        assert_eq!(
+            harness
+                .session_transport()
+                .expect("transport after rejected session seek"),
+            before
+        );
+        assert!(harness.player().is_playing());
+    }
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn stale_session_seek_is_cancelled_before_a_retry(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 120]).await;
+    let target = SessionBeat::new(2.1).expect("finite seek target");
+    let players: Vec<_> = harnesses
+        .iter()
+        .map(|harness| Arc::clone(harness.player()))
+        .collect();
+    let stale_seek = kithara::platform::tokio::task::spawn(async move {
+        let peers: Vec<_> = players[1..].iter().map(AsRef::as_ref).collect();
+        players[0].seek_session(&peers, target).await
+    });
+    sleep(Duration::from_millis(10)).await;
+
+    let (_, tempo_after) =
+        commit_tempo_change(&harnesses, Tempo::new(100.0).expect("valid changed tempo"));
+    let error = stale_seek
+        .await
+        .expect("stale seek task joins")
+        .expect_err("tempo commit invalidates the staged seek");
+    assert!(matches!(error, PlayError::SessionSeekPreparationFailed));
+    for harness in &harnesses {
+        let position = harness
+            .player()
+            .playback_snapshot()
+            .expect("position after stale seek")
+            .position();
+        assert!(
+            position < 0.5,
+            "stale seek moved source position to {position}"
+        );
+    }
+
+    let _ = harnesses[0].render(1);
+    for harness in &harnesses {
+        harness.tick_and_drain();
+    }
+
+    let players: Vec<_> = harnesses
+        .iter()
+        .map(|harness| Arc::clone(harness.player()))
+        .collect();
+    let retry = kithara::platform::tokio::task::spawn(async move {
+        let peers: Vec<_> = players[1..].iter().map(AsRef::as_ref).collect();
+        players[0].seek_session(&peers, target).await
+    });
+    for _ in 0..512 {
+        if retry.is_finished() {
+            break;
+        }
+        let _ = harnesses[0].render(1);
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    retry
+        .await
+        .expect("retry task joins")
+        .expect("retry commits after cancellation");
+
+    let after = (0..BLOCK_FRAMES * 8)
+        .find_map(|_| {
+            let _ = harnesses[0].render(1);
+            harnesses[0]
+                .tick_session()
+                .expect("retry transaction progresses");
+            let snapshot = harnesses[0]
+                .session_transport()
+                .expect("transport after retry");
+            (snapshot.revision() != tempo_after.revision()).then_some(snapshot)
+        })
+        .expect("retry commits within the render budget");
+    assert_eq!(after.revision(), tempo_after.revision() + 1);
+    assert!((after.position().get() - target.get()).abs() < 0.01);
 }
 
 #[kithara::test(tokio, flash(false))]

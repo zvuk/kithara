@@ -59,6 +59,8 @@ pub(crate) enum ElasticPrepareError {
     UnsupportedSourceOutcome,
     #[error("elastic preparation source range is outside the prepared fetch window")]
     FetchWindowMismatch,
+    #[error("another elastic relocation is still pending")]
+    RelocationPending,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -95,6 +97,10 @@ pub(crate) enum ElasticRenderError {
     SourceWorkerUnavailable,
     #[error("elastic source preparation worker failed")]
     SourceWorkerFailed,
+    #[error("elastic relocation was not ready at the committed session boundary")]
+    RelocationNotReady,
+    #[error("elastic relocation could not be primed at the committed session boundary")]
+    RelocationPreparationFailed,
     #[error("elastic source window missed its render deadline")]
     SourceWindowDeadlineMissed,
 }
@@ -156,6 +162,13 @@ struct ElasticPreparation {
     warmup: ElasticRequest,
 }
 
+struct ElasticRelocation {
+    preparation: ElasticPreparation,
+    revision: u64,
+    samples: Option<PcmBuf>,
+    target: SessionBeat,
+}
+
 pub(crate) struct ElasticRenderer {
     backend: Box<dyn ElasticBackend>,
     capabilities: ElasticCapabilities,
@@ -169,9 +182,12 @@ pub(crate) struct ElasticRenderer {
     demand: Option<SourceAudioDemand>,
     cursor: Option<SourceCursor>,
     pending_request: Option<ElasticSourceRequest>,
+    pending_relocation_request: Option<ElasticSourceRequest>,
     pending_retirement: Option<PcmBuf>,
     preparation: Option<ElasticPreparation>,
     primed: bool,
+    relocation: Option<ElasticRelocation>,
+    relocation_port: Option<ElasticSourcePort>,
     source_generation: u64,
     source_port: Option<ElasticSourcePort>,
     source_window: Option<SourceFrameRange>,
@@ -184,6 +200,7 @@ pub(crate) struct ElasticRenderer {
 
 impl ElasticRenderer {
     const PREFETCH_BLOCKS: usize = 8;
+    const RELOCATION_PREFETCH_BLOCKS: usize = 1;
     const RENEWAL_BLOCKS: usize = 2;
 
     pub(crate) fn prepare(
@@ -241,9 +258,12 @@ impl ElasticRenderer {
             demand: None,
             cursor: None,
             pending_request: None,
+            pending_relocation_request: None,
             pending_retirement: None,
             preparation: None,
             primed: false,
+            relocation: None,
+            relocation_port: None,
             source_generation: 0,
             source_port: None,
             source_window: None,
@@ -263,6 +283,9 @@ impl ElasticRenderer {
 
     pub(super) fn set_service_class(&mut self, class: ServiceClass) {
         if let Some(port) = self.source_port.as_mut() {
+            port.set_service_class(class);
+        }
+        if let Some(port) = self.relocation_port.as_mut() {
             port.set_service_class(class);
         }
     }
