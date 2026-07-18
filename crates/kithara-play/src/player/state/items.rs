@@ -14,7 +14,7 @@ use super::{
     playlist::{Playlist, QueuedLoad},
 };
 use crate::{
-    api::{PlayerEvent, SlotId, TrackBinding},
+    api::{PlayerEvent, SessionBeat, SlotId, TrackBinding},
     bridge::PlayerCmd,
     engine::{DeferredPlayerCmdError, EngineImpl},
     error::PlayError,
@@ -35,8 +35,14 @@ pub(in crate::player) struct BoundLoad {
     pub(in crate::player) activation: Option<(CancelToken, PcmPool)>,
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::player) struct JoinLoad {
+    pub(in crate::player) target: SessionBeat,
+    pub(in crate::player) transport_revision: u64,
+}
+
 #[must_use = "load transactions must be dispatched"]
-struct LoadTransaction<'a> {
+pub(in crate::player) struct LoadTransaction<'a> {
     playlist: MutexGuard<'a, Playlist>,
     index: usize,
     binding: Option<TrackBinding>,
@@ -46,10 +52,16 @@ struct LoadTransaction<'a> {
     abr_handle: Option<AbrHandle>,
     activation: Option<(CancelToken, PcmPool)>,
     duration_seconds: f64,
+    join: Option<JoinLoad>,
+    rollback_insert: bool,
 }
 
 impl LoadTransaction<'_> {
-    fn dispatch(self, engine: &EngineImpl, slot: SlotId) -> Result<DispatchedLoad, PlayError> {
+    pub(in crate::player) fn dispatch(
+        self,
+        engine: &EngineImpl,
+        slot: SlotId,
+    ) -> Result<DispatchedLoad, PlayError> {
         let Self {
             mut playlist,
             index,
@@ -60,6 +72,8 @@ impl LoadTransaction<'_> {
             abr_handle,
             mut activation,
             duration_seconds,
+            join,
+            rollback_insert,
         } = self;
         let src = Arc::clone(player_resource.src());
         let mut player_resource = Some(player_resource);
@@ -68,11 +82,22 @@ impl LoadTransaction<'_> {
             let resource = player_resource
                 .take()
                 .ok_or_else(|| PlayError::Internal("load transaction lost its resource".into()))?;
-            Ok(PlayerCmd::LoadTrack {
-                binding: binding.clone(),
-                item_id: item_id.clone(),
-                resource: Box::new(resource),
-            })
+            match join {
+                Some(join) => Ok(PlayerCmd::JoinTrack {
+                    binding: binding.clone().ok_or_else(|| {
+                        PlayError::Internal("join transaction lost its binding".into())
+                    })?,
+                    item_id: item_id.clone(),
+                    resource: Box::new(resource),
+                    target: join.target,
+                    transport_revision: join.transport_revision,
+                }),
+                None => Ok(PlayerCmd::LoadTrack {
+                    binding: binding.clone(),
+                    item_id: item_id.clone(),
+                    resource: Box::new(resource),
+                }),
+            }
         });
         match result {
             Ok(()) => {
@@ -94,17 +119,25 @@ impl LoadTransaction<'_> {
                     resource,
                     prepared_stamp,
                 )?;
+                if rollback_insert {
+                    let _ = playlist.remove_at(index);
+                }
                 Err(error)
             }
             Err(DeferredPlayerCmdError::Rejected(rejected)) => {
                 let error = rejected.error;
-                let PlayerCmd::LoadTrack {
-                    binding, resource, ..
-                } = *rejected.command
-                else {
-                    return Err(PlayError::Internal(
-                        "load dispatch rejected a non-load command".into(),
-                    ));
+                let (binding, resource) = match *rejected.command {
+                    PlayerCmd::LoadTrack {
+                        binding, resource, ..
+                    } => (binding, resource),
+                    PlayerCmd::JoinTrack {
+                        binding, resource, ..
+                    } => (Some(binding), resource),
+                    _ => {
+                        return Err(PlayError::Internal(
+                            "load dispatch rejected a non-load command".into(),
+                        ));
+                    }
                 };
                 restore_queue_resource(
                     &mut playlist,
@@ -113,6 +146,9 @@ impl LoadTransaction<'_> {
                     *resource,
                     prepared_stamp,
                 )?;
+                if rollback_insert {
+                    let _ = playlist.remove_at(index);
+                }
                 Err(error)
             }
         }
@@ -279,12 +315,34 @@ impl ItemQueue {
         index: usize,
         context: ItemLoadContext<'_>,
     ) -> Result<Option<LoadTransaction<'_>>, PlayError> {
-        let mut playlist = self.playlist.lock();
+        let playlist = self.playlist.lock();
+        Self::prepare_load(playlist, index, context, None, false).map_err(|(_, error)| error)
+    }
+
+    pub(in crate::player) fn prepare_load<'a>(
+        mut playlist: MutexGuard<'a, Playlist>,
+        index: usize,
+        context: ItemLoadContext<'_>,
+        join: Option<JoinLoad>,
+        rollback_insert: bool,
+    ) -> Result<Option<LoadTransaction<'a>>, (MutexGuard<'a, Playlist>, PlayError)> {
         if index >= playlist.len() {
+            if rollback_insert {
+                return Err((
+                    playlist,
+                    PlayError::Internal("inserted join index is unavailable".into()),
+                ));
+            }
             return Ok(None);
         }
 
         let Some(queued) = playlist.take(index) else {
+            if rollback_insert {
+                return Err((
+                    playlist,
+                    PlayError::Internal("inserted join resource is unavailable".into()),
+                ));
+            }
             return Ok(None);
         };
         let QueuedLoad {
@@ -305,7 +363,10 @@ impl ItemQueue {
             abr_handle,
             activation,
         } = if binding.is_some() {
-            prepare_bound_load(&mut playlist, index, resource, prepared, context)?
+            match prepare_bound_load(&mut playlist, index, resource, prepared, context) {
+                Ok(load) => load,
+                Err(error) => return Err((playlist, error)),
+            }
         } else {
             let ItemLoadContext {
                 rate,
@@ -343,6 +404,8 @@ impl ItemQueue {
             abr_handle,
             activation,
             duration_seconds,
+            join,
+            rollback_insert,
         }))
     }
 

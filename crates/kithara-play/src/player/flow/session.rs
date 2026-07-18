@@ -1,13 +1,17 @@
 use std::{future::Future, sync::atomic::Ordering};
 
-use kithara_platform::time::{Duration, sleep};
+use kithara_platform::{
+    sync::Arc,
+    time::{Duration, sleep},
+};
 
 use super::super::core::PlayerImpl;
 use crate::{
     PlayerId,
-    api::{SessionBeat, Tempo},
+    api::{SessionBeat, Tempo, TrackBinding},
     bridge::PlayerCmd,
     error::PlayError,
+    resource::Resource,
 };
 
 /// Session-wide musical mutations executed by the canonical player owner.
@@ -15,6 +19,15 @@ use crate::{
 /// Implementations coordinate the supplied players through their existing
 /// queues, slots, and renderers; the trait owns no runtime state or protocol.
 pub trait SessionTrackControl {
+    /// Adds the first bound track to an idle player at an exact session beat.
+    fn join_track_at<'a>(
+        &'a self,
+        resource: Resource,
+        item_id: Option<Arc<str>>,
+        binding: TrackBinding,
+        target: SessionBeat,
+    ) -> impl Future<Output = Result<(), PlayError>> + 'a;
+
     /// Relocates every participating bound player at one session render boundary.
     fn seek_session<'a>(
         &'a self,
@@ -217,6 +230,16 @@ impl PlayerImpl {
 }
 
 impl SessionTrackControl for PlayerImpl {
+    fn join_track_at<'a>(
+        &'a self,
+        resource: Resource,
+        item_id: Option<Arc<str>>,
+        binding: TrackBinding,
+        target: SessionBeat,
+    ) -> impl Future<Output = Result<(), PlayError>> + 'a {
+        Self::join_track_at(self, resource, item_id, binding, target)
+    }
+
     fn seek_session<'a>(
         &'a self,
         peers: &'a [&'a Self],

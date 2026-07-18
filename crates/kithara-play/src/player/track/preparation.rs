@@ -14,6 +14,7 @@ impl ElasticRenderer {
         &mut self,
         resource: &mut PlayerResource,
         binding: &TrackBinding,
+        anchor: SessionBeat,
         tempo: Tempo,
         revision: u64,
     ) -> Result<(), ElasticPrepareError> {
@@ -23,12 +24,7 @@ impl ElasticRenderer {
         if self.relocation.is_some() {
             return Err(ElasticPrepareError::RelocationPending);
         }
-        let preparation = self.plan_preparation(
-            binding,
-            binding.session_anchor(),
-            tempo,
-            Self::PREFETCH_BLOCKS,
-        )?;
+        let preparation = self.plan_preparation(binding, anchor, tempo, Self::PREFETCH_BLOCKS)?;
         let start = preparation.fetch_range.start();
         resource
             .seek_source_frame(start)

@@ -172,7 +172,22 @@ impl PlayerNodeProcessor {
                     resource,
                     item_id,
                 } => {
-                    self.load_track(resource, item_id, binding);
+                    self.load_track(resource, item_id, binding, None);
+                }
+                PlayerCmd::JoinTrack {
+                    binding,
+                    resource,
+                    item_id,
+                    target,
+                    transport_revision,
+                } => {
+                    self.load_track(
+                        resource,
+                        item_id,
+                        Some(binding),
+                        Some((target, transport_revision)),
+                    );
+                    self.playback.playing.store(true, Ordering::SeqCst);
                 }
                 PlayerCmd::UnloadTrack { src } => {
                     self.unload_track(&src);
@@ -288,6 +303,7 @@ impl PlayerNodeProcessor {
         resource: Box<PlayerResource>,
         item_id: Option<Arc<str>>,
         binding: Option<TrackBinding>,
+        join: Option<(SessionBeat, u64)>,
     ) {
         if let Some((revision, _)) = self.session_seek {
             self.fail_session_seek(revision);
@@ -312,7 +328,10 @@ impl PlayerNodeProcessor {
             .prefetch_duration(self.prefetch_duration)
             .fade_curve(self.crossfade.fade_curve())
             .build();
-        let track = PlayerTrack::new(resource, params);
+        let mut track = PlayerTrack::new(resource, params);
+        if let Some((target, revision)) = join {
+            track.schedule_join(target, revision);
+        }
         self.tracks.insert(src, track);
         self.notif_tx
             .try_push(PlayerNotification::Loaded { src: loaded_src })

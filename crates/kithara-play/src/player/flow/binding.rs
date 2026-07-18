@@ -12,7 +12,7 @@ use super::super::{
     state::{PreparedBindingResource, PreparedBindingStamp},
 };
 use crate::{
-    api::{Tempo, TrackBinding},
+    api::{SessionBeat, Tempo, TrackBinding},
     error::PlayError,
     player::track::{ElasticPreparationOutcome, PlayerResource},
     resource::Resource,
@@ -23,6 +23,16 @@ impl PlayerImpl {
         &self,
         resource: &Resource,
         binding: &TrackBinding,
+    ) -> Result<PreparedBindingResource, PlayError> {
+        self.prepare_bound_resource_at(resource, binding, binding.session_anchor())
+            .await
+    }
+
+    pub(in crate::player) async fn prepare_bound_resource_at(
+        &self,
+        resource: &Resource,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
     ) -> Result<PreparedBindingResource, PlayError> {
         self.ensure_engine_started()?;
         let cancel = self
@@ -93,6 +103,7 @@ impl PlayerImpl {
         prepared
             .prepare_elastic(
                 binding,
+                anchor,
                 tempo,
                 stamp.transport_revision,
                 stamp.shape,

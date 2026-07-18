@@ -6,12 +6,16 @@ use kithara_stretch::{ElasticRateEnvelope, SignalsmithElastic};
 use super::super::{
     core::PlayerImpl,
     state::{
-        items::{BoundLoad, ItemLoadContext, ItemQueue, restore_queued_resource},
+        items::{
+            BoundLoad, DispatchedLoad, ItemLoadContext, ItemQueue, JoinLoad, LoadTransaction,
+            restore_queued_resource,
+        },
         playlist::{Playlist, PreparedBindingStamp, QueuedResource},
     },
 };
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding},
+    api::{PlayerStatus, SessionBeat, SessionTransportSnapshot, SlotId, Tempo, TrackBinding},
+    engine::EngineImpl,
     error::PlayError,
     player::{
         node::StreamShape,
@@ -84,6 +88,125 @@ impl PlayerImpl {
             .items
             .insert_with_binding(resource, item_id, binding, prepared, at_position);
         Ok(())
+    }
+
+    pub(in crate::player) async fn join_track_at(
+        &self,
+        resource: Resource,
+        item_id: Option<Arc<str>>,
+        binding: TrackBinding,
+        target: SessionBeat,
+    ) -> Result<(), PlayError> {
+        if self.item_count() != 0 {
+            return Err(PlayError::SessionJoinPlayerNotEmpty);
+        }
+        self.ensure_engine_started()?;
+        let slot = self.ensure_slot()?;
+        let before = self.core.engine.session_transport()?;
+        ensure_join_target(before, target)?;
+        let prepared = self
+            .prepare_bound_resource_at(&resource, &binding, target)
+            .await?;
+        let current = self.core.engine.session_transport()?;
+        if current.revision() != before.revision() || current.tempo() != before.tempo() {
+            return Err(PlayError::BindingPreparationContextChanged);
+        }
+        ensure_join_target(current, target)?;
+        let stamp = prepared.stamp;
+        let cancel = self
+            .core
+            .engine
+            .cancel_token()
+            .ok_or_else(|| PlayError::Internal("player join has no cancel owner".into()))?
+            .child();
+        let dispatched = dispatch_join(
+            &self.core.items,
+            QueuedResource {
+                binding: Some(binding),
+                item_id,
+                prepared: Some(prepared),
+                resource: Some(resource),
+            },
+            ItemLoadContext {
+                rate: self.core.timestretch.speed(),
+                pitch_bend: self.core.params.pitch_bend(),
+                shape: stamp.shape,
+                pool: self.core.engine.pcm_pool(),
+                stamp,
+                cancel,
+            },
+            &self.core.engine,
+            slot,
+            target,
+            current.revision(),
+        )?;
+        self.phase.lock().set_abr_handle(dispatched.abr_handle);
+        self.publish_current_track_snapshot(dispatched.duration_seconds);
+        self.enter_playing();
+        self.set_status(PlayerStatus::ReadyToPlay);
+        Ok(())
+    }
+}
+
+fn dispatch_join(
+    items: &ItemQueue,
+    queued: QueuedResource,
+    context: ItemLoadContext<'_>,
+    engine: &EngineImpl,
+    slot: SlotId,
+    target: SessionBeat,
+    transport_revision: u64,
+) -> Result<DispatchedLoad, PlayError> {
+    prepare_join(items, queued, context, target, transport_revision)?.dispatch(engine, slot)
+}
+
+fn prepare_join<'a>(
+    items: &'a ItemQueue,
+    queued: QueuedResource,
+    context: ItemLoadContext<'_>,
+    target: SessionBeat,
+    transport_revision: u64,
+) -> Result<LoadTransaction<'a>, PlayError> {
+    let mut playlist = items.lock_playlist();
+    if playlist.len() != 0 {
+        return Err(PlayError::SessionJoinPlayerNotEmpty);
+    }
+    let index = playlist.insert(queued, None);
+    let transaction = match ItemQueue::prepare_load(
+        playlist,
+        index,
+        context,
+        Some(JoinLoad {
+            target,
+            transport_revision,
+        }),
+        true,
+    ) {
+        Ok(Some(transaction)) => transaction,
+        Ok(None) => {
+            return Err(PlayError::Internal(
+                "inserted join resource is unavailable".into(),
+            ));
+        }
+        Err((mut playlist, error)) => {
+            let _ = playlist.remove_at(index);
+            return Err(error);
+        }
+    };
+    Ok(transaction)
+}
+
+fn ensure_join_target(
+    snapshot: SessionTransportSnapshot,
+    target: SessionBeat,
+) -> Result<(), PlayError> {
+    if target > snapshot.position() {
+        Ok(())
+    } else {
+        Err(PlayError::SessionJoinTargetElapsed {
+            target: target.get(),
+            position: snapshot.position().get(),
+        })
     }
 }
 

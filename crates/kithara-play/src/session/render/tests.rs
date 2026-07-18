@@ -25,7 +25,7 @@ use super::{
         TransportCommitEvent, TransportCommitStamp, TransportCommitState, TransportObservation,
         TransportObservationInput,
     },
-    context::{RenderFrame, SessionTransportCommit},
+    context::{RenderContext, RenderFrame, SessionTransportCommit},
     node::{RenderContextProcessor, RenderContextSlot, RenderContextUnavailable},
     read_render_context,
 };
@@ -40,6 +40,28 @@ use crate::{
 
 const BLOCK_FRAMES: usize = 480;
 const SAMPLE_RATE: u32 = 48_000;
+
+#[kithara::test]
+fn render_context_maps_an_exact_join_beat_to_its_output_frame() {
+    let start = SessionBeat::new(2.0).expect("finite start beat");
+    let end = SessionBeat::new(2.02).expect("finite end beat");
+    let context = RenderContext::new(
+        RenderFrame::new(10)..RenderFrame::new(490),
+        sample_rate(),
+        Some(start..end),
+        Some(SessionTransportCommit::new(
+            Tempo::new(120.0).expect("valid tempo"),
+            true,
+            7,
+        )),
+    )
+    .expect("valid render context");
+    let target = SessionBeat::new(2.0 + 37.0 * 0.02 / 480.0).expect("finite target beat");
+
+    assert_eq!(context.output_offset_for_beat(target), Some(37));
+    assert_eq!(context.output_offset_for_beat(start), Some(0));
+    assert_eq!(context.output_offset_for_beat(end), None);
+}
 
 struct EofReader {
     bus: EventBus,
@@ -621,7 +643,7 @@ fn render_context_rejects_beats_without_a_playing_commit() {
     let beats =
         SessionBeat::new(0.0).expect("finite beat")..SessionBeat::new(0.02).expect("finite beat");
     assert!(
-        super::context::RenderContext::new(
+        RenderContext::new(
             RenderFrame::new(0)..RenderFrame::new(BLOCK_FRAMES as i64),
             sample_rate(),
             Some(beats),

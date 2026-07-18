@@ -89,6 +89,27 @@ async fn insert_bound_sine(
     frequency: f64,
     session_anchor: SessionBeat,
 ) -> usize {
+    let resource = bound_sine_resource(harness, server, temp_dir, frequency).await;
+    let index = harness.player().item_count();
+    harness
+        .player()
+        .insert_with_binding(
+            resource,
+            None,
+            exact_binding(session_anchor, source_tempo),
+            None,
+        )
+        .await
+        .expect("insert prepared bound fixture");
+    index
+}
+
+async fn bound_sine_resource(
+    harness: &OfflinePlayerHarness,
+    server: &TestServerHelper,
+    temp_dir: &TestTempDir,
+    frequency: f64,
+) -> Resource {
     let spec = SignalSpec {
         format: SignalFormat::Wav,
         length: SignalSpecLength::Frames(FIXTURE_FRAMES),
@@ -110,18 +131,7 @@ async fn insert_bound_sine(
         .preload()
         .await
         .expect("preload exact-tempo WAV resource");
-    let index = harness.player().item_count();
-    harness
-        .player()
-        .insert_with_binding(
-            resource,
-            None,
-            exact_binding(session_anchor, source_tempo),
-            None,
-        )
-        .await
-        .expect("insert prepared bound fixture");
-    index
+    resource
 }
 
 async fn prepare_bound_players(
@@ -486,6 +496,130 @@ async fn stale_session_seek_is_cancelled_before_a_retry(temp_dir: TestTempDir) {
         .expect("retry commits within the render budget");
     assert_eq!(after.revision(), tempo_after.revision() + 1);
     assert!((after.position().get() - target.get()).abs() < 0.01);
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn explicit_join_is_silent_before_its_beat_and_uses_the_existing_transport(
+    temp_dir: TestTempDir,
+) {
+    let server = TestServerHelper::new().await;
+    let session = Arc::new(OfflineSession::new_manual());
+    let harnesses: Vec<_> = (0..2)
+        .map(|_| {
+            OfflinePlayerHarness::in_session(
+                OfflinePlayerOptions::builder()
+                    .crossfade_duration(0.0)
+                    .build(),
+                SAMPLE_RATE,
+                Arc::clone(&session),
+            )
+        })
+        .collect();
+    for harness in &harnesses {
+        harness
+            .player()
+            .ensure_engine_started()
+            .expect("offline engine starts");
+        harness
+            .player()
+            .ensure_slot()
+            .expect("offline player slot is allocated");
+    }
+    harnesses[0]
+        .set_session_tempo(Tempo::new(SESSION_TEMPO).expect("valid initial tempo"))
+        .expect("initial tempo accepted");
+    let _ = harnesses[0].render(1);
+    let initial = harnesses[0]
+        .session_transport()
+        .expect("initial tempo committed");
+    let active = insert_bound_sine(
+        &harnesses[0],
+        &server,
+        &temp_dir,
+        100,
+        220.0,
+        initial.position(),
+    )
+    .await;
+    harnesses[0]
+        .player()
+        .select_item(active, true)
+        .expect("active bound fixture selected");
+    harnesses[0].player().set_volume(0.0);
+    harnesses[1].player().set_volume(1.0);
+    for _ in 0..8 {
+        let _ = harnesses[0].render(BLOCK_FRAMES);
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+        sleep(Duration::from_millis(1)).await;
+    }
+
+    let before = harnesses[0]
+        .session_transport()
+        .expect("transport before explicit join");
+    let boundary_offset = 37usize;
+    let lead_frames = BLOCK_FRAMES * 2 + boundary_offset;
+    let slope = before.tempo().beats_per_minute() / (f64::from(SAMPLE_RATE) * 60.0);
+    let target = SessionBeat::new(
+        before.position().get() + lead_frames.to_f64().expect("lead frame count fits f64") * slope,
+    )
+    .expect("future join beat is finite");
+    let joining_binding = exact_binding(initial.position(), 120);
+    assert!(
+        joining_binding
+            .source_frame_at(target)
+            .expect("join target resolves against binding")
+            .is_some()
+    );
+    let resource = bound_sine_resource(&harnesses[1], &server, &temp_dir, 440.0).await;
+
+    harnesses[1]
+        .player()
+        .join_track_at(resource, None, joining_binding, target)
+        .await
+        .expect("explicit join is prepared and scheduled");
+    assert_eq!(
+        harnesses[0]
+            .session_transport()
+            .expect("transport remains observable after join scheduling")
+            .revision(),
+        before.revision()
+    );
+
+    for _ in 0..2 {
+        let rendered = harnesses[0].render(BLOCK_FRAMES);
+        assert!(rendered.iter().all(|sample| sample.abs() <= 1.0e-4));
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+    }
+    let boundary = harnesses[0].render(BLOCK_FRAMES);
+    let silent_samples = boundary_offset * usize::from(CHANNELS);
+    assert!(
+        boundary[..silent_samples]
+            .iter()
+            .all(|sample| sample.abs() <= 1.0e-4)
+    );
+    assert!(
+        boundary[silent_samples..]
+            .iter()
+            .any(|sample| sample.abs() > 0.05)
+    );
+    for harness in &harnesses {
+        harness.tick_and_drain();
+    }
+    let after = harnesses[0]
+        .session_transport()
+        .expect("transport after explicit join");
+    assert_eq!(after.revision(), before.revision());
+    assert_eq!(after.tempo(), before.tempo());
+    let frequency = positive_crossing_frequency(&boundary[silent_samples..])
+        .expect("joined output contains a measurable waveform");
+    assert!(
+        (frequency - 440.0).abs() < 10.0,
+        "frequency was {frequency}"
+    );
 }
 
 #[kithara::test(tokio, flash(false))]

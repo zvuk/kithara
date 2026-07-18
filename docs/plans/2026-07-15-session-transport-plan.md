@@ -55,7 +55,7 @@ coverage through the existing integration-test session.
       rolling source windows.
 - [x] Slice 6: multi-track participant readiness and an all-or-nothing tempo
       commit at one presentation boundary.
-- [ ] Slice 7: transactional session seek and explicit join.
+- [x] Slice 7: transactional session seek and explicit join.
 - [ ] Slice 8: prepared file-source reverse and directional read-ahead.
 
 ## 2026-07-16 Slice 5 Checkpoint
@@ -184,6 +184,24 @@ insufficient look-ahead and marker-local rate rejection. Signalsmith renderers
 prime and discard their independently declared latency before publication,
 leaving one presentation cursor per track without a session-owned latency
 mirror.
+
+### 2026-07-18 Slice 7 Checkpoint
+
+Transactional session seek and explicit join both extend the canonical player
+path. Seek prepares relocation on each participant's existing
+`ElasticRenderer`, publishes through the existing slot lanes, and commits one
+checked session transport revision only after every participant is ready.
+Failure cancels the prepared relocation and leaves the transport unchanged.
+
+Explicit join adds a bound resource only to an idle `PlayerImpl`. The native
+implementation prepares at the requested future beat, holds the existing
+`ItemQueue` lock from insertion through command publication, and rolls the
+insert back on rejection. `PlayerTrack` stores the pending beat and transport
+revision, remains silent before the exact `RenderContext` output offset, and
+starts within that callback without mutating session transport. The WASM
+implementation is structurally separate and returns the typed elastic backend
+capability error. No participant registry, second renderer, session binding
+mirror, or alternate real-time control plane is introduced.
 
 ## Affected Paths
 
@@ -509,7 +527,8 @@ a session seek atomically. Add a new track at an explicitly requested
   unchanged;
 - stale prepared work cannot commit;
 - offline preparation completes deterministically;
-- a per-track relocation changes its binding without moving session transport.
+- an explicit join installs one bound track at the exact requested output frame
+  without moving or revising session transport.
 
 ## Slice 8 - File-Source Reverse
 

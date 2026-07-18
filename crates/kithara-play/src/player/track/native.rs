@@ -256,6 +256,7 @@ impl PlayerResource {
     pub(crate) fn prepare_elastic(
         &mut self,
         binding: &TrackBinding,
+        anchor: SessionBeat,
         tempo: Tempo,
         revision: u64,
         shape: StreamShape,
@@ -272,7 +273,7 @@ impl PlayerResource {
         if !self.activate_source_audio_authoritative()? {
             return Err(ElasticPrepareError::SourceUnavailable);
         }
-        if let Err(error) = renderer.begin_prefetch(self, binding, tempo, revision) {
+        if let Err(error) = renderer.begin_prefetch(self, binding, anchor, tempo, revision) {
             let _ = self.deactivate_source_audio();
             return Err(error);
         }

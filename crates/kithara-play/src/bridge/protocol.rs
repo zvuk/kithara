@@ -18,6 +18,14 @@ pub enum PlayerCmd {
         resource: Box<PlayerResource>,
         item_id: Option<Arc<str>>,
     },
+    /// Load a bound track that becomes audible at an exact session beat.
+    JoinTrack {
+        binding: TrackBinding,
+        resource: Box<PlayerResource>,
+        item_id: Option<Arc<str>>,
+        target: SessionBeat,
+        transport_revision: u64,
+    },
     /// Unload a track by its source identifier.
     UnloadTrack { src: Arc<str> },
     /// Unload every track from the arena and reset the position/duration
@@ -64,6 +72,19 @@ impl fmt::Debug for PlayerCmd {
                 .field("bound", &binding.is_some())
                 .field("item_id", item_id)
                 .field("src", resource.src())
+                .finish_non_exhaustive(),
+            Self::JoinTrack {
+                binding: _,
+                item_id,
+                resource,
+                target,
+                transport_revision,
+            } => f
+                .debug_struct("JoinTrack")
+                .field("item_id", item_id)
+                .field("src", resource.src())
+                .field("target", target)
+                .field("transport_revision", transport_revision)
                 .finish_non_exhaustive(),
             Self::UnloadTrack { src } => f.debug_struct("UnloadTrack").field("src", src).finish(),
             Self::Clear => f.write_str("Clear"),

@@ -58,6 +58,16 @@ impl PlayerImpl {
     ) -> Result<(), PlayError> {
         Err(PlayError::ElasticBackendUnavailable)
     }
+
+    pub(in crate::player) async fn join_track_at(
+        &self,
+        _resource: Resource,
+        _item_id: Option<Arc<str>>,
+        _binding: TrackBinding,
+        _target: SessionBeat,
+    ) -> Result<(), PlayError> {
+        Err(PlayError::ElasticBackendUnavailable)
+    }
 }
 
 pub(crate) fn activate_load(

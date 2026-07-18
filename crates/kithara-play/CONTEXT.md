@@ -263,6 +263,25 @@ track continues to receive the same immutable session context and revision.
 The browser path retains the same player API but rejects a current bound track
 with `ElasticBackendUnavailable` until a browser elastic backend exists.
 
+`SessionTrackControl::join_track_at` adds one bound resource to an idle
+`PlayerImpl`; joining over an existing playlist or an elapsed beat is rejected.
+The native player prepares the resource and its existing `ElasticRenderer` at
+the requested `SessionBeat`, then holds the `ItemQueue` playlist lock from
+insertion through publication on the existing slot command lane. A rejected
+publication removes that exact inserted entry, so no partially joined queue
+state remains.
+
+The callback stores only the pending join beat and observed transport revision
+on the new `PlayerTrack`. The immutable `RenderContext` maps that beat to the
+first matching output frame; the track stays silent before that offset and
+begins rendering at the offset within the same callback. Join never commits or
+reanchors session transport. A changed revision rejects preparation before
+publication, while a stale revision observed by the callback fails the joined
+track through the existing playback failure path. Native join ownership lives
+in `player/platform/native.rs`; the separate browser implementation in
+`player/platform/wasm.rs` returns `ElasticBackendUnavailable` without adding
+native-only queue state to the WASM path.
+
 `SessionTransportSnapshot` is published as one render-observed value by the
 same adapter node. It never combines a control-side tempo or revision with an
 independently sampled graph clock. Until a candidate is applied, a query returns

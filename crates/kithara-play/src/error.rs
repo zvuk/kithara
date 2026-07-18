@@ -130,6 +130,14 @@ pub enum PlayError {
     #[error("session seek preparation failed before the transport boundary")]
     SessionSeekPreparationFailed,
 
+    /// Explicit join only adds the first track to an idle player.
+    #[error("explicit session join requires an empty player queue")]
+    SessionJoinPlayerNotEmpty,
+
+    /// The requested join boundary has already passed on the observed transport.
+    #[error("session join target {target} is not after the observed position {position}")]
+    SessionJoinTargetElapsed { target: f64, position: f64 },
+
     #[error("slot not found: {0:?}")]
     SlotNotFound(SlotId),
 

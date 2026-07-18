@@ -109,7 +109,7 @@ impl PlayerTrack {
         triggers.check(notification_tx, input);
     }
 
-    fn handle_failed_end(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
+    pub(crate) fn handle_failed_end(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
         if self.state == TrackState::Finished {
             return;
         }

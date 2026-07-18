@@ -117,6 +117,41 @@ impl RenderContext {
         }
     }
 
+    pub(crate) fn output_offset_for_beat(&self, target: SessionBeat) -> Option<usize> {
+        let beats = self.session_beats.as_ref()?;
+        let frames = self
+            .render_frames
+            .end
+            .get()
+            .checked_sub(self.render_frames.start.get())
+            .and_then(|frames| usize::try_from(frames).ok())?;
+        if target == beats.start {
+            return Some(0);
+        }
+        if target < beats.start || target >= beats.end || frames == 0 {
+            return None;
+        }
+        let span = beats.end.get() - beats.start.get();
+        if span <= 0.0 {
+            return None;
+        }
+        let exact = (target.get() - beats.start.get()) * frames.to_f64()? / span;
+        let nearest = exact.round();
+        let offset = if (exact - nearest).abs() <= 1.0e-6 {
+            nearest
+        } else {
+            exact.ceil()
+        }
+        .to_usize()?;
+        (offset < frames).then_some(offset)
+    }
+
+    pub(crate) fn beat_is_before_output(&self, target: SessionBeat) -> bool {
+        self.session_beats
+            .as_ref()
+            .is_some_and(|beats| target < beats.start)
+    }
+
     #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn session_beats(&self) -> Option<&Range<SessionBeat>> {
         self.session_beats.as_ref()

@@ -11,7 +11,7 @@ use crate::{
     player::track::{PlayerTrack, TrackReadOutcome, TrackRenderMode},
 };
 
-type ActiveTrackEntry = (usize, Index, bool);
+type ActiveTrackEntry = (usize, Index, bool, usize);
 
 #[derive(Clone, Copy)]
 struct Handover {
@@ -84,6 +84,7 @@ impl RenderPass {
         let mut mix_bufs = [&mut mix_buf0[0][..frames], &mut mix_buf1[0][..frames]];
         let tracks = targets.tracks;
         let notification_tx = targets.notification_tx;
+        let join_offsets = activate_pending_joins(mode, tracks, notification_tx, is_playing);
         let arena_tracks: SmallVec<[(Index, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
             if is_playing {
                 tracks
@@ -98,15 +99,17 @@ impl RenderPass {
                 .iter()
                 .enumerate()
                 .filter(|(_, (_, state))| state.is_playing())
-                .map(|(arena_idx, (idx, state))| (arena_idx, *idx, state.is_leading()))
+                .map(|(arena_idx, (idx, state))| {
+                    (arena_idx, *idx, state.is_leading(), join_offsets[arena_idx])
+                })
                 .collect();
         let mut active_arena_slots = [false; PlayerNodeProcessor::MAX_TRACKS];
-        for (arena_idx, _, _) in &active_tracks {
+        for (arena_idx, _, _, _) in &active_tracks {
             active_arena_slots[*arena_idx] = true;
         }
         let mut skip_tracks = [false; PlayerNodeProcessor::MAX_TRACKS];
 
-        for (track_idx, (_arena_slot, track_handle, was_leading)) in
+        for (track_idx, (_arena_slot, track_handle, was_leading, start_offset)) in
             active_tracks.iter().enumerate()
         {
             if skip_tracks[track_idx] {
@@ -117,13 +120,14 @@ impl RenderPass {
                 ch_buffer.fill(0.0);
             }
 
+            let start_offset = *start_offset;
             let mut read_outcome = {
                 let Some(outcome) = tracks.get_by_index_mut(*track_handle).map(|track| {
                     track.render(
                         mode,
                         &mut read_bufs,
                         &mut mix_bufs,
-                        0..frames,
+                        start_offset..frames,
                         notification_tx,
                     )
                 }) else {
@@ -138,15 +142,15 @@ impl RenderPass {
                     leading_outcome_pos_dur = Some(snapshot);
                 }
 
-                let mut handover = initial_handover(&read_outcome);
+                let mut handover = initial_handover(&read_outcome, start_offset);
 
-                for (next_idx, (_, next_handle, next_is_leading)) in
+                for (next_idx, (_, next_handle, next_is_leading, next_start)) in
                     active_tracks.iter().enumerate()
                 {
                     let Some(handoff) = handover else {
                         break;
                     };
-                    let offset = handoff.offset;
+                    let offset = handoff.offset.max(*next_start);
                     if next_idx == track_idx || skip_tracks[next_idx] || !*next_is_leading {
                         continue;
                     }
@@ -225,10 +229,37 @@ impl RenderPass {
     }
 }
 
-fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {
+fn activate_pending_joins(
+    mode: TrackRenderMode<'_>,
+    tracks: &mut ArenaRegistry<Arc<str>, PlayerTrack>,
+    notification_tx: &mut HeapProd<PlayerNotification>,
+    is_playing: bool,
+) -> [usize; PlayerNodeProcessor::MAX_TRACKS] {
+    let mut offsets = [0; PlayerNodeProcessor::MAX_TRACKS];
+    if !is_playing {
+        return offsets;
+    }
+    let TrackRenderMode::Session(context) = mode else {
+        return offsets;
+    };
+    for (arena_slot, (_, track)) in tracks.iter_mut().enumerate() {
+        match track.activate_pending_join(context) {
+            Ok(Some(offset)) => offsets[arena_slot] = offset,
+            Ok(None) => {}
+            Err(()) => track.handle_failed_end(notification_tx),
+        }
+    }
+    offsets
+}
+
+fn initial_handover(read_outcome: &TrackReadOutcome, start_offset: usize) -> Option<Handover> {
     match read_outcome {
-        TrackReadOutcome::Partial { frames, .. } => Some(Handover { offset: *frames }),
-        TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(Handover { offset: 0 }),
+        TrackReadOutcome::Partial { frames, .. } => Some(Handover {
+            offset: start_offset.saturating_add(*frames),
+        }),
+        TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(Handover {
+            offset: start_offset,
+        }),
         TrackReadOutcome::Full { .. } => None,
     }
 }
