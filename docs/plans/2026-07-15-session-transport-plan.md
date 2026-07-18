@@ -20,7 +20,7 @@ coverage through the existing integration-test session.
 - [x] Every player node receives the same immutable render context for a
       processed graph block.
 - [x] Two and then four tracks remain phase-aligned through a tempo change.
-- [ ] Seek, reverse, and read-ahead obey explicit source-range and revision
+- [x] Seek, reverse, and read-ahead obey explicit source-range and revision
       contracts.
 - [x] The integration session renders the real native forward bound path to
       memory and to WAV.
@@ -29,9 +29,9 @@ coverage through the existing integration-test session.
 - [ ] Legacy entertainment-role event naming is migrated to transport and
       synchronization vocabulary before new sync events become public.
 - [x] Existing forward playback and legacy pitch bend do not regress.
-- [ ] The transport and unchanged graph adapter compile and pass their shared
+- [x] The transport and unchanged graph adapter compile and pass their shared
       contract on Android and browser `wasm32-unknown-unknown` surfaces.
-- [ ] Repo formatting, lint, and test acceptance gates pass without suppressions
+- [x] Repo formatting, lint, and test acceptance gates pass without suppressions
       or baseline growth.
 
 ## Status
@@ -59,6 +59,8 @@ coverage through the existing integration-test session.
 - [x] Slice 8: prepared file-source reverse and directional read-ahead.
 - [x] Slice 9: single-variant HLS reverse and bounded directional look-ahead.
 - [x] Slice 10: queued successor prefetch and tempo retarget without source reload.
+- [x] Slice 11: deterministic artifact, real-time and boundedness checks, Apple,
+      Android, browser WASM, and repository acceptance gates.
 
 ## 2026-07-16 Slice 5 Checkpoint
 
@@ -96,8 +98,7 @@ The current limits are intentional and typed:
 - custom readers cannot be reopened for bound preparation and return
   `BindingSourceNotReopenable`.
 
-Slices 11-12 remain required. Slice 11 owns full offline, real-time,
-performance, and device/platform acceptance, and Slice 12 owns event vocabulary
+Slice 11 is complete. Slice 12 remains required and owns event vocabulary
 migration.
 
 Open implementation boundaries retained for the next slices:
