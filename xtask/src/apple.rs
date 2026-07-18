@@ -470,8 +470,14 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
     if let Some(parent) = swift_dst.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(&swift_src, &swift_dst)
-        .with_context(|| format!("copy {} -> {}", swift_src.display(), swift_dst.display()))?;
+    let swift =
+        fs::read_to_string(&swift_src).with_context(|| format!("read {}", swift_src.display()))?;
+    let swift = swift
+        .split('\n')
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&swift_dst, swift).with_context(|| format!("write {}", swift_dst.display()))?;
 
     println!("==> Done!");
     println!("==> XCFramework: {}", xcf_dst.display());

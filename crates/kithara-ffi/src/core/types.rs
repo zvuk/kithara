@@ -440,7 +440,7 @@ pub enum FfiPlayerEvent {
     /// Queue reached the end with `RepeatMode::Off` active.
     QueueEnded,
     /// A crossfade between tracks just started. `duration_seconds` is
-    /// the configured crossfade window — UIs can drive progress from it.
+    /// the configured crossfade window - UIs can drive progress from it.
     CrossfadeStarted { duration_seconds: f32 },
     /// The configured crossfade window changed at runtime.
     CrossfadeDurationChanged { seconds: f32 },
@@ -836,7 +836,7 @@ pub enum FfiItemEvent {
         seconds: f64,
     },
     /// Buffered byte ranges, expressed as `[start, start + duration)` in
-    /// seconds. Replaces the older scalar `BufferedDurationChanged` —
+    /// seconds. Replaces the older scalar `BufferedDurationChanged` -
     /// the total buffered time is the sum of `range.duration_seconds`.
     /// Mirrors the iOS `AudioPlayerItemProtocol.rxLoadedRanges` shape.
     LoadedRangesChanged {

@@ -80,6 +80,25 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return .crossfadeStarted(durationSeconds: durationSeconds)
         case .crossfadeDurationChanged(let seconds):
             return .crossfadeDurationChanged(seconds: seconds)
+        case .trackAdded,
+             .trackRemoved,
+             .trackLoadFailed,
+             .repeatModeChanged,
+             .nextTrackReady,
+             .currentItemAdvanced,
+             .engineStarted,
+             .engineStopped,
+             .crossfadeCompleted,
+             .crossfadeCancelled,
+             .masterVolumeChanged,
+             .audioRouteChanged,
+             .djBpmDetected,
+             .djKeylockChanged,
+             .djStretchBackendChanged,
+             .assetCommitted,
+             .assetFailed,
+             .assetEvicted:
+            return nil
         }
     }
 
@@ -149,7 +168,38 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
                 .itemFailed(itemId.map(String.init) ?? "<unknown>"),
                 itemId: itemId.flatMap(audioId(for:))
             )
-        default:
+        case .timeChanged,
+             .rateChanged,
+             .currentItemChanged,
+             .statusChanged,
+             .timeControlStatusChanged,
+             .durationChanged,
+             .bufferedDurationChanged,
+             .volumeChanged,
+             .muteChanged,
+             .itemDidPlayToEnd,
+             .trackStatusChanged,
+             .queueEnded,
+             .crossfadeStarted,
+             .crossfadeDurationChanged,
+             .trackAdded,
+             .trackRemoved,
+             .trackLoadFailed,
+             .repeatModeChanged,
+             .nextTrackReady,
+             .currentItemAdvanced,
+             .engineStarted,
+             .engineStopped,
+             .crossfadeCompleted,
+             .crossfadeCancelled,
+             .masterVolumeChanged,
+             .audioRouteChanged,
+             .djBpmDetected,
+             .djKeylockChanged,
+             .djStretchBackendChanged,
+             .assetCommitted,
+             .assetFailed,
+             .assetEvicted:
             return nil
         }
     }
