@@ -18,7 +18,7 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir,
     audio_mock::TestPcmReader,
     kithara,
     offline::{OfflineSession, resource_from_reader},
@@ -299,12 +299,11 @@ fn write_rendered_wav(path: &Path, rendered: &[f32]) {
     fs::write(path, wav).expect("write offline elastic artifact");
 }
 
-fn write_marker_source_wav(path: &Path) {
+fn marker_source_pcm() -> Vec<u8> {
     const MARKERS: [f32; 8] = [-0.7, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.7];
     let frames_per_beat = usize::try_from(60 * SAMPLE_RATE / 120).expect("beat span fits usize");
     let data_bytes = FIXTURE_FRAMES * usize::from(CHANNELS) * size_of::<i16>();
-    let mut wav = create_wav_header(SAMPLE_RATE, CHANNELS, Some(data_bytes));
-    wav.reserve(data_bytes);
+    let mut pcm = Vec::with_capacity(data_bytes);
     for frame in 0..FIXTURE_FRAMES {
         let sample = MARKERS[frame / frames_per_beat];
         let quantized = (sample * f32::from(i16::MAX))
@@ -312,10 +311,21 @@ fn write_marker_source_wav(path: &Path) {
             .to_i16()
             .expect("marker sample fits i16");
         for _ in 0..CHANNELS {
-            wav.extend_from_slice(&quantized.to_le_bytes());
+            pcm.extend_from_slice(&quantized.to_le_bytes());
         }
     }
-    fs::write(path, wav).expect("write reverse marker source");
+    pcm
+}
+
+fn marker_source_wav() -> Vec<u8> {
+    let pcm = marker_source_pcm();
+    let mut wav = create_wav_header(SAMPLE_RATE, CHANNELS, Some(pcm.len()));
+    wav.extend_from_slice(&pcm);
+    wav
+}
+
+fn write_marker_source_wav(path: &Path) {
+    fs::write(path, marker_source_wav()).expect("write reverse marker source");
 }
 
 fn channel_mean(rendered: &[f32], frames: std::ops::Range<usize>) -> f32 {
@@ -1066,6 +1076,201 @@ async fn reverse_bound_file_prepares_before_activation_and_renders_markers_to_wa
             .len()
             > 44
     );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn reverse_bound_hls_crosses_segment_boundaries_without_stale_replay(temp_dir: TestTempDir) {
+    const SEGMENT_BYTES: usize = 88_200;
+    const SEGMENTS: usize = 8;
+
+    let server = TestServerHelper::new().await;
+    let fixture = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(SEGMENTS)
+                .segment_size(SEGMENT_BYTES)
+                .segment_duration_secs(0.5)
+                .codecs("wav".to_string())
+                .custom_data(Arc::new(marker_source_wav())),
+        )
+        .await
+        .expect("create segmented marker HLS fixture");
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    );
+    let config = ResourceConfig::for_src(fixture.master_url().as_str())
+        .expect("valid HLS master URL")
+        .store(StoreOptions::new(temp_dir.path()))
+        .look_ahead_bytes(
+            u64::try_from(SEGMENT_BYTES.saturating_mul(2)).expect("look-ahead fits u64"),
+        )
+        .byte_pool(harness.player().byte_pool().clone())
+        .pcm_pool(harness.player().pcm_pool().clone())
+        .build();
+    let mut resource = Resource::new(harness.player().prepare_config(config))
+        .await
+        .expect("open segmented marker HLS fixture");
+    resource
+        .preload()
+        .await
+        .expect("preload segmented marker HLS fixture");
+
+    harness
+        .player()
+        .ensure_engine_started()
+        .expect("offline engine starts");
+    harness
+        .player()
+        .ensure_slot()
+        .expect("offline player slot is allocated");
+    harness
+        .set_session_tempo(Tempo::new(120.0).expect("valid session tempo"))
+        .expect("session tempo accepted");
+    let _ = harness.render(1);
+    let anchor = harness
+        .session_transport()
+        .expect("initial transport commit")
+        .position();
+    let binding = directional_binding(
+        anchor,
+        120,
+        TrackBeat::new(6.0).expect("finite reverse anchor"),
+        PlaybackDirection::Reverse,
+    );
+    harness
+        .player()
+        .insert_with_binding(resource, None, binding, None)
+        .await
+        .expect("reverse HLS prepares before queue publication");
+    harness
+        .player()
+        .select_item(0, true)
+        .expect("activate prepared reverse HLS");
+
+    let frames_per_beat = usize::try_from(60 * SAMPLE_RATE / 120).expect("beat span fits usize");
+    let target_frames = frames_per_beat * 7 + BLOCK_FRAMES * 2;
+    let block_duration = Duration::from_secs_f64(
+        BLOCK_FRAMES.to_f64().expect("block size fits f64") / f64::from(SAMPLE_RATE),
+    );
+    let mut rendered = Vec::with_capacity(target_frames * usize::from(CHANNELS));
+    while rendered.len() / usize::from(CHANNELS) < target_frames {
+        rendered.extend(harness.render(BLOCK_FRAMES));
+        let _ = harness.tick_and_drain();
+        sleep(block_duration).await;
+    }
+
+    let measured: Vec<_> = (0..6)
+        .map(|beat| {
+            let start = beat * frames_per_beat + frames_per_beat / 4;
+            let end = beat * frames_per_beat + frames_per_beat * 3 / 4;
+            channel_mean(&rendered, start..end)
+        })
+        .collect();
+    let expected = [0.3_f32, 0.1, -0.1, -0.3, -0.5, -0.7];
+    let gain = measured[0] / expected[0];
+    assert!(
+        gain.is_finite() && gain > 0.1,
+        "reverse HLS produced no stable marker gain: {measured:?}"
+    );
+    assert!(
+        measured
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| (actual - expected * gain).abs() <= 0.02),
+        "reverse HLS marker order differs across segment boundaries: {measured:?}"
+    );
+    assert!(measured.windows(2).all(|pair| pair[0] > pair[1]));
+    let silence_start = (frames_per_beat * 6 + frames_per_beat / 2) * usize::from(CHANNELS);
+    let silence_end = frames_per_beat * 7 * usize::from(CHANNELS);
+    let source_start_peak = rendered[silence_start..silence_end]
+        .iter()
+        .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+    assert!(
+        source_start_peak <= 0.02,
+        "reverse HLS replayed stale PCM after source start: peak={source_start_peak}"
+    );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn reverse_binding_rejects_adaptive_hls_before_publication(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let marker_wav = Arc::new(marker_source_wav());
+    let fixture = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(2)
+                .segments_per_variant(8)
+                .segment_size(88_200)
+                .segment_duration_secs(0.5)
+                .codecs("wav".to_string())
+                .variant_bandwidths(vec![128_000, 256_000])
+                .custom_data_per_variant(vec![Arc::clone(&marker_wav), marker_wav]),
+        )
+        .await
+        .expect("create adaptive marker HLS fixture");
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    );
+    let config = ResourceConfig::for_src(fixture.master_url().as_str())
+        .expect("valid adaptive HLS master URL")
+        .store(StoreOptions::new(temp_dir.path()))
+        .byte_pool(harness.player().byte_pool().clone())
+        .pcm_pool(harness.player().pcm_pool().clone())
+        .build();
+    let resource = Resource::new(harness.player().prepare_config(config))
+        .await
+        .expect("open adaptive marker HLS fixture");
+    assert_eq!(
+        resource
+            .abr_handle()
+            .expect("adaptive HLS exposes ABR control")
+            .variants()
+            .len(),
+        2
+    );
+
+    harness
+        .player()
+        .ensure_engine_started()
+        .expect("offline engine starts");
+    harness
+        .player()
+        .ensure_slot()
+        .expect("offline player slot is allocated");
+    harness
+        .set_session_tempo(Tempo::new(120.0).expect("valid session tempo"))
+        .expect("session tempo accepted");
+    let _ = harness.render(1);
+    let anchor = harness
+        .session_transport()
+        .expect("initial transport commit")
+        .position();
+
+    let error = harness
+        .player()
+        .insert_with_binding(
+            resource,
+            None,
+            directional_binding(
+                anchor,
+                120,
+                TrackBeat::new(6.0).expect("finite reverse anchor"),
+                PlaybackDirection::Reverse,
+            ),
+            None,
+        )
+        .await
+        .expect_err("adaptive HLS cannot satisfy stable reverse range demand");
+
+    assert!(matches!(error, PlayError::ReverseSourceUnavailable));
+    assert_eq!(harness.player().item_count(), 0);
 }
 
 #[kithara::test(tokio, flash(false))]

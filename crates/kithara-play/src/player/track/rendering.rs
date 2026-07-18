@@ -304,6 +304,9 @@ impl ElasticRenderer {
         };
         self.pending_request = None;
         self.pending_relocation_request = None;
+        while let Some(window) = self.ready_windows.pop() {
+            self.recycle_samples(window.samples);
+        }
         let range = relocation.preparation.fetch_range;
         let fetch_frames =
             usize::try_from(range.len()).map_err(|_| ElasticRenderError::FrameOverflow)?;

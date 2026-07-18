@@ -158,6 +158,7 @@ impl Resource {
             &source_type,
             SourceType::RemoteFile(_) | SourceType::LocalFile(_)
         );
+        let hls_source = matches!(&source_type, SourceType::HlsStream(_));
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio_config = config.build_file_config();
@@ -170,7 +171,11 @@ impl Resource {
         };
         resource.cancel = CancelGuard(cancel);
         resource.blueprint = Some(blueprint);
-        resource.supports_reverse_source = supports_reverse_source;
+        resource.supports_reverse_source = supports_reverse_source
+            || hls_source
+                && resource
+                    .abr_handle()
+                    .is_some_and(|handle| handle.variants().len() == 1);
         Ok(resource)
     }
 

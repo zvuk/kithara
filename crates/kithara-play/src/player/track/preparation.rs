@@ -1,12 +1,10 @@
-use std::mem;
-
 use num_traits::ToPrimitive;
 
 use super::{
-    ElasticPreparation, ElasticPreparationOutcome, ElasticPrepareError, ElasticRenderError,
-    ElasticRenderer, ElasticSourcePort, ElasticSourceReply, ElasticSourceRequest,
-    PlaybackDirection, PlayerResource, SessionBeat, SourceAudioReadOutcome, SourceCopy,
-    SourceCursor, SourceFrameRange, Tempo, TrackBinding, copy_source, sample_count,
+    BufferedSourceWindow, ElasticPreparation, ElasticPreparationOutcome, ElasticPrepareError,
+    ElasticRenderer, PlaybackDirection, PlayerResource, READY_WINDOW_COUNT, SessionBeat,
+    SourceAudioReadOutcome, SourceCopy, SourceCursor, SourceFrameRange, Tempo, TrackBinding,
+    copy_source, sample_count,
 };
 
 impl ElasticRenderer {
@@ -120,12 +118,15 @@ impl ElasticRenderer {
         &mut self,
         resource: &mut PlayerResource,
     ) -> Result<ElasticPreparationOutcome, ElasticPrepareError> {
-        if self.primed {
+        if self.primed && self.preparation.is_none() {
             return Ok(ElasticPreparationOutcome::Ready);
         }
         let preparation = self
             .preparation
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
+        if self.primed {
+            return self.poll_preparation_window(resource);
+        }
         let fetch_frames = usize::try_from(preparation.fetch_range.len())
             .map_err(|_| ElasticPrepareError::FrameOverflow)?;
         if fetch_frames > self.max_fetch_frames {
@@ -149,11 +150,93 @@ impl ElasticRenderer {
         self.prime(preparation, fetch_samples)?;
         self.cursor = Some(preparation.anchor);
         self.direction = Some(preparation.direction);
-        self.preparation = None;
         self.primed = true;
         self.source_window = Some(preparation.fetch_range);
+        if preparation.direction == PlaybackDirection::Reverse
+            && self.begin_preparation_window(
+                resource,
+                preparation.fetch_range,
+                preparation.direction,
+            )?
+        {
+            return Ok(ElasticPreparationOutcome::Pending);
+        }
+        self.preparation = None;
+        self.demand = None;
+        self.preparation_buffers.clear();
         Ok(ElasticPreparationOutcome::Ready)
     }
+
+    fn poll_preparation_window(
+        &mut self,
+        resource: &mut PlayerResource,
+    ) -> Result<ElasticPreparationOutcome, ElasticPrepareError> {
+        let Some(range) = self.preparation_window else {
+            self.preparation = None;
+            self.demand = None;
+            return Ok(ElasticPreparationOutcome::Ready);
+        };
+        let frames =
+            usize::try_from(range.len()).map_err(|_| ElasticPrepareError::FrameOverflow)?;
+        if frames > self.max_fetch_frames {
+            return Err(ElasticPrepareError::FetchWindowMismatch);
+        }
+        let samples = sample_count(frames, self.channels)?;
+        let demand = self.demand.ok_or(ElasticPrepareError::SourceUnavailable)?;
+        let buffer = self
+            .preparation_buffers
+            .last_mut()
+            .ok_or(ElasticPrepareError::SourceUnavailable)?;
+        match resource.read_source_audio(&demand, range, &mut buffer[..samples])? {
+            Some(SourceAudioReadOutcome::Ready { .. }) => {}
+            Some(SourceAudioReadOutcome::Pending) => {
+                return Ok(ElasticPreparationOutcome::Pending);
+            }
+            Some(SourceAudioReadOutcome::Eof) => return Err(ElasticPrepareError::SourceEnded),
+            Some(_) => return Err(ElasticPrepareError::UnsupportedSourceOutcome),
+            None => return Err(ElasticPrepareError::SourceUnavailable),
+        }
+        let samples = self
+            .preparation_buffers
+            .pop()
+            .ok_or(ElasticPrepareError::SourceUnavailable)?;
+        self.ready_windows
+            .push(BufferedSourceWindow { range, samples });
+        self.preparation_window = None;
+        self.demand = None;
+        let preparation = self
+            .preparation
+            .ok_or(ElasticPrepareError::SourceUnavailable)?;
+        if self.ready_windows.len() < READY_WINDOW_COUNT
+            && self.begin_preparation_window(resource, range, preparation.direction)?
+        {
+            return Ok(ElasticPreparationOutcome::Pending);
+        }
+        self.preparation = None;
+        self.preparation_buffers.clear();
+        Ok(ElasticPreparationOutcome::Ready)
+    }
+
+    fn begin_preparation_window(
+        &mut self,
+        resource: &mut PlayerResource,
+        current: SourceFrameRange,
+        direction: PlaybackDirection,
+    ) -> Result<bool, ElasticPrepareError> {
+        let Some(range) = self.next_source_window(current, direction)? else {
+            return Ok(false);
+        };
+        resource
+            .seek_source_frame(range.start())
+            .map_err(|_| ElasticPrepareError::SourceSeek)?;
+        self.demand = resource.request_source_audio(range, 0)?;
+        if self.demand.is_none() {
+            return Err(ElasticPrepareError::SourceUnavailable);
+        }
+        self.preparation_window = Some(range);
+        Ok(true)
+    }
+
     pub(super) fn prime(
         &mut self,
         preparation: ElasticPreparation,
@@ -217,161 +300,6 @@ impl ElasticRenderer {
             &self.source[..sample_count(preparation.warmup.source_frames(), self.channels)?],
             &mut self.discarded[..sample_count(preparation.warmup.output_frames(), self.channels)?],
         )?;
-        Ok(())
-    }
-
-    pub(crate) fn attach_source_ports(
-        &mut self,
-        port: ElasticSourcePort,
-        relocation_port: ElasticSourcePort,
-    ) {
-        self.source_port = Some(port);
-        self.relocation_port = Some(relocation_port);
-    }
-
-    pub(super) fn ensure_window(
-        &mut self,
-        range: SourceFrameRange,
-        direction: PlaybackDirection,
-    ) -> Result<(), ElasticRenderError> {
-        self.poll_source_port(direction)?;
-        if self
-            .source_window
-            .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
-        {
-            self.schedule_window(range, direction)?;
-            return Ok(());
-        }
-        self.schedule_window(range, direction)?;
-        Err(ElasticRenderError::SourceWindowDeadlineMissed)
-    }
-
-    fn schedule_window(
-        &mut self,
-        range: SourceFrameRange,
-        direction: PlaybackDirection,
-    ) -> Result<(), ElasticRenderError> {
-        let renewal = self
-            .max_source_frames
-            .checked_mul(Self::RENEWAL_BLOCKS)
-            .ok_or(ElasticRenderError::FrameOverflow)?;
-        let renewal = u64::try_from(renewal).map_err(|_| ElasticRenderError::FrameOverflow)?;
-        let needs_window = self.source_window.is_none_or(|window| match direction {
-            PlaybackDirection::Forward => {
-                window.end() < self.source_frame_count
-                    && window.end().saturating_sub(range.end()) <= renewal
-            }
-            PlaybackDirection::Reverse => {
-                window.start() > 0 && range.start().saturating_sub(window.start()) <= renewal
-            }
-        });
-        if !needs_window {
-            return Ok(());
-        }
-        if self.pending_request.is_some() {
-            return Ok(());
-        }
-        let window_frames = self
-            .max_source_frames
-            .checked_mul(Self::PREFETCH_BLOCKS)
-            .ok_or(ElasticRenderError::FrameOverflow)?;
-        let window_frames =
-            u64::try_from(window_frames).map_err(|_| ElasticRenderError::FrameOverflow)?;
-        let request_range = match direction {
-            PlaybackDirection::Forward => SourceFrameRange::new(
-                range.start(),
-                range
-                    .start()
-                    .checked_add(window_frames)
-                    .ok_or(ElasticRenderError::FrameOverflow)?
-                    .min(self.source_frame_count),
-            )?,
-            PlaybackDirection::Reverse => {
-                SourceFrameRange::new(range.end().saturating_sub(window_frames), range.end())?
-            }
-        };
-        let generation = self
-            .source_generation
-            .checked_add(1)
-            .ok_or(ElasticRenderError::FrameOverflow)?;
-        let request = ElasticSourceRequest::new(generation, request_range);
-        let port = self
-            .source_port
-            .as_mut()
-            .ok_or(ElasticRenderError::SourceWorkerUnavailable)?;
-        if port.request(request).is_ok() {
-            self.source_generation = generation;
-            self.pending_request = Some(request);
-        }
-        Ok(())
-    }
-
-    fn poll_source_port(&mut self, direction: PlaybackDirection) -> Result<(), ElasticRenderError> {
-        if self.source_port.is_none() {
-            return Err(ElasticRenderError::SourceWorkerUnavailable);
-        }
-        if let Some(samples) = self.pending_retirement.take()
-            && let Err(samples) = self
-                .source_port
-                .as_mut()
-                .ok_or(ElasticRenderError::SourceWorkerUnavailable)?
-                .recycle(samples)
-        {
-            self.pending_retirement = Some(samples);
-            return Ok(());
-        }
-        while let Some(reply) = self
-            .source_port
-            .as_mut()
-            .ok_or(ElasticRenderError::SourceWorkerUnavailable)?
-            .receive()
-        {
-            let pending = self
-                .pending_request
-                .filter(|pending| pending.generation() == reply.generation());
-            let expected = pending.is_some();
-            if !expected {
-                if let ElasticSourceReply::Ready(window) = reply {
-                    self.recycle_window(window);
-                    if self.pending_retirement.is_some() {
-                        return Ok(());
-                    }
-                }
-                continue;
-            }
-            match reply {
-                ElasticSourceReply::Ready(window) => {
-                    let range = window.range();
-                    let pending = pending.ok_or(ElasticRenderError::SourceWorkerFailed)?;
-                    if range != pending.range() {
-                        self.recycle_window(window);
-                        self.pending_request = None;
-                        return Err(ElasticRenderError::SourceWorkerFailed);
-                    }
-                    let samples = window.release_samples();
-                    let advances = self.source_window.is_none_or(|current| match direction {
-                        PlaybackDirection::Forward => range.end() > current.end(),
-                        PlaybackDirection::Reverse => range.start() < current.start(),
-                    });
-                    if !advances {
-                        self.recycle_samples(samples);
-                        self.pending_request = None;
-                        return Err(ElasticRenderError::SourceWorkerFailed);
-                    }
-                    let old = mem::replace(&mut self.fetch, samples);
-                    self.recycle_samples(old);
-                    self.source_window = Some(range);
-                    self.pending_request = None;
-                    if self.pending_retirement.is_some() {
-                        return Ok(());
-                    }
-                }
-                ElasticSourceReply::Eof { .. } | ElasticSourceReply::Failed { .. } => {
-                    self.pending_request = None;
-                    return Err(ElasticRenderError::SourceWorkerFailed);
-                }
-            }
-        }
         Ok(())
     }
 }
@@ -459,7 +387,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn reverse_window_renewal_requests_and_accepts_an_earlier_ascending_range() {
+    fn reverse_window_renewal_keeps_the_active_window_until_successor_use() {
         let pool = PcmPool::default();
         let mut renderer = renderer(&pool);
         let scope = CancelScope::new(None);
@@ -467,21 +395,74 @@ mod tests {
         renderer.source_port = Some(port);
         renderer.source_window =
             Some(SourceFrameRange::new(10_000, 20_000).expect("valid current source window"));
-        let rendered = SourceFrameRange::new(10_000, 10_512).expect("valid rendered range");
 
         renderer
-            .schedule_window(rendered, PlaybackDirection::Reverse)
+            .schedule_window(PlaybackDirection::Reverse)
             .expect("reverse renewal schedules");
         let request = peer.pop_request().expect("reverse renewal request");
         assert!(request.range().start() < 10_000);
-        assert_eq!(request.range().end(), rendered.end());
+        assert_eq!(
+            request.range().end(),
+            10_000 + u64::try_from(renderer.max_source_frames).expect("window overlap fits u64")
+        );
+        assert!(request.range().len() <= renderer.source_window_frames);
         assert!(request.range().start() < request.range().end());
         assert!(peer.push_ready(request.generation(), request.range(), pool.get()));
 
         renderer
             .poll_source_port(PlaybackDirection::Reverse)
             .expect("earlier source window is accepted");
+        assert_eq!(
+            renderer.source_window,
+            Some(SourceFrameRange::new(10_000, 20_000).expect("valid current source window"))
+        );
+        assert_eq!(
+            renderer.ready_windows.first().map(|window| window.range),
+            Some(request.range())
+        );
+        renderer
+            .schedule_window(PlaybackDirection::Reverse)
+            .expect("second reverse successor schedules");
+        let second = peer
+            .pop_request()
+            .expect("second reverse successor request");
+        assert!(second.range().start() < request.range().start());
+        assert!(peer.push_ready(second.generation(), second.range(), pool.get()));
+        renderer
+            .poll_source_port(PlaybackDirection::Reverse)
+            .expect("second reverse successor is accepted");
+        assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT);
+
+        let successor_range = SourceFrameRange::new(9_000, 9_512).expect("valid successor range");
+        renderer
+            .ensure_window(successor_range, PlaybackDirection::Reverse)
+            .expect("ready successor window is promoted at its boundary");
         assert_eq!(renderer.source_window, Some(request.range()));
+        assert_eq!(
+            renderer.ready_windows.first().map(|window| window.range),
+            Some(second.range())
+        );
+        let third = peer
+            .pop_request()
+            .expect("FIFO promotion replenishes one successor");
+        assert!(third.range().start() < second.range().start());
+    }
+
+    #[kithara::test]
+    fn decoded_frontier_includes_a_ready_forward_window() {
+        let pool = PcmPool::default();
+        let mut renderer = renderer(&pool);
+        renderer.source_window =
+            Some(SourceFrameRange::new(10_000, 20_000).expect("valid active window"));
+        renderer.ready_windows.push(BufferedSourceWindow {
+            range: SourceFrameRange::new(19_000, 30_000).expect("valid ready window"),
+            samples: pool.get(),
+        });
+
+        assert_eq!(
+            renderer.decoded_frontier(),
+            30_000.0 / f64::from(SAMPLE_RATE)
+        );
     }
 
     #[kithara::test]

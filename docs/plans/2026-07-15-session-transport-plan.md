@@ -87,18 +87,16 @@ elastic-playback acceptance.
 The current limits are intentional and typed:
 
 - browser WASM bound insertion returns `ElasticBackendUnavailable`;
-- reverse binding preparation returns `ReversePreparationRequired`;
+- adaptive/multi-variant HLS reverse returns `ReverseSourceUnavailable` until
+  reverse ABR re-aiming has a protocol-owned discontinuity contract;
 - track-local seek on a current bound item returns
   `BoundTrackSeekRequiresSessionTransport` without moving the player position;
 - custom readers cannot be reopened for bound preparation and return
   `BindingSourceNotReopenable`.
 
-Slices 6-12 remain required. Slice 6 owns the multi-track participant handshake,
-pinned tempo-stage windows, latency alignment, and all-or-nothing tempo commit.
-Slice 7 owns transactional session seek and per-track relocation. Slice 8 owns
-file-source reverse; Slice 9 extends directional range planning to HLS; Slice
-10 owns successor prefetch. Slice 11 owns full offline, real-time, performance,
-and device/platform acceptance, and Slice 12 owns event vocabulary migration.
+Slices 10-12 remain required. Slice 10 owns successor prefetch. Slice 11 owns
+full offline, real-time, performance, and device/platform acceptance, and Slice
+12 owns event vocabulary migration.
 
 Open implementation boundaries retained for the next slices:
 
@@ -219,6 +217,30 @@ before playlist publication. Native source access lives in one native module,
 while the existing WASM player implementation remains structurally separate.
 The integration session proves reverse marker order through the real file
 reader and writes the rendered result to WAV. HLS reverse remains Slice 9.
+
+### 2026-07-18 Slice 9 Checkpoint
+
+Single-variant HLS reverse extends the same `Resource` source-audio lane and
+`ElasticRenderer` used by file reverse. HLS remains the owner of segment,
+access-point, preroll, cache, and discontinuity resolution. The renderer keeps
+all requests ascending and bounded, prepares two small successor windows before
+playlist publication, and maintains that fixed-depth inline FIFO while the
+active window remains immutable until its overlap boundary.
+
+The integration session uses a two-segment HLS look-ahead cap, crosses every
+media boundary in descending audible order, reaches frame zero, and proves that
+no stale marker is replayed afterward. Adaptive HLS is rejected with
+`ReverseSourceUnavailable` before playlist publication; this is the explicit
+variant/discontinuity policy until protocol-owned reverse ABR re-aiming is
+proven. Custom readers retain the same typed capability rejection.
+
+The HLS reverse session passed three consecutive isolated runs. The first full
+workspace run then exposed a deterministic forward-readiness regression: a
+prepared successor window was renderable but absent from `decoded_frontier`.
+Publishing the maximum frontier across the active window and ready FIFO fixed
+the contract; the focused elastic suite passed 16/16 and the final workspace
+harness passed 3803/3803 with 145 skipped. Native lint, formatting, architecture
+ratchets, and the structurally separate WASM lane are green.
 
 ## Affected Paths
 

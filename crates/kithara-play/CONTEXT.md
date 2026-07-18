@@ -347,18 +347,28 @@ decoded data, terminal status, and producer close are signaled by
 `kithara-audio`. No periodic timer or runtime `Notify` participates in this
 path.
 
-Bound elastic rendering supports native forward and file-source reverse
-playback. Activation requires a session-created node and its shared
-`RenderContext`; browser WASM returns a typed backend capability error. Every
-source-worker request remains one bounded ascending `SourceFrameRange`. A
-reverse renderer primes history in reverse audible order, consumes each window
-toward lower frames, and renews with an earlier ascending range. Reaching source
-frame zero produces the defined end boundary and never wraps. Resources that do
-not declare reverse range access fail with `ReverseSourceUnavailable` before
-playlist publication; HLS remains unsupported until its protocol-specific
-range contract lands. Ordinary track-local seek is rejected for a bound current
-item because only a session relocation transaction may move the session-owned
-audible cursor and renderer state.
+Bound elastic rendering supports native forward playback and reverse playback
+for files and single-variant HLS. Activation requires a session-created node
+and its shared `RenderContext`; browser WASM returns a typed backend capability
+error. Every source-worker request remains one bounded ascending
+`SourceFrameRange`. A reverse renderer primes history and two successor windows
+before publication, consumes each window toward lower frames, and replenishes
+the same fixed-depth inline FIFO with earlier ascending ranges. A ready
+successor never replaces the active PCM window before the render cursor crosses
+their overlap. Reaching source frame zero produces the defined end boundary and
+never wraps or replays stale PCM.
+
+HLS remains the owner of byte-to-segment resolution, codec access points,
+preroll, cache pressure, and discontinuity fences; the player submits only
+decoded source-frame ranges through the same `Resource` lane used by file
+reverse. Reverse HLS is admitted only when the resolved HLS peer exposes one
+variant. Adaptive/multi-variant HLS is rejected with
+`ReverseSourceUnavailable` before playlist publication until reverse ABR
+re-aiming across variant discontinuities has its own proven protocol contract.
+Other resources that do not declare reverse range access fail through the same
+typed capability gate. Ordinary track-local seek is rejected for a bound
+current item because only a session relocation transaction may move the
+session-owned audible cursor and renderer state.
 
 Inter-block phase correction is bounded in the source-frame domain. An error of
 at most one source frame is corrected continuously at no more than one frame per
