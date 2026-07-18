@@ -170,7 +170,9 @@ pub(crate) fn plan_elastic_render(
             beat: track_end.get(),
         })?
         .get();
-    if let Some(boundary) = crossed_marker_boundary(track_start.get(), track_end.get()) {
+    if let Some(boundary) =
+        crossed_marker_boundary(track_start.get(), track_end.get(), output_frames)
+    {
         return Err(ElasticPlanError::MarkerBoundaryCrossing { boundary });
     }
 
@@ -197,11 +199,29 @@ pub(crate) fn plan_elastic_render(
     })
 }
 
-fn crossed_marker_boundary(start: f64, end: f64) -> Option<f64> {
+fn crossed_marker_boundary(start: f64, end: f64, output_frames: usize) -> Option<f64> {
     let lower = start.min(end);
     let upper = start.max(end);
-    let boundary = lower.floor() + 1.0;
-    (boundary < upper).then_some(boundary)
+    let output_frames_f64 = output_frames.to_f64()?;
+    let half_frame = (upper - lower) / (2.0 * output_frames_f64);
+    let candidate = (lower + half_frame).floor();
+    [candidate, candidate + 1.0, candidate + 2.0]
+        .into_iter()
+        .filter(|boundary| *boundary > lower && *boundary < upper)
+        .find(|boundary| {
+            boundary_output_offset(start, end, output_frames, *boundary)
+                .is_some_and(|offset| offset > 0 && offset < output_frames)
+        })
+}
+
+fn boundary_output_offset(
+    start: f64,
+    end: f64,
+    output_frames: usize,
+    boundary: f64,
+) -> Option<usize> {
+    let fraction = (boundary - start) / (end - start);
+    (fraction * output_frames.to_f64()?).round().to_usize()
 }
 
 fn boundary_output_frame(
@@ -218,15 +238,8 @@ fn boundary_output_frame(
         .ok_or(ElasticPlanError::SessionBeatsUnavailable)?;
     let start = binding.track_beat_at(beats.start)?.get();
     let end = binding.track_beat_at(beats.end)?.get();
-    let fraction = (boundary - start) / (end - start);
-    let offset = (fraction
-        * output_range
-            .len()
-            .to_f64()
-            .ok_or(ElasticPlanError::InvalidBoundarySplit)?)
-    .round()
-    .to_usize()
-    .ok_or(ElasticPlanError::InvalidBoundarySplit)?;
+    let offset = boundary_output_offset(start, end, output_range.len(), boundary)
+        .ok_or(ElasticPlanError::InvalidBoundarySplit)?;
     let split = output_range
         .start
         .checked_add(offset)
@@ -377,6 +390,24 @@ mod tests {
     }
 
     #[kithara::test]
+    fn finds_an_internal_marker_after_a_sub_frame_edge_marker() {
+        let error = plan_elastic_render(
+            &binding(7_200.0),
+            &context(0.9999..2.5),
+            0..TestSpec::OUTPUT_FRAMES,
+            TestSpec::REQUEST_ID,
+            TestSpec::REVISION,
+            TestSpec::supported_rates(),
+        )
+        .expect_err("an edge marker must not hide the next internal marker");
+
+        assert_eq!(
+            error,
+            ElasticPlanError::MarkerBoundaryCrossing { boundary: 2.0 }
+        );
+    }
+
+    #[kithara::test]
     fn splits_one_marker_into_ordered_continuous_segments() {
         let segments = plan_elastic_segments(
             &binding(100.0),
@@ -404,6 +435,34 @@ mod tests {
         );
         assert_eq!(segments[0].request.request_id(), TestSpec::REQUEST_ID);
         assert_eq!(segments[1].request.request_id(), TestSpec::REQUEST_ID + 1);
+    }
+
+    #[kithara::test]
+    fn rounds_a_marker_split_to_the_nearest_render_frame() {
+        let output_frames = TestSpec::OUTPUT_FRAMES
+            .to_f64()
+            .expect("output frame count fits f64");
+        let start = 0.99;
+        let split = 389.25;
+        let end = start + (1.0 - start) * output_frames / split;
+        let segments = plan_elastic_segments(
+            &binding(100.0),
+            &context(start..end),
+            0..TestSpec::OUTPUT_FRAMES,
+            TestSpec::REQUEST_ID,
+            TestSpec::REVISION,
+            TestSpec::supported_rates(),
+        )
+        .expect("sub-frame marker boundary uses the nearest render-frame split");
+
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].request.output_frames(), 389);
+        assert_eq!(segments[1].output_start, 389);
+        assert_eq!(segments[1].request.output_frames(), 91);
+        assert_eq!(
+            segments[0].request.source_end(),
+            segments[1].request.source_start()
+        );
     }
 
     #[kithara::test]
