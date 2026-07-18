@@ -482,6 +482,98 @@ mod tests {
     }
 
     #[kithara::test]
+    fn direction_and_tempo_stress_stays_inside_fixed_preparation_budgets() {
+        let pool = PcmPool::default();
+        let renderer = renderer(&pool);
+        let max_fetch_frames =
+            u64::try_from(renderer.max_fetch_frames).expect("fetch budget fits u64");
+        for direction in [PlaybackDirection::Forward, PlaybackDirection::Reverse] {
+            let binding = binding(direction);
+            for beats_per_minute in [80.0, 100.0, 120.0, 140.0, 160.0] {
+                let preparation = renderer
+                    .plan_preparation(
+                        &binding,
+                        SessionBeat::new(0.0).expect("finite anchor"),
+                        Tempo::new(beats_per_minute).expect("valid tempo"),
+                        ElasticRenderer::PREFETCH_BLOCKS,
+                    )
+                    .expect("supported direction and tempo prepare inside fixed buffers");
+
+                assert!(preparation.fetch_range.start() < preparation.fetch_range.end());
+                assert!(preparation.fetch_range.len() <= max_fetch_frames);
+                assert!(preparation.warmup.source_frames() <= renderer.max_warm_frames);
+            }
+        }
+    }
+
+    fn assert_window_stress(direction: PlaybackDirection, initial: SourceFrameRange) {
+        const PROMOTIONS: usize = 24;
+
+        let pool = PcmPool::default();
+        let mut renderer = renderer(&pool);
+        let scope = CancelScope::new(None);
+        let (port, mut peer) = elastic_source_test_pair(scope.token());
+        renderer.source_port = Some(port);
+        renderer.source_window = Some(initial);
+        renderer
+            .schedule_window(direction)
+            .expect("initial successor schedules");
+
+        for ready_count in 1..=READY_WINDOW_COUNT {
+            let request = peer.pop_request().expect("successor request is bounded");
+            assert!(request.range().start() < request.range().end());
+            assert!(request.range().len() <= renderer.source_window_frames);
+            assert!(peer.push_ready(request.generation(), request.range(), pool.get()));
+            renderer
+                .poll_source_port(direction)
+                .expect("successor reply advances the directional frontier");
+            assert_eq!(renderer.ready_windows.len(), ready_count);
+            renderer
+                .schedule_window(direction)
+                .expect("ready pipeline replenishes within capacity");
+        }
+        assert!(peer.pop_request().is_none());
+
+        for _ in 0..PROMOTIONS {
+            let next = renderer
+                .ready_windows
+                .first()
+                .expect("full pipeline has a successor")
+                .range;
+            renderer
+                .ensure_window(next, direction)
+                .expect("ready successor promotes without a deadline miss");
+            assert_eq!(renderer.source_window, Some(next));
+            assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT - 1);
+            while peer.pop_recycled().is_some() {}
+
+            let request = peer
+                .pop_request()
+                .expect("promotion schedules one successor");
+            assert!(peer.pop_request().is_none());
+            assert!(request.range().start() < request.range().end());
+            assert!(request.range().len() <= renderer.source_window_frames);
+            assert!(peer.push_ready(request.generation(), request.range(), pool.get()));
+            renderer
+                .poll_source_port(direction)
+                .expect("scheduled successor restores the full pipeline");
+            assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT);
+        }
+    }
+
+    #[kithara::test]
+    fn forward_and_reverse_window_stress_never_exceeds_the_ready_bound() {
+        assert_window_stress(
+            PlaybackDirection::Forward,
+            SourceFrameRange::new(10_000, 20_000).expect("valid forward window"),
+        );
+        assert_window_stress(
+            PlaybackDirection::Reverse,
+            SourceFrameRange::new(200_000, 210_000).expect("valid reverse window"),
+        );
+    }
+
+    #[kithara::test]
     fn reverse_preparation_requests_one_ascending_bounded_range() {
         let pool = PcmPool::default();
         let renderer = renderer(&pool);
