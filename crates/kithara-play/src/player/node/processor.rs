@@ -307,7 +307,7 @@ impl PlayerNodeProcessor {
         frames: usize,
         is_playing: bool,
     ) -> (bool, Option<(f64, f64)>) {
-        self.render.render_audio(
+        let (playback_started, leading_outcome, multiple_tracks) = self.render.render_audio(
             mode,
             RenderTargets {
                 tracks: &mut self.tracks,
@@ -316,7 +316,11 @@ impl PlayerNodeProcessor {
             buffers,
             frames,
             is_playing,
-        )
+        );
+        self.playback
+            .multiple_tracks
+            .store(multiple_tracks, Ordering::SeqCst);
+        (playback_started, leading_outcome)
     }
 
     /// Unload a track from the arena.

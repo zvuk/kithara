@@ -54,12 +54,18 @@ impl RenderPass {
         buffers: &mut ProcBuffers,
         frames: usize,
         is_playing: bool,
-    ) -> (bool, Option<(f64, f64)>) {
+    ) -> (bool, Option<(f64, f64)>, bool) {
         let mut playback_started = false;
         let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
+        let multiple_tracks = targets
+            .tracks
+            .iter()
+            .filter(|(_, track)| track.state().is_playing())
+            .nth(1)
+            .is_some();
 
         if buffers.outputs.len() < Self::MIN_STEREO {
-            return (false, None);
+            return (false, None, multiple_tracks);
         }
 
         for ch_buffer in buffers.outputs.iter_mut() {
@@ -207,7 +213,7 @@ impl RenderPass {
             }
         }
 
-        (playback_started, leading_outcome_pos_dur)
+        (playback_started, leading_outcome_pos_dur, multiple_tracks)
     }
 
     pub(crate) fn resize(&mut self, max_frames: usize) {

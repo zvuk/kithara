@@ -69,6 +69,21 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
+        Cmd::SetSessionTempoChecked {
+            tempo,
+            expected_revision,
+            expected_shape,
+            player_ids,
+        } => match transport::set_tempo_checked(
+            state,
+            tempo,
+            expected_revision,
+            expected_shape,
+            &player_ids,
+        ) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
         Cmd::SessionTransport => match transport::snapshot(state) {
             Ok(snapshot) => Reply::SessionTransport(snapshot),
             Err(err) => Reply::Err(err),

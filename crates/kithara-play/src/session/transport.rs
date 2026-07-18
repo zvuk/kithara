@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 
 use super::{
+    PlayerId,
     protocol::{BindingPreparation, SessionError},
     render::{
         RenderFrame, SessionTransportCommit, TransportCommitResult, TransportCommitStamp,
@@ -20,6 +21,50 @@ pub(super) fn set_tempo<B: AudioBackend>(
     tempo: Tempo,
 ) -> Result<(), SessionError> {
     let _ = refresh_observation(state)?;
+    set_tempo_after_refresh(state, tempo)
+}
+
+pub(super) fn set_tempo_checked<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    tempo: Tempo,
+    expected_revision: u64,
+    expected_shape: StreamShape,
+    player_ids: &[PlayerId],
+) -> Result<(), SessionError> {
+    let observation = refresh_observation(state)?;
+    let actual_revision = observation
+        .snapshot()
+        .ok_or(SessionError::TransportNotProcessed)?
+        .revision();
+    if actual_revision != expected_revision {
+        return Err(SessionError::TransportRevisionChanged {
+            expected: expected_revision,
+            actual: actual_revision,
+        });
+    }
+    if stream_shape(state)? != expected_shape {
+        return Err(SessionError::TransportStreamShapeChanged);
+    }
+    let mut active: Vec<_> = state
+        .players
+        .iter()
+        .filter(|player| player.started && !player.slots.is_empty())
+        .map(|player| player.player_id)
+        .collect();
+    active.sort_unstable();
+    if active != player_ids {
+        return Err(SessionError::TransportPlayersChanged {
+            expected: player_ids.len(),
+            actual: active.len(),
+        });
+    }
+    set_tempo_after_refresh(state, tempo)
+}
+
+fn set_tempo_after_refresh<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    tempo: Tempo,
+) -> Result<(), SessionError> {
     if state.transport.accepted.map(SessionTransportCommit::tempo) == Some(tempo) {
         return Ok(());
     }
@@ -169,6 +214,13 @@ pub(super) fn stream_shape<B: AudioBackend>(
 fn preparation_commit(
     transport: &SessionTransportState,
 ) -> Result<SessionTransportCommit, SessionError> {
+    if let Some(pending) = transport.pending
+        && transport.observed.is_some()
+    {
+        return Err(SessionError::TransportCommitPending {
+            revision: pending.revision,
+        });
+    }
     match (transport.observed, transport.accepted) {
         (Some(commit), _) => Ok(commit),
         (None, Some(initial)) => Ok(initial),
@@ -275,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn preparation_keeps_observed_commit_while_a_future_revision_is_pending() {
+    fn preparation_rejects_while_a_future_revision_is_pending() {
         let transport = SessionTransportState {
             accepted: Some(commit(90.0, 2)),
             observed: Some(commit(120.0, 1)),
@@ -286,10 +338,10 @@ mod tests {
             ..SessionTransportState::default()
         };
 
-        assert_eq!(
-            preparation_commit(&transport).expect("active commit is preparable"),
-            commit(120.0, 1)
-        );
+        assert!(matches!(
+            preparation_commit(&transport),
+            Err(SessionError::TransportCommitPending { revision: 2 })
+        ));
     }
 
     #[test]

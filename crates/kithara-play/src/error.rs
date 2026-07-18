@@ -90,6 +90,38 @@ pub enum PlayError {
     #[error("engine already running")]
     EngineAlreadyRunning,
 
+    /// Players in one transport operation must use the same session.
+    #[error("players do not share one session transport")]
+    SessionMismatch,
+
+    /// A bound player cannot render the requested session tempo.
+    #[error(
+        "session tempo requires source rate {rate}, outside the renderer envelope [{minimum}, {maximum}]"
+    )]
+    SessionTempoUnsupported {
+        /// Required source frames per output frame.
+        rate: f64,
+        /// Minimum supported source frames per output frame.
+        minimum: f64,
+        /// Maximum supported source frames per output frame.
+        maximum: f64,
+    },
+
+    /// A bound player has not decoded far enough for the common tempo boundary.
+    #[error(
+        "session tempo requires source frame {required}, but the prepared frontier is {available}"
+    )]
+    SessionTempoLookAheadUnavailable {
+        /// Furthest source frame needed through the prepared boundary.
+        required: f64,
+        /// Furthest source frame currently available to the renderer.
+        available: f64,
+    },
+
+    /// A player has more than one audible track during a local handover.
+    #[error("session tempo cannot change during a player track handover")]
+    SessionTempoHandoverActive,
+
     #[error("slot not found: {0:?}")]
     SlotNotFound(SlotId),
 

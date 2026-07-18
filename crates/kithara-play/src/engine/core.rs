@@ -224,6 +224,14 @@ impl EngineImpl {
     pub(super) fn session(&self) -> &SessionHandle {
         &self.session
     }
+
+    pub(crate) fn shares_session_with(&self, other: &Self) -> bool {
+        self.session.shares_dispatcher(&other.session)
+    }
+
+    pub(crate) fn player_id(&self) -> Option<PlayerId> {
+        *self.player_id.lock()
+    }
 }
 
 impl Drop for EngineImpl {

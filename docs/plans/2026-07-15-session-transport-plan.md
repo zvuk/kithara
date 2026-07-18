@@ -19,7 +19,7 @@ coverage through the existing integration-test session.
 - [x] Track bindings use real analysed beat maps and typed coordinate spaces.
 - [x] Every player node receives the same immutable render context for a
       processed graph block.
-- [ ] Two and then four tracks remain phase-aligned through a tempo change.
+- [x] Two and then four tracks remain phase-aligned through a tempo change.
 - [ ] Seek, reverse, and read-ahead obey explicit source-range and revision
       contracts.
 - [x] The integration session renders the real native forward bound path to
@@ -53,7 +53,7 @@ coverage through the existing integration-test session.
 - [x] Slice 5: one native forward bound track, numeric elastic requests,
       independent off-RT preparation, source-authoritative rendering, and
       rolling source windows.
-- [ ] Slice 6: multi-track participant readiness and an all-or-nothing tempo
+- [x] Slice 6: multi-track participant readiness and an all-or-nothing tempo
       commit at one presentation boundary.
 - [ ] Slice 7: transactional session seek and explicit join.
 - [ ] Slice 8: prepared file-source reverse and directional read-ahead.
@@ -158,6 +158,32 @@ Rejected alternatives:
 - keeping the participant barrier and merely reducing its module count;
 - retaining the dirty Slice 7 control plane while moving its files;
 - exposing a second public track-control protocol beside `PlayerImpl`.
+
+### 2026-07-18 Slice 6 Checkpoint
+
+Slice 6 extends the canonical player path directly. The caller supplies the
+participating `PlayerImpl` values; their existing `ItemQueue` locks are acquired
+in `PlayerId` order only for readiness and stamp publication. `SessionState`
+atomically verifies the expected transport revision, stream shape, and its
+existing active graph roster before scheduling the normal tempo commit. It does
+not retain a participant registry, binding mirror, or renderer state.
+
+Native readiness plans the old span through the future boundary and the first
+new-tempo span with the same marker-splitting planner used by the renderer. It
+checks each current bound track, including paused tracks, against the declared
+rate envelope and decoded frontier. Bound preparation is rejected while a
+future tempo commit is pending, and a player-local handover rejects explicitly
+until it has one current audible binding. Browser players keep the same API and
+return the existing typed backend-unavailable result for a bound track.
+
+The offline session covers two and four different source tempos, one shared old
+and new revision, beat continuity at the exact boundary, one-output-frame phase
+tolerance, WAV output, unsupported rate, incomplete roster, paused peer, and
+local-handover rejection. Focused renderer preflight coverage proves
+insufficient look-ahead and marker-local rate rejection. Signalsmith renderers
+prime and discard their independently declared latency before publication,
+leaving one presentation cursor per track without a session-owned latency
+mirror.
 
 ## Affected Paths
 

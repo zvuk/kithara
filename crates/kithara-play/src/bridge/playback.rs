@@ -16,6 +16,8 @@ pub struct PlaybackSnapshot {
     pub(crate) position: f64,
     /// Current output sample rate.
     pub(crate) sample_rate: u32,
+    /// Whether more than one player track is audible.
+    pub(crate) multiple_tracks: bool,
 }
 
 /// Atomic playback state written by the RT processor and read by control code.
@@ -32,6 +34,8 @@ pub struct PlaybackShared {
     pub duration: AtomicF64,
     /// Current output sample rate.
     pub sample_rate: AtomicU32,
+    /// Whether more than one player track is audible.
+    pub multiple_tracks: AtomicBool,
     /// Number of audio-thread process calls.
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
@@ -68,6 +72,12 @@ impl PlaybackSnapshot {
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
+
+    /// Whether more than one player track is audible.
+    #[must_use]
+    pub fn has_multiple_tracks(&self) -> bool {
+        self.multiple_tracks
+    }
 }
 
 impl PlaybackShared {
@@ -87,6 +97,7 @@ impl PlaybackShared {
             frontier,
             duration: self.duration.load(Ordering::Relaxed),
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
+            multiple_tracks: self.multiple_tracks.load(Ordering::SeqCst),
             playing: self.playing.load(Ordering::Relaxed),
         }
     }
@@ -108,6 +119,7 @@ mod tests {
         assert_eq!(playback.position.load(Ordering::Relaxed), 0.0);
         assert_eq!(playback.duration.load(Ordering::Relaxed), 0.0);
         assert_eq!(playback.sample_rate.load(Ordering::Relaxed), 0);
+        assert!(!playback.multiple_tracks.load(Ordering::Relaxed));
     }
 
     #[kithara::test]
@@ -126,6 +138,7 @@ mod tests {
         playback.frontier.store(20.0, Ordering::Relaxed);
         playback.duration.store(180.0, Ordering::Relaxed);
         playback.sample_rate.store(48_000, Ordering::Relaxed);
+        playback.multiple_tracks.store(true, Ordering::Relaxed);
 
         let snap = playback.snapshot();
         assert!(snap.playing);
@@ -133,6 +146,7 @@ mod tests {
         assert!((snap.frontier - 20.0).abs() < f64::EPSILON);
         assert!((snap.duration - 180.0).abs() < f64::EPSILON);
         assert_eq!(snap.sample_rate, 48_000);
+        assert!(snap.multiple_tracks);
     }
 
     #[kithara::test]

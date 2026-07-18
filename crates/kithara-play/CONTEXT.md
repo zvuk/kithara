@@ -220,6 +220,30 @@ route-invalidated transactions cannot change the active anchor. Rejection keeps
 the previously observed commit authoritative and is returned as a typed session
 error.
 
+Multi-player tempo changes extend the existing player ownership chain rather
+than introducing a participant registry. `PlayerImpl::set_session_tempo`
+receives the participating players, locks their existing `ItemQueue` values in
+`PlayerId` order, and validates every current bound track, including paused
+tracks. The preflight uses the renderer's `plan_elastic_segments` path for the
+old span through the future boundary and the first new-tempo span after it, so
+marker-local rate limits and the decoded source frontier are checked before any
+transport mutation.
+
+The guarded session command rechecks the observed revision, stream shape, and
+the active graph-owned player IDs before it queues the ordinary transport
+stamp. A future transport commit blocks new bound-track preparation until the
+commit is observed. A local player handover with two audible tracks rejects a
+tempo change explicitly because one control-side current binding cannot
+describe both callback tracks. These are transient checks over player- and
+session-owned state; the session stores no copy of player bindings or readiness.
+
+Each prepared elastic renderer consumes its declared source history and
+discards its declared output latency before becoming audible. The resulting
+presentation cursor is therefore latency-compensated per track, while every
+track continues to receive the same immutable session context and revision.
+The browser path retains the same player API but rejects a current bound track
+with `ElasticBackendUnavailable` until a browser elastic backend exists.
+
 `SessionTransportSnapshot` is published as one render-observed value by the
 same adapter node. It never combines a control-side tempo or revision with an
 independently sampled graph clock. Until a candidate is applied, a query returns

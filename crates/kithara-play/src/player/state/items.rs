@@ -372,6 +372,10 @@ impl ItemQueue {
             .is_some_and(|item| item.binding.is_some())
     }
 
+    pub(crate) fn lock_playlist(&self) -> MutexGuard<'_, Playlist> {
+        self.playlist.lock()
+    }
+
     pub(crate) fn is_announced(&self, index: usize) -> bool {
         self.playlist.lock().is_announced(index)
     }

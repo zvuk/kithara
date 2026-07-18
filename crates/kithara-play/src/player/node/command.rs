@@ -78,6 +78,7 @@ impl PlayerNodeProcessor {
         self.playback.position.store(0.0, Ordering::Relaxed);
         self.playback.frontier.store(0.0, Ordering::Relaxed);
         self.playback.duration.store(0.0, Ordering::Relaxed);
+        self.playback.multiple_tracks.store(false, Ordering::SeqCst);
     }
 
     /// Drain all pending commands from the channel.

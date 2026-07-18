@@ -67,6 +67,11 @@ impl Playlist {
         self.current
     }
 
+    pub(crate) fn current_binding(&self) -> Option<&TrackBinding> {
+        self.get(self.current)
+            .and_then(|item| item.binding.as_ref())
+    }
+
     pub(crate) fn has_resource(&self, index: usize) -> bool {
         self.items
             .get(index)

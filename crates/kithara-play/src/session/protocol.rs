@@ -60,6 +60,15 @@ mod wire {
         /// The graph frame used to schedule a transport commit cannot advance further.
         #[error("session transport frame is exhausted")]
         TransportFrameExhausted,
+        /// The active graph roster changed after tempo preparation.
+        #[error("session tempo player roster changed: expected {expected} players, found {actual}")]
+        TransportPlayersChanged { expected: usize, actual: usize },
+        /// The observed transport changed after tempo preparation.
+        #[error("session tempo revision changed: expected revision {expected}, found {actual}")]
+        TransportRevisionChanged { expected: u64, actual: u64 },
+        /// The active stream dimensions changed after tempo preparation.
+        #[error("session stream shape changed after tempo preparation")]
+        TransportStreamShapeChanged,
         #[error("eq band out of range: {band} (bands: {bands})")]
         EqBandOutOfRange { band: usize, bands: usize },
         #[error("stream start failed: {0}")]
@@ -115,6 +124,13 @@ mod wire {
         /// Change the tempo of the shared session transport.
         SetSessionTempo {
             tempo: Tempo,
+        },
+        /// Commit a prepared tempo only while its transport revision and player roster remain current.
+        SetSessionTempoChecked {
+            tempo: Tempo,
+            expected_revision: u64,
+            expected_shape: StreamShape,
+            player_ids: Vec<PlayerId>,
         },
         /// Query the transport state last processed by the audio graph.
         SessionTransport,
@@ -192,6 +208,10 @@ mod handle {
         #[must_use]
         pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
             Arc::clone(&self.0)
+        }
+
+        pub(crate) fn shares_dispatcher(&self, other: &Self) -> bool {
+            Arc::ptr_eq(&self.0, &other.0)
         }
 
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
@@ -295,6 +315,22 @@ mod handle {
                     "unexpected reply for session transport query".into(),
                 )),
             }
+        }
+
+        pub(crate) fn set_session_tempo_checked(
+            &self,
+            tempo: Tempo,
+            expected_revision: u64,
+            expected_shape: StreamShape,
+            player_ids: Vec<PlayerId>,
+        ) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::SetSessionTempoChecked {
+                tempo,
+                expected_revision,
+                expected_shape,
+                player_ids,
+            })
+            .map(|_| ())
         }
 
         pub(crate) fn binding_preparation(&self) -> Result<BindingPreparation, PlayError> {

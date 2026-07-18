@@ -13,6 +13,8 @@ mod triggers;
 pub use core::{PlayerTrack, TrackAxis, TrackParams};
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) use elastic::{ElasticPlanError, plan_elastic_segments};
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use elastic_renderer::ElasticPreparationOutcome;
 pub(crate) use feeder::PreparedElasticRenderer;
 pub use feeder::{PlayerResource, ReadOutcome};

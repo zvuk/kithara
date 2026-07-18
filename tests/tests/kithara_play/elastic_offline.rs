@@ -6,15 +6,18 @@ use kithara::{
     assets::StoreOptions,
     audio::{BeatGrid, ReadOutcome, TrackBeat, analysis::TrackAnalysis},
     events::{AudioEvent, Event, EventBus},
-    platform::time::{Duration, sleep},
+    platform::{
+        sync::Arc,
+        time::{Duration, sleep},
+    },
     play::{
-        PlayError, PlaybackDirection, Resource, ResourceBlueprint, ResourceConfig, SessionBeat,
-        Tempo, TrackBinding,
+        PlayError, PlaybackDirection, Resource, ResourceBlueprint, ResourceConfig,
+        SelectTransition, SessionBeat, SessionError, SessionTransportSnapshot, Tempo, TrackBinding,
     },
 };
 use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara, temp_dir,
-    wav::create_wav_header,
+    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara,
+    offline::OfflineSession, temp_dir, wav::create_wav_header,
 };
 use num_traits::ToPrimitive;
 
@@ -48,6 +51,208 @@ fn binding(session_anchor: SessionBeat) -> TrackBinding {
         PlaybackDirection::Forward,
     )
     .expect("fixture analysis can be bound")
+}
+
+fn exact_binding(session_anchor: SessionBeat, source_tempo: u32) -> TrackBinding {
+    let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("static sample rate");
+    let frames_per_minute = 60 * u64::from(SAMPLE_RATE);
+    assert_eq!(frames_per_minute % u64::from(source_tempo), 0);
+    let frames_per_beat = frames_per_minute / u64::from(source_tempo);
+    let markers = (0..=6).map(|beat| beat * frames_per_beat).collect();
+    let analysis = TrackAnalysis::with_source_rate(
+        Some(BeatGrid::new(
+            f64::from(source_tempo),
+            markers,
+            vec![0],
+            Vec::new(),
+        )),
+        None,
+        u64::try_from(FIXTURE_FRAMES).expect("fixture frame count fits u64"),
+        sample_rate,
+    );
+    TrackBinding::new(
+        &analysis,
+        sample_rate,
+        session_anchor,
+        TrackBeat::new(0.0).expect("finite track anchor"),
+        PlaybackDirection::Forward,
+    )
+    .expect("exact source grid can be bound")
+}
+
+async fn insert_bound_sine(
+    harness: &OfflinePlayerHarness,
+    server: &TestServerHelper,
+    temp_dir: &TestTempDir,
+    source_tempo: u32,
+    frequency: f64,
+    session_anchor: SessionBeat,
+) -> usize {
+    let spec = SignalSpec {
+        format: SignalFormat::Wav,
+        length: SignalSpecLength::Frames(FIXTURE_FRAMES),
+        channels: CHANNELS,
+        sample_rate: SAMPLE_RATE,
+        bit_rate: None,
+    };
+    let url = server.sine(&spec, frequency).await;
+    let config = ResourceConfig::for_src(url.as_str())
+        .expect("valid fixture URL")
+        .store(StoreOptions::new(temp_dir.path()))
+        .byte_pool(harness.player().byte_pool().clone())
+        .pcm_pool(harness.player().pcm_pool().clone())
+        .build();
+    let mut resource = Resource::new(harness.player().prepare_config(config))
+        .await
+        .expect("open exact-tempo WAV resource");
+    resource
+        .preload()
+        .await
+        .expect("preload exact-tempo WAV resource");
+    let index = harness.player().item_count();
+    harness
+        .player()
+        .insert_with_binding(
+            resource,
+            None,
+            exact_binding(session_anchor, source_tempo),
+            None,
+        )
+        .await
+        .expect("insert prepared bound fixture");
+    index
+}
+
+async fn prepare_bound_players(
+    server: &TestServerHelper,
+    temp_dir: &TestTempDir,
+    source_tempos: &[u32],
+) -> Vec<OfflinePlayerHarness> {
+    let session = Arc::new(OfflineSession::new_manual());
+    let harnesses: Vec<_> = source_tempos
+        .iter()
+        .map(|_| {
+            OfflinePlayerHarness::in_session(
+                OfflinePlayerOptions::builder()
+                    .crossfade_duration(0.0)
+                    .build(),
+                SAMPLE_RATE,
+                Arc::clone(&session),
+            )
+        })
+        .collect();
+    let volume = 1.0 / source_tempos.len().to_f32().expect("player count fits f32");
+
+    for harness in &harnesses {
+        harness
+            .player()
+            .ensure_engine_started()
+            .expect("offline engine starts");
+        harness
+            .player()
+            .ensure_slot()
+            .expect("offline player slot is allocated");
+        harness.player().set_volume(volume);
+    }
+    harnesses[0]
+        .set_session_tempo(Tempo::new(SESSION_TEMPO).expect("valid initial tempo"))
+        .expect("initial tempo accepted");
+    let _ = harnesses[0].render(1);
+    let initial = harnesses[0]
+        .session_transport()
+        .expect("initial tempo committed");
+
+    for (index, source_tempo) in source_tempos.iter().copied().enumerate() {
+        let item = insert_bound_sine(
+            &harnesses[index],
+            server,
+            temp_dir,
+            source_tempo,
+            220.0 + index.to_f64().expect("player index fits f64") * 110.0,
+            initial.position(),
+        )
+        .await;
+        harnesses[index]
+            .player()
+            .select_item(item, true)
+            .expect("select prepared bound fixture");
+    }
+    for _ in 0..16 {
+        let _ = harnesses[0].render(BLOCK_FRAMES);
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+        sleep(Duration::from_millis(1)).await;
+    }
+    assert!(
+        harnesses
+            .iter()
+            .all(|harness| harness.player().is_playing())
+    );
+    harnesses
+}
+
+fn commit_tempo_change(
+    harnesses: &[OfflinePlayerHarness],
+    tempo: Tempo,
+) -> (SessionTransportSnapshot, SessionTransportSnapshot) {
+    let before = harnesses[0]
+        .session_transport()
+        .expect("transport before tempo change");
+    let peers: Vec<_> = harnesses[1..]
+        .iter()
+        .map(|harness| harness.player().as_ref())
+        .collect();
+    harnesses[0]
+        .player()
+        .set_session_tempo(&peers, tempo)
+        .expect("multi-player tempo change accepted");
+
+    let old_slope = before.tempo().beats_per_minute() / (f64::from(SAMPLE_RATE) * 60.0);
+    let new_slope = tempo.beats_per_minute() / (f64::from(SAMPLE_RATE) * 60.0);
+    let tolerance = old_slope.max(new_slope);
+    let mut previous = before;
+    let after = (0..BLOCK_FRAMES * 8)
+        .find_map(|_| {
+            let _ = harnesses[0].render(1);
+            harnesses[0]
+                .tick_session()
+                .expect("tempo transaction progresses");
+            let snapshot = harnesses[0]
+                .session_transport()
+                .expect("transport snapshot");
+            let slope = if snapshot.revision() == before.revision() {
+                old_slope
+            } else {
+                new_slope
+            };
+            assert!(
+                (snapshot.position().get() - previous.position().get() - slope).abs() <= tolerance
+            );
+            previous = snapshot;
+            (snapshot.revision() != before.revision()).then_some(snapshot)
+        })
+        .expect("tempo change commits within the render budget");
+
+    assert_eq!(after.revision(), before.revision() + 1);
+    assert_eq!(after.tempo(), tempo);
+    for harness in harnesses {
+        assert_eq!(harness.session_transport().expect("shared snapshot"), after);
+    }
+    (before, after)
+}
+
+fn assert_player_phase_aligned(harnesses: &[OfflinePlayerHarness]) {
+    let mut positions = harnesses.iter().map(|harness| {
+        harness
+            .player()
+            .playback_snapshot()
+            .expect("player phase snapshot")
+            .position()
+    });
+    let first = positions.next().expect("at least one player");
+    let tolerance = 1.0 / f64::from(SAMPLE_RATE);
+    assert!(positions.all(|position| (position - first).abs() <= tolerance));
 }
 
 fn write_rendered_wav(path: &Path, rendered: &[f32]) {
@@ -91,6 +296,207 @@ fn positive_crossing_frequency(rendered: &[f32]) -> Option<f64> {
     let intervals = crossings.checked_sub(1)?.to_f64()?;
     let span = last.checked_sub(first)?.to_f64()?;
     (span > 0.0).then_some(intervals * f64::from(SAMPLE_RATE) / span)
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn two_bound_players_commit_one_tempo_revision(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 120]).await;
+    let (before, after) =
+        commit_tempo_change(&harnesses, Tempo::new(100.0).expect("valid changed tempo"));
+    assert_eq!(before.tempo().beats_per_minute(), SESSION_TEMPO);
+    assert_eq!(after.tempo().beats_per_minute(), 100.0);
+
+    let mut rendered = Vec::new();
+    for _ in 0..8 {
+        rendered.extend(harnesses[0].render(BLOCK_FRAMES));
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+        sleep(Duration::from_millis(1)).await;
+    }
+    assert!(rendered.iter().any(|sample| sample.abs() > 1.0e-4));
+    assert!(
+        harnesses
+            .iter()
+            .all(|harness| harness.player().is_playing())
+    );
+    assert_player_phase_aligned(&harnesses);
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn four_bound_players_write_one_tempo_revision(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 105, 120, 140]).await;
+    let (_, after) =
+        commit_tempo_change(&harnesses, Tempo::new(100.0).expect("valid changed tempo"));
+
+    let mut rendered = Vec::new();
+    for _ in 0..8 {
+        rendered.extend(harnesses[0].render(BLOCK_FRAMES));
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+        sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(after.tempo().beats_per_minute(), 100.0);
+    assert!(rendered.iter().any(|sample| sample.abs() > 1.0e-4));
+    assert!(
+        harnesses
+            .iter()
+            .all(|harness| harness.player().is_playing())
+    );
+    assert_player_phase_aligned(&harnesses);
+
+    let artifact = temp_dir.path().join("four-track-tempo-transaction.wav");
+    write_rendered_wav(&artifact, &rendered);
+    assert!(
+        fs::metadata(&artifact)
+            .expect("four-track offline artifact metadata")
+            .len()
+            > 44
+    );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn unsupported_peer_rejects_tempo_before_session_mutation(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 108]).await;
+    let before = harnesses[0]
+        .session_transport()
+        .expect("transport before rejected tempo");
+
+    let error = harnesses[0]
+        .player()
+        .set_session_tempo(
+            &[harnesses[1].player().as_ref()],
+            Tempo::new(70.0).expect("valid rejected tempo"),
+        )
+        .expect_err("unsupported peer rejects the whole tempo change");
+
+    assert!(matches!(error, PlayError::SessionTempoUnsupported { .. }));
+    assert_eq!(
+        harnesses[0]
+            .session_transport()
+            .expect("transport after rejection"),
+        before
+    );
+    let mut rendered = Vec::new();
+    for _ in 0..4 {
+        rendered.extend(harnesses[0].render(BLOCK_FRAMES));
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+        sleep(Duration::from_millis(1)).await;
+    }
+    assert!(rendered.iter().any(|sample| sample.abs() > 1.0e-4));
+    assert!(
+        harnesses
+            .iter()
+            .all(|harness| harness.player().is_playing())
+    );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn paused_unsupported_peer_rejects_tempo_before_session_mutation(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 108]).await;
+    harnesses[1].player().pause();
+    let _ = harnesses[0].render(1);
+    for harness in &harnesses {
+        harness.tick_and_drain();
+    }
+    assert!(!harnesses[1].player().is_playing());
+    let before = harnesses[0]
+        .session_transport()
+        .expect("transport before rejected paused peer");
+
+    let error = harnesses[0]
+        .player()
+        .set_session_tempo(
+            &[harnesses[1].player().as_ref()],
+            Tempo::new(70.0).expect("valid rejected tempo"),
+        )
+        .expect_err("unsupported paused peer rejects the whole tempo change");
+
+    assert!(matches!(error, PlayError::SessionTempoUnsupported { .. }));
+    assert_eq!(
+        harnesses[0]
+            .session_transport()
+            .expect("transport after rejected paused peer"),
+        before
+    );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn local_handover_rejects_tempo_before_session_mutation(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100]).await;
+    let harness = &harnesses[0];
+    let anchor = harness
+        .session_transport()
+        .expect("transport before local handover");
+    let next = insert_bound_sine(harness, &server, &temp_dir, 108, 330.0, anchor.position()).await;
+    harness
+        .player()
+        .select_item_with_crossfade(
+            next,
+            SelectTransition {
+                autoplay: true,
+                crossfade_seconds: 1.0,
+            },
+        )
+        .expect("start local bound-track handover");
+    let _ = harness.render(BLOCK_FRAMES);
+    harness.tick_and_drain();
+    assert!(
+        harness
+            .player()
+            .playback_snapshot()
+            .expect("handover playback snapshot")
+            .has_multiple_tracks()
+    );
+    let before = harness
+        .session_transport()
+        .expect("transport during local handover");
+
+    let error = harness
+        .player()
+        .set_session_tempo(&[], Tempo::new(100.0).expect("valid changed tempo"))
+        .expect_err("local handover rejects a session tempo change");
+
+    assert!(matches!(error, PlayError::SessionTempoHandoverActive));
+    assert_eq!(
+        harness
+            .session_transport()
+            .expect("transport after rejected local handover"),
+        before
+    );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn omitted_peer_rejects_tempo_before_session_mutation(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 120]).await;
+    let before = harnesses[0]
+        .session_transport()
+        .expect("transport before incomplete tempo request");
+
+    let error = harnesses[0]
+        .player()
+        .set_session_tempo(&[], Tempo::new(100.0).expect("valid changed tempo"))
+        .expect_err("omitting an active peer rejects the tempo change");
+
+    assert!(matches!(
+        error,
+        PlayError::Session(SessionError::TransportPlayersChanged { .. })
+    ));
+    assert_eq!(
+        harnesses[0]
+            .session_transport()
+            .expect("transport after incomplete request"),
+        before
+    );
 }
 
 #[kithara::test(tokio, flash(false))]

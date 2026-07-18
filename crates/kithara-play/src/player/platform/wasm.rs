@@ -9,7 +9,7 @@ use super::super::{
     },
 };
 use crate::{
-    api::TrackBinding,
+    api::{SessionTransportSnapshot, Tempo, TrackBinding},
     error::PlayError,
     player::track::{PlayerResource, PreparedElasticRenderer},
     resource::Resource,
@@ -18,6 +18,20 @@ use crate::{
 pub(crate) enum PreparedBindingResource {}
 
 impl PlayerImpl {
+    pub(in crate::player) fn validate_session_tempo(
+        &self,
+        _snapshot: SessionTransportSnapshot,
+        _tempo: Tempo,
+        _shape: crate::player::node::StreamShape,
+        binding: Option<&TrackBinding>,
+    ) -> Result<(), PlayError> {
+        if binding.is_some() {
+            Err(PlayError::ElasticBackendUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Rejects session-bound elastic insertion because the browser backend
     /// does not provide the required renderer.
     pub async fn insert_with_binding(
