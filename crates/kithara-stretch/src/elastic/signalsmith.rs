@@ -4,7 +4,7 @@ use signalsmith_stretch::Stretch;
 
 use super::{
     ElasticBackend, ElasticCapabilities, ElasticConfig, ElasticError, ElasticLatency,
-    ElasticRequest,
+    ElasticRateEnvelope, ElasticRequest,
 };
 
 /// Prepared Signalsmith engine for continuous, exact-frame elastic rendering.
@@ -16,6 +16,12 @@ pub struct SignalsmithElastic {
 }
 
 impl SignalsmithElastic {
+    /// Returns the source-frame rate range accepted by this backend.
+    #[must_use]
+    pub const fn rate_envelope() -> ElasticRateEnvelope {
+        ElasticRateEnvelope::signalsmith()
+    }
+
     /// Allocates and initializes the engine outside the real-time render core.
     /// # Errors
     /// Returns [`ElasticError`] when Signalsmith cannot represent the channel count.

@@ -67,7 +67,10 @@ Every numeric request is checked against those limits and the declared rate
 envelope before processing. `prime` resets the algorithm, consumes the required
 warm-up span, and discards the reported output latency so the caller can align
 the first audible frame to its presentation boundary. The backend never chooses
-a transport rate or repairs phase on its own.
+a transport rate or repairs phase on its own. Envelope comparisons admit one
+floating-point rounding step at a declared boundary, but reject the next
+representable value; coordinate interpolation therefore cannot reject an exact
+2/3 or 4/3 contract edge as a real rate violation.
 
 ## Adding A Backend
 

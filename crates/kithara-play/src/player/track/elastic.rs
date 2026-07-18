@@ -1,5 +1,6 @@
-use std::ops::{Range, RangeInclusive};
+use std::ops::Range;
 
+use kithara_stretch::ElasticRateEnvelope;
 use num_traits::ToPrimitive;
 use smallvec::SmallVec;
 
@@ -55,8 +56,6 @@ pub(crate) enum ElasticPlanError {
     OutsideMarkerDomain { beat: f64 },
     #[error("elastic render request crosses the marker boundary at track beat {boundary}")]
     MarkerBoundaryCrossing { boundary: f64 },
-    #[error("elastic rate envelope [{minimum}, {maximum}] is invalid")]
-    InvalidRateEnvelope { minimum: f64, maximum: f64 },
     #[error("source rate {rate} lies outside the elastic renderer envelope [{minimum}, {maximum}]")]
     UnsupportedRate {
         rate: f64,
@@ -81,7 +80,7 @@ pub(crate) fn plan_elastic_segments(
     output_range: Range<usize>,
     first_request_id: u64,
     revision: u64,
-    supported_rates: RangeInclusive<f64>,
+    supported_rates: ElasticRateEnvelope,
 ) -> Result<SmallVec<[ElasticRenderSegment; 4]>, ElasticPlanError> {
     const MAX_SEGMENTS: usize = 4;
     let mut pending = SmallVec::<[Range<usize>; 4]>::new();
@@ -100,7 +99,7 @@ pub(crate) fn plan_elastic_segments(
             range.clone(),
             request_id,
             revision,
-            supported_rates.clone(),
+            supported_rates,
         ) {
             Ok(request) => {
                 if segments.len() == MAX_SEGMENTS {
@@ -132,7 +131,7 @@ pub(crate) fn plan_elastic_render(
     output_range: Range<usize>,
     request_id: u64,
     revision: u64,
-    supported_rates: RangeInclusive<f64>,
+    supported_rates: ElasticRateEnvelope,
 ) -> Result<ElasticRenderRequest, ElasticPlanError> {
     let output_frames = output_range
         .end
@@ -175,15 +174,13 @@ pub(crate) fn plan_elastic_render(
         return Err(ElasticPlanError::MarkerBoundaryCrossing { boundary });
     }
 
-    let (minimum, maximum) = supported_rates.into_inner();
-    if !minimum.is_finite() || !maximum.is_finite() || minimum <= 0.0 || minimum > maximum {
-        return Err(ElasticPlanError::InvalidRateEnvelope { minimum, maximum });
-    }
+    let minimum = supported_rates.min_source_frames_per_output();
+    let maximum = supported_rates.max_source_frames_per_output();
     let output_frames_f64 = output_frames
         .to_f64()
         .ok_or(ElasticPlanError::InvalidOutputRange)?;
     let rate = (source_end - source_start).abs() / output_frames_f64;
-    if rate < minimum || rate > maximum {
+    if !supported_rates.contains_rate(rate) {
         return Err(ElasticPlanError::UnsupportedRate {
             rate,
             minimum,
@@ -242,12 +239,10 @@ fn boundary_output_frame(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZeroU32,
-        ops::{Range, RangeInclusive},
-    };
+    use std::{num::NonZeroU32, ops::Range};
 
     use kithara_audio::{BeatGrid, TrackBeat, analysis::TrackAnalysis};
+    use kithara_stretch::SignalsmithElastic;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -266,8 +261,8 @@ mod tests {
         const MINIMUM_RATE: f64 = 2.0 / 3.0;
         const MAXIMUM_RATE: f64 = 4.0 / 3.0;
 
-        fn supported_rates() -> RangeInclusive<f64> {
-            Self::MINIMUM_RATE..=Self::MAXIMUM_RATE
+        fn supported_rates() -> ElasticRateEnvelope {
+            SignalsmithElastic::rate_envelope()
         }
     }
 
@@ -452,6 +447,24 @@ mod tests {
         .expect("endpoint marker belongs to the current segment");
 
         assert_eq!(request.source_end(), 28_800.0);
+    }
+
+    #[kithara::test]
+    fn accepts_the_exact_upper_renderer_rate_after_float_mapping() {
+        let request = plan_elastic_render(
+            &binding(90.0),
+            &context(0.0..0.02),
+            0..TestSpec::OUTPUT_FRAMES,
+            TestSpec::REQUEST_ID,
+            TestSpec::REVISION,
+            TestSpec::supported_rates(),
+        )
+        .expect("declared upper rate remains supported after coordinate mapping");
+
+        let output_frames = TestSpec::OUTPUT_FRAMES
+            .to_f64()
+            .expect("output frame count fits f64");
+        assert!((request.source_end() / output_frames - 4.0 / 3.0).abs() <= f64::EPSILON);
     }
 
     #[kithara::test]

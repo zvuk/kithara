@@ -86,7 +86,7 @@ impl ElasticRenderer {
             output_range,
             self.request_id,
             revision,
-            envelope.min_source_frames_per_output()..=envelope.max_source_frames_per_output(),
+            envelope,
         )?;
         let (segments, staged_cursor) = self.integer_segments(&planned, revision)?;
         let first = segments
