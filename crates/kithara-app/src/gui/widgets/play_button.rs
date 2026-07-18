@@ -19,7 +19,6 @@ use crate::{
 mod consts {
     pub(super) const SIZE: f32 = 56.0;
     pub(super) const ICON_SIZE: f32 = 22.0;
-    pub(super) const BORDER_RADIUS: f32 = 8.0;
     pub(super) const BORDER_WIDTH: f32 = 1.0;
     pub(super) const ALPHA_DISABLED: f32 = 0.4;
     pub(super) const ALPHA_GLOW_HOVER: f32 = 0.30;
@@ -32,9 +31,7 @@ mod consts {
 }
 use consts::*;
 
-/// Primary play/pause control shared by compact view and DJ Studio:
-/// a solid-gold rounded square with a hover glow. The icon swaps
-/// between play and pause based on `playing`.
+/// Primary play/pause control shared by the compact view and DJ Studio.
 pub(crate) fn play_button(
     playing: bool,
     p: GuiPalette,
@@ -80,10 +77,11 @@ fn play_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle {
     ButtonStyle {
         background: Some(Background::Color(background)),
         text_color: p.bg,
-        border: Border::default()
-            .rounded(BORDER_RADIUS)
-            .width(BORDER_WIDTH)
-            .color(mix_colors(p.accent, Color::BLACK, BORDER_DARKEN_MIX)),
+        border: Border::default().width(BORDER_WIDTH).color(mix_colors(
+            p.accent,
+            Color::BLACK,
+            BORDER_DARKEN_MIX,
+        )),
         shadow,
         ..ButtonStyle::default()
     }

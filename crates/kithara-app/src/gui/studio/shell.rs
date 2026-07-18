@@ -7,7 +7,7 @@ use super::{
     deck::view_deck,
     library::view_library,
     status::view_status_bar,
-    styles::{shell_style, vertical_divider},
+    styles::{horizontal_divider, shell_style, vertical_divider},
     tokens::studio_size,
     topbar::view_topbar,
 };
@@ -19,6 +19,7 @@ pub(crate) fn view_dj_studio(state: &Kithara) -> Element<'_, Message> {
     container(
         column![
             view_topbar(p),
+            horizontal_divider(studio_size::DIVIDER, p.line),
             row![
                 view_deck(state),
                 vertical_divider(studio_size::DIVIDER, f32::INFINITY, p.line),
@@ -26,6 +27,7 @@ pub(crate) fn view_dj_studio(state: &Kithara) -> Element<'_, Message> {
             ]
             .width(Length::Fill)
             .height(Length::Fill),
+            horizontal_divider(studio_size::DIVIDER, p.line_soft),
             view_status_bar(state),
         ]
         .width(Length::Fill)

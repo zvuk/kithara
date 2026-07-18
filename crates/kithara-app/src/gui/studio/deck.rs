@@ -13,8 +13,9 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    styles::vertical_divider,
-    tokens::{studio_radius, studio_size, studio_space, studio_type},
+    module::Module,
+    styles::{horizontal_divider, vertical_divider},
+    tokens::{studio_size, studio_space, studio_type},
 };
 use crate::{
     gui::{
@@ -24,7 +25,7 @@ use crate::{
         icons::Icon,
         message::Message,
         tokens::gap,
-        view::{eq_band_label, format_time, track_subtitle, with_alpha},
+        view::{eq_band_label, format_time, track_subtitle},
         widgets,
         widgets::WaveMsg,
     },
@@ -32,43 +33,33 @@ use crate::{
 };
 
 mod consts {
-    /// Deck EQ fader range in dB; mirrors the compact equalizer tab so a
-    /// band's fader and slider agree on the same gain.
+    /// Mirrors the compact equalizer tab so a band's fader and slider agree
+    /// on the same gain.
     pub(super) const EQ_MIN_DB: f32 = -24.0;
     pub(super) const EQ_MAX_DB: f32 = 6.0;
-    /// Gap between adjacent EQ faders; kept tight to match the reference deck.
     pub(super) const FADER_GAP: f32 = 2.0;
-    /// Vertical gap between a fader track and its value/frequency labels.
     pub(super) const FADER_LABEL_GAP: f32 = 2.0;
-    /// Vertical inset of the fader bank from the panel's top/bottom border.
     pub(super) const FADER_EDGE_PAD: f32 = 10.0;
-    /// Gap between the transport cluster and the fader bank.
-    pub(super) const TRANSPORT_FADERS_GAP: f32 = 14.0;
 }
 use consts::*;
 
 pub(super) fn view_deck(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
 
-    container(
-        column![
-            deck_header(state, p),
-            waveform_cluster(state, p),
-            transport_and_faders_row(state, p),
-            super::timestretch::view_timestretch_panel(state),
-        ]
-        .spacing(gap::CONTENT),
-    )
+    container(column![
+        waveform_cluster(state, p),
+        horizontal_divider(studio_size::DIVIDER, p.line_soft),
+        transport_and_faders_row(state, p),
+        horizontal_divider(studio_size::DIVIDER, p.line_soft),
+        super::timestretch::view_timestretch_panel(state),
+    ])
     .width(Length::Fill)
     .height(Length::Fill)
-    .padding(studio_space::DECK)
     .style(deck_style(p))
     .into()
 }
 
-/// One vertical fader per EQ band, frequency-labelled, sharing the band gain
-/// with the compact equalizer tab through `EqBandChanged`. Bands fill the
-/// space right of the transport with a tight gap, mirroring the reference.
+/// Shares the band gain with the compact equalizer tab through `EqBandChanged`.
 fn faders(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     let total = state.ui_state.eq_bands.len();
     let strip = state
@@ -132,20 +123,17 @@ fn deck_header(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
         state.ui_state.track_name.as_str()
     };
 
-    container(
-        column![
-            text(title)
-                .size(studio_type::TRACK)
-                .font(fonts::display(Weight::Semibold))
-                .color(p.text),
-            text(track_subtitle(state))
-                .size(studio_type::BODY_SM)
-                .font(fonts::SANS)
-                .color(p.text_dim),
-        ]
-        .spacing(gap::TEXT_STACK),
-    )
-    .width(Length::Fill)
+    column![
+        text(title)
+            .size(studio_type::TRACK)
+            .font(fonts::display(Weight::Medium))
+            .color(p.text),
+        text(track_subtitle(state))
+            .size(studio_type::BODY_SM)
+            .font(fonts::SANS)
+            .color(p.text_dim),
+    ]
+    .spacing(gap::TEXT_STACK)
     .into()
 }
 
@@ -203,23 +191,25 @@ fn waveform_cluster(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
         wave_box.into()
     };
 
-    column![
-        wave_layer,
-        row![
-            text(current)
-                .size(studio_type::MONO_SM)
-                .font(fonts::MONO)
-                .color(p.muted),
-            Space::new().width(Length::Fill),
-            text(total)
-                .size(studio_type::MONO_SM)
-                .font(fonts::MONO)
-                .color(p.muted),
+    Module::new().pad(studio_space::CLUSTER).wrap(
+        column![
+            deck_header(state, p),
+            wave_layer,
+            row![
+                text(current)
+                    .size(studio_type::MONO_SM)
+                    .font(fonts::MONO)
+                    .color(p.muted),
+                Space::new().width(Length::Fill),
+                text(total)
+                    .size(studio_type::MONO_SM)
+                    .font(fonts::MONO)
+                    .color(p.muted),
+            ]
+            .align_y(Alignment::Center),
         ]
-        .align_y(Alignment::Center),
-    ]
-    .spacing(gap::INLINE_TIGHT)
-    .into()
+        .spacing(gap::INLINE_TIGHT),
+    )
 }
 
 /// Playhead fraction in `[0, 1]`. `None`/zero duration reads as 0.
@@ -275,20 +265,14 @@ fn zoom_button(label: &'static str, msg: WaveMsg, p: GuiPalette) -> Element<'sta
 fn zoom_pill_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
     move |_theme| {
         ContainerStyle::default()
-            .background(Background::Color(with_alpha(p.bg_deep, 0.7)))
-            .border(
-                Border::default()
-                    .rounded(studio_radius::SM)
-                    .width(1.0)
-                    .color(p.line),
-            )
+            .background(Background::Color(p.bg_panel))
+            .border(Border::default().width(1.0).color(p.line))
     }
 }
 
 fn zoom_button_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle {
     let background = match status {
-        ButtonStatus::Hovered => Some(Background::Color(with_alpha(p.bg_panel_2, 0.7))),
-        ButtonStatus::Pressed => Some(Background::Color(with_alpha(p.bg_panel_2, 0.5))),
+        ButtonStatus::Hovered | ButtonStatus::Pressed => Some(Background::Color(p.bg_elev)),
         ButtonStatus::Active | ButtonStatus::Disabled => {
             Some(Background::Color(Color::TRANSPARENT))
         }
@@ -297,27 +281,23 @@ fn zoom_button_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle {
     ButtonStyle {
         background,
         text_color: p.text,
-        border: Border::default().rounded(studio_radius::SM),
         ..ButtonStyle::default()
     }
 }
 
-/// Transport (prev / play / next) on the left, a divider, then the EQ fader
-/// bank - all in one panel, matching the reference deck layout.
 fn transport_and_faders_row(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
-    container(
-        row![
-            transport_buttons(state, p),
-            vertical_divider(studio_size::DIVIDER, studio_size::FADER_HEIGHT, p.line_soft),
-            faders(state, p),
-        ]
-        .align_y(Alignment::Center)
-        .spacing(TRANSPORT_FADERS_GAP),
-    )
-    .width(Length::Fill)
-    .padding([8.0, 14.0])
-    .style(transport_style(p))
-    .into()
+    Module::new()
+        .bg(p.bg_panel)
+        .pad(studio_space::CLUSTER)
+        .wrap(
+            row![
+                transport_buttons(state, p),
+                vertical_divider(studio_size::DIVIDER, studio_size::FADER_HEIGHT, p.line_soft),
+                faders(state, p),
+            ]
+            .align_y(Alignment::Center)
+            .spacing(gap::CONTENT),
+        )
 }
 
 fn transport_buttons(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
@@ -353,8 +333,7 @@ fn secondary_transport_button(
 
 fn transport_secondary_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle {
     let background = match status {
-        ButtonStatus::Hovered => Some(Background::Color(with_alpha(p.bg_panel_2, 0.6))),
-        ButtonStatus::Pressed => Some(Background::Color(with_alpha(p.bg_panel_2, 0.45))),
+        ButtonStatus::Hovered | ButtonStatus::Pressed => Some(Background::Color(p.bg_elev)),
         ButtonStatus::Active | ButtonStatus::Disabled => {
             Some(Background::Color(Color::TRANSPARENT))
         }
@@ -363,41 +342,18 @@ fn transport_secondary_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle
     ButtonStyle {
         background,
         text_color: p.text_dim,
-        border: Border::default().rounded(studio_radius::BUTTON),
         ..ButtonStyle::default()
     }
 }
 
 fn deck_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
-    move |_theme| {
-        ContainerStyle::default()
-            .background(Background::Color(with_alpha(p.bg_deep, 0.24)))
-            .color(p.text)
-    }
+    move |_theme| ContainerStyle::default().color(p.text)
 }
 
 fn waveform_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
     move |_theme| {
         ContainerStyle::default()
-            .background(Background::Color(with_alpha(p.bg_deep, 0.55)))
-            .border(
-                Border::default()
-                    .rounded(studio_radius::BUTTON)
-                    .width(1.0)
-                    .color(p.line),
-            )
-    }
-}
-
-fn transport_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
-    move |_theme| {
-        ContainerStyle::default()
-            .background(Background::Color(with_alpha(p.bg_deep, 0.52)))
-            .border(
-                Border::default()
-                    .rounded(studio_radius::SURFACE)
-                    .width(1.0)
-                    .color(p.line),
-            )
+            .background(Background::Color(p.bg_inset))
+            .border(Border::default().width(1.0).color(p.line_soft))
     }
 }

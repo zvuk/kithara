@@ -5,6 +5,7 @@ mod analysis;
 pub mod baked;
 pub mod config;
 pub mod crossfade;
+pub mod deck;
 pub mod events;
 pub mod frontend;
 pub mod mix;

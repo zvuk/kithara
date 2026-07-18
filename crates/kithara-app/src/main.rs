@@ -8,7 +8,7 @@ use kithara::{
     assets::{AssetStoreBuilder, BytePool, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
     audio::generate_log_spaced_bands,
     net::{HttpClient, NetOptions},
-    play::{CrossfaderBus, PlayerConfig, PlayerImpl, StretchControls},
+    play::{PlayerConfig, PlayerImpl, StretchControls},
     stream::dl::{Downloader, DownloaderConfig},
 };
 #[cfg(not(feature = "tui"))]
@@ -20,8 +20,8 @@ use kithara_app::tui::TuiFrontend;
 use kithara_app::{
     baked,
     config::AppConfig,
+    deck::{Deck, DeckId, DeckSet},
     frontend::Frontend,
-    mix::{DeckMix, DeckStrip},
     tracing_init::init_tracing,
 };
 use kithara_platform::{CancelToken, sync::Arc};
@@ -48,29 +48,30 @@ struct Args {
     decks: usize,
 }
 
-/// Crossfader assignment for `index` within a `count`-deck mix: deck 0 → A,
-/// deck 1 → B, everything else (and single-deck mode) → `Bypass` (ordinary
-/// fader, no crossfade).
-fn deck_bus(index: usize, count: usize) -> CrossfaderBus {
-    match (count >= 2, index) {
-        (true, 0) => CrossfaderBus::A,
-        (true, 1) => CrossfaderBus::B,
-        _ => CrossfaderBus::Bypass,
-    }
-}
-
-/// Build a fresh deck player sharing the process audio session.
-fn build_deck_player(shutdown: &CancelToken, config: &AppConfig) -> Arc<PlayerImpl> {
+fn build_deck(index: usize, shutdown: &CancelToken, config: &AppConfig) -> Deck {
+    let timestretch = StretchControls::new(1.0);
     let player_config = PlayerConfig::builder()
         .cancel(shutdown.child())
         .crossfade_duration(config.crossfade_seconds)
         .eq_layout(generate_log_spaced_bands(config.eq_band_count))
-        .timestretch(StretchControls::new(1.0))
+        .timestretch(Arc::clone(&timestretch))
         .build();
-    Arc::new(PlayerImpl::new(player_config))
+    let player = Arc::new(PlayerImpl::new(player_config));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::default()
+/// Resolve `Mode::Auto` into a concrete mode.
+            .with_player(Arc::clone(&player))
+            .with_cancel(shutdown.child()),
+    ));
+
+    Deck {
+        id: DeckId(index),
+        player,
+        queue,
+        timestretch,
+    }
 }
 
-/// Application UI mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Mode {
     /// Auto-detect: TUI if terminal attached, GUI otherwise.
@@ -84,7 +85,6 @@ enum Mode {
 type AppError = Box<dyn std::error::Error + Send + Sync>;
 type AppResult<T = ()> = Result<T, AppError>;
 
-/// Resolve `Mode::Auto` into a concrete mode.
 fn resolve_mode(mode: Mode) -> Mode {
     match mode {
         Mode::Auto => {
@@ -169,31 +169,14 @@ fn main() -> AppResult {
         .should_accept_invalid_certs(args.insecure)
         .build();
 
-    let timestretch = StretchControls::new(1.0);
-    let player_config = PlayerConfig::builder()
-        .cancel(shutdown.child())
-        .crossfade_duration(config.crossfade_seconds)
-        .eq_layout(generate_log_spaced_bands(config.eq_band_count))
-        .timestretch(Arc::clone(&timestretch))
-        .build();
-    let player = Arc::new(PlayerImpl::new(player_config));
+    let decks: Vec<Deck> = (0..args.decks)
+        .map(|index| build_deck(index, &shutdown, &config))
+        .collect();
+    let mut deck_set = DeckSet::new(decks);
+    deck_set.commit(deck_set.mix().clone())?;
 
-    // Deck 0 is the queue-driven primary player; any extra decks share the
-    // process audio session. The shared mix owns the desired session-input
-    // gains and commits them through the common `SessionMixer`.
-    let mut strips = vec![DeckStrip::new(Arc::clone(&player), deck_bus(0, args.decks))];
-    for index in 1..args.decks {
-        let deck = build_deck_player(&shutdown, &config);
-        strips.push(DeckStrip::new(deck, deck_bus(index, args.decks)));
-    }
-    let deck_mix = DeckMix::new(strips);
-    deck_mix.apply()?;
-
-    let queue_config = QueueConfig::default()
-        .with_player(player)
-        .with_cancel(shutdown.child());
-
-    let queue = Arc::new(Queue::new(queue_config));
+    let queue = Arc::clone(&deck_set.decks()[0].queue);
+    let timestretch = Arc::clone(&deck_set.decks()[0].timestretch);
 
     match mode {
         #[cfg(feature = "tui")]

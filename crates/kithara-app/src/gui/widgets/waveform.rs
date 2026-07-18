@@ -31,15 +31,26 @@ struct WaveformCanvas {
     duration: f64,
 }
 
-/// Dim a played-past band color so the playhead split reads at a glance.
-fn dim(c: Color) -> Color {
-    Color {
-        r: c.r * 0.42,
-        g: c.g * 0.42,
-        b: c.b * 0.42,
-        a: 1.0,
-    }
-}
+/// Played-side veil over the bars, per the design-system deck waveform.
+const PLAYED_VEIL: Color = Color {
+    r: 11.0 / 255.0,
+    g: 11.0 / 255.0,
+    b: 22.0 / 255.0,
+    a: 0.35,
+};
+
+/// Bar column pitch and width; buckets span the full pitch so no downsample
+/// data falls into the gaps.
+const COL_PITCH: f32 = 4.0;
+const BAR_W: f32 = 3.0;
+
+/// Downbeat marker color from the design-system beat grid.
+const DOWNBEAT_LINE: Color = Color {
+    r: 130.0 / 255.0,
+    g: 132.0 / 255.0,
+    b: 170.0 / 255.0,
+    a: 0.6,
+};
 
 fn wheel_factor(delta: ScrollDelta) -> f32 {
     const WHEEL_BASE: f32 = 1.2;
@@ -77,8 +88,8 @@ impl WaveformCanvas {
             return;
         }
         let beat_color = Color {
-            a: 0.18,
-            ..self.p.accent
+            a: 0.4,
+            ..self.p.line
         };
         let mut last_x = f32::NEG_INFINITY;
         for &frac in self.beats.iter() {
@@ -138,7 +149,7 @@ impl WaveformCanvas {
             let (marker_color, marker_w) = if is_active {
                 (accent_strong, 2.0)
             } else {
-                (Color { a: 0.6, ..accent }, 1.0)
+                (DOWNBEAT_LINE, 1.0)
             };
             frame.stroke(
                 &Path::line(Point::new(x, 0.0), Point::new(x, h)),
@@ -175,21 +186,6 @@ impl canvas::Program<Message> for WaveformCanvas {
             return vec![frame.into_geometry()];
         }
 
-        let grid_color = Color {
-            a: 0.08,
-            ..self.p.accent
-        };
-
-        for i in 1u16..=8 {
-            let x = self.view.screen_frac(f32::from(i) / 8.0) * w;
-            if (0.0..=w).contains(&x) {
-                frame.stroke(
-                    &Path::line(Point::new(x, 0.0), Point::new(x, h)),
-                    Stroke::default().with_color(grid_color).with_width(1.0),
-                );
-            }
-        }
-
         let head_x = self.view.screen_frac(self.progress.clamp(0.0, 1.0)) * w;
 
         let buckets = self.wave.buckets();
@@ -199,43 +195,39 @@ impl canvas::Program<Message> for WaveformCanvas {
             let amp = (mid - 4.0).max(0.0);
             let bands = [WAVE_LOW, WAVE_MID, WAVE_HIGH];
 
-            let cols: usize = w.ceil().as_();
+            let cols: usize = (w / COL_PITCH).ceil().as_();
             for col in 0..cols {
-                let x: f32 = col.as_();
-                let (lo, hi) = self.view.pixel_buckets(x, w, n);
+                let c: f32 = col.as_();
+                let x = c * COL_PITCH;
+                let (lo, hi_near) = self.view.pixel_buckets(x, w, n);
+                let (_, hi_far) = self.view.pixel_buckets((x + COL_PITCH - 1.0).min(w), w, n);
+                let hi = hi_far.max(hi_near);
                 let mut peak = [0.0_f32; 3];
                 for b in &buckets[lo..hi] {
                     peak[0] = peak[0].max(b.low);
                     peak[1] = peak[1].max(b.mid);
                     peak[2] = peak[2].max(b.high);
                 }
-                let played = (x + 0.5) <= head_x;
                 for (value, base) in peak.iter().zip(bands.iter()) {
                     let v = value.clamp(0.0, 1.0);
                     if v <= 0.0 {
                         continue;
                     }
                     let half = v * amp;
-                    let color = if played { dim(*base) } else { *base };
                     frame.fill_rectangle(
                         Point::new(x, mid - half),
-                        Size::new(1.0, half * 2.0),
-                        color,
+                        Size::new(BAR_W, half * 2.0),
+                        *base,
                     );
                 }
             }
-        }
-
-        let tick_color = Color {
-            a: 0.4,
-            ..self.p.accent
-        };
-        for i in 0u16..16 {
-            let x = self.view.screen_frac(f32::from(i) / 16.0) * w;
-            if (0.0..=w).contains(&x) {
-                frame.stroke(
-                    &Path::line(Point::new(x, h - 6.0), Point::new(x, h)),
-                    Stroke::default().with_color(tick_color).with_width(1.0),
+            // Design system dims the played side with a veil, not by
+            // repainting the band colors.
+            if head_x > 0.0 {
+                frame.fill_rectangle(
+                    Point::new(0.0, 0.0),
+                    Size::new(head_x.min(w), h),
+                    PLAYED_VEIL,
                 );
             }
         }
@@ -245,7 +237,18 @@ impl canvas::Program<Message> for WaveformCanvas {
         if (0.0..=w).contains(&head_x) {
             frame.stroke(
                 &Path::line(Point::new(head_x, 0.0), Point::new(head_x, h)),
-                Stroke::default().with_color(self.p.accent).with_width(2.0),
+                Stroke::default().with_color(self.p.accent).with_width(1.5),
+            );
+            // Playhead flags at both edges, per the design-system deck wave.
+            frame.fill_rectangle(
+                Point::new(head_x - 4.0, 0.0),
+                Size::new(8.0, 3.0),
+                self.p.accent,
+            );
+            frame.fill_rectangle(
+                Point::new(head_x - 4.0, h - 3.0),
+                Size::new(8.0, 3.0),
+                self.p.accent,
             );
         }
 

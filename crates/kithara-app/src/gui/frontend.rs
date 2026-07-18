@@ -11,13 +11,11 @@ use crate::{
 };
 
 mod consts {
-    /// Compact-player window size in logical pixels.
     pub(super) const COMPACT_WIDTH: f32 = 448.0;
     pub(super) const COMPACT_HEIGHT: f32 = 784.0;
     pub(super) const COMPACT_MIN_WIDTH: f32 = 420.0;
     pub(super) const COMPACT_MIN_HEIGHT: f32 = 760.0;
 
-    /// DJ Studio window size in logical pixels.
     pub(super) const STUDIO_WIDTH: f32 = 980.0;
     pub(super) const STUDIO_HEIGHT: f32 = 700.0;
     pub(super) const STUDIO_MIN_WIDTH: f32 = 820.0;
@@ -48,7 +46,6 @@ pub(crate) fn window_settings(dj: bool) -> Settings {
     }
 }
 
-/// GUI frontend using iced.
 pub struct GuiFrontend {
     config: AppConfig,
     palette: gui::GuiPalette,
@@ -91,11 +88,10 @@ impl Frontend for GuiFrontend {
         .theme(Kithara::theme)
         .subscription(Kithara::subscription)
         .default_font(fonts::SANS)
-        .font(fonts::INTER_BYTES)
-        .font(fonts::SPACE_GROTESK_BYTES)
-        .font(fonts::JETBRAINS_MONO_REGULAR_BYTES)
-        .font(fonts::JETBRAINS_MONO_MEDIUM_BYTES)
-        .font(fonts::JETBRAINS_MONO_SEMIBOLD_BYTES)
+        .font(fonts::INTER_REGULAR_BYTES)
+        .font(fonts::INTER_SEMIBOLD_BYTES)
+        .font(fonts::SPACE_GROTESK_MEDIUM_BYTES)
+        .font(fonts::SPACE_GROTESK_BOLD_BYTES)
         .run();
 
         config.shutdown.cancel();

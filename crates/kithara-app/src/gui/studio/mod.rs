@@ -1,5 +1,6 @@
 mod deck;
 mod library;
+mod module;
 mod shell;
 mod status;
 mod styles;

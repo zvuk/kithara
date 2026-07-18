@@ -1,8 +1,7 @@
 use iced::{
-    Alignment, Background, Border, Color, Degrees, Element, Length, Padding, Shadow, Task, Vector,
+    Alignment, Background, Border, Color, Element, Length, Padding, Shadow, Task, Vector,
     alignment::{Horizontal, Vertical},
     font::Weight,
-    gradient::Linear,
     widget::{
         button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -21,9 +20,6 @@ use crate::{
 };
 
 mod consts {
-    use iced::Color;
-
-    pub(super) const BAR_RADIUS: f32 = 10.0;
     pub(super) const BORDER_WIDTH: f32 = 1.0;
     pub(super) const INPUT_FONT: f32 = 12.5;
     pub(super) const INPUT_PAD_V: f32 = 11.0;
@@ -38,9 +34,7 @@ mod consts {
     pub(super) const FLASH_FONT: f32 = 10.0;
     pub(super) const CHIP_PAD_X: f32 = 7.0;
     pub(super) const CHIP_PAD_Y: f32 = 3.0;
-    pub(super) const CHIP_RADIUS: f32 = 4.0;
     pub(super) const SUBMIT_SIZE: f32 = 32.0;
-    pub(super) const SUBMIT_RADIUS: f32 = 7.0;
     pub(super) const SUBMIT_ICON: f32 = 14.0;
     pub(super) const PLACEHOLDER_ALPHA: f32 = 0.6;
     pub(super) const SELECTION_ALPHA: f32 = 0.4;
@@ -49,7 +43,6 @@ mod consts {
     pub(super) const CHIP_BORDER_ALPHA: f32 = 0.3;
     pub(super) const FLASH_BG_ALPHA: f32 = 0.14;
     pub(super) const FLASH_BORDER_ALPHA: f32 = 0.3;
-    pub(super) const GRADIENT_ALPHA: f32 = 0.85;
     pub(super) const SUBMIT_DISABLED_BG_ALPHA: f32 = 0.55;
     /// Submit-button border: accent at 60% over black.
     pub(super) const SUBMIT_BORDER_MIX: f32 = 0.6;
@@ -57,14 +50,6 @@ mod consts {
     pub(super) const SUBMIT_SHADOW_BLUR: f32 = 14.0;
     pub(super) const SUBMIT_SHADOW_OFFSET_Y: f32 = 4.0;
     pub(super) const FLASH_EXPIRE_MS: u64 = 2200;
-
-    /// Dark glyph color on the active (gold) submit button (#1a1408).
-    pub(super) const SUBMIT_FG: Color = Color {
-        r: 26.0 / 255.0,
-        g: 20.0 / 255.0,
-        b: 8.0 / 255.0,
-        a: 1.0,
-    };
 
     pub(super) const PLACEHOLDER: &str = "Audio URL \u{2014} mp3, flac, m3u8, opus\u{2026}";
 }
@@ -95,11 +80,8 @@ pub(crate) enum FlashKind {
 /// URL-bar events, grouped so the top-level [`Message`] stays thin.
 #[derive(Debug, Clone)]
 pub(crate) enum UrlMsg {
-    /// Text field edited.
     Changed(String),
-    /// Commit the current text (Enter or submit button).
     Submit,
-    /// Clear the success flash after its lifetime elapsed.
     FlashExpired,
 }
 
@@ -254,10 +236,7 @@ fn input_style(p: GuiPalette, flash: Option<FlashKind>, status: InputStatus) -> 
 
     InputStyle {
         background: bar_background(p),
-        border: Border::default()
-            .rounded(BAR_RADIUS)
-            .width(BORDER_WIDTH)
-            .color(border_color),
+        border: Border::default().width(BORDER_WIDTH).color(border_color),
         icon: p.muted,
         placeholder: with_alpha(p.muted, PLACEHOLDER_ALPHA),
         value: p.text,
@@ -276,7 +255,6 @@ fn chip_view(fmt: &'static str, p: GuiPalette) -> Element<'static, Message> {
     .style(move |_theme| {
         ContainerStyle::default().background(p.accent_soft).border(
             Border::default()
-                .rounded(CHIP_RADIUS)
                 .width(BORDER_WIDTH)
                 .color(with_alpha(p.accent, CHIP_BORDER_ALPHA)),
         )
@@ -301,7 +279,6 @@ fn flash_view(flash: &Flash, p: GuiPalette) -> Element<'static, Message> {
             .background(with_alpha(base, FLASH_BG_ALPHA))
             .border(
                 Border::default()
-                    .rounded(CHIP_RADIUS)
                     .width(BORDER_WIDTH)
                     .color(with_alpha(base, FLASH_BORDER_ALPHA)),
             )
@@ -310,7 +287,8 @@ fn flash_view(flash: &Flash, p: GuiPalette) -> Element<'static, Message> {
 }
 
 fn submit_button(active: bool, p: GuiPalette) -> Element<'static, Message> {
-    let icon_color = if active { SUBMIT_FG } else { p.muted };
+    // Dark on-gold glyph: active gold fill takes `p.bg` as foreground.
+    let icon_color = if active { p.bg } else { p.muted };
     let content = container(Icon::PlaylistAdd.view(SUBMIT_ICON, icon_color))
         .center_x(Length::Fill)
         .center_y(Length::Fill);
@@ -334,27 +312,24 @@ fn submit_style(p: GuiPalette, active: bool, status: ButtonStatus) -> ButtonStyl
                 SUBMIT_DISABLED_BG_ALPHA,
             ))),
             text_color: p.muted,
-            border: Border::default()
-                .rounded(SUBMIT_RADIUS)
-                .width(BORDER_WIDTH)
-                .color(p.line),
+            border: Border::default().width(BORDER_WIDTH).color(p.line),
             ..ButtonStyle::default()
         };
     }
 
-    let background = match status {
-        ButtonStatus::Pressed => Background::Color(p.accent),
-        ButtonStatus::Hovered => linear(p.accent_strong, p.accent_strong),
-        _ => linear(p.accent_strong, p.accent),
-    };
+    let background = Background::Color(match status {
+        ButtonStatus::Hovered => p.accent_strong,
+        _ => p.accent,
+    });
 
     ButtonStyle {
         background: Some(background),
-        text_color: SUBMIT_FG,
-        border: Border::default()
-            .rounded(SUBMIT_RADIUS)
-            .width(BORDER_WIDTH)
-            .color(mix_colors(Color::BLACK, p.accent, SUBMIT_BORDER_MIX)),
+        text_color: p.bg,
+        border: Border::default().width(BORDER_WIDTH).color(mix_colors(
+            Color::BLACK,
+            p.accent,
+            SUBMIT_BORDER_MIX,
+        )),
         shadow: Shadow {
             color: with_alpha(p.accent, SUBMIT_SHADOW_ALPHA),
             offset: Vector::new(0.0, SUBMIT_SHADOW_OFFSET_Y),
@@ -373,17 +348,7 @@ fn badge_padding() -> Padding {
 }
 
 fn bar_background(p: GuiPalette) -> Background {
-    Linear::new(Degrees(180.0))
-        .add_stop(0.0, with_alpha(p.bg_inset, GRADIENT_ALPHA))
-        .add_stop(1.0, with_alpha(p.bg_deep, GRADIENT_ALPHA))
-        .into()
-}
-
-fn linear(start: Color, end: Color) -> Background {
-    Linear::new(Degrees(180.0))
-        .add_stop(0.0, start)
-        .add_stop(1.0, end)
-        .into()
+    Background::Color(p.bg_inset)
 }
 
 #[cfg(test)]

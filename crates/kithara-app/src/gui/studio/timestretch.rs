@@ -1,8 +1,7 @@
 use iced::{
-    Alignment, Background, Border, Degrees, Element, Length, Theme,
+    Alignment, Background, Border, Element, Length, Theme,
     alignment::Horizontal,
     font::Weight,
-    gradient,
     widget::{Space, button, column, container, container::Style as ContainerStyle, row, text},
 };
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -13,7 +12,10 @@ use iced::{
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara::prelude::StretchKind;
 
-use super::tokens::{studio_radius, studio_type};
+use super::{
+    module::Module,
+    tokens::{studio_radius, studio_space, studio_type},
+};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use crate::gui::icons::Icon;
 use crate::{
@@ -23,52 +25,44 @@ use crate::{
         fonts,
         message::Message,
         tokens::gap,
-        view::{mix_colors, with_alpha},
         widgets,
     },
     theme::gui::GuiPalette,
 };
 
-/// Layout tunables for the timestretch panel, grouped to keep the module
-/// surface small.
 struct Consts;
 
 impl Consts {
-    /// Range / library pill height.
     const PILL_H: f32 = 24.0;
-    /// Selectable tempo bounds in ± percent.
     const RANGES: [u8; 4] = [8, 16, 50, 100];
     /// Shared height of the stat tile / key-lock / nudge row so they align.
     const STAT_H: f32 = 38.0;
 }
 
-/// The timestretch deck panel, matching the design `.ts` block: a single
-/// head row (label · range pills · tempo value), the tempo slider, a stat
-/// row (ratio · key-lock · nudge), and the stretch-backend selector.
 pub(super) fn view_timestretch_panel(state: &Kithara) -> Element<'static, Message> {
     let p = state.palette;
     let ts = state.dj.timestretch;
-    container(
-        column![
-            head_row(ts.tempo, state, p),
-            ranges_row(ts.range, p),
-            slider_row(ts.tempo, ts.range, p),
-            stats_row(ts, state, p),
-        ]
-        .spacing(gap::INLINE_WIDE),
-    )
-    .padding([10.0, 12.0])
-    .style(panel_style(p))
-    .into()
+    Module::new()
+        .bg(p.bg_panel)
+        .pad(studio_space::CLUSTER)
+        .wrap(
+            column![
+                head_row(ts.tempo, state, p),
+    /// Range / library pill height.
+                ranges_row(ts.range, p),
+    /// Selectable tempo bounds in ± percent.
+                slider_row(ts.tempo, ts.range, p),
+                stats_row(ts, state, p),
+            ]
+            .spacing(gap::INLINE_WIDE),
+        )
 }
 
-/// `[• TIMESTRETCH  library pills] … [+0.00%]` — title, backend selector,
-/// and the live tempo value.
 fn head_row(tempo: f32, state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     row![
         indicator_dot(p),
         text("TIMESTRETCH")
-            .size(13.0)
+            .size(studio_type::BODY_SM)
             .font(fonts::display(Weight::Bold))
             .color(p.text),
         library_select(state, p),
@@ -87,8 +81,6 @@ fn head_row(tempo: f32, state: &Kithara, p: GuiPalette) -> Element<'static, Mess
     .into()
 }
 
-/// Range pills (`±8 / ±16 / ±50 / ±100 %`) that set the slider bound,
-/// right-aligned above the slider.
 fn ranges_row(range: u8, p: GuiPalette) -> Element<'static, Message> {
     let mut pills = row![].spacing(gap::INLINE_TIGHT).align_y(Alignment::Center);
     for r in Consts::RANGES {
@@ -157,21 +149,15 @@ fn library_select(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
         text_color: p.accent,
         placeholder_color: p.muted,
         handle_color: p.muted,
-        background: Background::Color(with_alpha(p.bg_deep, 0.5)),
-        border: Border::default()
-            .rounded(studio_radius::SM)
-            .width(1.0)
-            .color(p.line),
+        background: Background::Color(p.bg_inset),
+        border: Border::default().width(1.0).color(p.line),
     })
     .menu_style(move |_theme: &Theme| menu::Style {
         background: Background::Color(p.bg_panel),
-        border: Border::default()
-            .rounded(studio_radius::SM)
-            .width(1.0)
-            .color(p.line),
+        border: Border::default().width(1.0).color(p.line),
         text_color: p.text,
-        selected_text_color: p.accent,
-        selected_background: Background::Color(p.accent_soft),
+        selected_text_color: p.bg,
+        selected_background: Background::Color(p.accent),
         shadow: Shadow::default(),
     })
     .into()
@@ -193,12 +179,12 @@ fn stat_tile(label: &str, value: String, p: GuiPalette) -> Element<'static, Mess
     container(
         column![
             text(label.to_string())
-                .size(9.0)
+                .size(studio_type::MONO_XS)
                 .font(fonts::mono(Weight::Medium))
                 .color(p.muted),
             text(value)
                 .size(studio_type::TRACK)
-                .font(fonts::display(Weight::Semibold))
+                .font(fonts::display(Weight::Medium))
                 .color(p.text),
         ]
         .spacing(1.0),
@@ -218,12 +204,9 @@ fn keylock_pill(_state: &Kithara, _p: GuiPalette) -> Element<'static, Message> {
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 fn keylock_pill(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     let on = state.controller.deck().keylock();
-    let color = if on { p.accent } else { p.muted };
-    let background = if on {
-        p.accent_soft
-    } else {
-        with_alpha(p.bg_deep, 0.5)
-    };
+    // Active toggle: gold fill with on-gold (dark) text, per the design system.
+    let color = if on { p.bg } else { p.muted };
+    let background = if on { p.accent } else { p.bg_inset };
     let border = if on { p.accent } else { p.line };
     button(
         container(
@@ -244,10 +227,7 @@ fn keylock_pill(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     .style(move |_theme: &Theme, _status| button::Style {
         background: Some(Background::Color(background)),
         text_color: color,
-        border: Border::default()
-            .rounded(studio_radius::SM)
-            .width(1.0)
-            .color(border),
+        border: Border::default().width(1.0).color(border),
         ..button::Style::default()
     })
     .on_press(Message::Dj(DjMsg::ToggleKeyLock))
@@ -279,12 +259,9 @@ fn nudge_button(label: &str, message: Message, p: GuiPalette) -> Element<'static
     .height(Length::Fixed(Consts::STAT_H))
     .padding(0)
     .style(move |_theme: &Theme, _status| button::Style {
-        background: Some(Background::Color(with_alpha(p.bg_deep, 0.5))),
+        background: Some(Background::Color(p.bg_inset)),
         text_color: p.text_dim,
-        border: Border::default()
-            .rounded(studio_radius::SM)
-            .width(1.0)
-            .color(p.line),
+        border: Border::default().width(1.0).color(p.line),
         ..button::Style::default()
     })
     .on_press(message)
@@ -301,12 +278,9 @@ fn range_pill(range: u8, active: bool, p: GuiPalette) -> Element<'static, Messag
 }
 
 fn pill(label: String, active: bool, message: Message, p: GuiPalette) -> Element<'static, Message> {
-    let color = if active { p.accent } else { p.text_dim };
-    let background = if active {
-        p.accent_soft
-    } else {
-        with_alpha(p.bg_deep, 0.5)
-    };
+    // Active segment: gold fill with on-gold (dark) text, per the design system.
+    let color = if active { p.bg } else { p.text_dim };
+    let background = if active { p.accent } else { p.bg_inset };
     let border = if active { p.accent } else { p.line };
     button(
         container(
@@ -323,45 +297,17 @@ fn pill(label: String, active: bool, message: Message, p: GuiPalette) -> Element
     .style(move |_theme: &Theme, _status| button::Style {
         background: Some(Background::Color(background)),
         text_color: color,
-        border: Border::default()
-            .rounded(studio_radius::SM)
-            .width(1.0)
-            .color(border),
+        border: Border::default().width(1.0).color(border),
         ..button::Style::default()
     })
     .on_press(message)
     .into()
 }
 
-/// `.ts` background: a subtle gold glow in the top-right corner over a dark
-/// base, approximated as a diagonal linear gradient (iced has no radial).
-fn panel_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
-    move |_theme| {
-        let glow = with_alpha(mix_colors(p.bg_deep, p.accent, 0.16), 0.72);
-        let base = with_alpha(p.bg_deep, 0.62);
-        let bg: Background = gradient::Linear::new(Degrees(215.0))
-            .add_stop(0.0, glow)
-            .add_stop(0.55, base)
-            .add_stop(1.0, base)
-            .into();
-        ContainerStyle::default().background(bg).border(
-            Border::default()
-                .rounded(studio_radius::SURFACE)
-                .width(1.0)
-                .color(p.line),
-        )
-    }
-}
-
 fn tile_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
     move |_theme| {
         ContainerStyle::default()
-            .background(Background::Color(with_alpha(p.bg_deep, 0.5)))
-            .border(
-                Border::default()
-                    .rounded(studio_radius::SM)
-                    .width(1.0)
-                    .color(p.line),
-            )
+            .background(Background::Color(p.bg_inset))
+            .border(Border::default().width(1.0).color(p.line_soft))
     }
 }

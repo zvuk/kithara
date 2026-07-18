@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use iced::{
-    Alignment, Background, Border, Color, Element, Length, Padding, Theme,
+    Alignment, Background, Color, Element, Length, Theme,
     font::Weight,
     widget::{
         Space, button,
@@ -12,9 +12,12 @@ use iced::{
     },
 };
 
-use super::tokens::{studio_radius, studio_size, studio_space, studio_type};
+use super::{
+    module::Module,
+    tokens::{studio_size, studio_space, studio_type},
+};
 use crate::{
-    gui::{app::Kithara, fonts, icons::Icon, message::Message, tokens::gap, view::with_alpha},
+    gui::{app::Kithara, fonts, icons::Icon, message::Message, tokens::gap},
     theme::gui::GuiPalette,
 };
 
@@ -42,44 +45,41 @@ pub(super) fn view_library(state: &Kithara) -> Element<'_, Message> {
         },
     );
 
-    container(
+    let panel = Module::new().bg(p.bg_panel).fill_height().wrap(
         column![
             library_tabs(state.ui_state.shuffle_enabled, p),
             library_head_row(p),
             container(scrollable(body))
                 .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(Padding {
-                    top: 4.0,
-                    right: 0.0,
-                    bottom: 4.0,
-                    left: 0.0,
-                }),
+                .height(Length::Fill),
         ]
         .width(Length::Fill)
         .height(Length::Fill),
-    )
-    .width(Length::Fixed(studio_size::LIBRARY_WIDTH))
-    .height(Length::Fill)
-    .style(library_style(p))
-    .into()
+    );
+
+    container(panel)
+        .width(Length::Fixed(studio_size::LIBRARY_WIDTH))
+        .height(Length::Fill)
+        .into()
 }
 
 fn library_tabs(shuffle_on: bool, p: GuiPalette) -> Element<'static, Message> {
-    let shuffle_color = if shuffle_on { p.accent } else { p.muted };
+    // Active toggle follows the design system: gold fill with on-gold icon.
+    let shuffle_color = if shuffle_on { p.bg } else { p.muted };
     container(
         row![
             library_label(p),
             Space::new().width(Length::Fill),
             button(Icon::Shuffle.view(12.0, shuffle_color))
-                .padding([10.0, 12.0])
-                .style(move |_theme: &Theme, status| shuffle_button_style(p, status))
+                .padding([4.0, 8.0])
+                .style(move |_theme: &Theme, status| shuffle_button_style(p, shuffle_on, status))
                 .on_press(Message::ToggleShuffle),
         ]
         .align_y(Alignment::Center)
         .spacing(0.0),
     )
     .width(Length::Fill)
+    .center_y(Length::Fixed(studio_size::LIB_HEAD_HEIGHT))
     .padding(studio_space::LIBRARY_RAIL)
     .style(tabs_style(p))
     .into()
@@ -90,9 +90,9 @@ fn library_label(p: GuiPalette) -> Element<'static, Message> {
         row![
             Icon::Playlist.view(12.0, p.accent),
             text("LIBRARY")
-                .size(studio_type::MONO_SM)
-                .font(fonts::mono(Weight::Medium))
-                .color(p.accent),
+                .size(studio_type::BODY_SM)
+                .font(fonts::display(Weight::Bold))
+                .color(p.text),
         ]
         .align_y(Alignment::Center)
         .spacing(5.0),
@@ -100,16 +100,18 @@ fn library_label(p: GuiPalette) -> Element<'static, Message> {
     .into()
 }
 
-fn shuffle_button_style(p: GuiPalette, status: Status) -> ButtonStyle {
-    let background = match status {
-        Status::Hovered => Some(Background::Color(with_alpha(p.bg_panel_2, 0.6))),
-        Status::Pressed => Some(Background::Color(p.accent_soft)),
-        Status::Active | Status::Disabled => Some(Background::Color(Color::TRANSPARENT)),
+fn shuffle_button_style(p: GuiPalette, on: bool, status: Status) -> ButtonStyle {
+    let background = if on {
+        Background::Color(p.accent)
+    } else {
+        match status {
+            Status::Hovered | Status::Pressed => Background::Color(p.bg_elev),
+            Status::Active | Status::Disabled => Background::Color(Color::TRANSPARENT),
+        }
     };
     ButtonStyle {
-        background,
-        text_color: p.text,
-        border: Border::default().rounded(studio_radius::BUTTON),
+        background: Some(background),
+        text_color: if on { p.bg } else { p.text },
         ..ButtonStyle::default()
     }
 }
@@ -125,14 +127,12 @@ fn library_head_row(p: GuiPalette) -> Element<'static, Message> {
         .align_y(Alignment::Center)
         .spacing(gap::CONTENT),
     )
-    .height(Length::Fixed(studio_size::LIB_HEAD_HEIGHT))
+    .height(Length::Fixed(studio_size::LIB_COL_HEAD_HEIGHT))
     .padding(studio_space::LIBRARY_ROW)
     .style(head_style(p))
     .into()
 }
 
-/// Track display state for a single [`library_row`]: name, derived artist,
-/// and whether the row is the current or the selected track.
 #[derive(Clone, Copy)]
 struct LibraryRow<'a> {
     artist: &'a str,
@@ -232,55 +232,26 @@ fn row_artist(url: Option<&str>) -> String {
         .map_or_else(|| "Local source".to_string(), ToString::to_string)
 }
 
-fn library_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
-    move |_theme| {
-        ContainerStyle::default()
-            .background(Background::Color(with_alpha(p.bg_deep, 0.7)))
-            .color(p.text)
-    }
-}
-
 fn tabs_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
-    move |_theme| {
-        ContainerStyle::default().background(Background::Color(with_alpha(p.bg_elev, 0.28)))
-    }
+    move |_theme| ContainerStyle::default().background(Background::Color(p.bg_panel_2))
 }
 
 fn head_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
-    move |_theme| {
-        ContainerStyle::default().background(Background::Color(with_alpha(p.bg_deep, 0.18)))
-    }
+    move |_theme| ContainerStyle::default().background(Background::Color(p.bg_inset))
 }
 
 fn row_style(p: GuiPalette, current: bool, selected: bool, status: Status) -> ButtonStyle {
-    let active_bg = if current {
-        with_alpha(p.bg_panel, 0.5)
-    } else if selected {
-        with_alpha(p.bg_panel, 0.34)
-    } else {
-        Color::TRANSPARENT
-    };
-    let hover_bg = if current || selected {
-        with_alpha(p.bg_panel_2, 0.68)
-    } else {
-        with_alpha(p.bg_panel, 0.24)
-    };
-    let pressed_bg = if current || selected {
-        with_alpha(p.bg_panel_2, 0.82)
-    } else {
-        with_alpha(p.accent, 0.12)
-    };
-
     let background = match status {
-        Status::Active | Status::Disabled => Some(Background::Color(active_bg)),
-        Status::Hovered => Some(Background::Color(hover_bg)),
-        Status::Pressed => Some(Background::Color(pressed_bg)),
+        Status::Active | Status::Disabled if current || selected => {
+            Some(Background::Color(p.bg_elev))
+        }
+        Status::Active | Status::Disabled => Some(Background::Color(Color::TRANSPARENT)),
+        Status::Hovered | Status::Pressed => Some(Background::Color(p.bg_elev)),
     };
 
     ButtonStyle {
         background,
         text_color: p.text,
-        border: Border::default().rounded(studio_radius::BUTTON),
         ..ButtonStyle::default()
     }
 }

@@ -7,9 +7,9 @@ use iced::{
 use crate::{gui::message::Message, theme::gui::GuiPalette};
 
 /// Vertical EQ fader: a thin rail with a zero line, a gradient fill growing
-/// from 0 dB toward the current value and a round white handle with an accent
-/// border. Click or drag the rail to set the band gain; snaps to 0 within
-/// 0.3 dB and rounds to one decimal.
+/// from 0 dB toward the current value and a round gold handle. Click or drag
+/// the rail to set the band gain; snaps to 0 within 0.3 dB and rounds to one
+/// decimal.
 struct VFader {
     p: GuiPalette,
     max: f32,
@@ -75,10 +75,9 @@ impl canvas::Program<Message> for VFader {
         let usable = (h - HANDLE).max(1.0);
 
         frame.fill(
-            &Path::rounded_rectangle(
+            &Path::rectangle(
                 Point::new(cx - RAIL_W / 2.0, top),
                 Size::new(RAIL_W, usable),
-                2.0.into(),
             ),
             Color {
                 a: 0.35,
@@ -95,15 +94,12 @@ impl canvas::Program<Message> for VFader {
         };
         // At 0 dB the fill collapses to nothing; skip it so the rail reads clean.
         if fh > 0.5 {
+            // Gradient renders the VU level; sanctioned deviation from the flat style.
             let fill = gradient::Linear::new(Point::new(0.0, fy), Point::new(0.0, fy + fh))
                 .add_stop(0.0, self.p.accent_strong)
                 .add_stop(1.0, self.p.accent);
             frame.fill(
-                &Path::rounded_rectangle(
-                    Point::new(cx - RAIL_W / 2.0, fy),
-                    Size::new(RAIL_W, fh),
-                    2.0.into(),
-                ),
+                &Path::rectangle(Point::new(cx - RAIL_W / 2.0, fy), Size::new(RAIL_W, fh)),
                 fill,
             );
         }
@@ -121,12 +117,9 @@ impl canvas::Program<Message> for VFader {
                 .with_width(1.0),
         );
 
+        // Gold handle per the design system; kept round as a physical control.
         let handle = Path::circle(Point::new(cx, val_y), HANDLE / 2.0);
-        frame.fill(&handle, Color::WHITE);
-        frame.stroke(
-            &handle,
-            Stroke::default().with_color(self.p.accent).with_width(2.0),
-        );
+        frame.fill(&handle, self.p.accent);
 
         vec![frame.into_geometry()]
     }
@@ -174,7 +167,6 @@ impl canvas::Program<Message> for VFader {
     }
 }
 
-/// Range, current value, and pixel height for a single [`vfader`].
 #[derive(Clone, Copy)]
 pub(crate) struct VFaderParams {
     pub(crate) height: f32,
@@ -183,8 +175,6 @@ pub(crate) struct VFaderParams {
     pub(crate) value: f32,
 }
 
-/// Build a vertical EQ fader of pixel `params.height` for `band`, with
-/// `params.value` in `params.min..=params.max` dB.
 pub(crate) fn vfader<'a>(band: usize, params: VFaderParams, p: GuiPalette) -> Element<'a, Message> {
     let VFaderParams {
         value,

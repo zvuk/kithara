@@ -5,20 +5,26 @@ use kithara::prelude::StretchKind;
 use super::{app::Kithara, frontend::window_settings, message::Message, widgets::Viewport};
 use crate::gui::widgets::WaveMsg;
 
-/// View-local DJ Studio state.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct DjView {
     pub(crate) timestretch: TimestretchState,
     pub(crate) wave: Viewport,
     pub(crate) open: bool,
 }
 
-/// View-local timestretch deck state.
+impl Default for DjView {
+    fn default() -> Self {
+        Self {
+            timestretch: TimestretchState::default(),
+            wave: Viewport::default(),
+            open: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TimestretchState {
-    /// Tempo offset in percent.
     pub(crate) tempo: f32,
-    /// Tempo bound in ± percent (8 / 16 / 50 / 100).
     pub(crate) range: u8,
 }
 
@@ -52,31 +58,21 @@ impl TimestretchState {
         self.clamp_tempo();
     }
 
-    /// Playback speed multiplier for the current tempo offset.
     pub(crate) fn speed(self) -> f32 {
         1.0 + self.tempo / 100.0
     }
 }
 
-/// DJ Studio control events.
 #[derive(Debug, Clone)]
 pub(crate) enum DjMsg {
-    /// Toggle between the compact player and the DJ Studio shell.
     Toggle,
-    /// Deck waveform zoom/pan request (wheel, drag, or the `−`/`+` control).
     Wave(WaveMsg),
-    /// Set the tempo offset (± percent) from the slider.
     SetTempo(f32),
-    /// Select a tempo range bound (± percent).
     SetRange(u8),
-    /// Nudge the tempo by a small delta (± percent).
     Nudge(f32),
-    /// Reset tempo to 0 %.
     ResetTempo,
-    /// Toggle key-lock (pitch-preserving tempo).
     #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     ToggleKeyLock,
-    /// Select the time-stretch backend.
     #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     SelectBackend(StretchKind),
 }

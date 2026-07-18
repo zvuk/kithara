@@ -1,17 +1,16 @@
 use iced::{
-    Alignment, Border, Element, Length, Theme,
+    Alignment, Element, Length,
     font::Weight,
     widget::{
-        Space, Svg, button, container,
-        container::Style as ContainerStyle,
-        row,
+        Space, Svg, button, row,
         svg::{self, Handle as SvgHandle},
         text,
     },
 };
 
 use super::{
-    styles::{ghost_button_style, linear_background, mix_colors, vertical_divider},
+    module::Module,
+    styles::{ghost_button_style, vertical_divider},
     tokens::{studio_size, studio_space, studio_type},
 };
 use crate::{
@@ -23,14 +22,13 @@ pub(super) fn view_topbar(p: GuiPalette) -> Element<'static, Message> {
     let exit = button(
         text("Back to compact")
             .size(studio_type::BODY_MD)
-            .font(fonts::mono(Weight::Medium))
-            .color(p.text),
+            .font(fonts::mono(Weight::Medium)),
     )
     .padding(studio_space::BUTTON)
     .style(ghost_button_style(p))
     .on_press(Message::Dj(DjMsg::Toggle));
 
-    container(
+    Module::new().bg(p.bg_panel).pad(studio_space::TOPBAR).wrap(
         row![
             brand_mark(p, "DJ STUDIO"),
             Space::new().width(Length::Fill),
@@ -39,9 +37,6 @@ pub(super) fn view_topbar(p: GuiPalette) -> Element<'static, Message> {
         .align_y(Alignment::Center)
         .spacing(gap::SECTION_ROOMY),
     )
-    .padding(studio_space::TOPBAR)
-    .style(topbar_style(p))
-    .into()
 }
 
 pub(crate) fn brand_mark(p: GuiPalette, sub: &'static str) -> Element<'static, Message> {
@@ -54,11 +49,13 @@ pub(crate) fn brand_mark(p: GuiPalette, sub: &'static str) -> Element<'static, M
         color: Some(p.accent),
     });
 
+    // Spaced letters emulate the design-system 0.3em brand tracking; iced
+    // has no native letter-spacing.
     row![
         logo,
-        text("Kithara")
+        text("K I T H A R A")
             .size(studio_type::BRAND)
-            .font(fonts::display(Weight::Semibold))
+            .font(fonts::display(Weight::Bold))
             .color(p.text),
         vertical_divider(
             studio_size::DIVIDER,
@@ -73,16 +70,4 @@ pub(crate) fn brand_mark(p: GuiPalette, sub: &'static str) -> Element<'static, M
     .align_y(Alignment::Center)
     .spacing(gap::CONTENT)
     .into()
-}
-
-fn topbar_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
-    move |_theme| {
-        ContainerStyle::default()
-            .background(linear_background(
-                180.0,
-                p.bg_panel.scale_alpha(0.7),
-                mix_colors(p.bg_panel, p.bg_deep, 0.28).scale_alpha(0.5),
-            ))
-            .border(Border::default().width(1.0).color(p.line))
-    }
 }

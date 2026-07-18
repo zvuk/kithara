@@ -1,22 +1,17 @@
-use kithara::play::{CrossfaderBus, PlayError, PlayerImpl, apply_mix, crossfader_gain};
-use kithara_platform::sync::Arc;
+use kithara::play::{CrossfaderBus, PlayError, crossfader_gain};
 
-/// One deck's contribution to the shared session mix. `player` is a deck's
-/// `PlayerImpl`; `bus` assigns it to a crossfader side (or `Bypass` for an
-/// ordinary fader). `trim` and `muted` are per-deck level controls applied
-/// before the crossfader.
-pub struct DeckStrip {
-    pub player: Arc<PlayerImpl>,
+/// One deck's channel strip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MixStrip {
     pub bus: CrossfaderBus,
     pub trim: f32,
     pub muted: bool,
 }
 
-impl DeckStrip {
+impl MixStrip {
     #[must_use]
-    pub fn new(player: Arc<PlayerImpl>, bus: CrossfaderBus) -> Self {
+    pub fn new(bus: CrossfaderBus) -> Self {
         Self {
-            player,
             bus,
             trim: 1.0,
             muted: false,
@@ -24,56 +19,51 @@ impl DeckStrip {
     }
 }
 
-/// App-owned mix state for the shared session. It is the single owner of the
-/// app's desired mix and commits it through the common `SessionMixer`; it holds
-/// no applied graph state of its own. The crossfader curve and session actuation
-/// come from `kithara-play`, never reimplemented here.
-pub struct DeckMix {
+/// The app's desired mix. A plain value; `DeckSet` is its single owner.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MixState {
     pub position: f32,
     pub group_master: f32,
-    pub decks: Vec<DeckStrip>,
+    pub strips: Vec<MixStrip>,
 }
 
-impl DeckMix {
+impl MixState {
+    /// Deck 0 -> A, deck 1 -> B, anything further (or a lone deck) -> `Bypass`.
     #[must_use]
-    pub fn new(decks: Vec<DeckStrip>) -> Self {
+    pub fn new(count: usize) -> Self {
+        let strips = (0..count)
+            .map(|i| MixStrip::new(bus_for(i, count)))
+            .collect();
         Self {
             position: 0.5,
             group_master: 1.0,
-            decks,
+            strips,
         }
     }
 
-    /// Resolve each deck's final session-input level and actuate the whole group
-    /// in one session batch.
+    /// `trim * mute * crossfader_gain(bus, position) * group_master` per deck.
     ///
     /// # Errors
-    /// Returns [`PlayError`] if the crossfader position is invalid or the
-    /// session rejects the batch (foreign session, duplicate player, invalid
-    /// level).
-    pub fn apply(&self) -> Result<(), PlayError> {
-        let mut levels: Vec<(&PlayerImpl, f32)> = Vec::with_capacity(self.decks.len());
-        for deck in &self.decks {
-            let mute = if deck.muted { 0.0 } else { 1.0 };
-            let level = resolve_level(deck.bus, deck.trim, mute, self.position, self.group_master)?;
-            levels.push((deck.player.as_ref(), level));
-        }
-        apply_mix(levels)
+    /// Returns [`PlayError::MixPosition`] when the crossfader position is not a
+    /// finite value in `0.0..=1.0`.
+    pub fn levels(&self) -> Result<Vec<f32>, PlayError> {
+        self.strips
+            .iter()
+            .map(|strip| {
+                let gain = crossfader_gain(strip.bus, self.position)?;
+                let mute = if strip.muted { 0.0 } else { 1.0 };
+                Ok((strip.trim * mute * gain * self.group_master).clamp(0.0, 1.0))
+            })
+            .collect()
     }
 }
 
-/// `final = trim * mute * crossfader_gain(bus, position) * group_master`, all
-/// normalized factors. The crossfader coefficient is the common `kithara-play`
-/// policy, not a local curve.
-fn resolve_level(
-    bus: CrossfaderBus,
-    trim: f32,
-    mute: f32,
-    position: f32,
-    group_master: f32,
-) -> Result<f32, PlayError> {
-    let gain = crossfader_gain(bus, position)?;
-    Ok((trim * mute * gain * group_master).clamp(0.0, 1.0))
+fn bus_for(index: usize, count: usize) -> CrossfaderBus {
+    match (count >= 2, index) {
+        (true, 0) => CrossfaderBus::A,
+        (true, 1) => CrossfaderBus::B,
+        _ => CrossfaderBus::Bypass,
+    }
 }
 
 #[cfg(test)]
@@ -81,39 +71,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_b_endpoints_resolve_to_full_and_silent() {
-        assert_eq!(
-            resolve_level(CrossfaderBus::A, 1.0, 1.0, 0.0, 1.0).unwrap(),
-            1.0
-        );
-        assert_eq!(
-            resolve_level(CrossfaderBus::B, 1.0, 1.0, 0.0, 1.0).unwrap(),
-            0.0
-        );
-        assert_eq!(
-            resolve_level(CrossfaderBus::A, 1.0, 1.0, 1.0, 1.0).unwrap(),
-            0.0
-        );
-        assert_eq!(
-            resolve_level(CrossfaderBus::B, 1.0, 1.0, 1.0, 1.0).unwrap(),
-            1.0
-        );
+    fn two_decks_are_assigned_to_the_a_and_b_buses() {
+        let mix = MixState::new(2);
+        assert_eq!(mix.strips[0].bus, CrossfaderBus::A);
+        assert_eq!(mix.strips[1].bus, CrossfaderBus::B);
     }
 
     #[test]
-    fn bypass_ignores_position_and_folds_trim_mute_master() {
-        assert_eq!(
-            resolve_level(CrossfaderBus::Bypass, 0.5, 1.0, 0.3, 0.8).unwrap(),
-            0.5 * 0.8
-        );
-        assert_eq!(
-            resolve_level(CrossfaderBus::Bypass, 1.0, 0.0, 0.3, 1.0).unwrap(),
-            0.0
-        );
+    fn a_single_deck_bypasses_the_crossfader() {
+        let mix = MixState::new(1);
+        assert_eq!(mix.strips[0].bus, CrossfaderBus::Bypass);
+        assert_eq!(mix.levels().unwrap(), vec![1.0]);
     }
 
     #[test]
-    fn invalid_position_is_rejected() {
-        assert!(resolve_level(CrossfaderBus::A, 1.0, 1.0, 1.5, 1.0).is_err());
+    fn crossfader_endpoints_resolve_to_full_and_silent() {
+        let mut mix = MixState::new(2);
+
+        mix.position = 0.0;
+        assert_eq!(mix.levels().unwrap(), vec![1.0, 0.0]);
+
+        mix.position = 1.0;
+        assert_eq!(mix.levels().unwrap(), vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn trim_mute_and_group_master_fold_into_the_level() {
+        let mut mix = MixState::new(2);
+        mix.position = 0.0;
+        mix.group_master = 0.5;
+        mix.strips[0].trim = 0.5;
+        mix.strips[1].muted = true;
+
+        // Deck 0: trim 0.5 * A-gain 1.0 * master 0.5. Deck 1: muted.
+        assert_eq!(mix.levels().unwrap(), vec![0.25, 0.0]);
+    }
+
+    #[test]
+    fn an_invalid_position_is_rejected_rather_than_clamped() {
+        let mut mix = MixState::new(2);
+        mix.position = 1.5;
+        assert!(matches!(mix.levels(), Err(PlayError::MixPosition { .. })));
     }
 }

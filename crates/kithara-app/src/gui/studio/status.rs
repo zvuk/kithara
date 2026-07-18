@@ -5,7 +5,10 @@ use iced::{
 };
 use kithara::prelude::EngineLoadSnapshot;
 
-use super::tokens::{studio_radius, studio_size, studio_space, studio_type};
+use super::{
+    module::Module,
+    tokens::{studio_radius, studio_size, studio_space, studio_type},
+};
 use crate::{
     gui::{app::Kithara, fonts, message::Message, tokens::gap, view::mix_colors},
     theme::gui::GuiPalette,
@@ -30,26 +33,26 @@ pub(super) fn view_status_bar(state: &Kithara) -> Element<'static, Message> {
         status_text(format!("{track_count} tracks"), p),
     ]
     .align_y(Alignment::Center)
-    .spacing(gap::SECTION);
+    .spacing(gap::INLINE);
 
     if show_load {
         bar = bar.push(separator_text(p)).push(engine_load_view(load, p));
     }
     bar = bar.push(Space::new().width(Length::Fill));
 
-    container(bar)
-        .padding(studio_space::STATUS)
-        .style(status_style(p))
-        .into()
+    Module::new()
+        .bg(p.bg_panel_2)
+        .pad(studio_space::STATUS)
+        .height(studio_size::STATUS_HEIGHT)
+        .wrap(bar)
 }
 
-/// Audio-engine cost readout shown inline in the status bar.
 fn engine_load_view(load: EngineLoadSnapshot, p: GuiPalette) -> Element<'static, Message> {
     let pct = (load.load * 100.0).clamp(0.0, 999.0);
     row![
         status_text("load".to_string(), p),
         text(format!("{pct:.0}% \u{00b7} {:.1}ms", load.ms))
-            .size(studio_type::MONO_SM)
+            .size(studio_type::MONO_XS)
             .font(fonts::mono(Weight::Semibold))
             .color(load_color(load.load, p)),
     ]
@@ -58,7 +61,6 @@ fn engine_load_view(load: EngineLoadSnapshot, p: GuiPalette) -> Element<'static,
     .into()
 }
 
-/// Traffic-light color for an engine load fraction.
 fn load_color(load: f32, p: GuiPalette) -> Color {
     let base = if load < 0.33 {
         p.success
@@ -72,7 +74,7 @@ fn load_color(load: f32, p: GuiPalette) -> Color {
 
 fn status_text(label: String, p: GuiPalette) -> Element<'static, Message> {
     text(label)
-        .size(studio_type::MONO_SM)
+        .size(studio_type::MONO_XS)
         .font(fonts::mono(Weight::Medium))
         .color(p.muted)
         .into()
@@ -80,7 +82,7 @@ fn status_text(label: String, p: GuiPalette) -> Element<'static, Message> {
 
 fn separator_text(p: GuiPalette) -> Element<'static, Message> {
     text("|")
-        .size(studio_type::MONO_SM)
+        .size(studio_type::MONO_XS)
         .font(fonts::mono(Weight::Medium))
         .color(p.line)
         .into()
@@ -96,13 +98,4 @@ fn status_dot(color: Color) -> Element<'static, Message> {
                 .border(Border::default().rounded(studio_radius::ROUND))
         })
         .into()
-}
-
-fn status_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
-    move |_theme| {
-        ContainerStyle::default()
-            .background(p.bg_deep.scale_alpha(0.85))
-            .color(p.muted)
-            .border(Border::default().width(1.0).color(p.line))
-    }
 }

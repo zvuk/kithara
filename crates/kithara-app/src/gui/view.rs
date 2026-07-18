@@ -1,9 +1,8 @@
 use std::path::Path;
 
 use iced::{
-    Alignment, Background, Border, Color, Degrees, Element, Gradient, Length, Padding, Theme,
+    Alignment, Background, Border, Color, Element, Length, Padding, Theme,
     font::Weight,
-    gradient::Linear,
     widget::{
         Space, button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -53,7 +52,6 @@ impl Consts {
     const ALPHA_SPEED_FILL: f32 = 0.4;
 
     const ALPHA_TAB_ACTIVE_BASE: f32 = 0.12;
-    const ALPHA_TAB_ACTIVE_HOVER: f32 = 0.2;
     const ALPHA_TAB_ACTIVE_PRESSED: f32 = 0.28;
     const ALPHA_TAB_DISABLED: f32 = 0.2;
     const ALPHA_TAB_INACTIVE_HOVER: f32 = 0.8;
@@ -63,11 +61,9 @@ impl Consts {
     const ALPHA_TRANSPORT_PRESSED: f32 = 0.45;
     const BLINK_DIVISOR: u8 = 5;
     const BLINK_PERIOD: u64 = 2;
-    const BORDER_RADIUS: f32 = 12.0;
-    const BORDER_RADIUS_BUTTON: f32 = 8.0;
+    // Flat design: borders default to square corners; only the round
+    // status dot keeps a radius.
     const BORDER_RADIUS_CIRCLE: f32 = 100.0;
-    const BORDER_RADIUS_PILL: f32 = 4.0;
-    const BORDER_RADIUS_SECTION: f32 = 10.0;
     const BORDER_WIDTH: f32 = 1.0;
     /// Crossfade slider upper bound — mirrors the iOS reference (0…8s).
     const CROSSFADE_MAX: f32 = 8.0;
@@ -80,10 +76,8 @@ impl Consts {
     /// Minimum gap between bands. Anything beyond it gets soaked up by
     /// `Space::Fill` spacers so the row reads as "evenly spread".
     const EQ_BAND_MIN_GAP: f32 = 2.0;
-    /// Width of a single EQ band column — kept stable so the slider
-    /// rails stay readable. The window is allowed to grow; flex
-    /// spacers between bands absorb the extra width instead of
-    /// stretching the bands themselves.
+    /// Fixed so the rails stay readable; flex spacers absorb extra
+    /// window width instead of stretching the bands.
     const EQ_BAND_WIDTH: f32 = 28.0;
     const EQ_LABEL_FONT: f32 = 11.0;
     const EQ_MAX_DB: f32 = 6.0;
@@ -103,8 +97,6 @@ impl Consts {
     const NOW_BITRATE_FONT: f32 = 10.0;
     const NOW_COVER_SIZE: f32 = 88.0;
 
-    const NOW_GRADIENT_END_ALPHA: f32 = 0.9;
-    const NOW_GRADIENT_START_ALPHA: f32 = 0.8;
     const OUTER_PADDING: f32 = 18.0;
     const PILL_PADDING_X: f32 = 8.0;
 
@@ -123,7 +115,6 @@ impl Consts {
     const SETTINGS_LABEL_FONT: f32 = 10.0;
     const SLIDER_HANDLE_BORDER: f32 = 1.0;
     const SLIDER_HANDLE_RADIUS: f32 = 7.0;
-    const SLIDER_RAIL_RADIUS: f32 = 4.0;
     const SLIDER_RAIL_WIDTH: f32 = 4.0;
     const SMALL_FONT: f32 = 13.0;
     const SPEED_PADDING_X: f32 = 12.0;
@@ -205,8 +196,7 @@ fn view_header(state: &Kithara) -> Element<'_, Message> {
     .into()
 }
 
-/// Compact-header entry point to the DJ Studio. The studio has no tab of
-/// its own on this layout, so this button is the only way in.
+/// The studio has no tab of its own, so this button is the only way in.
 fn dj_studio_button(p: GuiPalette) -> Element<'static, Message> {
     button(
         row![
@@ -239,7 +229,7 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
     let mut meta = column![
         text(track_name)
             .size(Consts::TRACK_NAME_FONT)
-            .font(fonts::display(Weight::Semibold))
+            .font(fonts::display(Weight::Medium))
             .color(p.text),
         text(subtitle)
             .size(Consts::SMALL_FONT)
@@ -274,7 +264,7 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
     )
     .width(Length::Fill)
     .padding(gap::SECTION_ROOMY)
-    .style(now_card_style(p))
+    .style(panel_style(p))
     .into()
 }
 
@@ -629,7 +619,7 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
             row![
                 text(title)
                     .size(Consts::HEADING_FONT)
-                    .font(fonts::display(Weight::Semibold))
+                    .font(fonts::display(Weight::Bold))
                     .color(p.text),
                 Space::new().width(Length::Fill),
                 button(
@@ -656,18 +646,12 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
     .into()
 }
 
-/// Generate a short label for an EQ band by index. Mirrors the iOS
-/// reference: a log-spaced frequency between 30 Hz and 18 kHz is
-/// rendered as `60`, `200`, `1k`, `12k`, etc.; tiny EQs (≤3 bands) get
-/// the friendlier `Low`/`Mid`/`High` triplet.
+/// Log-spaced frequency between 30 Hz and 18 kHz rendered as `60`, `200`,
+/// `1k`, `12k`; tiny EQs (≤3 bands) get the `Low`/`Mid`/`High` triplet.
 pub(crate) fn eq_band_label(index: usize, total: usize) -> String {
-    /// Lower bound of the log-spaced label range, in Hz.
     const MIN_FREQ_HZ: f32 = 30.0;
-    /// Upper bound of the log-spaced label range, in Hz.
     const MAX_FREQ_HZ: f32 = 18_000.0;
-    /// Threshold above which the label switches to "Nk" notation.
     const KILO_THRESHOLD_HZ: f32 = 1_000.0;
-    /// Hz per kHz, expressed as `f32` so the cast lives in one place.
     const HZ_PER_KHZ: f32 = 1_000.0;
 
     if total <= Consts::EQ_SIMPLE_LABEL_THRESHOLD {
@@ -694,7 +678,7 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
     let mut col = column![
         text("Settings")
             .size(Consts::HEADING_FONT)
-            .font(fonts::display(Weight::Semibold))
+            .font(fonts::display(Weight::Bold))
             .color(p.text),
     ]
     .spacing(gap::INLINE_WIDE)
@@ -762,7 +746,6 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
     }
 }
 
-/// Glyph, size, tint, and padding for a ghost [`icon_button`].
 #[derive(Clone, Copy)]
 struct IconButtonStyle {
     color: Color,
@@ -786,7 +769,6 @@ fn icon_button(style: IconButtonStyle, message: Message) -> Element<'static, Mes
         .into()
 }
 
-/// Glyph, sizing, palette, and toggle state for a [`transport_square_button`].
 #[derive(Clone, Copy)]
 struct TransportButton {
     p: GuiPalette,
@@ -796,9 +778,8 @@ struct TransportButton {
     icon_size: f32,
 }
 
-/// Secondary / toggle transport button: a fixed-size rounded square. `active`
-/// drives the toggle highlight (accent fill) for shuffle and repeat; prev/next
-/// pass `false`. Hover paints a faint panel fill so the target reads as live.
+/// `active` drives the toggle highlight for shuffle and repeat; prev/next
+/// pass `false`.
 fn transport_square_button(cfg: TransportButton, message: Message) -> Element<'static, Message> {
     let TransportButton {
         icon,
@@ -839,7 +820,6 @@ fn transport_square_style(p: GuiPalette, active: bool, status: ButtonStatus) -> 
         background: Some(Background::Color(background)),
         text_color: if active { p.accent } else { p.text_dim },
         border: Border::default()
-            .rounded(Consts::BORDER_RADIUS_BUTTON)
             .width(Consts::BORDER_WIDTH)
             .color(Color::TRANSPARENT),
         ..ButtonStyle::default()
@@ -849,8 +829,9 @@ fn transport_square_style(p: GuiPalette, active: bool, status: ButtonStatus) -> 
 fn tab_button(state: &Kithara, tab: Tab, icon: Icon, label: &str) -> Element<'static, Message> {
     let p = state.palette;
     let active = state.active_tab == tab;
-    let icon_color = if active { p.accent } else { p.text_dim };
-    let label_color = if active { p.accent } else { p.text_dim };
+    // On-gold (dark) foreground over the active tab's solid accent fill.
+    let icon_color = if active { p.bg } else { p.text_dim };
+    let label_color = if active { p.bg } else { p.text_dim };
 
     let content = row![
         icon.view(Consts::TAB_ICON_SIZE, icon_color),
@@ -879,34 +860,7 @@ fn panel_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
         ContainerStyle::default()
             .background(p.bg_panel)
             .color(p.text)
-            .border(
-                Border::default()
-                    .rounded(Consts::BORDER_RADIUS)
-                    .width(Consts::BORDER_WIDTH)
-                    .color(p.line),
-            )
-    }
-}
-
-fn now_card_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
-    move |_theme| {
-        let fill = Background::Gradient(Gradient::Linear(
-            Linear::new(Degrees(180.0))
-                .add_stop(
-                    0.0,
-                    with_alpha(p.bg_panel_2, Consts::NOW_GRADIENT_START_ALPHA),
-                )
-                .add_stop(1.0, with_alpha(p.bg_panel, Consts::NOW_GRADIENT_END_ALPHA)),
-        ));
-        ContainerStyle::default()
-            .background(fill)
-            .color(p.text)
-            .border(
-                Border::default()
-                    .rounded(Consts::BORDER_RADIUS_SECTION)
-                    .width(Consts::BORDER_WIDTH)
-                    .color(p.line),
-            )
+            .border(Border::default().width(Consts::BORDER_WIDTH).color(p.line))
     }
 }
 
@@ -925,7 +879,6 @@ fn speed_control_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
             .color(p.text)
             .border(
                 Border::default()
-                    .rounded(Consts::BORDER_RADIUS_BUTTON)
                     .width(Consts::BORDER_WIDTH)
                     .color(p.line_soft),
             )
@@ -937,12 +890,7 @@ fn tab_strip_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
         ContainerStyle::default()
             .background(with_alpha(p.bg_inset, Consts::ALPHA_TAB_STRIP_FILL))
             .color(p.text)
-            .border(
-                Border::default()
-                    .rounded(Consts::BORDER_RADIUS_SECTION)
-                    .width(Consts::BORDER_WIDTH)
-                    .color(p.line),
-            )
+            .border(Border::default().width(Consts::BORDER_WIDTH).color(p.line))
     }
 }
 
@@ -967,43 +915,28 @@ fn ghost_button_style(p: GuiPalette) -> impl Fn(&Theme, ButtonStatus) -> ButtonS
         ButtonStyle {
             background,
             text_color: p.text,
-            border: Border::default().rounded(Consts::BORDER_RADIUS_BUTTON),
             ..ButtonStyle::default()
         }
     }
 }
 
 fn tab_button_style(p: GuiPalette, active: bool, status: ButtonStatus) -> ButtonStyle {
-    let base_bg = if active {
-        with_alpha(p.accent, Consts::ALPHA_TAB_ACTIVE_BASE)
-    } else {
-        Color::TRANSPARENT
-    };
+    let base_bg = if active { p.accent } else { Color::TRANSPARENT };
 
     let hover_bg = if active {
-        with_alpha(p.accent, Consts::ALPHA_TAB_ACTIVE_HOVER)
+        p.accent_strong
     } else {
         with_alpha(p.bg_panel, Consts::ALPHA_TAB_INACTIVE_HOVER)
     };
 
     let pressed_bg = if active {
-        with_alpha(p.accent, Consts::ALPHA_TAB_ACTIVE_PRESSED)
+        p.accent_strong
     } else {
         with_alpha(p.accent, Consts::ALPHA_TAB_INACTIVE_PRESSED)
     };
 
-    let active_fill = Background::Gradient(Gradient::Linear(
-        Linear::new(Degrees(180.0))
-            .add_stop(0.0, with_alpha(p.accent, 0.16))
-            .add_stop(1.0, with_alpha(p.accent, 0.08)),
-    ));
-
     let background = match status {
-        ButtonStatus::Active => Some(if active {
-            active_fill
-        } else {
-            Background::Color(base_bg)
-        }),
+        ButtonStatus::Active => Some(Background::Color(base_bg)),
         ButtonStatus::Hovered => Some(Background::Color(hover_bg)),
         ButtonStatus::Pressed => Some(Background::Color(pressed_bg)),
         ButtonStatus::Disabled => Some(Background::Color(with_alpha(
@@ -1014,9 +947,8 @@ fn tab_button_style(p: GuiPalette, active: bool, status: ButtonStatus) -> Button
 
     ButtonStyle {
         background,
-        text_color: if active { p.accent } else { p.text_dim },
+        text_color: if active { p.bg } else { p.text_dim },
         border: Border::default()
-            .rounded(Consts::BORDER_RADIUS_BUTTON)
             .width(Consts::BORDER_WIDTH)
             .color(if active {
                 with_alpha(p.accent, 0.30)
@@ -1059,7 +991,6 @@ fn playlist_item_style(p: GuiPalette, selected: bool, status: ButtonStatus) -> B
     ButtonStyle {
         background,
         text_color: p.text,
-        border: Border::default().rounded(Consts::BORDER_RADIUS_BUTTON),
         ..ButtonStyle::default()
     }
 }
@@ -1079,7 +1010,7 @@ fn slider_style(p: GuiPalette) -> impl Fn(&Theme, SliderStatus) -> SliderStyle {
                     Background::Color(with_alpha(p.muted, Consts::ALPHA_SLIDER_INACTIVE_RAIL)),
                 ),
                 width: Consts::SLIDER_RAIL_WIDTH,
-                border: Border::default().rounded(Consts::SLIDER_RAIL_RADIUS),
+                border: Border::default(),
             },
             handle: SliderHandle {
                 shape: SliderHandleShape::Circle {
@@ -1125,7 +1056,6 @@ fn pill_button<'a>(label: &str, active: bool, p: GuiPalette, msg: Message) -> El
             background: Some(Background::Color(background)),
             text_color,
             border: Border::default()
-                .rounded(Consts::BORDER_RADIUS_PILL)
                 .width(Consts::BORDER_WIDTH)
                 .color(if active { p.accent } else { p.line }),
             ..ButtonStyle::default()
@@ -1169,8 +1099,8 @@ pub(crate) fn with_alpha(color: Color, alpha: f32) -> Color {
     Color { a: alpha, ..color }
 }
 
-/// Linearly interpolate `base` toward `tint` by `amount` in `[0, 1]`
-/// (channels and alpha). Shared color-mix helper for the GUI.
+/// Linearly interpolate `base` toward `tint` by `amount` in `[0, 1]`,
+/// channels and alpha alike.
 pub(crate) fn mix_colors(base: Color, tint: Color, amount: f32) -> Color {
     let amount = amount.clamp(0.0, 1.0);
     Color::from_rgba(

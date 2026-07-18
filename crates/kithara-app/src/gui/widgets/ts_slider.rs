@@ -1,7 +1,7 @@
 use iced::{
     Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
     mouse::{self, Cursor},
-    widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, gradient},
+    widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
 };
 
 use crate::{
@@ -93,13 +93,12 @@ impl canvas::Program<Message> for TsSlider {
             );
         }
 
-        // Soft glow under the handle (2 translucent rounded passes).
+        // Soft glow under the handle (2 translucent passes).
         for &(grow, alpha) in &[(2.5, 0.16), (1.2, 0.28)] {
             frame.fill(
-                &Path::rounded_rectangle(
+                &Path::rectangle(
                     Point::new(val_x - HANDLE / 2.0 - grow, mid_y - HANDLE / 2.0 - grow),
                     Size::new(HANDLE + grow * 2.0, HANDLE + grow * 2.0),
-                    4.0.into(),
                 ),
                 Color {
                     a: alpha,
@@ -108,20 +107,11 @@ impl canvas::Program<Message> for TsSlider {
             );
         }
 
-        let handle = Path::rounded_rectangle(
+        let handle = Path::rectangle(
             Point::new(val_x - HANDLE / 2.0, mid_y - HANDLE / 2.0),
             Size::new(HANDLE, HANDLE),
-            4.0.into(),
         );
-        frame.fill(
-            &handle,
-            gradient::Linear::new(
-                Point::new(val_x, mid_y - HANDLE / 2.0),
-                Point::new(val_x, mid_y + HANDLE / 2.0),
-            )
-            .add_stop(0.0, self.p.accent_strong)
-            .add_stop(1.0, self.p.accent),
-        );
+        frame.fill(&handle, self.p.accent);
         frame.stroke(
             &handle,
             Stroke::default()
@@ -183,7 +173,6 @@ impl canvas::Program<Message> for TsSlider {
     }
 }
 
-/// Build the interactive timestretch slider for the DJ deck.
 pub(crate) fn ts_slider<'a>(tempo: f32, range: f32, p: GuiPalette) -> Element<'a, Message> {
     Canvas::new(TsSlider { p, range, tempo })
         .width(Length::Fill)
