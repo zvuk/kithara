@@ -26,3 +26,4 @@ mod session_transport;
 mod silvercomet_seek_hang;
 mod source_audio_sidecar;
 mod track_binding;
+mod transport_artifact;
