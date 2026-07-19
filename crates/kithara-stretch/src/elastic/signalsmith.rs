@@ -1,5 +1,6 @@
 use std::fmt;
 
+use num_traits::ToPrimitive;
 use signalsmith_stretch::Stretch;
 
 use super::{
@@ -10,16 +11,38 @@ use super::{
 /// Prepared Signalsmith engine for continuous, exact-frame elastic rendering.
 #[non_exhaustive]
 pub struct SignalsmithElastic {
-    inner: Stretch,
-    config: ElasticConfig,
     capabilities: ElasticCapabilities,
+    config: ElasticConfig,
+    inner: Stretch,
+}
+
+impl ElasticRateEnvelope {
+    const SIGNALSMITH_MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0 / 3.0;
+    const SIGNALSMITH_MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 2.0 / 3.0;
+
+    pub(crate) fn contains(self, request: ElasticRequest) -> bool {
+        request
+            .source_frames()
+            .to_f64()
+            .zip(request.output_frames().to_f64())
+            .is_some_and(|(source_frames, output_frames)| {
+                self.contains_rate(source_frames / output_frames)
+            })
+    }
+
+    pub(crate) const fn signalsmith() -> Self {
+        Self {
+            max_source_frames_per_output: Self::SIGNALSMITH_MAX_SOURCE_FRAMES_PER_OUTPUT,
+            min_source_frames_per_output: Self::SIGNALSMITH_MIN_SOURCE_FRAMES_PER_OUTPUT,
+        }
+    }
 }
 
 impl SignalsmithElastic {
-    /// Returns the source-frame rate range accepted by this backend.
-    #[must_use]
-    pub const fn rate_envelope() -> ElasticRateEnvelope {
-        ElasticRateEnvelope::signalsmith()
+    fn expected_samples(&self, frames: usize) -> Result<usize, ElasticError> {
+        frames
+            .checked_mul(self.config.channels())
+            .ok_or(ElasticError::SampleCountOverflow)
     }
 
     /// Allocates and initializes the engine outside the real-time render core.
@@ -38,10 +61,10 @@ impl SignalsmithElastic {
         })
     }
 
-    fn expected_samples(&self, frames: usize) -> Result<usize, ElasticError> {
-        frames
-            .checked_mul(self.config.channels())
-            .ok_or(ElasticError::SampleCountOverflow)
+    /// Returns the source-frame rate range accepted by this backend.
+    #[must_use]
+    pub const fn rate_envelope() -> ElasticRateEnvelope {
+        ElasticRateEnvelope::signalsmith()
     }
 
     fn validate(
@@ -89,17 +112,6 @@ impl SignalsmithElastic {
 impl ElasticBackend for SignalsmithElastic {
     fn capabilities(&self) -> ElasticCapabilities {
         self.capabilities
-    }
-
-    fn process(
-        &mut self,
-        request: ElasticRequest,
-        source: &[f32],
-        output: &mut [f32],
-    ) -> Result<(), ElasticError> {
-        self.validate(request, source.len(), output.len())?;
-        self.inner.process(source, output);
-        Ok(())
     }
 
     fn prime(
@@ -150,9 +162,19 @@ impl ElasticBackend for SignalsmithElastic {
         Ok(())
     }
 
+    fn process(
+        &mut self,
+        request: ElasticRequest,
+        source: &[f32],
+        output: &mut [f32],
+    ) -> Result<(), ElasticError> {
+        self.validate(request, source.len(), output.len())?;
+        self.inner.process(source, output);
+        Ok(())
+    }
+
     fn reset(&mut self) {
-        // Signalsmith sizes every reset vector during configure; reset only clears
-        // and copy-assigns the same shapes, so their existing capacity is reused.
+        // WHY: Signalsmith sizes reset vectors during configure, so reset reuses capacity.
         self.inner.reset();
     }
 }

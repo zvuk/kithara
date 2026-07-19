@@ -8,33 +8,27 @@ use super::{ElasticError, ElasticLatency, ElasticRateEnvelope, ElasticRequest};
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ElasticCapabilities {
+    latency: ElasticLatency,
+    rate_envelope: ElasticRateEnvelope,
+    supports_reverse: bool,
     sample_rate: u32,
     channels: usize,
-    rate_envelope: ElasticRateEnvelope,
-    latency: ElasticLatency,
-    max_source_frames: usize,
     max_output_frames: usize,
-    supports_reverse: bool,
+    max_source_frames: usize,
 }
 
 impl ElasticCapabilities {
     #[cfg(feature = "stretch-signalsmith")]
     pub(crate) const fn new(config: ElasticConfig, latency: ElasticLatency) -> Self {
         Self {
+            latency,
             sample_rate: config.sample_rate(),
             channels: config.channels(),
             rate_envelope: ElasticRateEnvelope::signalsmith(),
-            latency,
             max_source_frames: config.max_source_frames(),
             max_output_frames: config.max_output_frames(),
             supports_reverse: true,
         }
-    }
-
-    /// Prepared source sample rate in Hz.
-    #[must_use]
-    pub const fn sample_rate(self) -> u32 {
-        self.sample_rate
     }
 
     /// Prepared interleaved channel count.
@@ -43,16 +37,16 @@ impl ElasticCapabilities {
         self.channels
     }
 
-    /// Supported source-frame advance range.
-    #[must_use]
-    pub const fn rate_envelope(self) -> ElasticRateEnvelope {
-        self.rate_envelope
-    }
-
     /// Fixed algorithmic latency in both coordinate spaces.
     #[must_use]
     pub const fn latency(self) -> ElasticLatency {
         self.latency
+    }
+
+    /// Largest accepted output block in frames.
+    #[must_use]
+    pub const fn max_output_frames(self) -> usize {
+        self.max_output_frames
     }
 
     /// Largest accepted source block in frames.
@@ -61,10 +55,16 @@ impl ElasticCapabilities {
         self.max_source_frames
     }
 
-    /// Largest accepted output block in frames.
+    /// Supported source-frame advance range.
     #[must_use]
-    pub const fn max_output_frames(self) -> usize {
-        self.max_output_frames
+    pub const fn rate_envelope(self) -> ElasticRateEnvelope {
+        self.rate_envelope
+    }
+
+    /// Prepared source sample rate in Hz.
+    #[must_use]
+    pub const fn sample_rate(self) -> u32 {
+        self.sample_rate
     }
 
     /// Whether the engine accepts source prepared in reverse audible order.

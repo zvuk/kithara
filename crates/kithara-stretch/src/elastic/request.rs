@@ -7,8 +7,8 @@ use super::ElasticError;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ElasticRequest {
-    source_frames: usize,
     output_frames: usize,
+    source_frames: usize,
 }
 
 impl ElasticRequest {
@@ -23,21 +23,21 @@ impl ElasticRequest {
             return Err(ElasticError::EmptyOutput);
         }
         Ok(Self {
-            source_frames,
             output_frames,
+            source_frames,
         })
-    }
-
-    /// Number of source frames consumed by this request.
-    #[must_use]
-    pub const fn source_frames(self) -> usize {
-        self.source_frames
     }
 
     /// Number of output frames filled by this request.
     #[must_use]
     pub const fn output_frames(self) -> usize {
         self.output_frames
+    }
+
+    /// Number of source frames consumed by this request.
+    #[must_use]
+    pub const fn source_frames(self) -> usize {
+        self.source_frames
     }
 
     #[cfg(feature = "stretch-signalsmith")]

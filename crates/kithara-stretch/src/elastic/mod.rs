@@ -13,8 +13,8 @@ pub use error::ElasticError;
 mod latency;
 pub use latency::ElasticLatency;
 
-mod rate_envelope;
-pub use rate_envelope::ElasticRateEnvelope;
+mod rate;
+pub use rate::ElasticRateEnvelope;
 
 mod request;
 pub use request::ElasticRequest;

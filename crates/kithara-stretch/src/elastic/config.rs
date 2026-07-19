@@ -6,8 +6,8 @@ use super::ElasticError;
 pub struct ElasticConfig {
     sample_rate: u32,
     channels: usize,
-    max_source_frames: usize,
     max_output_frames: usize,
+    max_source_frames: usize,
 }
 
 impl ElasticConfig {
@@ -44,15 +44,9 @@ impl ElasticConfig {
         Ok(Self {
             sample_rate,
             channels,
-            max_source_frames,
             max_output_frames,
+            max_source_frames,
         })
-    }
-
-    /// Source sample rate in Hz.
-    #[must_use]
-    pub const fn sample_rate(self) -> u32 {
-        self.sample_rate
     }
 
     /// Interleaved channel count.
@@ -61,15 +55,21 @@ impl ElasticConfig {
         self.channels
     }
 
+    /// Largest accepted output block in frames.
+    #[must_use]
+    pub const fn max_output_frames(self) -> usize {
+        self.max_output_frames
+    }
+
     /// Largest accepted source block in frames.
     #[must_use]
     pub const fn max_source_frames(self) -> usize {
         self.max_source_frames
     }
 
-    /// Largest accepted output block in frames.
+    /// Source sample rate in Hz.
     #[must_use]
-    pub const fn max_output_frames(self) -> usize {
-        self.max_output_frames
+    pub const fn sample_rate(self) -> u32 {
+        self.sample_rate
     }
 }
