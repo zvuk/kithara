@@ -1,12 +1,15 @@
 use kithara_bufpool::PcmPool;
 use kithara_platform::{CancelToken, sync::Arc};
 
-use super::super::{
-    core::PlayerImpl,
-    state::{
-        items::{BoundLoad, restore_queued_resource},
-        playlist::{Playlist, PreparedBindingStamp},
+use super::{
+    super::{
+        core::PlayerImpl,
+        state::{
+            items::{BoundLoad, restore_queued_resource},
+            playlist::{Playlist, PreparedBindingStamp},
+        },
     },
+    ItemLoadContext,
 };
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding},
@@ -19,36 +22,6 @@ use crate::{
 };
 
 pub(crate) enum PreparedBindingResource {}
-
-pub(crate) struct ItemLoadContext<'a> {
-    pub(crate) rate: f32,
-    pub(crate) pitch_bend: f32,
-    pub(crate) shape: StreamShape,
-    pub(crate) pool: &'a PcmPool,
-    pub(crate) stamp: PreparedBindingStamp,
-    pub(crate) cancel: CancelToken,
-}
-
-impl<'a> ItemLoadContext<'a> {
-    pub(crate) const fn new(
-        rate: f32,
-        pitch_bend: f32,
-        _tempo: Option<Tempo>,
-        shape: StreamShape,
-        pool: &'a PcmPool,
-        stamp: PreparedBindingStamp,
-        cancel: CancelToken,
-    ) -> Self {
-        Self {
-            rate,
-            pitch_bend,
-            shape,
-            pool,
-            stamp,
-            cancel,
-        }
-    }
-}
 
 impl PlayerImpl {
     pub(in crate::player) fn validate_session_tempo(
@@ -140,8 +113,11 @@ pub(crate) fn prepare_bound_load(
     prepared: Option<PreparedBindingResource>,
     context: ItemLoadContext<'_>,
 ) -> Result<BoundLoad, PlayError> {
-    let _ = context.stamp;
-    drop((prepared, context));
+    let ItemLoadContext {
+        tempo: _binding_tempo,
+        ..
+    } = context;
+    drop(prepared);
     restore_queued_resource(playlist, index, None, resource)?;
     Err(PlayError::Internal(
         "browser queue unexpectedly contained a bound resource".into(),

@@ -194,7 +194,6 @@ impl PlayerImpl {
                 self.core.timestretch.speed(),
                 self.core.params.pitch_bend(),
                 tempo,
-                shape,
                 self.core.engine.pcm_pool(),
                 stamp,
                 cancel,

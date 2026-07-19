@@ -349,7 +349,7 @@ impl ItemQueue {
             .map_or(0.0, |duration| duration.as_secs_f64());
         let rate = context.rate;
         let pitch_bend = context.pitch_bend;
-        let shape = context.shape;
+        let shape = context.stamp.shape;
         let BoundLoad {
             player_resource,
             prepared_stamp,
@@ -558,7 +558,6 @@ mod tests {
             1.0,
             1.0,
             Some(Tempo::new(120.0).expect("valid tempo")),
-            shape,
             pool,
             PreparedBindingStamp::new(shape, 0),
             cancel,

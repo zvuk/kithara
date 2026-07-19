@@ -3,15 +3,18 @@ use kithara_bufpool::PcmPool;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stretch::{ElasticError, ElasticRateEnvelope, SignalsmithElastic};
 
-use super::super::{
-    core::PlayerImpl,
-    state::{
-        items::{
-            BoundLoad, DispatchedLoad, ItemQueue, JoinLoad, LoadTransaction,
-            restore_queued_resource,
+use super::{
+    super::{
+        core::PlayerImpl,
+        state::{
+            items::{
+                BoundLoad, DispatchedLoad, ItemQueue, JoinLoad, LoadTransaction,
+                restore_queued_resource,
+            },
+            playlist::{Playlist, PreparedBindingStamp, QueuedResource},
         },
-        playlist::{Playlist, PreparedBindingStamp, QueuedResource},
     },
+    ItemLoadContext,
 };
 use crate::{
     api::{PlayerStatus, SessionBeat, SessionTransportSnapshot, SlotId, Tempo, TrackBinding},
@@ -31,38 +34,6 @@ use crate::{
 pub(crate) struct PreparedBindingResource {
     pub(crate) renderer: PreparedElasticRenderer,
     pub(crate) stamp: PreparedBindingStamp,
-}
-
-pub(crate) struct ItemLoadContext<'a> {
-    pub(crate) rate: f32,
-    pub(crate) pitch_bend: f32,
-    pub(crate) tempo: Option<Tempo>,
-    pub(crate) shape: StreamShape,
-    pub(crate) pool: &'a PcmPool,
-    pub(crate) stamp: PreparedBindingStamp,
-    pub(crate) cancel: CancelToken,
-}
-
-impl<'a> ItemLoadContext<'a> {
-    pub(crate) const fn new(
-        rate: f32,
-        pitch_bend: f32,
-        tempo: Option<Tempo>,
-        shape: StreamShape,
-        pool: &'a PcmPool,
-        stamp: PreparedBindingStamp,
-        cancel: CancelToken,
-    ) -> Self {
-        Self {
-            rate,
-            pitch_bend,
-            tempo,
-            shape,
-            pool,
-            stamp,
-            cancel,
-        }
-    }
 }
 
 impl PlayerImpl {
@@ -193,7 +164,6 @@ impl PlayerImpl {
                 self.core.timestretch.speed(),
                 self.core.params.pitch_bend(),
                 Some(current.tempo()),
-                stamp.shape,
                 self.core.engine.pcm_pool(),
                 stamp,
                 cancel,
@@ -461,7 +431,12 @@ pub(crate) fn prepare_bound_load(
         stamp: prepared_stamp,
     } = prepared;
     let abr_handle = renderer.abr_handle();
-    prepare_resource(&resource, context.rate, context.pitch_bend, context.shape);
+    prepare_resource(
+        &resource,
+        context.rate,
+        context.pitch_bend,
+        context.stamp.shape,
+    );
     resource.set_service_class(ServiceClass::Idle);
     let src = Arc::clone(resource.src());
     let mut player_resource = PlayerResource::new_elastic(resource, src);
