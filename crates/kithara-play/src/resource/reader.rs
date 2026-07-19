@@ -5,11 +5,6 @@ use kithara_audio::{
     Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
     ServiceClass, SourceAudioReader,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_audio::{
-    SourceAudioActivity, SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome,
-    SourceFrameRange,
-};
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
@@ -49,7 +44,7 @@ use super::{ResourceBlueprint, ResourceConfig, SourceType};
 #[fieldwork(opt_in, get)]
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
-    source_audio: Option<SourceAudioReader>,
+    pub(super) source_audio: Option<SourceAudioReader>,
     blueprint: Option<ResourceBlueprint>,
     pub(super) supports_reverse_source: bool,
     #[field(get, deref = false)]
@@ -293,58 +288,6 @@ impl Resource {
     #[must_use]
     pub fn blueprint(&self) -> Option<ResourceBlueprint> {
         self.blueprint.clone()
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn activate_source_audio_authoritative(&mut self) -> Result<bool, SourceAudioError> {
-        let Some(source_audio) = self.source_audio.as_mut() else {
-            return Ok(false);
-        };
-        source_audio.activate_authoritative(self.inner.spec())?;
-        Ok(true)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn take_source_audio_activity(&mut self) -> Option<SourceAudioActivity> {
-        self.source_audio
-            .as_mut()
-            .and_then(SourceAudioReader::take_activity)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn deactivate_source_audio(&mut self) -> Result<(), SourceAudioError> {
-        if let Some(source_audio) = self.source_audio.as_mut() {
-            source_audio.deactivate()?;
-            source_audio.poll();
-        }
-        Ok(())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn request_source_audio(
-        &mut self,
-        range: SourceFrameRange,
-        look_ahead_frames: u64,
-    ) -> Result<Option<SourceAudioDemand>, SourceAudioError> {
-        let Some(source_audio) = self.source_audio.as_mut() else {
-            return Ok(None);
-        };
-        source_audio
-            .request(range, look_ahead_frames, self.inner.preload_epoch())
-            .map(Some)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn read_source_audio(
-        &mut self,
-        demand: &SourceAudioDemand,
-        range: SourceFrameRange,
-        output: &mut [f32],
-    ) -> Result<Option<SourceAudioReadOutcome>, SourceAudioError> {
-        self.source_audio
-            .as_mut()
-            .map(|source_audio| source_audio.read_range_into(demand, range, output))
-            .transpose()
     }
 }
 
