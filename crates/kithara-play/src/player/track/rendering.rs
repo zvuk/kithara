@@ -506,13 +506,13 @@ fn quantize_segments(
 }
 
 fn validate_continuity(segments: &[ContinuousSegment]) -> Result<(), ElasticRenderError> {
-    for pair in segments.windows(2) {
-        if (pair[0].source_end - pair[1].source_start).abs() > PhasePlan::CONTINUITY_EPSILON {
-            return Err(ElasticRenderError::DiscontinuousSource {
-                expected: pair[0].source_end,
-                actual: pair[1].source_start,
-            });
-        }
+    if let Some(pair) = segments.windows(2).find(|pair| {
+        (pair[0].source_end - pair[1].source_start).abs() > PhasePlan::CONTINUITY_EPSILON
+    }) {
+        return Err(ElasticRenderError::DiscontinuousSource {
+            expected: pair[0].source_end,
+            actual: pair[1].source_start,
+        });
     }
     Ok(())
 }

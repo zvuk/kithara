@@ -177,14 +177,18 @@ impl PlayerNodeProcessor {
             [const { None }; Self::MAX_TRACKS];
         let mut count = 0;
 
-        for (key, idx) in self.tracks.iter_keys() {
-            if let Some(track) = self.tracks.get_by_index(*idx)
-                && track.state() == TrackState::Finished
-                && count < Self::MAX_TRACKS
-            {
-                finished[count] = Some((Arc::clone(key), *idx));
-                count += 1;
-            }
+        for (key, idx) in self
+            .tracks
+            .iter_keys()
+            .filter(|(_, idx)| {
+                self.tracks
+                    .get_by_index(**idx)
+                    .is_some_and(|track| track.state() == TrackState::Finished)
+            })
+            .take(Self::MAX_TRACKS)
+        {
+            finished[count] = Some((Arc::clone(key), *idx));
+            count += 1;
         }
 
         // Superpowered-style end-of-queue resume: if removing the finished
@@ -362,13 +366,14 @@ impl PlayerNodeProcessor {
         // Decoded-ahead frontier comes from the leading track's lock-free
         // snapshot (always `>=` position) — the authoritative buffered/playable
         // window the FFI polls for loaded ranges.
-        for (_, track) in self.tracks.iter() {
-            if track.state().is_leading() {
-                self.playback
-                    .frontier
-                    .store(track.decoded_frontier(), Ordering::Relaxed);
-                break;
-            }
+        let leading = self
+            .tracks
+            .iter()
+            .find_map(|(_, track)| track.state().is_leading().then_some(track));
+        if let Some(track) = leading {
+            self.playback
+                .frontier
+                .store(track.decoded_frontier(), Ordering::Relaxed);
         }
 
         if let Some((position, duration)) = leading_outcome {
@@ -377,16 +382,13 @@ impl PlayerNodeProcessor {
             return;
         }
 
-        for (_, track) in self.tracks.iter() {
-            if track.state().is_leading() {
-                self.playback
-                    .position
-                    .store(track.position(), Ordering::Relaxed);
-                self.playback
-                    .duration
-                    .store(track.duration(), Ordering::Relaxed);
-                break;
-            }
+        if let Some(track) = leading {
+            self.playback
+                .position
+                .store(track.position(), Ordering::Relaxed);
+            self.playback
+                .duration
+                .store(track.duration(), Ordering::Relaxed);
         }
     }
 
