@@ -6,6 +6,7 @@ use kithara_ui::{
         ControlCatalog, ControlKindDesc, EndpointCategory, EndpointDesc, EndpointRegistry,
         PropKind, ValueKind,
     },
+    size::{Dim, SizeSpec},
 };
 
 #[derive(Default)]
@@ -47,28 +48,54 @@ pub(crate) fn catalog() -> AppCatalog {
     let mut catalog = AppCatalog::default();
     catalog.insert(
         "text",
-        ControlKindDesc::new(Some(ValueKind::Text), None).with_prop("style", PropKind::Text),
+        ControlKindDesc::new(Some(ValueKind::Text), None)
+            .with_prop("style", PropKind::Text)
+            .with_size(SizeSpec::new(Dim::Fill, Dim::Fixed(18.0))),
     );
     catalog.insert(
         "button",
         ControlKindDesc::new(Some(ValueKind::Bool), Some(ValueKind::Trigger))
-            .with_prop("label", PropKind::Text),
+            .with_prop("label", PropKind::Text)
+            .with_size(SizeSpec::new(
+                Dim::Range {
+                    min: 44.0,
+                    max: None,
+                },
+                Dim::Fixed(28.0),
+            )),
     );
     catalog.insert(
         "telemetry.scalar",
-        ControlKindDesc::new(Some(ValueKind::Scalar), None).with_prop("format", PropKind::Text),
+        ControlKindDesc::new(Some(ValueKind::Scalar), None)
+            .with_prop("format", PropKind::Text)
+            .with_size(SizeSpec::new(Dim::Fixed(64.0), Dim::Fixed(18.0))),
     );
     catalog.insert(
         "fader.horizontal",
-        ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
+        ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar)).with_size(
+            SizeSpec::new(
+                Dim::Range {
+                    min: 120.0,
+                    max: None,
+                },
+                Dim::Fixed(24.0),
+            ),
+        ),
     );
     catalog.insert(
         "waveform.mini",
-        ControlKindDesc::new(Some(ValueKind::Waveform), Some(ValueKind::Scalar)),
+        ControlKindDesc::new(Some(ValueKind::Waveform), Some(ValueKind::Scalar))
+            .with_size(SizeSpec::new(Dim::Fill, Dim::Fixed(56.0))),
     );
     catalog.insert(
         "track_list",
-        ControlKindDesc::new(Some(ValueKind::TrackList), None),
+        ControlKindDesc::new(Some(ValueKind::TrackList), None).with_size(SizeSpec::new(
+            Dim::Fill,
+            Dim::Range {
+                min: 160.0,
+                max: None,
+            },
+        )),
     );
     catalog
 }
@@ -147,5 +174,23 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("{preset}: {error}"));
         }
+    }
+
+    #[kithara::test]
+    fn player_window_size_is_derived_from_catalog() {
+        let ui = compile(
+            builtin::PLAYER_PRESET,
+            &builtin::resolver(),
+            &catalog(),
+            &registry(),
+            &Limits::default(),
+        )
+        .unwrap_or_else(|error| panic!("player preset must compile: {error}"));
+
+        // The catalog declares real component sizes, so the root composes to a
+        // positive minimum on both axes — the window derives from constraints
+        // rather than a hardcoded default.
+        assert!(ui.size.w.min() > 0.0, "width min: {}", ui.size.w.min());
+        assert!(ui.size.h.min() > 0.0, "height min: {}", ui.size.h.min());
     }
 }

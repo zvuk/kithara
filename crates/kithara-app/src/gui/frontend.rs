@@ -2,6 +2,10 @@ use iced::{Size, window::Settings};
 use kithara::play::StretchControls;
 use kithara_platform::{sync::Arc, tokio};
 use kithara_queue::Queue;
+use kithara_ui::{
+    compile::CompiledUi,
+    size::{Dim, SizeSpec},
+};
 
 use super::{app::Kithara, fonts, update, view};
 use crate::{
@@ -10,42 +14,21 @@ use crate::{
     theme::gui,
 };
 
-mod consts {
-    pub(super) const MODULAR_MICRO_WIDTH: f32 = 560.0;
-    pub(super) const MODULAR_MICRO_HEIGHT: f32 = 96.0;
-    pub(super) const MODULAR_MICRO_MIN_WIDTH: f32 = 420.0;
-    pub(super) const MODULAR_MICRO_MIN_HEIGHT: f32 = 72.0;
+/// Degraded-mode window size used only when the preset failed to compile, so
+/// the error window still has usable dimensions. Builtin presets are tested to
+/// compile, so this is never hit in normal operation.
+const ERROR_FALLBACK: SizeSpec = SizeSpec::new(Dim::Fixed(360.0), Dim::Fixed(240.0));
 
-    pub(super) const MODULAR_PLAYER_WIDTH: f32 = 448.0;
-    pub(super) const MODULAR_PLAYER_HEIGHT: f32 = 640.0;
-    pub(super) const MODULAR_PLAYER_MIN_WIDTH: f32 = 400.0;
-    pub(super) const MODULAR_PLAYER_MIN_HEIGHT: f32 = 560.0;
-}
-use consts::*;
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum WindowMode {
-    ModularMicro,
-    ModularPlayer,
-}
-
-/// Window settings per mode. A mode swap opens a fresh window rather than
-/// resizing the live one. Close is handled via `close_requests()`, so the
-/// programmatic swap-close does not exit the app.
-pub(crate) fn window_settings(mode: WindowMode) -> Settings {
-    let (size, min_size) = match mode {
-        WindowMode::ModularMicro => (
-            Size::new(MODULAR_MICRO_WIDTH, MODULAR_MICRO_HEIGHT),
-            Size::new(MODULAR_MICRO_MIN_WIDTH, MODULAR_MICRO_MIN_HEIGHT),
-        ),
-        WindowMode::ModularPlayer => (
-            Size::new(MODULAR_PLAYER_WIDTH, MODULAR_PLAYER_HEIGHT),
-            Size::new(MODULAR_PLAYER_MIN_WIDTH, MODULAR_PLAYER_MIN_HEIGHT),
-        ),
-    };
+/// Window settings derived from the compiled UI's intrinsic size: the window's
+/// minimum and initial size are the composed minimum of the root. A preset swap
+/// opens a fresh window rather than resizing the live one; close is handled via
+/// `close_requests()`, so the programmatic swap-close does not exit the app.
+pub(crate) fn window_settings(compiled: Option<&CompiledUi>) -> Settings {
+    let size = compiled.map_or(ERROR_FALLBACK, |ui| ui.size);
+    let dims = Size::new(size.w.min(), size.h.min());
     Settings {
-        size,
-        min_size: Some(min_size),
+        size: dims,
+        min_size: Some(dims),
         exit_on_close_request: false,
         ..Settings::default()
     }

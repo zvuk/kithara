@@ -60,6 +60,12 @@ impl ControlKindDesc {
         self.props.insert(name.to_owned(), kind);
         self
     }
+
+    #[must_use]
+    pub fn with_size(mut self, size: SizeSpec) -> Self {
+        self.size = size;
+        self
+    }
 }
 
 pub trait ControlCatalog {

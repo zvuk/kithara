@@ -7,11 +7,7 @@ use kithara_ui::{
 use tracing::error;
 
 use super::{ModularMsg, ModularView, dispatch, endpoints};
-use crate::gui::{
-    app::Kithara,
-    frontend::{WindowMode, window_settings},
-    message::Message,
-};
+use crate::gui::{app::Kithara, frontend::window_settings, message::Message};
 
 pub(crate) fn update(state: &mut Kithara, message: ModularMsg) -> Task<Message> {
     match message {
@@ -49,7 +45,7 @@ fn select_preset(state: &mut Kithara, preset: &str) -> Task<Message> {
     match compile_preset(preset) {
         Ok(compiled) => {
             commit_preset(&mut state.modular, preset, compiled);
-            replace_main_window(state, preset_window_mode(preset))
+            replace_main_window(state)
         }
         Err(error) => {
             error!(error = %error, preset, "modular preset compile failed");
@@ -79,17 +75,9 @@ fn commit_preset(modular: &mut ModularView, preset: &str, compiled: CompiledUi) 
     modular.error = None;
 }
 
-fn preset_window_mode(preset: &str) -> WindowMode {
-    if preset == builtin::PLAYER_PRESET {
-        WindowMode::ModularPlayer
-    } else {
-        WindowMode::ModularMicro
-    }
-}
-
-fn replace_main_window(state: &mut Kithara, mode: WindowMode) -> Task<Message> {
+fn replace_main_window(state: &mut Kithara) -> Task<Message> {
     let old = state.window_id;
-    let (new_id, open) = window::open(window_settings(mode));
+    let (new_id, open) = window::open(window_settings(state.modular.compiled.as_ref()));
     state.window_id = Some(new_id);
     let close_old = old.map_or_else(Task::none, window::close);
     open.discard().chain(close_old)

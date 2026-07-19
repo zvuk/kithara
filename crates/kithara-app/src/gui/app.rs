@@ -7,7 +7,7 @@ use iced::{
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    frontend::{WindowMode, window_settings},
+    frontend::window_settings,
     message::Message,
     modular::{ModularView, initial_view},
     subscription::subscription_config,
@@ -55,7 +55,7 @@ impl Kithara {
             window_id: None,
         };
 
-        let (id, open) = window::open(window_settings(WindowMode::ModularPlayer));
+        let (id, open) = window::open(window_settings(state.modular.compiled.as_ref()));
         state.window_id = Some(id);
 
         (state, open.discard())
