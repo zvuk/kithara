@@ -37,3 +37,12 @@ filename is a sha256 of the key — a `std` hasher is not stable across toolchai
 versions and would orphan every blob. Because the key is the source location
 and not the bytes, a file overwritten in place keeps its key until the version
 is bumped (acceptable for a library of stable files).
+
+## Modular Window Sizing
+
+`AppConfig.window_sizing` owns the main window's fixed renderer chrome,
+absolute minimum dimensions, and comfortable initial-size scale. The dimension
+floors are user-facing defaults that keep valid Fill-only presets usable. If a
+preset fails to compile, `ERROR_FALLBACK` supplies a degraded error-window body
+size; this is an explicit degraded-mode default, not a fallback that masks a
+state-resolution bug.

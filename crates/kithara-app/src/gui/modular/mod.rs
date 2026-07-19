@@ -1,6 +1,6 @@
 mod controls;
 mod dispatch;
-mod endpoints;
+pub(crate) mod endpoints;
 mod filter;
 mod mini_wave;
 mod msg;

@@ -153,7 +153,7 @@ mod tests {
     use kithara_ui::{
         compile::compile,
         module::BindingRef,
-        source::{Limits, MemResolver},
+        source::{MemResolver, UiConfig},
     };
 
     use super::find_control;
@@ -200,7 +200,7 @@ mod tests {
             &resolver,
             &endpoints::catalog(),
             &endpoints::registry(),
-            &Limits::default(),
+            &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("mini layout must compile: {error}"));
 

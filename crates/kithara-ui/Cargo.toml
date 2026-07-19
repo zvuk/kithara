@@ -12,6 +12,7 @@ categories = ["gui", "config"]
 [dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
+bon = { workspace = true }
 derive_more = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true }

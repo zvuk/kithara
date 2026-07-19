@@ -8,7 +8,7 @@ use kithara_ui::{
     expand::ExpandedNode,
     module::PropValue,
     size::{Dim, SizeSpec},
-    source::{Limits, MemResolver},
+    source::{Limits, MemResolver, UiConfig},
 };
 
 fn resolver() -> MemResolver {
@@ -22,7 +22,7 @@ fn compiles_micro_layout_end_to_end() {
         &resolver(),
         &common::player_catalog(),
         &common::player_registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .unwrap();
     let CompiledNode::Module { instance, .. } = &ui.root else {
@@ -54,7 +54,7 @@ fn layout_module_size_override_wins_over_computed_size() {
         &resolver,
         &common::player_catalog(),
         &common::player_registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .unwrap();
     let expected = SizeSpec::new(Dim::Fixed(100.0), Dim::Fixed(50.0));
@@ -80,7 +80,7 @@ fn unknown_endpoint_fails_with_module_origin_and_path() {
         &resolver,
         &common::player_catalog(),
         &common::player_registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .unwrap_err();
     assert!(matches!(
@@ -104,7 +104,7 @@ fn node_limit_is_enforced() {
         &resolver(),
         &common::player_catalog(),
         &common::player_registry(),
-        &limits,
+        &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
     assert!(matches!(error, UiDocError::NodesExceeded { max: 1, .. }));
@@ -131,7 +131,7 @@ fn layout_parameter_reference_is_unresolved() {
         &resolver,
         &common::player_catalog(),
         &common::player_registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .unwrap_err();
     assert!(matches!(
@@ -164,7 +164,7 @@ fn layout_doubled_dollar_passes_literal_dollar() {
         &resolver,
         &common::player_catalog(),
         &common::player_registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = ui.root else {
@@ -195,7 +195,7 @@ fn oversized_layout_source_is_rejected() {
         &resolver,
         &common::player_catalog(),
         &common::player_registry(),
-        &limits,
+        &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
     assert!(matches!(
@@ -230,7 +230,7 @@ fn fifty_empty_columns_exceed_node_limit() {
         &resolver,
         &common::player_catalog(),
         &common::player_registry(),
-        &limits,
+        &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
     assert!(

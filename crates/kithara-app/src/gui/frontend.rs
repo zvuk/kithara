@@ -9,26 +9,27 @@ use kithara_ui::{
 
 use super::{app::Kithara, fonts, update, view};
 use crate::{
-    config::AppConfig,
+    config::{AppConfig, WindowSizing},
     frontend::{Frontend, FrontendError},
     theme::gui,
 };
 
-/// Degraded-mode window size used only when the preset failed to compile, so
-/// the error window still has usable dimensions. Builtin presets are tested to
-/// compile, so this is never hit in normal operation.
 const ERROR_FALLBACK: SizeSpec = SizeSpec::new(Dim::Fixed(360.0), Dim::Fixed(240.0));
 
-/// Window settings derived from the compiled UI's intrinsic size: the window's
-/// minimum and initial size are the composed minimum of the root. A preset swap
-/// opens a fresh window rather than resizing the live one; close is handled via
-/// `close_requests()`, so the programmatic swap-close does not exit the app.
-pub(crate) fn window_settings(compiled: Option<&CompiledUi>) -> Settings {
+/// Derives main-window settings from the compiled body and app window policy.
+pub(crate) fn window_settings(compiled: Option<&CompiledUi>, sizing: &WindowSizing) -> Settings {
     let size = compiled.map_or(ERROR_FALLBACK, |ui| ui.size);
-    let dims = Size::new(size.w.min(), size.h.min());
+    let min_size = Size::new(
+        (size.w.min() + sizing.chrome_w).max(sizing.min_floor_w),
+        (size.h.min() + sizing.chrome_h).max(sizing.min_floor_h),
+    );
+    let initial_size = Size::new(
+        min_size.width * sizing.initial_scale,
+        min_size.height * sizing.initial_scale,
+    );
     Settings {
-        size: dims,
-        min_size: Some(dims),
+        size: initial_size,
+        min_size: Some(min_size),
         exit_on_close_request: false,
         ..Settings::default()
     }
@@ -55,6 +56,7 @@ impl Frontend for GuiFrontend {
     ) -> Result<(), FrontendError> {
         let palette = self.palette;
         let config = self.config.clone();
+        let window_sizing = config.window_sizing;
 
         let rt = tokio::runtime::Runtime::new()
             .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
@@ -69,7 +71,7 @@ impl Frontend for GuiFrontend {
         ));
 
         let result = iced::daemon(
-            move || Kithara::new(Arc::clone(&controller), palette),
+            move || Kithara::new(Arc::clone(&controller), palette, window_sizing),
             update::update,
             view::view,
         )
@@ -96,5 +98,39 @@ impl Frontend for GuiFrontend {
 
     fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use kithara_ui::{builtin, compile::compile, source::UiConfig};
+
+    use super::window_settings;
+    use crate::{config::WindowSizing, gui::modular::endpoints};
+
+    #[kithara::test]
+    fn player_window_settings_include_chrome_floor_and_initial_scale() {
+        let ui = compile(
+            builtin::PLAYER_PRESET,
+            &builtin::resolver(),
+            &endpoints::catalog(),
+            &endpoints::registry(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("player preset must compile: {error}"));
+        let sizing = WindowSizing::default();
+
+        let settings = window_settings(Some(&ui), &sizing);
+        let min = settings
+            .min_size
+            .unwrap_or_else(|| panic!("main window must have a minimum size"));
+
+        assert!(min.width >= ui.size.w.min() + sizing.chrome_w);
+        assert!(min.height >= ui.size.h.min() + sizing.chrome_h);
+        assert!(min.width >= sizing.min_floor_w);
+        assert!(min.height >= sizing.min_floor_h);
+        assert!(settings.size.width > min.width);
+        assert!(settings.size.height > min.height);
     }
 }

@@ -5,7 +5,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, compile},
     layout::Axis,
-    source::Limits,
+    source::UiConfig,
 };
 
 #[kithara::test]
@@ -15,7 +15,7 @@ fn micro_preset_compiles_against_player_registry() {
         &builtin::resolver(),
         &common::player_catalog(),
         &common::player_registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .unwrap();
 }
@@ -27,7 +27,7 @@ fn player_preset_compiles_against_player_registry() {
         &builtin::resolver(),
         &common::player_catalog(),
         &common::player_registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .unwrap();
 }
@@ -39,7 +39,7 @@ fn player_preset_size_sums_vertical_module_heights() {
         &builtin::resolver(),
         &common::player_catalog(),
         &common::player_registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .unwrap();
     let CompiledNode::Split {

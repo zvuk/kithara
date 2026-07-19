@@ -8,7 +8,7 @@ use kithara_ui::{
     compile::{CompiledNode, compile},
     expand::ExpandedNode,
     module::BindingRef,
-    source::{Limits, MemResolver},
+    source::{MemResolver, UiConfig},
 };
 
 fn resolver_with(fixture_name: &str, text: &str) -> MemResolver {
@@ -86,7 +86,7 @@ fn four_deck_layout_instantiates_one_module_file_four_times() {
         &resolver,
         &common::player_catalog(),
         &common::player_registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .unwrap();
     let mut instances = Vec::new();
@@ -122,7 +122,7 @@ fn two_deck_layout_compiles() {
         &resolver,
         &common::player_catalog(),
         &common::player_registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .unwrap();
 }

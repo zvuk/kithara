@@ -6,7 +6,7 @@ use crate::{
     registry::{ControlCatalog, EndpointRegistry},
     resolve::load_module_graph,
     size::{SizeSpec, combine_horizontal, combine_vertical, compute_size},
-    source::{Limits, SourceResolver},
+    source::{SourceResolver, UiConfig},
     validate,
 };
 
@@ -41,27 +41,27 @@ pub fn compile(
     resolver: &dyn SourceResolver,
     catalog: &dyn ControlCatalog,
     endpoints: &dyn EndpointRegistry,
-    limits: &Limits,
+    config: &UiConfig,
 ) -> Result<CompiledUi, UiDocError> {
     let loaded = resolver.load(None, entry)?;
     let bytes = loaded.text.len();
-    if bytes > limits.max_bytes {
+    if bytes > config.limits.max_bytes {
         return Err(UiDocError::TooLarge {
             origin: loaded.uri,
             bytes,
-            max: limits.max_bytes,
+            max: config.limits.max_bytes,
         });
     }
     let document = parse_layout(&loaded.text, &loaded.uri)?;
     validate::check_layout_instances(&document, &loaded.uri)?;
-    let mut budget = Budget::new(limits.max_nodes);
+    let mut budget = Budget::new(config.limits.max_nodes);
     let root = build(
         &document.root,
         &loaded.uri,
         resolver,
         catalog,
         endpoints,
-        limits,
+        config,
         &mut budget,
     )?;
     let size = compiled_node_size(&root);
@@ -74,7 +74,7 @@ fn build(
     resolver: &dyn SourceResolver,
     catalog: &dyn ControlCatalog,
     endpoints: &dyn EndpointRegistry,
-    limits: &Limits,
+    config: &UiConfig,
     budget: &mut Budget,
 ) -> Result<CompiledNode, UiDocError> {
     budget.charge(layout_uri)?;
@@ -91,7 +91,7 @@ fn build(
                             resolver,
                             catalog,
                             endpoints,
-                            limits,
+                            config,
                             budget,
                         )?,
                     ))
@@ -134,13 +134,14 @@ fn build(
                     (key.clone(), value)
                 })
                 .collect();
-            let (module_uri, set) = load_module_graph(resolver, Some(layout_uri), source, limits)?;
+            let (module_uri, set) =
+                load_module_graph(resolver, Some(layout_uri), source, &config.limits)?;
             let root = expand_module(
                 &set,
                 &module_uri,
                 &args,
                 &instance.0,
-                limits.max_depth,
+                config.limits.max_depth,
                 budget,
                 &mut |control, origin| {
                     validate::check_controls(control, origin, catalog, endpoints)

@@ -5,7 +5,7 @@ use iced::{
 
 use crate::theme::gui::GuiPalette;
 
-pub(crate) const SLIDER_RAIL_WIDTH: f32 = 4.0;
+const SLIDER_RAIL_WIDTH: f32 = 4.0;
 
 pub(crate) fn slider_style(p: GuiPalette) -> impl Fn(&Theme, SliderStatus) -> SliderStyle {
     const ACTIVE_RAIL_ALPHA: f32 = 0.95;

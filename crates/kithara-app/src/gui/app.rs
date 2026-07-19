@@ -14,6 +14,7 @@ use super::{
     theme,
 };
 use crate::{
+    config::WindowSizing,
     state::{StateController, UiState},
     theme::gui,
 };
@@ -31,6 +32,7 @@ pub(crate) struct Kithara {
 
     pub(crate) palette: gui::GuiPalette,
     pub(crate) selected_track_index: Option<usize>,
+    pub(crate) window_sizing: WindowSizing,
     /// Currently live main window; mode swaps replace this ID while the
     /// optional settings window is tracked separately.
     pub(crate) window_id: Option<window::Id>,
@@ -42,6 +44,7 @@ impl Kithara {
     pub(crate) fn new(
         controller: Arc<StateController>,
         palette: gui::GuiPalette,
+        window_sizing: WindowSizing,
     ) -> (Self, Task<Message>) {
         let ui_state = controller.snapshot();
 
@@ -50,12 +53,16 @@ impl Kithara {
             ui_state,
             palette,
             selected_track_index: None,
+            window_sizing,
             modular: initial_view(),
             settings_window_id: None,
             window_id: None,
         };
 
-        let (id, open) = window::open(window_settings(state.modular.compiled.as_ref()));
+        let (id, open) = window::open(window_settings(
+            state.modular.compiled.as_ref(),
+            &state.window_sizing,
+        ));
         state.window_id = Some(id);
 
         (state, open.discard())

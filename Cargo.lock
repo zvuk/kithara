@@ -5159,6 +5159,7 @@ dependencies = [
 name = "kithara-ui"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bon",
  "derive_more",
  "kithara-test-utils",
  "kithara-workspace-hack",

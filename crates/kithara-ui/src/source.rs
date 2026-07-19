@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use bon::Builder;
+
 use crate::{error::UiDocError, ids::SourceUri};
 
 #[derive(Clone, Debug)]
@@ -9,21 +11,37 @@ pub struct LoadedSource {
     pub text: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Builder, Clone, Debug)]
 #[non_exhaustive]
 pub struct Limits {
+    #[builder(default = 256 * 1024)]
     pub max_bytes: usize,
+    #[builder(default = 8)]
     pub max_depth: usize,
+    #[builder(default = 10_000)]
     pub max_nodes: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self {
-            max_bytes: 256 * 1024,
-            max_depth: 8,
-            max_nodes: 10_000,
-        }
+        Self::builder().build()
+    }
+}
+
+/// Canonical compile configuration. Owns the safety [`Limits`]; the extension
+/// point for future compile knobs (a config-sized string arena budget lands
+/// once its owner-review question is settled).
+#[derive(Builder, Clone, Debug)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct UiConfig {
+    #[builder(default)]
+    pub limits: Limits,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self::builder().build()
     }
 }
 

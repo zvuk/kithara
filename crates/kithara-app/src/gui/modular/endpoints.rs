@@ -158,7 +158,7 @@ pub(crate) fn registry() -> AppRegistry {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
-    use kithara_ui::{builtin, compile::compile, source::Limits};
+    use kithara_ui::{builtin, compile::compile, source::UiConfig};
 
     use super::*;
 
@@ -170,10 +170,25 @@ mod tests {
                 &builtin::resolver(),
                 &catalog(),
                 &registry(),
-                &Limits::default(),
+                &UiConfig::default(),
             )
             .unwrap_or_else(|error| panic!("{preset}: {error}"));
         }
+    }
+
+    #[kithara::test]
+    fn micro_window_size_is_derived_from_catalog() {
+        let ui = compile(
+            builtin::MICRO_PRESET,
+            &builtin::resolver(),
+            &catalog(),
+            &registry(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("micro preset must compile: {error}"));
+
+        assert!(ui.size.w.min() > 0.0, "width min: {}", ui.size.w.min());
+        assert!(ui.size.h.min() > 0.0, "height min: {}", ui.size.h.min());
     }
 
     #[kithara::test]
@@ -183,7 +198,7 @@ mod tests {
             &builtin::resolver(),
             &catalog(),
             &registry(),
-            &Limits::default(),
+            &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("player preset must compile: {error}"));
 

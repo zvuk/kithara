@@ -2,7 +2,7 @@ use iced::{Size, Task, window, window::Settings};
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
-    source::Limits,
+    source::UiConfig,
 };
 use tracing::error;
 
@@ -61,7 +61,7 @@ fn compile_preset(preset: &str) -> Result<CompiledUi, String> {
         &builtin::resolver(),
         &endpoints::catalog(),
         &endpoints::registry(),
-        &Limits::default(),
+        &UiConfig::default(),
     )
     .map_err(|error| error.to_string())
 }
@@ -77,7 +77,10 @@ fn commit_preset(modular: &mut ModularView, preset: &str, compiled: CompiledUi) 
 
 fn replace_main_window(state: &mut Kithara) -> Task<Message> {
     let old = state.window_id;
-    let (new_id, open) = window::open(window_settings(state.modular.compiled.as_ref()));
+    let (new_id, open) = window::open(window_settings(
+        state.modular.compiled.as_ref(),
+        &state.window_sizing,
+    ));
     state.window_id = Some(new_id);
     let close_old = old.map_or_else(Task::none, window::close);
     open.discard().chain(close_old)

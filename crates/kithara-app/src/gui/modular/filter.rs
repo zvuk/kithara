@@ -32,7 +32,7 @@ mod tests {
     use kithara_ui::{
         builtin,
         compile::{CompiledNode, CompiledUi, compile},
-        source::Limits,
+        source::UiConfig,
     };
 
     use super::visible;
@@ -44,7 +44,7 @@ mod tests {
             &builtin::resolver(),
             &endpoints::catalog(),
             &endpoints::registry(),
-            &Limits::default(),
+            &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("player preset must compile: {error}"))
     }
@@ -109,7 +109,7 @@ mod tests {
             &resolver,
             &endpoints::catalog(),
             &endpoints::registry(),
-            &Limits::default(),
+            &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("nested layout must compile: {error}"));
         let filtered = visible(&compiled.root, &BTreeSet::from(["deck-a".to_owned()]))
