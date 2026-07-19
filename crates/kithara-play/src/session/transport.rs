@@ -151,7 +151,7 @@ fn schedule_commit<B: AudioBackend>(
                 reason: error.to_string(),
             },
         );
-        abort_commit(state, revision);
+        abort_commit(state, revision)?;
         return Err(error);
     }
 
@@ -203,16 +203,31 @@ fn update_context<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), Se
         .map_err(|error| SessionError::TransportSync(sync_error_reason(error)))
 }
 
-fn abort_commit<B: AudioBackend>(state: &mut SessionState<B>, revision: u64) {
+fn abort_commit<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    revision: u64,
+) -> Result<(), SessionError> {
+    let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
+    let control = state
+        .render_context_control
+        .as_ref()
+        .ok_or_else(|| SessionError::Graph("render context control is missing".into()))?;
+    control.queue_abort(ctx, revision);
     state.transport.pending = Some(PendingTransportCommit {
-        phase: TransportCommitPhase::Aborting,
+        phase: TransportCommitPhase::AbortPending,
         revision,
     });
-    if let (Some(ctx), Some(control)) = (state.ctx.as_mut(), state.render_context_control.as_ref())
+    deliver_abort(state)
+}
+
+fn deliver_abort<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), SessionError> {
+    update_context(state)?;
+    if let Some(pending) = state.transport.pending.as_mut()
+        && pending.phase == TransportCommitPhase::AbortPending
     {
-        control.queue_abort(ctx, revision);
-        let _ = ctx.update();
+        pending.phase = TransportCommitPhase::Aborting;
     }
+    Ok(())
 }
 
 fn sync_error_reason<E>(error: UpdateError<E>) -> String
@@ -302,6 +317,13 @@ fn refresh_observation<B: AudioBackend>(
         .observation();
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);
+    }
+    if state
+        .transport
+        .pending
+        .is_some_and(|pending| pending.phase == TransportCommitPhase::AbortPending)
+    {
+        deliver_abort(state)?;
     }
     if let Some(revision) = state.transport.rejected.take() {
         return Err(SessionError::TransportCommitRejected { revision });

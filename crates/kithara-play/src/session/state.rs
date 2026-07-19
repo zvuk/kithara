@@ -73,6 +73,7 @@ impl PlayerState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TransportCommitPhase {
+    AbortPending,
     Aborting,
     Applying,
 }

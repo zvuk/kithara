@@ -5,8 +5,8 @@ use kithara::{
     events::{Event, EventBus, EventReceiver, TransportEvent},
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
     play::{
-        EngineConfig, EngineImpl, PlayError, SessionDispatcher, SessionError,
-        SessionTransportSnapshot, Tempo,
+        Cmd, EngineConfig, EngineImpl, PlayError, Reply, SessionDispatcher, SessionError,
+        SessionHandle, SessionTransportSnapshot, Tempo,
     },
 };
 use kithara_integration_tests::{kithara, offline::OfflineSession};
@@ -272,4 +272,74 @@ fn tempo_rejects_non_finite_and_non_positive_values() {
     for value in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         assert!(Tempo::new(value).is_err(), "tempo {value:?} must fail");
     }
+}
+
+#[kithara::test]
+fn failed_abort_delivery_is_retried_before_the_next_transport_commit() {
+    let session = Arc::new(OfflineSession::new_manual());
+    let dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
+    let handle = SessionHandle::new(dispatcher);
+    let player_id = handle
+        .register_player(EventBus::default(), Vec::new(), PcmPool::default())
+        .expect("player registers");
+    handle
+        .exec_ok(Cmd::StartPlayer {
+            master_volume: 1.0,
+            player_id,
+            sample_rate: SAMPLE_RATE,
+        })
+        .expect("player starts");
+
+    let mut delivered_updates = 0;
+    loop {
+        let volume = if delivered_updates % 2 == 0 {
+            0.25
+        } else {
+            0.75
+        };
+        handle
+            .set_player_master_volume(player_id, volume)
+            .expect("volume event queues");
+        match handle.exec(Cmd::Tick).expect("tick dispatches") {
+            Reply::Ok => delivered_updates += 1,
+            Reply::Err(SessionError::Graph(reason)) if reason.contains("MsgChannelFull") => break,
+            _ => panic!("unexpected reply while saturating the Firewheel message lane"),
+        }
+    }
+    assert!(delivered_updates > 0);
+
+    let first_tempo = Tempo::new(120.0).expect("valid first tempo");
+    assert!(matches!(
+        handle
+            .exec(Cmd::SetSessionTempo { tempo: first_tempo })
+            .expect("tempo dispatches"),
+        Reply::Err(SessionError::TransportSync(reason)) if reason == "message channel is full"
+    ));
+
+    render_frames(&session, 1, 1);
+    assert!(matches!(
+        handle
+            .exec(Cmd::SessionTransport)
+            .expect("transport query dispatches"),
+        Reply::Err(SessionError::TransportNotProcessed)
+    ));
+    render_frames(&session, 1, 1);
+
+    let retry_tempo = Tempo::new(90.0).expect("valid retry tempo");
+    assert!(matches!(
+        handle
+            .exec(Cmd::SetSessionTempo { tempo: retry_tempo })
+            .expect("retry dispatches"),
+        Reply::Ok
+    ));
+    render_frames(&session, 1, 1);
+    let snapshot = match handle
+        .exec(Cmd::SessionTransport)
+        .expect("committed transport query dispatches")
+    {
+        Reply::SessionTransport(snapshot) => snapshot,
+        _ => panic!("retry transport did not commit"),
+    };
+    assert_eq!(snapshot.tempo(), retry_tempo);
+    assert_eq!(snapshot.revision(), 2);
 }
