@@ -88,40 +88,6 @@ struct SourceWorker {
     service_rx: HeapCons<ServiceClass>,
 }
 
-#[cfg(test)]
-pub(super) struct ElasticSourceTestPeer {
-    reply_tx: HeapProd<ElasticSourceReply>,
-    recycle_rx: HeapCons<PcmBuf>,
-    request_rx: HeapCons<ElasticSourceRequest>,
-    _service_rx: HeapCons<ServiceClass>,
-}
-
-#[cfg(test)]
-impl ElasticSourceTestPeer {
-    pub(super) fn push_ready(
-        &mut self,
-        generation: u64,
-        range: SourceFrameRange,
-        samples: PcmBuf,
-    ) -> bool {
-        self.reply_tx
-            .try_push(ElasticSourceReply::Ready(ElasticSourceWindow {
-                generation,
-                range,
-                samples,
-            }))
-            .is_ok()
-    }
-
-    pub(super) fn pop_recycled(&mut self) -> Option<PcmBuf> {
-        self.recycle_rx.try_pop()
-    }
-
-    pub(super) fn pop_request(&mut self) -> Option<ElasticSourceRequest> {
-        self.request_rx.try_pop()
-    }
-}
-
 impl ElasticSourcePort {
     pub(super) fn request(
         &mut self,
@@ -167,15 +133,6 @@ impl ElasticSourcePort {
             Err(service_class) => self.pending_service_class = Some(service_class),
         }
     }
-
-    #[cfg(test)]
-    fn shutdown_for_test(mut self) {
-        self.cancel.cancel();
-        self.activity.signal();
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("elastic source worker exits cleanly");
-        }
-    }
 }
 
 impl Drop for ElasticSourcePort {
@@ -184,35 +141,6 @@ impl Drop for ElasticSourcePort {
         self.activity.signal();
         drop(self.worker.take());
     }
-}
-
-#[cfg(test)]
-pub(super) fn elastic_source_test_pair(
-    cancel: CancelToken,
-) -> (ElasticSourcePort, ElasticSourceTestPeer) {
-    let activity = SourceAudioActivity::for_test();
-    let (request_tx, request_rx) = HeapRb::<ElasticSourceRequest>::new(PORT_CAPACITY).split();
-    let (reply_tx, reply_rx) = HeapRb::<ElasticSourceReply>::new(PORT_CAPACITY).split();
-    let (recycle_tx, recycle_rx) = HeapRb::<PcmBuf>::new(PORT_CAPACITY).split();
-    let (service_tx, service_rx) = HeapRb::<ServiceClass>::new(1).split();
-    (
-        ElasticSourcePort {
-            activity,
-            cancel,
-            pending_service_class: None,
-            recycle_tx,
-            reply_rx,
-            request_tx,
-            service_tx,
-            worker: None,
-        },
-        ElasticSourceTestPeer {
-            reply_tx,
-            recycle_rx,
-            request_rx,
-            _service_rx: service_rx,
-        },
-    )
 }
 
 pub(super) fn spawn_elastic_source(
@@ -371,15 +299,91 @@ fn apply_service_class(resource: &Resource, service_rx: &mut HeapCons<ServiceCla
 }
 
 #[cfg(test)]
-mod tests {
-    use kithara_audio::SourceAudioActivity;
-    use kithara_bufpool::PcmPool;
-    use kithara_platform::{CancelScope, tokio::runtime::Builder};
+mod test_support {
+    use kithara_audio::{ServiceClass, SourceAudioActivity, SourceFrameRange};
+    use kithara_bufpool::{PcmBuf, PcmPool};
+    use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Builder};
     use kithara_test_utils::kithara;
-    use ringbuf::{HeapRb, traits::Split};
+    use ringbuf::{
+        HeapCons, HeapProd, HeapRb,
+        traits::{Consumer, Producer, Split},
+    };
 
-    use super::{ElasticSourceReply, ElasticSourceRequest, SourceWorker, spawn_elastic_source};
+    use super::{
+        ElasticSourcePort, ElasticSourceReply, ElasticSourceRequest, ElasticSourceWindow,
+        PORT_CAPACITY, SourceWorker, spawn_elastic_source,
+    };
     use crate::test_support::empty_resource;
+
+    pub(in crate::player::track) struct ElasticSourceTestPeer {
+        reply_tx: HeapProd<ElasticSourceReply>,
+        recycle_rx: HeapCons<PcmBuf>,
+        request_rx: HeapCons<ElasticSourceRequest>,
+        _service_rx: HeapCons<ServiceClass>,
+    }
+
+    impl ElasticSourceTestPeer {
+        pub(in crate::player::track) fn push_ready(
+            &mut self,
+            generation: u64,
+            range: SourceFrameRange,
+            samples: PcmBuf,
+        ) -> bool {
+            self.reply_tx
+                .try_push(ElasticSourceReply::Ready(ElasticSourceWindow {
+                    generation,
+                    range,
+                    samples,
+                }))
+                .is_ok()
+        }
+
+        pub(in crate::player::track) fn pop_recycled(&mut self) -> Option<PcmBuf> {
+            self.recycle_rx.try_pop()
+        }
+
+        pub(in crate::player::track) fn pop_request(&mut self) -> Option<ElasticSourceRequest> {
+            self.request_rx.try_pop()
+        }
+    }
+
+    impl ElasticSourcePort {
+        fn shutdown_for_test(mut self) {
+            self.cancel.cancel();
+            self.activity.signal();
+            if let Some(worker) = self.worker.take() {
+                worker.join().expect("elastic source worker exits cleanly");
+            }
+        }
+    }
+
+    pub(in crate::player::track) fn elastic_source_test_pair(
+        cancel: CancelToken,
+    ) -> (ElasticSourcePort, ElasticSourceTestPeer) {
+        let activity = SourceAudioActivity::for_test();
+        let (request_tx, request_rx) = HeapRb::<ElasticSourceRequest>::new(PORT_CAPACITY).split();
+        let (reply_tx, reply_rx) = HeapRb::<ElasticSourceReply>::new(PORT_CAPACITY).split();
+        let (recycle_tx, recycle_rx) = HeapRb::<PcmBuf>::new(PORT_CAPACITY).split();
+        let (service_tx, service_rx) = HeapRb::<ServiceClass>::new(1).split();
+        (
+            ElasticSourcePort {
+                activity,
+                cancel,
+                pending_service_class: None,
+                recycle_tx,
+                reply_rx,
+                request_tx,
+                service_tx,
+                worker: None,
+            },
+            ElasticSourceTestPeer {
+                reply_tx,
+                recycle_rx,
+                request_rx,
+                _service_rx: service_rx,
+            },
+        )
+    }
 
     #[kithara::test(native, flash(false))]
     fn source_worker_lifetime_is_independent_of_tokio_runtime() {
@@ -424,3 +428,6 @@ mod tests {
         assert!(!worker.run_cycle_after_snapshot(snapshot));
     }
 }
+
+#[cfg(test)]
+pub(super) use test_support::elastic_source_test_pair;
