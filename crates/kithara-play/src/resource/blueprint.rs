@@ -1,18 +1,18 @@
-use std::{fmt, future::Future, pin::Pin};
+use std::fmt;
 
 use kithara_audio::ResamplerBackend;
 use kithara_decode::DecodeResult;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_events::EventBus;
-use kithara_platform::{CancelScope, CancelToken, sync::Arc};
+use kithara_platform::{
+    CancelScope, CancelToken,
+    maybe_send::{BoxFuture, MaybeSend, MaybeSync},
+    sync::Arc,
+};
 
 use super::{Resource, ResourceConfig};
 
-#[cfg(not(target_arch = "wasm32"))]
-type OpenFuture = Pin<Box<dyn Future<Output = DecodeResult<Resource>> + Send + 'static>>;
-
-#[cfg(target_arch = "wasm32")]
-type OpenFuture = Pin<Box<dyn Future<Output = DecodeResult<Resource>> + 'static>>;
+type OpenFuture = BoxFuture<'static, DecodeResult<Resource>>;
 
 #[derive(Clone, Copy)]
 enum EventScope {
@@ -21,7 +21,7 @@ enum EventScope {
     Isolated,
 }
 
-trait OpenResource: Send + Sync {
+trait OpenResource: MaybeSend + MaybeSync {
     fn open(&self, blueprint: ResourceBlueprint, event_scope: EventScope) -> OpenFuture;
 }
 
