@@ -133,7 +133,7 @@ impl ElasticRenderer {
         if fetch_frames > self.max_fetch_frames {
             return Err(ElasticRenderError::FetchWindowMismatch);
         }
-        let fetch_samples = sample_count(fetch_frames, self.channels)
+        let fetch_samples = sample_count(fetch_frames, self.capabilities.channels())
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
         for segment in &segments {
             self.render_segment(*segment, direction, source_window, fetch_samples, output)?;
@@ -190,6 +190,7 @@ impl ElasticRenderer {
         fetch_samples: usize,
         output: &mut [&mut [f32]],
     ) -> Result<(), ElasticRenderError> {
+        let channels = self.capabilities.channels();
         let source_frames = usize::try_from(segment.source_start.abs_diff(segment.source_end))
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
         if source_frames > self.max_source_frames {
@@ -202,15 +203,15 @@ impl ElasticRenderer {
             fetch_range,
             fetch: &self.fetch[..fetch_samples],
             target: &mut self.source,
-            channels: self.channels,
+            channels,
             source_frame_count: self.source_frame_count,
         }
         .copy()
         .map_err(ElasticRenderError::from)?;
         let request = ElasticRequest::new(source_frames, segment.output_frames)?;
-        let source_samples = sample_count(source_frames, self.channels)
-            .map_err(|_| ElasticRenderError::FrameOverflow)?;
-        let output_samples = sample_count(segment.output_frames, self.channels)
+        let source_samples =
+            sample_count(source_frames, channels).map_err(|_| ElasticRenderError::FrameOverflow)?;
+        let output_samples = sample_count(segment.output_frames, channels)
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
         self.backend.process(
             request,
@@ -222,12 +223,12 @@ impl ElasticRenderer {
             .checked_add(segment.output_frames)
             .ok_or(ElasticRenderError::FrameOverflow)?;
         for (channel, target) in output.iter_mut().enumerate() {
-            let source_channel = channel.min(self.channels - 1);
+            let source_channel = channel.min(channels - 1);
             for (frame, sample) in target[segment.output_start..output_end]
                 .iter_mut()
                 .enumerate()
             {
-                *sample = self.output[frame * self.channels + source_channel];
+                *sample = self.output[frame * channels + source_channel];
             }
         }
         Ok(())
@@ -317,7 +318,7 @@ impl ElasticRenderer {
         if fetch_frames > self.max_fetch_frames {
             return Err(ElasticRenderError::FetchWindowMismatch);
         }
-        let fetch_samples = sample_count(fetch_frames, self.channels)
+        let fetch_samples = sample_count(fetch_frames, self.capabilities.channels())
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
         let old = mem::replace(&mut self.fetch, samples);
         self.recycle_samples(old);

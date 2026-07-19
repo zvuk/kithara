@@ -187,7 +187,6 @@ struct BufferedSourceWindow {
 pub(crate) struct ElasticRenderer {
     backend: Box<dyn ElasticBackend>,
     capabilities: ElasticCapabilities,
-    channels: usize,
     max_warm_frames: usize,
     max_source_frames: usize,
     max_fetch_frames: usize,
@@ -282,7 +281,6 @@ impl ElasticRenderer {
         Ok(Self {
             backend: Box::new(backend),
             capabilities,
-            channels,
             max_warm_frames,
             max_source_frames,
             max_fetch_frames,

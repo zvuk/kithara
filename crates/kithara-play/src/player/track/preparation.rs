@@ -167,7 +167,7 @@ impl ElasticRenderer {
         let preparation = self.retarget_preparation(binding, anchor, tempo)?;
         let fetch_frames = usize::try_from(preparation.fetch_range.len())
             .map_err(|_| ElasticPrepareError::FrameOverflow)?;
-        let fetch_samples = sample_count(fetch_frames, self.channels)?;
+        let fetch_samples = sample_count(fetch_frames, self.capabilities.channels())?;
         self.prime(preparation, fetch_samples)?;
         self.cursor = Some(preparation.anchor);
         self.direction = Some(preparation.direction);
@@ -216,7 +216,8 @@ impl ElasticRenderer {
         if fetch_frames > self.max_fetch_frames {
             return Err(ElasticPrepareError::FetchWindowMismatch);
         }
-        let fetch_samples = sample_count(fetch_frames, self.channels)?;
+        let channels = self.capabilities.channels();
+        let fetch_samples = sample_count(fetch_frames, channels)?;
         let request = self
             .preparation_request
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
@@ -228,9 +229,9 @@ impl ElasticRenderer {
             .ok_or(ElasticPrepareError::FetchWindowMismatch)?;
         let request_offset =
             usize::try_from(request_offset).map_err(|_| ElasticPrepareError::FrameOverflow)?;
-        let request_sample_start = sample_count(request_offset, self.channels)?;
+        let request_sample_start = sample_count(request_offset, channels)?;
         let request_sample_end = request_sample_start
-            .checked_add(sample_count(request_frames, self.channels)?)
+            .checked_add(sample_count(request_frames, channels)?)
             .ok_or(ElasticPrepareError::FrameOverflow)?;
         let demand = self
             .demand
@@ -304,7 +305,7 @@ impl ElasticRenderer {
         if frames > self.max_fetch_frames {
             return Err(ElasticPrepareError::FetchWindowMismatch);
         }
-        let samples = sample_count(frames, self.channels)?;
+        let samples = sample_count(frames, self.capabilities.channels())?;
         let demand = self
             .demand
             .as_ref()
@@ -368,6 +369,7 @@ impl ElasticRenderer {
         preparation: ElasticPreparation,
         fetch_samples: usize,
     ) -> Result<(), ElasticPrepareError> {
+        let channels = self.capabilities.channels();
         let history_frames = self.capabilities.latency().source_frames();
         let warm_source_frames = preparation.warmup.source_frames();
         let warm_source_frames =
@@ -394,7 +396,7 @@ impl ElasticRenderer {
             fetch_range: preparation.fetch_range,
             fetch: &self.fetch[..fetch_samples],
             target: &mut self.history,
-            channels: self.channels,
+            channels,
             source_frame_count: self.source_frame_count,
         }
         .copy()
@@ -416,17 +418,17 @@ impl ElasticRenderer {
             fetch_range: preparation.fetch_range,
             fetch: &self.fetch[..fetch_samples],
             target: &mut self.source,
-            channels: self.channels,
+            channels,
             source_frame_count: self.source_frame_count,
         }
         .copy()
         .map_err(ElasticPrepareError::from)?;
         self.backend.prime(
             preparation.warmup,
-            &self.history[..sample_count(history_frames, self.channels)
+            &self.history[..sample_count(history_frames, channels)
                 .map_err(|_| ElasticPrepareError::FrameOverflow)?],
-            &self.source[..sample_count(preparation.warmup.source_frames(), self.channels)?],
-            &mut self.discarded[..sample_count(preparation.warmup.output_frames(), self.channels)?],
+            &self.source[..sample_count(preparation.warmup.source_frames(), channels)?],
+            &mut self.discarded[..sample_count(preparation.warmup.output_frames(), channels)?],
         )?;
         Ok(())
     }
