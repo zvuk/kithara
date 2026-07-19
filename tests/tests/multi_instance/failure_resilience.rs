@@ -3,7 +3,6 @@ use std::path::Path;
 #[cfg(target_arch = "wasm32")]
 use kithara::platform::thread;
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -109,7 +108,7 @@ async fn create_hls_audio(
     let url = server.url("/master.m3u8");
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(cache_dir))
+        .store(kithara_integration_tests::disk_asset_store(cache_dir))
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();

@@ -3,7 +3,6 @@
 use std::{fs, path::Path};
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
@@ -114,7 +113,7 @@ async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: Deco
         .expect("create AAC HE v2 HLS fixture");
 
     let hls_config = HlsConfig::for_url(created.master_url())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
     // Park on ring underrun instead of spinning on Pending, so the read
     // loop needs no wall-clock iteration cap.

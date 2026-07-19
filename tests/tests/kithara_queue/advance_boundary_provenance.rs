@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use kithara::{
-    assets::StoreOptions,
     audio::generate_log_spaced_bands,
     events::{AbrEvent, AdvanceReason, Event, EventReceiver},
     hls::AbrMode,
@@ -1267,7 +1266,7 @@ async fn hls_resource_with_segments_and_duration(
         .create_hls(builder)
         .await
         .expect("create advance-boundary HLS fixture");
-    let store = StoreOptions::new(cache_dir);
+    let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)
@@ -1302,7 +1301,7 @@ async fn hls_multivariant_flac_resource(
         )
         .await
         .expect("create advance-boundary multivariant FLAC HLS fixture");
-    let store = StoreOptions::new(cache_dir);
+    let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)
@@ -1333,7 +1332,7 @@ async fn hls_sine_aac_resource(
         )
         .await
         .expect("create advance-boundary sine AAC HLS fixture");
-    let store = StoreOptions::new(cache_dir);
+    let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
         .store(store)

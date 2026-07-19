@@ -8,7 +8,7 @@ use std::{
 
 use clap::Parser;
 use kithara::{
-    assets::{AssetStoreBuilder, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
+    assets::{AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend},
     audio::generate_log_spaced_bands,
     bufpool::Region,
     net::{HttpClient, NetOptions},
@@ -121,26 +121,18 @@ fn main() -> AppResult {
         DownloaderConfig::for_client(HttpClient::new(net, shutdown.child())).build(),
     );
     let flush_hub = FlushHub::new(shutdown.child(), FlushPolicy::default());
-    let store_options = StoreOptions::builder()
-        .flush_hub(Arc::clone(&flush_hub))
+    let store = AssetStoreBuilder::default()
+        .cancel(shutdown.child())
+        .backend(StorageBackend::default())
+        .pool(byte_pool.clone())
+        .flush_hub(flush_hub)
         .build();
-    let asset_store = Arc::new(
-        AssetStoreBuilder::default()
-            .cancel(shutdown.child())
-            .backend(store_options.backend.clone())
-            .evict_config(EvictConfig::from(&store_options))
-            .pool(byte_pool.clone())
-            .maybe_cache_capacity(store_options.cache_capacity)
-            .maybe_flush_hub(store_options.flush_hub)
-            .build(),
-    );
     let config = AppConfig::builder()
         .downloader(downloader)
-        .flush_hub(flush_hub)
         .shutdown(shutdown.clone())
         .byte_pool(byte_pool)
         .pcm_pool(region.pcm_pool())
-        .asset_store(asset_store)
+        .store(store)
         .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
         .should_accept_invalid_certs(args.insecure)
         .build();
@@ -158,6 +150,7 @@ fn main() -> AppResult {
     let player = Arc::new(PlayerImpl::new(player_config));
     let queue_config = QueueConfig::default()
         .with_player(player)
+        .with_store(config.store.clone())
         .with_cancel(shutdown.child());
 
     let queue = Arc::new(Queue::new(queue_config));

@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 use crate::{
     item::AudioPlayerItem,
     player::AudioPlayer,
-    types::{FfiAbrMode, FfiItemConfig, FfiPlayerConfig, FfiTransition},
+    types::{FfiAbrMode, FfiItemConfig, FfiTransition},
     web::observer::shim::{ItemObserverJs, KeyProcessorJs, PlayerObserverJs, SeekCallbackJs},
 };
 
@@ -135,7 +135,7 @@ impl AudioPlayer {
     #[must_use]
     pub fn new_js() -> Self {
         Self {
-            inner: crate::Inner::new(FfiPlayerConfig::default()),
+            inner: crate::Inner::default(),
         }
     }
 

@@ -17,8 +17,8 @@ use rangemap::RangeSet;
 
 use crate::{
     error::AssetsResult,
-    flush::{FlushHub, Flushable},
-    key::ResourceKey,
+    index::persistence::{FlushHub, Flushable},
+    layout::{ResourceKey, ResourceKeyKind},
 };
 
 /// Byte-level availability state for a single resource.
@@ -37,25 +37,31 @@ impl Availability {
         self.ranges.gaps(range).next().is_none()
     }
 
-    pub(super) fn insert(&mut self, range: Range<u64>) {
-        if range.start >= range.end {
-            return;
+    pub(super) fn insert(&mut self, range: Range<u64>) -> bool {
+        if range.start >= range.end || self.contains(&range) {
+            return false;
         }
         self.ranges.insert(range);
+        true
     }
 
-    pub(super) fn mark_committed(&mut self, final_len: u64) {
+    pub(super) fn mark_committed(&mut self, final_len: u64) -> bool {
+        let range = 0..final_len;
+        if self.committed && self.final_len == Some(final_len) && self.contains(&range) {
+            return false;
+        }
         self.committed = true;
         self.final_len = Some(final_len);
         if final_len > 0 {
-            self.ranges.insert(0..final_len);
+            self.ranges.insert(range);
         }
+        true
     }
 }
 
 /// Opaque handle to the aggregate byte availability index.
 #[derive(Clone)]
-pub struct AvailabilityIndex {
+pub(crate) struct AvailabilityIndex {
     pub(super) inner: Arc<InnerIndex>,
 }
 
@@ -124,7 +130,9 @@ impl AvailabilityIndex {
     /// on disk — producing the HLS hang pinned by
     /// `red_test_delete_asset_strands_availability_index`.
     pub(crate) fn clear_root(&self, asset_root: &str) {
-        self.inner.assets.remove(asset_root);
+        if self.inner.assets.remove(asset_root).is_some() {
+            self.mark_dirty();
+        }
     }
 
     pub(crate) fn contains_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
@@ -159,10 +167,17 @@ impl AvailabilityIndex {
     /// Propagates the first per-source flush error encountered.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn flush(&self) -> AssetsResult<()> {
-        self.inner
-            .hub
-            .get()
-            .map_or_else(|| Flushable::flush(&*self.inner), |hub| hub.flush_now())
+        if let Some(hub) = self.inner.hub.get() {
+            return hub.flush_now();
+        }
+        if !self.inner.dirty.swap(false, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let result = Flushable::flush(&*self.inner);
+        if result.is_err() {
+            self.inner.dirty.store(true, Ordering::Release);
+        }
+        result
     }
 
     fn insert_or_get_entry(&self, asset_root: &str, path: &str) -> Arc<Mutex<Availability>> {
@@ -188,11 +203,19 @@ impl AvailabilityIndex {
         )
     }
 
+    fn mark_dirty(&self) {
+        self.inner.dirty.store(true, Ordering::Release);
+        if let Some(hub) = self.inner.hub.get() {
+            hub.signal();
+        }
+    }
+
     pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
         let (root, path) = Self::resolve_refs(key);
         let arc = self.insert_or_get_entry(root, path);
-        arc.lock().mark_committed(final_len);
-        self.inner.dirty.store(true, Ordering::Release);
+        if arc.lock().mark_committed(final_len) {
+            self.mark_dirty();
+        }
     }
 
     pub(crate) fn record_write(&self, key: &ResourceKey, range: Range<u64>) {
@@ -201,24 +224,30 @@ impl AvailabilityIndex {
         }
         let (root, path) = Self::resolve_refs(key);
         let arc = self.insert_or_get_entry(root, path);
-        arc.lock().insert(range);
-        self.inner.dirty.store(true, Ordering::Release);
+        if arc.lock().insert(range) {
+            self.mark_dirty();
+        }
     }
 
     pub(crate) fn remove(&self, key: &ResourceKey) {
         let (root, path) = Self::resolve_refs(key);
-        if let Some(asset) = self.inner.assets.get(root) {
-            asset.remove(path);
+        let removed = self
+            .inner
+            .assets
+            .get(root)
+            .is_some_and(|asset| asset.remove(path).is_some());
+        if removed {
+            self.mark_dirty();
         }
     }
 
     fn resolve_refs(key: &ResourceKey) -> (&str, &str) {
-        match key {
-            ResourceKey::Relative {
+        match key.kind() {
+            ResourceKeyKind::Relative {
                 asset_root,
                 rel_path,
             } => (asset_root, rel_path),
-            ResourceKey::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
+            ResourceKeyKind::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
         }
     }
 }
@@ -244,7 +273,6 @@ impl Flushable for InnerIndex {
 #[cfg(target_arch = "wasm32")]
 impl InnerIndex {
     fn flush_with_durability(&self, _durable: bool) -> AssetsResult<()> {
-        self.dirty.store(false, Ordering::Release);
         Ok(())
     }
 }
@@ -279,16 +307,10 @@ impl ScopedAvailabilityObserver {
 impl AvailabilityObserver for ScopedAvailabilityObserver {
     fn on_commit(&self, final_len: u64) {
         self.index.record_commit(&self.key, final_len);
-        if let Some(hub) = self.index.inner.hub.get() {
-            hub.signal();
-        }
     }
 
     fn on_write(&self, range: Range<u64>) {
         self.index.record_write(&self.key, range);
-        if let Some(hub) = self.index.inner.hub.get() {
-            hub.signal();
-        }
     }
 }
 
@@ -410,6 +432,35 @@ mod tests {
 
         idx.record_write(&k, 10..10);
         assert!(!idx.contains_range(&k, 10..11));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn unchanged_records_do_not_dirty_the_index() {
+        let idx = AvailabilityIndex::new();
+        let k = ResourceKey::relative("test_asset", "file1");
+
+        idx.record_write(&k, 0..10);
+        idx.record_commit(&k, 10);
+        idx.flush().unwrap();
+        assert!(!idx.inner.dirty.load(Ordering::Acquire));
+
+        idx.record_write(&k, 0..10);
+        idx.record_commit(&k, 10);
+
+        assert!(!idx.inner.dirty.load(Ordering::Acquire));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn flush_source_does_not_clear_a_new_dirty_signal() {
+        let idx = AvailabilityIndex::new();
+        let k = ResourceKey::relative("test_asset", "file1");
+
+        idx.record_write(&k, 0..10);
+        assert!(idx.inner.dirty.swap(false, Ordering::AcqRel));
+        idx.remove(&k);
+        Flushable::flush(&*idx.inner).unwrap();
+
+        assert!(idx.inner.dirty.load(Ordering::Acquire));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]

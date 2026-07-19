@@ -1,5 +1,6 @@
 use std::num::NonZeroUsize;
 
+use kithara_assets::AssetStore;
 use kithara_events::{
     DownloaderEvent, Envelope, Event, EventBus, ScopeLabel, TrackId, TrackStatus,
 };
@@ -24,6 +25,7 @@ use crate::{
 /// isolated permit lanes with one abortable attempt per track.
 pub(crate) struct Loader {
     player: Arc<PlayerImpl>,
+    store: AssetStore,
     /// Background prefetch lane (`max_concurrent_loads` permits).
     prefetch_lane: Arc<Semaphore>,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
@@ -36,11 +38,13 @@ pub(crate) struct Loader {
 impl Loader {
     pub(crate) fn new(
         player: Arc<PlayerImpl>,
+        store: AssetStore,
         max_concurrent_loads: NonZeroUsize,
         tracks: Arc<Tracks>,
     ) -> Self {
         Self {
             player,
+            store,
             tracks,
             prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             interactive_lane: Arc::new(Semaphore::new(1)),
@@ -49,9 +53,10 @@ impl Loader {
 
     /// Build a [`ResourceConfig`] for the given [`TrackSource`].
     ///
-    /// - [`TrackSource::Uri`] uses [`ResourceConfig::new`] defaults.
-    ///   Callers wanting custom net/store behavior build a configured
-    ///   [`ResourceConfig`] and pass it via [`TrackSource::Config`].
+    /// - [`TrackSource::Uri`] uses the queue store and player pools; other
+    ///   resource options keep their defaults. Callers wanting custom
+    ///   behavior build a configured [`ResourceConfig`] and pass it via
+    ///   [`TrackSource::Config`].
     /// - [`TrackSource::Config`] is passed through untouched (DRM keys,
     ///   headers, format hints preserved).
     ///
@@ -65,6 +70,7 @@ impl Loader {
         let mut config = match source {
             TrackSource::Uri(url) => ResourceConfig::new(
                 &url,
+                self.store.clone(),
                 self.player.byte_pool().clone(),
                 self.player.pcm_pool().clone(),
             )
@@ -229,6 +235,7 @@ impl Loader {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use kithara_assets::{AssetStoreBuilder, StorageBackend};
     use kithara_bufpool::{BytePool, PcmPool, Region};
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::time::Duration;
@@ -282,7 +289,12 @@ mod tests {
             ));
             let bus = player.bus().clone();
             let tracks = Arc::new(Tracks::new(bus.clone()));
-            let loader = Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks)));
+            let loader = Arc::new(Loader::new(
+                player,
+                AssetStoreBuilder::default().build(),
+                self.cap,
+                Arc::clone(&tracks),
+            ));
             LoaderFixture {
                 loader,
                 tracks,
@@ -294,10 +306,14 @@ mod tests {
     #[kithara::test(tokio)]
     async fn build_config_preserves_caller_supplied_config() {
         let loader = LoaderFixtureSpec::default().build().loader;
+        let supplied_store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build();
         let Ok(builder) = ResourceConfig::for_src("https://example.com/a.mp3") else {
             panic!("valid url");
         };
         let given = builder
+            .store(supplied_store.clone())
             .byte_pool(BytePool::default())
             .pcm_pool(PcmPool::default())
             .preferred_peak_bitrate(321.0)
@@ -310,6 +326,8 @@ mod tests {
             (returned.preferred_peak_bitrate() - 321.0).abs() < f64::EPSILON,
             "caller-set fields must be preserved"
         );
+        assert!(returned.store().is_same(&supplied_store));
+        assert!(!returned.store().is_same(&loader.store));
     }
 
     #[kithara::test(tokio)]
@@ -325,6 +343,7 @@ mod tests {
         let Some(bus) = config.bus() else {
             panic!("build_config must inject a per-track bus");
         };
+        assert!(config.store().is_same(&fixture.loader.store));
         bus.publish(QueueEvent::QueueEnded);
         let Ok(envelope) = rx.try_recv() else {
             panic!("scoped publish must reach the root subscriber");

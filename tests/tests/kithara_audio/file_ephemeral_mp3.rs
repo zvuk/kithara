@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig},
@@ -48,7 +48,7 @@ async fn audio_file_mp3_decodes_with_duration(
     };
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
-            StoreOptions::builder()
+            AssetStoreBuilder::default()
                 .backend(StorageBackend::Memory)
                 .build(),
         )
@@ -138,7 +138,7 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
     let url = handle.url();
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
-            StoreOptions::builder()
+            AssetStoreBuilder::default()
                 .backend(StorageBackend::Memory)
                 .build(),
         )
@@ -177,7 +177,7 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
     });
     let file_config = FileConfig::for_src(handle.url().into())
         .store(
-            StoreOptions::builder()
+            AssetStoreBuilder::default()
                 .backend(StorageBackend::Memory)
                 .build(),
         )

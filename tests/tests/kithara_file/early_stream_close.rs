@@ -6,7 +6,6 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus, EventReceiver, FileEvent},
     file::{File, FileConfig, FileSrc},
     net::{HttpClient, NetOptions},
@@ -115,7 +114,9 @@ async fn file_stream_closes_early_seek_still_works() {
 
     let config = FileConfig::for_src(FileSrc::Remote(url))
         .events(bus)
-        .store(StoreOptions::new(clean_temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(
+            clean_temp_dir.path(),
+        ))
         .cancel(cancel_token)
         .look_ahead_bytes(256_000)
         .downloader(dl)
@@ -228,7 +229,9 @@ async fn partial_cache_resume_works() {
     let mut rx1 = bus1.subscribe();
     let config1 = FileConfig::for_src(FileSrc::Remote(url.clone()))
         .events(bus1)
-        .store(StoreOptions::new(cache_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(
+            cache_dir.path(),
+        ))
         .cancel(cancel1.clone())
         .look_ahead_bytes(256_000)
         .build();
@@ -265,7 +268,9 @@ async fn partial_cache_resume_works() {
 
     let cancel2 = CancelToken::never();
     let config2 = FileConfig::for_src(FileSrc::Remote(url))
-        .store(StoreOptions::new(cache_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(
+            cache_dir.path(),
+        ))
         .cancel(cancel2.clone())
         .look_ahead_bytes(256_000)
         .build();

@@ -72,14 +72,14 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 unimock = { workspace = true }
 
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 kithara-apple = { workspace = true, optional = true }
 
 core-foundation = { workspace = true, optional = true }
 core-foundation-sys = { workspace = true, optional = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true, optional = true }

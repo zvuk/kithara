@@ -4,11 +4,11 @@ use std::fmt;
 
 use bon::Builder;
 use kithara_abr::AbrMode;
-use kithara_assets::{AssetStore, BytePool, StoreOptions};
+use kithara_assets::{AssetStore, BytePool};
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
 use url::Url;
 
@@ -82,8 +82,6 @@ pub struct HlsConfig {
     /// [`downloader`]: Self::downloader
     #[builder(default)]
     pub net_options: NetOptions,
-    /// Optional app-wide shared store.
-    pub asset_store: Option<Arc<AssetStore>>,
     /// Base URL for resolving relative playlist/segment URLs.
     pub base_url: Option<Url>,
     /// Event bus (optional - if not provided, one is created internally).
@@ -104,8 +102,8 @@ pub struct HlsConfig {
     /// at the consumer site — production HLS streams need a downloader
     /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
     pub look_ahead_bytes: Option<u64>,
-    /// Optional name for cache disambiguation.
-    pub name: Option<String>,
+    /// Optional cache discriminator.
+    pub discriminator: Option<String>,
     /// Buffer pool shared across all components.
     #[builder(default = BytePool::default())]
     pub pool: BytePool,
@@ -114,9 +112,8 @@ pub struct HlsConfig {
     /// exact prefix offsets.
     #[builder(default)]
     pub size_probe_method: SizeProbeMethod,
-    /// Storage configuration.
-    #[builder(default)]
-    pub store: StoreOptions,
+    /// Shared asset store.
+    pub store: AssetStore,
     /// Master playlist URL.
     pub url: Url,
     /// Max segments to download per step.
@@ -126,8 +123,13 @@ pub struct HlsConfig {
     /// applying [`Self::ephemeral_cache_non_media_reserve`].
     #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
     pub ephemeral_cache_min_media_window: usize,
+    /// Maximum media-segment prefetch window for ephemeral HLS stores.
+    /// The effective maximum is never lower than
+    /// [`Self::ephemeral_cache_min_media_window`].
+    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
+    pub ephemeral_cache_max_media_window: usize,
     /// Number of non-media HLS cache entries reserved when deriving the
-    /// ephemeral media prefetch window from [`StoreOptions::cache_capacity`].
+    /// ephemeral media prefetch window from the store cache capacity.
     #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
     pub ephemeral_cache_non_media_reserve: usize,
     /// Capacity of the event bus channel (used when `bus` is not provided).
@@ -153,10 +155,13 @@ impl fmt::Debug for HlsConfig {
                 "ephemeral_cache_min_media_window",
                 &self.ephemeral_cache_min_media_window,
             )
-            .field("name", &self.name)
+            .field(
+                "ephemeral_cache_max_media_window",
+                &self.ephemeral_cache_max_media_window,
+            )
+            .field("discriminator", &self.discriminator)
             .field("pool", &self.pool)
             .field("store", &self.store)
-            .field("asset_store", &self.asset_store.is_some())
             .field("url", &self.url)
             .field("download_batch_size", &self.download_batch_size)
             .field("event_channel_capacity", &self.event_channel_capacity)
@@ -166,15 +171,11 @@ impl fmt::Debug for HlsConfig {
     }
 }
 
-impl Default for HlsConfig {
-    fn default() -> Self {
-        let url = Url::parse("http://localhost/stream.m3u8").expect("valid default URL");
-        Self::new(url)
-    }
-}
-
 impl HlsConfig {
     pub const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
+    /// Per-stream media window for a shared 128-entry cache. Two concurrent
+    /// streams each retain 60 media and four non-media entries.
+    pub const DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW: usize = 60;
     pub const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize = 4;
     /// Default `look_ahead_bytes` cap (~2 `MiB`). Production HLS streams
     /// need a downloader backpressure cap so an idle reader does not
@@ -183,8 +184,8 @@ impl HlsConfig {
 
     /// Create new HLS config with URL.
     #[must_use]
-    pub fn new(url: Url) -> Self {
-        Self::for_url(url).build()
+    pub fn new(url: Url, store: AssetStore) -> Self {
+        Self::for_url(url).store(store).build()
     }
 
     /// Chainable counterpart to [`HlsConfig::new`].

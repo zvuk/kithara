@@ -77,18 +77,16 @@ async fn waveform_and_player_share_one_get() {
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.wav");
 
-    let store = Arc::new(
-        AssetStoreBuilder::default()
-            .backend(StorageBackend::Memory)
-            .build(),
-    );
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
 
     // Waveform analysis consumer (whole-file) of the shared store.
     let waveform_cfg = ResourceConfig::for_src(url.as_str())
         .expect("waveform url")
         .byte_pool(BytePool::default())
         .pcm_pool(PcmPool::default())
-        .asset_store(Arc::clone(&store))
+        .store(store.clone())
         .build();
 
     // Player consumer of the same URL through the same shared store. Built
@@ -96,7 +94,7 @@ async fn waveform_and_player_share_one_get() {
     // until the worker delivers, instead of sleep-polling on `Pending`.
     let player_cfg = AudioConfig::<File>::for_stream(
         FileConfig::for_src(FileSrc::Remote(url.clone()))
-            .asset_store(Arc::clone(&store))
+            .store(store)
             .build(),
     )
     .byte_pool(BytePool::default())

@@ -49,6 +49,10 @@ Output:
 - `android/lib/build/generated/jniLibs/` — native `.so` libraries per ABI
 - `android/lib/build/generated/uniffi/kotlin/` — generated Kotlin bindings
 
+The Android SDK target graph excludes `kithara-workspace-hack`; host feature
+unification must not leak into NDK builds. The build must not modify
+`Cargo.lock` or the generated workspace-hack manifest.
+
 Run the build once before opening the project in Android Studio.
 
 ## Quick Start
@@ -78,6 +82,40 @@ player.play()
 player.pause()
 player.playingRate = 1.5f   // target playback speed
 ```
+
+### Cache Location and Layout
+
+`Kithara.initialize` creates one process-wide `AssetStore` rooted at
+`<application cacheDir>/kithara`. Every default-configured player shares that
+native store. To use a different root or custom path layouts, create another
+store and pass it through the player's `store` field:
+
+```kotlin
+val layouts = AssetLayoutRegistry().apply {
+    register(MyFileAssetLayout(), AssetLayoutTarget.File)
+    register(MyHlsAssetLayout(), AssetLayoutTarget.Hls)
+}
+val store = AssetStore(
+    root = application.filesDir.resolve("kithara-cache").absolutePath,
+    layouts = layouts,
+)
+
+val player = KitharaPlayer(
+    config = KitharaPlayer.Config(
+        store = store,
+    )
+)
+```
+
+`AssetLayoutRegistry` is a native Rust registry; `register` immediately routes
+the layout into Rust, and Kotlin does not keep a second registry. The store
+captures a registry snapshot when it is created and can then be shared by any
+number of players. `MyFileAssetLayout` and `MyHlsAssetLayout` implement
+`AssetLayout`; their `root(source)` and `path(resource)` callbacks control paths
+below the outer cache directory. An empty registry uses Kithara's defaults.
+Invalid callback output is rejected rather than rewritten or replaced with a
+default path; see the `AssetLayout` API contract for the portable component
+rules.
 
 ### Seek
 

@@ -1,4 +1,4 @@
-use crate::{player::AudioPlayer, types::FfiPlayerConfig};
+use crate::{config::FfiPlayerConfig, player::AudioPlayer};
 
 #[kithara::test]
 fn create_player() {

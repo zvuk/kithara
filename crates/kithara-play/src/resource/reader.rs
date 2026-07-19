@@ -26,12 +26,14 @@ use super::{ResourceBlueprint, ResourceConfig, SourceType};
 /// # Example
 ///
 /// ```ignore
+/// use kithara_assets::AssetStoreBuilder;
 /// use kithara_bufpool::{BytePool, PcmPool};
 /// use kithara_play::{Resource, ResourceConfig};
 ///
 /// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
 /// let config = ResourceConfig::new(
 ///     "https://example.com/song.mp3",
+///     AssetStoreBuilder::default().build(),
 ///     BytePool::default(),
 ///     PcmPool::default(),
 /// )?;
@@ -366,6 +368,7 @@ impl From<Resource> for Box<dyn PcmReader> {
 mod tests {
     use std::{num::NonZeroU32, path::Path};
 
+    use kithara_assets::AssetStoreBuilder;
     use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
     use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::{PcmSpec, TrackMetadata};
@@ -477,8 +480,13 @@ mod tests {
             .join("../../assets/silence_1s.wav")
             .to_string_lossy()
             .into_owned();
-        let mut config = ResourceConfig::new(fixture, BytePool::default(), PcmPool::default())
-            .expect("fixture path must be a valid local resource");
+        let mut config = ResourceConfig::new(
+            fixture,
+            AssetStoreBuilder::default().build(),
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("fixture path must be a valid local resource");
         config.cancel = Some(owner.clone());
 
         let resource = Resource::new(config)

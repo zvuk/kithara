@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::AbrMode,
@@ -94,7 +94,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     let TrackSource::Config(cfg) = super::app_track_source(
         PROD_TRACK,
         &config,
-        StoreOptions::new(temp.path()),
+        kithara_integration_tests::disk_asset_store(temp.path()),
         backend,
         AbrMode::Auto(None),
         Some("t0"),

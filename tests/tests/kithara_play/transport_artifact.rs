@@ -14,7 +14,8 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{
-    TestTempDir, kithara, offline::OfflineSession, temp_dir, wav::create_wav_header,
+    TestTempDir, kithara, memory_asset_store, offline::OfflineSession, temp_dir,
+    wav::create_wav_header,
 };
 use num_traits::ToPrimitive;
 
@@ -83,6 +84,7 @@ fn binding(
 async fn marker_resource(harness: &OfflinePlayerHarness, source: &Path) -> Resource {
     let config = ResourceConfig::for_src(source.to_string_lossy())
         .expect("valid marker fixture path")
+        .store(memory_asset_store())
         .byte_pool(harness.player().byte_pool().clone())
         .pcm_pool(harness.player().pcm_pool().clone())
         .build();

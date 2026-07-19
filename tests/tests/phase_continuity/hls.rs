@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     abr::AbrMode,
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
@@ -156,11 +156,14 @@ async fn run_case_paced(
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let mut store = StoreOptions::new(temp_dir.path());
-    if ephemeral {
-        store.cache_capacity = Some(NonZeroUsize::new(SEGMENTS_PER_VARIANT + 10).expect("nonzero"));
-        store.backend = StorageBackend::Memory;
-    }
+    let store = if ephemeral {
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cache_capacity(NonZeroUsize::new(SEGMENTS_PER_VARIANT + 10).expect("nonzero"))
+            .build()
+    } else {
+        kithara_integration_tests::disk_asset_store(temp_dir.path())
+    };
     let initial_mode = scenario.first().map_or(AbrMode::default(), |&(m, _)| m);
     let hls_config = HlsConfig::for_url(created.master_url())
         .store(store)

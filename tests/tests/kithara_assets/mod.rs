@@ -11,3 +11,4 @@ mod resource_path_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod resource_state;
 mod streaming_resources_comprehensive;
+mod support;

@@ -18,7 +18,7 @@
 //! multi-track queue.
 
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     bufpool::Region,
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
@@ -95,7 +95,7 @@ impl Harness {
 async fn build_hls_resource(
     master: &url::Url,
     downloader: &Downloader,
-    store: &StoreOptions,
+    store: &AssetStore,
     player: &PlayerImpl,
 ) -> Resource {
     let cfg = ResourceConfig::for_src(master.as_str())
@@ -184,7 +184,7 @@ async fn run_case(mode: GateMode) {
 
     let master = server.url("/master.m3u8");
     let temp = TestTempDir::new();
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),

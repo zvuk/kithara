@@ -4,8 +4,8 @@ use std::sync::{
 };
 
 use kithara_assets::{
-    AssetReader, AssetResource, AssetStore, AssetWriter, DemandLease, RawWriteHandle, ReadSide,
-    ResourceKey, WriteSide,
+    AssetReader, AssetStore, AssetWriter, DemandLease, RawWriteHandle, ReadSide,
+    ResourceAcquisition, ResourceKey, WriteSide,
 };
 use kithara_events::{AudioCodecKind, ContainerKind, EventBus, FileEvent, TotalBytesSource};
 use kithara_net::Headers;
@@ -24,15 +24,15 @@ use crate::{coord::FileCoord, error::SourceError};
 /// (`Pending` writer to download / `Ready` reader already cached) is decided
 /// by the caller.
 pub(crate) struct FileStreamState {
-    pub(crate) backend: Arc<AssetStore>,
-    pub(crate) acq: AssetResource,
+    pub(crate) backend: AssetStore,
+    pub(crate) acq: ResourceAcquisition,
     pub(crate) bus: EventBus,
     pub(crate) key: ResourceKey,
 }
 
 impl FileStreamState {
     pub(crate) fn create(
-        assets: &Arc<AssetStore>,
+        assets: &AssetStore,
         key: ResourceKey,
         bus: Option<EventBus>,
         event_channel_capacity: usize,
@@ -45,7 +45,7 @@ impl FileStreamState {
             bus,
             key,
             acq,
-            backend: Arc::clone(assets),
+            backend: assets.clone(),
         })
     }
 }
@@ -77,7 +77,7 @@ pub(crate) struct FileSourceCtx {
 /// present only on the download path; `raw` is the clone-able streaming-write
 /// handle a fetch closure uses to land bytes into the writer's generation.
 pub(crate) struct FileAssetCtx {
-    pub(crate) backend: Arc<AssetStore>,
+    pub(crate) backend: AssetStore,
     pub(crate) reader: AssetReader,
     pub(crate) writer: Mutex<Option<AssetWriter>>,
     pub(crate) headers: Option<Headers>,
@@ -163,11 +163,12 @@ impl FileInner {
     /// keeps the mmap parked in the cache directory for the full lifetime
     /// of the holding `Stream<File>`.
     pub(crate) fn fail_and_evict(&self, reason: &str) {
-        self.set_phase(FilePhase::Complete);
         if let Some(writer) = self.take_writer() {
             writer.fail(reason.to_string());
         }
-        self.asset.backend.remove_resource(&self.asset.key);
+        if let Err(error) = self.asset.backend.remove_resource(&self.asset.key) {
+            tracing::warn!(%error, reason, "kithara-file: failed to remove terminal resource");
+        }
     }
 
     /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs

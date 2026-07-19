@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
@@ -94,7 +94,7 @@ fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSou
     super::app_track_source(
         url,
         &ctx.config,
-        StoreOptions::new(ctx.cache.path()),
+        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
         backend,
         AbrMode::Auto(None),
         None,

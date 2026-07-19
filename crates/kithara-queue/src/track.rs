@@ -273,6 +273,7 @@ fn install(record: &mut TrackRecord, generations: &AtomicU64, cancel: CancelToke
 
 #[cfg(test)]
 mod tests {
+    use kithara_assets::AssetStoreBuilder;
     use kithara_bufpool::{BytePool, PcmPool};
     use kithara_test_utils::kithara;
 
@@ -293,6 +294,7 @@ mod tests {
     fn track_source_from_resource_config() {
         let cfg = ResourceConfig::new(
             "https://example.com/a.mp3",
+            AssetStoreBuilder::default().build(),
             BytePool::default(),
             PcmPool::default(),
         )

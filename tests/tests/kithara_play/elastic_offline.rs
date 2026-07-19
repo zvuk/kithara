@@ -3,7 +3,6 @@
 use std::{fs, iter::from_fn, mem::size_of, num::NonZeroU32, path::Path};
 
 use kithara::{
-    assets::StoreOptions,
     audio::{BeatGrid, ReadOutcome, TrackBeat, analysis::TrackAnalysis},
     decode::PcmSpec,
     events::{AudioEvent, Event, EventBus, PlayerEvent},
@@ -21,7 +20,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, SignalFormat, SignalSpec,
     SignalSpecLength, TestServerHelper, TestTempDir,
     audio_mock::TestPcmReader,
-    kithara,
+    disk_asset_store, kithara,
     offline::{OfflineSession, resource_from_reader},
     temp_dir,
     wav::create_wav_header,
@@ -140,7 +139,7 @@ async fn bound_sine_resource(
     let url = server.sine(&spec, frequency).await;
     let config = ResourceConfig::for_src(url.as_str())
         .expect("valid fixture URL")
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(disk_asset_store(temp_dir.path()))
         .byte_pool(harness.player().byte_pool().clone())
         .pcm_pool(harness.player().pcm_pool().clone())
         .build();
@@ -739,7 +738,7 @@ async fn queued_bound_successor_retargets_after_tempo_commit_without_reload(temp
     });
     let config = ResourceConfig::for_src(successor.child_url("successor.wav").as_str())
         .expect("valid successor URL")
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(disk_asset_store(temp_dir.path()))
         .byte_pool(harness.player().byte_pool().clone())
         .pcm_pool(harness.player().pcm_pool().clone())
         .build();
@@ -1047,7 +1046,7 @@ async fn bound_track_renders_elastic_audio_to_an_offline_wav(temp_dir: TestTempD
     let mut public_resource_events = public_resource_bus.subscribe();
     let mut config = ResourceConfig::for_src(url.as_str())
         .expect("valid fixture URL")
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(disk_asset_store(temp_dir.path()))
         .byte_pool(harness.player().byte_pool().clone())
         .pcm_pool(harness.player().pcm_pool().clone())
         .build();
@@ -1170,6 +1169,7 @@ async fn reverse_bound_file_prepares_before_activation_and_renders_markers_to_wa
     write_marker_source_wav(&source);
     let config = ResourceConfig::for_src(source.to_string_lossy())
         .expect("valid marker fixture path")
+        .store(disk_asset_store(temp_dir.path()))
         .byte_pool(harness.player().byte_pool().clone())
         .pcm_pool(harness.player().pcm_pool().clone())
         .build();
@@ -1274,7 +1274,7 @@ async fn reverse_bound_hls_crosses_segment_boundaries_without_stale_replay(temp_
     );
     let config = ResourceConfig::for_src(fixture.master_url().as_str())
         .expect("valid HLS master URL")
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(disk_asset_store(temp_dir.path()))
         .look_ahead_bytes(
             u64::try_from(SEGMENT_BYTES.saturating_mul(2)).expect("look-ahead fits u64"),
         )
@@ -1390,7 +1390,7 @@ async fn reverse_binding_rejects_adaptive_hls_before_publication(temp_dir: TestT
     );
     let config = ResourceConfig::for_src(fixture.master_url().as_str())
         .expect("valid adaptive HLS master URL")
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(disk_asset_store(temp_dir.path()))
         .byte_pool(harness.player().byte_pool().clone())
         .pcm_pool(harness.player().pcm_pool().clone())
         .build();
@@ -1512,7 +1512,7 @@ async fn resource_blueprint_opens_independent_preparation_readers(temp_dir: Test
     let url = server.sine(&spec, 220.0).await;
     let config = ResourceConfig::for_src(url.as_str())
         .expect("valid fixture URL")
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(disk_asset_store(temp_dir.path()))
         .byte_pool(harness.player().byte_pool().clone())
         .pcm_pool(harness.player().pcm_pool().clone())
         .build();

@@ -204,15 +204,8 @@ pub(crate) enum PlannedFetch {
     Segment(u32),
 }
 
-/// Pairs the freshly-acquired [`AssetResource`](kithara_assets::AssetResource) with the entry's state
-/// atom and the cancel token captured at dispatch time. `settle` reads
-/// `cancel.is_cancelled()` as the rebuild-epoch marker: a stale fetch
-/// (cancelled before completion) does not write to state — `rebuild`
-/// has already taken over and the asset slot belongs to the new epoch.
-///
-/// The `Weak<HlsVariant>` lets the slot call back into the variant to
-/// apply the post-decrypt size — we use `Weak` (not `Arc`) so a dropped
-/// peer doesn't keep the variant alive past teardown.
+/// Fetch ownership and epoch state settled back into one variant slot.
+/// Its weak variant reference does not extend the variant lifetime.
 pub(crate) struct FetchSlot {
     /// Read view of the writer's generation — used to observe a
     /// committed-by-race status before deciding the terminal transition.

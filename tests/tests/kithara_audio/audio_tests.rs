@@ -3,7 +3,6 @@
 use std::{fs::File, io::Write};
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     bufpool::PcmPool,
     decode::{GaplessMode, SilenceTrimParams},
@@ -73,7 +72,7 @@ fn test_wav_config(
         .unwrap();
     let cache = TestTempDir::new();
     let file_config = FileConfig::for_src(FileSrc::Local(tmp.path().to_path_buf()))
-        .store(StoreOptions::new(cache.path()))
+        .store(kithara_integration_tests::disk_asset_store(cache.path()))
         .build();
     let config = AudioConfig::<kithara::file::File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())
@@ -160,7 +159,11 @@ fn test_audio_config_with_media_info() {
         .sample_rate(44100)
         .build();
 
-    let config = AudioConfig::<kithara::file::File>::for_stream(FileConfig::default())
+    let file_config = FileConfig::new(
+        FileSrc::Local("/tmp/test.mp3".into()),
+        kithara_integration_tests::memory_asset_store(),
+    );
+    let config = AudioConfig::<kithara::file::File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(PcmPool::default())
         .media_info(info.clone())
@@ -182,7 +185,11 @@ fn test_audio_config_with_media_info() {
     trim_trailing: true,
 }))]
 fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
-    let config = AudioConfig::<kithara::file::File>::for_stream(FileConfig::default())
+    let file_config = FileConfig::new(
+        FileSrc::Local("/tmp/test.mp3".into()),
+        kithara_integration_tests::memory_asset_store(),
+    );
+    let config = AudioConfig::<kithara::file::File>::for_stream(file_config)
         .byte_pool(kithara::bufpool::BytePool::default())
         .pcm_pool(PcmPool::default())
         .decoder(

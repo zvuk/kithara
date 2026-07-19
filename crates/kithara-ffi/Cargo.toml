@@ -105,6 +105,7 @@ dev = []
 test = ["dep:cpal"]
 
 [dependencies]
+kithara-assets = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 # Cross-platform deps (used by both the native UniFFI modules and `src/web`).
 # `kithara-play` is the canonical owner of the shared play types

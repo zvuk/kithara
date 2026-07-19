@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{
@@ -39,7 +38,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     info!(label, path, "Opening real stream");
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -173,7 +172,7 @@ async fn seek_sequence_from_log_real_stream(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls>::new(

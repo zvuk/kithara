@@ -16,7 +16,9 @@ fn engine_config(backend: Backend) -> EngineConfig {
 }
 
 fn engine_config_with_max_slots(backend: Backend, max_slots: usize) -> EngineConfig {
-    let builder = EngineConfig::builder().max_slots(max_slots);
+    let builder = EngineConfig::builder()
+        .max_slots(max_slots)
+        .pcm_pool(kithara::bufpool::PcmPool::default());
     if matches!(backend, Backend::Offline) {
         builder.session(OfflineSession::arc_auto()).build()
     } else {

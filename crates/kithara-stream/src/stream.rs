@@ -139,7 +139,7 @@ impl StdError for VariantChangeError {}
 /// On wasm32, `Send`/`Sync` bounds are relaxed via [`MaybeSend`]/[`MaybeSync`].
 pub trait StreamType: MaybeSend + 'static {
     /// Configuration for this stream type.
-    type Config: Default + MaybeSend;
+    type Config: MaybeSend;
 
     /// Event bus type carried by the stream config.
     ///

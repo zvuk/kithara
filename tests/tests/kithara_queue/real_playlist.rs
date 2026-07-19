@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, AdvanceReason, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
@@ -23,6 +23,9 @@ use kithara_integration_tests::{
     offline::OfflineSession,
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
+
+#[path = "source_helper.rs"]
+mod source_helper;
 
 /// Per-process singleton: one offline audio session, one Downloader,
 /// one Queue. `#[case]` tests inside this file share it, so init cost
@@ -46,10 +49,10 @@ fn build_track_source(
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> TrackSource {
-    super::app_track_source(
+    source_helper::app_track_source(
         url,
         &ctx.config,
-        StoreOptions::new(ctx.cache.path()),
+        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
         backend,
         abr,
         None,

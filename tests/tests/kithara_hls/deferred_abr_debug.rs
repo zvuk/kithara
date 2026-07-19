@@ -3,7 +3,6 @@
 use std::io::Read;
 
 use kithara::{
-    assets::StoreOptions,
     events::EventBus,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio, tokio::task::spawn_blocking},
@@ -31,7 +30,7 @@ async fn debug_sequential_read(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(rt_cancel)
         .initial_abr_mode(AbrMode::manual(1))
         .events(bus)

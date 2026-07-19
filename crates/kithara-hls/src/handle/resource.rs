@@ -1,7 +1,8 @@
 use std::{io::ErrorKind, ops::Range};
 
 use kithara_assets::{
-    AssetResource, AssetResourceState, AssetScope, AssetsError, AssetsResult, ReadSide, ResourceKey,
+    AssetResourceState, AssetScope, AssetsError, AssetsResult, ReadSide, ResourceAcquisition,
+    ResourceKey,
 };
 use kithara_stream::{StreamError, StreamResult};
 use url::Url;
@@ -38,7 +39,7 @@ impl ResourceHandle {
     /// Acquire the resource for the write path, branching on the segment's
     /// decryption disposition: `Plain` acquires cleartext; `Encrypted` carries
     /// the AES-128 [`DecryptContext`] forward as the processing context.
-    pub(crate) fn acquire(&self, content: &SegmentContent) -> AssetsResult<AssetResource> {
+    pub(crate) fn acquire(&self, content: &SegmentContent) -> AssetsResult<ResourceAcquisition> {
         match content {
             SegmentContent::Plain => self.scope.store().acquire_resource(&self.key, None),
             SegmentContent::Encrypted(c) => self.scope.store().acquire_resource_with_ctx(

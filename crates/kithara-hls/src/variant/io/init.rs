@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use kithara_assets::AssetResource;
 #[cfg(test)]
 use kithara_assets::ResourceKey;
 use kithara_drm::DecryptContext;
@@ -8,6 +9,7 @@ use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
 
 use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};
 use crate::{
+    HlsResult,
     handle::ResourceHandle,
     playlist::{PlaylistAccess, PlaylistState},
     segment::{
@@ -24,9 +26,18 @@ impl HlsVariant {
     ) -> Option<FetchCmd> {
         let init = self.init()?;
         let resource_handle = self.init_handle()?;
-        let resource = resource_handle
-            .acquire(init.content())
-            .expect("acquire_resource for init must succeed");
+        let resource = match resource_handle.acquire(init.content()) {
+            Ok(resource) => resource,
+            Err(error) => {
+                tracing::debug!(
+                    variant = self.variant,
+                    error = %error,
+                    "build_init_cmd: acquire_resource dropped (variant switch in flight)"
+                );
+                let _ = handle.into_missing();
+                return None;
+            }
+        };
         self.build_cmd(
             resource_handle.url().clone(),
             resource,
@@ -51,8 +62,10 @@ impl HlsVariant {
         variant_idx: usize,
         decrypt_ctx: Option<DecryptContext>,
         ctx: &PlanCtx,
-    ) -> Option<Segment> {
-        let url = playlist_state.init_url(variant_idx)?;
+    ) -> HlsResult<Option<Segment>> {
+        let Some(url) = playlist_state.init_url(variant_idx) else {
+            return Ok(None);
+        };
         let needs_exact = needs_exact_byte_sizes(
             playlist_state.variant_codec(variant_idx),
             playlist_state.variant_container(variant_idx),
@@ -62,13 +75,13 @@ impl HlsVariant {
         } else {
             SegmentSize::default()
         };
-        Some(Segment::Init(InitSegment {
-            resource_id: ctx.scope.key_for(&url),
+        Ok(Some(Segment::Init(InitSegment {
+            resource_id: ctx.scope.key(&AssetResource::Url(url.clone()))?,
             url,
             state: SegmentSlotState::missing(),
             size,
             content: SegmentContent::from(decrypt_ctx),
-        }))
+        })))
     }
 
     delegate::delegate! {

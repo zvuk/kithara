@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
+use kithara_assets::{AssetStoreBuilder, StorageBackend};
 use kithara_bufpool::Region;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
@@ -122,6 +123,7 @@ impl Queue {
     pub fn new(config: QueueConfig) -> Self {
         let QueueConfig {
             player,
+            store,
             cancel: config_cancel,
             max_concurrent_loads,
             prefetch_duration: _,
@@ -142,11 +144,19 @@ impl Queue {
                 .build();
             Arc::new(PlayerImpl::new(config))
         });
+        let store = store.unwrap_or_else(|| {
+            AssetStoreBuilder::default()
+                .backend(StorageBackend::default())
+                .cancel(cancel.child())
+                .pool(player.byte_pool().clone())
+                .build()
+        });
         player.set_auto_advance_enabled(false);
         let bus = player.bus().clone();
         let tracks = Arc::new(Tracks::new(bus.clone()));
         let loader = Arc::new(Loader::new(
             Arc::clone(&player),
+            store,
             max_concurrent_loads,
             Arc::clone(&tracks),
         ));
