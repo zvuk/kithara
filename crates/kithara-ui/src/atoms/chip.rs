@@ -15,6 +15,7 @@ use crate::{
 struct Consts;
 
 impl Consts {
+    const BORDER_WIDTH: f32 = 1.0;
     const HEIGHT: f32 = 18.0;
     const MIN_WIDTH: f32 = 24.0;
     const PADDING_X: f32 = 8.0;
@@ -70,7 +71,13 @@ fn chip_style(
         } else {
             palette.text_dim
         },
-        border: Border::default(),
+        border: if active {
+            Border::default()
+        } else {
+            Border::default()
+                .width(Consts::BORDER_WIDTH)
+                .color(palette.line)
+        },
         ..ButtonStyle::default()
     }
 }

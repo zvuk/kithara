@@ -3,9 +3,11 @@
     version: 1,
     id: "gallery-knobs",
     root: Column(
+        gap: Some(8.0),
         children: [
-            Control(id: "title", kind: "text", read: Model(id: "gallery.label.knobs")),
+            Control(id: "title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.knobs")),
             Row(
+                gap: Some(24.0),
                 children: [
                     Control(
                         id: "size-26",

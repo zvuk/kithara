@@ -3,25 +3,30 @@
     version: 1,
     id: "gallery-readouts",
     root: Column(
+        gap: Some(8.0),
         children: [
-            Control(id: "title", kind: "text", read: Model(id: "gallery.label.readouts")),
+            Control(id: "title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.readouts")),
             Row(
+                gap: Some(18.0),
                 children: [
                     Control(
                         id: "bpm",
                         kind: "readout",
+                        size: (w: Fixed(64.0), h: Fixed(26.0)),
                         props: { "label": Text("BPM"), "tone": Text("accent") },
                         read: Model(id: "mock.bpm"),
                     ),
                     Control(
                         id: "key",
                         kind: "readout",
+                        size: (w: Fixed(46.0), h: Fixed(26.0)),
                         props: { "label": Text("KEY") },
                         read: Model(id: "mock.key"),
                     ),
                     Control(
                         id: "remain",
                         kind: "readout",
+                        size: (w: Fixed(72.0), h: Fixed(26.0)),
                         props: { "label": Text("REMAIN"), "framed": Bool(true) },
                         read: Model(id: "mock.remain"),
                     ),

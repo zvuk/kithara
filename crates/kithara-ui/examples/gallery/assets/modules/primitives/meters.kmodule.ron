@@ -3,9 +3,11 @@
     version: 1,
     id: "gallery-meters",
     root: Column(
+        gap: Some(8.0),
         children: [
-            Control(id: "title", kind: "text", read: Model(id: "gallery.label.meters")),
+            Control(id: "title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.meters")),
             Row(
+                gap: Some(24.0),
                 children: [
                     Control(
                         id: "stereo",

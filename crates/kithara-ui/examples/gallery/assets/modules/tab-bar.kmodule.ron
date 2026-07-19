@@ -4,22 +4,26 @@
     id: "gallery-tab-bar",
     root: Row(
         size: (w: Fill, h: Fixed(28.0)),
+        gap: Some(1.0),
         children: [
             Control(
                 id: "atoms",
                 kind: "chip",
+                size: (w: Fixed(110.0), h: Fixed(28.0)),
                 props: { "label": Text("ПРИМИТИВЫ") },
                 read: Model(id: "gallery.tab.atoms"),
             ),
             Control(
                 id: "buttons",
                 kind: "chip",
+                size: (w: Fixed(90.0), h: Fixed(28.0)),
                 props: { "label": Text("КНОПКИ") },
                 read: Model(id: "gallery.tab.buttons"),
             ),
             Control(
                 id: "faders",
                 kind: "chip",
+                size: (w: Fixed(96.0), h: Fixed(28.0)),
                 props: { "label": Text("ФЕЙДЕРЫ") },
                 read: Model(id: "gallery.tab.faders"),
             ),

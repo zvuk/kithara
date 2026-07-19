@@ -17,15 +17,15 @@ use crate::{
 struct Consts;
 
 impl Consts {
+    const BORDER_WIDTH: f32 = 1.0;
     const BUTTON_HEIGHT: f32 = 28.0;
     const BUTTON_ICON_SIZE: f32 = 11.0;
     const BUTTON_MIN_WIDTH: f32 = 72.0;
-    const BUTTON_PADDING_X: f32 = 10.0;
-    const BUTTON_TEXT: f32 = 13.0;
+    const BUTTON_PADDING_X: f32 = 8.0;
+    const BUTTON_TEXT: f32 = 11.0;
     const ICON_GAP: f32 = 4.0;
     const MICRO_BUTTON_SIZE: f32 = 34.0;
     const MICRO_ICON_SIZE: f32 = 14.0;
-    const PRIMARY_TEXT: f32 = 14.0;
 }
 
 pub(crate) fn desc() -> ControlKindDesc {
@@ -60,11 +60,7 @@ pub(crate) fn view<'a>(
     } else {
         label
     };
-    let label_size = if visual == ButtonVisual::TransportPrimary {
-        Consts::PRIMARY_TEXT
-    } else {
-        Consts::BUTTON_TEXT
-    };
+    let label_size = Consts::BUTTON_TEXT;
     let weight = if visual.is_primary() {
         Weight::Bold
     } else {
@@ -75,15 +71,11 @@ pub(crate) fn view<'a>(
             let icon = if active { Icon::Pause } else { Icon::Play };
             icon.view(Consts::MICRO_ICON_SIZE, palette.bg)
         }
-        ButtonVisual::TransportPrimary => {
-            let icon = if active { Icon::Pause } else { Icon::Play };
-            icon_label(icon, label, label_size, weight, palette.bg)
-        }
         ButtonVisual::Transport => transport_content(label, label_size, weight, palette),
-        ButtonVisual::Default => shaped_text(label)
+        ButtonVisual::TransportPrimary | ButtonVisual::Default => shaped_text(label)
             .font(Font {
                 weight,
-                ..fonts::SANS
+                ..fonts::MONO
             })
             .size(label_size)
             .into(),
@@ -133,7 +125,7 @@ fn transport_content<'a>(
             shaped_text(label)
                 .font(Font {
                     weight,
-                    ..fonts::SANS
+                    ..fonts::MONO
                 })
                 .size(size)
                 .into()
@@ -154,7 +146,7 @@ fn icon_label<'a>(
         shaped_text(label)
             .font(Font {
                 weight,
-                ..fonts::SANS
+                ..fonts::MONO
             })
             .size(size),
     ]
@@ -207,6 +199,13 @@ fn control_button_style(
                 ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel,
             }
         };
+        let border = if highlighted {
+            Border::default()
+        } else {
+            Border::default()
+                .width(Consts::BORDER_WIDTH)
+                .color(palette.line)
+        };
         ButtonStyle {
             background: Some(Background::Color(background)),
             text_color: if highlighted {
@@ -214,7 +213,7 @@ fn control_button_style(
             } else {
                 palette.text
             },
-            border: Border::default(),
+            border,
             ..ButtonStyle::default()
         }
     }

@@ -31,6 +31,10 @@ pub enum ControlNode {
         id: Option<NodeId>,
         #[serde(default)]
         size: Option<SizeSpec>,
+        #[serde(default)]
+        gap: Option<f32>,
+        #[serde(default)]
+        pad: Option<f32>,
         children: Vec<Self>,
     },
     Column {
@@ -38,6 +42,10 @@ pub enum ControlNode {
         id: Option<NodeId>,
         #[serde(default)]
         size: Option<SizeSpec>,
+        #[serde(default)]
+        gap: Option<f32>,
+        #[serde(default)]
+        pad: Option<f32>,
         children: Vec<Self>,
     },
     Include {

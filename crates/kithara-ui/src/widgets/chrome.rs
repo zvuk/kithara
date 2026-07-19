@@ -85,7 +85,7 @@ pub(crate) const fn border_width() -> f32 {
 
 fn module_style(palette: RenderPalette) -> ContainerStyle {
     ContainerStyle::default()
-        .background(Background::Color(palette.bg_inset))
+        .background(Background::Color(palette.bg_panel))
         .border(
             Border::default()
                 .width(Consts::BORDER_WIDTH)

@@ -11,6 +11,7 @@ struct Consts;
 impl Consts {
     const BODY_SIZE: f32 = 13.0;
     const HEIGHT: f32 = 18.0;
+    const SECTION_SIZE: f32 = 9.0;
     const TRACK_TITLE_SIZE: f32 = 15.0;
 }
 
@@ -28,16 +29,20 @@ pub(crate) fn view<'a>(
     let Some(ReadValue::Text(value)) = value else {
         return iced::widget::Space::new().into();
     };
-    let (font, size) = if style == Some("track-title") {
-        (fonts::display(Weight::Semibold), Consts::TRACK_TITLE_SIZE)
-    } else {
-        (fonts::SANS, Consts::BODY_SIZE)
+    let (font, size, color) = match style {
+        Some("track-title") => (
+            fonts::display(Weight::Semibold),
+            Consts::TRACK_TITLE_SIZE,
+            palette.text,
+        ),
+        Some("section") => (fonts::MONO, Consts::SECTION_SIZE, palette.muted),
+        _ => (fonts::SANS, Consts::BODY_SIZE, palette.text),
     };
     container(
         shaped_text((*value).to_owned())
             .font(font)
             .size(size)
-            .color(palette.text),
+            .color(color),
     )
     .width(Length::Fill)
     .height(Length::Fill)

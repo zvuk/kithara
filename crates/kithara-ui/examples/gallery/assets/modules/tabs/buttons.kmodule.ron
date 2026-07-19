@@ -3,13 +3,17 @@
     version: 1,
     id: "gallery-buttons-tab",
     root: Column(
+        gap: Some(18.0),
+        pad: Some(14.0),
         children: [
-            Control(id: "transport-title", kind: "text", read: Model(id: "gallery.label.transport")),
+            Control(id: "transport-title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.transport")),
             Row(
+                gap: Some(1.0),
                 children: [
                     Control(
                         id: "play",
                         kind: "button",
+                        size: (w: Fixed(48.0), h: Fixed(28.0)),
                         props: {
                             "label": Text("PLAY"),
                             "active-label": Text("PAUSE"),
@@ -20,29 +24,39 @@
                     Control(
                         id: "cue",
                         kind: "button",
+                        size: (w: Fixed(42.0), h: Fixed(28.0)),
                         props: { "label": Text("CUE"), "style": Text("transport") },
                         read: Model(id: "mock.button.cue"),
                     ),
                     Control(
                         id: "sync",
                         kind: "button",
+                        size: (w: Fixed(46.0), h: Fixed(28.0)),
                         props: { "label": Text("SYNC"), "style": Text("transport") },
                         read: Model(id: "mock.button.sync"),
                     ),
                 ],
             ),
-            Control(id: "regular-title", kind: "text", read: Model(id: "gallery.label.regular")),
+            Control(id: "regular-title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.regular")),
             Row(
+                gap: Some(12.0),
                 children: [
-                    Control(id: "default", kind: "button", props: { "label": Text("DEFAULT") }),
+                    Control(
+                        id: "default",
+                        kind: "button",
+                        size: (w: Fixed(72.0), h: Fixed(28.0)),
+                        props: { "label": Text("DEFAULT") },
+                    ),
                     Control(
                         id: "primary",
                         kind: "button",
+                        size: (w: Fixed(72.0), h: Fixed(28.0)),
                         props: { "label": Text("PRIMARY"), "style": Text("transport-primary") },
                     ),
                     Control(
                         id: "micro",
                         kind: "button",
+                        size: (w: Fixed(36.0), h: Fixed(20.0)),
                         props: { "label": Text("PLAY"), "style": Text("micro-primary") },
                     ),
                 ],

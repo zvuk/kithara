@@ -141,15 +141,29 @@ pub(crate) fn compute_size(
     }
 
     match node {
-        ExpandedNode::Row { children, .. } => combine_horizontal(
-            children
-                .iter()
-                .map(|child| compute_size(child, catalog, interner)),
+        ExpandedNode::Row {
+            children, gap, pad, ..
+        } => inset(
+            combine_horizontal(
+                children
+                    .iter()
+                    .map(|child| compute_size(child, catalog, interner)),
+            ),
+            gap_total(*gap, children.len()),
+            0.0,
+            *pad,
         ),
-        ExpandedNode::Column { children, .. } => combine_vertical(
-            children
-                .iter()
-                .map(|child| compute_size(child, catalog, interner)),
+        ExpandedNode::Column {
+            children, gap, pad, ..
+        } => inset(
+            combine_vertical(
+                children
+                    .iter()
+                    .map(|child| compute_size(child, catalog, interner)),
+            ),
+            0.0,
+            gap_total(*gap, children.len()),
+            *pad,
         ),
         ExpandedNode::Slot { children, .. } if children.is_empty() => SizeSpec::FILL,
         ExpandedNode::Slot { children, .. } => combine_vertical(
@@ -160,6 +174,30 @@ pub(crate) fn compute_size(
         ExpandedNode::Control { kind, .. } => catalog
             .kind(interner.resolve(*kind))
             .map_or(SizeSpec::FILL, |description| description.size),
+    }
+}
+
+fn gap_total(gap: Option<f32>, child_count: usize) -> f32 {
+    let gaps = u16::try_from(child_count.saturating_sub(1)).unwrap_or(u16::MAX);
+    gap.unwrap_or(0.0) * f32::from(gaps)
+}
+
+fn inset(size: SizeSpec, extra_w: f32, extra_h: f32, pad: Option<f32>) -> SizeSpec {
+    let pad = pad.unwrap_or(0.0) * 2.0;
+    SizeSpec::new(grow(size.w, extra_w + pad), grow(size.h, extra_h + pad))
+}
+
+fn grow(dim: Dim, delta: f32) -> Dim {
+    if delta <= 0.0 {
+        return dim;
+    }
+    match dim {
+        Dim::Fixed(value) => Dim::Fixed(value + delta),
+        Dim::Range { min, max } => Dim::Range {
+            min: min + delta,
+            max: max.map(|max| max + delta),
+        },
+        Dim::Fill => Dim::Fill,
     }
 }
 
@@ -229,6 +267,8 @@ mod tests {
                 control(&mut interner, "right", fixed(6.0, 8.0)),
             ],
             size: None,
+            gap: None,
+            pad: None,
         };
 
         let size = compute_size(&node, &EmptyCatalog, &interner);
@@ -247,6 +287,8 @@ mod tests {
                 control(&mut interner, "bottom", fixed(6.0, 8.0)),
             ],
             size: None,
+            gap: None,
+            pad: None,
         };
 
         let size = compute_size(&node, &EmptyCatalog, &interner);
@@ -263,6 +305,8 @@ mod tests {
             id: None,
             children: vec![control(&mut interner, "child", fixed(10.0, 10.0))],
             size: Some(override_size),
+            gap: None,
+            pad: None,
         };
 
         assert_eq!(compute_size(&node, &EmptyCatalog, &interner), override_size);
@@ -282,6 +326,8 @@ mod tests {
                 ),
             ],
             size: None,
+            gap: None,
+            pad: None,
         };
 
         let size = compute_size(&node, &EmptyCatalog, &interner);

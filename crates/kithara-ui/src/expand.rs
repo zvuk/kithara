@@ -14,11 +14,15 @@ pub enum ExpandedNode {
     Row {
         id: Option<InternId>,
         size: Option<SizeSpec>,
+        gap: Option<f32>,
+        pad: Option<f32>,
         children: Vec<Self>,
     },
     Column {
         id: Option<InternId>,
         size: Option<SizeSpec>,
+        gap: Option<f32>,
+        pad: Option<f32>,
         children: Vec<Self>,
     },
     Slot {
@@ -301,7 +305,13 @@ fn walk(
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     match node {
-        ControlNode::Row { id, size, children } => {
+        ControlNode::Row {
+            id,
+            size,
+            gap,
+            pad,
+            children,
+        } => {
             machine.budget.charge(&context.origin)?;
             Ok(ExpandedNode::Row {
                 id: id
@@ -309,13 +319,21 @@ fn walk(
                     .map(|id| machine.interner.intern(&id.0, &context.origin))
                     .transpose()?,
                 size: *size,
+                gap: *gap,
+                pad: *pad,
                 children: children
                     .iter()
                     .map(|child| walk(context, child, depth, machine))
                     .collect::<Result<_, _>>()?,
             })
         }
-        ControlNode::Column { id, size, children } => {
+        ControlNode::Column {
+            id,
+            size,
+            gap,
+            pad,
+            children,
+        } => {
             machine.budget.charge(&context.origin)?;
             Ok(ExpandedNode::Column {
                 id: id
@@ -323,6 +341,8 @@ fn walk(
                     .map(|id| machine.interner.intern(&id.0, &context.origin))
                     .transpose()?,
                 size: *size,
+                gap: *gap,
+                pad: *pad,
                 children: children
                     .iter()
                     .map(|child| walk(context, child, depth, machine))

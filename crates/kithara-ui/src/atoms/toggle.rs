@@ -167,6 +167,7 @@ fn draw_toggle(frame: &mut Frame, bounds: Rectangle, active: bool, palette: Rend
 fn draw_checkbox(frame: &mut Frame, bounds: Rectangle, active: bool, palette: RenderPalette) {
     if active {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), palette.accent);
+        draw_border(frame, bounds, palette.line);
     } else {
         draw_border(frame, bounds, palette.muted);
     }

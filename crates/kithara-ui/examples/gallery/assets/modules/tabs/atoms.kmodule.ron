@@ -3,6 +3,8 @@
     version: 1,
     id: "gallery-atoms-tab",
     root: Column(
+        gap: Some(18.0),
+        pad: Some(14.0),
         children: [
             Include(id: "knobs", source: "../primitives/knobs.kmodule.ron"),
             Include(id: "meters", source: "../primitives/meters.kmodule.ron"),

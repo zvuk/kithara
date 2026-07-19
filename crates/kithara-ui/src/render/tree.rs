@@ -58,7 +58,7 @@ pub fn render<'a>(
     reads: &dyn Reads,
     palette: RenderPalette,
 ) -> Element<'a, UiEvent> {
-    module_chrome(render_compiled(node, ui, reads, palette), palette)
+    render_compiled(node, ui, reads, palette)
 }
 
 fn render_compiled<'a>(
@@ -104,7 +104,9 @@ fn render_compiled<'a>(
             })
             .into(),
         },
-        CompiledNode::Module { root, .. } => render_node(root, ui, reads, palette),
+        CompiledNode::Module { root, .. } => {
+            module_chrome(render_node(root, ui, reads, palette), palette)
+        }
     }
 }
 
@@ -115,19 +117,35 @@ fn render_node<'a>(
     palette: RenderPalette,
 ) -> Element<'a, UiEvent> {
     let element = match node {
-        ExpandedNode::Row { children, .. } => container(
+        ExpandedNode::Row {
+            children, gap, pad, ..
+        } => container(
             Row::with_children(
                 children
                     .iter()
                     .map(|child| render_node(child, ui, reads, palette)),
             )
-            .spacing(Consts::GRID_GAP)
+            .spacing(gap.unwrap_or(Consts::GRID_GAP))
             .width(Length::Fill),
         )
+        .padding(pad.unwrap_or(0.0))
         .width(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(palette.line_soft)))
         .into(),
-        ExpandedNode::Column { children, .. } | ExpandedNode::Slot { children, .. } => container(
+        ExpandedNode::Column {
+            children, gap, pad, ..
+        } => container(
+            Column::with_children(
+                children
+                    .iter()
+                    .map(|child| render_node(child, ui, reads, palette)),
+            )
+            .spacing(gap.unwrap_or(Consts::GRID_GAP))
+            .width(Length::Fill),
+        )
+        .padding(pad.unwrap_or(0.0))
+        .width(Length::Fill)
+        .into(),
+        ExpandedNode::Slot { children, .. } => container(
             Column::with_children(
                 children
                     .iter()
@@ -137,7 +155,6 @@ fn render_node<'a>(
             .width(Length::Fill),
         )
         .width(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(palette.line_soft)))
         .into(),
         ExpandedNode::Control {
             path,

@@ -84,7 +84,7 @@ impl Default for MockReads {
             checkbox_on: true,
             chip_active: true,
             chip_inactive: false,
-            knob: 0.62,
+            knob: 0.5,
             levels_volume: 0.7,
             toggle_off: false,
             toggle_on: true,
