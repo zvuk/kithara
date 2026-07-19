@@ -5,6 +5,7 @@ use crate::{
     ids::{ControlKind, NodeId, SourceUri},
     module::{AdaptivePolicy, BindingRef, ControlNode, PropValue},
     resolve::ModuleSet,
+    size::SizeSpec,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -12,20 +13,24 @@ use crate::{
 pub enum ExpandedNode {
     Row {
         id: Option<NodeId>,
+        size: Option<SizeSpec>,
         children: Vec<Self>,
     },
     Column {
         id: Option<NodeId>,
+        size: Option<SizeSpec>,
         children: Vec<Self>,
     },
     Slot {
         id: NodeId,
+        size: Option<SizeSpec>,
         children: Vec<Self>,
     },
     Control {
         path: String,
         id: NodeId,
         kind: ControlKind,
+        size: Option<SizeSpec>,
         props: BTreeMap<String, PropValue>,
         read: Option<BindingRef>,
         write: Option<BindingRef>,
@@ -196,30 +201,33 @@ fn walk(
     machine: &mut Machine<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     match node {
-        ControlNode::Row { id, children } => {
+        ControlNode::Row { id, size, children } => {
             machine.budget.charge(&context.origin)?;
             Ok(ExpandedNode::Row {
                 id: id.clone(),
+                size: *size,
                 children: children
                     .iter()
                     .map(|child| walk(context, child, depth, machine))
                     .collect::<Result<_, _>>()?,
             })
         }
-        ControlNode::Column { id, children } => {
+        ControlNode::Column { id, size, children } => {
             machine.budget.charge(&context.origin)?;
             Ok(ExpandedNode::Column {
                 id: id.clone(),
+                size: *size,
                 children: children
                     .iter()
                     .map(|child| walk(context, child, depth, machine))
                     .collect::<Result<_, _>>()?,
             })
         }
-        ControlNode::Slot { id, default } => {
+        ControlNode::Slot { id, size, default } => {
             machine.budget.charge(&context.origin)?;
             Ok(ExpandedNode::Slot {
                 id: id.clone(),
+                size: *size,
                 children: default
                     .iter()
                     .map(|child| walk(context, child, depth, machine))
@@ -241,6 +249,7 @@ fn walk(
         ControlNode::Control {
             id,
             kind,
+            size,
             props,
             read,
             write,
@@ -270,6 +279,7 @@ fn walk(
                 path,
                 id: id.clone(),
                 kind: kind.clone(),
+                size: *size,
                 props,
                 read,
                 write,

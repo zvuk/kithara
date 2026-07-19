@@ -96,7 +96,7 @@ fn empty_state(state: &Kithara) -> Element<'_, Message> {
 
 fn render_compiled<'a>(state: &'a Kithara, node: &CompiledNode) -> Element<'a, Message> {
     match node {
-        CompiledNode::Split { axis, children } => match axis {
+        CompiledNode::Split { axis, children, .. } => match axis {
             Axis::Horizontal => Row::with_children(children.iter().map(|(weight, child)| {
                 container(render_compiled(state, child))
                     .width(Length::FillPortion(fill_portion(*weight)))

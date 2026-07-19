@@ -6,7 +6,14 @@ use kithara_ui::{
         ControlCatalog, ControlKindDesc, EndpointCategory, EndpointDesc, EndpointRegistry,
         PropKind, ValueKind,
     },
+    size::{Dim, SizeSpec},
 };
+
+pub(crate) const CONTROL_SIZE: f32 = 10.0;
+
+fn control_size() -> SizeSpec {
+    SizeSpec::new(Dim::Fixed(CONTROL_SIZE), Dim::Fixed(CONTROL_SIZE))
+}
 
 #[derive(Default)]
 pub(crate) struct TestCatalog {
@@ -14,7 +21,8 @@ pub(crate) struct TestCatalog {
 }
 
 impl TestCatalog {
-    fn insert(&mut self, kind: &str, description: ControlKindDesc) {
+    fn insert(&mut self, kind: &str, mut description: ControlKindDesc) {
+        description.size = control_size();
         self.kinds.insert(ControlKind(kind.to_owned()), description);
     }
 }

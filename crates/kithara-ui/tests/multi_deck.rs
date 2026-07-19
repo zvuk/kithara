@@ -66,7 +66,7 @@ fn collect_instance_decks(node: &CompiledNode, decks: &mut BTreeMap<String, Vec<
                 collect_instance_decks(child, decks);
             }
         }
-        CompiledNode::Module { instance, root } => {
+        CompiledNode::Module { instance, root, .. } => {
             let mut values = Vec::new();
             collect_control_decks(root, &mut values);
             decks.insert(instance.0.clone(), values);

@@ -7,6 +7,7 @@ use kithara_ui::{
     error::UiDocError,
     expand::ExpandedNode,
     module::PropValue,
+    size::{Dim, SizeSpec},
     source::{Limits, MemResolver},
 };
 
@@ -28,6 +29,41 @@ fn compiles_micro_layout_end_to_end() {
         panic!("expected module root");
     };
     assert_eq!(instance.0, "deck-a");
+}
+
+#[kithara::test]
+fn layout_module_size_override_wins_over_computed_size() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "override.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "override",
+            root: Module(
+                instance: "deck-a",
+                source: "module.kmodule.ron",
+                size: Some((w: Fixed(100.0), h: Fixed(50.0))),
+            ))"#,
+    );
+    resolver.insert(
+        "module.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "module",
+            root: Control(id: "play", kind: "button"))"#,
+    );
+
+    let ui = compile(
+        "override.klayout.ron",
+        &resolver,
+        &common::player_catalog(),
+        &common::player_registry(),
+        &Limits::default(),
+    )
+    .unwrap();
+    let expected = SizeSpec::new(Dim::Fixed(100.0), Dim::Fixed(50.0));
+    let CompiledNode::Module { size, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+
+    assert_eq!(*size, expected);
+    assert_eq!(ui.size, expected);
 }
 
 #[kithara::test]

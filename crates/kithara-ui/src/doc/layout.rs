@@ -2,11 +2,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::ron_io;
 use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
     ids::{DocId, InstanceId, SourceUri},
-    ron_io,
+    size::SizeSpec,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -32,6 +33,8 @@ pub enum LayoutNode {
         source: String,
         #[serde(default)]
         with: BTreeMap<String, String>,
+        #[serde(default)]
+        size: Option<SizeSpec>,
     },
 }
 

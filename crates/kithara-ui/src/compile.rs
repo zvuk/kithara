@@ -5,6 +5,7 @@ use crate::{
     layout::{Axis, LayoutNode, parse_layout},
     registry::{ControlCatalog, EndpointRegistry},
     resolve::load_module_graph,
+    size::{SizeSpec, combine_horizontal, combine_vertical, compute_size},
     source::{Limits, SourceResolver},
     validate,
 };
@@ -13,6 +14,7 @@ use crate::{
 #[non_exhaustive]
 pub struct CompiledUi {
     pub root: CompiledNode,
+    pub size: SizeSpec,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -21,10 +23,12 @@ pub enum CompiledNode {
     Split {
         axis: Axis,
         children: Vec<(f32, Self)>,
+        size: SizeSpec,
     },
     Module {
         instance: InstanceId,
         root: Box<ExpandedNode>,
+        size: SizeSpec,
     },
 }
 
@@ -60,7 +64,8 @@ pub fn compile(
         limits,
         &mut budget,
     )?;
-    Ok(CompiledUi { root })
+    let size = compiled_node_size(&root);
+    Ok(CompiledUi { root, size })
 }
 
 fn build(
@@ -74,9 +79,8 @@ fn build(
 ) -> Result<CompiledNode, UiDocError> {
     budget.charge(layout_uri)?;
     match node {
-        LayoutNode::Split { axis, children } => Ok(CompiledNode::Split {
-            axis: *axis,
-            children: children
+        LayoutNode::Split { axis, children } => {
+            let children: Vec<_> = children
                 .iter()
                 .map(|child| {
                     Ok((
@@ -92,12 +96,23 @@ fn build(
                         )?,
                     ))
                 })
-                .collect::<Result<_, UiDocError>>()?,
-        }),
+                .collect::<Result<_, UiDocError>>()?;
+            let sizes = children.iter().map(|(_, child)| compiled_node_size(child));
+            let size = match axis {
+                Axis::Horizontal => combine_horizontal(sizes),
+                Axis::Vertical => combine_vertical(sizes),
+            };
+            Ok(CompiledNode::Split {
+                axis: *axis,
+                children,
+                size,
+            })
+        }
         LayoutNode::Module {
             instance,
             source,
             with,
+            size,
         } => {
             for value in with.values() {
                 if !value.starts_with("$$")
@@ -131,10 +146,18 @@ fn build(
                     validate::check_controls(control, origin, catalog, endpoints)
                 },
             )?;
+            let size = (*size).unwrap_or_else(|| compute_size(&root, catalog));
             Ok(CompiledNode::Module {
                 instance: instance.clone(),
                 root: Box::new(root),
+                size,
             })
         }
+    }
+}
+
+fn compiled_node_size(node: &CompiledNode) -> SizeSpec {
+    match node {
+        CompiledNode::Split { size, .. } | CompiledNode::Module { size, .. } => *size,
     }
 }

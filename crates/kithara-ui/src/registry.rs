@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use derive_more::Display;
 
-use crate::ids::{ControlKind, EndpointId};
+use crate::{
+    ids::{ControlKind, EndpointId},
+    size::SizeSpec,
+};
 
 #[derive(Clone, Copy, Debug, Display, Eq, PartialEq)]
 #[non_exhaustive]
@@ -38,6 +41,7 @@ pub struct ControlKindDesc {
     pub props: BTreeMap<String, PropKind>,
     pub read: Option<ValueKind>,
     pub write: Option<ValueKind>,
+    pub size: SizeSpec,
 }
 
 impl ControlKindDesc {
@@ -47,6 +51,7 @@ impl ControlKindDesc {
             props: BTreeMap::new(),
             read,
             write,
+            size: SizeSpec::FILL,
         }
     }
 
@@ -86,4 +91,18 @@ impl EndpointDesc {
 
 pub trait EndpointRegistry {
     fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc>;
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn control_kind_defaults_to_fill() {
+        let description = ControlKindDesc::new(None, None);
+
+        assert_eq!(description.size, SizeSpec::FILL);
+    }
 }

@@ -4,7 +4,11 @@ use kithara_ui::compile::CompiledNode;
 
 pub(super) fn visible(node: &CompiledNode, hidden: &BTreeSet<String>) -> Option<CompiledNode> {
     match node {
-        CompiledNode::Split { axis, children } => {
+        CompiledNode::Split {
+            axis,
+            children,
+            size,
+        } => {
             let children = children
                 .iter()
                 .filter_map(|(weight, child)| visible(child, hidden).map(|child| (*weight, child)))
@@ -12,6 +16,7 @@ pub(super) fn visible(node: &CompiledNode, hidden: &BTreeSet<String>) -> Option<
             (!children.is_empty()).then_some(CompiledNode::Split {
                 children,
                 axis: *axis,
+                size: *size,
             })
         }
         CompiledNode::Module { instance, .. } if hidden.contains(&instance.0) => None,

@@ -121,7 +121,7 @@ fn walk_module(
     seen: &mut BTreeSet<String>,
 ) -> Result<(), UiDocError> {
     match node {
-        ControlNode::Row { id, children } | ControlNode::Column { id, children } => {
+        ControlNode::Row { id, children, .. } | ControlNode::Column { id, children, .. } => {
             let here = match id {
                 Some(id) => {
                     let here = path.push(format!("Group({id})"));
@@ -138,7 +138,7 @@ fn walk_module(
         ControlNode::Include { id, .. } => {
             record(&id.0, &path.push(format!("Include({id})")), origin, seen)
         }
-        ControlNode::Slot { id, default } => {
+        ControlNode::Slot { id, default, .. } => {
             let here = path.push(format!("Slot({id})"));
             record(&id.0, &here, origin, seen)?;
             for (index, child) in default.iter().enumerate() {
@@ -507,6 +507,7 @@ mod tests {
             path: "play".into(),
             id: NodeId("play".into()),
             kind: ControlKind("button".into()),
+            size: None,
             props: BTreeMap::new(),
             read: None,
             write: Some(write),
@@ -595,6 +596,7 @@ mod tests {
             path: "volume".into(),
             id: NodeId("volume".into()),
             kind: ControlKind("fader".into()),
+            size: None,
             props: BTreeMap::new(),
             read: None,
             write: Some(BindingRef::Parameter {
@@ -631,6 +633,7 @@ mod tests {
             path: "unknown".into(),
             id: NodeId("unknown".into()),
             kind: ControlKind("nope".into()),
+            size: None,
             props: BTreeMap::new(),
             read: None,
             write: None,

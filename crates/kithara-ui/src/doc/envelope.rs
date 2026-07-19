@@ -1,9 +1,9 @@
 use serde::Deserialize;
 
+use super::ron_io;
 use crate::{
     error::UiDocError,
     ids::{DocId, SourceUri},
-    ron_io,
 };
 
 pub(crate) const LAYOUT_SCHEMA: &str = "kithara.layout";
