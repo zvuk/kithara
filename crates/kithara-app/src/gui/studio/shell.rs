@@ -161,7 +161,7 @@ fn library_panel(state: &Kithara) -> Element<'_, Message> {
         targets: ids.iter().map(|id| channel_of(state, *id)).collect(),
     };
 
-    container(view_library(props, state.palette).map(move |msg| lib_msg(msg, &ids)))
+    container(view_library(&props, state.palette).map(move |msg| lib_msg(msg, &ids)))
         .width(Length::Fill)
         .height(Length::Fixed(studio_size::LIBRARY_HEIGHT))
         .into()

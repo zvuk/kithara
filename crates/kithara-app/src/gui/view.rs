@@ -383,11 +383,12 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_speed(state: &Kithara) -> Element<'_, Message> {
+    /// A dead-band around 1.0x keeps the RESET pill from flickering while the
+    /// slider rests near neutral.
+    const RESET_DEADBAND: f32 = 0.06;
+
     let focus = state.decks.focus();
     let ui = &state.decks.focused().ui;
-
-    // A dead-band around 1.0x keeps the RESET pill from flickering while
-    const RESET_DEADBAND: f32 = 0.06;
     let p = state.palette;
     let rate = ui.selected_rate;
 

@@ -51,7 +51,7 @@ const MARKS_WIDTH: f32 = 24.0;
 /// time column shows a stable placeholder instead of fabricating a value.
 const NO_DURATION: &str = "--:--";
 
-pub(super) fn view_library<'a>(props: LibProps<'a>, p: GuiPalette) -> Element<'a, LibMsg> {
+pub(super) fn view_library(props: &LibProps<'_>, p: GuiPalette) -> Element<'static, LibMsg> {
     let body = props
         .rows
         .iter()
@@ -71,7 +71,7 @@ pub(super) fn view_library<'a>(props: LibProps<'a>, p: GuiPalette) -> Element<'a
             ))
         });
 
-    let panel = Module::new().bg(p.bg_panel).fill_height().wrap(
+    Module::new().bg(p.bg_panel).fill_height().wrap(
         column![
             library_tabs(p),
             library_head_row(p),
@@ -81,9 +81,7 @@ pub(super) fn view_library<'a>(props: LibProps<'a>, p: GuiPalette) -> Element<'a
         ]
         .width(Length::Fill)
         .height(Length::Fill),
-    );
-
-    panel
+    )
 }
 
 fn library_tabs(p: GuiPalette) -> Element<'static, LibMsg> {
