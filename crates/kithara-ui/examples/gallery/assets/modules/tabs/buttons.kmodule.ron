@@ -1,0 +1,52 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-buttons-tab",
+    root: Column(
+        children: [
+            Control(id: "transport-title", kind: "text", read: Model(id: "gallery.label.transport")),
+            Row(
+                children: [
+                    Control(
+                        id: "play",
+                        kind: "button",
+                        props: {
+                            "label": Text("PLAY"),
+                            "active-label": Text("PAUSE"),
+                            "style": Text("transport-primary"),
+                        },
+                        read: Model(id: "mock.button.play"),
+                    ),
+                    Control(
+                        id: "cue",
+                        kind: "button",
+                        props: { "label": Text("CUE"), "style": Text("transport") },
+                        read: Model(id: "mock.button.cue"),
+                    ),
+                    Control(
+                        id: "sync",
+                        kind: "button",
+                        props: { "label": Text("SYNC"), "style": Text("transport") },
+                        read: Model(id: "mock.button.sync"),
+                    ),
+                ],
+            ),
+            Control(id: "regular-title", kind: "text", read: Model(id: "gallery.label.regular")),
+            Row(
+                children: [
+                    Control(id: "default", kind: "button", props: { "label": Text("DEFAULT") }),
+                    Control(
+                        id: "primary",
+                        kind: "button",
+                        props: { "label": Text("PRIMARY"), "style": Text("transport-primary") },
+                    ),
+                    Control(
+                        id: "micro",
+                        kind: "button",
+                        props: { "label": Text("PLAY"), "style": Text("micro-primary") },
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

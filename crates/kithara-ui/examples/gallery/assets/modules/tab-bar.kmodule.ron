@@ -1,0 +1,28 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-tab-bar",
+    root: Row(
+        size: (w: Fill, h: Fixed(28.0)),
+        children: [
+            Control(
+                id: "atoms",
+                kind: "chip",
+                props: { "label": Text("ПРИМИТИВЫ") },
+                read: Model(id: "gallery.tab.atoms"),
+            ),
+            Control(
+                id: "buttons",
+                kind: "chip",
+                props: { "label": Text("КНОПКИ") },
+                read: Model(id: "gallery.tab.buttons"),
+            ),
+            Control(
+                id: "faders",
+                kind: "chip",
+                props: { "label": Text("ФЕЙДЕРЫ") },
+                read: Model(id: "gallery.tab.faders"),
+            ),
+        ],
+    ),
+)

@@ -1,5 +1,7 @@
 //! Serializable modular UI model for kithara.
 
+#[cfg(feature = "render")]
+pub(crate) mod atoms;
 pub mod builtin;
 pub mod compile;
 pub mod error;

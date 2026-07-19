@@ -36,12 +36,15 @@ struct Consts;
 
 impl Consts {
     const INTER_FAMILY: Family = Family::Name("Inter");
-    const JETBRAINS_MONO_FAMILY: Family = Family::Name("JetBrains Mono");
+    #[cfg(not(target_vendor = "apple"))]
+    const MONO_FAMILY: Family = Family::Name("JetBrains Mono");
+    #[cfg(target_vendor = "apple")]
+    const MONO_FAMILY: Family = Family::Name("Menlo");
     const SPACE_GROTESK_FAMILY: Family = Family::Name("Space Grotesk");
 }
 
 pub const SANS: Font = font(Consts::INTER_FAMILY, Weight::Normal);
-pub const MONO: Font = font(Consts::JETBRAINS_MONO_FAMILY, Weight::Normal);
+pub const MONO: Font = font(Consts::MONO_FAMILY, Weight::Normal);
 
 #[must_use]
 pub const fn display(weight: Weight) -> Font {

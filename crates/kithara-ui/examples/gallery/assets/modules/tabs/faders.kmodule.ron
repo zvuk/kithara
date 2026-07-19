@@ -1,0 +1,36 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-faders-tab",
+    root: Column(
+        children: [
+            Control(id: "text-title", kind: "text", read: Model(id: "gallery.label.text")),
+            Control(
+                id: "track-title",
+                kind: "text",
+                props: { "style": Text("track-title") },
+                read: Model(id: "mock.track.title"),
+            ),
+            Control(id: "artist", kind: "text", read: Model(id: "mock.track.artist")),
+            Control(id: "fader-title", kind: "text", read: Model(id: "gallery.label.faders")),
+            Control(
+                id: "default",
+                kind: "fader.horizontal",
+                read: Model(id: "mock.volume"),
+            ),
+            Control(
+                id: "volume",
+                kind: "fader.horizontal",
+                props: { "style": Text("volume") },
+                read: Model(id: "mock.volume"),
+            ),
+            Control(id: "scalar-title", kind: "text", read: Model(id: "gallery.label.scalar")),
+            Control(
+                id: "scalar",
+                kind: "telemetry.scalar",
+                props: { "format": Text("percent") },
+                read: Model(id: "mock.volume"),
+            ),
+        ],
+    ),
+)

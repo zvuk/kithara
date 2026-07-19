@@ -26,6 +26,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+kithara-platform = { path = "../kithara-platform" }
 kithara-test-utils = { path = "../kithara-test-utils", features = [
     "client-reqwest",
     "probe",
@@ -36,3 +37,7 @@ ron = { workspace = true }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "gallery"
+required-features = ["render"]

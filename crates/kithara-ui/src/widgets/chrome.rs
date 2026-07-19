@@ -16,9 +16,8 @@ struct Consts;
 
 impl Consts {
     const BORDER_WIDTH: f32 = 1.0;
-    const CORNER_TICK_SIZE: f32 = 9.0;
+    const CORNER_TICK_SIZE: f32 = 10.0;
     const CORNER_TICK_WIDTH: f32 = 2.0;
-    const SHORT_MODULE_HEIGHT: f32 = 48.0;
 }
 
 pub fn module_chrome<'a, Message: 'a, C: Into<Element<'a, Message>>>(
@@ -125,18 +124,16 @@ impl<Message> canvas::Program<Message> for CornerTicks {
             Size::new(Consts::CORNER_TICK_WIDTH, Consts::CORNER_TICK_SIZE),
             self.color,
         );
-        if bounds.height >= Consts::SHORT_MODULE_HEIGHT {
-            frame.fill_rectangle(
-                Point::new(right_tick, bottom),
-                Size::new(Consts::CORNER_TICK_SIZE, Consts::CORNER_TICK_WIDTH),
-                self.color,
-            );
-            frame.fill_rectangle(
-                Point::new(right, bottom_tick),
-                Size::new(Consts::CORNER_TICK_WIDTH, Consts::CORNER_TICK_SIZE),
-                self.color,
-            );
-        }
+        frame.fill_rectangle(
+            Point::new(right_tick, bottom),
+            Size::new(Consts::CORNER_TICK_SIZE, Consts::CORNER_TICK_WIDTH),
+            self.color,
+        );
+        frame.fill_rectangle(
+            Point::new(right, bottom_tick),
+            Size::new(Consts::CORNER_TICK_WIDTH, Consts::CORNER_TICK_SIZE),
+            self.color,
+        );
 
         vec![frame.into_geometry()]
     }

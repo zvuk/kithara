@@ -10,6 +10,7 @@ pub enum ValueKind {
     Trigger,
     Bool,
     Scalar,
+    Stereo,
     Text,
     Waveform,
     TrackList,

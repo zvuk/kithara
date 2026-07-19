@@ -1,0 +1,18 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-toggles",
+    root: Column(
+        children: [
+            Control(id: "title", kind: "text", read: Model(id: "gallery.label.toggles")),
+            Row(
+                children: [
+                    Control(id: "toggle-on", kind: "toggle", read: Model(id: "mock.toggle.on")),
+                    Control(id: "toggle-off", kind: "toggle", read: Model(id: "mock.toggle.off")),
+                    Control(id: "checkbox-on", kind: "checkbox", read: Model(id: "mock.checkbox.on")),
+                    Control(id: "checkbox-off", kind: "checkbox", read: Model(id: "mock.checkbox.off")),
+                ],
+            ),
+        ],
+    ),
+)

@@ -1,3 +1,11 @@
+/// Stereo levels and volume exposed to renderers.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StereoLevels {
+    pub l: f32,
+    pub r: f32,
+    pub volume: f32,
+}
+
 /// One normalized waveform column.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WaveBucket {
@@ -33,6 +41,7 @@ pub enum ReadValue<'a> {
     Text(&'a str),
     Bool(bool),
     Scalar(f64),
+    Stereo(StereoLevels),
     Waveform(WaveformView<'a>),
     TrackList(&'a [TrackRow<'a>]),
 }

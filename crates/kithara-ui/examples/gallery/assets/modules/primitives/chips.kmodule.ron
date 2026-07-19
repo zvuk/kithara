@@ -1,0 +1,26 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-chips",
+    root: Column(
+        children: [
+            Control(id: "title", kind: "text", read: Model(id: "gallery.label.chips")),
+            Row(
+                children: [
+                    Control(
+                        id: "active",
+                        kind: "chip",
+                        props: { "label": Text("A") },
+                        read: Model(id: "mock.chip.active"),
+                    ),
+                    Control(
+                        id: "inactive",
+                        kind: "chip",
+                        props: { "label": Text("FX1") },
+                        read: Model(id: "mock.chip.inactive"),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

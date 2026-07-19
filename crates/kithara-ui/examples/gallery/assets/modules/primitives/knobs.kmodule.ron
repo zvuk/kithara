@@ -1,0 +1,38 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-knobs",
+    root: Column(
+        children: [
+            Control(id: "title", kind: "text", read: Model(id: "gallery.label.knobs")),
+            Row(
+                children: [
+                    Control(
+                        id: "size-26",
+                        kind: "knob",
+                        size: (w: Fixed(26.0), h: Fixed(26.0)),
+                        read: Model(id: "mock.knob"),
+                    ),
+                    Control(
+                        id: "size-28",
+                        kind: "knob",
+                        size: (w: Fixed(28.0), h: Fixed(28.0)),
+                        read: Model(id: "mock.knob"),
+                    ),
+                    Control(
+                        id: "size-34",
+                        kind: "knob",
+                        size: (w: Fixed(34.0), h: Fixed(34.0)),
+                        read: Model(id: "mock.knob"),
+                    ),
+                    Control(
+                        id: "size-38",
+                        kind: "knob",
+                        size: (w: Fixed(38.0), h: Fixed(38.0)),
+                        read: Model(id: "mock.knob"),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

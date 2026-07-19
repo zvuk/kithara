@@ -1,0 +1,20 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "gallery-buttons",
+    root: Split(
+        axis: Vertical,
+        children: [
+            (weight: 1.0, node: Module(
+                instance: "gallery",
+                source: "modules/tab-bar-shell.kmodule.ron",
+                size: (w: Fill, h: Fixed(28.0)),
+            )),
+            (weight: 1.0, node: Module(
+                instance: "buttons",
+                source: "modules/tabs/buttons.kmodule.ron",
+                size: (w: Fill, h: Fill),
+            )),
+        ],
+    ),
+)

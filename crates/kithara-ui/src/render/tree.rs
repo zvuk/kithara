@@ -7,6 +7,7 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
+    atoms::{chip, knob, meter, readout, toggle, vu},
     compile::{CompiledNode, CompiledUi},
     expand::{Binding, ExpandedNode},
     ids::{ControlKind, InternId},
@@ -199,6 +200,19 @@ fn render_control<'a>(
         "fader.horizontal" => {
             fader::view(path, text_prop(props, "style", ui), value.as_ref(), palette)
         }
+        "toggle" => toggle::toggle(path, value.as_ref(), palette),
+        "checkbox" => toggle::checkbox(path, value.as_ref(), palette),
+        "readout" => readout::view(
+            text_prop(props, "label", ui),
+            text_prop(props, "tone", ui),
+            bool_prop(props, "framed", ui),
+            value.as_ref(),
+            palette,
+        ),
+        "chip" => chip::view(path, text_prop(props, "label", ui), value.as_ref(), palette),
+        "knob" => knob::view(path, value.as_ref(), palette),
+        "vu.stereo" => meter::view(path, value.as_ref(), palette),
+        "vu.vertical" => vu::view(path, value.as_ref(), palette),
         "waveform.mini" => mini_wave::view(
             path,
             text_prop(props, "style", ui),
@@ -237,6 +251,13 @@ fn text_prop<'a>(
             PropValue::Text(value) => Some(ui.resolve(*value)),
             _ => None,
         })
+}
+
+fn bool_prop(props: &BTreeMap<InternId, PropValue<InternId>>, name: &str, ui: &CompiledUi) -> bool {
+    props
+        .iter()
+        .find(|(key, _)| ui.resolve(**key) == name)
+        .is_some_and(|(_, value)| matches!(value, PropValue::Bool(true)))
 }
 
 fn effective_size(
@@ -315,6 +336,13 @@ fn build_catalog() -> Catalog {
     catalog.insert("telemetry.time", deck::time_desc());
     catalog.insert("telemetry.scalar", telemetry::desc());
     catalog.insert("fader.horizontal", fader::desc());
+    catalog.insert("toggle", toggle::toggle_desc());
+    catalog.insert("checkbox", toggle::checkbox_desc());
+    catalog.insert("readout", readout::desc());
+    catalog.insert("chip", chip::desc());
+    catalog.insert("knob", knob::desc());
+    catalog.insert("vu.stereo", meter::desc());
+    catalog.insert("vu.vertical", vu::desc());
     catalog.insert("waveform.mini", mini_wave::desc());
     catalog.insert("track_list", track_list::desc());
     catalog

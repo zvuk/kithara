@@ -5163,6 +5163,7 @@ dependencies = [
  "delegate",
  "derive_more",
  "iced",
+ "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",

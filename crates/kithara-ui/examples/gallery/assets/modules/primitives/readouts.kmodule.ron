@@ -1,0 +1,32 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-readouts",
+    root: Column(
+        children: [
+            Control(id: "title", kind: "text", read: Model(id: "gallery.label.readouts")),
+            Row(
+                children: [
+                    Control(
+                        id: "bpm",
+                        kind: "readout",
+                        props: { "label": Text("BPM"), "tone": Text("accent") },
+                        read: Model(id: "mock.bpm"),
+                    ),
+                    Control(
+                        id: "key",
+                        kind: "readout",
+                        props: { "label": Text("KEY") },
+                        read: Model(id: "mock.key"),
+                    ),
+                    Control(
+                        id: "remain",
+                        kind: "readout",
+                        props: { "label": Text("REMAIN"), "framed": Bool(true) },
+                        read: Model(id: "mock.remain"),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

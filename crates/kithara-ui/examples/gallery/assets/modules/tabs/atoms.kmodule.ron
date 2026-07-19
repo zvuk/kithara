@@ -1,0 +1,14 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-atoms-tab",
+    root: Column(
+        children: [
+            Include(id: "knobs", source: "../primitives/knobs.kmodule.ron"),
+            Include(id: "meters", source: "../primitives/meters.kmodule.ron"),
+            Include(id: "toggles", source: "../primitives/toggles.kmodule.ron"),
+            Include(id: "readouts", source: "../primitives/readouts.kmodule.ron"),
+            Include(id: "chips", source: "../primitives/chips.kmodule.ron"),
+        ],
+    ),
+)

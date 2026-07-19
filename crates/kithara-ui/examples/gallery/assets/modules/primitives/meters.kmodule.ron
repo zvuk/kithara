@@ -1,0 +1,32 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-meters",
+    root: Column(
+        children: [
+            Control(id: "title", kind: "text", read: Model(id: "gallery.label.meters")),
+            Row(
+                children: [
+                    Control(
+                        id: "stereo",
+                        kind: "vu.stereo",
+                        size: (w: Fixed(64.0), h: Fixed(22.0)),
+                        read: Model(id: "mock.levels"),
+                    ),
+                    Control(
+                        id: "vertical-120",
+                        kind: "vu.vertical",
+                        size: (w: Fixed(18.0), h: Fixed(120.0)),
+                        read: Model(id: "mock.levels"),
+                    ),
+                    Control(
+                        id: "vertical-64",
+                        kind: "vu.vertical",
+                        size: (w: Fixed(16.0), h: Fixed(64.0)),
+                        read: Model(id: "mock.levels"),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

@@ -199,6 +199,7 @@ impl From<Palette> for kithara_ui::render::RenderPalette {
             .bg_inset(to_iced(canvas.bg_inset))
             .bg_panel(to_iced(canvas.bg_panel))
             .bg_panel_2(to_iced(canvas.bg_panel_2))
+            .bg_select(iced::Color::from_rgb8(0x26, 0x26, 0x4a))
             .line(to_iced(canvas.line))
             .line_soft(to_iced(canvas.line_soft))
             .text(to_iced(canvas.text))
