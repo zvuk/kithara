@@ -4,14 +4,14 @@ use kithara_platform::{sync::Arc, tokio};
 use kithara_queue::Queue;
 use kithara_ui::{
     compile::CompiledUi,
+    render::{RenderPalette, fonts},
     size::{Dim, SizeSpec},
 };
 
-use super::{app::Kithara, fonts, update, view};
+use super::{app::Kithara, update, view};
 use crate::{
     config::{AppConfig, WindowSizing},
     frontend::{Frontend, FrontendError},
-    theme::gui,
 };
 
 const ERROR_FALLBACK: SizeSpec = SizeSpec::new(Dim::Fixed(360.0), Dim::Fixed(240.0));
@@ -59,7 +59,7 @@ fn axis_settings(dim: Dim, chrome: f32, floor: f32, initial_scale: f32) -> (f32,
 /// GUI frontend using iced.
 pub struct GuiFrontend {
     config: AppConfig,
-    palette: gui::GuiPalette,
+    palette: RenderPalette,
 }
 
 impl Frontend for GuiFrontend {
@@ -91,7 +91,7 @@ impl Frontend for GuiFrontend {
             config.shutdown.child(),
         ));
 
-        let result = iced::daemon(
+        let daemon = iced::daemon(
             move || Kithara::new(Arc::clone(&controller), palette, window_sizing),
             update::update,
             view::view,
@@ -99,17 +99,11 @@ impl Frontend for GuiFrontend {
         .title(Kithara::title)
         .theme(Kithara::theme)
         .subscription(Kithara::subscription)
-        .default_font(fonts::SANS)
-        .font(fonts::INTER_REGULAR_BYTES)
-        .font(fonts::INTER_SEMIBOLD_BYTES)
-        .font(fonts::SPACE_GROTESK_REGULAR_BYTES)
-        .font(fonts::SPACE_GROTESK_MEDIUM_BYTES)
-        .font(fonts::SPACE_GROTESK_SEMIBOLD_BYTES)
-        .font(fonts::SPACE_GROTESK_BOLD_BYTES)
-        .font(fonts::JETBRAINS_MONO_REGULAR_BYTES)
-        .font(fonts::JETBRAINS_MONO_MEDIUM_BYTES)
-        .font(fonts::JETBRAINS_MONO_SEMIBOLD_BYTES)
-        .run();
+        .default_font(fonts::SANS);
+        let daemon = fonts::FONT_BYTES
+            .iter()
+            .fold(daemon, |daemon, bytes| daemon.font(*bytes));
+        let result = daemon.run();
 
         config.shutdown.cancel();
         result?;

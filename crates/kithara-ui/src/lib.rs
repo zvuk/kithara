@@ -6,6 +6,8 @@ pub mod error;
 pub mod expand;
 pub mod ids;
 pub mod registry;
+#[cfg(feature = "render")]
+pub mod render;
 pub mod size;
 pub mod source;
 

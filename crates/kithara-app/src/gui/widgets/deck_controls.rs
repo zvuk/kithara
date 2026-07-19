@@ -4,20 +4,13 @@ use iced::{
     font::Weight,
     widget::{Row, Space, column, container, container::Style as ContainerStyle, row},
 };
-use kithara::audio::BeatGrid;
+use kithara_ui::render::{ReadValue, RenderPalette, WaveformView, fonts, shaped_text};
 use num_traits::ToPrimitive;
 
-use crate::{
-    gui::{
-        app::Kithara,
-        fonts,
-        message::Message,
-        modular::ReadValue,
-        tokens::{chrome, deck, gap, telemetry, transport},
-        typography::shaped_text,
-    },
-    theme::gui::GuiPalette,
-    waveform::TrackAnalysis,
+use crate::gui::{
+    app::Kithara,
+    message::Message,
+    tokens::{chrome, deck, gap, telemetry, transport},
 };
 
 struct Consts;
@@ -35,7 +28,7 @@ impl Consts {
 pub(crate) fn header<'a>(
     state: &'a Kithara,
     badge: Option<&'a str>,
-    value: &Option<ReadValue<'a>>,
+    value: &Option<ReadValue<'_>>,
 ) -> Element<'a, Message> {
     let Some(badge) = badge else {
         return Space::new().into();
@@ -46,27 +39,27 @@ pub(crate) fn header<'a>(
         shaped_text("ART")
             .font(fonts::MONO)
             .size(deck::ART_LABEL_SIZE)
-            .color(p.canvas.muted),
+            .color(p.muted),
     )
     .center(deck::ART_SIZE)
     .style(move |_| {
         ContainerStyle::default()
-            .background(Background::Color(p.canvas.bg_panel))
+            .background(Background::Color(p.bg_panel))
             .border(
                 Border::default()
                     .width(deck::ART_BORDER_WIDTH)
-                    .color(p.canvas.line),
+                    .color(p.line),
             )
     });
     let summary = column![
         shaped_text(track_title(state))
             .font(fonts::display(Weight::Semibold))
             .size(deck::TITLE_SIZE)
-            .color(p.canvas.text),
+            .color(p.text),
         shaped_text(source_kind(state))
             .font(fonts::SANS)
             .size(deck::ARTIST_SIZE)
-            .color(p.canvas.text_dim),
+            .color(p.text_dim),
     ]
     .spacing(gap::GRID)
     .width(Length::Fill);
@@ -74,7 +67,7 @@ pub(crate) fn header<'a>(
         shaped_text(badge)
             .font(fonts::display(Weight::Bold))
             .size(deck::BADGE_TEXT)
-            .color(p.canvas.bg),
+            .color(p.bg),
     )
     .center(deck::BADGE_SIZE)
     .style(move |_| ContainerStyle::default().background(Background::Color(p.accent)));
@@ -109,19 +102,19 @@ pub(crate) fn header<'a>(
     .padding([deck::HEADER_PADDING_Y, deck::HEADER_PADDING_X])
     .height(Length::Fixed(deck::HEADER_HEIGHT))
     .width(Length::Fill)
-    .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg_deep)))
+    .style(move |_| ContainerStyle::default().background(Background::Color(p.bg_deep)))
     .into()
 }
 
 pub(crate) fn summary<'a>(
     state: &'a Kithara,
     style: Option<&str>,
-    value: &Option<ReadValue<'a>>,
+    value: &Option<ReadValue<'_>>,
 ) -> Element<'a, Message> {
     let p = state.palette;
     let title = match value {
-        Some(ReadValue::Text(value)) if !value.is_empty() => *value,
-        _ => track_title(state),
+        Some(ReadValue::Text(value)) if !value.is_empty() => (*value).to_owned(),
+        _ => track_title(state).to_owned(),
     };
     let compact = style == Some(Consts::MICRO_STYLE);
     let content: Element<'a, Message> = if compact {
@@ -129,11 +122,11 @@ pub(crate) fn summary<'a>(
             shaped_text(title)
                 .font(fonts::display(Weight::Medium))
                 .size(deck::MICRO_TITLE_SIZE)
-                .color(p.canvas.text),
+                .color(p.text),
             shaped_text(source_kind(state))
                 .font(fonts::SANS)
                 .size(deck::MICRO_SOURCE_SIZE)
-                .color(p.canvas.muted),
+                .color(p.muted),
         ]
         .spacing(deck::MICRO_SUMMARY_GAP)
         .align_y(Alignment::Center)
@@ -143,11 +136,11 @@ pub(crate) fn summary<'a>(
             shaped_text(title)
                 .font(fonts::display(Weight::Semibold))
                 .size(deck::TITLE_SIZE)
-                .color(p.canvas.text),
+                .color(p.text),
             shaped_text(source_kind(state))
                 .font(fonts::SANS)
                 .size(deck::ARTIST_SIZE)
-                .color(p.canvas.text_dim),
+                .color(p.text_dim),
         ]
         .spacing(gap::GRID)
         .into()
@@ -158,14 +151,14 @@ pub(crate) fn summary<'a>(
         .width(Length::FillPortion(deck::SUMMARY_FILL_PORTION))
         .padding([0.0, deck::SUMMARY_PADDING_X])
         .align_y(Vertical::Center)
-        .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg_panel)))
+        .style(move |_| ContainerStyle::default().background(Background::Color(p.bg_panel)))
         .into()
 }
 
 pub(crate) fn bpm<'a>(
     state: &'a Kithara,
     fallback: Option<&str>,
-    value: &Option<ReadValue<'a>>,
+    value: &Option<ReadValue<'_>>,
 ) -> Element<'a, Message> {
     let p = state.palette;
     let content: Element<'a, Message> = if let Some(bpm) = analysis_bpm(waveform_value(value)) {
@@ -179,7 +172,7 @@ pub(crate) fn bpm<'a>(
             shaped_text("TIME")
                 .font(fonts::MONO)
                 .size(deck::READOUT_LABEL_SIZE)
-                .color(p.canvas.muted),
+                .color(p.muted),
             shaped_text(format_time(state.ui_state.position))
                 .font(fonts::MONO)
                 .size(telemetry::BPM_TEXT_SIZE)
@@ -197,7 +190,7 @@ pub(crate) fn bpm<'a>(
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg_panel)))
+        .style(move |_| ContainerStyle::default().background(Background::Color(p.bg_panel)))
         .into()
 }
 
@@ -221,7 +214,7 @@ pub(crate) fn time<'a>(state: &'a Kithara, value: &Option<ReadValue<'_>>) -> Ele
     .center_x(Length::Fill)
     .height(Length::Fixed(transport::BUTTON_HEIGHT))
     .width(Length::Fixed(transport::TIME_WIDTH))
-    .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg_deep)))
+    .style(move |_| ContainerStyle::default().background(Background::Color(p.bg_deep)))
     .into()
 }
 
@@ -233,7 +226,7 @@ pub(crate) fn format_time(seconds: f64) -> String {
 }
 
 fn readout_cell(
-    p: GuiPalette,
+    p: RenderPalette,
     caption: &'static str,
     value: String,
     width: f32,
@@ -243,7 +236,7 @@ fn readout_cell(
             shaped_text(caption)
                 .font(fonts::MONO)
                 .size(deck::READOUT_LABEL_SIZE)
-                .color(p.canvas.muted),
+                .color(p.muted),
             shaped_text(value)
                 .font(fonts::MONO)
                 .size(deck::READOUT_VALUE_SIZE)
@@ -258,26 +251,22 @@ fn readout_cell(
     .center_y(Length::Fill)
     .style(move |_| {
         ContainerStyle::default()
-            .background(Background::Color(p.canvas.bg_inset))
-            .border(
-                Border::default()
-                    .width(chrome::BORDER_WIDTH)
-                    .color(p.canvas.line),
-            )
+            .background(Background::Color(p.bg_inset))
+            .border(Border::default().width(chrome::BORDER_WIDTH).color(p.line))
     })
     .into()
 }
 
-fn analysis_bpm(analysis: Option<&TrackAnalysis>) -> Option<f64> {
+fn analysis_bpm(analysis: Option<WaveformView<'_>>) -> Option<f64> {
     analysis
-        .and_then(TrackAnalysis::beat)
-        .map(BeatGrid::bpm)
+        .and_then(|view| view.bpm)
+        .map(f64::from)
         .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
 }
 
-fn waveform_value<'a>(value: &Option<ReadValue<'a>>) -> Option<&'a TrackAnalysis> {
+fn waveform_value<'a>(value: &Option<ReadValue<'a>>) -> Option<WaveformView<'a>> {
     match value {
-        Some(ReadValue::Waveform(analysis)) => *analysis,
+        Some(ReadValue::Waveform(analysis)) => Some(*analysis),
         _ => None,
     }
 }

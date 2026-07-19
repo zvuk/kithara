@@ -2,32 +2,34 @@ use iced::{Size, Task, window, window::Settings};
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
+    render::UiEvent,
     source::UiConfig,
 };
 use tracing::error;
 
-use super::{ModularMsg, ModularView, dispatch, endpoints};
+use super::{ModularView, dispatch, endpoints};
 use crate::gui::{app::Kithara, frontend::window_settings, message::Message};
 
-pub(crate) fn update(state: &mut Kithara, message: ModularMsg) -> Task<Message> {
+pub(crate) fn update(state: &mut Kithara, message: UiEvent) -> Task<Message> {
     match message {
-        ModularMsg::SelectPreset(preset) => select_preset(state, &preset),
-        ModularMsg::LibraryQueryChanged(query) => {
+        UiEvent::SelectPreset(preset) => select_preset(state, &preset),
+        UiEvent::LibraryQuery(query) => {
             state.library_query = query;
             Task::none()
         }
-        ModularMsg::ToggleModule(instance) => {
+        UiEvent::ToggleModule(instance) => {
             if !state.modular.hidden.remove(&instance) {
                 state.modular.hidden.insert(instance);
             }
             Task::none()
         }
-        ModularMsg::OpenSettings => open_settings(state),
-        ModularMsg::CloseSettings => close_settings(state),
-        ModularMsg::Control { path, action } => {
+        UiEvent::OpenSettings => open_settings(state),
+        UiEvent::CloseSettings => close_settings(state),
+        UiEvent::Control { path, action } => {
             dispatch::apply(state, &path, &action);
             Task::none()
         }
+        _ => Task::none(),
     }
 }
 

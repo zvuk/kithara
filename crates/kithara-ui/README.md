@@ -11,5 +11,6 @@ compiler producing a normalized UI tree for renderers.
 - `compile` resolves includes (with cycle detection and limits), substitutes `$parameters`,
   validates the whole graph, and returns a `CompiledUi` — or a typed error with the exact
   document path.
-- The crate is GUI-toolkit independent and wasm-compatible; renderers (such as the iced GUI
-  in `kithara-app`) consume `CompiledUi`. Built-in presets live in `assets/`.
+- The default crate is GUI-toolkit independent and wasm-compatible; renderers consume
+  `CompiledUi`. The optional `render` feature adds shared iced-facing fonts, icons, palette,
+  events, and read-model contracts. Built-in presets live in `assets/`.

@@ -9,29 +9,25 @@ use iced::{
         row,
     },
 };
-use kithara_ui::builtin;
+use kithara_ui::{
+    builtin,
+    render::{Icon, RenderPalette, UiEvent, fonts, shaped_text},
+};
 
-use crate::{
-    gui::{
-        app::Kithara,
-        fonts,
-        icons::Icon,
-        message::Message,
-        modular::ModularMsg,
-        tokens::{chrome, gap, global_bar},
-        typography::shaped_text,
-    },
-    theme::gui::GuiPalette,
+use crate::gui::{
+    app::Kithara,
+    message::Message,
+    tokens::{chrome, gap, global_bar},
 };
 
 const BRAND_LETTERS: [&str; 7] = ["K", "I", "T", "H", "A", "R", "A"];
 
-pub(crate) fn brand(p: GuiPalette) -> Element<'static, Message> {
+pub(crate) fn brand(p: RenderPalette) -> Element<'static, Message> {
     let letters = BRAND_LETTERS.into_iter().map(|letter| {
         shaped_text(letter)
             .font(fonts::display(Weight::Bold))
             .size(global_bar::BRAND_SIZE)
-            .color(p.canvas.text)
+            .color(p.text)
             .into()
     });
     container(
@@ -42,7 +38,7 @@ pub(crate) fn brand(p: GuiPalette) -> Element<'static, Message> {
     .padding([0.0, global_bar::BRAND_PADDING_X])
     .width(Length::Fixed(global_bar::BRAND_WIDTH))
     .height(Length::Fixed(global_bar::HEIGHT))
-    .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg_panel)))
+    .style(move |_| ContainerStyle::default().background(Background::Color(p.bg_panel)))
     .into()
 }
 
@@ -67,41 +63,37 @@ pub(crate) fn preset_selector(state: &Kithara) -> Element<'static, Message> {
 
     container(container(chips).style(move |_| {
         ContainerStyle::default()
-            .background(Background::Color(p.canvas.line))
-            .border(
-                Border::default()
-                    .width(chrome::BORDER_WIDTH)
-                    .color(p.canvas.line),
-            )
+            .background(Background::Color(p.line))
+            .border(Border::default().width(chrome::BORDER_WIDTH).color(p.line))
     }))
     .padding([0.0, global_bar::SELECTOR_PADDING_X])
     .width(Length::Fixed(global_bar::SELECTOR_WIDTH))
     .height(Length::Fixed(global_bar::HEIGHT))
     .center_y(Length::Fill)
-    .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg_panel)))
+    .style(move |_| ContainerStyle::default().background(Background::Color(p.bg_panel)))
     .into()
 }
 
-pub(crate) fn spacer(p: GuiPalette) -> Element<'static, Message> {
+pub(crate) fn spacer(p: RenderPalette) -> Element<'static, Message> {
     container(Space::new())
         .width(Length::Fill)
         .height(Length::Fixed(global_bar::HEIGHT))
-        .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg_panel)))
+        .style(move |_| ContainerStyle::default().background(Background::Color(p.bg_panel)))
         .into()
 }
 
-pub(crate) fn settings_button(p: GuiPalette) -> Element<'static, Message> {
-    button(Icon::Settings.view(global_bar::GEAR_SIZE, p.canvas.text_dim))
+pub(crate) fn settings_button(p: RenderPalette) -> Element<'static, Message> {
+    button(Icon::Gear.view(global_bar::GEAR_SIZE, p.text_dim))
         .padding(0.0)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |theme, status| settings_button_style(p, theme, status))
-        .on_press(Message::Modular(ModularMsg::OpenSettings))
+        .on_press(Message::Modular(UiEvent::OpenSettings))
         .into()
 }
 
 fn preset_chip(
-    p: GuiPalette,
+    p: RenderPalette,
     label: &'static str,
     preset: &'static str,
     active: bool,
@@ -110,53 +102,43 @@ fn preset_chip(
         shaped_text(label)
             .font(fonts::MONO)
             .size(global_bar::CHIP_TEXT)
-            .color(if active {
-                p.canvas.bg
-            } else {
-                p.canvas.text_dim
-            }),
+            .color(if active { p.bg } else { p.text_dim }),
     )
     .padding([global_bar::CHIP_PADDING_Y, global_bar::CHIP_PADDING_X])
     .style(move |theme, status| preset_chip_style(p, active, theme, status))
-    .on_press(Message::Modular(ModularMsg::SelectPreset(
-        preset.to_owned(),
-    )))
+    .on_press(Message::Modular(UiEvent::SelectPreset(preset.to_owned())))
     .into()
 }
 
 fn preset_chip_style(
-    p: GuiPalette,
+    p: RenderPalette,
     active: bool,
     _theme: &Theme,
     status: ButtonStatus,
 ) -> ButtonStyle {
     let background = match status {
         ButtonStatus::Hovered if active => p.accent_strong,
-        ButtonStatus::Hovered => p.canvas.bg_panel_2,
+        ButtonStatus::Hovered => p.bg_panel_2,
         ButtonStatus::Pressed => p.accent_soft,
         ButtonStatus::Active | ButtonStatus::Disabled if active => p.accent,
-        ButtonStatus::Active | ButtonStatus::Disabled => p.canvas.bg_panel,
+        ButtonStatus::Active | ButtonStatus::Disabled => p.bg_panel,
     };
     ButtonStyle {
         background: Some(Background::Color(background)),
-        text_color: if active {
-            p.canvas.bg
-        } else {
-            p.canvas.text_dim
-        },
+        text_color: if active { p.bg } else { p.text_dim },
         ..ButtonStyle::default()
     }
 }
 
-fn settings_button_style(p: GuiPalette, _theme: &Theme, status: ButtonStatus) -> ButtonStyle {
+fn settings_button_style(p: RenderPalette, _theme: &Theme, status: ButtonStatus) -> ButtonStyle {
     let background = match status {
-        ButtonStatus::Hovered => p.canvas.bg_panel_2,
+        ButtonStatus::Hovered => p.bg_panel_2,
         ButtonStatus::Pressed => p.accent_soft,
-        ButtonStatus::Active | ButtonStatus::Disabled => p.canvas.bg_panel,
+        ButtonStatus::Active | ButtonStatus::Disabled => p.bg_panel,
     };
     ButtonStyle {
         background: Some(Background::Color(background)),
-        text_color: p.canvas.text_dim,
+        text_color: p.text_dim,
         ..ButtonStyle::default()
     }
 }

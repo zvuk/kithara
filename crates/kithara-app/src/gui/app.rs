@@ -5,6 +5,7 @@ use iced::{
     time as iced_time, window,
 };
 use kithara_platform::{sync::Arc, time::Duration};
+use kithara_ui::render::RenderPalette;
 
 use super::{
     frontend::window_settings,
@@ -16,7 +17,6 @@ use super::{
 use crate::{
     config::WindowSizing,
     state::{StateController, UiState},
-    theme::gui,
 };
 
 /// Main GUI application state.
@@ -31,7 +31,7 @@ pub(crate) struct Kithara {
     pub(crate) settings_window_id: Option<window::Id>,
 
     pub(crate) library_query: String,
-    pub(crate) palette: gui::GuiPalette,
+    pub(crate) palette: RenderPalette,
     pub(crate) selected_track_index: Option<usize>,
     pub(crate) window_sizing: WindowSizing,
     /// Currently live main window; mode swaps replace this ID while the
@@ -44,7 +44,7 @@ impl Kithara {
     /// Boot function for `iced::daemon()`. Opens the modular player window.
     pub(crate) fn new(
         controller: Arc<StateController>,
-        palette: gui::GuiPalette,
+        palette: RenderPalette,
         window_sizing: WindowSizing,
     ) -> (Self, Task<Message>) {
         let ui_state = controller.snapshot();

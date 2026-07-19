@@ -9,12 +9,17 @@ description = "Serializable modular UI model: layout and module documents, regis
 keywords = ["ui", "layout", "modular", "serde", "ron"]
 categories = ["gui", "config"]
 
+[features]
+default = []
+render = ["dep:iced"]
+
 [dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
+iced = { workspace = true, optional = true }
 ron = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

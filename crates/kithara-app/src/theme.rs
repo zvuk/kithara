@@ -190,77 +190,38 @@ impl Default for Palette {
 }
 
 #[cfg(feature = "gui")]
-pub(crate) mod gui {
-    use iced::Color;
-
-    use super::{CanvasPalette, Palette, Rgb};
-
-    #[derive(Debug, Clone, Copy)]
-    pub(crate) struct GuiCanvasPalette {
-        pub(crate) bg: Color,
-        pub(crate) bg_deep: Color,
-        pub(crate) bg_inset: Color,
-        pub(crate) bg_panel: Color,
-        pub(crate) bg_panel_2: Color,
-        pub(crate) line: Color,
-        pub(crate) line_soft: Color,
-        pub(crate) muted: Color,
-        pub(crate) text: Color,
-        pub(crate) text_dim: Color,
-        pub(crate) wave_high: Color,
-        pub(crate) wave_low: Color,
-        pub(crate) wave_mid: Color,
+impl From<Palette> for kithara_ui::render::RenderPalette {
+    fn from(p: Palette) -> Self {
+        let canvas = p.canvas;
+        Self::builder()
+            .bg(to_iced(canvas.bg))
+            .bg_deep(to_iced(canvas.bg_deep))
+            .bg_inset(to_iced(canvas.bg_inset))
+            .bg_panel(to_iced(canvas.bg_panel))
+            .bg_panel_2(to_iced(canvas.bg_panel_2))
+            .line(to_iced(canvas.line))
+            .line_soft(to_iced(canvas.line_soft))
+            .text(to_iced(canvas.text))
+            .text_dim(to_iced(canvas.text_dim))
+            .muted(to_iced(canvas.muted))
+            .accent(to_iced(p.accent))
+            .accent_strong(to_iced(p.accent_strong))
+            .accent_soft(iced::Color::from_rgba8(
+                p.accent.0, p.accent.1, p.accent.2, 0.18,
+            ))
+            .danger(to_iced(p.danger))
+            .success(to_iced(p.success))
+            .warning(to_iced(p.warning))
+            .wave_low(to_iced(canvas.wave_low))
+            .wave_mid(to_iced(canvas.wave_mid))
+            .wave_high(to_iced(canvas.wave_high))
+            .build()
     }
+}
 
-    /// Resolved iced color palette.
-    #[derive(Debug, Clone, Copy)]
-    pub(crate) struct GuiPalette {
-        pub(crate) accent: Color,
-        pub(crate) accent_soft: Color,
-        pub(crate) accent_strong: Color,
-        pub(crate) danger: Color,
-        pub(crate) success: Color,
-        pub(crate) warning: Color,
-        pub(crate) canvas: GuiCanvasPalette,
-    }
-
-    impl From<Palette> for GuiPalette {
-        fn from(p: Palette) -> Self {
-            Self {
-                accent: to_iced(p.accent),
-                accent_soft: Color::from_rgba8(p.accent.0, p.accent.1, p.accent.2, 0.18),
-                accent_strong: to_iced(p.accent_strong),
-                danger: to_iced(p.danger),
-                success: to_iced(p.success),
-                warning: to_iced(p.warning),
-                canvas: p.canvas.into(),
-            }
-        }
-    }
-
-    impl From<CanvasPalette> for GuiCanvasPalette {
-        fn from(p: CanvasPalette) -> Self {
-            Self {
-                bg: to_iced(p.bg),
-                bg_deep: to_iced(p.bg_deep),
-                bg_inset: to_iced(p.bg_inset),
-                bg_panel: to_iced(p.bg_panel),
-                bg_panel_2: to_iced(p.bg_panel_2),
-                line: to_iced(p.line),
-                line_soft: to_iced(p.line_soft),
-                muted: to_iced(p.muted),
-                text: to_iced(p.text),
-                text_dim: to_iced(p.text_dim),
-                wave_high: to_iced(p.wave_high),
-                wave_low: to_iced(p.wave_low),
-                wave_mid: to_iced(p.wave_mid),
-            }
-        }
-    }
-
-    fn to_iced(rgb: Rgb) -> Color {
-        Color::from_rgb8(rgb.0, rgb.1, rgb.2)
-    }
+#[cfg(feature = "gui")]
+fn to_iced(rgb: Rgb) -> iced::Color {
+    iced::Color::from_rgb8(rgb.0, rgb.1, rgb.2)
 }
 
 #[cfg(feature = "tui")]

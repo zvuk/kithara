@@ -3,28 +3,29 @@ use iced::{
     mouse::{self, Button, Cursor},
     widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
 };
-use kithara::audio::Bucket;
+use kithara_ui::render::{ControlAction, RenderPalette, UiEvent, WaveBucket, WaveformView};
 use num_traits::cast::AsPrimitive;
 
-use crate::{
-    gui::{
-        message::Message,
-        modular::{ControlAction, ModularMsg},
-        tokens::{chrome, waveform},
-    },
-    theme::gui::GuiPalette,
-    waveform::TrackAnalysis,
+use crate::gui::{
+    message::Message,
+    tokens::{chrome, waveform},
 };
 
-pub(crate) struct MiniWave<'a> {
-    palette: GuiPalette,
-    analysis: Option<&'a TrackAnalysis>,
+pub(crate) struct MiniWave {
+    palette: RenderPalette,
+    waveform: Option<WaveformData>,
     path: String,
     progress: f32,
     show_beats: bool,
 }
 
-impl canvas::Program<Message> for MiniWave<'_> {
+struct WaveformData {
+    buckets: Box<[WaveBucket]>,
+    beats: Box<[f32]>,
+    downbeats: Box<[f32]>,
+}
+
+impl canvas::Program<Message> for MiniWave {
     type State = ();
 
     fn draw(
@@ -36,15 +37,15 @@ impl canvas::Program<Message> for MiniWave<'_> {
         _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.canvas.bg_deep);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
 
-        if let Some(waveform) = self.analysis.and_then(TrackAnalysis::waveform) {
-            draw_bars(&mut frame, bounds, waveform.buckets(), self.palette);
+        if let Some(waveform) = &self.waveform {
+            draw_bars(&mut frame, bounds, &waveform.buckets, self.palette);
         }
         if self.show_beats
-            && let Some(analysis) = self.analysis
+            && let Some(waveform) = &self.waveform
         {
-            draw_beat_grid(&mut frame, bounds, analysis, self.palette);
+            draw_beat_grid(&mut frame, bounds, waveform, self.palette);
         }
 
         let head_x = self.progress.clamp(0.0, 1.0) * bounds.width;
@@ -54,7 +55,7 @@ impl canvas::Program<Message> for MiniWave<'_> {
                 .with_color(self.palette.accent_strong)
                 .with_width(waveform::PLAYHEAD_WIDTH),
         );
-        draw_border(&mut frame, bounds, self.palette.canvas.line);
+        draw_border(&mut frame, bounds, self.palette.line);
         vec![frame.into_geometry()]
     }
 
@@ -79,9 +80,9 @@ impl canvas::Program<Message> for MiniWave<'_> {
         cursor: Cursor,
     ) -> Option<Action<Message>> {
         let has_waveform = self
-            .analysis
-            .and_then(TrackAnalysis::waveform)
-            .is_some_and(|waveform| !waveform.is_empty());
+            .waveform
+            .as_ref()
+            .is_some_and(|waveform| !waveform.buckets.is_empty());
         if !has_waveform || bounds.width <= 0.0 {
             return None;
         }
@@ -89,7 +90,7 @@ impl canvas::Program<Message> for MiniWave<'_> {
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
                 cursor.position_over(bounds).map(|position| {
                     let value = (position.x / bounds.width).clamp(0.0, 1.0);
-                    Action::publish(Message::Modular(ModularMsg::Control {
+                    Action::publish(Message::Modular(UiEvent::Control {
                         path: self.path.clone(),
                         action: ControlAction::SetScalar(f64::from(value)),
                     }))
@@ -101,17 +102,22 @@ impl canvas::Program<Message> for MiniWave<'_> {
     }
 }
 
-pub(crate) fn view<'a>(
-    analysis: Option<&'a TrackAnalysis>,
+pub(crate) fn view(
+    waveform: Option<WaveformView<'_>>,
     progress: f32,
-    palette: GuiPalette,
+    palette: RenderPalette,
     path: String,
     height: Length,
     show_beats: bool,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
+    let waveform = waveform.map(|view| WaveformData {
+        buckets: view.buckets.to_vec().into_boxed_slice(),
+        beats: view.beats.to_vec().into_boxed_slice(),
+        downbeats: view.downbeats.to_vec().into_boxed_slice(),
+    });
     Canvas::new(MiniWave {
         palette,
-        analysis,
+        waveform,
         path,
         progress,
         show_beats,
@@ -121,7 +127,7 @@ pub(crate) fn view<'a>(
     .into()
 }
 
-fn draw_bars(frame: &mut Frame, bounds: Rectangle, buckets: &[Bucket], palette: GuiPalette) {
+fn draw_bars(frame: &mut Frame, bounds: Rectangle, buckets: &[WaveBucket], palette: RenderPalette) {
     let step = waveform::LOW_BAR_WIDTH + waveform::BAR_GAP;
     let content_width = (bounds.width - waveform::CONTENT_INSET * 2.0).max(0.0);
     let max_columns: usize = ((content_width + waveform::BAR_GAP) / step).floor().as_();
@@ -140,9 +146,9 @@ fn draw_bars(frame: &mut Frame, bounds: Rectangle, buckets: &[Bucket], palette: 
             (0.0_f32, 0.0_f32, 0.0_f32),
             |(low, mid, high), bucket| {
                 (
-                    low.max(bucket.low()),
-                    mid.max(bucket.mid()),
-                    high.max(bucket.high()),
+                    low.max(bucket.low),
+                    mid.max(bucket.mid),
+                    high.max(bucket.high),
                 )
             },
         );
@@ -155,7 +161,7 @@ fn draw_bars(frame: &mut Frame, bounds: Rectangle, buckets: &[Bucket], palette: 
             low,
             available_height,
             waveform::LOW_BAR_WIDTH,
-            palette.canvas.wave_low,
+            palette.wave_low,
         );
         draw_band(
             frame,
@@ -164,7 +170,7 @@ fn draw_bars(frame: &mut Frame, bounds: Rectangle, buckets: &[Bucket], palette: 
             mid,
             available_height,
             waveform::MID_BAR_WIDTH,
-            palette.canvas.wave_mid,
+            palette.wave_mid,
         );
         draw_band(
             frame,
@@ -173,7 +179,7 @@ fn draw_bars(frame: &mut Frame, bounds: Rectangle, buckets: &[Bucket], palette: 
             high,
             available_height,
             waveform::HIGH_BAR_WIDTH,
-            palette.canvas.wave_high,
+            palette.wave_high,
         );
     }
 }
@@ -201,44 +207,26 @@ fn draw_band(
 fn draw_beat_grid(
     frame: &mut Frame,
     bounds: Rectangle,
-    analysis: &TrackAnalysis,
-    palette: GuiPalette,
+    data: &WaveformData,
+    palette: RenderPalette,
 ) {
-    let Some(grid) = analysis.beat() else {
-        return;
-    };
-    let source_frames = analysis.source_frames();
-    if source_frames == 0 {
-        return;
-    }
     draw_marks(
         frame,
         bounds,
-        grid.beats(),
-        source_frames,
-        with_alpha(palette.canvas.line, waveform::GRID_ALPHA),
+        &data.beats,
+        with_alpha(palette.line, waveform::GRID_ALPHA),
     );
     draw_marks(
         frame,
         bounds,
-        grid.downbeats(),
-        source_frames,
+        &data.downbeats,
         with_alpha(palette.accent, waveform::DOWNBEAT_ALPHA),
     );
 }
 
-fn draw_marks(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    marks: &[u64],
-    source_frames: u64,
-    color: Color,
-) {
-    let total: f64 = source_frames.as_();
+fn draw_marks(frame: &mut Frame, bounds: Rectangle, marks: &[f32], color: Color) {
     for &mark in marks {
-        let frame_position: f64 = mark.as_();
-        let fraction: f32 = (frame_position / total).clamp(0.0, 1.0).as_();
-        let x = fraction * bounds.width;
+        let x = mark.clamp(0.0, 1.0) * bounds.width;
         frame.stroke(
             &Path::line(Point::new(x, 0.0), Point::new(x, bounds.height)),
             Stroke::default()

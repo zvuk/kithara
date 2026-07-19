@@ -21,26 +21,18 @@ use kithara_ui::{
     ids::InternId,
     module::PropValue,
     registry::ControlCatalog,
+    render::{ControlAction, Icon, ReadValue, Reads, RenderPalette, UiEvent, fonts, shaped_text},
     size::{Dim, SizeSpec},
 };
 use num_traits::cast::AsPrimitive;
 
-use super::{
-    ControlAction, ModularMsg,
-    reads::{self, ReadValue},
-};
-use crate::{
-    gui::{
-        app::Kithara,
-        fonts,
-        icons::Icon,
-        message::Message,
-        tokens::{chrome, deck, gap, telemetry as telemetry_tokens, transport, type_scale, volume},
-        typography::shaped_text,
-        widgets,
-        widgets::{deck_controls, global_controls, library, mini_wave, volume_meter},
-    },
-    theme::gui::GuiPalette,
+use super::reads;
+use crate::gui::{
+    app::Kithara,
+    message::Message,
+    tokens::{chrome, deck, gap, telemetry as telemetry_tokens, transport, type_scale, volume},
+    widgets,
+    widgets::{deck_controls, global_controls, library, mini_wave, volume_meter},
 };
 
 const PERCENT_SCALE: f64 = 100.0;
@@ -50,6 +42,7 @@ pub(super) fn render_node<'a>(
     node: &ExpandedNode,
     ui: &'a CompiledUi,
     catalog: &dyn ControlCatalog,
+    values: &dyn Reads,
 ) -> Element<'a, Message> {
     let p = state.palette;
     let element = match node {
@@ -57,25 +50,25 @@ pub(super) fn render_node<'a>(
             Row::with_children(
                 children
                     .iter()
-                    .map(|child| render_node(state, child, ui, catalog)),
+                    .map(|child| render_node(state, child, ui, catalog, values)),
             )
             .spacing(gap::GRID)
             .width(Length::Fill),
         )
         .width(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.line_soft)))
+        .style(move |_| ContainerStyle::default().background(Background::Color(p.line_soft)))
         .into(),
         ExpandedNode::Column { children, .. } | ExpandedNode::Slot { children, .. } => container(
             Column::with_children(
                 children
                     .iter()
-                    .map(|child| render_node(state, child, ui, catalog)),
+                    .map(|child| render_node(state, child, ui, catalog, values)),
             )
             .spacing(gap::GRID)
             .width(Length::Fill),
         )
         .width(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.line_soft)))
+        .style(move |_| ContainerStyle::default().background(Background::Color(p.line_soft)))
         .into(),
         ExpandedNode::Control {
             path,
@@ -83,7 +76,7 @@ pub(super) fn render_node<'a>(
             props,
             read,
             ..
-        } => render_control(state, *path, *kind, props, read.as_ref(), ui),
+        } => render_control(state, *path, *kind, props, read.as_ref(), ui, values),
         _ => Space::new().into(),
     };
     apply_size(element, effective_size(node, ui, catalog))
@@ -138,8 +131,9 @@ fn render_control<'a>(
     props: &BTreeMap<InternId, PropValue<InternId>>,
     read: Option<&Binding>,
     ui: &'a CompiledUi,
+    values: &dyn Reads,
 ) -> Element<'a, Message> {
-    let value = read.and_then(|binding| reads::resolve(&state.ui_state, binding, ui));
+    let value = read.and_then(|binding| reads::resolve(values, binding, ui));
     let path = ui.resolve(path);
     match ui.resolve(kind) {
         "deck.header" => deck_controls::header(state, text_prop(props, "badge", ui), &value),
@@ -161,9 +155,9 @@ fn render_control<'a>(
 }
 
 fn render_text<'a>(
-    p: GuiPalette,
+    p: RenderPalette,
     props: &BTreeMap<InternId, PropValue<InternId>>,
-    value: &Option<ReadValue<'a>>,
+    value: &Option<ReadValue<'_>>,
     ui: &'a CompiledUi,
 ) -> Element<'a, Message> {
     let Some(ReadValue::Text(value)) = value else {
@@ -175,15 +169,15 @@ fn render_text<'a>(
     } else {
         (fonts::SANS, type_scale::BODY)
     };
-    shaped_text(*value)
+    shaped_text((*value).to_owned())
         .font(font)
         .size(size)
-        .color(p.canvas.text)
+        .color(p.text)
         .into()
 }
 
 fn render_button<'a>(
-    p: GuiPalette,
+    p: RenderPalette,
     path: &str,
     props: &BTreeMap<InternId, PropValue<InternId>>,
     value: &Option<ReadValue<'_>>,
@@ -212,12 +206,12 @@ fn render_button<'a>(
     let content: Element<'a, Message> = match visual {
         ButtonVisual::MicroPrimary => {
             let icon = if active { Icon::Pause } else { Icon::Play };
-            icon.view(transport::MICRO_ICON_SIZE, p.canvas.bg)
+            icon.view(transport::MICRO_ICON_SIZE, p.bg)
         }
         ButtonVisual::TransportPrimary => {
             let icon = if active { Icon::Pause } else { Icon::Play };
             row![
-                icon.view(transport::BUTTON_ICON_SIZE, p.canvas.bg),
+                icon.view(transport::BUTTON_ICON_SIZE, p.bg),
                 shaped_text(label)
                     .font(Font {
                         weight,
@@ -245,7 +239,7 @@ fn render_button<'a>(
         .height(Length::Fixed(height))
         .padding([0.0, transport::BUTTON_PADDING_X])
         .style(control_button_style(p, visual))
-        .on_press(Message::Modular(ModularMsg::Control {
+        .on_press(Message::Modular(UiEvent::Control {
             path: path.to_owned(),
             action: ControlAction::Activate,
         }));
@@ -261,7 +255,7 @@ fn render_button<'a>(
 }
 
 fn render_scalar<'a>(
-    p: GuiPalette,
+    p: RenderPalette,
     props: &BTreeMap<InternId, PropValue<InternId>>,
     value: &Option<ReadValue<'_>>,
     ui: &'a CompiledUi,
@@ -278,7 +272,7 @@ fn render_scalar<'a>(
         shaped_text(formatted)
             .font(fonts::MONO)
             .size(telemetry_tokens::SCALAR_TEXT_SIZE)
-            .color(p.canvas.text),
+            .color(p.text),
     )
     .padding([
         telemetry_tokens::SCALAR_PADDING_Y,
@@ -286,14 +280,14 @@ fn render_scalar<'a>(
     ])
     .style(move |_| {
         ContainerStyle::default()
-            .background(Background::Color(p.canvas.bg_inset))
-            .border(Border::default().width(1).color(p.canvas.line))
+            .background(Background::Color(p.bg_inset))
+            .border(Border::default().width(1).color(p.line))
     })
     .into()
 }
 
 fn render_fader<'a>(
-    p: GuiPalette,
+    p: RenderPalette,
     path: &str,
     props: &BTreeMap<InternId, PropValue<InternId>>,
     value: &Option<ReadValue<'_>>,
@@ -311,7 +305,7 @@ fn render_fader<'a>(
 
     let path = path.to_owned();
     let slider = slider(0.0..=1.0, value.clamp(0.0, 1.0), move |value| {
-        Message::Modular(ModularMsg::Control {
+        Message::Modular(UiEvent::Control {
             path: path.clone(),
             action: ControlAction::SetScalar(value),
         })
@@ -320,11 +314,9 @@ fn render_fader<'a>(
     .height(volume::SLIDER_HEIGHT)
     .style(widgets::slider_style(p))
     .width(Length::Fill);
-    let ticks = Canvas::new(FaderTicks {
-        color: p.canvas.line_soft,
-    })
-    .height(Length::Fixed(volume::TICKS_HEIGHT))
-    .width(Length::Fill);
+    let ticks = Canvas::new(FaderTicks { color: p.line_soft })
+        .height(Length::Fixed(volume::TICKS_HEIGHT))
+        .width(Length::Fill);
     let slider = container(slider)
         .height(Length::Fixed(volume::TICKS_HEIGHT))
         .align_y(Vertical::Top);
@@ -334,7 +326,7 @@ fn render_fader<'a>(
     let label: Element<'_, Message> = shaped_text("VOL")
         .font(fonts::SANS)
         .size(type_scale::MICRO_LABEL)
-        .color(p.canvas.muted)
+        .color(p.muted)
         .into();
     let control = row![
         container(label).width(Length::Fixed(volume::LABEL_WIDTH)),
@@ -348,13 +340,13 @@ fn render_fader<'a>(
         .padding([0.0, volume::CONTROL_PADDING_X])
         .height(Length::Fixed(volume::CONTROL_HEIGHT))
         .width(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg_panel)))
+        .style(move |_| ContainerStyle::default().background(Background::Color(p.bg_panel)))
         .into()
 }
 
-fn render_segmented_volume(p: GuiPalette, path: &str, value: f64) -> Element<'static, Message> {
+fn render_segmented_volume(p: RenderPalette, path: &str, value: f64) -> Element<'static, Message> {
     let control = row![
-        container(Icon::Volume.view(volume::ICON_SIZE, p.canvas.muted))
+        container(Icon::SpeakerHigh.view(volume::ICON_SIZE, p.muted))
             .width(Length::Fixed(volume::LABEL_WIDTH)),
         volume_meter::view(p, path.to_owned(), value),
     ]
@@ -367,7 +359,7 @@ fn render_segmented_volume(p: GuiPalette, path: &str, value: f64) -> Element<'st
         .padding([0.0, volume::CONTROL_PADDING_X])
         .height(Length::Fixed(volume::CONTROL_HEIGHT))
         .width(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg_panel)))
+        .style(move |_| ContainerStyle::default().background(Background::Color(p.bg_panel)))
         .into()
 }
 
@@ -375,11 +367,11 @@ fn render_waveform<'a>(
     state: &'a Kithara,
     path: &str,
     props: &BTreeMap<InternId, PropValue<InternId>>,
-    value: &Option<ReadValue<'a>>,
+    value: &Option<ReadValue<'_>>,
     ui: &'a CompiledUi,
 ) -> Element<'a, Message> {
     let analysis = match value {
-        Some(ReadValue::Waveform(analysis)) => *analysis,
+        Some(ReadValue::Waveform(analysis)) => Some(*analysis),
         _ => None,
     };
     let progress: f32 = reads::position_normalized(&state.ui_state).as_();
@@ -431,7 +423,7 @@ fn button_visual(style: Option<&str>) -> ButtonVisual {
 }
 
 fn control_button_style(
-    p: GuiPalette,
+    p: RenderPalette,
     visual: ButtonVisual,
 ) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle {
     move |_theme, status| {
@@ -444,18 +436,14 @@ fn control_button_style(
             }
         } else {
             match status {
-                ButtonStatus::Hovered => p.canvas.bg_panel_2,
+                ButtonStatus::Hovered => p.bg_panel_2,
                 ButtonStatus::Pressed => p.accent_soft,
-                ButtonStatus::Active | ButtonStatus::Disabled => p.canvas.bg_panel,
+                ButtonStatus::Active | ButtonStatus::Disabled => p.bg_panel,
             }
         };
         ButtonStyle {
             background: Some(Background::Color(background)),
-            text_color: if highlighted {
-                p.canvas.bg
-            } else {
-                p.canvas.text
-            },
+            text_color: if highlighted { p.bg } else { p.text },
             border: Border::default(),
             ..ButtonStyle::default()
         }

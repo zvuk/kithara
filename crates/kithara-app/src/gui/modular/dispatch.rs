@@ -2,11 +2,11 @@ use kithara_ui::{
     compile::{CompiledNode, CompiledUi},
     expand::{Binding, ExpandedNode},
     ids::InternId,
+    render::ControlAction,
 };
 use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::ControlAction;
 use crate::gui::{
     app::Kithara,
     update::{

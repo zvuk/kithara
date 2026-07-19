@@ -12,25 +12,22 @@ use kithara_ui::{
     compile::{CompiledNode, CompiledUi},
     layout::Axis,
     registry::ControlCatalog,
+    render::{Reads, RenderPalette, UiEvent, fonts, shaped_text},
     size::{Dim, SizeSpec},
 };
 use num_traits::cast::AsPrimitive;
 
-use super::{ModularMsg, controls, endpoints, filter};
-use crate::{
-    gui::{
-        app::Kithara,
-        fonts,
-        message::Message,
-        tokens::{canvas as canvas_tokens, chrome, gap, type_scale},
-        typography::shaped_text,
-    },
-    theme::gui::GuiPalette,
+use super::{controls, endpoints, filter, reads::UiReads};
+use crate::gui::{
+    app::Kithara,
+    message::Message,
+    tokens::{canvas as canvas_tokens, chrome, gap, type_scale},
 };
 
 pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
     let catalog = endpoints::render_catalog();
+    let reads = UiReads::new(&state.ui_state);
     let body = state.modular.compiled.as_ref().map_or_else(
         || empty_state(state),
         |compiled| {
@@ -39,10 +36,10 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
                     shaped_text("All modules are hidden")
                         .font(fonts::SANS)
                         .size(type_scale::BODY)
-                        .color(p.canvas.muted)
+                        .color(p.muted)
                         .into()
                 },
-                |root| render_compiled(state, &root, compiled, catalog),
+                |root| render_compiled(state, &root, compiled, catalog, &reads),
             )
         },
     );
@@ -50,7 +47,7 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     container(module_chrome(body, p))
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg)))
+        .style(move |_| ContainerStyle::default().background(Background::Color(p.bg)))
         .into()
 }
 
@@ -73,7 +70,7 @@ fn empty_state(state: &Kithara) -> Element<'_, Message> {
         canvas_tokens::LOAD_BUTTON_PADDING_X,
     ])
     .style(move |theme, status| header_button_style(p, theme, status))
-    .on_press(Message::Modular(ModularMsg::SelectPreset(
+    .on_press(Message::Modular(UiEvent::SelectPreset(
         state.modular.preset.clone(),
     )))
     .into()
@@ -84,13 +81,14 @@ fn render_compiled<'a>(
     node: &CompiledNode,
     ui: &'a CompiledUi,
     catalog: &dyn ControlCatalog,
+    reads: &dyn Reads,
 ) -> Element<'a, Message> {
     let p = state.palette;
     match node {
         CompiledNode::Split { axis, children, .. } => match axis {
             Axis::Horizontal => container(
                 Row::with_children(children.iter().map(|(weight, child)| {
-                    container(render_compiled(state, child, ui, catalog))
+                    container(render_compiled(state, child, ui, catalog, reads))
                         .width(split_length(child_size(child).w, *weight))
                         .height(Length::Fill)
                         .into()
@@ -101,13 +99,11 @@ fn render_compiled<'a>(
             )
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_| {
-                ContainerStyle::default().background(Background::Color(p.canvas.line_soft))
-            })
+            .style(move |_| ContainerStyle::default().background(Background::Color(p.line_soft)))
             .into(),
             Axis::Vertical => container(
                 Column::with_children(children.iter().map(|(weight, child)| {
-                    container(render_compiled(state, child, ui, catalog))
+                    container(render_compiled(state, child, ui, catalog, reads))
                         .width(Length::Fill)
                         .height(split_length(child_size(child).h, *weight))
                         .into()
@@ -118,13 +114,11 @@ fn render_compiled<'a>(
             )
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_| {
-                ContainerStyle::default().background(Background::Color(p.canvas.line_soft))
-            })
+            .style(move |_| ContainerStyle::default().background(Background::Color(p.line_soft)))
             .into(),
             _ => Space::new().into(),
         },
-        CompiledNode::Module { root, .. } => controls::render_node(state, root, ui, catalog),
+        CompiledNode::Module { root, .. } => controls::render_node(state, root, ui, catalog, reads),
         _ => Space::new().into(),
     }
 }
@@ -145,7 +139,7 @@ fn split_length(dim: Dim, weight: f32) -> Length {
 
 pub(super) fn module_chrome<'a>(
     content: impl Into<Element<'a, Message>>,
-    p: GuiPalette,
+    p: RenderPalette,
 ) -> Element<'a, Message> {
     let body = container(content)
         .width(Length::Fill)
@@ -169,28 +163,22 @@ fn fill_portion(weight: f32) -> u16 {
     scaled.as_()
 }
 
-fn module_style(p: GuiPalette) -> ContainerStyle {
+fn module_style(p: RenderPalette) -> ContainerStyle {
     ContainerStyle::default()
-        .background(Background::Color(p.canvas.bg_inset))
-        .border(
-            Border::default()
-                .width(chrome::BORDER_WIDTH)
-                .color(p.canvas.line),
-        )
+        .background(Background::Color(p.bg_inset))
+        .border(Border::default().width(chrome::BORDER_WIDTH).color(p.line))
 }
 
-fn header_button_style(p: GuiPalette, _theme: &Theme, status: ButtonStatus) -> ButtonStyle {
+fn header_button_style(p: RenderPalette, _theme: &Theme, status: ButtonStatus) -> ButtonStyle {
     let background = match status {
-        ButtonStatus::Hovered => p.canvas.bg_panel_2,
+        ButtonStatus::Hovered => p.bg_panel_2,
         ButtonStatus::Pressed => p.accent_soft,
-        ButtonStatus::Active | ButtonStatus::Disabled => p.canvas.bg_panel,
+        ButtonStatus::Active | ButtonStatus::Disabled => p.bg_panel,
     };
     ButtonStyle {
         background: Some(Background::Color(background)),
-        text_color: p.canvas.text,
-        border: Border::default()
-            .width(chrome::BORDER_WIDTH)
-            .color(p.canvas.line),
+        text_color: p.text,
+        border: Border::default().width(chrome::BORDER_WIDTH).color(p.line),
         ..ButtonStyle::default()
     }
 }

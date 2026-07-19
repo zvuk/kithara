@@ -1,50 +1,93 @@
 use std::collections::BTreeMap;
 
-use kithara_queue::TrackEntry;
-use kithara_ui::{compile::CompiledUi, expand::Binding, ids::InternId};
+use kithara_ui::{
+    compile::CompiledUi,
+    expand::Binding,
+    ids::InternId,
+    render::{ReadValue, Reads, TrackRow, WaveBucket, WaveformView},
+};
+use num_traits::ToPrimitive;
 
-use crate::{state::UiState, waveform::TrackAnalysis};
+use crate::state::UiState;
 
-pub(crate) enum ReadValue<'a> {
-    Bool(bool),
-    Scalar(f64),
-    Text(&'a str),
-    Waveform(Option<&'a TrackAnalysis>),
-    Tracks(&'a [TrackEntry]),
+pub(super) struct UiReads<'state> {
+    state: &'state UiState,
+    buckets: Vec<WaveBucket>,
+    tracks: Vec<TrackRow<'state>>,
+}
+
+impl<'state> UiReads<'state> {
+    pub(super) fn new(state: &'state UiState) -> Self {
+        let buckets = state
+            .analysis
+            .as_ref()
+            .and_then(|analysis| analysis.waveform())
+            .map(|waveform| {
+                waveform
+                    .buckets()
+                    .iter()
+                    .map(|bucket| WaveBucket {
+                        low: bucket.low(),
+                        mid: bucket.mid(),
+                        high: bucket.high(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let tracks = state
+            .tracks
+            .iter()
+            .map(|track| TrackRow {
+                title: track.name.as_str(),
+                artist: None,
+                time: None,
+            })
+            .collect();
+        Self {
+            state,
+            buckets,
+            tracks,
+        }
+    }
+}
+
+impl Reads for UiReads<'_> {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        match endpoint {
+            "deck.playback.playing" => Some(ReadValue::Bool(self.state.playing)),
+            "deck.playback.position_normalized" => {
+                Some(ReadValue::Scalar(position_normalized(self.state)))
+            }
+            "deck.playback.waveform" => {
+                let analysis = self.state.analysis.as_ref()?;
+                let bpm = analysis
+                    .beat()
+                    .map(kithara::audio::BeatGrid::bpm)
+                    .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+                    .and_then(|bpm| bpm.to_f32());
+                Some(ReadValue::Waveform(WaveformView {
+                    buckets: &self.buckets,
+                    beats: &self.state.beat_marks,
+                    downbeats: &self.state.downbeat_marks,
+                    bpm,
+                }))
+            }
+            "deck.track.title" => Some(ReadValue::Text(self.state.track_name.as_str())),
+            "player.output.volume" => Some(ReadValue::Scalar(f64::from(self.state.volume))),
+            "library.visible_tracks" => Some(ReadValue::TrackList(&self.tracks)),
+            _ => None,
+        }
+    }
 }
 
 pub(super) fn resolve<'a>(
-    ui_state: &'a UiState,
+    reads: &'a dyn Reads,
     binding: &Binding,
     ui: &CompiledUi,
 ) -> Option<ReadValue<'a>> {
     match binding {
-        Binding::Telemetry { id, with }
-            if ui.resolve(*id) == "deck.playback.playing" && deck_is_a(with, ui) =>
-        {
-            Some(ReadValue::Bool(ui_state.playing))
-        }
-        Binding::Telemetry { id, with }
-            if ui.resolve(*id) == "deck.playback.position_normalized" && deck_is_a(with, ui) =>
-        {
-            Some(ReadValue::Scalar(position_normalized(ui_state)))
-        }
-        Binding::Telemetry { id, with }
-            if ui.resolve(*id) == "deck.playback.waveform" && deck_is_a(with, ui) =>
-        {
-            Some(ReadValue::Waveform(ui_state.analysis.as_ref()))
-        }
-        Binding::Telemetry { id, with }
-            if ui.resolve(*id) == "deck.track.title" && deck_is_a(with, ui) =>
-        {
-            Some(ReadValue::Text(ui_state.track_name.as_str()))
-        }
-        Binding::Parameter { id, .. } if ui.resolve(*id) == "player.output.volume" => {
-            Some(ReadValue::Scalar(f64::from(ui_state.volume)))
-        }
-        Binding::Model { id, .. } if ui.resolve(*id) == "library.visible_tracks" => {
-            Some(ReadValue::Tracks(&ui_state.tracks))
-        }
+        Binding::Telemetry { id, with } if deck_is_a(with, ui) => reads.get(ui.resolve(*id)),
+        Binding::Parameter { id, .. } | Binding::Model { id, .. } => reads.get(ui.resolve(*id)),
         _ => None,
     }
 }
@@ -69,10 +112,11 @@ mod tests {
     use kithara_ui::{
         compile::{CompiledNode, CompiledUi, compile},
         expand::{Binding, ExpandedNode},
+        render::ReadValue,
         source::{MemResolver, UiConfig},
     };
 
-    use super::{ReadValue, resolve};
+    use super::{UiReads, resolve};
     use crate::{gui::modular::endpoints, state::UiState};
 
     fn compile_read(kind: &str, read: &str) -> (CompiledUi, Binding) {
@@ -126,7 +170,8 @@ mod tests {
         for playing in [false, true] {
             let mut ui = UiState::empty();
             ui.playing = playing;
-            let Some(ReadValue::Bool(value)) = resolve(&ui, &binding, &compiled) else {
+            let reads = UiReads::new(&ui);
+            let Some(ReadValue::Bool(value)) = resolve(&reads, &binding, &compiled) else {
                 panic!("playing binding must resolve to bool");
             };
             assert_eq!(value, playing);
@@ -139,8 +184,9 @@ mod tests {
             telemetry("deck.playback.position_normalized", "a", "telemetry.scalar");
         let mut ui = UiState::empty();
         ui.position = 12.0;
+        let reads = UiReads::new(&ui);
 
-        let Some(ReadValue::Scalar(value)) = resolve(&ui, &binding, &compiled) else {
+        let Some(ReadValue::Scalar(value)) = resolve(&reads, &binding, &compiled) else {
             panic!("position binding must resolve to scalar");
         };
         assert!(value.abs() < f64::EPSILON);
@@ -154,7 +200,8 @@ mod tests {
             let mut ui = UiState::empty();
             ui.duration = 100.0;
             ui.position = position;
-            let Some(ReadValue::Scalar(value)) = resolve(&ui, &binding, &compiled) else {
+            let reads = UiReads::new(&ui);
+            let Some(ReadValue::Scalar(value)) = resolve(&reads, &binding, &compiled) else {
                 panic!("position binding must resolve to scalar");
             };
             assert!((value - expected).abs() < f64::EPSILON);
@@ -169,8 +216,9 @@ mod tests {
         );
         let mut ui = UiState::empty();
         ui.volume = 0.37;
+        let reads = UiReads::new(&ui);
 
-        let Some(ReadValue::Scalar(value)) = resolve(&ui, &binding, &compiled) else {
+        let Some(ReadValue::Scalar(value)) = resolve(&reads, &binding, &compiled) else {
             panic!("volume binding must resolve to scalar");
         };
         assert!((value - f64::from(ui.volume)).abs() < f64::EPSILON);
@@ -179,8 +227,9 @@ mod tests {
     #[kithara::test]
     fn rejects_unknown_deck_scope() {
         let ui = UiState::empty();
+        let reads = UiReads::new(&ui);
         let (compiled, binding) = telemetry("deck.playback.playing", "b", "button");
 
-        assert!(resolve(&ui, &binding, &compiled).is_none());
+        assert!(resolve(&reads, &binding, &compiled).is_none());
     }
 }

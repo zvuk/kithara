@@ -3,22 +3,16 @@ use iced::{
     mouse::{self, Button, Cursor},
     widget::canvas::{self, Action, Canvas, Frame, Geometry, Stroke},
 };
+use kithara_ui::render::{ControlAction, RenderPalette, UiEvent};
 use num_traits::cast::AsPrimitive;
 
-use crate::{
-    gui::{
-        message::Message,
-        modular::{ControlAction, ModularMsg},
-        tokens::volume,
-    },
-    theme::gui::GuiPalette,
-};
+use crate::gui::{message::Message, tokens::volume};
 
 /// Interactive volume strip whose lit segments currently follow the volume.
 /// A live output level can later drive a separate pulsing overlay while volume
 /// remains the stable base fill and the value published by pointer input.
 struct SegmentedVolume {
-    palette: GuiPalette,
+    palette: RenderPalette,
     path: String,
     volume: f32,
 }
@@ -63,9 +57,9 @@ impl canvas::Program<Message> for SegmentedVolume {
         _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.canvas.bg_deep);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
         draw_segments(&mut frame, bounds, self.volume, self.palette);
-        draw_border(&mut frame, bounds, self.palette.canvas.line);
+        draw_border(&mut frame, bounds, self.palette.line);
         vec![frame.into_geometry()]
     }
 
@@ -83,7 +77,7 @@ impl canvas::Program<Message> for SegmentedVolume {
     }
 }
 
-pub(crate) fn view(palette: GuiPalette, path: String, value: f64) -> Element<'static, Message> {
+pub(crate) fn view(palette: RenderPalette, path: String, value: f64) -> Element<'static, Message> {
     Canvas::new(SegmentedVolume {
         palette,
         path,
@@ -100,7 +94,7 @@ fn scalar_action(path: &str, bounds: Rectangle, cursor: Cursor) -> Option<Action
     }
     cursor.position_from(bounds.position()).map(|position| {
         let value = (position.x / bounds.width).clamp(0.0, 1.0);
-        Action::publish(Message::Modular(ModularMsg::Control {
+        Action::publish(Message::Modular(UiEvent::Control {
             path: path.to_owned(),
             action: ControlAction::SetScalar(f64::from(value)),
         }))
@@ -108,7 +102,7 @@ fn scalar_action(path: &str, bounds: Rectangle, cursor: Cursor) -> Option<Action
     })
 }
 
-fn draw_segments(frame: &mut Frame, bounds: Rectangle, level: f32, palette: GuiPalette) {
+fn draw_segments(frame: &mut Frame, bounds: Rectangle, level: f32, palette: RenderPalette) {
     let count: f32 = volume::SEGMENT_COUNT.as_();
     let gap_width = volume::SEGMENT_GAP * (count - 1.0);
     let content_width = (bounds.width - volume::STRIP_PADDING * 2.0).max(0.0);
@@ -130,7 +124,7 @@ fn draw_segments(frame: &mut Frame, bounds: Rectangle, level: f32, palette: GuiP
             if index < lit {
                 palette.success
             } else {
-                palette.canvas.bg_panel
+                palette.bg_panel
             },
         );
     }
