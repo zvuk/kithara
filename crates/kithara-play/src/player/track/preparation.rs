@@ -1,8 +1,8 @@
 use num_traits::ToPrimitive;
 
 use super::{
-    BufferedSourceWindow, ElasticPreparation, ElasticPreparationOutcome, ElasticPrepareError,
-    ElasticRenderer, PlaybackDirection, PlayerResource, READY_WINDOW_COUNT, SessionBeat,
+    BufferedSourceWindow, Consts, ElasticPreparation, ElasticPreparationOutcome,
+    ElasticPrepareError, ElasticRenderer, PlaybackDirection, PlayerResource, SessionBeat,
     SourceAudioReadOutcome, SourceCopy, SourceCursor, SourceFrameRange, Tempo, TrackBinding,
     copy_source, sample_count,
 };
@@ -327,7 +327,7 @@ impl ElasticRenderer {
         let preparation = self
             .preparation
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
-        if self.ready_windows.len() < READY_WINDOW_COUNT
+        if self.ready_windows.len() < Consts::READY_WINDOW_COUNT
             && self.begin_preparation_window(resource, range, preparation.direction)?
         {
             return Ok(ElasticPreparationOutcome::Pending);
@@ -519,7 +519,7 @@ mod tests {
             .schedule_window(direction)
             .expect("initial successor schedules");
 
-        for ready_count in 1..=READY_WINDOW_COUNT {
+        for ready_count in 1..=Consts::READY_WINDOW_COUNT {
             let request = peer.pop_request().expect("successor request is bounded");
             assert!(request.range().start() < request.range().end());
             assert!(request.range().len() <= renderer.source_window_frames);
@@ -544,7 +544,7 @@ mod tests {
                 .ensure_window(next, direction)
                 .expect("ready successor promotes without a deadline miss");
             assert_eq!(renderer.source_window, Some(next));
-            assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT - 1);
+            assert_eq!(renderer.ready_windows.len(), Consts::READY_WINDOW_COUNT - 1);
             while peer.pop_recycled().is_some() {}
 
             let request = peer
@@ -557,7 +557,7 @@ mod tests {
             renderer
                 .poll_source_port(direction)
                 .expect("scheduled successor restores the full pipeline");
-            assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT);
+            assert_eq!(renderer.ready_windows.len(), Consts::READY_WINDOW_COUNT);
         }
     }
 
@@ -675,7 +675,7 @@ mod tests {
         renderer
             .poll_source_port(PlaybackDirection::Reverse)
             .expect("second reverse successor is accepted");
-        assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT);
+        assert_eq!(renderer.ready_windows.len(), Consts::READY_WINDOW_COUNT);
 
         let successor_range = SourceFrameRange::new(9_000, 9_512).expect("valid successor range");
         renderer
@@ -726,13 +726,13 @@ mod tests {
         renderer
             .poll_source_port(PlaybackDirection::Forward)
             .expect("first reply poll");
-        assert!(renderer.pending_retirement.is_some());
+        assert_eq!(renderer.pending_retirements.len(), 1);
 
         let mut retired = usize::from(peer.pop_recycled().is_some());
         renderer
             .poll_source_port(PlaybackDirection::Forward)
             .expect("second reply poll");
-        assert!(renderer.pending_retirement.is_some());
+        assert_eq!(renderer.pending_retirements.len(), 1);
         while peer.pop_recycled().is_some() {
             retired += 1;
         }
@@ -745,7 +745,7 @@ mod tests {
         }
 
         assert_eq!(retired, 6);
-        assert!(renderer.pending_retirement.is_none());
+        assert!(renderer.pending_retirements.is_empty());
         assert!(
             renderer
                 .source_port
@@ -754,5 +754,62 @@ mod tests {
                 .receive()
                 .is_none()
         );
+    }
+
+    #[kithara::test]
+    fn relocation_backpressure_preserves_every_retired_buffer() {
+        let pool = PcmPool::default();
+        let mut renderer = renderer(&pool);
+        let scope = CancelScope::new(None);
+        let (mut source_port, mut source_peer) = elastic_source_test_pair(scope.token());
+        let (relocation_port, _relocation_peer) = elastic_source_test_pair(scope.token());
+        for _ in 0..4 {
+            assert!(source_port.recycle(pool.get()).is_ok());
+        }
+        renderer.attach_source_ports(source_port, relocation_port);
+        for offset in [0, 1] {
+            renderer.ready_windows.push(BufferedSourceWindow {
+                range: SourceFrameRange::new(offset, offset + 1).expect("valid ready range"),
+                samples: pool.get(),
+            });
+        }
+        let target = SessionBeat::new(0.0).expect("finite target");
+        let preparation = renderer
+            .plan_preparation(
+                &binding(PlaybackDirection::Forward),
+                target,
+                Tempo::new(120.0).expect("valid tempo"),
+                ElasticRenderer::RELOCATION_PREFETCH_BLOCKS,
+            )
+            .expect("relocation preparation");
+        let fetch_frames =
+            usize::try_from(preparation.fetch_range.len()).expect("test fetch range fits usize");
+        let samples =
+            super::super::prepared_buffer(&pool, fetch_frames).expect("relocation buffer");
+        renderer.relocation = Some(super::super::ElasticRelocation {
+            preparation,
+            revision: 1,
+            samples: Some(samples),
+            target,
+        });
+
+        renderer
+            .commit_relocation(1)
+            .expect("relocation commits under recycle backpressure");
+
+        let mut retired = 0;
+        while source_peer.pop_recycled().is_some() {
+            retired += 1;
+        }
+        renderer
+            .poll_source_port(PlaybackDirection::Forward)
+            .expect("deferred retirements flush");
+        while source_peer.pop_recycled().is_some() {
+            retired += 1;
+        }
+
+        assert_eq!(retired, 7);
+        assert!(renderer.pending_retirements.is_empty());
+        assert!(!renderer.pending_retirements.spilled());
     }
 }

@@ -22,6 +22,7 @@ use super::{
     elastic::{ElasticPlanError, ElasticRenderSegment, plan_elastic_segments},
     elastic_source::{
         ElasticSourcePort, ElasticSourceReply, ElasticSourceRequest, ElasticSourceWindow,
+        PORT_CAPACITY,
     },
 };
 use crate::{
@@ -30,7 +31,12 @@ use crate::{
     session::render::RenderContext,
 };
 
-const READY_WINDOW_COUNT: usize = 2;
+struct Consts;
+
+impl Consts {
+    const READY_WINDOW_COUNT: usize = 2;
+    const RETIREMENT_CAPACITY: usize = Self::READY_WINDOW_COUNT + PORT_CAPACITY + 1;
+}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ElasticPrepareError {
@@ -195,9 +201,9 @@ pub(crate) struct ElasticRenderer {
     direction: Option<PlaybackDirection>,
     pending_request: Option<ElasticSourceRequest>,
     pending_relocation_request: Option<ElasticSourceRequest>,
-    pending_retirement: Option<PcmBuf>,
+    pending_retirements: SmallVec<[PcmBuf; Consts::RETIREMENT_CAPACITY]>,
     preparation: Option<ElasticPreparation>,
-    preparation_buffers: SmallVec<[PcmBuf; READY_WINDOW_COUNT]>,
+    preparation_buffers: SmallVec<[PcmBuf; Consts::READY_WINDOW_COUNT]>,
     preparation_extension: Option<SourceFrameRange>,
     preparation_request: Option<SourceFrameRange>,
     preparation_window: Option<SourceFrameRange>,
@@ -207,7 +213,7 @@ pub(crate) struct ElasticRenderer {
     source_generation: u64,
     source_port: Option<ElasticSourcePort>,
     source_window: Option<SourceFrameRange>,
-    ready_windows: SmallVec<[BufferedSourceWindow; READY_WINDOW_COUNT]>,
+    ready_windows: SmallVec<[BufferedSourceWindow; Consts::READY_WINDOW_COUNT]>,
     fetch: PcmBuf,
     history: PcmBuf,
     source: PcmBuf,
@@ -269,7 +275,7 @@ impl ElasticRenderer {
             u64::try_from(source_window_frames).map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let fetch_samples = sample_count(max_fetch_frames, channels)?;
         let mut preparation_buffers = SmallVec::new();
-        for _ in 0..READY_WINDOW_COUNT {
+        for _ in 0..Consts::READY_WINDOW_COUNT {
             preparation_buffers.push(prepared_buffer(pool, fetch_samples)?);
         }
 
@@ -290,7 +296,7 @@ impl ElasticRenderer {
             direction: None,
             pending_request: None,
             pending_relocation_request: None,
-            pending_retirement: None,
+            pending_retirements: SmallVec::new(),
             preparation: None,
             preparation_buffers,
             preparation_extension: None,
@@ -358,6 +364,9 @@ impl ElasticRenderer {
             .map(|window| window.range)
             .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
         {
+            if !self.has_retirement_capacity(1) {
+                return Err(ElasticRenderError::SourceWindowDeadlineMissed);
+            }
             let window = self.ready_windows.remove(0);
             let old = replace(&mut self.fetch, window.samples);
             self.recycle_samples(old);
@@ -373,7 +382,7 @@ impl ElasticRenderer {
         &mut self,
         direction: PlaybackDirection,
     ) -> Result<(), ElasticRenderError> {
-        if self.ready_windows.len() >= READY_WINDOW_COUNT {
+        if self.ready_windows.len() >= Consts::READY_WINDOW_COUNT {
             return Ok(());
         }
         if self.pending_request.is_some() {
@@ -411,22 +420,16 @@ impl ElasticRenderer {
         if self.source_port.is_none() {
             return Err(ElasticRenderError::SourceWorkerUnavailable);
         }
-        if let Some(samples) = self.pending_retirement.take()
-            && let Err(samples) = self
+        self.flush_retirements();
+        while self.has_retirement_capacity(1) {
+            let Some(reply) = self
                 .source_port
                 .as_mut()
                 .ok_or(ElasticRenderError::SourceWorkerUnavailable)?
-                .recycle(samples)
-        {
-            self.pending_retirement = Some(samples);
-            return Ok(());
-        }
-        while let Some(reply) = self
-            .source_port
-            .as_mut()
-            .ok_or(ElasticRenderError::SourceWorkerUnavailable)?
-            .receive()
-        {
+                .receive()
+            else {
+                break;
+            };
             let pending = self
                 .pending_request
                 .filter(|pending| pending.generation() == reply.generation());
@@ -434,7 +437,7 @@ impl ElasticRenderer {
             if !expected {
                 if let ElasticSourceReply::Ready(window) = reply {
                     self.recycle_window(window);
-                    if self.pending_retirement.is_some() {
+                    if !self.pending_retirements.is_empty() {
                         return Ok(());
                     }
                 }
@@ -464,7 +467,7 @@ impl ElasticRenderer {
                         self.pending_request = None;
                         return Err(ElasticRenderError::SourceWorkerFailed);
                     }
-                    if self.ready_windows.len() >= READY_WINDOW_COUNT {
+                    if self.ready_windows.len() >= Consts::READY_WINDOW_COUNT {
                         self.recycle_samples(samples);
                         self.pending_request = None;
                         return Err(ElasticRenderError::SourceWorkerFailed);
@@ -472,7 +475,7 @@ impl ElasticRenderer {
                     self.ready_windows
                         .push(BufferedSourceWindow { range, samples });
                     self.pending_request = None;
-                    if self.pending_retirement.is_some() {
+                    if !self.pending_retirements.is_empty() {
                         return Ok(());
                     }
                 }

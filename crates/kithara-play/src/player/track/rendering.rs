@@ -4,7 +4,7 @@ use num_traits::ToPrimitive;
 use smallvec::SmallVec;
 
 use super::{
-    ElasticCopyError, ElasticPreparationOutcome, ElasticPrepareError, ElasticRelocation,
+    Consts, ElasticCopyError, ElasticPreparationOutcome, ElasticPrepareError, ElasticRelocation,
     ElasticRenderError, ElasticRenderOutcome, ElasticRenderSegment, ElasticRenderer,
     ElasticRequest, ElasticSourceReply, ElasticSourceRequest, ElasticSourceWindow, IntegerSegment,
     PcmBuf, PlaybackDirection, RenderContext, SessionBeat, SourceCursor, SourceFrameRange, Tempo,
@@ -291,6 +291,9 @@ impl ElasticRenderer {
 
     pub(crate) fn commit_relocation(&mut self, revision: u64) -> Result<(), ElasticRenderError> {
         self.poll_relocation_port()?;
+        if !self.has_retirement_capacity(self.ready_windows.len() + 1) {
+            return Err(ElasticRenderError::RelocationNotReady);
+        }
         let Some(mut relocation) = self.relocation.take() else {
             return Err(ElasticRenderError::RelocationNotReady);
         };
@@ -356,12 +359,16 @@ impl ElasticRenderer {
     }
 
     fn poll_relocation_port(&mut self) -> Result<(), ElasticRenderError> {
-        while let Some(reply) = self
-            .relocation_port
-            .as_mut()
-            .ok_or(ElasticRenderError::SourceWorkerUnavailable)?
-            .receive()
-        {
+        self.flush_retirements();
+        while self.has_retirement_capacity(1) {
+            let Some(reply) = self
+                .relocation_port
+                .as_mut()
+                .ok_or(ElasticRenderError::SourceWorkerUnavailable)?
+                .receive()
+            else {
+                break;
+            };
             let pending = self
                 .pending_relocation_request
                 .filter(|pending| pending.generation() == reply.generation());
@@ -405,13 +412,31 @@ impl ElasticRenderer {
         self.recycle_samples(window.release_samples());
     }
 
+    pub(super) fn flush_retirements(&mut self) {
+        while let Some(samples) = self.pending_retirements.pop() {
+            let Some(port) = self.source_port.as_mut() else {
+                self.pending_retirements.push(samples);
+                return;
+            };
+            if let Err(samples) = port.recycle(samples) {
+                self.pending_retirements.push(samples);
+                return;
+            }
+        }
+    }
+
+    pub(super) fn has_retirement_capacity(&self, count: usize) -> bool {
+        count <= Consts::RETIREMENT_CAPACITY.saturating_sub(self.pending_retirements.len())
+    }
+
     pub(super) fn recycle_samples(&mut self, samples: PcmBuf) {
+        debug_assert!(self.has_retirement_capacity(1));
         let Some(port) = self.source_port.as_mut() else {
-            self.pending_retirement = Some(samples);
+            self.pending_retirements.push(samples);
             return;
         };
         if let Err(samples) = port.recycle(samples) {
-            self.pending_retirement = Some(samples);
+            self.pending_retirements.push(samples);
         }
     }
 }

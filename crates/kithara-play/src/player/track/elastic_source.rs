@@ -13,7 +13,7 @@ use ringbuf::{
 
 use crate::resource::Resource;
 
-const PORT_CAPACITY: usize = 4;
+pub(super) const PORT_CAPACITY: usize = 4;
 
 #[derive(Clone, Copy)]
 pub(super) struct ElasticSourceRequest {
