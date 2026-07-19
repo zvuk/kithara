@@ -1,5 +1,3 @@
-use std::borrow::Borrow;
-
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
 
@@ -16,16 +14,6 @@ pub struct NodeId(pub String);
 #[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct InstanceId(pub String);
-
-#[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ControlKind(pub String);
-
-impl Borrow<str> for ControlKind {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
 
 #[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]

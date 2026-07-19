@@ -1,21 +1,19 @@
-use std::{collections::BTreeMap, sync::LazyLock};
+use std::collections::BTreeMap;
 
 use iced::{
     Background, Element, Length,
-    widget::{Column, Row, Space, container, container::Style as ContainerStyle},
+    widget::{Column, Row, container, container::Style as ContainerStyle},
 };
 use num_traits::cast::AsPrimitive;
 
 use crate::{
     atoms::{chip, knob, meter, readout, toggle, vu},
     compile::{CompiledNode, CompiledUi},
-    expand::{Binding, ExpandedNode},
-    ids::{ControlKind, InternId},
+    expand::{Binding, ControlSpec, ExpandedNode},
+    ids::InternId,
     layout::Axis,
-    module::PropValue,
-    registry::{ControlCatalog, ControlKindDesc},
     render::{ReadValue, Reads, RenderPalette, UiEvent},
-    size::{Dim, SizeSpec},
+    size::{Dim, SizeSpec, control_size},
     widgets::{
         button, deck, fader, global_bar, mini_wave, module_chrome, telemetry, text, track_list,
     },
@@ -26,30 +24,6 @@ struct Consts;
 impl Consts {
     const FILL_WEIGHT_SCALE: f32 = 100.0;
     const GRID_GAP: f32 = 1.0;
-}
-
-#[derive(Default)]
-struct Catalog {
-    kinds: BTreeMap<ControlKind, ControlKindDesc>,
-}
-
-impl Catalog {
-    fn insert(&mut self, kind: &str, description: ControlKindDesc) {
-        self.kinds.insert(ControlKind(kind.to_owned()), description);
-    }
-}
-
-impl ControlCatalog for Catalog {
-    fn kind(&self, kind: &str) -> Option<&ControlKindDesc> {
-        self.kinds.get(kind)
-    }
-}
-
-static RENDER_CATALOG: LazyLock<Catalog> = LazyLock::new(build_catalog);
-
-#[must_use]
-pub fn catalog() -> impl ControlCatalog {
-    build_catalog()
 }
 
 pub fn render<'a>(
@@ -157,20 +131,15 @@ fn render_node<'a>(
         .width(Length::Fill)
         .into(),
         ExpandedNode::Control {
-            path,
-            kind,
-            props,
-            read,
-            ..
-        } => render_control(*path, *kind, props, read.as_ref(), ui, reads, palette),
+            path, spec, read, ..
+        } => render_control(*path, spec, read.as_ref(), ui, reads, palette),
     };
-    apply_size(element, effective_size(node, ui, &*RENDER_CATALOG))
+    apply_size(element, effective_size(node))
 }
 
 fn render_control<'a>(
     path: InternId,
-    kind: InternId,
-    props: &BTreeMap<InternId, PropValue<InternId>>,
+    spec: &ControlSpec,
     read: Option<&Binding>,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
@@ -178,67 +147,63 @@ fn render_control<'a>(
 ) -> Element<'a, UiEvent> {
     let value = read.and_then(|binding| resolve(reads, binding, ui));
     let path = ui.resolve(path);
-    match ui.resolve(kind) {
-        "deck.header" => deck::header(
-            text_prop(props, "badge", ui),
+    match spec {
+        ControlSpec::DeckHeader { badge } => deck::header(
+            badge.map(|id| ui.resolve(id)),
             value.as_ref(),
             reads,
             palette,
         ),
-        "deck.summary" => deck::summary(
-            text_prop(props, "style", ui),
+        ControlSpec::DeckSummary { style } => deck::summary(*style, value.as_ref(), reads, palette),
+        ControlSpec::Brand => global_bar::brand(palette),
+        ControlSpec::Spacer => global_bar::spacer(palette),
+        ControlSpec::PresetSelector => global_bar::preset_selector(reads, palette),
+        ControlSpec::SettingsButton => global_bar::settings_button(palette),
+        ControlSpec::Bpm { placeholder } => deck::bpm(
+            placeholder.map(|id| ui.resolve(id)),
             value.as_ref(),
             reads,
             palette,
         ),
-        "global.brand" => global_bar::brand(palette),
-        "global.spacer" => global_bar::spacer(palette),
-        "preset.selector" => global_bar::preset_selector(reads, palette),
-        "view.settings" => global_bar::settings_button(palette),
-        "telemetry.bpm" => deck::bpm(
-            text_prop(props, "fallback", ui),
-            value.as_ref(),
-            reads,
-            palette,
-        ),
-        "telemetry.time" => deck::time(value.as_ref(), reads, palette),
-        "text" => text::view(text_prop(props, "style", ui), value.as_ref(), palette),
-        "button" => button::view(
+        ControlSpec::Time => deck::time(value.as_ref(), reads, palette),
+        ControlSpec::Text { style } => text::view(*style, value.as_ref(), palette),
+        ControlSpec::Button {
+            label,
+            active_label,
+            style,
+        } => button::view(
             path,
-            text_prop(props, "label", ui),
-            text_prop(props, "active-label", ui),
-            text_prop(props, "style", ui),
+            ui.resolve(*label),
+            active_label.map(|id| ui.resolve(id)),
+            *style,
             value.as_ref(),
             palette,
         ),
-        "telemetry.scalar" => {
-            telemetry::view(text_prop(props, "format", ui), value.as_ref(), palette)
+        ControlSpec::Scalar { format } => telemetry::view(*format, value.as_ref(), palette),
+        ControlSpec::Fader { style } => fader::view(path, *style, value.as_ref(), palette),
+        ControlSpec::Toggle => toggle::toggle(path, value.as_ref(), palette),
+        ControlSpec::Checkbox => toggle::checkbox(path, value.as_ref(), palette),
+        ControlSpec::Readout {
+            label,
+            tone,
+            framed,
+        } => readout::view(
+            label.map(|id| ui.resolve(id)),
+            *tone,
+            *framed,
+            value.as_ref(),
+            palette,
+        ),
+        ControlSpec::Chip { label } => {
+            chip::view(path, ui.resolve(*label), value.as_ref(), palette)
         }
-        "fader.horizontal" => {
-            fader::view(path, text_prop(props, "style", ui), value.as_ref(), palette)
+        ControlSpec::Knob => knob::view(path, value.as_ref(), palette),
+        ControlSpec::VuStereo => meter::view(path, value.as_ref(), palette),
+        ControlSpec::VuVertical => vu::view(path, value.as_ref(), palette),
+        ControlSpec::Wave { style } => {
+            mini_wave::view(path, *style, value.as_ref(), reads, palette)
         }
-        "toggle" => toggle::toggle(path, value.as_ref(), palette),
-        "checkbox" => toggle::checkbox(path, value.as_ref(), palette),
-        "readout" => readout::view(
-            text_prop(props, "label", ui),
-            text_prop(props, "tone", ui),
-            bool_prop(props, "framed", ui),
-            value.as_ref(),
-            palette,
-        ),
-        "chip" => chip::view(path, text_prop(props, "label", ui), value.as_ref(), palette),
-        "knob" => knob::view(path, value.as_ref(), palette),
-        "vu.stereo" => meter::view(path, value.as_ref(), palette),
-        "vu.vertical" => vu::view(path, value.as_ref(), palette),
-        "waveform.mini" => mini_wave::view(
-            path,
-            text_prop(props, "style", ui),
-            value.as_ref(),
-            reads,
-            palette,
-        ),
-        "track_list" => track_list::view(path, value.as_ref(), reads, palette),
-        _ => Space::new().into(),
+        ControlSpec::TrackList => track_list::view(path, value.as_ref(), reads, palette),
     }
 }
 
@@ -256,32 +221,7 @@ fn deck_is_a(scope: &BTreeMap<InternId, InternId>, ui: &CompiledUi) -> bool {
         .any(|(key, value)| ui.resolve(*key) == "deck" && ui.resolve(*value) == "a")
 }
 
-fn text_prop<'a>(
-    props: &BTreeMap<InternId, PropValue<InternId>>,
-    name: &str,
-    ui: &'a CompiledUi,
-) -> Option<&'a str> {
-    props
-        .iter()
-        .find(|(key, _)| ui.resolve(**key) == name)
-        .and_then(|(_, value)| match value {
-            PropValue::Text(value) => Some(ui.resolve(*value)),
-            _ => None,
-        })
-}
-
-fn bool_prop(props: &BTreeMap<InternId, PropValue<InternId>>, name: &str, ui: &CompiledUi) -> bool {
-    props
-        .iter()
-        .find(|(key, _)| ui.resolve(**key) == name)
-        .is_some_and(|(_, value)| matches!(value, PropValue::Bool(true)))
-}
-
-fn effective_size(
-    node: &ExpandedNode,
-    ui: &CompiledUi,
-    catalog: &dyn ControlCatalog,
-) -> Option<SizeSpec> {
+fn effective_size(node: &ExpandedNode) -> Option<SizeSpec> {
     let declared = match node {
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
@@ -289,9 +229,7 @@ fn effective_size(
         | ExpandedNode::Control { size, .. } => *size,
     };
     declared.or_else(|| match node {
-        ExpandedNode::Control { kind, .. } => catalog
-            .kind(ui.resolve(*kind))
-            .map(|description| description.size),
+        ExpandedNode::Control { spec, .. } => Some(control_size(spec)),
         _ => None,
     })
 }
@@ -339,35 +277,9 @@ fn fill_portion(weight: f32) -> u16 {
     scaled.as_()
 }
 
-fn build_catalog() -> Catalog {
-    let mut catalog = Catalog::default();
-    catalog.insert("deck.header", deck::header_desc());
-    catalog.insert("deck.summary", deck::summary_desc());
-    catalog.insert("global.brand", global_bar::brand_desc());
-    catalog.insert("global.spacer", global_bar::spacer_desc());
-    catalog.insert("preset.selector", global_bar::selector_desc());
-    catalog.insert("view.settings", global_bar::settings_desc());
-    catalog.insert("text", text::desc());
-    catalog.insert("button", button::desc());
-    catalog.insert("telemetry.bpm", deck::bpm_desc());
-    catalog.insert("telemetry.time", deck::time_desc());
-    catalog.insert("telemetry.scalar", telemetry::desc());
-    catalog.insert("fader.horizontal", fader::desc());
-    catalog.insert("toggle", toggle::toggle_desc());
-    catalog.insert("checkbox", toggle::checkbox_desc());
-    catalog.insert("readout", readout::desc());
-    catalog.insert("chip", chip::desc());
-    catalog.insert("knob", knob::desc());
-    catalog.insert("vu.stereo", meter::desc());
-    catalog.insert("vu.vertical", vu::desc());
-    catalog.insert("waveform.mini", mini_wave::desc());
-    catalog.insert("track_list", track_list::desc());
-    catalog
-}
-
 #[cfg(test)]
 mod tests {
-    use iced::Size;
+    use iced::{Size, widget::Space};
     use kithara_test_utils::kithara;
 
     use super::*;

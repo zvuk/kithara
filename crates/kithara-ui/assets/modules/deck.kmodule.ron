@@ -5,17 +5,15 @@
     parameters: ["deck"],
     root: Column(
         children: [
-            Control(
+            DeckHeader(
                 id: "header",
-                kind: "deck.header",
-                props: { "badge": Text("A") },
+                badge: Some("A"),
                 read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                 adaptive: (priority: Required),
             ),
-            Control(
+            Wave(
                 id: "wave",
-                kind: "waveform.mini",
-                props: { "style": Text("hero") },
+                style: Hero,
                 read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
                 adaptive: (priority: Required),

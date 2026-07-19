@@ -6,44 +6,23 @@ use iced::{
     },
 };
 
-use crate::{
-    registry::{ControlKindDesc, PropKind, ValueKind},
-    render::{ControlAction, ReadValue, RenderPalette, UiEvent, fonts, shaped_text},
-    size::{Dim, SizeSpec},
-};
+use crate::render::{ControlAction, ReadValue, RenderPalette, UiEvent, fonts, shaped_text};
 
 struct Consts;
 
 impl Consts {
     const BORDER_WIDTH: f32 = 1.0;
-    const HEIGHT: f32 = 18.0;
-    const MIN_WIDTH: f32 = 24.0;
     const PADDING_X: f32 = 8.0;
     const PADDING_Y: f32 = 3.0;
     const TEXT_SIZE: f32 = 9.0;
 }
 
-pub(crate) fn desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Bool), Some(ValueKind::Trigger))
-        .with_prop("label", PropKind::Text)
-        .with_size(SizeSpec::new(
-            Dim::Range {
-                min: Consts::MIN_WIDTH,
-                max: None,
-            },
-            Dim::Fixed(Consts::HEIGHT),
-        ))
-}
-
 pub(crate) fn view<'a>(
     path: &str,
-    label: Option<&'a str>,
+    label: &'a str,
     value: Option<&ReadValue<'_>>,
     palette: RenderPalette,
 ) -> Element<'a, UiEvent> {
-    let Some(label) = label else {
-        return Space::new().into();
-    };
     let Some(ReadValue::Bool(active)) = value else {
         return Space::new().into();
     };

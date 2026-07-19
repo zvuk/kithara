@@ -14,9 +14,7 @@ use iced::{
 use super::chrome;
 use crate::{
     builtin,
-    registry::ControlKindDesc,
     render::{Icon, ReadValue, Reads, RenderPalette, UiEvent, fonts, shaped_text},
-    size::{Dim, SizeSpec},
 };
 
 const BRAND_LETTERS: [&str; 7] = ["K", "I", "T", "H", "A", "R", "A"];
@@ -27,7 +25,6 @@ impl Consts {
     const BRAND_GAP: f32 = 3.0;
     const BRAND_PADDING_X: f32 = 13.0;
     const BRAND_SIZE: f32 = 14.0;
-    const BRAND_WIDTH: f32 = 112.0;
     const CHIP_GAP: f32 = 1.0;
     const CHIP_PADDING_X: f32 = 8.0;
     const CHIP_PADDING_Y: f32 = 3.0;
@@ -35,33 +32,8 @@ impl Consts {
     const GEAR_SIZE: f32 = 12.0;
     const HEIGHT: f32 = 34.0;
     const SELECTOR_PADDING_X: f32 = 10.0;
+    const BRAND_WIDTH: f32 = 112.0;
     const SELECTOR_WIDTH: f32 = 126.0;
-    const SETTINGS_WIDTH: f32 = 34.0;
-}
-
-pub(crate) fn brand_desc() -> ControlKindDesc {
-    ControlKindDesc::new(None, None).with_size(SizeSpec::new(
-        Dim::Fixed(Consts::BRAND_WIDTH),
-        Dim::Fixed(Consts::HEIGHT),
-    ))
-}
-
-pub(crate) fn spacer_desc() -> ControlKindDesc {
-    ControlKindDesc::new(None, None).with_size(SizeSpec::new(Dim::Fill, Dim::Fixed(Consts::HEIGHT)))
-}
-
-pub(crate) fn selector_desc() -> ControlKindDesc {
-    ControlKindDesc::new(None, None).with_size(SizeSpec::new(
-        Dim::Fixed(Consts::SELECTOR_WIDTH),
-        Dim::Fixed(Consts::HEIGHT),
-    ))
-}
-
-pub(crate) fn settings_desc() -> ControlKindDesc {
-    ControlKindDesc::new(None, None).with_size(SizeSpec::new(
-        Dim::Fixed(Consts::SETTINGS_WIDTH),
-        Dim::Fixed(Consts::HEIGHT),
-    ))
 }
 
 pub(crate) fn brand(palette: RenderPalette) -> Element<'static, UiEvent> {

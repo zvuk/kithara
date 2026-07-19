@@ -3,7 +3,7 @@ use crate::{
     expand::{Budget, ControlSite, ExpandedNode, Expander},
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, LayoutNode, parse_layout},
-    registry::{ControlCatalog, EndpointRegistry},
+    registry::EndpointRegistry,
     resolve::load_module_graph,
     size::{SizeSpec, combine_horizontal, combine_vertical, compute_size},
     source::{SourceResolver, UiConfig},
@@ -50,7 +50,6 @@ pub enum CompiledNode {
 pub fn compile(
     entry: &str,
     resolver: &dyn SourceResolver,
-    catalog: &dyn ControlCatalog,
     endpoints: &dyn EndpointRegistry,
     config: &UiConfig,
 ) -> Result<CompiledUi, UiDocError> {
@@ -69,7 +68,6 @@ pub fn compile(
     let mut interner = Interner::new(config.max_arena_bytes);
     let root = Compiler {
         resolver,
-        catalog,
         endpoints,
         config,
         budget: &mut budget,
@@ -83,7 +81,6 @@ pub fn compile(
 
 struct Compiler<'a> {
     resolver: &'a dyn SourceResolver,
-    catalog: &'a dyn ControlCatalog,
     endpoints: &'a dyn EndpointRegistry,
     config: &'a UiConfig,
     budget: &'a mut Budget,
@@ -147,7 +144,7 @@ impl Compiler<'_> {
                     &self.config.limits,
                 )?;
                 let mut visitor = |site: ControlSite<'_>, origin: &SourceUri| {
-                    validate::check_controls(site, origin, self.catalog, self.endpoints)
+                    validate::check_controls(site, origin, self.endpoints)
                 };
                 let root = Expander::new(
                     self.config.limits.max_depth,
@@ -156,8 +153,7 @@ impl Compiler<'_> {
                     &mut visitor,
                 )
                 .expand_module(&set, &module_uri, &args, &instance.0)?;
-                let size =
-                    (*size).unwrap_or_else(|| compute_size(&root, self.catalog, self.interner));
+                let size = (*size).unwrap_or_else(|| compute_size(&root));
                 let instance = self.interner.intern(&instance.0, layout_uri)?;
                 Ok(CompiledNode::Module {
                     instance,

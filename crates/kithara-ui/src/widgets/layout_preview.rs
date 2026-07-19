@@ -181,7 +181,6 @@ mod tests {
         compile::compile,
         ids::EndpointId,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-        render::tree::catalog,
         source::UiConfig,
     };
 
@@ -235,12 +234,10 @@ mod tests {
     #[kithara::test]
     fn builtin_presets_build_preview_geometry() {
         let registry = Registry::default();
-        let catalog = catalog();
         let geometry = [builtin::MICRO_PRESET, builtin::PLAYER_PRESET].map(|preset| {
             let ui = compile(
                 preset,
                 &builtin::resolver(),
-                &catalog,
                 &registry,
                 &UiConfig::default(),
             )

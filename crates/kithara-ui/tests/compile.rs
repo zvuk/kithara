@@ -5,8 +5,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, compile},
     error::UiDocError,
-    expand::ExpandedNode,
-    module::PropValue,
+    expand::{ControlSpec, ExpandedNode},
     size::{Dim, SizeSpec},
     source::{Limits, MemResolver, UiConfig},
 };
@@ -20,7 +19,6 @@ fn compiles_micro_layout_end_to_end() {
     let ui = compile(
         "micro.klayout.ron",
         &resolver(),
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::default(),
     )
@@ -46,13 +44,12 @@ fn layout_module_size_override_wins_over_computed_size() {
     resolver.insert(
         "module.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "module",
-            root: Control(id: "play", kind: "button"))"#,
+            root: Button(id: "play", label: "PLAY"))"#,
     );
 
     let ui = compile(
         "override.klayout.ron",
         &resolver,
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::default(),
     )
@@ -72,13 +69,12 @@ fn unknown_endpoint_fails_with_module_origin_and_path() {
     resolver.insert(
         "modules/deck/transport.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "transport", parameters: ["deck"],
-            root: Control(id: "play", kind: "button",
+            root: Button(id: "play", label: "PLAY",
                 write: Command(id: "deck.transport.typo", with: { "deck": "$deck" })))"#,
     );
     let error = compile(
         "player.klayout.ron",
         &resolver,
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::default(),
     )
@@ -102,7 +98,6 @@ fn node_limit_is_enforced() {
     let error = compile(
         "micro.klayout.ron",
         &resolver(),
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::builder().limits(limits).build(),
     )
@@ -123,13 +118,12 @@ fn layout_parameter_reference_is_unresolved() {
     resolver.insert(
         "deck.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "deck", parameters: ["deck"],
-            root: Control(id: "title", kind: "text"))"#,
+            root: Text(id: "title"))"#,
     );
 
     let error = compile(
         "layout.klayout.ron",
         &resolver,
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::default(),
     )
@@ -154,15 +148,12 @@ fn layout_doubled_dollar_passes_literal_dollar() {
     resolver.insert(
         "literal.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "literal", parameters: ["x"],
-            root: Control(id: "text", kind: "text", props: {
-                "style": Text("$x"),
-            }))"#,
+            root: Chip(id: "text", label: "$x"))"#,
     );
 
     let ui = compile(
         "literal.klayout.ron",
         &resolver,
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::default(),
     )
@@ -170,17 +161,14 @@ fn layout_doubled_dollar_passes_literal_dollar() {
     let CompiledNode::Module { root, .. } = &ui.root else {
         panic!("expected module");
     };
-    let ExpandedNode::Control { props, .. } = &**root else {
+    let ExpandedNode::Control {
+        spec: ControlSpec::Chip { label },
+        ..
+    } = &**root
+    else {
         panic!("expected control");
     };
-    let value = props
-        .iter()
-        .find(|(key, _)| ui.resolve(**key) == "style")
-        .map(|(_, value)| value);
-    let Some(PropValue::Text(value)) = value else {
-        panic!("expected text prop");
-    };
-    assert_eq!(ui.resolve(*value), "$lit");
+    assert_eq!(ui.resolve(*label), "$lit");
 }
 
 #[kithara::test]
@@ -197,7 +185,6 @@ fn oversized_layout_source_is_rejected() {
     let error = compile(
         "large.klayout.ron",
         &resolver,
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::builder().limits(limits).build(),
     )
@@ -232,7 +219,6 @@ fn fifty_empty_columns_exceed_node_limit() {
     let error = compile(
         "nested.klayout.ron",
         &resolver,
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::builder().limits(limits).build(),
     )

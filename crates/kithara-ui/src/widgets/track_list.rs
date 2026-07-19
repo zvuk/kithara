@@ -12,12 +12,8 @@ use iced::{
 };
 
 use super::{chrome, deck};
-use crate::{
-    registry::{ControlKindDesc, ValueKind},
-    render::{
-        ControlAction, ReadValue, Reads, RenderPalette, TrackRow, UiEvent, fonts, shaped_text,
-    },
-    size::{Dim, SizeSpec},
+use crate::render::{
+    ControlAction, ReadValue, Reads, RenderPalette, TrackRow, UiEvent, fonts, shaped_text,
 };
 
 struct Consts;
@@ -34,8 +30,6 @@ impl Consts {
     const HEADER_TEXT_SIZE: f32 = 8.0;
     const INPUT_PADDING_X: f32 = 12.0;
     const INPUT_TEXT_SIZE: f32 = 12.0;
-    const MIN_HEIGHT: f32 = 210.0;
-    const MIN_WIDTH: f32 = 600.0;
     const NUMBER_TEXT_SIZE: f32 = 10.0;
     const NUMBER_WIDTH: f32 = 44.0;
     const ROW_HEIGHT: f32 = 30.0;
@@ -46,19 +40,6 @@ impl Consts {
     const TIME_TEXT_SIZE: f32 = 12.0;
     const TIME_WIDTH: f32 = 70.0;
     const TITLE_GAP: f32 = 8.0;
-}
-
-pub(crate) fn desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::TrackList), None).with_size(SizeSpec::new(
-        Dim::Range {
-            min: Consts::MIN_WIDTH,
-            max: None,
-        },
-        Dim::Range {
-            min: Consts::MIN_HEIGHT,
-            max: None,
-        },
-    ))
 }
 
 pub(crate) fn view<'a>(

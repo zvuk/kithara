@@ -5,14 +5,14 @@
     root: Column(
         gap: Some(8.0),
         children: [
-            Control(id: "title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.toggles")),
+            Text(id: "title", style: Section, read: Model(id: "gallery.label.toggles")),
             Row(
                 gap: Some(12.0),
                 children: [
-                    Control(id: "toggle-on", kind: "toggle", read: Model(id: "mock.toggle.on")),
-                    Control(id: "toggle-off", kind: "toggle", read: Model(id: "mock.toggle.off")),
-                    Control(id: "checkbox-on", kind: "checkbox", read: Model(id: "mock.checkbox.on")),
-                    Control(id: "checkbox-off", kind: "checkbox", read: Model(id: "mock.checkbox.off")),
+                    Toggle(id: "toggle-on", read: Model(id: "mock.toggle.on")),
+                    Toggle(id: "toggle-off", read: Model(id: "mock.toggle.off")),
+                    Checkbox(id: "checkbox-on", read: Model(id: "mock.checkbox.on")),
+                    Checkbox(id: "checkbox-off", read: Model(id: "mock.checkbox.off")),
                 ],
             ),
         ],

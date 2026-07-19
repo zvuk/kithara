@@ -6,6 +6,7 @@ use iced::{
 };
 use kithara_platform::time::Duration;
 use kithara_ui::{
+    builtin,
     compile::{CompiledUi, compile},
     render::{RenderPalette, UiEvent, fonts, tree},
     source::{MemResolver, UiConfig},
@@ -33,6 +34,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "gallery-faders.klayout.ron",
         include_str!("assets/gallery-faders.klayout.ron"),
+    ),
+    (
+        "gallery-modules.klayout.ron",
+        include_str!("assets/gallery-modules.klayout.ron"),
     ),
     (
         "modules/tab-bar-shell.kmodule.ron",
@@ -85,7 +90,7 @@ enum Message {
 }
 
 struct Gallery {
-    layouts: [CompiledUi; 3],
+    layouts: [CompiledUi; 4],
     palette: RenderPalette,
     reads: MockReads,
     shot: Option<shot::ShotPlan>,
@@ -95,22 +100,16 @@ struct Gallery {
 impl Gallery {
     fn new() -> (Self, Task<Message>) {
         let resolver = resolver();
-        let catalog = tree::catalog();
         let endpoints = mock::registry();
         let layouts = Tab::ALL.map(|tab| {
-            compile(
-                tab.entry(),
-                &resolver,
-                &catalog,
-                &endpoints,
-                &UiConfig::default(),
+            compile(tab.entry(), &resolver, &endpoints, &UiConfig::default()).unwrap_or_else(
+                |error| {
+                    panic!(
+                        "embedded gallery document {} must compile: {error}",
+                        tab.entry()
+                    )
+                },
             )
-            .unwrap_or_else(|error| {
-                panic!(
-                    "embedded gallery document {} must compile: {error}",
-                    tab.entry()
-                )
-            })
         });
         let settings = Settings {
             size: Size::new(Consts::WIDTH, Consts::HEIGHT),
@@ -166,6 +165,10 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::Ui(UiEvent::LibraryQuery(query)) => {
+            state.reads.set_library_query(query);
+            Task::none()
+        }
         Message::Ui(_) => Task::none(),
     }
 }
@@ -193,7 +196,7 @@ fn subscription(state: &Gallery) -> Subscription<Message> {
 }
 
 fn resolver() -> MemResolver {
-    let mut resolver = MemResolver::default();
+    let mut resolver = builtin::resolver();
     for (path, text) in ASSETS {
         resolver.insert(path, text);
     }

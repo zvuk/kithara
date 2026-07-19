@@ -83,27 +83,6 @@ pub enum UiDocError {
         name: String,
         path: String,
     },
-    #[error("{origin}: unknown control kind {kind:?} at {path}")]
-    UnknownControlKind {
-        origin: SourceUri,
-        kind: String,
-        path: String,
-    },
-    #[error("{origin}: unknown prop {prop:?} for control kind {kind:?} at {path}")]
-    UnknownProp {
-        origin: SourceUri,
-        kind: String,
-        prop: String,
-        path: String,
-    },
-    #[error("{origin}: prop {prop:?} at {path}: expected {expected}, got {got}")]
-    PropType {
-        origin: SourceUri,
-        prop: String,
-        path: String,
-        expected: String,
-        got: String,
-    },
     #[error("{origin}: unknown endpoint {category} {id:?} at {path}")]
     UnknownEndpoint {
         origin: SourceUri,

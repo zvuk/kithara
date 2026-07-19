@@ -16,9 +16,8 @@ use num_traits::cast::AsPrimitive;
 
 use super::chrome;
 use crate::{
-    registry::{ControlKindDesc, PropKind, ValueKind},
+    module::FaderStyle,
     render::{ControlAction, Icon, ReadValue, RenderPalette, UiEvent, fonts, shaped_text},
-    size::{Dim, SizeSpec},
 };
 
 struct Consts;
@@ -32,7 +31,6 @@ impl Consts {
     const ICON_SIZE: f32 = 11.0;
     const LABEL_TEXT_SIZE: f32 = 12.0;
     const LABEL_WIDTH: f32 = 18.0;
-    const MIN_WIDTH: f32 = 90.0;
     const RAIL_WIDTH: f32 = 6.0;
     const SEGMENT_COUNT: usize = 12;
     const SEGMENT_GAP: f32 = 1.5;
@@ -46,28 +44,16 @@ impl Consts {
     const TICK_STEP: f32 = 12.0;
 }
 
-pub(crate) fn desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar))
-        .with_prop("style", PropKind::Text)
-        .with_size(SizeSpec::new(
-            Dim::Range {
-                min: Consts::MIN_WIDTH,
-                max: None,
-            },
-            Dim::Fixed(Consts::CONTROL_HEIGHT),
-        ))
-}
-
 pub(crate) fn view<'a>(
     path: &str,
-    style: Option<&str>,
+    style: FaderStyle,
     value: Option<&ReadValue<'_>>,
     palette: RenderPalette,
 ) -> Element<'a, UiEvent> {
     let Some(ReadValue::Scalar(value)) = value else {
         return Space::new().into();
     };
-    if matches!(style, Some("volume" | "volume-compact")) {
+    if matches!(style, FaderStyle::Volume | FaderStyle::VolumeCompact) {
         return segmented_volume(palette, path, *value);
     }
 

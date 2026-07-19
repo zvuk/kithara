@@ -8,31 +8,18 @@ use iced::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::{
-    registry::{ControlKindDesc, ValueKind},
-    render::{ControlAction, ReadValue, RenderPalette, StereoLevels, UiEvent},
-    size::{Dim, SizeSpec},
-};
+use crate::render::{ControlAction, ReadValue, RenderPalette, StereoLevels, UiEvent};
 
 struct Consts;
 
 impl Consts {
     const DANGER_THRESHOLD: f32 = 0.83;
-    const HEIGHT: f32 = 120.0;
     const SEGMENT_GAP: f32 = 2.0;
     const SEGMENT_HEIGHT: f32 = 4.0;
     const SEGMENT_INSET_X: f32 = 4.0;
     const THUMB_HEIGHT: f32 = 9.0;
     const THUMB_LINE_HEIGHT: f32 = 1.0;
     const WARNING_THRESHOLD: f32 = 0.66;
-    const WIDTH: f32 = 18.0;
-}
-
-pub(crate) fn desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Stereo), Some(ValueKind::Scalar)).with_size(SizeSpec::new(
-        Dim::Fixed(Consts::WIDTH),
-        Dim::Fixed(Consts::HEIGHT),
-    ))
 }
 
 pub(crate) fn view<'a>(

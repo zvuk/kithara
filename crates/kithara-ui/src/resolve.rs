@@ -102,7 +102,27 @@ fn walk_includes(
             )?;
             Ok(())
         }
-        ControlNode::Control { .. } => Ok(()),
+        ControlNode::DeckHeader { .. }
+        | ControlNode::DeckSummary { .. }
+        | ControlNode::Brand { .. }
+        | ControlNode::Spacer { .. }
+        | ControlNode::PresetSelector { .. }
+        | ControlNode::SettingsButton { .. }
+        | ControlNode::Text { .. }
+        | ControlNode::Button { .. }
+        | ControlNode::Bpm { .. }
+        | ControlNode::Time { .. }
+        | ControlNode::Scalar { .. }
+        | ControlNode::Fader { .. }
+        | ControlNode::Wave { .. }
+        | ControlNode::TrackList { .. }
+        | ControlNode::Toggle { .. }
+        | ControlNode::Checkbox { .. }
+        | ControlNode::Readout { .. }
+        | ControlNode::Chip { .. }
+        | ControlNode::Knob { .. }
+        | ControlNode::VuStereo { .. }
+        | ControlNode::VuVertical { .. } => Ok(()),
     }
 }
 
@@ -134,10 +154,7 @@ mod tests {
                 r#"Row(children: [Include(id: "c", source: "c.kmodule.ron")])"#,
             ),
         );
-        resolver.insert(
-            "sub/c.kmodule.ron",
-            &module("c", r#"Control(id: "x", kind: "text")"#),
-        );
+        resolver.insert("sub/c.kmodule.ron", &module("c", r#"Text(id: "x")"#));
 
         let (uri, set) =
             load_module_graph(&resolver, None, "a.kmodule.ron", &Limits::default()).unwrap();
@@ -182,10 +199,7 @@ mod tests {
                 r#"Row(children: [Include(id: "b", source: "b.kmodule.ron")])"#,
             ),
         );
-        resolver.insert(
-            "b.kmodule.ron",
-            &module("b", r#"Control(id: "x", kind: "text")"#),
-        );
+        resolver.insert("b.kmodule.ron", &module("b", r#"Text(id: "x")"#));
 
         let limits = Limits {
             max_depth: 1,
@@ -215,10 +229,7 @@ mod tests {
                 ])"#,
             ),
         );
-        resolver.insert(
-            "shared.kmodule.ron",
-            &module("shared", r#"Control(id: "x", kind: "text")"#),
-        );
+        resolver.insert("shared.kmodule.ron", &module("shared", r#"Text(id: "x")"#));
 
         load_module_graph(&resolver, None, "a.kmodule.ron", &Limits::default()).unwrap();
     }
@@ -228,10 +239,7 @@ mod tests {
         let entry = module("a", r#"Include(id: "b", source: "b.kmodule.ron")"#);
         let child = module(
             "b",
-            &format!(
-                r#"Control(id: "text", kind: "text", props: {{ "text": Text("{}") }})"#,
-                "x".repeat(256)
-            ),
+            &format!(r#"Chip(id: "text", label: "{}")"#, "x".repeat(256)),
         );
         assert!(child.len() > entry.len());
         let mut resolver = MemResolver::default();

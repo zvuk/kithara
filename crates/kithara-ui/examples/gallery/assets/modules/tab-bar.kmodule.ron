@@ -6,26 +6,29 @@
         size: (w: Fill, h: Fixed(28.0)),
         gap: Some(1.0),
         children: [
-            Control(
+            Chip(
                 id: "atoms",
-                kind: "chip",
                 size: (w: Fixed(110.0), h: Fixed(28.0)),
-                props: { "label": Text("ПРИМИТИВЫ") },
+                label: "ПРИМИТИВЫ",
                 read: Model(id: "gallery.tab.atoms"),
             ),
-            Control(
+            Chip(
                 id: "buttons",
-                kind: "chip",
                 size: (w: Fixed(90.0), h: Fixed(28.0)),
-                props: { "label": Text("КНОПКИ") },
+                label: "КНОПКИ",
                 read: Model(id: "gallery.tab.buttons"),
             ),
-            Control(
+            Chip(
                 id: "faders",
-                kind: "chip",
                 size: (w: Fixed(96.0), h: Fixed(28.0)),
-                props: { "label": Text("ФЕЙДЕРЫ") },
+                label: "ФЕЙДЕРЫ",
                 read: Model(id: "gallery.tab.faders"),
+            ),
+            Chip(
+                id: "modules",
+                size: (w: Fixed(96.0), h: Fixed(28.0)),
+                label: "МОДУЛИ",
+                read: Model(id: "gallery.tab.modules"),
             ),
         ],
     ),

@@ -94,7 +94,6 @@ fn four_deck_layout_instantiates_one_module_file_four_times() {
     let ui = compile(
         "four_deck.klayout.ron",
         &resolver,
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::default(),
     )
@@ -130,7 +129,6 @@ fn two_deck_layout_compiles() {
     compile(
         "two_deck.klayout.ron",
         &resolver,
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::default(),
     )

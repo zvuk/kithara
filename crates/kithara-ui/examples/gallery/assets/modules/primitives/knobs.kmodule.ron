@@ -5,31 +5,27 @@
     root: Column(
         gap: Some(8.0),
         children: [
-            Control(id: "title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.knobs")),
+            Text(id: "title", style: Section, read: Model(id: "gallery.label.knobs")),
             Row(
                 gap: Some(24.0),
                 children: [
-                    Control(
+                    Knob(
                         id: "size-26",
-                        kind: "knob",
                         size: (w: Fixed(26.0), h: Fixed(26.0)),
                         read: Model(id: "mock.knob"),
                     ),
-                    Control(
+                    Knob(
                         id: "size-28",
-                        kind: "knob",
                         size: (w: Fixed(28.0), h: Fixed(28.0)),
                         read: Model(id: "mock.knob"),
                     ),
-                    Control(
+                    Knob(
                         id: "size-34",
-                        kind: "knob",
                         size: (w: Fixed(34.0), h: Fixed(34.0)),
                         read: Model(id: "mock.knob"),
                     ),
-                    Control(
+                    Knob(
                         id: "size-38",
-                        kind: "knob",
                         size: (w: Fixed(38.0), h: Fixed(38.0)),
                         read: Model(id: "mock.knob"),
                     ),

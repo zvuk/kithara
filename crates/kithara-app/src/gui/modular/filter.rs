@@ -38,7 +38,6 @@ mod tests {
     use kithara_ui::{
         builtin,
         compile::{CompiledNode, CompiledUi, compile},
-        render::tree::catalog,
         source::UiConfig,
     };
 
@@ -49,7 +48,6 @@ mod tests {
         compile(
             builtin::PLAYER_PRESET,
             &builtin::resolver(),
-            &catalog(),
             &endpoints::registry(),
             &UiConfig::default(),
         )
@@ -122,7 +120,6 @@ mod tests {
         let compiled = compile(
             "nested.klayout.ron",
             &resolver,
-            &catalog(),
             &endpoints::registry(),
             &UiConfig::default(),
         )

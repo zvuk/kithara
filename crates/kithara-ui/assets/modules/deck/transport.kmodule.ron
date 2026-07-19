@@ -5,39 +5,29 @@
     parameters: ["deck"],
     root: Row(
         children: [
-            Control(
+            Button(
                 id: "prev",
-                kind: "button",
-                props: {
-                    "label": Text("PREV"),
-                    "style": Text("transport"),
-                },
+                label: "PREV",
+                style: Transport,
                 write: Command(id: "deck.transport.prev", with: { "deck": "$deck" }),
             ),
-            Control(
+            Button(
                 id: "play",
-                kind: "button",
-                props: {
-                    "label": Text("PLAY"),
-                    "active-label": Text("PAUSE"),
-                    "style": Text("transport-primary"),
-                },
+                label: "PLAY",
+                active_label: Some("PAUSE"),
+                style: TransportPrimary,
                 read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
                 adaptive: (priority: Required),
             ),
-            Control(
+            Button(
                 id: "next",
-                kind: "button",
-                props: {
-                    "label": Text("NEXT"),
-                    "style": Text("transport"),
-                },
+                label: "NEXT",
+                style: Transport,
                 write: Command(id: "deck.transport.next", with: { "deck": "$deck" }),
             ),
-            Control(
+            Time(
                 id: "position",
-                kind: "telemetry.time",
                 read: Telemetry(id: "deck.playback.position_normalized", with: { "deck": "$deck" }),
             ),
         ],

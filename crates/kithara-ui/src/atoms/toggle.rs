@@ -7,28 +7,14 @@ use iced::{
     },
 };
 
-use crate::{
-    registry::{ControlKindDesc, ValueKind},
-    render::{ControlAction, ReadValue, RenderPalette, UiEvent},
-    size::{Dim, SizeSpec},
-};
+use crate::render::{ControlAction, ReadValue, RenderPalette, UiEvent};
 
 struct Consts;
 
 impl Consts {
     const BORDER_WIDTH: f32 = 1.0;
-    const CHECKBOX_SIZE: f32 = 10.0;
     const THUMB_INSET: f32 = 2.0;
     const THUMB_SIZE: f32 = 9.0;
-    const TOGGLE_HEIGHT: f32 = 14.0;
-    const TOGGLE_WIDTH: f32 = 26.0;
-}
-
-pub(crate) fn toggle_desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Bool), Some(ValueKind::Trigger)).with_size(SizeSpec::new(
-        Dim::Fixed(Consts::TOGGLE_WIDTH),
-        Dim::Fixed(Consts::TOGGLE_HEIGHT),
-    ))
 }
 
 pub(crate) fn toggle<'a>(
@@ -37,13 +23,6 @@ pub(crate) fn toggle<'a>(
     palette: RenderPalette,
 ) -> Element<'a, UiEvent> {
     binary_control(path, value, palette, Shape::Toggle)
-}
-
-pub(crate) fn checkbox_desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Bool), Some(ValueKind::Trigger)).with_size(SizeSpec::new(
-        Dim::Fixed(Consts::CHECKBOX_SIZE),
-        Dim::Fixed(Consts::CHECKBOX_SIZE),
-    ))
 }
 
 pub(crate) fn checkbox<'a>(

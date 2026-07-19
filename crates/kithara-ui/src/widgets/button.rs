@@ -2,16 +2,15 @@ use iced::{
     Alignment, Background, Border, Element, Font, Length, Theme,
     font::Weight,
     widget::{
-        Space, button,
-        button::{Status as ButtonStatus, Style as ButtonStyle},
+        button,
+        button::{Status as ButtonStatus, Style as IcedButtonStyle},
         container, row,
     },
 };
 
 use crate::{
-    registry::{ControlKindDesc, PropKind, ValueKind},
+    module::ButtonStyle,
     render::{ControlAction, Icon, ReadValue, RenderPalette, UiEvent, fonts, shaped_text},
-    size::{Dim, SizeSpec},
 };
 
 struct Consts;
@@ -20,7 +19,6 @@ impl Consts {
     const BORDER_WIDTH: f32 = 1.0;
     const BUTTON_HEIGHT: f32 = 28.0;
     const BUTTON_ICON_SIZE: f32 = 11.0;
-    const BUTTON_MIN_WIDTH: f32 = 72.0;
     const BUTTON_PADDING_X: f32 = 8.0;
     const BUTTON_TEXT: f32 = 11.0;
     const ICON_GAP: f32 = 4.0;
@@ -28,51 +26,33 @@ impl Consts {
     const MICRO_ICON_SIZE: f32 = 14.0;
 }
 
-pub(crate) fn desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Bool), Some(ValueKind::Trigger))
-        .with_prop("label", PropKind::Text)
-        .with_prop("active-label", PropKind::Text)
-        .with_prop("style", PropKind::Text)
-        .with_size(SizeSpec::new(
-            Dim::Range {
-                min: Consts::BUTTON_MIN_WIDTH,
-                max: None,
-            },
-            Dim::Fixed(Consts::BUTTON_HEIGHT),
-        ))
-}
-
 pub(crate) fn view<'a>(
     path: &str,
-    label: Option<&'a str>,
+    label: &'a str,
     active_label: Option<&'a str>,
-    style: Option<&str>,
+    style: ButtonStyle,
     value: Option<&ReadValue<'_>>,
     palette: RenderPalette,
 ) -> Element<'a, UiEvent> {
-    let Some(label) = label else {
-        return Space::new().into();
-    };
     let active = matches!(value, Some(ReadValue::Bool(true)));
-    let visual = ButtonVisual::from(style);
     let label = if active {
         active_label.unwrap_or(label)
     } else {
         label
     };
     let label_size = Consts::BUTTON_TEXT;
-    let weight = if visual.is_primary() {
+    let weight = if is_primary(style) {
         Weight::Bold
     } else {
         Weight::Normal
     };
-    let content: Element<'a, UiEvent> = match visual {
-        ButtonVisual::MicroPrimary => {
+    let content: Element<'a, UiEvent> = match style {
+        ButtonStyle::MicroPrimary => {
             let icon = if active { Icon::Pause } else { Icon::Play };
             icon.view(Consts::MICRO_ICON_SIZE, palette.bg)
         }
-        ButtonVisual::Transport => transport_content(label, label_size, weight, palette),
-        ButtonVisual::TransportPrimary | ButtonVisual::Default => shaped_text(label)
+        ButtonStyle::Transport => transport_content(label, label_size, weight, palette),
+        ButtonStyle::TransportPrimary | ButtonStyle::Default => shaped_text(label)
             .font(Font {
                 weight,
                 ..fonts::MONO
@@ -80,7 +60,7 @@ pub(crate) fn view<'a>(
             .size(label_size)
             .into(),
     };
-    let height = if visual == ButtonVisual::MicroPrimary {
+    let height = if style == ButtonStyle::MicroPrimary {
         Consts::MICRO_BUTTON_SIZE
     } else {
         Consts::BUTTON_HEIGHT
@@ -93,19 +73,19 @@ pub(crate) fn view<'a>(
     let control = button(centered)
         .height(Length::Fixed(height))
         .padding([0.0, Consts::BUTTON_PADDING_X])
-        .style(control_button_style(palette, visual))
+        .style(control_button_style(palette, style))
         .on_press(UiEvent::Control {
             path: path.to_owned(),
             action: ControlAction::Activate,
         });
 
-    match visual {
-        ButtonVisual::Transport => control.width(Length::FillPortion(1)).into(),
-        ButtonVisual::TransportPrimary => control.width(Length::FillPortion(2)).into(),
-        ButtonVisual::MicroPrimary => control
+    match style {
+        ButtonStyle::Transport => control.width(Length::FillPortion(1)).into(),
+        ButtonStyle::TransportPrimary => control.width(Length::FillPortion(2)).into(),
+        ButtonStyle::MicroPrimary => control
             .width(Length::Fixed(Consts::MICRO_BUTTON_SIZE))
             .into(),
-        ButtonVisual::Default => control.width(Length::Shrink).into(),
+        ButtonStyle::Default => control.width(Length::Shrink).into(),
     }
 }
 
@@ -155,37 +135,19 @@ fn icon_label<'a>(
     .into()
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum ButtonVisual {
-    Default,
-    Transport,
-    TransportPrimary,
-    MicroPrimary,
-}
-
-impl From<Option<&str>> for ButtonVisual {
-    fn from(style: Option<&str>) -> Self {
-        match style {
-            Some("transport") => Self::Transport,
-            Some("transport-primary") => Self::TransportPrimary,
-            Some("micro-primary") => Self::MicroPrimary,
-            _ => Self::Default,
-        }
-    }
-}
-
-impl ButtonVisual {
-    fn is_primary(self) -> bool {
-        matches!(self, Self::TransportPrimary | Self::MicroPrimary)
-    }
+fn is_primary(style: ButtonStyle) -> bool {
+    matches!(
+        style,
+        ButtonStyle::TransportPrimary | ButtonStyle::MicroPrimary
+    )
 }
 
 fn control_button_style(
     palette: RenderPalette,
-    visual: ButtonVisual,
-) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle {
+    style: ButtonStyle,
+) -> impl Fn(&Theme, ButtonStatus) -> IcedButtonStyle {
     move |_theme, status| {
-        let highlighted = visual.is_primary();
+        let highlighted = is_primary(style);
         let background = if highlighted {
             match status {
                 ButtonStatus::Hovered => palette.accent_strong,
@@ -206,7 +168,7 @@ fn control_button_style(
                 .width(Consts::BORDER_WIDTH)
                 .color(palette.line)
         };
-        ButtonStyle {
+        IcedButtonStyle {
             background: Some(Background::Color(background)),
             text_color: if highlighted {
                 palette.bg
@@ -214,7 +176,7 @@ fn control_button_style(
                 palette.text
             },
             border,
-            ..ButtonStyle::default()
+            ..IcedButtonStyle::default()
         }
     }
 }

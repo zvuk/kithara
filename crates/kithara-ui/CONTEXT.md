@@ -26,10 +26,24 @@ or invalid span resolves to `""`; this is the documented handle behavior, not er
 
 ## Document And Compiled Layers
 
-`BindingRef` and `PropValue<String>` are the serde document inputs. `Binding` and
-`PropValue<InternId>` are their interned compiled forms. This is an explicit layer split, not a
-second source of domain truth: validation runs on the substituted document forms before they are
-interned.
+`BindingRef` and the typed `ControlNode` variants are the serde document inputs. `Binding` and
+`ControlSpec` are their compiled forms. String payloads retained by `ControlSpec` are interned;
+style, format, tone, and boolean fields remain typed values. This is an explicit layer split, not
+a second source of domain truth: endpoint validation uses the typed document variant and the
+substituted binding before the binding is interned.
 
 The arena types live in `ids.rs` because they back compiled identifiers and strings, and keeping
 them there preserves the crate's flat-directory budget.
+
+## Typed Control Schema
+
+Each supported control is a structural `ControlNode` enum variant. RON deserialization owns field
+validation, so the document layer has no string control discriminator, property map, or property
+kind catalog. Common control fields are repeated in the serde variants because RON flattening is
+not part of the schema contract.
+
+`validate::value_kinds` is the single owner of control read/write endpoint kinds. Intrinsic sizes
+are selected exhaustively from `ControlSpec` by `size::control_size`; this remains available in
+non-render and wasm builds. `compile` therefore depends only on a source resolver, endpoint
+registry, and UI configuration. Renderers match `ControlSpec` directly and do not resolve a
+runtime control catalog.

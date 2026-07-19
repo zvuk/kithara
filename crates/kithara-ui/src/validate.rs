@@ -3,10 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::{
     error::UiDocError,
     expand::ControlSite,
-    ids::{ControlKind, EndpointId, SourceUri},
+    ids::{EndpointId, NodeId, SourceUri},
     layout::{LayoutDoc, LayoutNode},
-    module::{BindingRef, ControlNode, ModuleDoc, PropValue},
-    registry::{ControlCatalog, ControlKindDesc, EndpointCategory, EndpointRegistry, PropKind},
+    module::{BindingRef, ControlNode, ModuleDoc},
+    registry::{EndpointCategory, EndpointRegistry, ValueKind},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -146,31 +146,56 @@ fn walk_module(
             }
             Ok(())
         }
-        ControlNode::Control { id, .. } => {
-            record(&id.0, &path.push(format!("Control({id})")), origin, seen)
+        control => {
+            if let Some(id) = control_id(control) {
+                record(&id.0, &path.push(format!("Control({id})")), origin, seen)?;
+            }
+            Ok(())
         }
+    }
+}
+
+fn control_id(node: &ControlNode) -> Option<&NodeId> {
+    match node {
+        ControlNode::Row { .. }
+        | ControlNode::Column { .. }
+        | ControlNode::Include { .. }
+        | ControlNode::Slot { .. } => None,
+        ControlNode::DeckHeader { id, .. }
+        | ControlNode::DeckSummary { id, .. }
+        | ControlNode::Brand { id, .. }
+        | ControlNode::Spacer { id, .. }
+        | ControlNode::PresetSelector { id, .. }
+        | ControlNode::SettingsButton { id, .. }
+        | ControlNode::Text { id, .. }
+        | ControlNode::Button { id, .. }
+        | ControlNode::Bpm { id, .. }
+        | ControlNode::Time { id, .. }
+        | ControlNode::Scalar { id, .. }
+        | ControlNode::Fader { id, .. }
+        | ControlNode::Wave { id, .. }
+        | ControlNode::TrackList { id, .. }
+        | ControlNode::Toggle { id, .. }
+        | ControlNode::Checkbox { id, .. }
+        | ControlNode::Readout { id, .. }
+        | ControlNode::Chip { id, .. }
+        | ControlNode::Knob { id, .. }
+        | ControlNode::VuStereo { id, .. }
+        | ControlNode::VuVertical { id, .. } => Some(id),
     }
 }
 
 pub(crate) fn check_controls(
     site: ControlSite<'_>,
     origin: &SourceUri,
-    catalog: &dyn ControlCatalog,
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
-    let Some(description) = catalog.kind(&site.kind.0) else {
-        return Err(UiDocError::UnknownControlKind {
-            origin: origin.clone(),
-            kind: site.kind.0.clone(),
-            path: site.path.to_owned(),
-        });
-    };
-    check_props(description, site.kind, site.props, site.path, origin)?;
+    let (read_kind, write_kind) = value_kinds(site.control);
     if let Some(binding) = site.read {
         check_binding(
             binding,
             BindingSide::Read,
-            description,
+            read_kind,
             site.path,
             origin,
             endpoints,
@@ -180,7 +205,7 @@ pub(crate) fn check_controls(
         check_binding(
             binding,
             BindingSide::Write,
-            description,
+            write_kind,
             site.path,
             origin,
             endpoints,
@@ -195,42 +220,36 @@ enum BindingSide {
     Write,
 }
 
-fn prop_kind_of(value: &PropValue<String>) -> PropKind {
-    match value {
-        PropValue::Bool(_) => PropKind::Bool,
-        PropValue::Num(_) => PropKind::Num,
-        PropValue::Text(_) => PropKind::Text,
-    }
-}
-
-fn check_props(
-    description: &ControlKindDesc,
-    kind: &ControlKind,
-    props: &BTreeMap<String, PropValue<String>>,
-    path: &str,
-    origin: &SourceUri,
-) -> Result<(), UiDocError> {
-    for (name, value) in props {
-        let Some(expected) = description.props.get(name) else {
-            return Err(UiDocError::UnknownProp {
-                origin: origin.clone(),
-                kind: kind.0.clone(),
-                prop: name.clone(),
-                path: path.to_owned(),
-            });
-        };
-        let got = prop_kind_of(value);
-        if got != *expected {
-            return Err(UiDocError::PropType {
-                origin: origin.clone(),
-                prop: name.clone(),
-                path: path.to_owned(),
-                expected: expected.to_string(),
-                got: got.to_string(),
-            });
+pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<ValueKind>) {
+    match control {
+        ControlNode::DeckHeader { .. } | ControlNode::Bpm { .. } => {
+            (Some(ValueKind::Waveform), None)
         }
+        ControlNode::DeckSummary { .. }
+        | ControlNode::Text { .. }
+        | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),
+        ControlNode::Button { .. }
+        | ControlNode::Toggle { .. }
+        | ControlNode::Checkbox { .. }
+        | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
+        ControlNode::Time { .. } | ControlNode::Scalar { .. } => (Some(ValueKind::Scalar), None),
+        ControlNode::Fader { .. } | ControlNode::Knob { .. } => {
+            (Some(ValueKind::Scalar), Some(ValueKind::Scalar))
+        }
+        ControlNode::Wave { .. } => (Some(ValueKind::Waveform), Some(ValueKind::Scalar)),
+        ControlNode::TrackList { .. } => (Some(ValueKind::TrackList), None),
+        ControlNode::VuStereo { .. } | ControlNode::VuVertical { .. } => {
+            (Some(ValueKind::Stereo), Some(ValueKind::Scalar))
+        }
+        ControlNode::Row { .. }
+        | ControlNode::Column { .. }
+        | ControlNode::Include { .. }
+        | ControlNode::Slot { .. }
+        | ControlNode::Brand { .. }
+        | ControlNode::Spacer { .. }
+        | ControlNode::PresetSelector { .. }
+        | ControlNode::SettingsButton { .. } => (None, None),
     }
-    Ok(())
 }
 
 fn binding_parts(
@@ -247,7 +266,7 @@ fn binding_parts(
 fn check_binding(
     binding: &BindingRef,
     side: BindingSide,
-    description: &ControlKindDesc,
+    expected_kind: Option<ValueKind>,
     path: &str,
     origin: &SourceUri,
     endpoints: &dyn EndpointRegistry,
@@ -279,24 +298,20 @@ fn check_binding(
             path: path.to_owned(),
         });
     };
-    let control_kind = match side {
-        BindingSide::Read => description.read,
-        BindingSide::Write => description.write,
-    };
-    let Some(control_kind) = control_kind else {
+    let Some(expected_kind) = expected_kind else {
         return Err(UiDocError::BindingDirection {
             origin: origin.clone(),
             id: id.0.clone(),
             path: path.to_owned(),
-            detail: "control kind does not support this side".to_owned(),
+            detail: "control does not support this side".to_owned(),
         });
     };
-    if control_kind != endpoint.value {
+    if expected_kind != endpoint.value {
         return Err(UiDocError::BindingType {
             origin: origin.clone(),
             id: id.0.clone(),
             path: path.to_owned(),
-            expected: control_kind.to_string(),
+            expected: expected_kind.to_string(),
             got: endpoint.value.to_string(),
         });
     }
@@ -331,31 +346,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        ids::{ControlKind, EndpointId, SourceUri},
+        ids::{EndpointId, SourceUri},
         layout::parse_layout,
         module::{BindingRef, parse_module},
-        registry::{
-            ControlCatalog, ControlKindDesc, EndpointCategory, EndpointDesc, EndpointRegistry,
-            PropKind, ValueKind,
-        },
+        registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     };
-
-    #[derive(Default)]
-    struct TestCatalog {
-        kinds: BTreeMap<ControlKind, ControlKindDesc>,
-    }
-
-    impl TestCatalog {
-        fn insert(&mut self, kind: &str, description: ControlKindDesc) {
-            self.kinds.insert(ControlKind(kind.to_owned()), description);
-        }
-    }
-
-    impl ControlCatalog for TestCatalog {
-        fn kind(&self, kind: &str) -> Option<&ControlKindDesc> {
-            self.kinds.get(kind)
-        }
-    }
 
     #[derive(Default)]
     struct TestRegistry {
@@ -450,8 +445,8 @@ mod tests {
     fn duplicate_control_id_reports_path() {
         let text = r#"(schema: "kithara.module", version: 1, id: "m",
             root: Row(children: [
-                Control(id: "play", kind: "button"),
-                Control(id: "play", kind: "button"),
+                Button(id: "play", label: "PLAY"),
+                Button(id: "play", label: "PLAY"),
             ]))"#;
         let doc = parse_module(text, &origin()).unwrap();
         let error = check_module_node_ids(&doc, &origin()).unwrap_err();
@@ -461,7 +456,7 @@ mod tests {
     #[kithara::test]
     fn control_id_with_path_separator_is_rejected() {
         let text = r#"(schema: "kithara.module", version: 1, id: "m",
-            root: Control(id: "transport/play", kind: "button"))"#;
+            root: Button(id: "transport/play", label: "PLAY"))"#;
         let doc = parse_module(text, &origin()).unwrap();
         let error = check_module_node_ids(&doc, &origin()).unwrap_err();
         assert!(matches!(
@@ -475,42 +470,26 @@ mod tests {
     fn unique_ids_pass() {
         let text = r#"(schema: "kithara.module", version: 1, id: "m",
             root: Row(children: [
-                Control(id: "play", kind: "button"),
+                Button(id: "play", label: "PLAY"),
                 Slot(id: "extra"),
             ]))"#;
         let doc = parse_module(text, &origin()).unwrap();
         check_module_node_ids(&doc, &origin()).unwrap();
     }
 
-    fn check_control(kind: &str, path: &str, write: Option<&BindingRef>) -> Result<(), UiDocError> {
-        let kind = ControlKind(kind.to_owned());
-        let props = BTreeMap::new();
+    fn check_control(body: &str, path: &str, write: Option<&BindingRef>) -> Result<(), UiDocError> {
+        let text = format!(r#"(schema: "kithara.module", version: 1, id: "test", root: {body})"#);
+        let document = parse_module(&text, &origin())?;
         check_controls(
             ControlSite {
                 path,
-                kind: &kind,
-                props: &props,
+                control: &document.root,
                 read: None,
                 write,
             },
             &origin(),
-            &catalog(),
             &registry(),
         )
-    }
-
-    fn catalog() -> TestCatalog {
-        let mut catalog = TestCatalog::default();
-        catalog.insert(
-            "button",
-            ControlKindDesc::new(Some(ValueKind::Bool), Some(ValueKind::Trigger))
-                .with_prop("label", PropKind::Text),
-        );
-        catalog.insert(
-            "fader",
-            ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
-        );
-        catalog
     }
 
     fn registry() -> TestRegistry {
@@ -538,7 +517,12 @@ mod tests {
             id: EndpointId("deck.transport.toggle_play".into()),
             with: with_deck(),
         };
-        check_control("button", "play", Some(&binding)).unwrap();
+        check_control(
+            r#"Button(id: "play", label: "PLAY")"#,
+            "play",
+            Some(&binding),
+        )
+        .unwrap();
     }
 
     #[kithara::test]
@@ -547,7 +531,12 @@ mod tests {
             id: EndpointId("deck.transport.toggle_play".into()),
             with: BTreeMap::new(),
         };
-        let error = check_control("button", "play", Some(&binding)).unwrap_err();
+        let error = check_control(
+            r#"Button(id: "play", label: "PLAY")"#,
+            "play",
+            Some(&binding),
+        )
+        .unwrap_err();
         assert!(matches!(
             error,
             UiDocError::MissingScope { scope, .. } if scope == "deck"
@@ -562,7 +551,12 @@ mod tests {
             id: EndpointId("deck.transport.toggle_play".into()),
             with,
         };
-        let error = check_control("button", "play", Some(&binding)).unwrap_err();
+        let error = check_control(
+            r#"Button(id: "play", label: "PLAY")"#,
+            "play",
+            Some(&binding),
+        )
+        .unwrap_err();
         assert!(matches!(
             error,
             UiDocError::UnknownScope {
@@ -580,7 +574,7 @@ mod tests {
             id: EndpointId("player.output.volume".into()),
             with: with_deck(),
         };
-        let error = check_control("fader", "volume", Some(&binding)).unwrap_err();
+        let error = check_control(r#"Fader(id: "volume")"#, "volume", Some(&binding)).unwrap_err();
         assert!(matches!(
             error,
             UiDocError::UnknownScope {
@@ -598,17 +592,12 @@ mod tests {
             id: EndpointId("library.visible_tracks".into()),
             with: BTreeMap::new(),
         };
-        let error = check_control("button", "play", Some(&binding)).unwrap_err();
+        let error = check_control(
+            r#"Button(id: "play", label: "PLAY")"#,
+            "play",
+            Some(&binding),
+        )
+        .unwrap_err();
         assert!(matches!(error, UiDocError::BindingDirection { .. }));
-    }
-
-    #[kithara::test]
-    fn unknown_kind_is_reported_with_path() {
-        let error = check_control("nope", "unknown", None).unwrap_err();
-        assert!(matches!(
-            error,
-            UiDocError::UnknownControlKind { kind, path, .. }
-                if kind == "nope" && path == "unknown"
-        ));
     }
 }

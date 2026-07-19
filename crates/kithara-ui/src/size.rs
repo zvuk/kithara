@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{expand::ExpandedNode, ids::Interner, registry::ControlCatalog};
+use crate::expand::{ControlSpec, ExpandedNode};
 
 /// One-axis size rule. `Fill` takes available space and has no intrinsic size.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
@@ -123,13 +123,108 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
     SizeSpec::new(Dim::from(width), Dim::from(height))
 }
 
-/// Computes a node's intrinsic size from its override, children, or catalog entry.
+struct Consts;
+
+impl Consts {
+    const BPM: SizeSpec = SizeSpec::new(Dim::Fixed(64.0), Dim::Fixed(34.0));
+    const BRAND: SizeSpec = SizeSpec::new(Dim::Fixed(112.0), Dim::Fixed(34.0));
+    const BUTTON: SizeSpec = SizeSpec::new(
+        Dim::Range {
+            min: 72.0,
+            max: None,
+        },
+        Dim::Fixed(28.0),
+    );
+    const CHECKBOX: SizeSpec = SizeSpec::new(Dim::Fixed(10.0), Dim::Fixed(10.0));
+    const CHIP: SizeSpec = SizeSpec::new(
+        Dim::Range {
+            min: 24.0,
+            max: None,
+        },
+        Dim::Fixed(18.0),
+    );
+    const DECK_HEADER: SizeSpec = SizeSpec::new(Dim::Fill, Dim::Fixed(60.0));
+    const DECK_SUMMARY: SizeSpec = SizeSpec::new(
+        Dim::Range {
+            min: 90.0,
+            max: None,
+        },
+        Dim::Fixed(34.0),
+    );
+    const FADER: SizeSpec = SizeSpec::new(
+        Dim::Range {
+            min: 90.0,
+            max: None,
+        },
+        Dim::Fixed(34.0),
+    );
+    const GLOBAL_SPACER: SizeSpec = SizeSpec::new(Dim::Fill, Dim::Fixed(34.0));
+    const KNOB: SizeSpec = SizeSpec::new(Dim::Fixed(34.0), Dim::Fixed(34.0));
+    const PRESET_SELECTOR: SizeSpec = SizeSpec::new(Dim::Fixed(126.0), Dim::Fixed(34.0));
+    const READOUT: SizeSpec = SizeSpec::new(
+        Dim::Range {
+            min: 40.0,
+            max: None,
+        },
+        Dim::Fixed(26.0),
+    );
+    const SCALAR: SizeSpec = SizeSpec::new(Dim::Fixed(64.0), Dim::Fixed(18.0));
+    const SETTINGS_BUTTON: SizeSpec = SizeSpec::new(Dim::Fixed(34.0), Dim::Fixed(34.0));
+    const TEXT: SizeSpec = SizeSpec::new(Dim::Fill, Dim::Fixed(18.0));
+    const TIME: SizeSpec = SizeSpec::new(Dim::Fixed(144.0), Dim::Fixed(28.0));
+    const TOGGLE: SizeSpec = SizeSpec::new(Dim::Fixed(26.0), Dim::Fixed(14.0));
+    const TRACK_LIST: SizeSpec = SizeSpec::new(
+        Dim::Range {
+            min: 600.0,
+            max: None,
+        },
+        Dim::Range {
+            min: 210.0,
+            max: None,
+        },
+    );
+    const VU_STEREO: SizeSpec = SizeSpec::new(Dim::Fixed(64.0), Dim::Fixed(22.0));
+    const VU_VERTICAL: SizeSpec = SizeSpec::new(Dim::Fixed(18.0), Dim::Fixed(120.0));
+    const WAVE: SizeSpec = SizeSpec::new(
+        Dim::Fill,
+        Dim::Range {
+            min: 120.0,
+            max: None,
+        },
+    );
+}
+
+/// Returns the intrinsic size for a typed control specification.
 #[must_use]
-pub(crate) fn compute_size(
-    node: &ExpandedNode,
-    catalog: &dyn ControlCatalog,
-    interner: &Interner,
-) -> SizeSpec {
+pub fn control_size(spec: &ControlSpec) -> SizeSpec {
+    match spec {
+        ControlSpec::DeckHeader { .. } => Consts::DECK_HEADER,
+        ControlSpec::DeckSummary { .. } => Consts::DECK_SUMMARY,
+        ControlSpec::Brand => Consts::BRAND,
+        ControlSpec::Spacer => Consts::GLOBAL_SPACER,
+        ControlSpec::PresetSelector => Consts::PRESET_SELECTOR,
+        ControlSpec::SettingsButton => Consts::SETTINGS_BUTTON,
+        ControlSpec::Text { .. } => Consts::TEXT,
+        ControlSpec::Button { .. } => Consts::BUTTON,
+        ControlSpec::Bpm { .. } => Consts::BPM,
+        ControlSpec::Time => Consts::TIME,
+        ControlSpec::Scalar { .. } => Consts::SCALAR,
+        ControlSpec::Fader { .. } => Consts::FADER,
+        ControlSpec::Wave { .. } => Consts::WAVE,
+        ControlSpec::TrackList => Consts::TRACK_LIST,
+        ControlSpec::Toggle => Consts::TOGGLE,
+        ControlSpec::Checkbox => Consts::CHECKBOX,
+        ControlSpec::Readout { .. } => Consts::READOUT,
+        ControlSpec::Chip { .. } => Consts::CHIP,
+        ControlSpec::Knob => Consts::KNOB,
+        ControlSpec::VuStereo => Consts::VU_STEREO,
+        ControlSpec::VuVertical => Consts::VU_VERTICAL,
+    }
+}
+
+/// Computes a node's intrinsic size from its override, children, or control specification.
+#[must_use]
+pub(crate) fn compute_size(node: &ExpandedNode) -> SizeSpec {
     let override_size = match node {
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
@@ -144,11 +239,7 @@ pub(crate) fn compute_size(
         ExpandedNode::Row {
             children, gap, pad, ..
         } => inset(
-            combine_horizontal(
-                children
-                    .iter()
-                    .map(|child| compute_size(child, catalog, interner)),
-            ),
+            combine_horizontal(children.iter().map(compute_size)),
             gap_total(*gap, children.len()),
             0.0,
             *pad,
@@ -156,24 +247,14 @@ pub(crate) fn compute_size(
         ExpandedNode::Column {
             children, gap, pad, ..
         } => inset(
-            combine_vertical(
-                children
-                    .iter()
-                    .map(|child| compute_size(child, catalog, interner)),
-            ),
+            combine_vertical(children.iter().map(compute_size)),
             0.0,
             gap_total(*gap, children.len()),
             *pad,
         ),
         ExpandedNode::Slot { children, .. } if children.is_empty() => SizeSpec::FILL,
-        ExpandedNode::Slot { children, .. } => combine_vertical(
-            children
-                .iter()
-                .map(|child| compute_size(child, catalog, interner)),
-        ),
-        ExpandedNode::Control { kind, .. } => catalog
-            .kind(interner.resolve(*kind))
-            .map_or(SizeSpec::FILL, |description| description.size),
+        ExpandedNode::Slot { children, .. } => combine_vertical(children.iter().map(compute_size)),
+        ExpandedNode::Control { spec, .. } => control_size(spec),
     }
 }
 
@@ -203,32 +284,20 @@ fn grow(dim: Dim, delta: f32) -> Dim {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         ids::{Interner, SourceUri},
         module::AdaptivePolicy,
-        registry::ControlKindDesc,
     };
-
-    struct EmptyCatalog;
-
-    impl ControlCatalog for EmptyCatalog {
-        fn kind(&self, _kind: &str) -> Option<&ControlKindDesc> {
-            None
-        }
-    }
 
     fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {
         let origin = SourceUri("size-test.ron".to_owned());
         ExpandedNode::Control {
             path: interner.intern(id, &origin).unwrap(),
             id: interner.intern(id, &origin).unwrap(),
-            kind: interner.intern("test", &origin).unwrap(),
-            props: BTreeMap::new(),
+            spec: ControlSpec::Knob,
             read: None,
             write: None,
             adaptive: AdaptivePolicy::default(),
@@ -271,7 +340,7 @@ mod tests {
             pad: None,
         };
 
-        let size = compute_size(&node, &EmptyCatalog, &interner);
+        let size = compute_size(&node);
 
         assert_eq!(size.w.min(), 16.0);
         assert_eq!(size.h.min(), 8.0);
@@ -291,7 +360,7 @@ mod tests {
             pad: None,
         };
 
-        let size = compute_size(&node, &EmptyCatalog, &interner);
+        let size = compute_size(&node);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.h.min(), 12.0);
@@ -309,7 +378,7 @@ mod tests {
             pad: None,
         };
 
-        assert_eq!(compute_size(&node, &EmptyCatalog, &interner), override_size);
+        assert_eq!(compute_size(&node), override_size);
     }
 
     #[kithara::test]
@@ -330,7 +399,7 @@ mod tests {
             pad: None,
         };
 
-        let size = compute_size(&node, &EmptyCatalog, &interner);
+        let size = compute_size(&node);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.w.max(), None);

@@ -8,11 +8,7 @@ use iced::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::{
-    registry::{ControlKindDesc, ValueKind},
-    render::{ControlAction, ReadValue, RenderPalette, StereoLevels, UiEvent},
-    size::{Dim, SizeSpec},
-};
+use crate::render::{ControlAction, ReadValue, RenderPalette, StereoLevels, UiEvent};
 
 struct Consts;
 
@@ -20,21 +16,12 @@ impl Consts {
     const CARRIAGE_WIDTH: f32 = 2.0;
     const CHANNEL_COUNT: usize = 2;
     const DANGER_THRESHOLD: f32 = 0.83;
-    const HEIGHT: f32 = 22.0;
     const ROW_Y: [f32; Self::CHANNEL_COUNT] = [2.0, 14.0];
     const SEGMENT_COUNT: usize = 16;
     const SEGMENT_GAP: f32 = 1.0;
     const SEGMENT_HEIGHT: f32 = 8.0;
     const SEGMENT_WIDTH: f32 = 3.0;
     const WARNING_THRESHOLD: f32 = 0.66;
-    const WIDTH: f32 = 64.0;
-}
-
-pub(crate) fn desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Stereo), Some(ValueKind::Scalar)).with_size(SizeSpec::new(
-        Dim::Fixed(Consts::WIDTH),
-        Dim::Fixed(Consts::HEIGHT),
-    ))
 }
 
 pub(crate) fn view<'a>(

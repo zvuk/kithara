@@ -1,37 +1,9 @@
 use std::collections::BTreeMap;
 
 use kithara_ui::{
-    ids::{ControlKind, EndpointId},
-    registry::{
-        ControlCatalog, ControlKindDesc, EndpointCategory, EndpointDesc, EndpointRegistry,
-        PropKind, ValueKind,
-    },
-    size::{Dim, SizeSpec},
+    ids::EndpointId,
+    registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };
-
-pub(crate) const CONTROL_SIZE: f32 = 10.0;
-
-fn control_size() -> SizeSpec {
-    SizeSpec::new(Dim::Fixed(CONTROL_SIZE), Dim::Fixed(CONTROL_SIZE))
-}
-
-#[derive(Default)]
-pub(crate) struct TestCatalog {
-    kinds: BTreeMap<ControlKind, ControlKindDesc>,
-}
-
-impl TestCatalog {
-    fn insert(&mut self, kind: &str, mut description: ControlKindDesc) {
-        description.size = control_size();
-        self.kinds.insert(ControlKind(kind.to_owned()), description);
-    }
-}
-
-impl ControlCatalog for TestCatalog {
-    fn kind(&self, kind: &str) -> Option<&ControlKindDesc> {
-        self.kinds.get(kind)
-    }
-}
 
 #[derive(Default)]
 pub(crate) struct TestRegistry {
@@ -49,60 +21,6 @@ impl EndpointRegistry for TestRegistry {
     fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
         self.endpoints.get(&(category, id.clone()))
     }
-}
-
-pub(crate) fn player_catalog() -> TestCatalog {
-    let mut catalog = TestCatalog::default();
-    catalog.insert(
-        "deck.header",
-        ControlKindDesc::new(Some(ValueKind::Waveform), None).with_prop("badge", PropKind::Text),
-    );
-    catalog.insert(
-        "deck.summary",
-        ControlKindDesc::new(Some(ValueKind::Text), None).with_prop("style", PropKind::Text),
-    );
-    catalog.insert("global.brand", ControlKindDesc::new(None, None));
-    catalog.insert("global.spacer", ControlKindDesc::new(None, None));
-    catalog.insert("preset.selector", ControlKindDesc::new(None, None));
-    catalog.insert("view.settings", ControlKindDesc::new(None, None));
-    catalog.insert(
-        "text",
-        ControlKindDesc::new(Some(ValueKind::Text), None).with_prop("style", PropKind::Text),
-    );
-    catalog.insert(
-        "button",
-        ControlKindDesc::new(Some(ValueKind::Bool), Some(ValueKind::Trigger))
-            .with_prop("label", PropKind::Text)
-            .with_prop("active-label", PropKind::Text)
-            .with_prop("style", PropKind::Text),
-    );
-    catalog.insert(
-        "telemetry.bpm",
-        ControlKindDesc::new(Some(ValueKind::Waveform), None).with_prop("fallback", PropKind::Text),
-    );
-    catalog.insert(
-        "telemetry.time",
-        ControlKindDesc::new(Some(ValueKind::Scalar), None),
-    );
-    catalog.insert(
-        "telemetry.scalar",
-        ControlKindDesc::new(Some(ValueKind::Scalar), None),
-    );
-    catalog.insert(
-        "fader.horizontal",
-        ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar))
-            .with_prop("style", PropKind::Text),
-    );
-    catalog.insert(
-        "waveform.mini",
-        ControlKindDesc::new(Some(ValueKind::Waveform), Some(ValueKind::Scalar))
-            .with_prop("style", PropKind::Text),
-    );
-    catalog.insert(
-        "track_list",
-        ControlKindDesc::new(Some(ValueKind::TrackList), None),
-    );
-    catalog
 }
 
 pub(crate) fn player_registry() -> TestRegistry {

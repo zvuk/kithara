@@ -4,18 +4,17 @@
     id: "global-bar",
     root: Row(
         children: [
-            Control(id: "brand", kind: "global.brand"),
-            Control(id: "presets", kind: "preset.selector"),
-            Control(id: "spacer", kind: "global.spacer"),
-            Control(
+            Brand(id: "brand"),
+            PresetSelector(id: "presets"),
+            Spacer(id: "spacer"),
+            Fader(
                 id: "volume",
-                kind: "fader.horizontal",
                 size: (w: Fixed(152.0), h: Fixed(34.0)),
-                props: { "style": Text("volume-compact") },
+                style: VolumeCompact,
                 read: Parameter(id: "player.output.volume"),
                 write: Parameter(id: "player.output.volume"),
             ),
-            Control(id: "settings", kind: "view.settings"),
+            SettingsButton(id: "settings"),
         ],
     ),
 )

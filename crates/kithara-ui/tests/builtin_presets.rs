@@ -4,7 +4,7 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
     compile::{CompiledNode, compile},
-    expand::ExpandedNode,
+    expand::{ControlSpec, ExpandedNode},
     layout::Axis,
     source::UiConfig,
 };
@@ -14,7 +14,6 @@ fn micro_preset_compiles_against_player_registry() {
     let ui = compile(
         builtin::MICRO_PRESET,
         &builtin::resolver(),
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::default(),
     )
@@ -25,24 +24,19 @@ fn micro_preset_compiles_against_player_registry() {
     let ExpandedNode::Row { children, .. } = &**root else {
         panic!("micro must compile to one row");
     };
-    let kinds: Vec<_> = children
+    let specs: Vec<_> = children
         .iter()
         .filter_map(|child| match child {
-            ExpandedNode::Control { kind, .. } => Some(ui.resolve(*kind)),
+            ExpandedNode::Control { spec, .. } => Some(spec),
             _ => None,
         })
         .collect();
-    assert_eq!(
-        kinds,
-        [
-            "button",
-            "deck.summary",
-            "telemetry.bpm",
-            "fader.horizontal",
-            "waveform.mini",
-            "view.settings",
-        ]
-    );
+    assert!(matches!(specs[0], ControlSpec::Button { .. }));
+    assert!(matches!(specs[1], ControlSpec::DeckSummary { .. }));
+    assert!(matches!(specs[2], ControlSpec::Bpm { .. }));
+    assert!(matches!(specs[3], ControlSpec::Fader { .. }));
+    assert!(matches!(specs[4], ControlSpec::Wave { .. }));
+    assert!(matches!(specs[5], ControlSpec::SettingsButton));
 }
 
 #[kithara::test]
@@ -50,7 +44,6 @@ fn player_preset_compiles_against_player_registry() {
     compile(
         builtin::PLAYER_PRESET,
         &builtin::resolver(),
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::default(),
     )
@@ -62,7 +55,6 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
     let ui = compile(
         builtin::PLAYER_PRESET,
         &builtin::resolver(),
-        &common::player_catalog(),
         &common::player_registry(),
         &UiConfig::default(),
     )
@@ -96,8 +88,8 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
     };
 
     assert_eq!(global_size.h.min(), 34.0);
-    assert_eq!(deck_size.h.min(), 3.0 * common::CONTROL_SIZE);
-    assert_eq!(library_size.h.min(), common::CONTROL_SIZE);
+    assert_eq!(deck_size.h.min(), 208.0);
+    assert_eq!(library_size.h.min(), 210.0);
     assert_eq!(
         ui.size.h.min(),
         global_size.h.min() + deck_size.h.min() + library_size.h.min()

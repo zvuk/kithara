@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kithara_ui::{
     compile::{CompiledNode, CompiledUi},
-    expand::{Binding, ExpandedNode},
+    expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     render::ControlAction,
 };
@@ -25,25 +25,24 @@ enum ResolvedWrite {
 
 pub(super) fn apply(state: &mut Kithara, path: &str, action: &ControlAction) {
     let resolved = state.modular.compiled.as_ref().and_then(|compiled| {
-        let (kind, write) = find_control(compiled, path)?;
-        let kind = compiled.resolve(kind).to_owned();
+        let (spec, write) = find_control(compiled, path)?;
         let write = write
             .as_ref()
             .and_then(|binding| resolve_write(binding, compiled));
-        Some((kind, write))
+        Some((spec, write))
     });
-    let Some((kind, write)) = resolved else {
+    let Some((spec, write)) = resolved else {
         warn!(path, ?action, "modular control path not found");
         return;
     };
 
-    if kind == "track_list" {
+    if matches!(spec, ControlSpec::TrackList) {
         apply_track_action(state, path, action);
         return;
     }
 
     let Some(binding) = write else {
-        warn!(path, kind, ?action, "modular control has no write binding");
+        warn!(path, ?spec, ?action, "modular control has no write binding");
         return;
     };
 
@@ -132,7 +131,7 @@ fn deck_is_a(scope: &BTreeMap<InternId, InternId>, ui: &CompiledUi) -> bool {
         .any(|(key, value)| ui.resolve(*key) == "deck" && ui.resolve(*value) == "a")
 }
 
-fn find_control(compiled: &CompiledUi, path: &str) -> Option<(InternId, Option<Binding>)> {
+fn find_control(compiled: &CompiledUi, path: &str) -> Option<(ControlSpec, Option<Binding>)> {
     find_compiled_node(&compiled.root, path, compiled)
 }
 
@@ -140,7 +139,7 @@ fn find_compiled_node(
     node: &CompiledNode,
     path: &str,
     ui: &CompiledUi,
-) -> Option<(InternId, Option<Binding>)> {
+) -> Option<(ControlSpec, Option<Binding>)> {
     match node {
         CompiledNode::Split { children, .. } => children
             .iter()
@@ -154,7 +153,7 @@ fn find_expanded_node(
     node: &ExpandedNode,
     path: &str,
     ui: &CompiledUi,
-) -> Option<(InternId, Option<Binding>)> {
+) -> Option<(ControlSpec, Option<Binding>)> {
     match node {
         ExpandedNode::Row { children, .. }
         | ExpandedNode::Column { children, .. }
@@ -163,10 +162,10 @@ fn find_expanded_node(
             .find_map(|child| find_expanded_node(child, path, ui)),
         ExpandedNode::Control {
             path: control_path,
-            kind,
+            spec,
             write,
             ..
-        } if ui.resolve(*control_path) == path => Some((*kind, write.clone())),
+        } if ui.resolve(*control_path) == path => Some((spec.clone(), write.clone())),
         _ => None,
     }
 }
@@ -177,7 +176,6 @@ mod tests {
     use kithara_ui::{
         compile::compile,
         expand::Binding,
-        render::tree::catalog,
         source::{MemResolver, UiConfig},
     };
 
@@ -205,10 +203,9 @@ mod tests {
                 schema: "kithara.module",
                 version: 1,
                 id: "control",
-                root: Control(
+                root: Button(
                     id: "play",
-                    kind: "button",
-                    props: { "label": Text("PLAY") },
+                    label: "PLAY",
                     read: Telemetry(
                         id: "deck.playback.playing",
                         with: { "deck": "a" },
@@ -223,7 +220,6 @@ mod tests {
         let compiled = compile(
             "mini.klayout.ron",
             &resolver,
-            &catalog(),
             &endpoints::registry(),
             &UiConfig::default(),
         )

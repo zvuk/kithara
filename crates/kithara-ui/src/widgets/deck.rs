@@ -8,9 +8,8 @@ use num_traits::ToPrimitive;
 
 use super::chrome;
 use crate::{
-    registry::{ControlKindDesc, PropKind, ValueKind},
+    module::DeckSummaryStyle,
     render::{ReadValue, Reads, RenderPalette, UiEvent, WaveformView, fonts, shaped_text},
-    size::{Dim, SizeSpec},
 };
 
 struct Consts;
@@ -24,14 +23,12 @@ impl Consts {
     const BADGE_TEXT: f32 = 14.0;
     const BPM_CELL_WIDTH: f32 = 64.0;
     const BPM_TEXT_SIZE: f32 = 11.0;
-    const CELL_HEIGHT: f32 = 34.0;
     const EM_DASH: &'static str = "\u{2014}";
     const HEADER_GAP: f32 = 12.0;
     const HEADER_HEIGHT: f32 = 60.0;
     const HEADER_PADDING_X: f32 = 12.0;
     const HEADER_PADDING_Y: f32 = 9.0;
     const MICRO_SOURCE_SIZE: f32 = 13.0;
-    const MICRO_STYLE: &'static str = "micro";
     const MICRO_SUMMARY_GAP: f32 = 7.0;
     const MICRO_TITLE_SIZE: f32 = 14.0;
     const NO_SOURCE: &'static str = "no source";
@@ -44,7 +41,6 @@ impl Consts {
     const SECONDS_PER_MINUTE: u64 = 60;
     const SUMMARY_FILL_PORTION: u16 = 3;
     const SUMMARY_HEIGHT: f32 = 34.0;
-    const SUMMARY_MIN_WIDTH: f32 = 90.0;
     const SUMMARY_PADDING_X: f32 = 10.0;
     const TELEMETRY_PADDING_X: f32 = 8.0;
     const TELEMETRY_PADDING_Y: f32 = 3.0;
@@ -53,40 +49,6 @@ impl Consts {
     const TIME_WIDTH: f32 = 144.0;
     const TITLE_SIZE: f32 = 15.0;
     const TRANSPORT_HEIGHT: f32 = 28.0;
-}
-
-pub(crate) fn header_desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Waveform), None)
-        .with_prop("badge", PropKind::Text)
-        .with_size(SizeSpec::new(Dim::Fill, Dim::Fixed(Consts::HEADER_HEIGHT)))
-}
-
-pub(crate) fn summary_desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Text), None)
-        .with_prop("style", PropKind::Text)
-        .with_size(SizeSpec::new(
-            Dim::Range {
-                min: Consts::SUMMARY_MIN_WIDTH,
-                max: None,
-            },
-            Dim::Fixed(Consts::SUMMARY_HEIGHT),
-        ))
-}
-
-pub(crate) fn bpm_desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Waveform), None)
-        .with_prop("fallback", PropKind::Text)
-        .with_size(SizeSpec::new(
-            Dim::Fixed(Consts::BPM_CELL_WIDTH),
-            Dim::Fixed(Consts::CELL_HEIGHT),
-        ))
-}
-
-pub(crate) fn time_desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Scalar), None).with_size(SizeSpec::new(
-        Dim::Fixed(Consts::TIME_WIDTH),
-        Dim::Fixed(Consts::TRANSPORT_HEIGHT),
-    ))
 }
 
 pub(crate) fn header<'a>(
@@ -181,7 +143,7 @@ pub(crate) fn header<'a>(
 }
 
 pub(crate) fn summary<'a>(
-    style: Option<&str>,
+    style: DeckSummaryStyle,
     value: Option<&ReadValue<'_>>,
     reads: &dyn Reads,
     palette: RenderPalette,
@@ -194,7 +156,7 @@ pub(crate) fn summary<'a>(
             .to_owned(),
     };
     let source = read_text(reads, "deck.track.source_kind").unwrap_or(Consts::EM_DASH);
-    let compact = style == Some(Consts::MICRO_STYLE);
+    let compact = style == DeckSummaryStyle::Micro;
     let content: Element<'a, UiEvent> = if compact {
         row![
             shaped_text(title)
@@ -234,7 +196,7 @@ pub(crate) fn summary<'a>(
 }
 
 pub(crate) fn bpm<'a>(
-    fallback: Option<&str>,
+    placeholder: Option<&str>,
     value: Option<&ReadValue<'_>>,
     reads: &dyn Reads,
     palette: RenderPalette,
@@ -245,7 +207,7 @@ pub(crate) fn bpm<'a>(
             .size(Consts::BPM_TEXT_SIZE)
             .color(palette.accent_strong)
             .into()
-    } else if fallback == Some("time") {
+    } else if placeholder == Some("time") {
         let position = read_scalar(reads, "deck.playback.position_secs").unwrap_or(0.0);
         column![
             shaped_text("TIME")

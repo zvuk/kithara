@@ -5,52 +5,44 @@
     parameters: ["deck"],
     root: Row(
         children: [
-            Control(
+            Button(
                 id: "play",
-                kind: "button",
                 size: (w: Fixed(34.0), h: Fixed(34.0)),
-                props: {
-                    "label": Text("PLAY"),
-                    "active-label": Text("PAUSE"),
-                    "style": Text("micro-primary"),
-                },
+                label: "PLAY",
+                active_label: Some("PAUSE"),
+                style: MicroPrimary,
                 read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
                 adaptive: (priority: Required),
             ),
-            Control(
+            DeckSummary(
                 id: "summary",
-                kind: "deck.summary",
-                props: { "style": Text("micro") },
+                style: Micro,
                 read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
                 adaptive: (priority: Required),
             ),
-            Control(
+            Bpm(
                 id: "bpm",
-                kind: "telemetry.bpm",
                 size: (w: Fixed(56.0), h: Fixed(34.0)),
-                props: { "fallback": Text("time") },
+                placeholder: Some("time"),
                 read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
             ),
-            Control(
+            Fader(
                 id: "volume",
-                kind: "fader.horizontal",
                 size: (w: Fixed(152.0), h: Fixed(34.0)),
-                props: { "style": Text("volume-compact") },
+                style: VolumeCompact,
                 read: Parameter(id: "player.output.volume"),
                 write: Parameter(id: "player.output.volume"),
             ),
-            Control(
+            Wave(
                 id: "wave",
-                kind: "waveform.mini",
                 size: (w: Range(min: 90.0, max: None), h: Fixed(34.0)),
-                props: { "style": Text("micro") },
+                style: Micro,
                 read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
             ),
-            Control(
+            SettingsButton(
                 id: "settings",
-                kind: "view.settings",
                 size: (w: Fixed(28.0), h: Fixed(34.0)),
             ),
         ],

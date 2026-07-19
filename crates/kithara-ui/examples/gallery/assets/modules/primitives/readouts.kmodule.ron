@@ -5,29 +5,28 @@
     root: Column(
         gap: Some(8.0),
         children: [
-            Control(id: "title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.readouts")),
+            Text(id: "title", style: Section, read: Model(id: "gallery.label.readouts")),
             Row(
                 gap: Some(18.0),
                 children: [
-                    Control(
+                    Readout(
                         id: "bpm",
-                        kind: "readout",
                         size: (w: Fixed(64.0), h: Fixed(26.0)),
-                        props: { "label": Text("BPM"), "tone": Text("accent") },
+                        label: Some("BPM"),
+                        tone: Accent,
                         read: Model(id: "mock.bpm"),
                     ),
-                    Control(
+                    Readout(
                         id: "key",
-                        kind: "readout",
                         size: (w: Fixed(46.0), h: Fixed(26.0)),
-                        props: { "label": Text("KEY") },
+                        label: Some("KEY"),
                         read: Model(id: "mock.key"),
                     ),
-                    Control(
+                    Readout(
                         id: "remain",
-                        kind: "readout",
                         size: (w: Fixed(72.0), h: Fixed(26.0)),
-                        props: { "label": Text("REMAIN"), "framed": Bool(true) },
+                        label: Some("REMAIN"),
+                        framed: true,
                         read: Model(id: "mock.remain"),
                     ),
                 ],

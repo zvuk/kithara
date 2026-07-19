@@ -5,22 +5,20 @@
     root: Column(
         gap: Some(8.0),
         children: [
-            Control(id: "title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.chips")),
+            Text(id: "title", style: Section, read: Model(id: "gallery.label.chips")),
             Row(
                 gap: Some(8.0),
                 children: [
-                    Control(
+                    Chip(
                         id: "active",
-                        kind: "chip",
                         size: (w: Fixed(20.0), h: Fixed(16.0)),
-                        props: { "label": Text("A") },
+                        label: "A",
                         read: Model(id: "mock.chip.active"),
                     ),
-                    Control(
+                    Chip(
                         id: "inactive",
-                        kind: "chip",
                         size: (w: Fixed(28.0), h: Fixed(16.0)),
-                        props: { "label": Text("FX1") },
+                        label: "FX1",
                         read: Model(id: "mock.chip.inactive"),
                     ),
                 ],

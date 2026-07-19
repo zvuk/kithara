@@ -1,28 +1,20 @@
 use iced::{Element, Length, alignment::Vertical, font::Weight, widget::container};
 
 use crate::{
-    registry::{ControlKindDesc, PropKind, ValueKind},
+    module::TextStyle,
     render::{ReadValue, RenderPalette, fonts, shaped_text},
-    size::{Dim, SizeSpec},
 };
 
 struct Consts;
 
 impl Consts {
     const BODY_SIZE: f32 = 13.0;
-    const HEIGHT: f32 = 18.0;
     const SECTION_SIZE: f32 = 9.0;
     const TRACK_TITLE_SIZE: f32 = 15.0;
 }
 
-pub(crate) fn desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Text), None)
-        .with_prop("style", PropKind::Text)
-        .with_size(SizeSpec::new(Dim::Fill, Dim::Fixed(Consts::HEIGHT)))
-}
-
 pub(crate) fn view<'a>(
-    style: Option<&str>,
+    style: TextStyle,
     value: Option<&ReadValue<'_>>,
     palette: RenderPalette,
 ) -> Element<'a, crate::render::UiEvent> {
@@ -30,13 +22,13 @@ pub(crate) fn view<'a>(
         return iced::widget::Space::new().into();
     };
     let (font, size, color) = match style {
-        Some("track-title") => (
+        TextStyle::TrackTitle => (
             fonts::display(Weight::Semibold),
             Consts::TRACK_TITLE_SIZE,
             palette.text,
         ),
-        Some("section") => (fonts::MONO, Consts::SECTION_SIZE, palette.muted),
-        _ => (fonts::SANS, Consts::BODY_SIZE, palette.text),
+        TextStyle::Section => (fonts::MONO, Consts::SECTION_SIZE, palette.muted),
+        TextStyle::Body => (fonts::SANS, Consts::BODY_SIZE, palette.text),
     };
     container(
         shaped_text((*value).to_owned())

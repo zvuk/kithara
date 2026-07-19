@@ -112,7 +112,11 @@ pub(crate) fn registry() -> AppRegistry {
 mod tests {
     use kithara_test_utils::kithara;
     use kithara_ui::{
-        builtin, compile::compile, registry::ControlCatalog, render::tree::catalog, size::Dim,
+        builtin,
+        compile::compile,
+        expand::ControlSpec,
+        module::{DeckSummaryStyle, WaveStyle},
+        size::{Dim, control_size},
         source::UiConfig,
     };
 
@@ -124,7 +128,6 @@ mod tests {
             compile(
                 preset,
                 &builtin::resolver(),
-                &catalog(),
                 &registry(),
                 &UiConfig::default(),
             )
@@ -133,11 +136,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn micro_window_size_is_derived_from_catalog() {
+    fn micro_window_size_is_derived_from_control_specs() {
         let ui = compile(
             builtin::MICRO_PRESET,
             &builtin::resolver(),
-            &catalog(),
             &registry(),
             &UiConfig::default(),
         )
@@ -148,11 +150,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn player_window_size_is_derived_from_catalog() {
+    fn player_window_size_is_derived_from_control_specs() {
         let ui = compile(
             builtin::PLAYER_PRESET,
             &builtin::resolver(),
-            &catalog(),
             &registry(),
             &UiConfig::default(),
         )
@@ -164,24 +165,23 @@ mod tests {
 
     #[kithara::test]
     fn visual_controls_declare_intrinsic_sizes() {
-        let catalog = catalog();
-        for kind in [
-            "deck.header",
-            "deck.summary",
-            "global.brand",
-            "preset.selector",
-            "telemetry.time",
+        for spec in [
+            ControlSpec::DeckHeader { badge: None },
+            ControlSpec::DeckSummary {
+                style: DeckSummaryStyle::Default,
+            },
+            ControlSpec::Brand,
+            ControlSpec::PresetSelector,
+            ControlSpec::Time,
         ] {
-            let description = catalog
-                .kind(kind)
-                .unwrap_or_else(|| panic!("{kind} must be registered"));
-            assert!(description.size.w.min() > 0.0 || description.size.w == Dim::Fill);
-            assert!(description.size.h.min() > 0.0, "{kind} height");
+            let size = control_size(&spec);
+            assert!(size.w.min() > 0.0 || size.w == Dim::Fill);
+            assert!(size.h.min() > 0.0, "{spec:?} height");
         }
 
-        let waveform = catalog
-            .kind("waveform.mini")
-            .unwrap_or_else(|| panic!("waveform.mini must be registered"));
-        assert!(waveform.size.h.min() >= 120.0);
+        let waveform = control_size(&ControlSpec::Wave {
+            style: WaveStyle::Default,
+        });
+        assert!(waveform.h.min() >= 120.0);
     }
 }

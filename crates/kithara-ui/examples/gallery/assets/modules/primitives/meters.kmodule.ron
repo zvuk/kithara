@@ -5,25 +5,22 @@
     root: Column(
         gap: Some(8.0),
         children: [
-            Control(id: "title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.meters")),
+            Text(id: "title", style: Section, read: Model(id: "gallery.label.meters")),
             Row(
                 gap: Some(24.0),
                 children: [
-                    Control(
+                    VuStereo(
                         id: "stereo",
-                        kind: "vu.stereo",
                         size: (w: Fixed(64.0), h: Fixed(22.0)),
                         read: Model(id: "mock.levels"),
                     ),
-                    Control(
+                    VuVertical(
                         id: "vertical-120",
-                        kind: "vu.vertical",
                         size: (w: Fixed(18.0), h: Fixed(120.0)),
                         read: Model(id: "mock.levels"),
                     ),
-                    Control(
+                    VuVertical(
                         id: "vertical-64",
-                        kind: "vu.vertical",
                         size: (w: Fixed(16.0), h: Fixed(64.0)),
                         read: Model(id: "mock.levels"),
                     ),

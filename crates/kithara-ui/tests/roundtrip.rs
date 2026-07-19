@@ -31,10 +31,9 @@ const DECK_MODULE: &str = r#"(
     parameters: ["deck"],
     root: Column(
         children: [
-            Control(
+            Text(
                 id: "title",
-                kind: "text",
-                props: { "style": Text("track-title") },
+                style: TrackTitle,
                 read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
                 adaptive: (priority: Required),
             ),
@@ -54,30 +53,26 @@ const ROUNDTRIP_MODULE: &str = r#"(
         children: [
             Row(
                 children: [
-                    Control(
+                    Button(
                         id: "play",
-                        kind: "button",
-                        props: {
-                            "enabled": Bool(true),
-                            "gain": Num(0.5),
-                            "label": Text("PLAY"),
-                        },
+                        label: "PLAY",
+                        active_label: Some("PAUSE"),
+                        style: TransportPrimary,
                         read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                         write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
                         size: Some((w: Fixed(96.0), h: Fixed(32.0))),
                         adaptive: (priority: Required),
                     ),
-                    Control(
+                    Fader(
                         id: "volume",
-                        kind: "fader.horizontal",
+                        style: Volume,
                         read: Parameter(id: "player.output.volume"),
                         write: Parameter(id: "player.output.volume"),
                         size: Some((w: Fixed(120.0), h: Fill)),
                         adaptive: (priority: High),
                     ),
-                    Control(
+                    TrackList(
                         id: "tracks",
-                        kind: "track_list",
                         read: Model(id: "library.visible_tracks"),
                         size: Some((w: Fill, h: Fixed(160.0))),
                         adaptive: (priority: Low),
@@ -95,7 +90,7 @@ const ROUNDTRIP_MODULE: &str = r#"(
                     Column(
                         id: "nested",
                         children: [
-                            Control(id: "status", kind: "text", adaptive: (priority: Normal)),
+                            Text(id: "status", adaptive: (priority: Normal)),
                         ],
                     ),
                 ],
@@ -162,7 +157,7 @@ fn module_parses_with_implicit_some_bindings() {
         panic!("expected column root");
     };
     assert_eq!(children.len(), 3);
-    let ControlNode::Control { read, adaptive, .. } = &children[0] else {
+    let ControlNode::Text { read, adaptive, .. } = &children[0] else {
         panic!("expected control");
     };
     assert!(read.is_some());

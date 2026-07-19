@@ -6,34 +6,30 @@
         gap: Some(18.0),
         pad: Some(14.0),
         children: [
-            Control(id: "text-title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.text")),
-            Control(
+            Text(id: "text-title", style: Section, read: Model(id: "gallery.label.text")),
+            Text(
                 id: "track-title",
-                kind: "text",
-                props: { "style": Text("track-title") },
+                style: TrackTitle,
                 read: Model(id: "mock.track.title"),
             ),
-            Control(id: "artist", kind: "text", read: Model(id: "mock.track.artist")),
-            Control(id: "fader-title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.faders")),
-            Control(
+            Text(id: "artist", read: Model(id: "mock.track.artist")),
+            Text(id: "fader-title", style: Section, read: Model(id: "gallery.label.faders")),
+            Fader(
                 id: "default",
-                kind: "fader.horizontal",
                 size: (w: Fixed(220.0), h: Fixed(34.0)),
                 read: Model(id: "mock.volume"),
             ),
-            Control(
+            Fader(
                 id: "volume",
-                kind: "fader.horizontal",
                 size: (w: Fixed(120.0), h: Fixed(34.0)),
-                props: { "style": Text("volume") },
+                style: Volume,
                 read: Model(id: "mock.volume"),
             ),
-            Control(id: "scalar-title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.scalar")),
-            Control(
+            Text(id: "scalar-title", style: Section, read: Model(id: "gallery.label.scalar")),
+            Scalar(
                 id: "scalar",
-                kind: "telemetry.scalar",
                 size: (w: Fixed(64.0), h: Fixed(18.0)),
-                props: { "format": Text("percent") },
+                format: Percent,
                 read: Model(id: "mock.volume"),
             ),
         ],

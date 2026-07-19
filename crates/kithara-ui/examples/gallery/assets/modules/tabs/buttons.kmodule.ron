@@ -6,58 +6,54 @@
         gap: Some(18.0),
         pad: Some(14.0),
         children: [
-            Control(id: "transport-title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.transport")),
+            Text(id: "transport-title", style: Section, read: Model(id: "gallery.label.transport")),
             Row(
                 gap: Some(1.0),
                 children: [
-                    Control(
+                    Button(
                         id: "play",
-                        kind: "button",
                         size: (w: Fixed(48.0), h: Fixed(28.0)),
-                        props: {
-                            "label": Text("PLAY"),
-                            "active-label": Text("PAUSE"),
-                            "style": Text("transport-primary"),
-                        },
+                        label: "PLAY",
+                        active_label: Some("PAUSE"),
+                        style: TransportPrimary,
                         read: Model(id: "mock.button.play"),
                     ),
-                    Control(
+                    Button(
                         id: "cue",
-                        kind: "button",
                         size: (w: Fixed(42.0), h: Fixed(28.0)),
-                        props: { "label": Text("CUE"), "style": Text("transport") },
+                        label: "CUE",
+                        style: Transport,
                         read: Model(id: "mock.button.cue"),
                     ),
-                    Control(
+                    Button(
                         id: "sync",
-                        kind: "button",
                         size: (w: Fixed(46.0), h: Fixed(28.0)),
-                        props: { "label": Text("SYNC"), "style": Text("transport") },
+                        label: "SYNC",
+                        style: Transport,
                         read: Model(id: "mock.button.sync"),
                     ),
                 ],
             ),
-            Control(id: "regular-title", kind: "text", props: { "style": Text("section") }, read: Model(id: "gallery.label.regular")),
+            Text(id: "regular-title", style: Section, read: Model(id: "gallery.label.regular")),
             Row(
                 gap: Some(12.0),
                 children: [
-                    Control(
+                    Button(
                         id: "default",
-                        kind: "button",
                         size: (w: Fixed(72.0), h: Fixed(28.0)),
-                        props: { "label": Text("DEFAULT") },
+                        label: "DEFAULT",
                     ),
-                    Control(
+                    Button(
                         id: "primary",
-                        kind: "button",
                         size: (w: Fixed(72.0), h: Fixed(28.0)),
-                        props: { "label": Text("PRIMARY"), "style": Text("transport-primary") },
+                        label: "PRIMARY",
+                        style: TransportPrimary,
                     ),
-                    Control(
+                    Button(
                         id: "micro",
-                        kind: "button",
                         size: (w: Fixed(36.0), h: Fixed(20.0)),
-                        props: { "label": Text("PLAY"), "style": Text("micro-primary") },
+                        label: "PLAY",
+                        style: MicroPrimary,
                     ),
                 ],
             ),

@@ -2,7 +2,7 @@ use iced::{Task, window};
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
-    render::{UiEvent, tree::catalog},
+    render::UiEvent,
     source::UiConfig,
 };
 use tracing::error;
@@ -89,7 +89,6 @@ fn compile_preset(preset: &str) -> Result<CompiledUi, String> {
     compile(
         preset,
         &builtin::resolver(),
-        &catalog(),
         &endpoints::registry(),
         &UiConfig::default(),
     )

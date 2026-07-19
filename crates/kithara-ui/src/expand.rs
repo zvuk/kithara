@@ -2,8 +2,11 @@ use std::collections::BTreeMap;
 
 use crate::{
     error::UiDocError,
-    ids::{ControlKind, InternId, Interner, NodeId, SourceUri},
-    module::{AdaptivePolicy, BindingRef, ControlNode, PropValue},
+    ids::{InternId, Interner, NodeId, SourceUri},
+    module::{
+        AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, DeckSummaryStyle, FaderStyle,
+        ScalarFormat, TextStyle, Tone, WaveStyle,
+    },
     resolve::ModuleSet,
     size::SizeSpec,
 };
@@ -33,13 +36,62 @@ pub enum ExpandedNode {
     Control {
         path: InternId,
         id: InternId,
-        kind: InternId,
+        spec: ControlSpec,
         size: Option<SizeSpec>,
-        props: BTreeMap<InternId, PropValue<InternId>>,
         read: Option<Binding>,
         write: Option<Binding>,
         adaptive: AdaptivePolicy,
     },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ControlSpec {
+    DeckHeader {
+        badge: Option<InternId>,
+    },
+    DeckSummary {
+        style: DeckSummaryStyle,
+    },
+    Brand,
+    Spacer,
+    PresetSelector,
+    SettingsButton,
+    Text {
+        style: TextStyle,
+    },
+    Button {
+        label: InternId,
+        active_label: Option<InternId>,
+        style: ButtonStyle,
+    },
+    Bpm {
+        placeholder: Option<InternId>,
+    },
+    Time,
+    Scalar {
+        format: ScalarFormat,
+    },
+    Fader {
+        style: FaderStyle,
+    },
+    Wave {
+        style: WaveStyle,
+    },
+    TrackList,
+    Toggle,
+    Checkbox,
+    Readout {
+        label: Option<InternId>,
+        tone: Tone,
+        framed: bool,
+    },
+    Chip {
+        label: InternId,
+    },
+    Knob,
+    VuStereo,
+    VuVertical,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -66,8 +118,7 @@ pub enum Binding {
 #[derive(Clone, Copy)]
 pub(crate) struct ControlSite<'a> {
     pub(crate) path: &'a str,
-    pub(crate) kind: &'a ControlKind,
-    pub(crate) props: &'a BTreeMap<String, PropValue<String>>,
+    pub(crate) control: &'a ControlNode,
     pub(crate) read: Option<&'a BindingRef>,
     pub(crate) write: Option<&'a BindingRef>,
 }
@@ -272,22 +323,26 @@ fn intern_binding(
     }
 }
 
-fn intern_props(
+fn intern_text(
+    context: &Context<'_>,
     interner: &mut Interner,
-    props: &BTreeMap<String, PropValue<String>>,
+    value: &str,
+    path: &str,
     origin: &SourceUri,
-) -> Result<BTreeMap<InternId, PropValue<InternId>>, UiDocError> {
-    props
-        .iter()
-        .map(|(key, value)| {
-            let value = match value {
-                PropValue::Bool(value) => PropValue::Bool(*value),
-                PropValue::Num(value) => PropValue::Num(*value),
-                PropValue::Text(value) => PropValue::Text(interner.intern(value, origin)?),
-            };
-            Ok((interner.intern(key, origin)?, value))
-        })
-        .collect()
+) -> Result<InternId, UiDocError> {
+    interner.intern(&substitute(context, value, path)?, origin)
+}
+
+fn intern_optional_text(
+    context: &Context<'_>,
+    interner: &mut Interner,
+    value: Option<&str>,
+    path: &str,
+    origin: &SourceUri,
+) -> Result<Option<InternId>, UiDocError> {
+    value
+        .map(|value| intern_text(context, interner, value, path, origin))
+        .transpose()
 }
 
 fn child_path(prefix: &str, id: &NodeId) -> String {
@@ -295,6 +350,378 @@ fn child_path(prefix: &str, id: &NodeId) -> String {
         id.0.clone()
     } else {
         format!("{prefix}/{id}")
+    }
+}
+
+fn begin_control(
+    context: &Context<'_>,
+    id: &NodeId,
+    machine: &mut Expander<'_, '_>,
+) -> Result<String, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    Ok(child_path(&context.prefix, id))
+}
+
+#[derive(Clone, Copy)]
+struct ControlFields<'a> {
+    id: &'a NodeId,
+    size: Option<SizeSpec>,
+    read: Option<&'a BindingRef>,
+    write: Option<&'a BindingRef>,
+    adaptive: &'a AdaptivePolicy,
+}
+
+impl<'a> ControlFields<'a> {
+    fn new(
+        id: &'a NodeId,
+        size: Option<SizeSpec>,
+        read: Option<&'a BindingRef>,
+        write: Option<&'a BindingRef>,
+        adaptive: &'a AdaptivePolicy,
+    ) -> Self {
+        Self {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+    }
+}
+
+fn finish_control(
+    context: &Context<'_>,
+    control: &ControlNode,
+    fields: ControlFields<'_>,
+    path: &str,
+    spec: ControlSpec,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let read = fields
+        .read
+        .map(|binding| substitute_binding(context, binding, path))
+        .transpose()?;
+    let write = fields
+        .write
+        .map(|binding| substitute_binding(context, binding, path))
+        .transpose()?;
+    (machine.visitor)(
+        ControlSite {
+            path,
+            control,
+            read: read.as_ref(),
+            write: write.as_ref(),
+        },
+        &context.origin,
+    )?;
+    Ok(ExpandedNode::Control {
+        path: machine.interner.intern(path, &context.origin)?,
+        id: machine.interner.intern(&fields.id.0, &context.origin)?,
+        spec,
+        size: fields.size,
+        read: read
+            .as_ref()
+            .map(|binding| intern_binding(machine.interner, binding, &context.origin))
+            .transpose()?,
+        write: write
+            .as_ref()
+            .map(|binding| intern_binding(machine.interner, binding, &context.origin))
+            .transpose()?,
+        adaptive: fields.adaptive.clone(),
+    })
+}
+
+fn expand_control(
+    context: &Context<'_>,
+    control: &ControlNode,
+    fields: ControlFields<'_>,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let path = begin_control(context, fields.id, machine)?;
+    let spec = match control {
+        ControlNode::DeckHeader { badge, .. } => ControlSpec::DeckHeader {
+            badge: intern_optional_text(
+                context,
+                machine.interner,
+                badge.as_deref(),
+                &path,
+                &context.origin,
+            )?,
+        },
+        ControlNode::DeckSummary { style, .. } => ControlSpec::DeckSummary { style: *style },
+        ControlNode::Brand { .. } => ControlSpec::Brand,
+        ControlNode::Spacer { .. } => ControlSpec::Spacer,
+        ControlNode::PresetSelector { .. } => ControlSpec::PresetSelector,
+        ControlNode::SettingsButton { .. } => ControlSpec::SettingsButton,
+        ControlNode::Text { style, .. } => ControlSpec::Text { style: *style },
+        ControlNode::Button {
+            label,
+            active_label,
+            style,
+            ..
+        } => ControlSpec::Button {
+            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+            active_label: intern_optional_text(
+                context,
+                machine.interner,
+                active_label.as_deref(),
+                &path,
+                &context.origin,
+            )?,
+            style: *style,
+        },
+        ControlNode::Bpm { placeholder, .. } => ControlSpec::Bpm {
+            placeholder: intern_optional_text(
+                context,
+                machine.interner,
+                placeholder.as_deref(),
+                &path,
+                &context.origin,
+            )?,
+        },
+        ControlNode::Time { .. } => ControlSpec::Time,
+        ControlNode::Scalar { format, .. } => ControlSpec::Scalar { format: *format },
+        ControlNode::Fader { style, .. } => ControlSpec::Fader { style: *style },
+        ControlNode::Wave { style, .. } => ControlSpec::Wave { style: *style },
+        ControlNode::TrackList { .. } => ControlSpec::TrackList,
+        ControlNode::Toggle { .. } => ControlSpec::Toggle,
+        ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
+        ControlNode::Readout {
+            label,
+            tone,
+            framed,
+            ..
+        } => ControlSpec::Readout {
+            label: intern_optional_text(
+                context,
+                machine.interner,
+                label.as_deref(),
+                &path,
+                &context.origin,
+            )?,
+            tone: *tone,
+            framed: *framed,
+        },
+        ControlNode::Chip { label, .. } => ControlSpec::Chip {
+            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+        },
+        ControlNode::Knob { .. } => ControlSpec::Knob,
+        ControlNode::VuStereo { .. } => ControlSpec::VuStereo,
+        ControlNode::VuVertical { .. } => ControlSpec::VuVertical,
+        ControlNode::Row { .. }
+        | ControlNode::Column { .. }
+        | ControlNode::Include { .. }
+        | ControlNode::Slot { .. } => return walk(context, control, depth, machine),
+    };
+    finish_control(context, control, fields, &path, spec, machine)
+}
+
+fn expand_header_control(
+    context: &Context<'_>,
+    control: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    match control {
+        control @ (ControlNode::DeckHeader {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::DeckSummary {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::Brand {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::Spacer {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::PresetSelector {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::SettingsButton {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::Text {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }) => expand_control(
+            context,
+            control,
+            ControlFields::new(id, *size, read.as_ref(), write.as_ref(), adaptive),
+            depth,
+            machine,
+        ),
+        _ => walk(context, control, depth, machine),
+    }
+}
+
+fn expand_value_control(
+    context: &Context<'_>,
+    control: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    match control {
+        control @ (ControlNode::Button {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::Bpm {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::Time {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::Scalar {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::Fader {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::Wave {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::TrackList {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }) => expand_control(
+            context,
+            control,
+            ControlFields::new(id, *size, read.as_ref(), write.as_ref(), adaptive),
+            depth,
+            machine,
+        ),
+        _ => walk(context, control, depth, machine),
+    }
+}
+
+fn expand_atom_control(
+    context: &Context<'_>,
+    control: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    match control {
+        control @ (ControlNode::Toggle {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::Checkbox {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::Readout {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::Chip {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::Knob {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::VuStereo {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::VuVertical {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }) => expand_control(
+            context,
+            control,
+            ControlFields::new(id, *size, read.as_ref(), write.as_ref(), adaptive),
+            depth,
+            machine,
+        ),
+        _ => walk(context, control, depth, machine),
     }
 }
 
@@ -372,63 +799,27 @@ fn walk(
                     })?;
             expand_at(context.set, &target, args, path, depth + 1, machine)
         }
-        ControlNode::Control {
-            id,
-            kind,
-            size,
-            props,
-            read,
-            write,
-            adaptive,
-        } => {
-            machine.budget.charge(&context.origin)?;
-            let path = child_path(&context.prefix, id);
-            let props = props
-                .iter()
-                .map(|(key, value)| {
-                    let value = match value {
-                        PropValue::Text(text) => PropValue::Text(substitute(context, text, &path)?),
-                        other => other.clone(),
-                    };
-                    Ok((key.clone(), value))
-                })
-                .collect::<Result<_, UiDocError>>()?;
-            let read = read
-                .as_ref()
-                .map(|binding| substitute_binding(context, binding, &path))
-                .transpose()?;
-            let write = write
-                .as_ref()
-                .map(|binding| substitute_binding(context, binding, &path))
-                .transpose()?;
-            (machine.visitor)(
-                ControlSite {
-                    path: &path,
-                    kind,
-                    props: &props,
-                    read: read.as_ref(),
-                    write: write.as_ref(),
-                },
-                &context.origin,
-            )?;
-            let node = ExpandedNode::Control {
-                path: machine.interner.intern(&path, &context.origin)?,
-                id: machine.interner.intern(&id.0, &context.origin)?,
-                kind: machine.interner.intern(&kind.0, &context.origin)?,
-                size: *size,
-                props: intern_props(machine.interner, &props, &context.origin)?,
-                read: read
-                    .as_ref()
-                    .map(|binding| intern_binding(machine.interner, binding, &context.origin))
-                    .transpose()?,
-                write: write
-                    .as_ref()
-                    .map(|binding| intern_binding(machine.interner, binding, &context.origin))
-                    .transpose()?,
-                adaptive: adaptive.clone(),
-            };
-            Ok(node)
-        }
+        control @ (ControlNode::DeckHeader { .. }
+        | ControlNode::DeckSummary { .. }
+        | ControlNode::Brand { .. }
+        | ControlNode::Spacer { .. }
+        | ControlNode::PresetSelector { .. }
+        | ControlNode::SettingsButton { .. }
+        | ControlNode::Text { .. }) => expand_header_control(context, control, depth, machine),
+        control @ (ControlNode::Button { .. }
+        | ControlNode::Bpm { .. }
+        | ControlNode::Time { .. }
+        | ControlNode::Scalar { .. }
+        | ControlNode::Fader { .. }
+        | ControlNode::Wave { .. }
+        | ControlNode::TrackList { .. }) => expand_value_control(context, control, depth, machine),
+        control @ (ControlNode::Toggle { .. }
+        | ControlNode::Checkbox { .. }
+        | ControlNode::Readout { .. }
+        | ControlNode::Chip { .. }
+        | ControlNode::Knob { .. }
+        | ControlNode::VuStereo { .. }
+        | ControlNode::VuVertical { .. }) => expand_atom_control(context, control, depth, machine),
     }
 }
 
@@ -465,7 +856,7 @@ mod tests {
             "deck/transport.kmodule.ron",
             r#"(schema: "kithara.module", version: 1, id: "transport", parameters: ["deck"],
                 root: Row(children: [
-                    Control(id: "play", kind: "button",
+                    Button(id: "play", label: "PLAY",
                         write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" })),
                 ]))"#,
         );
@@ -532,7 +923,7 @@ mod tests {
         resolver.insert(
             "d.kmodule.ron",
             r#"(schema: "kithara.module", version: 1, id: "d",
-                root: Control(id: "leaf", kind: "text"))"#,
+                root: Text(id: "leaf"))"#,
         );
         resolver
     }
@@ -602,7 +993,7 @@ mod tests {
         resolver.insert(
             "transport.kmodule.ron",
             r#"(schema: "kithara.module", version: 1, id: "transport", parameters: ["deck"],
-                root: Control(id: "play", kind: "button"))"#,
+                root: Button(id: "play", label: "PLAY"))"#,
         );
         let (uri, set) =
             load_module_graph(&resolver, None, "deck.kmodule.ron", &Limits::default()).unwrap();
@@ -628,25 +1019,20 @@ mod tests {
         resolver.insert(
             "price.kmodule.ron",
             r#"(schema: "kithara.module", version: 1, id: "price",
-                root: Control(id: "price", kind: "text", props: {
-                    "text": Text("$$5.99"),
-                }))"#,
+                root: Chip(id: "price", label: "$$5.99"))"#,
         );
         let (uri, set) =
             load_module_graph(&resolver, None, "price.kmodule.ron", &Limits::default()).unwrap();
 
         let (root, arena) = expand(&set, &uri, &BTreeMap::new()).unwrap();
-        let ExpandedNode::Control { props, .. } = root else {
+        let ExpandedNode::Control {
+            spec: ControlSpec::Chip { label },
+            ..
+        } = root
+        else {
             panic!("expected control");
         };
-        let value = props
-            .iter()
-            .find(|(key, _)| arena.resolve(**key) == "text")
-            .map(|(_, value)| value);
-        let Some(PropValue::Text(value)) = value else {
-            panic!("expected text prop");
-        };
-        assert_eq!(arena.resolve(*value), "$5.99");
+        assert_eq!(arena.resolve(label), "$5.99");
     }
 
     #[kithara::test]

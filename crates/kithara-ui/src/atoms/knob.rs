@@ -10,11 +10,7 @@ use iced::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::{
-    registry::{ControlKindDesc, ValueKind},
-    render::{ControlAction, ReadValue, RenderPalette, UiEvent},
-    size::{Dim, SizeSpec},
-};
+use crate::render::{ControlAction, ReadValue, RenderPalette, UiEvent};
 
 struct Consts;
 
@@ -23,19 +19,11 @@ impl Consts {
     const DRAG_RANGE: f32 = 140.0;
     const INDICATOR_WIDTH: f32 = 2.0;
     const OUTER_INSET: f32 = 3.0;
-    const SIZE: f32 = 34.0;
     const START_ANGLE: f32 = 3.0 * PI / 4.0;
     const NEUTRAL_ANGLE: f32 = 3.0 * PI / 2.0;
     const SWEEP_ANGLE: f32 = 3.0 * PI / 2.0;
     const TRACK_WIDTH: f32 = 2.0;
     const BODY_STROKE_WIDTH: f32 = 1.0;
-}
-
-pub(crate) fn desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar)).with_size(SizeSpec::new(
-        Dim::Fixed(Consts::SIZE),
-        Dim::Fixed(Consts::SIZE),
-    ))
 }
 
 pub(crate) fn view<'a>(

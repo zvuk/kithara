@@ -7,9 +7,8 @@ use num_traits::cast::AsPrimitive;
 
 use super::chrome;
 use crate::{
-    registry::{ControlKindDesc, PropKind, ValueKind},
+    module::WaveStyle,
     render::{ControlAction, ReadValue, Reads, RenderPalette, UiEvent, WaveBucket},
-    size::{Dim, SizeSpec},
 };
 
 struct Consts;
@@ -20,28 +19,15 @@ impl Consts {
     const DOWNBEAT_ALPHA: f32 = 0.72;
     const GRID_ALPHA: f32 = 0.55;
     const GRID_WIDTH: f32 = 1.0;
-    const HERO_HEIGHT: f32 = 120.0;
     const HIGH_BAR_WIDTH: f32 = 1.0;
     const LOW_BAR_WIDTH: f32 = 3.0;
     const MID_BAR_WIDTH: f32 = 2.0;
     const PLAYHEAD_WIDTH: f32 = 2.0;
 }
 
-pub(crate) fn desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Waveform), Some(ValueKind::Scalar))
-        .with_prop("style", PropKind::Text)
-        .with_size(SizeSpec::new(
-            Dim::Fill,
-            Dim::Range {
-                min: Consts::HERO_HEIGHT,
-                max: None,
-            },
-        ))
-}
-
 pub(crate) fn view(
     path: &str,
-    style: Option<&str>,
+    style: WaveStyle,
     value: Option<&ReadValue<'_>>,
     reads: &dyn Reads,
     palette: RenderPalette,
@@ -64,7 +50,7 @@ pub(crate) fn view(
         waveform,
         path: path.to_owned(),
         progress,
-        show_beats: style == Some("hero"),
+        show_beats: style == WaveStyle::Hero,
     })
     .width(Length::Fill)
     .height(Length::Fill)

@@ -4,40 +4,28 @@ use iced::{
 };
 
 use crate::{
-    registry::{ControlKindDesc, PropKind, ValueKind},
+    module::ScalarFormat,
     render::{ReadValue, RenderPalette, UiEvent, fonts, shaped_text},
-    size::{Dim, SizeSpec},
 };
 
 struct Consts;
 
 impl Consts {
-    const HEIGHT: f32 = 18.0;
     const PADDING_X: f32 = 7.0;
     const PADDING_Y: f32 = 4.0;
     const PERCENT_SCALE: f64 = 100.0;
     const TEXT_SIZE: f32 = 12.0;
-    const WIDTH: f32 = 64.0;
-}
-
-pub(crate) fn desc() -> ControlKindDesc {
-    ControlKindDesc::new(Some(ValueKind::Scalar), None)
-        .with_prop("format", PropKind::Text)
-        .with_size(SizeSpec::new(
-            Dim::Fixed(Consts::WIDTH),
-            Dim::Fixed(Consts::HEIGHT),
-        ))
 }
 
 pub(crate) fn view<'a>(
-    format: Option<&str>,
+    format: ScalarFormat,
     value: Option<&ReadValue<'_>>,
     palette: RenderPalette,
 ) -> Element<'a, UiEvent> {
     let Some(ReadValue::Scalar(value)) = value else {
         return Space::new().into();
     };
-    let formatted = if format == Some("percent") {
+    let formatted = if format == ScalarFormat::Percent {
         format!("{:>3.0}%", *value * Consts::PERCENT_SCALE)
     } else {
         format!("{value:.2}")

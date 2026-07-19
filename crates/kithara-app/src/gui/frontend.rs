@@ -123,9 +123,7 @@ impl Frontend for GuiFrontend {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
-    use kithara_ui::{
-        builtin, compile::compile, render::tree::catalog, size::Dim, source::UiConfig,
-    };
+    use kithara_ui::{builtin, compile::compile, size::Dim, source::UiConfig};
 
     use super::{axis_settings, window_settings};
     use crate::{config::WindowSizing, gui::modular::endpoints};
@@ -135,7 +133,6 @@ mod tests {
         let ui = compile(
             builtin::PLAYER_PRESET,
             &builtin::resolver(),
-            &catalog(),
             &endpoints::registry(),
             &UiConfig::default(),
         )
@@ -160,7 +157,6 @@ mod tests {
         let ui = compile(
             builtin::MICRO_PRESET,
             &builtin::resolver(),
-            &catalog(),
             &endpoints::registry(),
             &UiConfig::default(),
         )

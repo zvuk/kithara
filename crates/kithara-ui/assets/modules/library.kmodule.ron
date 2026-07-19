@@ -4,9 +4,8 @@
     id: "library",
     root: Column(
         children: [
-            Control(
+            TrackList(
                 id: "tracks",
-                kind: "track_list",
                 read: Model(id: "library.visible_tracks"),
                 adaptive: (priority: Required),
             ),
