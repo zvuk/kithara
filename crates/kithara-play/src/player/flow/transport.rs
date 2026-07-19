@@ -12,11 +12,11 @@ use crate::{
 };
 
 /// How a [`PlayerImpl::select_item_with_crossfade`] transition behaves:
-/// whether to `autoplay` the selected item and the `crossfade_seconds`
+/// whether to autoplay the selected item and the `crossfade_seconds`
 /// fade applied for this one transition.
 #[derive(Debug, Clone, Copy)]
 pub struct SelectTransition {
-    pub autoplay: bool,
+    pub should_autoplay: bool,
     pub crossfade_seconds: f32,
 }
 
@@ -167,11 +167,11 @@ impl PlayerImpl {
 
     /// Select and load a queue item by index, using the configured
     /// crossfade duration for the transition.
-    pub fn select_item(&self, index: usize, autoplay: bool) -> Result<(), PlayError> {
+    pub fn select_item(&self, index: usize, should_autoplay: bool) -> Result<(), PlayError> {
         self.select_item_with_crossfade(
             index,
             SelectTransition {
-                autoplay,
+                should_autoplay,
                 crossfade_seconds: self.crossfade_duration(),
             },
         )
@@ -191,8 +191,8 @@ impl PlayerImpl {
         transition: SelectTransition,
     ) -> Result<(), PlayError> {
         let SelectTransition {
-            autoplay,
             crossfade_seconds,
+            should_autoplay,
         } = transition;
         let items_len = self.item_count();
         if index >= items_len {
@@ -247,7 +247,7 @@ impl PlayerImpl {
             self.announce_current_item(index);
         }
 
-        self.apply_autoplay(autoplay);
+        self.apply_autoplay(should_autoplay);
         Ok(())
     }
 
@@ -277,8 +277,8 @@ mod tests {
             .select_item_with_crossfade(
                 5,
                 SelectTransition {
-                    autoplay: false,
                     crossfade_seconds: 0.0,
+                    should_autoplay: false,
                 },
             )
             .expect_err("must error");
@@ -299,8 +299,8 @@ mod tests {
         let result = player.select_item_with_crossfade(
             1,
             SelectTransition {
-                autoplay: false,
                 crossfade_seconds: 0.0,
+                should_autoplay: false,
             },
         );
         assert!(result.is_err(), "selecting an emptied slot must fail");

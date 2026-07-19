@@ -197,8 +197,8 @@ impl Queue {
                 self.player.select_item_with_crossfade(
                     index,
                     SelectTransition {
-                        autoplay: true,
                         crossfade_seconds: crossfade,
+                        should_autoplay: true,
                     },
                 )?;
                 self.lock_navigation_mut().select(index);
@@ -334,8 +334,8 @@ impl Queue {
                 if let Err(e) = player.select_item_with_crossfade(
                     index,
                     SelectTransition {
-                        autoplay: true,
                         crossfade_seconds: crossfade,
+                        should_autoplay: true,
                     },
                 ) {
                     warn!(id = id.as_u64(), error = %e, "pending select failed");
@@ -384,8 +384,8 @@ impl Queue {
         if let Err(err) = self.player.select_item_with_crossfade(
             index,
             SelectTransition {
-                autoplay: true,
                 crossfade_seconds: crossfade,
+                should_autoplay: true,
             },
         ) {
             return Some(Err(err.into()));

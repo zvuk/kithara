@@ -968,8 +968,8 @@ async fn local_handover_rejects_tempo_before_session_mutation(temp_dir: TestTemp
         .select_item_with_crossfade(
             next,
             SelectTransition {
-                autoplay: true,
                 crossfade_seconds: 1.0,
+                should_autoplay: true,
             },
         )
         .expect("start local bound-track handover");
