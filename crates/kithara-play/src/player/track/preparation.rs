@@ -444,7 +444,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::player::{node::StreamShape, track::elastic_source::elastic_source_test_pair};
+    use crate::player::{
+        node::StreamShape,
+        track::elastic_source::{PORT_CAPACITY, elastic_source_test_pair},
+    };
 
     const SAMPLE_RATE: u32 = 44_100;
 
@@ -820,6 +823,56 @@ mod tests {
 
         assert_eq!(retired, 7);
         assert!(renderer.pending_retirements.is_empty());
+        assert!(!renderer.pending_retirements.spilled());
+    }
+
+    #[kithara::test]
+    fn relocation_cancel_reserves_bounded_retirement_capacity() {
+        let pool = PcmPool::default();
+        let mut renderer = renderer(&pool);
+        let scope = CancelScope::new(None);
+        let (mut source_port, mut source_peer) = elastic_source_test_pair(scope.token());
+        let (mut relocation_port, _relocation_peer) = elastic_source_test_pair(scope.token());
+        for _ in 0..PORT_CAPACITY {
+            assert!(source_port.recycle(pool.get()).is_ok());
+            assert!(relocation_port.recycle(pool.get()).is_ok());
+        }
+        renderer.attach_source_ports(source_port, relocation_port);
+        for _ in 1..Consts::RETIREMENT_CAPACITY {
+            renderer.pending_retirements.push(pool.get());
+        }
+        let target = SessionBeat::new(1.0).expect("finite target");
+        renderer
+            .begin_relocation(
+                &binding(PlaybackDirection::Forward),
+                target,
+                Tempo::new(120.0).expect("valid tempo"),
+                7,
+            )
+            .expect("relocation begins");
+        renderer
+            .relocation
+            .as_mut()
+            .expect("relocation remains owned")
+            .samples = Some(pool.get());
+        assert!(source_peer.push_ready(
+            99,
+            SourceFrameRange::new(0, 1).expect("valid stale range"),
+            pool.get(),
+        ));
+
+        renderer
+            .poll_source_port(PlaybackDirection::Forward)
+            .expect("source poll remains bounded");
+        renderer
+            .discard_relocation(7)
+            .expect("relocation cancellation succeeds");
+
+        assert!(renderer.relocation.is_none());
+        assert_eq!(
+            renderer.pending_retirements.len(),
+            Consts::RETIREMENT_CAPACITY
+        );
         assert!(!renderer.pending_retirements.spilled());
     }
 

@@ -84,7 +84,7 @@ impl ElasticRenderer {
                 self.commit_relocation(revision)?;
             } else if revision >= relocation.revision {
                 let stale_revision = relocation.revision;
-                let _ = self.discard_relocation(stale_revision)?;
+                self.discard_relocation(stale_revision)?;
             }
         }
         if revision < self.revision {
@@ -335,37 +335,32 @@ impl ElasticRenderer {
         Ok(())
     }
 
-    pub(crate) fn discard_relocation(&mut self, revision: u64) -> Result<bool, ElasticRenderError> {
+    pub(crate) fn discard_relocation(&mut self, revision: u64) -> Result<(), ElasticRenderError> {
         if self
             .relocation
             .as_ref()
             .is_none_or(|relocation| relocation.revision != revision)
         {
-            return Ok(true);
+            return Ok(());
         }
         self.poll_relocation_port()?;
+        if !self.has_retirement_capacity_with_relocation(0) {
+            return Err(ElasticRenderError::RelocationNotReady);
+        }
         let Some(mut relocation) = self.relocation.take() else {
             self.pending_relocation_request = None;
-            return Ok(true);
+            return Ok(());
         };
-        if let Some(samples) = relocation.samples.take()
-            && let Err(samples) = self
-                .relocation_port
-                .as_mut()
-                .ok_or(ElasticRenderError::SourceWorkerUnavailable)?
-                .recycle(samples)
-        {
-            relocation.samples = Some(samples);
-            self.relocation = Some(relocation);
-            return Ok(false);
+        if let Some(samples) = relocation.samples.take() {
+            self.recycle_samples(samples);
         }
         self.pending_relocation_request = None;
-        Ok(true)
+        Ok(())
     }
 
     fn poll_relocation_port(&mut self) -> Result<(), ElasticRenderError> {
         self.flush_retirements();
-        while self.has_retirement_capacity(1) {
+        while self.has_retirement_capacity_with_relocation(1) {
             let Some(reply) = self
                 .relocation_port
                 .as_mut()
@@ -434,8 +429,19 @@ impl ElasticRenderer {
         count <= Consts::RETIREMENT_CAPACITY.saturating_sub(self.pending_retirements.len())
     }
 
+    pub(super) fn has_retirement_capacity_with_relocation(&self, count: usize) -> bool {
+        let relocation = usize::from(
+            self.relocation
+                .as_ref()
+                .is_some_and(|relocation| relocation.samples.is_some()),
+        );
+        count
+            .checked_add(relocation)
+            .is_some_and(|count| self.has_retirement_capacity(count))
+    }
+
     pub(super) fn recycle_samples(&mut self, samples: PcmBuf) {
-        debug_assert!(self.has_retirement_capacity(1));
+        debug_assert!(self.has_retirement_capacity_with_relocation(1));
         let Some(port) = self.source_port.as_mut() else {
             self.pending_retirements.push(samples);
             return;

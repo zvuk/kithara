@@ -237,7 +237,6 @@ impl PlayerResource {
         renderer
             .renderer_mut()
             .discard_relocation(revision)
-            .map(|_| ())
             .map_err(|error| PlayError::ElasticPreparation {
                 reason: error.to_string(),
             })

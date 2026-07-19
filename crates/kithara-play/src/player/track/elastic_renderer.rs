@@ -361,7 +361,7 @@ impl ElasticRenderer {
             .map(|window| window.range)
             .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
         {
-            if !self.has_retirement_capacity(1) {
+            if !self.has_retirement_capacity_with_relocation(1) {
                 return Err(ElasticRenderError::SourceWindowDeadlineMissed);
             }
             let window = self.ready_windows.remove(0);
@@ -418,7 +418,7 @@ impl ElasticRenderer {
             return Err(ElasticRenderError::SourceWorkerUnavailable);
         }
         self.flush_retirements();
-        while self.has_retirement_capacity(1) {
+        while self.has_retirement_capacity_with_relocation(1) {
             let Some(reply) = self
                 .source_port
                 .as_mut()
