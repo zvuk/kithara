@@ -28,7 +28,7 @@ fn compiles_micro_layout_end_to_end() {
     let CompiledNode::Module { instance, .. } = &ui.root else {
         panic!("expected module root");
     };
-    assert_eq!(instance.0, "deck-a");
+    assert_eq!(ui.resolve(*instance), "deck-a");
 }
 
 #[kithara::test]
@@ -167,16 +167,20 @@ fn layout_doubled_dollar_passes_literal_dollar() {
         &UiConfig::default(),
     )
     .unwrap();
-    let CompiledNode::Module { root, .. } = ui.root else {
+    let CompiledNode::Module { root, .. } = &ui.root else {
         panic!("expected module");
     };
-    let ExpandedNode::Control { props, .. } = *root else {
+    let ExpandedNode::Control { props, .. } = &**root else {
         panic!("expected control");
     };
-    assert_eq!(
-        props.get("style"),
-        Some(&PropValue::Text("$lit".to_owned()))
-    );
+    let value = props
+        .iter()
+        .find(|(key, _)| ui.resolve(**key) == "style")
+        .map(|(_, value)| value);
+    let Some(PropValue::Text(value)) = value else {
+        panic!("expected text prop");
+    };
+    assert_eq!(ui.resolve(*value), "$lit");
 }
 
 #[kithara::test]

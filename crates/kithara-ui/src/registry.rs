@@ -2,10 +2,7 @@ use std::collections::BTreeMap;
 
 use derive_more::Display;
 
-use crate::{
-    ids::{ControlKind, EndpointId},
-    size::SizeSpec,
-};
+use crate::{ids::EndpointId, size::SizeSpec};
 
 #[derive(Clone, Copy, Debug, Display, Eq, PartialEq)]
 #[non_exhaustive]
@@ -69,7 +66,7 @@ impl ControlKindDesc {
 }
 
 pub trait ControlCatalog {
-    fn kind(&self, kind: &ControlKind) -> Option<&ControlKindDesc>;
+    fn kind(&self, kind: &str) -> Option<&ControlKindDesc>;
 }
 
 #[derive(Clone, Debug)]

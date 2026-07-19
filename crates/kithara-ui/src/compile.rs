@@ -1,7 +1,7 @@
 use crate::{
     error::UiDocError,
-    expand::{Budget, ExpandedNode, expand_module},
-    ids::{InstanceId, SourceUri},
+    expand::{Budget, ControlSite, ExpandedNode, Expander},
+    ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, LayoutNode, parse_layout},
     registry::{ControlCatalog, EndpointRegistry},
     resolve::load_module_graph,
@@ -15,6 +15,17 @@ use crate::{
 pub struct CompiledUi {
     pub root: CompiledNode,
     pub size: SizeSpec,
+    arena: StrArena,
+}
+
+impl CompiledUi {
+    delegate::delegate! {
+        to self.arena {
+            /// Resolves a string interned by this compiled UI.
+            #[must_use]
+            pub fn resolve(&self, id: InternId) -> &str;
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -26,7 +37,7 @@ pub enum CompiledNode {
         size: SizeSpec,
     },
     Module {
-        instance: InstanceId,
+        instance: InternId,
         root: Box<ExpandedNode>,
         size: SizeSpec,
     },
@@ -55,104 +66,105 @@ pub fn compile(
     let document = parse_layout(&loaded.text, &loaded.uri)?;
     validate::check_layout_instances(&document, &loaded.uri)?;
     let mut budget = Budget::new(config.limits.max_nodes);
-    let root = build(
-        &document.root,
-        &loaded.uri,
+    let mut interner = Interner::new(config.max_arena_bytes);
+    let root = Compiler {
         resolver,
         catalog,
         endpoints,
         config,
-        &mut budget,
-    )?;
+        budget: &mut budget,
+        interner: &mut interner,
+    }
+    .build(&document.root, &loaded.uri)?;
     let size = compiled_node_size(&root);
-    Ok(CompiledUi { root, size })
+    let arena = interner.finish();
+    Ok(CompiledUi { root, size, arena })
 }
 
-fn build(
-    node: &LayoutNode,
-    layout_uri: &SourceUri,
-    resolver: &dyn SourceResolver,
-    catalog: &dyn ControlCatalog,
-    endpoints: &dyn EndpointRegistry,
-    config: &UiConfig,
-    budget: &mut Budget,
-) -> Result<CompiledNode, UiDocError> {
-    budget.charge(layout_uri)?;
-    match node {
-        LayoutNode::Split { axis, children } => {
-            let children: Vec<_> = children
-                .iter()
-                .map(|child| {
-                    Ok((
-                        child.weight,
-                        build(
-                            &child.node,
-                            layout_uri,
-                            resolver,
-                            catalog,
-                            endpoints,
-                            config,
-                            budget,
-                        )?,
-                    ))
+struct Compiler<'a> {
+    resolver: &'a dyn SourceResolver,
+    catalog: &'a dyn ControlCatalog,
+    endpoints: &'a dyn EndpointRegistry,
+    config: &'a UiConfig,
+    budget: &'a mut Budget,
+    interner: &'a mut Interner,
+}
+
+impl Compiler<'_> {
+    fn build(
+        &mut self,
+        node: &LayoutNode,
+        layout_uri: &SourceUri,
+    ) -> Result<CompiledNode, UiDocError> {
+        self.budget.charge(layout_uri)?;
+        match node {
+            LayoutNode::Split { axis, children } => {
+                let children: Vec<_> = children
+                    .iter()
+                    .map(|child| Ok((child.weight, self.build(&child.node, layout_uri)?)))
+                    .collect::<Result<_, UiDocError>>()?;
+                let sizes = children.iter().map(|(_, child)| compiled_node_size(child));
+                let size = match axis {
+                    Axis::Horizontal => combine_horizontal(sizes),
+                    Axis::Vertical => combine_vertical(sizes),
+                };
+                Ok(CompiledNode::Split {
+                    axis: *axis,
+                    children,
+                    size,
                 })
-                .collect::<Result<_, UiDocError>>()?;
-            let sizes = children.iter().map(|(_, child)| compiled_node_size(child));
-            let size = match axis {
-                Axis::Horizontal => combine_horizontal(sizes),
-                Axis::Vertical => combine_vertical(sizes),
-            };
-            Ok(CompiledNode::Split {
-                axis: *axis,
-                children,
-                size,
-            })
-        }
-        LayoutNode::Module {
-            instance,
-            source,
-            with,
-            size,
-        } => {
-            for value in with.values() {
-                if !value.starts_with("$$")
-                    && let Some(name) = value.strip_prefix('$')
-                {
-                    return Err(UiDocError::UnresolvedParam {
-                        origin: layout_uri.clone(),
-                        name: name.to_owned(),
-                        path: instance.0.clone(),
-                    });
-                }
             }
-            let args = with
-                .iter()
-                .map(|(key, value)| {
-                    let value = value
-                        .strip_prefix("$$")
-                        .map_or_else(|| value.clone(), |literal| format!("${literal}"));
-                    (key.clone(), value)
-                })
-                .collect();
-            let (module_uri, set) =
-                load_module_graph(resolver, Some(layout_uri), source, &config.limits)?;
-            let root = expand_module(
-                &set,
-                &module_uri,
-                &args,
-                &instance.0,
-                config.limits.max_depth,
-                budget,
-                &mut |control, origin| {
-                    validate::check_controls(control, origin, catalog, endpoints)
-                },
-            )?;
-            let size = (*size).unwrap_or_else(|| compute_size(&root, catalog));
-            Ok(CompiledNode::Module {
-                instance: instance.clone(),
-                root: Box::new(root),
+            LayoutNode::Module {
+                instance,
+                source,
+                with,
                 size,
-            })
+            } => {
+                for value in with.values() {
+                    if !value.starts_with("$$")
+                        && let Some(name) = value.strip_prefix('$')
+                    {
+                        return Err(UiDocError::UnresolvedParam {
+                            origin: layout_uri.clone(),
+                            name: name.to_owned(),
+                            path: instance.0.clone(),
+                        });
+                    }
+                }
+                let args = with
+                    .iter()
+                    .map(|(key, value)| {
+                        let value = value
+                            .strip_prefix("$$")
+                            .map_or_else(|| value.clone(), |literal| format!("${literal}"));
+                        (key.clone(), value)
+                    })
+                    .collect();
+                let (module_uri, set) = load_module_graph(
+                    self.resolver,
+                    Some(layout_uri),
+                    source,
+                    &self.config.limits,
+                )?;
+                let mut visitor = |site: ControlSite<'_>, origin: &SourceUri| {
+                    validate::check_controls(site, origin, self.catalog, self.endpoints)
+                };
+                let root = Expander::new(
+                    self.config.limits.max_depth,
+                    self.budget,
+                    self.interner,
+                    &mut visitor,
+                )
+                .expand_module(&set, &module_uri, &args, &instance.0)?;
+                let size =
+                    (*size).unwrap_or_else(|| compute_size(&root, self.catalog, self.interner));
+                let instance = self.interner.intern(&instance.0, layout_uri)?;
+                Ok(CompiledNode::Module {
+                    instance,
+                    root: Box::new(root),
+                    size,
+                })
+            }
         }
     }
 }

@@ -28,7 +28,7 @@ impl TestCatalog {
 }
 
 impl ControlCatalog for TestCatalog {
-    fn kind(&self, kind: &ControlKind) -> Option<&ControlKindDesc> {
+    fn kind(&self, kind: &str) -> Option<&ControlKindDesc> {
         self.kinds.get(kind)
     }
 }

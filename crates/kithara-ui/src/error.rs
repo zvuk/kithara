@@ -50,6 +50,8 @@ pub enum UiDocError {
         bytes: usize,
         max: usize,
     },
+    #[error("{origin}: string arena budget exceeded (max {max} bytes)")]
+    ArenaFull { origin: SourceUri, max: usize },
     #[error("{origin}: source not found: {rel:?}")]
     NotFound { origin: SourceUri, rel: String },
     #[error("{origin}: source {rel:?} escapes configured root")]

@@ -13,9 +13,10 @@ use iced::{
 };
 use kithara_queue::TrackEntry;
 use kithara_ui::{
-    expand::ExpandedNode,
-    ids::ControlKind,
-    module::{BindingRef, PropValue},
+    compile::CompiledUi,
+    expand::{Binding, ExpandedNode},
+    ids::InternId,
+    module::PropValue,
 };
 use num_traits::cast::AsPrimitive;
 
@@ -28,16 +29,20 @@ use crate::{
     theme::gui::GuiPalette,
 };
 
-pub(super) fn render_node<'a>(state: &'a Kithara, node: &ExpandedNode) -> Element<'a, Message> {
+pub(super) fn render_node<'a>(
+    state: &'a Kithara,
+    node: &ExpandedNode,
+    ui: &'a CompiledUi,
+) -> Element<'a, Message> {
     match node {
         ExpandedNode::Row { children, .. } => {
-            Row::with_children(children.iter().map(|child| render_node(state, child)))
+            Row::with_children(children.iter().map(|child| render_node(state, child, ui)))
                 .spacing(gap::INLINE)
                 .width(Length::Fill)
                 .into()
         }
         ExpandedNode::Column { children, .. } | ExpandedNode::Slot { children, .. } => {
-            Column::with_children(children.iter().map(|child| render_node(state, child)))
+            Column::with_children(children.iter().map(|child| render_node(state, child, ui)))
                 .spacing(gap::INLINE)
                 .width(Length::Fill)
                 .into()
@@ -48,23 +53,25 @@ pub(super) fn render_node<'a>(state: &'a Kithara, node: &ExpandedNode) -> Elemen
             props,
             read,
             ..
-        } => render_control(state, path, kind, props, read.as_ref()),
+        } => render_control(state, *path, *kind, props, read.as_ref(), ui),
         _ => Space::new().into(),
     }
 }
 
 fn render_control<'a>(
     state: &'a Kithara,
-    path: &str,
-    kind: &ControlKind,
-    props: &BTreeMap<String, PropValue>,
-    read: Option<&BindingRef>,
+    path: InternId,
+    kind: InternId,
+    props: &BTreeMap<InternId, PropValue<InternId>>,
+    read: Option<&Binding>,
+    ui: &'a CompiledUi,
 ) -> Element<'a, Message> {
-    let value = read.and_then(|binding| reads::resolve(&state.ui_state, binding));
-    match kind.0.as_str() {
-        "text" => render_text(state.palette, props, value),
-        "button" => render_button(state.palette, path, props, &value),
-        "telemetry.scalar" => render_scalar(state.palette, props, &value),
+    let value = read.and_then(|binding| reads::resolve(&state.ui_state, binding, ui));
+    let path = ui.resolve(path);
+    match ui.resolve(kind) {
+        "text" => render_text(state.palette, props, value, ui),
+        "button" => render_button(state.palette, path, props, &value, ui),
+        "telemetry.scalar" => render_scalar(state.palette, props, &value, ui),
         "fader.horizontal" => render_fader(state.palette, path, &value),
         "waveform.mini" => render_waveform(state, path, &value),
         "track_list" => render_track_list(state, path, &value),
@@ -74,13 +81,14 @@ fn render_control<'a>(
 
 fn render_text<'a>(
     p: GuiPalette,
-    props: &BTreeMap<String, PropValue>,
+    props: &BTreeMap<InternId, PropValue<InternId>>,
     value: Option<ReadValue<'_>>,
+    ui: &'a CompiledUi,
 ) -> Element<'a, Message> {
     let Some(ReadValue::Text(value)) = value else {
         return Space::new().into();
     };
-    let track_title = text_prop(props, "style") == Some("track-title");
+    let track_title = text_prop(props, "style", ui) == Some("track-title");
     let (font, size) = if track_title {
         (fonts::display(Weight::Semibold), 16.0)
     } else {
@@ -92,10 +100,11 @@ fn render_text<'a>(
 fn render_button<'a>(
     p: GuiPalette,
     path: &str,
-    props: &BTreeMap<String, PropValue>,
+    props: &BTreeMap<InternId, PropValue<InternId>>,
     value: &Option<ReadValue<'_>>,
+    ui: &'a CompiledUi,
 ) -> Element<'a, Message> {
-    let Some(label) = text_prop(props, "label") else {
+    let Some(label) = text_prop(props, "label", ui) else {
         return Space::new().into();
     };
     let Some(ReadValue::Bool(active)) = value else {
@@ -113,13 +122,14 @@ fn render_button<'a>(
 
 fn render_scalar<'a>(
     p: GuiPalette,
-    props: &BTreeMap<String, PropValue>,
+    props: &BTreeMap<InternId, PropValue<InternId>>,
     value: &Option<ReadValue<'_>>,
+    ui: &'a CompiledUi,
 ) -> Element<'a, Message> {
     let Some(ReadValue::Scalar(value)) = value else {
         return Space::new().into();
     };
-    let formatted = if text_prop(props, "format") == Some("percent") {
+    let formatted = if text_prop(props, "format", ui) == Some("percent") {
         format!("{:>3.0}%", *value * 100.0)
     } else {
         format!("{value:.2}")
@@ -222,11 +232,18 @@ fn track_list<'a>(state: &'a Kithara, path: &str, tracks: &[TrackEntry]) -> Elem
         .into()
 }
 
-fn text_prop<'a>(props: &'a BTreeMap<String, PropValue>, name: &str) -> Option<&'a str> {
-    match props.get(name) {
-        Some(PropValue::Text(value)) => Some(value),
-        _ => None,
-    }
+fn text_prop<'a>(
+    props: &BTreeMap<InternId, PropValue<InternId>>,
+    name: &str,
+    ui: &'a CompiledUi,
+) -> Option<&'a str> {
+    props
+        .iter()
+        .find(|(key, _)| ui.resolve(**key) == name)
+        .and_then(|(_, value)| match value {
+            PropValue::Text(value) => Some(ui.resolve(*value)),
+            _ => None,
+        })
 }
 
 fn control_button_style(

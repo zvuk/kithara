@@ -21,7 +21,7 @@ impl AppCatalog {
 }
 
 impl ControlCatalog for AppCatalog {
-    fn kind(&self, kind: &ControlKind) -> Option<&ControlKindDesc> {
+    fn kind(&self, kind: &str) -> Option<&ControlKindDesc> {
         self.kinds.get(kind)
     }
 }

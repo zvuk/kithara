@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     error::UiDocError,
-    ids::{ControlKind, NodeId, SourceUri},
+    ids::{ControlKind, InternId, Interner, NodeId, SourceUri},
     module::{AdaptivePolicy, BindingRef, ControlNode, PropValue},
     resolve::ModuleSet,
     size::SizeSpec,
@@ -12,33 +12,64 @@ use crate::{
 #[non_exhaustive]
 pub enum ExpandedNode {
     Row {
-        id: Option<NodeId>,
+        id: Option<InternId>,
         size: Option<SizeSpec>,
         children: Vec<Self>,
     },
     Column {
-        id: Option<NodeId>,
+        id: Option<InternId>,
         size: Option<SizeSpec>,
         children: Vec<Self>,
     },
     Slot {
-        id: NodeId,
+        id: InternId,
         size: Option<SizeSpec>,
         children: Vec<Self>,
     },
     Control {
-        path: String,
-        id: NodeId,
-        kind: ControlKind,
+        path: InternId,
+        id: InternId,
+        kind: InternId,
         size: Option<SizeSpec>,
-        props: BTreeMap<String, PropValue>,
-        read: Option<BindingRef>,
-        write: Option<BindingRef>,
+        props: BTreeMap<InternId, PropValue<InternId>>,
+        read: Option<Binding>,
+        write: Option<Binding>,
         adaptive: AdaptivePolicy,
     },
 }
 
-type ControlVisitor<'a> = dyn FnMut(&ExpandedNode, &SourceUri) -> Result<(), UiDocError> + 'a;
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Binding {
+    Command {
+        id: InternId,
+        with: BTreeMap<InternId, InternId>,
+    },
+    Parameter {
+        id: InternId,
+        with: BTreeMap<InternId, InternId>,
+    },
+    Telemetry {
+        id: InternId,
+        with: BTreeMap<InternId, InternId>,
+    },
+    Model {
+        id: InternId,
+        with: BTreeMap<InternId, InternId>,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ControlSite<'a> {
+    pub(crate) path: &'a str,
+    pub(crate) kind: &'a ControlKind,
+    pub(crate) props: &'a BTreeMap<String, PropValue<String>>,
+    pub(crate) read: Option<&'a BindingRef>,
+    pub(crate) write: Option<&'a BindingRef>,
+}
+
+type ControlVisitor<'v> =
+    dyn for<'a> FnMut(ControlSite<'a>, &SourceUri) -> Result<(), UiDocError> + 'v;
 
 pub(crate) struct Budget {
     nodes: usize,
@@ -72,27 +103,37 @@ struct Context<'a> {
 
 /// Cross-cutting expansion state threaded through the recursion: the include
 /// depth cap, the shared node budget, and the per-control validation visitor.
-struct Machine<'m, 'v> {
+pub(crate) struct Expander<'m, 'v> {
     max_depth: usize,
     budget: &'m mut Budget,
+    interner: &'m mut Interner,
     visitor: &'m mut ControlVisitor<'v>,
 }
 
-pub(crate) fn expand_module(
-    set: &ModuleSet,
-    entry: &SourceUri,
-    args: &BTreeMap<String, String>,
-    prefix: &str,
-    max_depth: usize,
-    budget: &mut Budget,
-    visitor: &mut ControlVisitor<'_>,
-) -> Result<ExpandedNode, UiDocError> {
-    let mut machine = Machine {
-        max_depth,
-        budget,
-        visitor,
-    };
-    expand_at(set, entry, args.clone(), prefix.to_owned(), 0, &mut machine)
+impl<'m, 'v> Expander<'m, 'v> {
+    pub(crate) fn new(
+        max_depth: usize,
+        budget: &'m mut Budget,
+        interner: &'m mut Interner,
+        visitor: &'m mut ControlVisitor<'v>,
+    ) -> Self {
+        Self {
+            max_depth,
+            budget,
+            interner,
+            visitor,
+        }
+    }
+
+    pub(crate) fn expand_module(
+        &mut self,
+        set: &ModuleSet,
+        entry: &SourceUri,
+        args: &BTreeMap<String, String>,
+        prefix: &str,
+    ) -> Result<ExpandedNode, UiDocError> {
+        expand_at(set, entry, args.clone(), prefix.to_owned(), 0, self)
+    }
 }
 
 fn expand_at(
@@ -101,7 +142,7 @@ fn expand_at(
     args: BTreeMap<String, String>,
     prefix: String,
     depth: usize,
-    machine: &mut Machine<'_, '_>,
+    machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     if depth > machine.max_depth {
         return Err(UiDocError::DepthExceeded {
@@ -186,6 +227,65 @@ fn substitute_binding(
     Ok(binding)
 }
 
+fn intern_map(
+    interner: &mut Interner,
+    values: &BTreeMap<String, String>,
+    origin: &SourceUri,
+) -> Result<BTreeMap<InternId, InternId>, UiDocError> {
+    values
+        .iter()
+        .map(|(key, value)| {
+            Ok((
+                interner.intern(key, origin)?,
+                interner.intern(value, origin)?,
+            ))
+        })
+        .collect()
+}
+
+fn intern_binding(
+    interner: &mut Interner,
+    binding: &BindingRef,
+    origin: &SourceUri,
+) -> Result<Binding, UiDocError> {
+    match binding {
+        BindingRef::Command { id, with } => Ok(Binding::Command {
+            id: interner.intern(&id.0, origin)?,
+            with: intern_map(interner, with, origin)?,
+        }),
+        BindingRef::Parameter { id, with } => Ok(Binding::Parameter {
+            id: interner.intern(&id.0, origin)?,
+            with: intern_map(interner, with, origin)?,
+        }),
+        BindingRef::Telemetry { id, with } => Ok(Binding::Telemetry {
+            id: interner.intern(&id.0, origin)?,
+            with: intern_map(interner, with, origin)?,
+        }),
+        BindingRef::Model { id, with } => Ok(Binding::Model {
+            id: interner.intern(&id.0, origin)?,
+            with: intern_map(interner, with, origin)?,
+        }),
+    }
+}
+
+fn intern_props(
+    interner: &mut Interner,
+    props: &BTreeMap<String, PropValue<String>>,
+    origin: &SourceUri,
+) -> Result<BTreeMap<InternId, PropValue<InternId>>, UiDocError> {
+    props
+        .iter()
+        .map(|(key, value)| {
+            let value = match value {
+                PropValue::Bool(value) => PropValue::Bool(*value),
+                PropValue::Num(value) => PropValue::Num(*value),
+                PropValue::Text(value) => PropValue::Text(interner.intern(value, origin)?),
+            };
+            Ok((interner.intern(key, origin)?, value))
+        })
+        .collect()
+}
+
 fn child_path(prefix: &str, id: &NodeId) -> String {
     if prefix.is_empty() {
         id.0.clone()
@@ -198,13 +298,16 @@ fn walk(
     context: &Context<'_>,
     node: &ControlNode,
     depth: usize,
-    machine: &mut Machine<'_, '_>,
+    machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     match node {
         ControlNode::Row { id, size, children } => {
             machine.budget.charge(&context.origin)?;
             Ok(ExpandedNode::Row {
-                id: id.clone(),
+                id: id
+                    .as_ref()
+                    .map(|id| machine.interner.intern(&id.0, &context.origin))
+                    .transpose()?,
                 size: *size,
                 children: children
                     .iter()
@@ -215,7 +318,10 @@ fn walk(
         ControlNode::Column { id, size, children } => {
             machine.budget.charge(&context.origin)?;
             Ok(ExpandedNode::Column {
-                id: id.clone(),
+                id: id
+                    .as_ref()
+                    .map(|id| machine.interner.intern(&id.0, &context.origin))
+                    .transpose()?,
                 size: *size,
                 children: children
                     .iter()
@@ -226,7 +332,7 @@ fn walk(
         ControlNode::Slot { id, size, default } => {
             machine.budget.charge(&context.origin)?;
             Ok(ExpandedNode::Slot {
-                id: id.clone(),
+                id: machine.interner.intern(&id.0, &context.origin)?,
                 size: *size,
                 children: default
                     .iter()
@@ -275,17 +381,32 @@ fn walk(
                 .as_ref()
                 .map(|binding| substitute_binding(context, binding, &path))
                 .transpose()?;
+            (machine.visitor)(
+                ControlSite {
+                    path: &path,
+                    kind,
+                    props: &props,
+                    read: read.as_ref(),
+                    write: write.as_ref(),
+                },
+                &context.origin,
+            )?;
             let node = ExpandedNode::Control {
-                path,
-                id: id.clone(),
-                kind: kind.clone(),
+                path: machine.interner.intern(&path, &context.origin)?,
+                id: machine.interner.intern(&id.0, &context.origin)?,
+                kind: machine.interner.intern(&kind.0, &context.origin)?,
                 size: *size,
-                props,
-                read,
-                write,
+                props: intern_props(machine.interner, &props, &context.origin)?,
+                read: read
+                    .as_ref()
+                    .map(|binding| intern_binding(machine.interner, binding, &context.origin))
+                    .transpose()?,
+                write: write
+                    .as_ref()
+                    .map(|binding| intern_binding(machine.interner, binding, &context.origin))
+                    .transpose()?,
                 adaptive: adaptive.clone(),
             };
-            (machine.visitor)(&node, &context.origin)?;
             Ok(node)
         }
     }
@@ -299,7 +420,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        module::BindingRef,
+        ids::StrArena,
         resolve::load_module_graph,
         source::{Limits, MemResolver},
     };
@@ -335,34 +456,31 @@ mod tests {
         set: &ModuleSet,
         uri: &SourceUri,
         args: &BTreeMap<String, String>,
-    ) -> Result<ExpandedNode, UiDocError> {
+    ) -> Result<(ExpandedNode, StrArena), UiDocError> {
         let mut budget = Budget::new(Limits::default().max_nodes);
-        expand_module(
-            set,
-            uri,
-            args,
-            "",
+        let mut interner = Interner::new(64 * 1024);
+        let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
+        let root = Expander::new(
             Limits::default().max_depth,
             &mut budget,
-            &mut |_, _| Ok(()),
+            &mut interner,
+            &mut visitor,
         )
+        .expand_module(set, uri, args, "")?;
+        Ok((root, interner.finish()))
     }
 
     fn expand_with_depth(
         set: &ModuleSet,
         uri: &SourceUri,
         max_depth: usize,
-    ) -> Result<ExpandedNode, UiDocError> {
+    ) -> Result<(ExpandedNode, StrArena), UiDocError> {
         let mut budget = Budget::new(Limits::default().max_nodes);
-        expand_module(
-            set,
-            uri,
-            &BTreeMap::new(),
-            "",
-            max_depth,
-            &mut budget,
-            &mut |_, _| Ok(()),
-        )
+        let mut interner = Interner::new(64 * 1024);
+        let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
+        let root = Expander::new(max_depth, &mut budget, &mut interner, &mut visitor)
+            .expand_module(set, uri, &BTreeMap::new(), "")?;
+        Ok((root, interner.finish()))
     }
 
     fn depth_fixture(reverse: bool) -> MemResolver {
@@ -404,7 +522,7 @@ mod tests {
         let resolver = deck_fixture();
         let (uri, set) =
             load_module_graph(&resolver, None, "deck.kmodule.ron", &Limits::default()).unwrap();
-        let root = expand(&set, &uri, &args(&[("deck", "b")])).unwrap();
+        let (root, arena) = expand(&set, &uri, &args(&[("deck", "b")])).unwrap();
 
         let ExpandedNode::Column { children, .. } = root else {
             panic!("expected column");
@@ -415,11 +533,15 @@ mod tests {
         let ExpandedNode::Control { path, write, .. } = &children[0] else {
             panic!("expected control");
         };
-        assert_eq!(path, "transport/play");
-        let Some(BindingRef::Command { with, .. }) = write else {
+        assert_eq!(arena.resolve(*path), "transport/play");
+        let Some(Binding::Command { with, .. }) = write else {
             panic!("expected command");
         };
-        assert_eq!(with.get("deck").map(String::as_str), Some("b"));
+        let deck = with
+            .iter()
+            .find(|(key, _)| arena.resolve(**key) == "deck")
+            .map(|(_, value)| arena.resolve(*value));
+        assert_eq!(deck, Some("b"));
     }
 
     #[kithara::test]
@@ -466,17 +588,12 @@ mod tests {
             load_module_graph(&resolver, None, "deck.kmodule.ron", &Limits::default()).unwrap();
         let limits = Limits::default();
         let mut budget = Budget::new(limits.max_nodes);
+        let mut interner = Interner::new(64 * 1024);
+        let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
 
-        let error = expand_module(
-            &set,
-            &uri,
-            &args(&[("deck", "a")]),
-            "deck-a",
-            limits.max_depth,
-            &mut budget,
-            &mut |_, _| Ok(()),
-        )
-        .unwrap_err();
+        let error = Expander::new(limits.max_depth, &mut budget, &mut interner, &mut visitor)
+            .expand_module(&set, &uri, &args(&[("deck", "a")]), "deck-a")
+            .unwrap_err();
         let message = error.to_string();
         assert!(matches!(
             error,
@@ -498,14 +615,18 @@ mod tests {
         let (uri, set) =
             load_module_graph(&resolver, None, "price.kmodule.ron", &Limits::default()).unwrap();
 
-        let root = expand(&set, &uri, &BTreeMap::new()).unwrap();
+        let (root, arena) = expand(&set, &uri, &BTreeMap::new()).unwrap();
         let ExpandedNode::Control { props, .. } = root else {
             panic!("expected control");
         };
-        assert_eq!(
-            props.get("text"),
-            Some(&PropValue::Text("$5.99".to_owned()))
-        );
+        let value = props
+            .iter()
+            .find(|(key, _)| arena.resolve(**key) == "text")
+            .map(|(_, value)| value);
+        let Some(PropValue::Text(value)) = value else {
+            panic!("expected text prop");
+        };
+        assert_eq!(arena.resolve(*value), "$5.99");
     }
 
     #[kithara::test]

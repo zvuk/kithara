@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{expand::ExpandedNode, registry::ControlCatalog};
+use crate::{expand::ExpandedNode, ids::Interner, registry::ControlCatalog};
 
 /// One-axis size rule. `Fill` takes available space and has no intrinsic size.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
@@ -125,7 +125,11 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
 
 /// Computes a node's intrinsic size from its override, children, or catalog entry.
 #[must_use]
-pub fn compute_size(node: &ExpandedNode, catalog: &dyn ControlCatalog) -> SizeSpec {
+pub(crate) fn compute_size(
+    node: &ExpandedNode,
+    catalog: &dyn ControlCatalog,
+    interner: &Interner,
+) -> SizeSpec {
     let override_size = match node {
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
@@ -137,18 +141,24 @@ pub fn compute_size(node: &ExpandedNode, catalog: &dyn ControlCatalog) -> SizeSp
     }
 
     match node {
-        ExpandedNode::Row { children, .. } => {
-            combine_horizontal(children.iter().map(|child| compute_size(child, catalog)))
-        }
-        ExpandedNode::Column { children, .. } => {
-            combine_vertical(children.iter().map(|child| compute_size(child, catalog)))
-        }
+        ExpandedNode::Row { children, .. } => combine_horizontal(
+            children
+                .iter()
+                .map(|child| compute_size(child, catalog, interner)),
+        ),
+        ExpandedNode::Column { children, .. } => combine_vertical(
+            children
+                .iter()
+                .map(|child| compute_size(child, catalog, interner)),
+        ),
         ExpandedNode::Slot { children, .. } if children.is_empty() => SizeSpec::FILL,
-        ExpandedNode::Slot { children, .. } => {
-            combine_vertical(children.iter().map(|child| compute_size(child, catalog)))
-        }
+        ExpandedNode::Slot { children, .. } => combine_vertical(
+            children
+                .iter()
+                .map(|child| compute_size(child, catalog, interner)),
+        ),
         ExpandedNode::Control { kind, .. } => catalog
-            .kind(kind)
+            .kind(interner.resolve(*kind))
             .map_or(SizeSpec::FILL, |description| description.size),
     }
 }
@@ -161,7 +171,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ids::{ControlKind, NodeId},
+        ids::{Interner, SourceUri},
         module::AdaptivePolicy,
         registry::ControlKindDesc,
     };
@@ -169,16 +179,17 @@ mod tests {
     struct EmptyCatalog;
 
     impl ControlCatalog for EmptyCatalog {
-        fn kind(&self, _kind: &ControlKind) -> Option<&ControlKindDesc> {
+        fn kind(&self, _kind: &str) -> Option<&ControlKindDesc> {
             None
         }
     }
 
-    fn control(id: &str, size: SizeSpec) -> ExpandedNode {
+    fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {
+        let origin = SourceUri("size-test.ron".to_owned());
         ExpandedNode::Control {
-            path: id.to_owned(),
-            id: NodeId(id.to_owned()),
-            kind: ControlKind("test".to_owned()),
+            path: interner.intern(id, &origin).unwrap(),
+            id: interner.intern(id, &origin).unwrap(),
+            kind: interner.intern("test", &origin).unwrap(),
             props: BTreeMap::new(),
             read: None,
             write: None,
@@ -210,16 +221,17 @@ mod tests {
 
     #[kithara::test]
     fn row_sums_width_and_maximizes_height() {
+        let mut interner = Interner::new(1024);
         let node = ExpandedNode::Row {
             id: None,
             children: vec![
-                control("left", fixed(10.0, 4.0)),
-                control("right", fixed(6.0, 8.0)),
+                control(&mut interner, "left", fixed(10.0, 4.0)),
+                control(&mut interner, "right", fixed(6.0, 8.0)),
             ],
             size: None,
         };
 
-        let size = compute_size(&node, &EmptyCatalog);
+        let size = compute_size(&node, &EmptyCatalog, &interner);
 
         assert_eq!(size.w.min(), 16.0);
         assert_eq!(size.h.min(), 8.0);
@@ -227,16 +239,17 @@ mod tests {
 
     #[kithara::test]
     fn column_maximizes_width_and_sums_height() {
+        let mut interner = Interner::new(1024);
         let node = ExpandedNode::Column {
             id: None,
             children: vec![
-                control("top", fixed(10.0, 4.0)),
-                control("bottom", fixed(6.0, 8.0)),
+                control(&mut interner, "top", fixed(10.0, 4.0)),
+                control(&mut interner, "bottom", fixed(6.0, 8.0)),
             ],
             size: None,
         };
 
-        let size = compute_size(&node, &EmptyCatalog);
+        let size = compute_size(&node, &EmptyCatalog, &interner);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.h.min(), 12.0);
@@ -244,28 +257,34 @@ mod tests {
 
     #[kithara::test]
     fn node_override_wins_over_composed_size() {
+        let mut interner = Interner::new(1024);
         let override_size = fixed(100.0, 50.0);
         let node = ExpandedNode::Row {
             id: None,
-            children: vec![control("child", fixed(10.0, 10.0))],
+            children: vec![control(&mut interner, "child", fixed(10.0, 10.0))],
             size: Some(override_size),
         };
 
-        assert_eq!(compute_size(&node, &EmptyCatalog), override_size);
+        assert_eq!(compute_size(&node, &EmptyCatalog, &interner), override_size);
     }
 
     #[kithara::test]
     fn fill_child_opens_row_width() {
+        let mut interner = Interner::new(1024);
         let node = ExpandedNode::Row {
             id: None,
             children: vec![
-                control("fixed", fixed(10.0, 10.0)),
-                control("fill", SizeSpec::new(Dim::Fill, Dim::Fixed(10.0))),
+                control(&mut interner, "fixed", fixed(10.0, 10.0)),
+                control(
+                    &mut interner,
+                    "fill",
+                    SizeSpec::new(Dim::Fill, Dim::Fixed(10.0)),
+                ),
             ],
             size: None,
         };
 
-        let size = compute_size(&node, &EmptyCatalog);
+        let size = compute_size(&node, &EmptyCatalog, &interner);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.w.max(), None);

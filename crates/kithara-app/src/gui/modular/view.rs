@@ -8,7 +8,10 @@ use iced::{
         row, text,
     },
 };
-use kithara_ui::{compile::CompiledNode, layout::Axis};
+use kithara_ui::{
+    compile::{CompiledNode, CompiledUi},
+    layout::Axis,
+};
 use num_traits::cast::AsPrimitive;
 
 use super::{ModularMsg, controls, filter};
@@ -22,7 +25,7 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     let body = state.modular.compiled.as_ref().map_or_else(
         || empty_state(state),
         |compiled| {
-            filter::visible(&compiled.root, &state.modular.hidden).map_or_else(
+            filter::visible(&compiled.root, &state.modular.hidden, compiled).map_or_else(
                 || {
                     text("All modules are hidden")
                         .font(fonts::SANS)
@@ -30,7 +33,7 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
                         .color(p.muted)
                         .into()
                 },
-                |root| render_compiled(state, &root),
+                |root| render_compiled(state, &root, compiled),
             )
         },
     );
@@ -91,11 +94,15 @@ fn empty_state(state: &Kithara) -> Element<'_, Message> {
         .into()
 }
 
-fn render_compiled<'a>(state: &'a Kithara, node: &CompiledNode) -> Element<'a, Message> {
+fn render_compiled<'a>(
+    state: &'a Kithara,
+    node: &CompiledNode,
+    ui: &'a CompiledUi,
+) -> Element<'a, Message> {
     match node {
         CompiledNode::Split { axis, children, .. } => match axis {
             Axis::Horizontal => Row::with_children(children.iter().map(|(weight, child)| {
-                container(render_compiled(state, child))
+                container(render_compiled(state, child, ui))
                     .width(Length::FillPortion(fill_portion(*weight)))
                     .height(Length::Fill)
                     .into()
@@ -105,7 +112,7 @@ fn render_compiled<'a>(state: &'a Kithara, node: &CompiledNode) -> Element<'a, M
             .height(Length::Fill)
             .into(),
             Axis::Vertical => Column::with_children(children.iter().map(|(weight, child)| {
-                container(render_compiled(state, child))
+                container(render_compiled(state, child, ui))
                     .width(Length::Fill)
                     .height(Length::FillPortion(fill_portion(*weight)))
                     .into()
@@ -118,7 +125,7 @@ fn render_compiled<'a>(state: &'a Kithara, node: &CompiledNode) -> Element<'a, M
         },
         CompiledNode::Module { root, .. } => {
             let p = state.palette;
-            container(controls::render_node(state, root))
+            container(controls::render_node(state, root, ui))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .padding(8)

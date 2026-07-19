@@ -59,7 +59,7 @@ pub enum ControlNode {
         #[serde(default)]
         size: Option<SizeSpec>,
         #[serde(default)]
-        props: BTreeMap<String, PropValue>,
+        props: BTreeMap<String, PropValue<String>>,
         #[serde(default)]
         read: Option<BindingRef>,
         #[serde(default)]
@@ -71,10 +71,10 @@ pub enum ControlNode {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[non_exhaustive]
-pub enum PropValue {
+pub enum PropValue<S = String> {
     Bool(bool),
     Num(f64),
-    Text(String),
+    Text(S),
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

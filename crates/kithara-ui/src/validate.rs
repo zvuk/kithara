@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     error::UiDocError,
-    expand::ExpandedNode,
+    expand::ControlSite,
     ids::{ControlKind, EndpointId, SourceUri},
     layout::{LayoutDoc, LayoutNode},
     module::{BindingRef, ControlNode, ModuleDoc, PropValue},
@@ -153,59 +153,40 @@ fn walk_module(
 }
 
 pub(crate) fn check_controls(
-    root: &ExpandedNode,
+    site: ControlSite<'_>,
     origin: &SourceUri,
     catalog: &dyn ControlCatalog,
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
-    match root {
-        ExpandedNode::Row { children, .. }
-        | ExpandedNode::Column { children, .. }
-        | ExpandedNode::Slot { children, .. } => {
-            for child in children {
-                check_controls(child, origin, catalog, endpoints)?;
-            }
-            Ok(())
-        }
-        ExpandedNode::Control {
-            path,
-            kind,
-            props,
-            read,
-            write,
-            ..
-        } => {
-            let Some(description) = catalog.kind(kind) else {
-                return Err(UiDocError::UnknownControlKind {
-                    origin: origin.clone(),
-                    kind: kind.0.clone(),
-                    path: path.clone(),
-                });
-            };
-            check_props(description, kind, props, path, origin)?;
-            if let Some(binding) = read {
-                check_binding(
-                    binding,
-                    BindingSide::Read,
-                    description,
-                    path,
-                    origin,
-                    endpoints,
-                )?;
-            }
-            if let Some(binding) = write {
-                check_binding(
-                    binding,
-                    BindingSide::Write,
-                    description,
-                    path,
-                    origin,
-                    endpoints,
-                )?;
-            }
-            Ok(())
-        }
+    let Some(description) = catalog.kind(&site.kind.0) else {
+        return Err(UiDocError::UnknownControlKind {
+            origin: origin.clone(),
+            kind: site.kind.0.clone(),
+            path: site.path.to_owned(),
+        });
+    };
+    check_props(description, site.kind, site.props, site.path, origin)?;
+    if let Some(binding) = site.read {
+        check_binding(
+            binding,
+            BindingSide::Read,
+            description,
+            site.path,
+            origin,
+            endpoints,
+        )?;
     }
+    if let Some(binding) = site.write {
+        check_binding(
+            binding,
+            BindingSide::Write,
+            description,
+            site.path,
+            origin,
+            endpoints,
+        )?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -214,7 +195,7 @@ enum BindingSide {
     Write,
 }
 
-fn prop_kind_of(value: &PropValue) -> PropKind {
+fn prop_kind_of(value: &PropValue<String>) -> PropKind {
     match value {
         PropValue::Bool(_) => PropKind::Bool,
         PropValue::Num(_) => PropKind::Num,
@@ -225,7 +206,7 @@ fn prop_kind_of(value: &PropValue) -> PropKind {
 fn check_props(
     description: &ControlKindDesc,
     kind: &ControlKind,
-    props: &BTreeMap<String, PropValue>,
+    props: &BTreeMap<String, PropValue<String>>,
     path: &str,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
@@ -350,10 +331,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        expand::ExpandedNode,
-        ids::{ControlKind, EndpointId, NodeId, SourceUri},
+        ids::{ControlKind, EndpointId, SourceUri},
         layout::parse_layout,
-        module::{AdaptivePolicy, BindingRef, parse_module},
+        module::{BindingRef, parse_module},
         registry::{
             ControlCatalog, ControlKindDesc, EndpointCategory, EndpointDesc, EndpointRegistry,
             PropKind, ValueKind,
@@ -372,7 +352,7 @@ mod tests {
     }
 
     impl ControlCatalog for TestCatalog {
-        fn kind(&self, kind: &ControlKind) -> Option<&ControlKindDesc> {
+        fn kind(&self, kind: &str) -> Option<&ControlKindDesc> {
             self.kinds.get(kind)
         }
     }
@@ -502,17 +482,21 @@ mod tests {
         check_module_node_ids(&doc, &origin()).unwrap();
     }
 
-    fn button_control(write: BindingRef) -> ExpandedNode {
-        ExpandedNode::Control {
-            path: "play".into(),
-            id: NodeId("play".into()),
-            kind: ControlKind("button".into()),
-            size: None,
-            props: BTreeMap::new(),
-            read: None,
-            write: Some(write),
-            adaptive: AdaptivePolicy::default(),
-        }
+    fn check_control(kind: &str, path: &str, write: Option<&BindingRef>) -> Result<(), UiDocError> {
+        let kind = ControlKind(kind.to_owned());
+        let props = BTreeMap::new();
+        check_controls(
+            ControlSite {
+                path,
+                kind: &kind,
+                props: &props,
+                read: None,
+                write,
+            },
+            &origin(),
+            &catalog(),
+            &registry(),
+        )
     }
 
     fn catalog() -> TestCatalog {
@@ -550,20 +534,20 @@ mod tests {
 
     #[kithara::test]
     fn valid_command_binding_passes() {
-        let node = button_control(BindingRef::Command {
+        let binding = BindingRef::Command {
             id: EndpointId("deck.transport.toggle_play".into()),
             with: with_deck(),
-        });
-        check_controls(&node, &origin(), &catalog(), &registry()).unwrap();
+        };
+        check_control("button", "play", Some(&binding)).unwrap();
     }
 
     #[kithara::test]
     fn missing_scope_is_reported() {
-        let node = button_control(BindingRef::Command {
+        let binding = BindingRef::Command {
             id: EndpointId("deck.transport.toggle_play".into()),
             with: BTreeMap::new(),
-        });
-        let error = check_controls(&node, &origin(), &catalog(), &registry()).unwrap_err();
+        };
+        let error = check_control("button", "play", Some(&binding)).unwrap_err();
         assert!(matches!(
             error,
             UiDocError::MissingScope { scope, .. } if scope == "deck"
@@ -574,11 +558,11 @@ mod tests {
     fn undeclared_command_scope_is_reported() {
         let mut with = with_deck();
         with.insert("sidechain".to_owned(), "1".to_owned());
-        let node = button_control(BindingRef::Command {
+        let binding = BindingRef::Command {
             id: EndpointId("deck.transport.toggle_play".into()),
             with,
-        });
-        let error = check_controls(&node, &origin(), &catalog(), &registry()).unwrap_err();
+        };
+        let error = check_control("button", "play", Some(&binding)).unwrap_err();
         assert!(matches!(
             error,
             UiDocError::UnknownScope {
@@ -592,20 +576,11 @@ mod tests {
 
     #[kithara::test]
     fn scope_on_unscoped_parameter_is_reported() {
-        let node = ExpandedNode::Control {
-            path: "volume".into(),
-            id: NodeId("volume".into()),
-            kind: ControlKind("fader".into()),
-            size: None,
-            props: BTreeMap::new(),
-            read: None,
-            write: Some(BindingRef::Parameter {
-                id: EndpointId("player.output.volume".into()),
-                with: with_deck(),
-            }),
-            adaptive: AdaptivePolicy::default(),
+        let binding = BindingRef::Parameter {
+            id: EndpointId("player.output.volume".into()),
+            with: with_deck(),
         };
-        let error = check_controls(&node, &origin(), &catalog(), &registry()).unwrap_err();
+        let error = check_control("fader", "volume", Some(&binding)).unwrap_err();
         assert!(matches!(
             error,
             UiDocError::UnknownScope {
@@ -619,27 +594,17 @@ mod tests {
 
     #[kithara::test]
     fn model_binding_on_write_side_is_direction_error() {
-        let node = button_control(BindingRef::Model {
+        let binding = BindingRef::Model {
             id: EndpointId("library.visible_tracks".into()),
             with: BTreeMap::new(),
-        });
-        let error = check_controls(&node, &origin(), &catalog(), &registry()).unwrap_err();
+        };
+        let error = check_control("button", "play", Some(&binding)).unwrap_err();
         assert!(matches!(error, UiDocError::BindingDirection { .. }));
     }
 
     #[kithara::test]
     fn unknown_kind_is_reported_with_path() {
-        let node = ExpandedNode::Control {
-            path: "unknown".into(),
-            id: NodeId("unknown".into()),
-            kind: ControlKind("nope".into()),
-            size: None,
-            props: BTreeMap::new(),
-            read: None,
-            write: None,
-            adaptive: AdaptivePolicy::default(),
-        };
-        let error = check_controls(&node, &origin(), &catalog(), &registry()).unwrap_err();
+        let error = check_control("nope", "unknown", None).unwrap_err();
         assert!(matches!(
             error,
             UiDocError::UnknownControlKind { kind, path, .. }

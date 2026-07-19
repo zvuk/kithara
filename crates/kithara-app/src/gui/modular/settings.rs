@@ -9,7 +9,10 @@ use iced::{
         scrollable, text,
     },
 };
-use kithara_ui::{builtin, compile::CompiledNode};
+use kithara_ui::{
+    builtin,
+    compile::{CompiledNode, CompiledUi},
+};
 
 use super::ModularMsg;
 use crate::{
@@ -160,20 +163,22 @@ fn section_title(p: GuiPalette, label: &'static str) -> Element<'static, Message
         .into()
 }
 
-fn module_instances(compiled: &kithara_ui::compile::CompiledUi) -> Vec<String> {
+fn module_instances(compiled: &CompiledUi) -> Vec<String> {
     let mut instances = Vec::new();
-    collect_modules(&compiled.root, &mut instances);
+    collect_modules(&compiled.root, compiled, &mut instances);
     instances
 }
 
-fn collect_modules(node: &CompiledNode, instances: &mut Vec<String>) {
+fn collect_modules(node: &CompiledNode, ui: &CompiledUi, instances: &mut Vec<String>) {
     match node {
         CompiledNode::Split { children, .. } => {
             for (_, child) in children {
-                collect_modules(child, instances);
+                collect_modules(child, ui, instances);
             }
         }
-        CompiledNode::Module { instance, .. } => instances.push(instance.0.clone()),
+        CompiledNode::Module { instance, .. } => {
+            instances.push(ui.resolve(*instance).to_owned());
+        }
         _ => {}
     }
 }

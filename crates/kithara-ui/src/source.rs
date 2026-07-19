@@ -28,15 +28,15 @@ impl Default for Limits {
     }
 }
 
-/// Canonical compile configuration. Owns the safety [`Limits`]; the extension
-/// point for future compile knobs (a config-sized string arena budget lands
-/// once its owner-review question is settled).
+/// Canonical compile configuration and its resource limits.
 #[derive(Builder, Clone, Debug)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct UiConfig {
     #[builder(default)]
     pub limits: Limits,
+    #[builder(default = 64 * 1024)]
+    pub max_arena_bytes: usize,
 }
 
 impl Default for UiConfig {

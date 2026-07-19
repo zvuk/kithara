@@ -1,8 +1,7 @@
 use kithara_ui::{
     compile::{CompiledNode, CompiledUi},
-    expand::ExpandedNode,
-    ids::ControlKind,
-    module::BindingRef,
+    expand::{Binding, ExpandedNode},
+    ids::InternId,
 };
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -16,19 +15,22 @@ use crate::gui::{
     },
 };
 
-struct ControlRef<'a> {
-    kind: &'a ControlKind,
-    write: Option<&'a BindingRef>,
+#[derive(Debug)]
+enum ResolvedWrite {
+    Command { id: String, deck_is_a: bool },
+    Parameter { id: String },
 }
 
 pub(super) fn apply(state: &mut Kithara, path: &str, action: &ControlAction) {
-    let Some((kind, write)) = state
-        .modular
-        .compiled
-        .as_ref()
-        .and_then(|compiled| find_control(compiled, path))
-        .map(|control| (control.kind.0.clone(), control.write.cloned()))
-    else {
+    let resolved = state.modular.compiled.as_ref().and_then(|compiled| {
+        let (kind, write) = find_control(compiled, path)?;
+        let kind = compiled.resolve(kind).to_owned();
+        let write = write
+            .as_ref()
+            .and_then(|binding| resolve_write(binding, compiled));
+        Some((kind, write))
+    });
+    let Some((kind, write)) = resolved else {
         warn!(path, ?action, "modular control path not found");
         return;
     };
@@ -62,38 +64,38 @@ fn apply_track_action(state: &mut Kithara, path: &str, action: &ControlAction) {
 fn apply_binding(
     state: &mut Kithara,
     path: &str,
-    binding: &BindingRef,
+    binding: &ResolvedWrite,
     action: &ControlAction,
 ) -> bool {
     match (binding, action) {
-        (BindingRef::Command { id, with }, ControlAction::Activate)
-            if id.0 == "deck.transport.toggle_play" && deck_is_a(with) =>
+        (ResolvedWrite::Command { id, deck_is_a }, ControlAction::Activate)
+            if id == "deck.transport.toggle_play" && *deck_is_a =>
         {
             handle_toggle_play_pause(state);
             true
         }
-        (BindingRef::Command { id, with }, ControlAction::Activate)
-            if id.0 == "deck.transport.prev" && deck_is_a(with) =>
+        (ResolvedWrite::Command { id, deck_is_a }, ControlAction::Activate)
+            if id == "deck.transport.prev" && *deck_is_a =>
         {
             handle_prev(state);
             true
         }
-        (BindingRef::Command { id, with }, ControlAction::Activate)
-            if id.0 == "deck.transport.next" && deck_is_a(with) =>
+        (ResolvedWrite::Command { id, deck_is_a }, ControlAction::Activate)
+            if id == "deck.transport.next" && *deck_is_a =>
         {
             handle_next(state);
             true
         }
-        (BindingRef::Command { id, with }, ControlAction::SetScalar(value))
-            if id.0 == "deck.transport.seek_normalized" && deck_is_a(with) =>
+        (ResolvedWrite::Command { id, deck_is_a }, ControlAction::SetScalar(value))
+            if id == "deck.transport.seek_normalized" && *deck_is_a =>
         {
             if state.ui_state.duration > 0.0 {
                 handle_seek_to(state, value * state.ui_state.duration);
             }
             true
         }
-        (BindingRef::Parameter { id, .. }, ControlAction::SetScalar(value))
-            if id.0 == "player.output.volume" =>
+        (ResolvedWrite::Parameter { id }, ControlAction::SetScalar(value))
+            if id == "player.output.volume" =>
         {
             let Some(volume) = value.to_f32() else {
                 warn!(path, value, "modular scalar cannot be represented as f32");
@@ -109,40 +111,54 @@ fn apply_binding(
     }
 }
 
-fn deck_is_a(scope: &std::collections::BTreeMap<String, String>) -> bool {
-    scope.get("deck").is_some_and(|deck| deck == "a")
-}
-
-fn find_control<'a>(compiled: &'a CompiledUi, path: &str) -> Option<ControlRef<'a>> {
-    find_compiled_node(&compiled.root, path)
-}
-
-fn find_compiled_node<'a>(node: &'a CompiledNode, path: &str) -> Option<ControlRef<'a>> {
-    match node {
-        CompiledNode::Split { children, .. } => children
-            .iter()
-            .find_map(|(_, child)| find_compiled_node(child, path)),
-        CompiledNode::Module { root, .. } => find_expanded_node(root, path),
+fn resolve_write(binding: &Binding, ui: &CompiledUi) -> Option<ResolvedWrite> {
+    match binding {
+        Binding::Command { id, with } => Some(ResolvedWrite::Command {
+            id: ui.resolve(*id).to_owned(),
+            deck_is_a: super::reads::deck_is_a(with, ui),
+        }),
+        Binding::Parameter { id, .. } => Some(ResolvedWrite::Parameter {
+            id: ui.resolve(*id).to_owned(),
+        }),
         _ => None,
     }
 }
 
-fn find_expanded_node<'a>(node: &'a ExpandedNode, path: &str) -> Option<ControlRef<'a>> {
+fn find_control(compiled: &CompiledUi, path: &str) -> Option<(InternId, Option<Binding>)> {
+    find_compiled_node(&compiled.root, path, compiled)
+}
+
+fn find_compiled_node(
+    node: &CompiledNode,
+    path: &str,
+    ui: &CompiledUi,
+) -> Option<(InternId, Option<Binding>)> {
+    match node {
+        CompiledNode::Split { children, .. } => children
+            .iter()
+            .find_map(|(_, child)| find_compiled_node(child, path, ui)),
+        CompiledNode::Module { root, .. } => find_expanded_node(root, path, ui),
+        _ => None,
+    }
+}
+
+fn find_expanded_node(
+    node: &ExpandedNode,
+    path: &str,
+    ui: &CompiledUi,
+) -> Option<(InternId, Option<Binding>)> {
     match node {
         ExpandedNode::Row { children, .. }
         | ExpandedNode::Column { children, .. }
         | ExpandedNode::Slot { children, .. } => children
             .iter()
-            .find_map(|child| find_expanded_node(child, path)),
+            .find_map(|child| find_expanded_node(child, path, ui)),
         ExpandedNode::Control {
             path: control_path,
             kind,
             write,
             ..
-        } if control_path == path => Some(ControlRef {
-            kind,
-            write: write.as_ref(),
-        }),
+        } if ui.resolve(*control_path) == path => Some((*kind, write.clone())),
         _ => None,
     }
 }
@@ -152,7 +168,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_ui::{
         compile::compile,
-        module::BindingRef,
+        expand::Binding,
         source::{MemResolver, UiConfig},
     };
 
@@ -206,10 +222,10 @@ mod tests {
 
         let control = find_control(&compiled, "deck-a/play")
             .unwrap_or_else(|| panic!("compiled control path must resolve"));
-        let Some(BindingRef::Command { id, .. }) = control.write else {
+        let Some(Binding::Command { id, .. }) = control.1 else {
             panic!("play control must have a command binding");
         };
-        assert_eq!(id.0, "deck.transport.toggle_play");
+        assert_eq!(compiled.resolve(id), "deck.transport.toggle_play");
         assert!(find_control(&compiled, "deck-a/missing").is_none());
     }
 }

@@ -1,8 +1,12 @@
 use std::collections::BTreeSet;
 
-use kithara_ui::compile::CompiledNode;
+use kithara_ui::compile::{CompiledNode, CompiledUi};
 
-pub(super) fn visible(node: &CompiledNode, hidden: &BTreeSet<String>) -> Option<CompiledNode> {
+pub(super) fn visible(
+    node: &CompiledNode,
+    hidden: &BTreeSet<String>,
+    ui: &CompiledUi,
+) -> Option<CompiledNode> {
     match node {
         CompiledNode::Split {
             axis,
@@ -11,7 +15,9 @@ pub(super) fn visible(node: &CompiledNode, hidden: &BTreeSet<String>) -> Option<
         } => {
             let children = children
                 .iter()
-                .filter_map(|(weight, child)| visible(child, hidden).map(|child| (*weight, child)))
+                .filter_map(|(weight, child)| {
+                    visible(child, hidden, ui).map(|child| (*weight, child))
+                })
                 .collect::<Vec<_>>();
             (!children.is_empty()).then_some(CompiledNode::Split {
                 children,
@@ -19,7 +25,7 @@ pub(super) fn visible(node: &CompiledNode, hidden: &BTreeSet<String>) -> Option<
                 size: *size,
             })
         }
-        CompiledNode::Module { instance, .. } if hidden.contains(&instance.0) => None,
+        CompiledNode::Module { instance, .. } if hidden.contains(ui.resolve(*instance)) => None,
         _ => Some(node.clone()),
     }
 }
@@ -53,7 +59,7 @@ mod tests {
     fn hides_one_of_two_modules() {
         let compiled = compile_player();
         let hidden = BTreeSet::from(["library".to_owned()]);
-        let filtered = visible(&compiled.root, &hidden)
+        let filtered = visible(&compiled.root, &hidden, &compiled)
             .unwrap_or_else(|| panic!("deck module must remain visible"));
 
         let CompiledNode::Split { children, .. } = filtered else {
@@ -62,7 +68,7 @@ mod tests {
         assert_eq!(children.len(), 1);
         assert!(matches!(
             &children[0].1,
-            CompiledNode::Module { instance, .. } if instance.0 == "deck-a"
+            CompiledNode::Module { instance, .. } if compiled.resolve(*instance) == "deck-a"
         ));
     }
 
@@ -71,7 +77,7 @@ mod tests {
         let compiled = compile_player();
         let hidden = BTreeSet::from(["deck-a".to_owned(), "library".to_owned()]);
 
-        assert!(visible(&compiled.root, &hidden).is_none());
+        assert!(visible(&compiled.root, &hidden, &compiled).is_none());
     }
 
     #[kithara::test]
@@ -112,8 +118,12 @@ mod tests {
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("nested layout must compile: {error}"));
-        let filtered = visible(&compiled.root, &BTreeSet::from(["deck-a".to_owned()]))
-            .unwrap_or_else(|| panic!("library module must remain visible"));
+        let filtered = visible(
+            &compiled.root,
+            &BTreeSet::from(["deck-a".to_owned()]),
+            &compiled,
+        )
+        .unwrap_or_else(|| panic!("library module must remain visible"));
 
         let CompiledNode::Split { children, .. } = filtered else {
             panic!("outer split must remain");
@@ -121,7 +131,7 @@ mod tests {
         assert_eq!(children.len(), 1);
         assert!(matches!(
             &children[0].1,
-            CompiledNode::Module { instance, .. } if instance.0 == "library"
+            CompiledNode::Module { instance, .. } if compiled.resolve(*instance) == "library"
         ));
     }
 }
