@@ -822,4 +822,35 @@ mod tests {
         assert!(renderer.pending_retirements.is_empty());
         assert!(!renderer.pending_retirements.spilled());
     }
+
+    #[kithara::test]
+    fn pending_relocation_rejects_replacement_and_retains_ready_samples() {
+        let pool = PcmPool::default();
+        let mut renderer = renderer(&pool);
+        let binding = binding(PlaybackDirection::Forward);
+        let tempo = Tempo::new(120.0).expect("valid tempo");
+        let first = SessionBeat::new(1.0).expect("finite first target");
+        let second = SessionBeat::new(2.0).expect("finite second target");
+        renderer
+            .begin_relocation(&binding, first, tempo, 7)
+            .expect("first relocation begins");
+        renderer
+            .relocation
+            .as_mut()
+            .expect("first relocation is retained")
+            .samples = Some(pool.get());
+
+        let error = renderer
+            .begin_relocation(&binding, second, tempo, 8)
+            .expect_err("second relocation is rejected");
+
+        assert!(matches!(error, ElasticPrepareError::RelocationPending));
+        let relocation = renderer
+            .relocation
+            .as_ref()
+            .expect("first relocation remains pending");
+        assert_eq!(relocation.revision, 7);
+        assert_eq!(relocation.target, first);
+        assert!(relocation.samples.is_some());
+    }
 }

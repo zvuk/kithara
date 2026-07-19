@@ -246,6 +246,9 @@ impl ElasticRenderer {
         {
             return Err(ElasticPrepareError::ReverseUnsupported);
         }
+        if self.relocation.is_some() {
+            return Err(ElasticPrepareError::RelocationPending);
+        }
         let preparation =
             self.plan_preparation(binding, target, tempo, Self::RELOCATION_PREFETCH_BLOCKS)?;
         self.pending_relocation_request = None;

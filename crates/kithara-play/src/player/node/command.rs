@@ -59,6 +59,12 @@ impl PlayerNodeProcessor {
     }
 
     fn begin_session_seek(&mut self, target: SessionBeat, tempo: Tempo, revision: u64) {
+        if self.session_seek.is_some() {
+            self.playback
+                .session_seek_failed
+                .store(revision, Ordering::SeqCst);
+            return;
+        }
         self.session_seek = Some((revision, target));
         let leading_count = self
             .tracks

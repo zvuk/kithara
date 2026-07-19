@@ -465,6 +465,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        api::Tempo,
         bridge::{PlayerCmd, SharedEq, SlotControl, slot_channels},
         player::track::PlayerResource,
         test_support::empty_resource,
@@ -559,6 +560,56 @@ mod tests {
                 .session_seek_prepared
                 .load(Ordering::SeqCst),
             0
+        );
+    }
+
+    #[kithara::test]
+    fn second_session_seek_prepare_does_not_replace_the_pending_owner() {
+        let (mut processor, mut control) = processor_and_control();
+        let src: Arc<str> = Arc::from("concurrent-seek.wav");
+        control
+            .cmd_tx
+            .try_push(load(&src))
+            .expect("load command fits");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+                &src,
+            ))))
+            .expect("transition command fits");
+        processor.drain_commands();
+
+        let first = SessionBeat::new(1.0).expect("finite first target");
+        let second = SessionBeat::new(2.0).expect("finite second target");
+        let tempo = Tempo::new(120.0).expect("valid tempo");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::PrepareSessionSeek {
+                target: first,
+                tempo,
+                revision: 7,
+            })
+            .expect("first prepare command fits");
+        processor.drain_commands();
+        assert_eq!(processor.session_seek, Some((7, first)));
+
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::PrepareSessionSeek {
+                target: second,
+                tempo,
+                revision: 7,
+            })
+            .expect("second prepare command fits");
+        processor.drain_commands();
+
+        assert_eq!(processor.session_seek, Some((7, first)));
+        assert_eq!(
+            processor
+                .playback
+                .session_seek_failed
+                .load(Ordering::SeqCst),
+            7
         );
     }
 
