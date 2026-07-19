@@ -107,12 +107,12 @@ fn render_button<'a>(
     let Some(label) = text_prop(props, "label", ui) else {
         return Space::new().into();
     };
-    let Some(ReadValue::Bool(active)) = value else {
-        return Space::new().into();
-    };
+    // The read binding is optional accent state: a bound `true` highlights the
+    // button; an unbound command button still renders and stays pressable.
+    let active = matches!(value, Some(ReadValue::Bool(true)));
     button(text(label.to_owned()).font(fonts::SANS).size(13.0))
         .padding([6, 10])
-        .style(control_button_style(p, *active))
+        .style(control_button_style(p, active))
         .on_press(Message::Modular(ModularMsg::Control {
             path: path.to_owned(),
             action: ControlAction::Activate,
