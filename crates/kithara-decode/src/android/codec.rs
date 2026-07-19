@@ -206,9 +206,19 @@ fn build_format(
         )
     })?;
     let channels = i32::from(track.channels);
-    format.set_i32(KEY_SAMPLE_RATE, sample_rate);
-    format.set_i32(KEY_CHANNEL_COUNT, channels);
-    format.set_i32(KEY_PCM_ENCODING, PCM_ENCODING_16BIT);
+    if !format.set_i32(KEY_SAMPLE_RATE, sample_rate) {
+        return Err(AndroidBackendError::operation(
+            "media-format-set-sample-rate",
+            format!("rate={sample_rate}"),
+        ));
+    }
+    if !format.set_i32(KEY_CHANNEL_COUNT, channels) {
+        return Err(AndroidBackendError::operation(
+            "media-format-set-channels",
+            format!("channels={channels}"),
+        ));
+    }
+    let _ = format.set_i32(KEY_PCM_ENCODING, PCM_ENCODING_16BIT);
 
     if !track.extra_data.is_empty() {
         // SAFETY: format is live; extra_data is a readable byte slice.

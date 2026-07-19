@@ -623,17 +623,17 @@ async fn test_range_on_non_range_supporting_server(
 
 #[kithara::test(
     tokio,
-    timeout(Duration::from_secs(5)),
+    timeout(Duration::from_secs(1)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn test_unreachable_url(http_client: HttpClient) {
-    let url = Url::parse("http://127.0.0.1:0/invalid").unwrap();
+async fn test_invalid_url(http_client: HttpClient) {
+    let url = Url::parse("http://192.0.2.1:9999/invalid").unwrap();
 
     let client = http_client.with_timeout(Duration::from_millis(100));
 
     let result = client.get_bytes(url, None).await;
 
-    assert!(result.is_err(), "Should fail for unreachable URL");
+    assert!(result.is_err(), "Should fail for invalid URL");
     let error = result.err().unwrap();
 
     let is_acceptable_error = matches!(&error, NetError::Timeout | NetError::Network(_));

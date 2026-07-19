@@ -69,8 +69,8 @@ impl OwnedFormat {
         self.raw.as_ptr()
     }
 
-    pub(crate) fn set_i32(&mut self, key: &CStr, value: i32) {
-        unsafe { ffi::AMediaFormat_setInt32(self.raw(), key.as_ptr(), value) };
+    pub(crate) fn set_i32(&mut self, key: &CStr, value: i32) -> bool {
+        unsafe { ffi::AMediaFormat_setInt32(self.raw(), key.as_ptr(), value) }
     }
 }
 
