@@ -1,9 +1,12 @@
+use std::ops::Range;
+
 use kithara_audio::ServiceClass;
 
-use super::PlayerResource;
+use super::{PlayerResource, ReadOutcome};
 use crate::{
     api::{SessionBeat, Tempo, TrackBinding},
     error::PlayError,
+    session::render::RenderContext,
 };
 
 pub(crate) struct PreparedElasticRenderer {
@@ -19,6 +22,16 @@ impl PreparedElasticRenderer {
 }
 
 impl PlayerResource {
+    pub(crate) fn read_elastic(
+        &mut self,
+        _binding: &TrackBinding,
+        _context: &RenderContext,
+        _range: Range<usize>,
+        _output: &mut [&mut [f32]],
+    ) -> ReadOutcome {
+        ReadOutcome::Failed
+    }
+
     pub(crate) fn begin_session_seek(
         &mut self,
         _binding: &TrackBinding,

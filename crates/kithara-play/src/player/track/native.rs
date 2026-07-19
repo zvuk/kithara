@@ -9,7 +9,7 @@ use kithara_decode::DecodeError;
 use kithara_platform::{CancelToken, maybe_send::WasmSend, sync::Arc, time::Duration};
 use num_traits::cast::AsPrimitive;
 
-use super::PlayerResource;
+use super::{PlayerResource, ReadOutcome};
 use crate::{
     api::{SessionBeat, Tempo, TrackBinding},
     error::PlayError,
@@ -17,8 +17,8 @@ use crate::{
         node::StreamShape,
         track::{
             elastic_renderer::{
-                ElasticPreparationOutcome, ElasticPrepareError, ElasticRenderError,
-                ElasticRenderOutcome, ElasticRenderer,
+                ElasticPreparationOutcome, ElasticPrepareError, ElasticRenderOutcome,
+                ElasticRenderer,
             },
             elastic_source::spawn_elastic_source,
         },
@@ -322,25 +322,32 @@ impl PlayerResource {
             .activate(cancel, pool)
     }
 
-    pub(crate) fn render_elastic(
+    pub(crate) fn read_elastic(
         &mut self,
         binding: &TrackBinding,
         context: &RenderContext,
         range: Range<usize>,
         output: &mut [&mut [f32]],
-    ) -> Result<ElasticRenderOutcome, ElasticRenderError> {
+    ) -> ReadOutcome {
+        let requested_frames = range.len();
         let Some(mut renderer) = self.elastic_renderer.take() else {
-            return Err(ElasticRenderError::NotPrepared);
+            return ReadOutcome::Failed;
         };
         if !renderer.is_active() {
             self.elastic_renderer = Some(renderer);
-            return Err(ElasticRenderError::NotPrepared);
+            return ReadOutcome::Failed;
         }
         let outcome = renderer
             .renderer_mut()
             .render(binding, context, range, output);
         self.elastic_renderer = Some(renderer);
-        outcome
+        match outcome {
+            Ok(ElasticRenderOutcome::Ready { frames }) if frames == requested_frames => {
+                ReadOutcome::Full { frames }
+            }
+            Ok(ElasticRenderOutcome::Eof) => ReadOutcome::Eof,
+            Ok(ElasticRenderOutcome::Ready { .. }) | Err(_) => ReadOutcome::Failed,
+        }
     }
 }
 
