@@ -221,6 +221,7 @@ mod tests {
             "mini.klayout.ron",
             &resolver,
             &endpoints::registry(),
+            builtin::skin_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("mini layout must compile: {error}"));

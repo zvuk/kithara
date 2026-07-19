@@ -90,6 +90,7 @@ fn compile_preset(preset: &str) -> Result<CompiledUi, String> {
         preset,
         &builtin::resolver(),
         &endpoints::registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .map_err(|error| error.to_string())

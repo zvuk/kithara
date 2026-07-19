@@ -3,8 +3,9 @@ use kithara::play::StretchControls;
 use kithara_platform::{sync::Arc, tokio};
 use kithara_queue::Queue;
 use kithara_ui::{
+    builtin,
     compile::CompiledUi,
-    render::{RenderPalette, fonts},
+    render::fonts,
     size::{Dim, SizeSpec},
 };
 
@@ -59,13 +60,11 @@ fn axis_settings(dim: Dim, chrome: f32, floor: f32, initial_scale: f32) -> (f32,
 /// GUI frontend using iced.
 pub struct GuiFrontend {
     config: AppConfig,
-    palette: RenderPalette,
 }
 
 impl Frontend for GuiFrontend {
     fn new(config: &AppConfig) -> Result<Self, FrontendError> {
         Ok(Self {
-            palette: config.palette.into(),
             config: config.clone(),
         })
     }
@@ -75,7 +74,6 @@ impl Frontend for GuiFrontend {
         queue: Arc<Queue>,
         timestretch: Arc<StretchControls>,
     ) -> Result<(), FrontendError> {
-        let palette = self.palette;
         let config = self.config.clone();
         let window_sizing = config.window_sizing;
 
@@ -92,7 +90,7 @@ impl Frontend for GuiFrontend {
         ));
 
         let daemon = iced::daemon(
-            move || Kithara::new(Arc::clone(&controller), palette, window_sizing),
+            move || Kithara::new(Arc::clone(&controller), builtin::skin(), window_sizing),
             update::update,
             view::view,
         )
@@ -134,6 +132,7 @@ mod tests {
             builtin::PLAYER_PRESET,
             &builtin::resolver(),
             &endpoints::registry(),
+            builtin::skin_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("player preset must compile: {error}"));
@@ -158,6 +157,7 @@ mod tests {
             builtin::MICRO_PRESET,
             &builtin::resolver(),
             &endpoints::registry(),
+            builtin::skin_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("micro preset must compile: {error}"));

@@ -95,6 +95,7 @@ fn four_deck_layout_instantiates_one_module_file_four_times() {
         "four_deck.klayout.ron",
         &resolver,
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -130,6 +131,7 @@ fn two_deck_layout_compiles() {
         "two_deck.klayout.ron",
         &resolver,
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap();

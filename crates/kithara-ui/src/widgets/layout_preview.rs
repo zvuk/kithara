@@ -9,34 +9,26 @@ use iced::{
 use crate::{
     compile::{CompiledNode, CompiledUi},
     layout::Axis,
-    render::RenderPalette,
+    render::{Skin, theme::RenderPalette},
+    skin::LayoutPreviewSkin,
 };
-
-struct Consts;
-
-impl Consts {
-    const HEIGHT: f32 = 92.0;
-    const LINE_WIDTH: f32 = 1.0;
-    const MODULE_INSET: f32 = 2.0;
-}
 
 /// Renders the split and module geometry of a compiled layout as a small canvas.
 #[must_use]
-pub fn layout_preview<Message: 'static>(
-    ui: &CompiledUi,
-    palette: RenderPalette,
-) -> Element<'static, Message> {
+pub fn layout_preview<Message: 'static>(ui: &CompiledUi, skin: &Skin) -> Element<'static, Message> {
     Canvas::new(Preview {
         geometry: PreviewGeometry::new(&ui.root),
-        palette,
+        metrics: skin.layout_preview,
+        palette: skin.palette,
     })
     .width(Length::Fill)
-    .height(Length::Fixed(Consts::HEIGHT))
+    .height(Length::Fixed(skin.layout_preview.height))
     .into()
 }
 
 struct Preview {
     geometry: PreviewGeometry,
+    metrics: LayoutPreviewSkin,
     palette: RenderPalette,
 }
 
@@ -63,10 +55,10 @@ impl<Message> canvas::Program<Message> for Preview {
             let color = match area.kind {
                 AreaKind::Split => self.palette.line_soft,
                 AreaKind::Module => {
-                    point.x += Consts::MODULE_INSET;
-                    point.y += Consts::MODULE_INSET;
-                    size.width = (size.width - Consts::MODULE_INSET * 2.0).max(0.0);
-                    size.height = (size.height - Consts::MODULE_INSET * 2.0).max(0.0);
+                    point.x += self.metrics.module_inset;
+                    point.y += self.metrics.module_inset;
+                    size.width = (size.width - self.metrics.module_inset * 2.0).max(0.0);
+                    size.height = (size.height - self.metrics.module_inset * 2.0).max(0.0);
                     frame.fill_rectangle(point, size, self.palette.bg_panel);
                     self.palette.line
                 }
@@ -76,7 +68,7 @@ impl<Message> canvas::Program<Message> for Preview {
                 size,
                 Stroke::default()
                     .with_color(color)
-                    .with_width(Consts::LINE_WIDTH),
+                    .with_width(self.metrics.line_width),
             );
         }
 
@@ -239,6 +231,7 @@ mod tests {
                 preset,
                 &builtin::resolver(),
                 &registry,
+                builtin::skin_doc(),
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| panic!("{preset} must compile: {error}"));

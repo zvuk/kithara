@@ -35,6 +35,17 @@ substituted binding before the binding is interned.
 The arena types live in `ids.rs` because they back compiled identifiers and strings, and keeping
 them there preserves the crate's flat-directory budget.
 
+The builtin skin is a compile-time asset; failing fast while initializing its `LazyLock` is the
+sanctioned panic site for an invalid embedded document or color.
+
+## Skin Ownership
+
+`SkinDoc` is the canonical owner of every configurable rendering metric, including intrinsic
+control sizes used by the toolkit-independent compiler. With the `render` feature, `Skin`
+converts the complete document to iced colors while retaining the document for layout sizing.
+The platform-specific monospace family remains code-owned because it describes font resource
+availability rather than skin design.
+
 ## Typed Control Schema
 
 Each supported control is a structural `ControlNode` enum variant. RON deserialization owns field
@@ -43,7 +54,6 @@ kind catalog. Common control fields are repeated in the serde variants because R
 not part of the schema contract.
 
 `validate::value_kinds` is the single owner of control read/write endpoint kinds. Intrinsic sizes
-are selected exhaustively from `ControlSpec` by `size::control_size`; this remains available in
-non-render and wasm builds. `compile` therefore depends only on a source resolver, endpoint
-registry, and UI configuration. Renderers match `ControlSpec` directly and do not resolve a
-runtime control catalog.
+are selected exhaustively from `ControlSpec` and the supplied `SkinDoc` by
+`size::control_size`; this remains available in non-render and wasm builds. Renderers match
+`ControlSpec` directly and do not resolve a runtime control catalog.

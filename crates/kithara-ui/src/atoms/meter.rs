@@ -8,34 +8,24 @@ use iced::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::render::{ControlAction, ReadValue, RenderPalette, StereoLevels, UiEvent};
-
-struct Consts;
-
-impl Consts {
-    const CARRIAGE_WIDTH: f32 = 2.0;
-    const CHANNEL_COUNT: usize = 2;
-    const DANGER_THRESHOLD: f32 = 0.83;
-    const ROW_Y: [f32; Self::CHANNEL_COUNT] = [2.0, 14.0];
-    const SEGMENT_COUNT: usize = 16;
-    const SEGMENT_GAP: f32 = 1.0;
-    const SEGMENT_HEIGHT: f32 = 8.0;
-    const SEGMENT_WIDTH: f32 = 3.0;
-    const WARNING_THRESHOLD: f32 = 0.66;
-}
+use crate::{
+    render::{ControlAction, ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
+    skin::VuStereoSkin,
+};
 
 pub(crate) fn view<'a>(
     path: &str,
     value: Option<&ReadValue<'_>>,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let Some(ReadValue::Stereo(levels)) = value else {
         return Space::new().into();
     };
 
     Canvas::new(StereoMeter {
+        metrics: skin.vu_stereo,
         levels: *levels,
-        palette,
+        palette: skin.palette,
         path: path.to_owned(),
     })
     .width(Length::Fill)
@@ -44,6 +34,7 @@ pub(crate) fn view<'a>(
 }
 
 struct StereoMeter {
+    metrics: VuStereoSkin,
     levels: StereoLevels,
     palette: RenderPalette,
     path: String,
@@ -93,15 +84,15 @@ impl canvas::Program<UiEvent> for StereoMeter {
 
         for (level, y) in [self.levels.l, self.levels.r]
             .into_iter()
-            .zip(Consts::ROW_Y)
+            .zip([self.metrics.channel_l_y, self.metrics.channel_r_y])
         {
-            draw_channel(&mut frame, y, level, self.palette);
+            draw_channel(&mut frame, y, level, self.metrics, self.palette);
         }
 
         let x = self.levels.volume.clamp(0.0, 1.0) * bounds.width;
         frame.fill_rectangle(
             Point::new(x, 0.0),
-            Size::new(Consts::CARRIAGE_WIDTH, bounds.height),
+            Size::new(self.metrics.carriage_width, bounds.height),
             self.palette.accent,
         );
         vec![frame.into_geometry()]
@@ -135,26 +126,32 @@ fn scalar_action(path: &str, bounds: Rectangle, cursor: Cursor) -> Option<Action
     })
 }
 
-fn draw_channel(frame: &mut Frame, y: f32, level: f32, palette: RenderPalette) {
-    let count: f32 = Consts::SEGMENT_COUNT.as_();
+fn draw_channel(
+    frame: &mut Frame,
+    y: f32,
+    level: f32,
+    metrics: VuStereoSkin,
+    palette: RenderPalette,
+) {
+    let count: f32 = metrics.segment_count.as_();
     let lit = (level.clamp(0.0, 1.0) * count).round();
 
-    for index in 0..Consts::SEGMENT_COUNT {
+    for index in 0..metrics.segment_count {
         let index: f32 = index.as_();
-        let x = index * (Consts::SEGMENT_WIDTH + Consts::SEGMENT_GAP);
+        let x = index * (metrics.segment_width + metrics.segment_gap);
         let ratio = index / count;
         let color = if index >= lit {
             palette.bg_inset
-        } else if ratio > Consts::DANGER_THRESHOLD {
+        } else if ratio > metrics.danger_threshold {
             palette.danger
-        } else if ratio > Consts::WARNING_THRESHOLD {
+        } else if ratio > metrics.warning_threshold {
             palette.warning
         } else {
             palette.success
         };
         frame.fill_rectangle(
             Point::new(x, y),
-            Size::new(Consts::SEGMENT_WIDTH, Consts::SEGMENT_HEIGHT),
+            Size::new(metrics.segment_width, metrics.segment_height),
             color,
         );
     }

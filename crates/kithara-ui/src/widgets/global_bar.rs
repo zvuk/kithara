@@ -1,7 +1,6 @@
 use iced::{
-    Alignment, Background, Border, Element, Length, Theme,
+    Alignment, Background, Element, Length, Theme,
     alignment::Vertical,
-    font::Weight,
     widget::{
         Row, Space, button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -11,129 +10,116 @@ use iced::{
     },
 };
 
-use super::chrome;
 use crate::{
     builtin,
-    render::{Icon, ReadValue, Reads, RenderPalette, UiEvent, fonts, shaped_text},
+    render::{Icon, ReadValue, Reads, Skin, UiEvent, fonts, shaped_text},
 };
 
 const BRAND_LETTERS: [&str; 7] = ["K", "I", "T", "H", "A", "R", "A"];
 
-struct Consts;
-
-impl Consts {
-    const BRAND_GAP: f32 = 3.0;
-    const BRAND_PADDING_X: f32 = 13.0;
-    const BRAND_SIZE: f32 = 14.0;
-    const CHIP_GAP: f32 = 1.0;
-    const CHIP_PADDING_X: f32 = 8.0;
-    const CHIP_PADDING_Y: f32 = 3.0;
-    const CHIP_TEXT: f32 = 9.0;
-    const GEAR_SIZE: f32 = 12.0;
-    const HEIGHT: f32 = 34.0;
-    const SELECTOR_PADDING_X: f32 = 10.0;
-    const BRAND_WIDTH: f32 = 112.0;
-    const SELECTOR_WIDTH: f32 = 126.0;
-}
-
-pub(crate) fn brand(palette: RenderPalette) -> Element<'static, UiEvent> {
+pub(crate) fn brand(skin: &Skin) -> Element<'static, UiEvent> {
+    let palette = skin.palette;
     let letters = BRAND_LETTERS.into_iter().map(|letter| {
         shaped_text(letter)
-            .font(fonts::display(Weight::Bold))
-            .size(Consts::BRAND_SIZE)
+            .font(fonts::display(skin.global_bar.brand_text.weight))
+            .size(skin.global_bar.brand_text.size)
             .color(palette.text)
             .into()
     });
     container(
         Row::with_children(letters)
-            .spacing(Consts::BRAND_GAP)
+            .spacing(skin.global_bar.brand_gap)
             .align_y(Alignment::Center),
     )
-    .padding([0.0, Consts::BRAND_PADDING_X])
-    .width(Length::Fixed(Consts::BRAND_WIDTH))
-    .height(Length::Fixed(Consts::HEIGHT))
+    .padding([
+        skin.global_bar.brand_padding_y,
+        skin.global_bar.brand_padding_x,
+    ])
+    .width(Length::Fixed(skin.global_bar.brand_width))
+    .height(Length::Fixed(skin.global_bar.height))
     .align_y(Vertical::Center)
     .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
     .into()
 }
 
-pub(crate) fn preset_selector(
-    reads: &dyn Reads,
-    palette: RenderPalette,
-) -> Element<'static, UiEvent> {
+pub(crate) fn preset_selector(reads: &dyn Reads, skin: &Skin) -> Element<'static, UiEvent> {
+    let palette = skin.palette;
     let active = match reads.get("ui.preset") {
         Some(ReadValue::Text(preset)) => preset,
         _ => "",
     };
     let chips = row![
         preset_chip(
-            palette,
+            skin,
             "MICRO",
             builtin::MICRO_PRESET,
             active == builtin::MICRO_PRESET,
         ),
         preset_chip(
-            palette,
+            skin,
             "PLAYER",
             builtin::PLAYER_PRESET,
             active == builtin::PLAYER_PRESET,
         ),
     ]
-    .spacing(Consts::CHIP_GAP)
+    .spacing(skin.global_bar.chip_gap)
     .align_y(Alignment::Center);
 
+    let selector_border = skin.border(skin.global_bar.selector_frame);
     container(container(chips).style(move |_| {
         ContainerStyle::default()
             .background(Background::Color(palette.line))
-            .border(
-                Border::default()
-                    .width(chrome::border_width())
-                    .color(palette.line),
-            )
+            .border(selector_border)
     }))
-    .padding([0.0, Consts::SELECTOR_PADDING_X])
-    .width(Length::Fixed(Consts::SELECTOR_WIDTH))
-    .height(Length::Fixed(Consts::HEIGHT))
+    .padding([
+        skin.global_bar.selector_padding_y,
+        skin.global_bar.selector_padding_x,
+    ])
+    .width(Length::Fixed(skin.global_bar.selector_width))
+    .height(Length::Fixed(skin.global_bar.height))
     .center_y(Length::Fill)
     .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
     .into()
 }
 
-pub(crate) fn spacer(palette: RenderPalette) -> Element<'static, UiEvent> {
+pub(crate) fn spacer(skin: &Skin) -> Element<'static, UiEvent> {
+    let palette = skin.palette;
     container(Space::new())
         .width(Length::Fill)
-        .height(Length::Fixed(Consts::HEIGHT))
+        .height(Length::Fixed(skin.global_bar.height))
         .align_y(Vertical::Center)
         .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
         .into()
 }
 
-pub(crate) fn settings_button(palette: RenderPalette) -> Element<'static, UiEvent> {
-    let icon = container(Icon::Gear.view(Consts::GEAR_SIZE, palette.text_dim))
+pub(crate) fn settings_button(skin: &Skin) -> Element<'static, UiEvent> {
+    let palette = skin.palette;
+    let icon = container(Icon::Gear.view(skin.global_bar.gear_size, palette.text_dim))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill);
     button(icon)
-        .padding(0.0)
+        .padding(skin.global_bar.settings_padding)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(settings_button_style(palette))
+        .style(settings_button_style(skin))
         .on_press(UiEvent::OpenSettings)
         .into()
 }
 
 fn preset_chip(
-    palette: RenderPalette,
+    skin: &Skin,
     label: &'static str,
     preset: &'static str,
     active: bool,
 ) -> Element<'static, UiEvent> {
+    let palette = skin.palette;
     button(
         container(
             shaped_text(label)
-                .font(fonts::MONO)
-                .size(Consts::CHIP_TEXT)
+                .font(fonts::mono(skin.global_bar.chip_text.weight))
+                .size(skin.global_bar.chip_text.size)
                 .color(if active { palette.bg } else { palette.text_dim }),
         )
         .width(Length::Fill)
@@ -141,33 +127,41 @@ fn preset_chip(
         .center_x(Length::Fill)
         .center_y(Length::Fill),
     )
-    .padding([Consts::CHIP_PADDING_Y, Consts::CHIP_PADDING_X])
-    .style(move |theme, status| preset_chip_style(palette, active, theme, status))
+    .padding([
+        skin.global_bar.chip_padding_y,
+        skin.global_bar.chip_padding_x,
+    ])
+    .style(preset_chip_style(skin, active))
     .on_press(UiEvent::SelectPreset(preset.to_owned()))
     .into()
 }
 
 fn preset_chip_style(
-    palette: RenderPalette,
+    skin: &Skin,
     active: bool,
-    _theme: &Theme,
-    status: ButtonStatus,
-) -> ButtonStyle {
-    let background = match status {
-        ButtonStatus::Hovered if active => palette.accent_strong,
-        ButtonStatus::Hovered => palette.bg_panel_2,
-        ButtonStatus::Pressed => palette.accent_soft,
-        ButtonStatus::Active | ButtonStatus::Disabled if active => palette.accent,
-        ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel,
-    };
-    ButtonStyle {
-        background: Some(Background::Color(background)),
-        text_color: if active { palette.bg } else { palette.text_dim },
-        ..ButtonStyle::default()
+) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle + 'static {
+    let palette = skin.palette;
+    let border = skin.border(skin.global_bar.chip_frame);
+    move |_theme, status| {
+        let background = match status {
+            ButtonStatus::Hovered if active => palette.accent_strong,
+            ButtonStatus::Hovered => palette.bg_panel_2,
+            ButtonStatus::Pressed => palette.accent_soft,
+            ButtonStatus::Active | ButtonStatus::Disabled if active => palette.accent,
+            ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel,
+        };
+        ButtonStyle {
+            background: Some(Background::Color(background)),
+            text_color: if active { palette.bg } else { palette.text_dim },
+            border,
+            ..ButtonStyle::default()
+        }
     }
 }
 
-fn settings_button_style(palette: RenderPalette) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle {
+fn settings_button_style(skin: &Skin) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle + 'static {
+    let palette = skin.palette;
+    let border = skin.border(skin.global_bar.settings_frame);
     move |_theme, status| {
         let background = match status {
             ButtonStatus::Hovered => palette.bg_panel_2,
@@ -177,6 +171,7 @@ fn settings_button_style(palette: RenderPalette) -> impl Fn(&Theme, ButtonStatus
         ButtonStyle {
             background: Some(Background::Color(background)),
             text_color: palette.text_dim,
+            border,
             ..ButtonStyle::default()
         }
     }

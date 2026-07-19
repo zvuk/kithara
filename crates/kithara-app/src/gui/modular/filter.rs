@@ -49,6 +49,7 @@ mod tests {
             builtin::PLAYER_PRESET,
             &builtin::resolver(),
             &endpoints::registry(),
+            builtin::skin_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("player preset must compile: {error}"))
@@ -121,6 +122,7 @@ mod tests {
             "nested.klayout.ron",
             &resolver,
             &endpoints::registry(),
+            builtin::skin_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("nested layout must compile: {error}"));

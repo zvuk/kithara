@@ -1,42 +1,55 @@
 use iced::{
-    Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
+    Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     mouse::{self, Button, Cursor},
     widget::{
         Space,
-        canvas::{self, Action, Canvas, Frame, Geometry, Stroke},
+        canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
     },
 };
 
-use crate::render::{ControlAction, ReadValue, RenderPalette, UiEvent};
-
-struct Consts;
-
-impl Consts {
-    const BORDER_WIDTH: f32 = 1.0;
-    const THUMB_INSET: f32 = 2.0;
-    const THUMB_SIZE: f32 = 9.0;
-}
+use crate::{
+    render::{ControlAction, ReadValue, Skin, UiEvent, theme::RenderPalette},
+    skin::{CheckboxSkin, FrameSkin, ToggleSkin},
+};
 
 pub(crate) fn toggle<'a>(
     path: &str,
     value: Option<&ReadValue<'_>>,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
-    binary_control(path, value, palette, Shape::Toggle)
+    binary_control(
+        path,
+        value,
+        skin,
+        Shape::Toggle {
+            metrics: skin.toggle,
+            active_border: skin.color(skin.toggle.active_frame.border),
+            inactive_border: skin.color(skin.toggle.inactive_frame.border),
+        },
+    )
 }
 
 pub(crate) fn checkbox<'a>(
     path: &str,
     value: Option<&ReadValue<'_>>,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
-    binary_control(path, value, palette, Shape::Checkbox)
+    binary_control(
+        path,
+        value,
+        skin,
+        Shape::Checkbox {
+            metrics: skin.checkbox,
+            active_border: skin.color(skin.checkbox.active_frame.border),
+            inactive_border: skin.color(skin.checkbox.inactive_frame.border),
+        },
+    )
 }
 
 fn binary_control<'a>(
     path: &str,
     value: Option<&ReadValue<'_>>,
-    palette: RenderPalette,
+    skin: &Skin,
     shape: Shape,
 ) -> Element<'a, UiEvent> {
     let Some(ReadValue::Bool(active)) = value else {
@@ -45,7 +58,7 @@ fn binary_control<'a>(
 
     Canvas::new(BinaryControl {
         active: *active,
-        palette,
+        palette: skin.palette,
         path: path.to_owned(),
         shape,
     })
@@ -56,8 +69,16 @@ fn binary_control<'a>(
 
 #[derive(Clone, Copy)]
 enum Shape {
-    Toggle,
-    Checkbox,
+    Toggle {
+        metrics: ToggleSkin,
+        active_border: Color,
+        inactive_border: Color,
+    },
+    Checkbox {
+        metrics: CheckboxSkin,
+        active_border: Color,
+        inactive_border: Color,
+    },
 }
 
 struct BinaryControl {
@@ -101,8 +122,32 @@ impl canvas::Program<UiEvent> for BinaryControl {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         match self.shape {
-            Shape::Toggle => draw_toggle(&mut frame, bounds, self.active, self.palette),
-            Shape::Checkbox => draw_checkbox(&mut frame, bounds, self.active, self.palette),
+            Shape::Toggle {
+                metrics,
+                active_border,
+                inactive_border,
+            } => draw_toggle(
+                &mut frame,
+                bounds,
+                self.active,
+                metrics,
+                active_border,
+                inactive_border,
+                self.palette,
+            ),
+            Shape::Checkbox {
+                metrics,
+                active_border,
+                inactive_border,
+            } => draw_checkbox(
+                &mut frame,
+                bounds,
+                self.active,
+                metrics,
+                active_border,
+                inactive_border,
+                self.palette,
+            ),
         }
         vec![frame.into_geometry()]
     }
@@ -121,20 +166,49 @@ impl canvas::Program<UiEvent> for BinaryControl {
     }
 }
 
-fn draw_toggle(frame: &mut Frame, bounds: Rectangle, active: bool, palette: RenderPalette) {
-    if active {
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), palette.accent);
+fn draw_toggle(
+    frame: &mut Frame,
+    bounds: Rectangle,
+    active: bool,
+    metrics: ToggleSkin,
+    active_border: Color,
+    inactive_border: Color,
+    palette: RenderPalette,
+) {
+    let frame_skin = if active {
+        metrics.active_frame
     } else {
-        draw_border(frame, bounds, palette.muted);
-    }
-    let x = if active {
-        bounds.width - Consts::THUMB_INSET - Consts::THUMB_SIZE
-    } else {
-        Consts::THUMB_INSET
+        metrics.inactive_frame
     };
-    frame.fill_rectangle(
-        Point::new(x, (bounds.height - Consts::THUMB_SIZE) / 2.0),
-        Size::new(Consts::THUMB_SIZE, Consts::THUMB_SIZE),
+    if active {
+        fill_rounded(
+            frame,
+            Point::ORIGIN,
+            bounds.size(),
+            frame_skin.radius,
+            palette.accent,
+        );
+    }
+    draw_border(
+        frame,
+        bounds,
+        frame_skin,
+        if active {
+            active_border
+        } else {
+            inactive_border
+        },
+    );
+    let x = if active {
+        bounds.width - metrics.thumb_inset - metrics.thumb_size
+    } else {
+        metrics.thumb_inset
+    };
+    fill_rounded(
+        frame,
+        Point::new(x, (bounds.height - metrics.thumb_size) / 2.0),
+        Size::new(metrics.thumb_size, metrics.thumb_size),
+        metrics.thumb_radius,
         if active {
             palette.bg_deep
         } else {
@@ -143,25 +217,62 @@ fn draw_toggle(frame: &mut Frame, bounds: Rectangle, active: bool, palette: Rend
     );
 }
 
-fn draw_checkbox(frame: &mut Frame, bounds: Rectangle, active: bool, palette: RenderPalette) {
-    if active {
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), palette.accent);
-        draw_border(frame, bounds, palette.line);
+fn draw_checkbox(
+    frame: &mut Frame,
+    bounds: Rectangle,
+    active: bool,
+    metrics: CheckboxSkin,
+    active_border: Color,
+    inactive_border: Color,
+    palette: RenderPalette,
+) {
+    let frame_skin = if active {
+        metrics.active_frame
     } else {
-        draw_border(frame, bounds, palette.muted);
+        metrics.inactive_frame
+    };
+    if active {
+        fill_rounded(
+            frame,
+            Point::ORIGIN,
+            bounds.size(),
+            frame_skin.radius,
+            palette.accent,
+        );
     }
+    draw_border(
+        frame,
+        bounds,
+        frame_skin,
+        if active {
+            active_border
+        } else {
+            inactive_border
+        },
+    );
 }
 
-fn draw_border(frame: &mut Frame, bounds: Rectangle, color: iced::Color) {
-    let inset = Consts::BORDER_WIDTH / 2.0;
-    frame.stroke_rectangle(
+fn draw_border(frame: &mut Frame, bounds: Rectangle, skin: FrameSkin, color: Color) {
+    if skin.border_width <= 0.0 {
+        return;
+    }
+    let inset = skin.border_width / 2.0;
+    let path = Path::rounded_rectangle(
         Point::new(inset, inset),
         Size::new(
-            (bounds.width - Consts::BORDER_WIDTH).max(0.0),
-            (bounds.height - Consts::BORDER_WIDTH).max(0.0),
+            (bounds.width - skin.border_width).max(0.0),
+            (bounds.height - skin.border_width).max(0.0),
         ),
+        skin.radius.into(),
+    );
+    frame.stroke(
+        &path,
         Stroke::default()
             .with_color(color)
-            .with_width(Consts::BORDER_WIDTH),
+            .with_width(skin.border_width),
     );
+}
+
+fn fill_rounded(frame: &mut Frame, point: Point, size: Size, radius: f32, color: Color) {
+    frame.fill(&Path::rounded_rectangle(point, size, radius.into()), color);
 }

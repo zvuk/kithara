@@ -5,7 +5,7 @@ use iced::{
     time as iced_time, window,
 };
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_ui::render::RenderPalette;
+use kithara_ui::render::Skin;
 
 use super::{
     frontend::window_settings,
@@ -31,7 +31,7 @@ pub(crate) struct Kithara {
     pub(crate) settings_window_id: Option<window::Id>,
 
     pub(crate) library_query: String,
-    pub(crate) palette: RenderPalette,
+    pub(crate) skin: &'static Skin,
     pub(crate) selected_track_index: Option<usize>,
     pub(crate) window_sizing: WindowSizing,
     /// Currently live main window; mode swaps replace this ID while the
@@ -44,7 +44,7 @@ impl Kithara {
     /// Boot function for `iced::daemon()`. Opens the modular player window.
     pub(crate) fn new(
         controller: Arc<StateController>,
-        palette: RenderPalette,
+        skin: &'static Skin,
         window_sizing: WindowSizing,
     ) -> (Self, Task<Message>) {
         let ui_state = controller.snapshot();
@@ -53,7 +53,7 @@ impl Kithara {
             controller,
             ui_state,
             library_query: String::new(),
-            palette,
+            skin,
             selected_track_index: None,
             window_sizing,
             modular: initial_view(),
@@ -96,7 +96,7 @@ impl Kithara {
 
     /// The dark + gold theme.
     pub(crate) fn theme(&self, _window: window::Id) -> Theme {
-        theme::kithara_theme(&self.palette)
+        theme::kithara_theme(self.skin)
     }
 
     /// Static application title for every window.

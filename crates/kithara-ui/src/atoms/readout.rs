@@ -1,29 +1,19 @@
 use iced::{
-    Border, Element, Length,
+    Element, Length,
     widget::{Column, Space, container, container::Style as ContainerStyle},
 };
 
 use crate::{
     module::Tone,
-    render::{ReadValue, RenderPalette, UiEvent, fonts, shaped_text},
+    render::{ReadValue, Skin, UiEvent, fonts, shaped_text},
 };
-
-struct Consts;
-
-impl Consts {
-    const BORDER_WIDTH: f32 = 1.0;
-    const LABEL_SIZE: f32 = 8.0;
-    const PADDING_X: f32 = 6.0;
-    const SPACING: f32 = 2.0;
-    const VALUE_SIZE: f32 = 11.0;
-}
 
 pub(crate) fn view<'a>(
     label: Option<&'a str>,
     tone: Tone,
     framed: bool,
     value: Option<&ReadValue<'_>>,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let Some(label) = label else {
         return Space::new().into();
@@ -33,6 +23,7 @@ pub(crate) fn view<'a>(
         Some(ReadValue::Scalar(value)) => format!("{value:.2}"),
         _ => return Space::new().into(),
     };
+    let palette = skin.palette;
     let value_color = if tone == Tone::Accent {
         palette.accent
     } else {
@@ -40,33 +31,30 @@ pub(crate) fn view<'a>(
     };
     let content = Column::with_children([
         shaped_text(label)
-            .font(fonts::MONO)
-            .size(Consts::LABEL_SIZE)
+            .font(fonts::mono(skin.readout.label.weight))
+            .size(skin.readout.label.size)
             .color(palette.muted)
             .into(),
         shaped_text(value)
-            .font(fonts::MONO)
-            .size(Consts::VALUE_SIZE)
+            .font(fonts::mono(skin.readout.value.weight))
+            .size(skin.readout.value.size)
             .color(value_color)
             .into(),
     ])
-    .spacing(Consts::SPACING);
+    .spacing(skin.readout.spacing);
+
+    let border = skin.border(skin.readout.frame);
 
     container(content)
-        .padding([0.0, if framed { Consts::PADDING_X } else { 0.0 }])
+        .padding([
+            skin.readout.padding_y,
+            if framed { skin.readout.padding_x } else { 0.0 },
+        ])
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_| {
             let style = ContainerStyle::default();
-            if framed {
-                style.border(
-                    Border::default()
-                        .width(Consts::BORDER_WIDTH)
-                        .color(palette.line),
-                )
-            } else {
-                style
-            }
+            if framed { style.border(border) } else { style }
         })
         .into()
 }

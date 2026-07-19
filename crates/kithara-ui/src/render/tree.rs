@@ -12,45 +12,39 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    render::{ReadValue, Reads, RenderPalette, UiEvent},
+    render::{ReadValue, Reads, Skin, UiEvent},
     size::{Dim, SizeSpec, control_size},
     widgets::{
         button, deck, fader, global_bar, mini_wave, module_chrome, telemetry, text, track_list,
     },
 };
 
-struct Consts;
-
-impl Consts {
-    const FILL_WEIGHT_SCALE: f32 = 100.0;
-    const GRID_GAP: f32 = 1.0;
-}
-
 pub fn render<'a>(
     node: &CompiledNode,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
-    render_compiled(node, ui, reads, palette)
+    render_compiled(node, ui, reads, skin)
 }
 
 fn render_compiled<'a>(
     node: &CompiledNode,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
+    let palette = skin.palette;
     match node {
         CompiledNode::Split { axis, children, .. } => match axis {
             Axis::Horizontal => container(
                 Row::with_children(children.iter().map(|(weight, child)| {
-                    container(render_compiled(child, ui, reads, palette))
-                        .width(split_length(child_size(child).w, *weight))
+                    container(render_compiled(child, ui, reads, skin))
+                        .width(split_length(child_size(child).w, *weight, skin))
                         .height(Length::Fill)
                         .into()
                 }))
-                .spacing(Consts::GRID_GAP)
+                .spacing(skin.layout.grid_gap)
                 .width(Length::Fill)
                 .height(Length::Fill),
             )
@@ -62,12 +56,12 @@ fn render_compiled<'a>(
             .into(),
             Axis::Vertical => container(
                 Column::with_children(children.iter().map(|(weight, child)| {
-                    container(render_compiled(child, ui, reads, palette))
+                    container(render_compiled(child, ui, reads, skin))
                         .width(Length::Fill)
-                        .height(split_length(child_size(child).h, *weight))
+                        .height(split_length(child_size(child).h, *weight, skin))
                         .into()
                 }))
-                .spacing(Consts::GRID_GAP)
+                .spacing(skin.layout.grid_gap)
                 .width(Length::Fill)
                 .height(Length::Fill),
             )
@@ -79,7 +73,7 @@ fn render_compiled<'a>(
             .into(),
         },
         CompiledNode::Module { root, .. } => {
-            module_chrome(render_node(root, ui, reads, palette), palette)
+            module_chrome(render_node(root, ui, reads, skin), skin)
         }
     }
 }
@@ -88,7 +82,7 @@ fn render_node<'a>(
     node: &ExpandedNode,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let element = match node {
         ExpandedNode::Row {
@@ -97,12 +91,12 @@ fn render_node<'a>(
             Row::with_children(
                 children
                     .iter()
-                    .map(|child| render_node(child, ui, reads, palette)),
+                    .map(|child| render_node(child, ui, reads, skin)),
             )
-            .spacing(gap.unwrap_or(Consts::GRID_GAP))
+            .spacing(gap.unwrap_or(skin.layout.grid_gap))
             .width(Length::Fill),
         )
-        .padding(pad.unwrap_or(0.0))
+        .padding(pad.unwrap_or(skin.layout.grid_pad))
         .width(Length::Fill)
         .into(),
         ExpandedNode::Column {
@@ -111,30 +105,30 @@ fn render_node<'a>(
             Column::with_children(
                 children
                     .iter()
-                    .map(|child| render_node(child, ui, reads, palette)),
+                    .map(|child| render_node(child, ui, reads, skin)),
             )
-            .spacing(gap.unwrap_or(Consts::GRID_GAP))
+            .spacing(gap.unwrap_or(skin.layout.grid_gap))
             .width(Length::Fill),
         )
-        .padding(pad.unwrap_or(0.0))
+        .padding(pad.unwrap_or(skin.layout.grid_pad))
         .width(Length::Fill)
         .into(),
         ExpandedNode::Slot { children, .. } => container(
             Column::with_children(
                 children
                     .iter()
-                    .map(|child| render_node(child, ui, reads, palette)),
+                    .map(|child| render_node(child, ui, reads, skin)),
             )
-            .spacing(Consts::GRID_GAP)
+            .spacing(skin.layout.grid_gap)
             .width(Length::Fill),
         )
         .width(Length::Fill)
         .into(),
         ExpandedNode::Control {
             path, spec, read, ..
-        } => render_control(*path, spec, read.as_ref(), ui, reads, palette),
+        } => render_control(*path, spec, read.as_ref(), ui, reads, skin),
     };
-    apply_size(element, effective_size(node))
+    apply_size(element, effective_size(node, skin))
 }
 
 fn render_control<'a>(
@@ -143,30 +137,27 @@ fn render_control<'a>(
     read: Option<&Binding>,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let value = read.and_then(|binding| resolve(reads, binding, ui));
     let path = ui.resolve(path);
     match spec {
-        ControlSpec::DeckHeader { badge } => deck::header(
-            badge.map(|id| ui.resolve(id)),
-            value.as_ref(),
-            reads,
-            palette,
-        ),
-        ControlSpec::DeckSummary { style } => deck::summary(*style, value.as_ref(), reads, palette),
-        ControlSpec::Brand => global_bar::brand(palette),
-        ControlSpec::Spacer => global_bar::spacer(palette),
-        ControlSpec::PresetSelector => global_bar::preset_selector(reads, palette),
-        ControlSpec::SettingsButton => global_bar::settings_button(palette),
+        ControlSpec::DeckHeader { badge } => {
+            deck::header(badge.map(|id| ui.resolve(id)), value.as_ref(), reads, skin)
+        }
+        ControlSpec::DeckSummary { style } => deck::summary(*style, value.as_ref(), reads, skin),
+        ControlSpec::Brand => global_bar::brand(skin),
+        ControlSpec::Spacer => global_bar::spacer(skin),
+        ControlSpec::PresetSelector => global_bar::preset_selector(reads, skin),
+        ControlSpec::SettingsButton => global_bar::settings_button(skin),
         ControlSpec::Bpm { placeholder } => deck::bpm(
             placeholder.map(|id| ui.resolve(id)),
             value.as_ref(),
             reads,
-            palette,
+            skin,
         ),
-        ControlSpec::Time => deck::time(value.as_ref(), reads, palette),
-        ControlSpec::Text { style } => text::view(*style, value.as_ref(), palette),
+        ControlSpec::Time => deck::time(value.as_ref(), reads, skin),
+        ControlSpec::Text { style } => text::view(*style, value.as_ref(), skin),
         ControlSpec::Button {
             label,
             active_label,
@@ -177,12 +168,12 @@ fn render_control<'a>(
             active_label.map(|id| ui.resolve(id)),
             *style,
             value.as_ref(),
-            palette,
+            skin,
         ),
-        ControlSpec::Scalar { format } => telemetry::view(*format, value.as_ref(), palette),
-        ControlSpec::Fader { style } => fader::view(path, *style, value.as_ref(), palette),
-        ControlSpec::Toggle => toggle::toggle(path, value.as_ref(), palette),
-        ControlSpec::Checkbox => toggle::checkbox(path, value.as_ref(), palette),
+        ControlSpec::Scalar { format } => telemetry::view(*format, value.as_ref(), skin),
+        ControlSpec::Fader { style } => fader::view(path, *style, value.as_ref(), skin),
+        ControlSpec::Toggle => toggle::toggle(path, value.as_ref(), skin),
+        ControlSpec::Checkbox => toggle::checkbox(path, value.as_ref(), skin),
         ControlSpec::Readout {
             label,
             tone,
@@ -192,18 +183,14 @@ fn render_control<'a>(
             *tone,
             *framed,
             value.as_ref(),
-            palette,
+            skin,
         ),
-        ControlSpec::Chip { label } => {
-            chip::view(path, ui.resolve(*label), value.as_ref(), palette)
-        }
-        ControlSpec::Knob => knob::view(path, value.as_ref(), palette),
-        ControlSpec::VuStereo => meter::view(path, value.as_ref(), palette),
-        ControlSpec::VuVertical => vu::view(path, value.as_ref(), palette),
-        ControlSpec::Wave { style } => {
-            mini_wave::view(path, *style, value.as_ref(), reads, palette)
-        }
-        ControlSpec::TrackList => track_list::view(path, value.as_ref(), reads, palette),
+        ControlSpec::Chip { label } => chip::view(path, ui.resolve(*label), value.as_ref(), skin),
+        ControlSpec::Knob => knob::view(path, value.as_ref(), skin),
+        ControlSpec::VuStereo => meter::view(path, value.as_ref(), skin),
+        ControlSpec::VuVertical => vu::view(path, value.as_ref(), skin),
+        ControlSpec::Wave { style } => mini_wave::view(path, *style, value.as_ref(), reads, skin),
+        ControlSpec::TrackList => track_list::view(path, value.as_ref(), reads, skin),
     }
 }
 
@@ -221,7 +208,7 @@ fn deck_is_a(scope: &BTreeMap<InternId, InternId>, ui: &CompiledUi) -> bool {
         .any(|(key, value)| ui.resolve(*key) == "deck" && ui.resolve(*value) == "a")
 }
 
-fn effective_size(node: &ExpandedNode) -> Option<SizeSpec> {
+fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {
     let declared = match node {
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
@@ -229,7 +216,7 @@ fn effective_size(node: &ExpandedNode) -> Option<SizeSpec> {
         | ExpandedNode::Control { size, .. } => *size,
     };
     declared.or_else(|| match node {
-        ExpandedNode::Control { spec, .. } => Some(control_size(spec)),
+        ExpandedNode::Control { spec, .. } => Some(control_size(spec, skin.document())),
         _ => None,
     })
 }
@@ -262,17 +249,17 @@ fn child_size(node: &CompiledNode) -> SizeSpec {
     }
 }
 
-fn split_length(dim: Dim, weight: f32) -> Length {
+fn split_length(dim: Dim, weight: f32, skin: &Skin) -> Length {
     match dim {
         Dim::Fixed(value) => Length::Fixed(value),
-        _ => Length::FillPortion(fill_portion(weight)),
+        _ => Length::FillPortion(fill_portion(weight, skin)),
     }
 }
 
-fn fill_portion(weight: f32) -> u16 {
-    let scaled = (weight * Consts::FILL_WEIGHT_SCALE)
+fn fill_portion(weight: f32, skin: &Skin) -> u16 {
+    let scaled = (weight * skin.layout.fill_weight_scale)
         .round()
-        .max(1.0)
+        .max(skin.layout.fill_weight_min)
         .min(f32::from(u16::MAX));
     scaled.as_()
 }

@@ -13,7 +13,7 @@ use iced::{
 use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi},
-    render::{RenderPalette, UiEvent, fonts, shaped_text},
+    render::{Skin, UiEvent, fonts, shaped_text, theme::RenderPalette},
     widgets::{layout_preview, module_chrome, secondary_button_style},
 };
 
@@ -70,7 +70,8 @@ pub(super) fn window_settings() -> Settings {
 }
 
 pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
-    let palette = state.palette;
+    let skin = state.skin;
+    let palette = skin.palette;
     let Some(draft) = state.modular.settings.as_ref() else {
         return container(Space::new())
             .width(Length::Fill)
@@ -93,7 +94,7 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     let body = Row::with_children([
         navigation(palette, draft.section),
         vertical_separator(palette),
-        section_content(palette, draft),
+        section_content(skin, draft),
     ])
     .width(Length::Fill)
     .height(Length::Fill);
@@ -102,11 +103,11 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
         horizontal_separator(palette),
         body,
         horizontal_separator(palette),
-        footer(palette),
+        footer(skin),
     ]
     .width(Length::Fill)
     .height(Length::Fill);
-    let framed = module_chrome(panel, palette);
+    let framed = module_chrome(panel, skin);
 
     container(framed)
         .width(Length::Fill)
@@ -180,9 +181,10 @@ fn nav_item(
         .into()
 }
 
-fn section_content(palette: RenderPalette, draft: &SettingsDraft) -> Element<'static, Message> {
+fn section_content(skin: &Skin, draft: &SettingsDraft) -> Element<'static, Message> {
+    let palette = skin.palette;
     let content = match draft.section {
-        SettingsSection::Layout => layout_section(palette, draft),
+        SettingsSection::Layout => layout_section(skin, draft),
         SettingsSection::Modules => modules_section(palette, draft),
     };
     container(content)
@@ -193,17 +195,18 @@ fn section_content(palette: RenderPalette, draft: &SettingsDraft) -> Element<'st
         .into()
 }
 
-fn layout_section(palette: RenderPalette, draft: &SettingsDraft) -> Element<'static, Message> {
+fn layout_section(skin: &Skin, draft: &SettingsDraft) -> Element<'static, Message> {
+    let palette = skin.palette;
     let cards = Row::with_children([
         preset_card(
-            palette,
+            skin,
             "Micro",
             builtin::MICRO_PRESET,
             draft.micro(),
             draft.draft_preset == BuiltinPreset::Micro,
         ),
         preset_card(
-            palette,
+            skin,
             "Player",
             builtin::PLAYER_PRESET,
             draft.player(),
@@ -220,15 +223,16 @@ fn layout_section(palette: RenderPalette, draft: &SettingsDraft) -> Element<'sta
 }
 
 fn preset_card(
-    palette: RenderPalette,
+    skin: &Skin,
     label: &'static str,
     preset: &'static str,
     compiled: &CompiledUi,
     selected: bool,
 ) -> Element<'static, Message> {
+    let palette = skin.palette;
     button(
         column![
-            layout_preview(compiled, palette),
+            layout_preview(compiled, skin),
             shaped_text(label)
                 .font(iced::Font {
                     weight: Weight::Semibold,
@@ -333,14 +337,15 @@ fn toggle_segment(
     .into()
 }
 
-fn footer(palette: RenderPalette) -> Element<'static, Message> {
+fn footer(skin: &Skin) -> Element<'static, Message> {
+    let palette = skin.palette;
     let reset = button(action_label("Reset to preset", palette.text))
         .padding([Consts::ACTION_PADDING_Y, Consts::ACTION_PADDING_X])
-        .style(secondary_button_style(palette))
+        .style(secondary_button_style(skin))
         .on_press(Message::Modular(UiEvent::SettingsReset));
     let cancel = button(action_label("Cancel", palette.text))
         .padding([Consts::ACTION_PADDING_Y, Consts::ACTION_PADDING_X])
-        .style(secondary_button_style(palette))
+        .style(secondary_button_style(skin))
         .on_press(Message::Modular(UiEvent::CloseSettings));
     let done = button(action_label("Done", palette.bg))
         .padding([Consts::ACTION_PADDING_Y, Consts::ACTION_PADDING_X])

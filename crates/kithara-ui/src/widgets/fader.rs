@@ -1,11 +1,10 @@
 use iced::{
-    Alignment, Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Size,
-    Theme,
+    Alignment, Background, Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
     mouse::{self, Button, Cursor},
     widget::{
         Canvas, Space, Stack,
-        canvas::{self, Action, Frame, Geometry, Stroke},
+        canvas::{self, Action, Frame, Geometry, Path, Stroke},
         container,
         container::Style as ContainerStyle,
         row, slider,
@@ -14,49 +13,28 @@ use iced::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::chrome;
 use crate::{
     module::FaderStyle,
-    render::{ControlAction, Icon, ReadValue, RenderPalette, UiEvent, fonts, shaped_text},
+    render::{
+        ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, shaped_text, theme::RenderPalette,
+    },
+    skin::{FaderSkin, FrameSkin},
 };
-
-struct Consts;
-
-impl Consts {
-    const CONTENT_GAP: f32 = 6.0;
-    const CONTROL_HEIGHT: f32 = 34.0;
-    const CONTROL_PADDING_X: f32 = 8.0;
-    const HANDLE_BORDER_WIDTH: f32 = 1.0;
-    const HANDLE_WIDTH: u16 = 6;
-    const ICON_SIZE: f32 = 11.0;
-    const LABEL_TEXT_SIZE: f32 = 12.0;
-    const LABEL_WIDTH: f32 = 18.0;
-    const RAIL_WIDTH: f32 = 6.0;
-    const SEGMENT_COUNT: usize = 12;
-    const SEGMENT_GAP: f32 = 1.5;
-    const SEGMENT_HEIGHT: f32 = 10.0;
-    const SLIDER_HEIGHT: f32 = 16.0;
-    const STEP: f64 = 0.01;
-    const STRIP_HEIGHT: f32 = 14.0;
-    const STRIP_PADDING: f32 = 2.0;
-    const TICKS_HEIGHT: f32 = 22.0;
-    const TICK_HEIGHT: f32 = 4.0;
-    const TICK_STEP: f32 = 12.0;
-}
 
 pub(crate) fn view<'a>(
     path: &str,
     style: FaderStyle,
     value: Option<&ReadValue<'_>>,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let Some(ReadValue::Scalar(value)) = value else {
         return Space::new().into();
     };
     if matches!(style, FaderStyle::Volume | FaderStyle::VolumeCompact) {
-        return segmented_volume(palette, path, *value);
+        return segmented_volume(skin, path, *value);
     }
 
+    let palette = skin.palette;
     let event_path = path.to_owned();
     let slider = slider(0.0..=1.0, value.clamp(0.0, 1.0), move |value| {
         UiEvent::Control {
@@ -64,88 +42,95 @@ pub(crate) fn view<'a>(
             action: ControlAction::SetScalar(value),
         }
     })
-    .step(Consts::STEP)
-    .height(Consts::SLIDER_HEIGHT)
-    .style(slider_style(palette))
+    .step(skin.fader.step)
+    .height(skin.fader.slider_height)
+    .style(slider_style(skin))
     .width(Length::Fill);
     let ticks = Canvas::new(FaderTicks {
+        metrics: skin.fader,
         color: palette.line_soft,
     })
-    .height(Length::Fixed(Consts::TICKS_HEIGHT))
+    .height(Length::Fixed(skin.fader.ticks_height))
     .width(Length::Fill);
     let slider = container(slider)
-        .height(Length::Fixed(Consts::TICKS_HEIGHT))
+        .height(Length::Fixed(skin.fader.ticks_height))
         .align_y(Vertical::Top);
     let rail = Stack::with_children([ticks.into(), slider.into()])
-        .height(Length::Fixed(Consts::TICKS_HEIGHT))
+        .height(Length::Fixed(skin.fader.ticks_height))
         .width(Length::Fill);
     let label = container(
         shaped_text("VOL")
-            .font(fonts::SANS)
-            .size(Consts::LABEL_TEXT_SIZE)
+            .font(fonts::sans(skin.fader.label.weight))
+            .size(skin.fader.label.size)
             .color(palette.muted),
     )
-    .width(Length::Fixed(Consts::LABEL_WIDTH))
+    .width(Length::Fixed(skin.fader.label_width))
     .height(Length::Fill)
     .center_y(Length::Fill);
     let control = row![label, rail]
         .align_y(Alignment::Center)
-        .height(Length::Fixed(Consts::CONTROL_HEIGHT))
+        .height(Length::Fixed(skin.fader.control_height))
         .width(Length::Fill);
 
     container(control)
-        .padding([0.0, Consts::CONTROL_PADDING_X])
-        .height(Length::Fixed(Consts::CONTROL_HEIGHT))
+        .padding([skin.fader.control_padding_y, skin.fader.control_padding_x])
+        .height(Length::Fixed(skin.fader.control_height))
         .width(Length::Fill)
         .align_y(Vertical::Center)
         .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
         .into()
 }
 
-fn segmented_volume(palette: RenderPalette, path: &str, value: f64) -> Element<'static, UiEvent> {
-    let icon = container(Icon::SpeakerHigh.view(Consts::ICON_SIZE, palette.muted))
-        .width(Length::Fixed(Consts::LABEL_WIDTH))
+fn segmented_volume(skin: &Skin, path: &str, value: f64) -> Element<'static, UiEvent> {
+    let palette = skin.palette;
+    let icon = container(Icon::SpeakerHigh.view(skin.fader.icon_size, palette.muted))
+        .width(Length::Fixed(skin.fader.label_width))
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill);
-    let control = row![icon, volume_strip(palette, path.to_owned(), value)]
-        .spacing(Consts::CONTENT_GAP)
+    let control = row![icon, volume_strip(skin, path.to_owned(), value)]
+        .spacing(skin.fader.content_gap)
         .align_y(Alignment::Center)
-        .height(Length::Fixed(Consts::CONTROL_HEIGHT))
+        .height(Length::Fixed(skin.fader.control_height))
         .width(Length::Fill);
 
     container(control)
-        .padding([0.0, Consts::CONTROL_PADDING_X])
-        .height(Length::Fixed(Consts::CONTROL_HEIGHT))
+        .padding([skin.fader.control_padding_y, skin.fader.control_padding_x])
+        .height(Length::Fixed(skin.fader.control_height))
         .width(Length::Fill)
         .align_y(Vertical::Center)
         .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
         .into()
 }
 
-fn slider_style(palette: RenderPalette) -> impl Fn(&Theme, SliderStatus) -> SliderStyle {
+fn slider_style(skin: &Skin) -> impl Fn(&Theme, SliderStatus) -> SliderStyle + 'static {
+    let palette = skin.palette;
+    let metrics = skin.fader;
+    let rail_border = skin.border(metrics.rail_frame);
+    let handle_border = skin.color(metrics.handle_frame.border);
     move |_theme, _status| SliderStyle {
         rail: Rail {
             backgrounds: (
                 Background::Color(palette.accent),
                 Background::Color(palette.bg_deep),
             ),
-            width: Consts::RAIL_WIDTH,
-            border: Border::default().width(1).color(palette.line_soft),
+            width: metrics.rail_width,
+            border: rail_border,
         },
         handle: Handle {
             shape: HandleShape::Rectangle {
-                width: Consts::HANDLE_WIDTH,
-                border_radius: 0.0.into(),
+                width: metrics.handle_width,
+                border_radius: metrics.handle_frame.radius.into(),
             },
             background: Background::Color(palette.bg_panel_2),
-            border_width: Consts::HANDLE_BORDER_WIDTH,
-            border_color: palette.line,
+            border_width: metrics.handle_frame.border_width,
+            border_color: handle_border,
         },
     }
 }
 
 struct FaderTicks {
+    metrics: FaderSkin,
     color: Color,
 }
 
@@ -162,20 +147,22 @@ impl canvas::Program<UiEvent> for FaderTicks {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let mut x = 0.0;
-        let y = (bounds.height - Consts::TICK_HEIGHT).max(0.0);
+        let y = (bounds.height - self.metrics.tick_height).max(0.0);
         while x <= bounds.width {
             frame.fill_rectangle(
                 Point::new(x, y),
-                Size::new(chrome::border_width(), Consts::TICK_HEIGHT),
+                Size::new(self.metrics.tick_width, self.metrics.tick_height),
                 self.color,
             );
-            x += Consts::TICK_STEP;
+            x += self.metrics.tick_step;
         }
         vec![frame.into_geometry()]
     }
 }
 
 struct SegmentedVolume {
+    metrics: FaderSkin,
+    border_color: Color,
     palette: RenderPalette,
     path: String,
     volume: f32,
@@ -222,8 +209,13 @@ impl canvas::Program<UiEvent> for SegmentedVolume {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
-        draw_segments(&mut frame, bounds, self.volume, self.palette);
-        draw_border(&mut frame, bounds, self.palette.line);
+        draw_segments(&mut frame, bounds, self.volume, self.metrics, self.palette);
+        draw_border(
+            &mut frame,
+            bounds,
+            self.metrics.strip_frame,
+            self.border_color,
+        );
         vec![frame.into_geometry()]
     }
 
@@ -241,14 +233,16 @@ impl canvas::Program<UiEvent> for SegmentedVolume {
     }
 }
 
-fn volume_strip(palette: RenderPalette, path: String, value: f64) -> Element<'static, UiEvent> {
+fn volume_strip(skin: &Skin, path: String, value: f64) -> Element<'static, UiEvent> {
     Canvas::new(SegmentedVolume {
-        palette,
+        metrics: skin.fader,
+        border_color: skin.color(skin.fader.strip_frame.border),
+        palette: skin.palette,
         path,
         volume: value.clamp(0.0, 1.0).as_(),
     })
     .width(Length::Fill)
-    .height(Length::Fixed(Consts::STRIP_HEIGHT))
+    .height(Length::Fixed(skin.fader.strip_height))
     .into()
 }
 
@@ -266,22 +260,29 @@ fn scalar_action(path: &str, bounds: Rectangle, cursor: Cursor) -> Option<Action
     })
 }
 
-fn draw_segments(frame: &mut Frame, bounds: Rectangle, level: f32, palette: RenderPalette) {
-    let count: f32 = Consts::SEGMENT_COUNT.as_();
-    let gap_width = Consts::SEGMENT_GAP * (count - 1.0);
-    let content_width = (bounds.width - Consts::STRIP_PADDING * 2.0).max(0.0);
+fn draw_segments(
+    frame: &mut Frame,
+    bounds: Rectangle,
+    level: f32,
+    metrics: FaderSkin,
+    palette: RenderPalette,
+) {
+    let count: f32 = metrics.segment_count.as_();
+    let gap_width = metrics.segment_gap * (count - 1.0);
+    let content_width = (bounds.width - metrics.strip_padding * 2.0).max(0.0);
     let segment_width = ((content_width - gap_width) / count).max(0.0);
     if segment_width <= 0.0 {
         return;
     }
 
-    let segment_height =
-        Consts::SEGMENT_HEIGHT.min((bounds.height - Consts::STRIP_PADDING * 2.0).max(0.0));
+    let segment_height = metrics
+        .segment_height
+        .min((bounds.height - metrics.strip_padding * 2.0).max(0.0));
     let y = (bounds.height - segment_height) / 2.0;
     let lit = (level.clamp(0.0, 1.0) * count).round();
-    for index in 0..Consts::SEGMENT_COUNT {
+    for index in 0..metrics.segment_count {
         let index: f32 = index.as_();
-        let x = Consts::STRIP_PADDING + index * (segment_width + Consts::SEGMENT_GAP);
+        let x = metrics.strip_padding + index * (segment_width + metrics.segment_gap);
         frame.fill_rectangle(
             Point::new(x, y),
             Size::new(segment_width, segment_height),
@@ -294,15 +295,23 @@ fn draw_segments(frame: &mut Frame, bounds: Rectangle, level: f32, palette: Rend
     }
 }
 
-fn draw_border(frame: &mut Frame, bounds: Rectangle, color: Color) {
-    let width = chrome::border_width();
-    let inset = width / 2.0;
-    frame.stroke_rectangle(
+fn draw_border(frame: &mut Frame, bounds: Rectangle, skin: FrameSkin, color: Color) {
+    if skin.border_width <= 0.0 {
+        return;
+    }
+    let inset = skin.border_width / 2.0;
+    let path = Path::rounded_rectangle(
         Point::new(inset, inset),
         Size::new(
-            (bounds.width - width).max(0.0),
-            (bounds.height - width).max(0.0),
+            (bounds.width - skin.border_width).max(0.0),
+            (bounds.height - skin.border_width).max(0.0),
         ),
-        Stroke::default().with_color(color).with_width(width),
+        skin.radius.into(),
+    );
+    frame.stroke(
+        &path,
+        Stroke::default()
+            .with_color(color)
+            .with_width(skin.border_width),
     );
 }

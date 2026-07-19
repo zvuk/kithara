@@ -26,6 +26,8 @@ pub enum UiDocError {
         expected: &'static str,
         found: &'static str,
     },
+    #[error("{origin}: invalid skin color {value:?}; expected #RRGGBB or #RRGGBBAA")]
+    BadColor { origin: SourceUri, value: String },
     #[error("{origin}: duplicate id {id:?} at {path}")]
     DuplicateId {
         origin: SourceUri,

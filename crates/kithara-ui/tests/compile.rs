@@ -20,6 +20,7 @@ fn compiles_micro_layout_end_to_end() {
         "micro.klayout.ron",
         &resolver(),
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -51,6 +52,7 @@ fn layout_module_size_override_wins_over_computed_size() {
         "override.klayout.ron",
         &resolver,
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -76,6 +78,7 @@ fn unknown_endpoint_fails_with_module_origin_and_path() {
         "player.klayout.ron",
         &resolver,
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -99,6 +102,7 @@ fn node_limit_is_enforced() {
         "micro.klayout.ron",
         &resolver(),
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
@@ -125,6 +129,7 @@ fn layout_parameter_reference_is_unresolved() {
         "layout.klayout.ron",
         &resolver,
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -155,6 +160,7 @@ fn layout_doubled_dollar_passes_literal_dollar() {
         "literal.klayout.ron",
         &resolver,
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -186,6 +192,7 @@ fn oversized_layout_source_is_rejected() {
         "large.klayout.ron",
         &resolver,
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
@@ -220,6 +227,7 @@ fn fifty_empty_columns_exceed_node_limit() {
         "nested.klayout.ron",
         &resolver,
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();

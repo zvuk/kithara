@@ -1,61 +1,36 @@
 use iced::{
-    Alignment, Background, Border, Element, Length,
+    Alignment, Background, Element, Length,
     alignment::Vertical,
-    font::Weight,
     widget::{Row, Space, column, container, container::Style as ContainerStyle, row},
 };
 use num_traits::ToPrimitive;
 
-use super::chrome;
 use crate::{
     module::DeckSummaryStyle,
-    render::{ReadValue, Reads, RenderPalette, UiEvent, WaveformView, fonts, shaped_text},
+    render::{ReadValue, Reads, Skin, UiEvent, WaveformView, fonts, shaped_text},
 };
 
-struct Consts;
+const fn em_dash() -> &'static str {
+    "\u{2014}"
+}
 
-impl Consts {
-    const ART_BORDER_WIDTH: f32 = 1.0;
-    const ART_LABEL_SIZE: f32 = 7.0;
-    const ART_SIZE: f32 = 40.0;
-    const ARTIST_SIZE: f32 = 13.0;
-    const BADGE_SIZE: f32 = 26.0;
-    const BADGE_TEXT: f32 = 14.0;
-    const BPM_CELL_WIDTH: f32 = 64.0;
-    const BPM_TEXT_SIZE: f32 = 11.0;
-    const EM_DASH: &'static str = "\u{2014}";
-    const HEADER_GAP: f32 = 12.0;
-    const HEADER_HEIGHT: f32 = 60.0;
-    const HEADER_PADDING_X: f32 = 12.0;
-    const HEADER_PADDING_Y: f32 = 9.0;
-    const MICRO_SOURCE_SIZE: f32 = 13.0;
-    const MICRO_SUMMARY_GAP: f32 = 7.0;
-    const MICRO_TITLE_SIZE: f32 = 14.0;
-    const NO_SOURCE: &'static str = "no source";
-    const NO_TRACK: &'static str = "No track loaded";
-    const READOUT_GAP: f32 = 1.0;
-    const READOUT_HEIGHT: f32 = 60.0;
-    const READOUT_LABEL_SIZE: f32 = 9.0;
-    const READOUT_VALUE_SIZE: f32 = 13.0;
-    const REMAIN_CELL_WIDTH: f32 = 72.0;
-    const SECONDS_PER_MINUTE: u64 = 60;
-    const SUMMARY_FILL_PORTION: u16 = 3;
-    const SUMMARY_HEIGHT: f32 = 34.0;
-    const SUMMARY_PADDING_X: f32 = 10.0;
-    const TELEMETRY_PADDING_X: f32 = 8.0;
-    const TELEMETRY_PADDING_Y: f32 = 3.0;
-    const TIME_PADDING_X: f32 = 11.0;
-    const TIME_TEXT_SIZE: f32 = 11.0;
-    const TIME_WIDTH: f32 = 144.0;
-    const TITLE_SIZE: f32 = 15.0;
-    const TRANSPORT_HEIGHT: f32 = 28.0;
+const fn no_source() -> &'static str {
+    "no source"
+}
+
+const fn no_track() -> &'static str {
+    "No track loaded"
+}
+
+const fn seconds_per_minute() -> u64 {
+    60
 }
 
 pub(crate) fn header<'a>(
     badge: Option<&'a str>,
     value: Option<&ReadValue<'_>>,
     reads: &dyn Reads,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let Some(badge) = badge else {
         return Space::new().into();
@@ -63,49 +38,54 @@ pub(crate) fn header<'a>(
     let analysis = waveform_value(value);
     let title = read_text(reads, "deck.track.title")
         .filter(|title| !title.is_empty())
-        .unwrap_or(Consts::NO_TRACK);
-    let source = read_text(reads, "deck.track.source_kind").unwrap_or(Consts::NO_SOURCE);
+        .unwrap_or(no_track());
+    let source = read_text(reads, "deck.track.source_kind").unwrap_or(no_source());
     let remaining = read_scalar(reads, "deck.playback.remaining_secs").unwrap_or(0.0);
+    let palette = skin.palette;
+    let art_border = skin.border(skin.deck.art_frame);
     let art = container(
         shaped_text("ART")
-            .font(fonts::MONO)
-            .size(Consts::ART_LABEL_SIZE)
+            .font(fonts::mono(skin.deck.art_label.weight))
+            .size(skin.deck.art_label.size)
             .color(palette.muted),
     )
-    .center(Consts::ART_SIZE)
+    .center(skin.deck.art_size)
     .style(move |_| {
         ContainerStyle::default()
             .background(Background::Color(palette.bg_panel))
-            .border(
-                Border::default()
-                    .width(Consts::ART_BORDER_WIDTH)
-                    .color(palette.line),
-            )
+            .border(art_border)
     });
     let summary = container(
         column![
             shaped_text(title.to_owned())
-                .font(fonts::display(Weight::Semibold))
-                .size(Consts::TITLE_SIZE)
+                .font(fonts::display(skin.deck.title.weight))
+                .size(skin.deck.title.size)
                 .color(palette.text),
             shaped_text(source.to_owned())
-                .font(fonts::SANS)
-                .size(Consts::ARTIST_SIZE)
+                .font(fonts::sans(skin.deck.artist.weight))
+                .size(skin.deck.artist.size)
                 .color(palette.text_dim),
         ]
-        .spacing(Consts::READOUT_GAP)
+        .spacing(skin.deck.readout_gap)
         .width(Length::Fill),
     )
     .height(Length::Fill)
     .align_y(Vertical::Center);
     let badge = container(
         shaped_text(badge)
-            .font(fonts::display(Weight::Bold))
-            .size(Consts::BADGE_TEXT)
+            .font(fonts::display(skin.deck.badge_text.weight))
+            .size(skin.deck.badge_text.size)
             .color(palette.bg),
     )
-    .center(Consts::BADGE_SIZE)
-    .style(move |_| ContainerStyle::default().background(Background::Color(palette.accent)));
+    .center(skin.deck.badge_size)
+    .style({
+        let badge_border = skin.border(skin.deck.badge_frame);
+        move |_| {
+            ContainerStyle::default()
+                .background(Background::Color(palette.accent))
+                .border(badge_border)
+        }
+    });
 
     let mut children: Vec<Element<'a, UiEvent>> = vec![
         art.into(),
@@ -114,28 +94,28 @@ pub(crate) fn header<'a>(
     ];
     if let Some(bpm) = analysis_bpm(analysis) {
         children.push(readout_cell(
-            palette,
+            skin,
             "BPM",
             format!("{bpm:.1}"),
-            Consts::BPM_CELL_WIDTH,
+            skin.deck.bpm_cell_width,
         ));
     }
     children.push(readout_cell(
-        palette,
+        skin,
         "REMAIN",
         format!("-{}", format_time(remaining)),
-        Consts::REMAIN_CELL_WIDTH,
+        skin.deck.remain_cell_width,
     ));
     children.push(badge.into());
 
     container(
         Row::with_children(children)
-            .spacing(Consts::HEADER_GAP)
+            .spacing(skin.deck.header_gap)
             .align_y(Alignment::Center)
             .width(Length::Fill),
     )
-    .padding([Consts::HEADER_PADDING_Y, Consts::HEADER_PADDING_X])
-    .height(Length::Fixed(Consts::HEADER_HEIGHT))
+    .padding([skin.deck.header_padding_y, skin.deck.header_padding_x])
+    .height(Length::Fixed(skin.deck.header_height))
     .width(Length::Fill)
     .align_y(Vertical::Center)
     .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_deep)))
@@ -146,50 +126,51 @@ pub(crate) fn summary<'a>(
     style: DeckSummaryStyle,
     value: Option<&ReadValue<'_>>,
     reads: &dyn Reads,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
+    let palette = skin.palette;
     let title = match value {
         Some(ReadValue::Text(value)) if !value.is_empty() => (*value).to_owned(),
         _ => read_text(reads, "deck.track.title")
             .filter(|title| !title.is_empty())
-            .unwrap_or(Consts::NO_TRACK)
+            .unwrap_or(no_track())
             .to_owned(),
     };
-    let source = read_text(reads, "deck.track.source_kind").unwrap_or(Consts::EM_DASH);
+    let source = read_text(reads, "deck.track.source_kind").unwrap_or(em_dash());
     let compact = style == DeckSummaryStyle::Micro;
     let content: Element<'a, UiEvent> = if compact {
         row![
             shaped_text(title)
-                .font(fonts::display(Weight::Medium))
-                .size(Consts::MICRO_TITLE_SIZE)
+                .font(fonts::display(skin.deck.micro_title.weight))
+                .size(skin.deck.micro_title.size)
                 .color(palette.text),
             shaped_text(source.to_owned())
-                .font(fonts::SANS)
-                .size(Consts::MICRO_SOURCE_SIZE)
+                .font(fonts::sans(skin.deck.micro_source.weight))
+                .size(skin.deck.micro_source.size)
                 .color(palette.muted),
         ]
-        .spacing(Consts::MICRO_SUMMARY_GAP)
+        .spacing(skin.deck.micro_summary_gap)
         .align_y(Alignment::Center)
         .into()
     } else {
         column![
             shaped_text(title)
-                .font(fonts::display(Weight::Semibold))
-                .size(Consts::TITLE_SIZE)
+                .font(fonts::display(skin.deck.title.weight))
+                .size(skin.deck.title.size)
                 .color(palette.text),
             shaped_text(source.to_owned())
-                .font(fonts::SANS)
-                .size(Consts::ARTIST_SIZE)
+                .font(fonts::sans(skin.deck.artist.weight))
+                .size(skin.deck.artist.size)
                 .color(palette.text_dim),
         ]
-        .spacing(Consts::READOUT_GAP)
+        .spacing(skin.deck.readout_gap)
         .into()
     };
 
     container(content)
-        .height(Length::Fixed(Consts::SUMMARY_HEIGHT))
-        .width(Length::FillPortion(Consts::SUMMARY_FILL_PORTION))
-        .padding([0.0, Consts::SUMMARY_PADDING_X])
+        .height(Length::Fixed(skin.deck.summary_height))
+        .width(Length::FillPortion(skin.deck.summary_fill))
+        .padding([skin.deck.summary_padding_y, skin.deck.summary_padding_x])
         .align_y(Vertical::Center)
         .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
         .into()
@@ -199,27 +180,28 @@ pub(crate) fn bpm<'a>(
     placeholder: Option<&str>,
     value: Option<&ReadValue<'_>>,
     reads: &dyn Reads,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
+    let palette = skin.palette;
     let content: Element<'a, UiEvent> = if let Some(bpm) = analysis_bpm(waveform_value(value)) {
         shaped_text(format!("{bpm:.1}"))
-            .font(fonts::MONO)
-            .size(Consts::BPM_TEXT_SIZE)
+            .font(fonts::mono(skin.deck.bpm_text.weight))
+            .size(skin.deck.bpm_text.size)
             .color(palette.accent_strong)
             .into()
     } else if placeholder == Some("time") {
         let position = read_scalar(reads, "deck.playback.position_secs").unwrap_or(0.0);
         column![
             shaped_text("TIME")
-                .font(fonts::MONO)
-                .size(Consts::READOUT_LABEL_SIZE)
+                .font(fonts::mono(skin.deck.readout_label.weight))
+                .size(skin.deck.readout_label.size)
                 .color(palette.muted),
             shaped_text(format_time(position))
-                .font(fonts::MONO)
-                .size(Consts::BPM_TEXT_SIZE)
+                .font(fonts::mono(skin.deck.bpm_text.weight))
+                .size(skin.deck.bpm_text.size)
                 .color(palette.accent_strong),
         ]
-        .spacing(Consts::READOUT_GAP)
+        .spacing(skin.deck.readout_gap)
         .align_x(Alignment::Center)
         .into()
     } else {
@@ -238,11 +220,12 @@ pub(crate) fn bpm<'a>(
 pub(crate) fn time<'a>(
     value: Option<&ReadValue<'_>>,
     reads: &dyn Reads,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     if !matches!(value, Some(ReadValue::Scalar(_))) {
         return Space::new().into();
     }
+    let palette = skin.palette;
     let position = read_scalar(reads, "deck.playback.position_secs").unwrap_or(0.0);
     let duration = read_scalar(reads, "deck.playback.duration_secs").unwrap_or(0.0);
     container(
@@ -251,58 +234,58 @@ pub(crate) fn time<'a>(
             format_time(position),
             format_time(duration)
         ))
-        .font(fonts::MONO)
-        .size(Consts::TIME_TEXT_SIZE)
+        .font(fonts::mono(skin.deck.time_text.weight))
+        .size(skin.deck.time_text.size)
         .color(palette.accent_strong),
     )
-    .padding([0.0, Consts::TIME_PADDING_X])
+    .padding([skin.deck.time_padding_y, skin.deck.time_padding_x])
     .center_y(Length::Fill)
     .center_x(Length::Fill)
-    .height(Length::Fixed(Consts::TRANSPORT_HEIGHT))
-    .width(Length::Fixed(Consts::TIME_WIDTH))
+    .height(Length::Fixed(skin.deck.transport_height))
+    .width(Length::Fixed(skin.deck.time_size.w.min()))
     .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_deep)))
     .into()
 }
 
 pub(crate) fn format_time(seconds: f64) -> String {
     let total = seconds.max(0.0).floor().to_u64().unwrap_or(0);
-    let minutes = total / Consts::SECONDS_PER_MINUTE;
-    let seconds = total % Consts::SECONDS_PER_MINUTE;
+    let minutes = total / seconds_per_minute();
+    let seconds = total % seconds_per_minute();
     format!("{minutes}:{seconds:02}")
 }
 
 fn readout_cell(
-    palette: RenderPalette,
+    skin: &Skin,
     caption: &'static str,
     value: String,
     width: f32,
 ) -> Element<'static, UiEvent> {
+    let palette = skin.palette;
     container(
         column![
             shaped_text(caption)
-                .font(fonts::MONO)
-                .size(Consts::READOUT_LABEL_SIZE)
+                .font(fonts::mono(skin.deck.readout_label.weight))
+                .size(skin.deck.readout_label.size)
                 .color(palette.muted),
             shaped_text(value)
-                .font(fonts::MONO)
-                .size(Consts::READOUT_VALUE_SIZE)
+                .font(fonts::mono(skin.deck.readout_value.weight))
+                .size(skin.deck.readout_value.size)
                 .color(palette.accent_strong),
         ]
-        .spacing(Consts::READOUT_GAP)
+        .spacing(skin.deck.readout_gap)
         .align_x(Alignment::End),
     )
-    .padding([Consts::TELEMETRY_PADDING_Y, Consts::TELEMETRY_PADDING_X])
-    .height(Length::Fixed(Consts::READOUT_HEIGHT))
+    .padding([skin.deck.telemetry_padding_y, skin.deck.telemetry_padding_x])
+    .height(Length::Fixed(skin.deck.readout_height))
     .width(Length::Fixed(width))
     .center_y(Length::Fill)
-    .style(move |_| {
-        ContainerStyle::default()
-            .background(Background::Color(palette.bg_inset))
-            .border(
-                Border::default()
-                    .width(chrome::border_width())
-                    .color(palette.line),
-            )
+    .style({
+        let border = skin.border(skin.deck.readout_frame);
+        move |_| {
+            ContainerStyle::default()
+                .background(Background::Color(palette.bg_inset))
+                .border(border)
+        }
     })
     .into()
 }

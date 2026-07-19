@@ -10,26 +10,23 @@ use iced::{
     },
 };
 
-use crate::render::RenderPalette;
-
-struct Consts;
-
-impl Consts {
-    const BORDER_WIDTH: f32 = 1.0;
-    const CORNER_TICK_SIZE: f32 = 10.0;
-    const CORNER_TICK_WIDTH: f32 = 2.0;
-}
+use crate::render::Skin;
 
 pub fn module_chrome<'a, Message: 'a, C: Into<Element<'a, Message>>>(
     content: C,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, Message> {
+    let palette = skin.palette;
+    let border = skin.border(skin.chrome.frame);
     let body = container(content)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(move |_| module_style(palette));
+        .style(move |_| module_style(palette, border));
     let ticks = Canvas::new(CornerTicks {
-        color: palette.accent,
+        color: skin.color(skin.chrome.corner_color),
+        size: skin.chrome.corner_size,
+        width: skin.chrome.corner_width,
+        offset: skin.chrome.corner_offset,
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -41,8 +38,10 @@ pub fn module_chrome<'a, Message: 'a, C: Into<Element<'a, Message>>>(
 }
 
 pub fn secondary_button_style(
-    palette: RenderPalette,
-) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle {
+    skin: &Skin,
+) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle + 'static {
+    let palette = skin.palette;
+    let border = skin.border(skin.chrome.secondary_frame);
     move |_theme, status| {
         let background = match status {
             ButtonStatus::Hovered => palette.bg_panel_2,
@@ -52,26 +51,29 @@ pub fn secondary_button_style(
         ButtonStyle {
             background: Some(Background::Color(background)),
             text_color: palette.text,
-            border: Border::default()
-                .width(Consts::BORDER_WIDTH)
-                .color(palette.line),
+            border,
             ..ButtonStyle::default()
         }
     }
 }
 
 pub(crate) fn text_input_style(
-    palette: RenderPalette,
-) -> impl Fn(&Theme, TextInputStatus) -> TextInputStyle {
+    skin: &Skin,
+) -> impl Fn(&Theme, TextInputStatus) -> TextInputStyle + 'static {
+    let palette = skin.palette;
+    let metrics = skin.text_input;
+    let border_color = skin.color(metrics.border);
     move |_theme, status| TextInputStyle {
         background: Background::Color(palette.bg_inset),
-        border: Border::default()
-            .width(if matches!(status, TextInputStatus::Focused { .. }) {
-                Consts::BORDER_WIDTH
+        border: Border {
+            width: if matches!(status, TextInputStatus::Focused { .. }) {
+                metrics.border_width
             } else {
-                0.0
-            })
-            .color(palette.accent),
+                metrics.idle_border_width
+            },
+            color: border_color,
+            radius: metrics.radius.into(),
+        },
         icon: palette.muted,
         placeholder: palette.muted,
         value: palette.text,
@@ -79,22 +81,17 @@ pub(crate) fn text_input_style(
     }
 }
 
-pub(crate) const fn border_width() -> f32 {
-    Consts::BORDER_WIDTH
-}
-
-fn module_style(palette: RenderPalette) -> ContainerStyle {
+fn module_style(palette: crate::render::theme::RenderPalette, border: Border) -> ContainerStyle {
     ContainerStyle::default()
         .background(Background::Color(palette.bg_panel))
-        .border(
-            Border::default()
-                .width(Consts::BORDER_WIDTH)
-                .color(palette.line),
-        )
+        .border(border)
 }
 
 struct CornerTicks {
     color: iced::Color,
+    size: f32,
+    width: f32,
+    offset: f32,
 }
 
 impl<Message> canvas::Program<Message> for CornerTicks {
@@ -109,29 +106,29 @@ impl<Message> canvas::Program<Message> for CornerTicks {
         _cursor: iced::mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let right = (bounds.width - Consts::CORNER_TICK_WIDTH).max(0.0);
-        let bottom = (bounds.height - Consts::CORNER_TICK_WIDTH).max(0.0);
-        let right_tick = (bounds.width - Consts::CORNER_TICK_SIZE).max(0.0);
-        let bottom_tick = (bounds.height - Consts::CORNER_TICK_SIZE).max(0.0);
+        let right = (bounds.width - self.offset - self.width).max(0.0);
+        let bottom = (bounds.height - self.offset - self.width).max(0.0);
+        let right_tick = (bounds.width - self.offset - self.size).max(0.0);
+        let bottom_tick = (bounds.height - self.offset - self.size).max(0.0);
 
         frame.fill_rectangle(
-            Point::ORIGIN,
-            Size::new(Consts::CORNER_TICK_SIZE, Consts::CORNER_TICK_WIDTH),
+            Point::new(self.offset, self.offset),
+            Size::new(self.size, self.width),
             self.color,
         );
         frame.fill_rectangle(
-            Point::ORIGIN,
-            Size::new(Consts::CORNER_TICK_WIDTH, Consts::CORNER_TICK_SIZE),
+            Point::new(self.offset, self.offset),
+            Size::new(self.width, self.size),
             self.color,
         );
         frame.fill_rectangle(
             Point::new(right_tick, bottom),
-            Size::new(Consts::CORNER_TICK_SIZE, Consts::CORNER_TICK_WIDTH),
+            Size::new(self.size, self.width),
             self.color,
         );
         frame.fill_rectangle(
             Point::new(right, bottom_tick),
-            Size::new(Consts::CORNER_TICK_WIDTH, Consts::CORNER_TICK_SIZE),
+            Size::new(self.width, self.size),
             self.color,
         );
 

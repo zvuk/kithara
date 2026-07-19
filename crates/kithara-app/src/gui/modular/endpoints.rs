@@ -129,6 +129,7 @@ mod tests {
                 preset,
                 &builtin::resolver(),
                 &registry(),
+                builtin::skin_doc(),
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| panic!("{preset}: {error}"));
@@ -141,6 +142,7 @@ mod tests {
             builtin::MICRO_PRESET,
             &builtin::resolver(),
             &registry(),
+            builtin::skin_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("micro preset must compile: {error}"));
@@ -155,6 +157,7 @@ mod tests {
             builtin::PLAYER_PRESET,
             &builtin::resolver(),
             &registry(),
+            builtin::skin_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("player preset must compile: {error}"));

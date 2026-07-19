@@ -3,7 +3,7 @@ use iced::{
     widget::{button, container, container::Style as ContainerStyle},
 };
 use kithara_ui::{
-    render::{RenderPalette, UiEvent, fonts, shaped_text, tree},
+    render::{Skin, UiEvent, fonts, shaped_text, tree},
     widgets::{module_chrome, secondary_button_style},
 };
 
@@ -21,7 +21,8 @@ impl Consts {
 }
 
 pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
-    let palette = state.palette;
+    let skin = state.skin;
+    let palette = skin.palette;
     let reads = UiReads::new(
         &state.ui_state,
         &state.library_query,
@@ -32,8 +33,8 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
         || empty_state(state),
         |compiled| {
             filter::visible(&compiled.root, &state.modular.hidden, compiled).map_or_else(
-                || hidden_state(palette),
-                |root| tree::render(&root, compiled, &reads, palette).map(Message::Modular),
+                || hidden_state(skin),
+                |root| tree::render(&root, compiled, &reads, skin).map(Message::Modular),
             )
         },
     );
@@ -46,7 +47,8 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn empty_state(state: &Kithara) -> Element<'_, Message> {
-    let palette = state.palette;
+    let skin = state.skin;
+    let palette = skin.palette;
     let content: Element<'_, Message> = state.modular.error.as_ref().map_or_else(
         || {
             button(
@@ -61,7 +63,7 @@ fn empty_state(state: &Kithara) -> Element<'_, Message> {
                 .center_y(Length::Fill),
             )
             .padding([Consts::LOAD_BUTTON_PADDING_Y, Consts::LOAD_BUTTON_PADDING_X])
-            .style(secondary_button_style(palette))
+            .style(secondary_button_style(skin))
             .on_press(Message::Modular(UiEvent::SelectPreset(
                 state.modular.preset.clone(),
             )))
@@ -81,10 +83,11 @@ fn empty_state(state: &Kithara) -> Element<'_, Message> {
             .into()
         },
     );
-    module_chrome(content, palette)
+    module_chrome(content, skin)
 }
 
-fn hidden_state(palette: RenderPalette) -> Element<'static, Message> {
+fn hidden_state(skin: &Skin) -> Element<'static, Message> {
+    let palette = skin.palette;
     let content = container(
         shaped_text("All modules are hidden")
             .font(fonts::SANS)
@@ -95,5 +98,5 @@ fn hidden_state(palette: RenderPalette) -> Element<'static, Message> {
     .height(Length::Fill)
     .center_x(Length::Fill)
     .center_y(Length::Fill);
-    module_chrome(content, palette)
+    module_chrome(content, skin)
 }

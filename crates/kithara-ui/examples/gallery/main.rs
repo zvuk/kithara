@@ -1,14 +1,12 @@
 mod mock;
 mod shot;
 
-use iced::{
-    Color, Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings,
-};
+use iced::{Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings};
 use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
-    render::{RenderPalette, UiEvent, fonts, tree},
+    render::{Skin, UiEvent, fonts, tree},
     source::{MemResolver, UiConfig},
 };
 
@@ -91,7 +89,7 @@ enum Message {
 
 struct Gallery {
     layouts: [CompiledUi; 4],
-    palette: RenderPalette,
+    skin: &'static Skin,
     reads: MockReads,
     shot: Option<shot::ShotPlan>,
     window_id: window::Id,
@@ -102,14 +100,19 @@ impl Gallery {
         let resolver = resolver();
         let endpoints = mock::registry();
         let layouts = Tab::ALL.map(|tab| {
-            compile(tab.entry(), &resolver, &endpoints, &UiConfig::default()).unwrap_or_else(
-                |error| {
-                    panic!(
-                        "embedded gallery document {} must compile: {error}",
-                        tab.entry()
-                    )
-                },
+            compile(
+                tab.entry(),
+                &resolver,
+                &endpoints,
+                builtin::skin_doc(),
+                &UiConfig::default(),
             )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "embedded gallery document {} must compile: {error}",
+                    tab.entry()
+                )
+            })
         });
         let settings = Settings {
             size: Size::new(Consts::WIDTH, Consts::HEIGHT),
@@ -121,7 +124,7 @@ impl Gallery {
         (
             Self {
                 layouts,
-                palette: palette(),
+                skin: builtin::skin(),
                 reads: MockReads::default(),
                 shot: shot::ShotPlan::read(),
                 window_id,
@@ -142,7 +145,7 @@ impl Gallery {
 fn main() -> iced::Result {
     let daemon = iced::daemon(Gallery::new, update, view)
         .title(|_state: &Gallery, _window| "Kithara UI Gallery".to_owned())
-        .theme(|state: &Gallery, _window| theme(state.palette))
+        .theme(|state: &Gallery, _window| theme(state.skin))
         .subscription(subscription)
         .default_font(fonts::SANS);
     fonts::FONT_BYTES
@@ -178,7 +181,7 @@ fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
         &state.compiled().root,
         state.compiled(),
         &state.reads,
-        state.palette,
+        state.skin,
     )
     .map(Message::Ui)
 }
@@ -203,32 +206,8 @@ fn resolver() -> MemResolver {
     resolver
 }
 
-fn palette() -> RenderPalette {
-    RenderPalette::builder()
-        .bg(Color::from_rgb8(18, 18, 31))
-        .bg_deep(Color::from_rgb8(11, 11, 22))
-        .bg_inset(Color::from_rgb8(21, 21, 42))
-        .bg_panel(Color::from_rgb8(32, 32, 58))
-        .bg_panel_2(Color::from_rgb8(38, 38, 74))
-        .bg_select(Color::from_rgb8(38, 38, 74))
-        .line(Color::from_rgb8(59, 59, 103))
-        .line_soft(Color::from_rgb8(42, 42, 76))
-        .text(Color::from_rgb8(230, 230, 230))
-        .text_dim(Color::from_rgb8(167, 170, 194))
-        .muted(Color::from_rgb8(111, 113, 137))
-        .accent(Color::from_rgb8(187, 148, 66))
-        .accent_strong(Color::from_rgb8(214, 173, 89))
-        .accent_soft(Color::from_rgba8(187, 148, 66, 0.18))
-        .danger(Color::from_rgb8(230, 77, 77))
-        .success(Color::from_rgb8(102, 204, 102))
-        .warning(Color::from_rgb8(230, 179, 51))
-        .wave_low(Color::from_rgb8(235, 41, 140))
-        .wave_mid(Color::from_rgb8(242, 209, 41))
-        .wave_high(Color::from_rgb8(46, 199, 235))
-        .build()
-}
-
-fn theme(palette: RenderPalette) -> Theme {
+fn theme(skin: &Skin) -> Theme {
+    let palette = skin.palette;
     Theme::custom(
         "Kithara".to_owned(),
         iced::theme::Palette {

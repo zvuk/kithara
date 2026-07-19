@@ -1,7 +1,6 @@
 use iced::{
-    Alignment, Background, Element, Font, Length, Theme,
+    Alignment, Background, Element, Length, Theme,
     alignment::{Horizontal, Vertical},
-    font::Weight,
     widget::{
         Column, Row, Space, button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -12,45 +11,26 @@ use iced::{
 };
 
 use super::{chrome, deck};
-use crate::render::{
-    ControlAction, ReadValue, Reads, RenderPalette, TrackRow, UiEvent, fonts, shaped_text,
-};
+use crate::render::{ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, fonts, shaped_text};
 
-struct Consts;
+const fn em_dash() -> &'static str {
+    "\u{2014}"
+}
 
-impl Consts {
-    const ARTIST_WIDTH: f32 = 170.0;
-    const CHIP_SIZE: f32 = 18.0;
-    const CHIP_TEXT_SIZE: f32 = 14.0;
-    const COUNT_PADDING_X: f32 = 11.0;
-    const COUNT_TEXT_SIZE: f32 = 9.0;
-    const EM_DASH: &'static str = "\u{2014}";
-    const GRID_GAP: f32 = 1.0;
-    const HEADER_HEIGHT: f32 = 24.0;
-    const HEADER_TEXT_SIZE: f32 = 8.0;
-    const INPUT_PADDING_X: f32 = 12.0;
-    const INPUT_TEXT_SIZE: f32 = 12.0;
-    const NUMBER_TEXT_SIZE: f32 = 10.0;
-    const NUMBER_WIDTH: f32 = 44.0;
-    const ROW_HEIGHT: f32 = 30.0;
-    const ROW_TEXT_SIZE: f32 = 13.0;
-    const SEARCH_HEIGHT: f32 = 30.0;
-    const SEARCH_PLACEHOLDER: &'static str = "Search title, artist, BPM, key\u{2026}";
-    const TIME_PADDING_X: f32 = 12.0;
-    const TIME_TEXT_SIZE: f32 = 12.0;
-    const TIME_WIDTH: f32 = 70.0;
-    const TITLE_GAP: f32 = 8.0;
+const fn search_placeholder() -> &'static str {
+    "Search title, artist, BPM, key\u{2026}"
 }
 
 pub(crate) fn view<'a>(
     path: &str,
     value: Option<&ReadValue<'_>>,
     reads: &dyn Reads,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let Some(ReadValue::TrackList(tracks)) = value else {
         return Space::new().into();
     };
+    let palette = skin.palette;
     let query = read_text(reads, "library.query").unwrap_or("").to_owned();
     let query_normalized = query.trim().to_lowercase();
     let bpm = current_bpm(reads);
@@ -60,65 +40,71 @@ pub(crate) fn view<'a>(
         .filter(|(_, track)| track_matches(track, &query_normalized, bpm))
         .collect();
     let count = format!("{} / {}", filtered.len(), tracks.len());
-    let search = text_input(Consts::SEARCH_PLACEHOLDER, &query)
+    let search = text_input(search_placeholder(), &query)
         .on_input(UiEvent::LibraryQuery)
-        .font(fonts::SANS)
-        .size(Consts::INPUT_TEXT_SIZE)
-        .padding([0.0, Consts::INPUT_PADDING_X])
-        .style(chrome::text_input_style(palette))
+        .font(fonts::sans(skin.text_input.font.weight))
+        .size(skin.text_input.font.size)
+        .padding([skin.text_input.padding_y, skin.text_input.padding_x])
+        .style(chrome::text_input_style(skin))
         .width(Length::Fill);
     let search_bar = row![
         container(search)
-            .height(Length::Fixed(Consts::SEARCH_HEIGHT))
+            .height(Length::Fixed(skin.text_input.height))
             .width(Length::Fill)
             .align_y(Vertical::Center),
         container(
             shaped_text(count)
-                .font(fonts::MONO)
-                .size(Consts::COUNT_TEXT_SIZE)
+                .font(fonts::mono(skin.track_list.count_text.weight))
+                .size(skin.track_list.count_text.size)
                 .color(palette.muted),
         )
-        .padding([0.0, Consts::COUNT_PADDING_X])
-        .height(Length::Fixed(Consts::SEARCH_HEIGHT))
+        .padding([
+            skin.track_list.count_padding_y,
+            skin.track_list.count_padding_x,
+        ])
+        .height(Length::Fixed(skin.text_input.height))
         .center_y(Length::Fill)
         .style(move |_| {
             ContainerStyle::default().background(Background::Color(palette.bg_panel))
         }),
     ]
-    .spacing(Consts::GRID_GAP)
+    .spacing(skin.track_list.grid_gap)
     .align_y(Alignment::Center)
-    .height(Length::Fixed(Consts::SEARCH_HEIGHT))
+    .height(Length::Fixed(skin.text_input.height))
     .width(Length::Fill);
 
     let table_header = row![
-        header_cell(palette, "#", Consts::NUMBER_WIDTH),
+        header_cell(skin, "#", skin.track_list.number_width),
         container(
             shaped_text("TITLE")
-                .font(fonts::MONO)
-                .size(Consts::HEADER_TEXT_SIZE)
+                .font(fonts::mono(skin.track_list.header_text.weight))
+                .size(skin.track_list.header_text.size)
                 .color(palette.muted),
         )
         .width(Length::Fill)
         .height(Length::Fill)
         .align_y(Vertical::Center),
-        header_cell(palette, "ARTIST", Consts::ARTIST_WIDTH),
-        header_cell(palette, "TIME", Consts::TIME_WIDTH),
+        header_cell(skin, "ARTIST", skin.track_list.artist_width),
+        header_cell(skin, "TIME", skin.track_list.time_width),
     ]
     .align_y(Alignment::Center)
-    .height(Length::Fixed(Consts::HEADER_HEIGHT))
+    .height(Length::Fixed(skin.track_list.header_height))
     .width(Length::Fill);
     let table_header = container(table_header)
-        .padding([0.0, Consts::TIME_PADDING_X])
+        .padding([
+            skin.track_list.time_padding_y,
+            skin.track_list.time_padding_x,
+        ])
         .align_y(Vertical::Center)
         .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)));
 
     let duration = read_scalar(reads, "deck.playback.duration_secs").unwrap_or(0.0);
     let rows = filtered
         .into_iter()
-        .map(|(index, track)| track_row(palette, path, index, *track, duration));
+        .map(|(index, track)| track_row(skin, path, index, *track, duration));
     let rows = container(
         Column::with_children(rows)
-            .spacing(Consts::GRID_GAP)
+            .spacing(skin.track_list.grid_gap)
             .width(Length::Fill),
     )
     .style(move |_| ContainerStyle::default().background(Background::Color(palette.line_soft)));
@@ -126,7 +112,7 @@ pub(crate) fn view<'a>(
 
     container(
         column![search_bar, table_header, table]
-            .spacing(Consts::GRID_GAP)
+            .spacing(skin.track_list.grid_gap)
             .width(Length::Fill)
             .height(Length::Fill),
     )
@@ -137,45 +123,50 @@ pub(crate) fn view<'a>(
 }
 
 fn track_row(
-    palette: RenderPalette,
+    skin: &Skin,
     path: &str,
     index: usize,
     track: TrackRow<'_>,
     duration: f64,
 ) -> Element<'static, UiEvent> {
+    let palette = skin.palette;
     let time = if track.current && duration > 0.0 {
         deck::format_time(duration)
     } else {
-        track.time.unwrap_or(Consts::EM_DASH).to_owned()
+        track.time.unwrap_or(em_dash()).to_owned()
     };
     let title = if track.title.is_empty() {
-        Consts::EM_DASH
+        em_dash()
     } else {
         track.title
     };
-    let artist = track.artist.unwrap_or(Consts::EM_DASH);
+    let artist = track.artist.unwrap_or(em_dash());
     let mut title_children: Vec<Element<'static, UiEvent>> = Vec::new();
     if track.current {
         title_children.push(
             container(
                 shaped_text("A")
-                    .font(fonts::display(Weight::Bold))
-                    .size(Consts::CHIP_TEXT_SIZE)
+                    .font(fonts::display(skin.track_list.chip_text.weight))
+                    .size(skin.track_list.chip_text.size)
                     .color(palette.bg),
             )
-            .center(Consts::CHIP_SIZE)
-            .style(move |_| ContainerStyle::default().background(Background::Color(palette.accent)))
+            .center(skin.track_list.chip_size)
+            .style({
+                let border = skin.border(skin.track_list.chip_frame);
+                move |_| {
+                    ContainerStyle::default()
+                        .background(Background::Color(palette.accent))
+                        .border(border)
+                }
+            })
             .into(),
         );
     }
     title_children.push(
         container(
             shaped_text(title.to_owned())
-                .font(Font {
-                    weight: Weight::Medium,
-                    ..fonts::SANS
-                })
-                .size(Consts::ROW_TEXT_SIZE)
+                .font(fonts::sans(skin.track_list.row_text.weight))
+                .size(skin.track_list.row_text.size)
                 .color(palette.text),
         )
         .width(Length::Fill)
@@ -188,33 +179,33 @@ fn track_row(
         row![
             container(
                 shaped_text(format!("{:02}", index + 1))
-                    .font(fonts::MONO)
-                    .size(Consts::NUMBER_TEXT_SIZE)
+                    .font(fonts::mono(skin.track_list.number_text.weight))
+                    .size(skin.track_list.number_text.size)
                     .color(palette.muted),
             )
-            .width(Length::Fixed(Consts::NUMBER_WIDTH))
+            .width(Length::Fixed(skin.track_list.number_width))
             .height(Length::Fill)
             .align_y(Vertical::Center),
             Row::with_children(title_children)
-                .spacing(Consts::TITLE_GAP)
+                .spacing(skin.track_list.title_gap)
                 .align_y(Alignment::Center)
                 .width(Length::Fill),
             container(
                 shaped_text(artist.to_owned())
-                    .font(fonts::SANS)
-                    .size(Consts::TIME_TEXT_SIZE)
+                    .font(fonts::sans(skin.track_list.time_text.weight))
+                    .size(skin.track_list.time_text.size)
                     .color(palette.text_dim),
             )
-            .width(Length::Fixed(Consts::ARTIST_WIDTH))
+            .width(Length::Fixed(skin.track_list.artist_width))
             .height(Length::Fill)
             .align_y(Vertical::Center),
             container(
                 shaped_text(time)
-                    .font(fonts::MONO)
-                    .size(Consts::TIME_TEXT_SIZE)
+                    .font(fonts::mono(skin.track_list.time_text.weight))
+                    .size(skin.track_list.time_text.size)
                     .color(palette.text_dim),
             )
-            .width(Length::Fixed(Consts::TIME_WIDTH))
+            .width(Length::Fixed(skin.track_list.time_width))
             .height(Length::Fill)
             .align_x(Horizontal::Right)
             .align_y(Vertical::Center),
@@ -222,10 +213,13 @@ fn track_row(
         .align_y(Alignment::Center)
         .width(Length::Fill),
     )
-    .padding([0.0, Consts::TIME_PADDING_X])
-    .height(Length::Fixed(Consts::ROW_HEIGHT))
+    .padding([
+        skin.track_list.time_padding_y,
+        skin.track_list.time_padding_x,
+    ])
+    .height(Length::Fixed(skin.track_list.row_height))
     .width(Length::Fill)
-    .style(track_button_style(palette, track.selected))
+    .style(track_button_style(skin, track.selected))
     .on_press(UiEvent::Control {
         path: path.to_owned(),
         action: ControlAction::SelectIndex(index),
@@ -233,15 +227,12 @@ fn track_row(
     .into()
 }
 
-fn header_cell(
-    palette: RenderPalette,
-    label: &'static str,
-    width: f32,
-) -> Element<'static, UiEvent> {
+fn header_cell(skin: &Skin, label: &'static str, width: f32) -> Element<'static, UiEvent> {
+    let palette = skin.palette;
     container(
         shaped_text(label)
-            .font(fonts::MONO)
-            .size(Consts::HEADER_TEXT_SIZE)
+            .font(fonts::mono(skin.track_list.header_text.weight))
+            .size(skin.track_list.header_text.size)
             .color(palette.muted),
     )
     .width(Length::Fixed(width))
@@ -284,9 +275,11 @@ fn read_scalar(reads: &dyn Reads, endpoint: &str) -> Option<f64> {
 }
 
 fn track_button_style(
-    palette: RenderPalette,
+    skin: &Skin,
     selected: bool,
-) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle {
+) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle + 'static {
+    let palette = skin.palette;
+    let border = skin.border(skin.track_list.row_frame);
     move |_theme, status| {
         let background = match status {
             ButtonStatus::Pressed => palette.accent_soft,
@@ -299,6 +292,7 @@ fn track_button_style(
         ButtonStyle {
             background: Some(Background::Color(background)),
             text_color: palette.text,
+            border,
             ..ButtonStyle::default()
         }
     }

@@ -1,9 +1,7 @@
-use bon::Builder;
 use iced::Color;
 
 /// Resolved color palette consumed by renderers.
-#[derive(Builder, Clone, Copy, Debug, PartialEq)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderPalette {
     pub bg: Color,
     pub bg_deep: Color,

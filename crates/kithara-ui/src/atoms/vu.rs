@@ -8,32 +8,24 @@ use iced::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::render::{ControlAction, ReadValue, RenderPalette, StereoLevels, UiEvent};
-
-struct Consts;
-
-impl Consts {
-    const DANGER_THRESHOLD: f32 = 0.83;
-    const SEGMENT_GAP: f32 = 2.0;
-    const SEGMENT_HEIGHT: f32 = 4.0;
-    const SEGMENT_INSET_X: f32 = 4.0;
-    const THUMB_HEIGHT: f32 = 9.0;
-    const THUMB_LINE_HEIGHT: f32 = 1.0;
-    const WARNING_THRESHOLD: f32 = 0.66;
-}
+use crate::{
+    render::{ControlAction, ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
+    skin::VuVerticalSkin,
+};
 
 pub(crate) fn view<'a>(
     path: &str,
     value: Option<&ReadValue<'_>>,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let Some(ReadValue::Stereo(levels)) = value else {
         return Space::new().into();
     };
 
     Canvas::new(VerticalVu {
+        metrics: skin.vu_vertical,
         levels: *levels,
-        palette,
+        palette: skin.palette,
         path: path.to_owned(),
     })
     .width(Length::Fill)
@@ -42,6 +34,7 @@ pub(crate) fn view<'a>(
 }
 
 struct VerticalVu {
+    metrics: VuVerticalSkin,
     levels: StereoLevels,
     palette: RenderPalette,
     path: String,
@@ -88,8 +81,14 @@ impl canvas::Program<UiEvent> for VerticalVu {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
-        draw_segments(&mut frame, bounds, self.levels, self.palette);
-        draw_thumb(&mut frame, bounds, self.levels.volume, self.palette);
+        draw_segments(&mut frame, bounds, self.levels, self.metrics, self.palette);
+        draw_thumb(
+            &mut frame,
+            bounds,
+            self.levels.volume,
+            self.metrics,
+            self.palette,
+        );
         vec![frame.into_geometry()]
     }
 
@@ -125,10 +124,11 @@ fn draw_segments(
     frame: &mut Frame,
     bounds: Rectangle,
     levels: StereoLevels,
+    metrics: VuVerticalSkin,
     palette: RenderPalette,
 ) {
-    let step = Consts::SEGMENT_HEIGHT + Consts::SEGMENT_GAP;
-    let count = ((bounds.height + Consts::SEGMENT_GAP) / step).floor();
+    let step = metrics.segment_height + metrics.segment_gap;
+    let count = ((bounds.height + metrics.segment_gap) / step).floor();
     if count <= 0.0 {
         return;
     }
@@ -136,39 +136,45 @@ fn draw_segments(
     let count_usize: usize = count.as_();
     let level = levels.l.max(levels.r).clamp(0.0, 1.0);
     let lit = (level * count).round();
-    let width = (bounds.width - Consts::SEGMENT_INSET_X * 2.0).max(0.0);
+    let width = (bounds.width - metrics.segment_inset_x * 2.0).max(0.0);
     for index in 0..count_usize {
         let index: f32 = index.as_();
         let ratio = index / count;
         let color = if index >= lit {
             palette.bg_inset
-        } else if ratio > Consts::DANGER_THRESHOLD {
+        } else if ratio > metrics.danger_threshold {
             palette.danger
-        } else if ratio > Consts::WARNING_THRESHOLD {
+        } else if ratio > metrics.warning_threshold {
             palette.warning
         } else {
             palette.success
         };
-        let y = bounds.height - Consts::SEGMENT_HEIGHT - index * step;
+        let y = bounds.height - metrics.segment_height - index * step;
         frame.fill_rectangle(
-            Point::new(Consts::SEGMENT_INSET_X, y),
-            Size::new(width, Consts::SEGMENT_HEIGHT),
+            Point::new(metrics.segment_inset_x, y),
+            Size::new(width, metrics.segment_height),
             color,
         );
     }
 }
 
-fn draw_thumb(frame: &mut Frame, bounds: Rectangle, volume: f32, palette: RenderPalette) {
+fn draw_thumb(
+    frame: &mut Frame,
+    bounds: Rectangle,
+    volume: f32,
+    metrics: VuVerticalSkin,
+    palette: RenderPalette,
+) {
     let center_y = (1.0 - volume.clamp(0.0, 1.0)) * bounds.height;
-    let y = center_y - Consts::THUMB_HEIGHT / 2.0;
+    let y = center_y - metrics.thumb_height / 2.0;
     frame.fill_rectangle(
         Point::new(0.0, y),
-        Size::new(bounds.width, Consts::THUMB_HEIGHT),
+        Size::new(bounds.width, metrics.thumb_height),
         palette.accent,
     );
     frame.fill_rectangle(
-        Point::new(0.0, center_y - Consts::THUMB_LINE_HEIGHT / 2.0),
-        Size::new(bounds.width, Consts::THUMB_LINE_HEIGHT),
+        Point::new(0.0, center_y - metrics.thumb_line_height / 2.0),
+        Size::new(bounds.width, metrics.thumb_line_height),
         palette.bg_deep,
     );
 }

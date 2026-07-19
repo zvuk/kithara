@@ -15,7 +15,7 @@ pub mod source;
 #[cfg(feature = "render")]
 pub mod widgets;
 
-pub use doc::{envelope, layout, module};
+pub use doc::{envelope, layout, module, skin};
 
 mod doc;
 mod resolve;

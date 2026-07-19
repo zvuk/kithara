@@ -6,6 +6,7 @@ use crate::{
     registry::EndpointRegistry,
     resolve::load_module_graph,
     size::{SizeSpec, combine_horizontal, combine_vertical, compute_size},
+    skin::SkinDoc,
     source::{SourceResolver, UiConfig},
     validate,
 };
@@ -51,6 +52,7 @@ pub fn compile(
     entry: &str,
     resolver: &dyn SourceResolver,
     endpoints: &dyn EndpointRegistry,
+    skin: &SkinDoc,
     config: &UiConfig,
 ) -> Result<CompiledUi, UiDocError> {
     let loaded = resolver.load(None, entry)?;
@@ -69,6 +71,7 @@ pub fn compile(
     let root = Compiler {
         resolver,
         endpoints,
+        skin,
         config,
         budget: &mut budget,
         interner: &mut interner,
@@ -82,6 +85,7 @@ pub fn compile(
 struct Compiler<'a> {
     resolver: &'a dyn SourceResolver,
     endpoints: &'a dyn EndpointRegistry,
+    skin: &'a SkinDoc,
     config: &'a UiConfig,
     budget: &'a mut Budget,
     interner: &'a mut Interner,
@@ -153,7 +157,7 @@ impl Compiler<'_> {
                     &mut visitor,
                 )
                 .expand_module(&set, &module_uri, &args, &instance.0)?;
-                let size = (*size).unwrap_or_else(|| compute_size(&root));
+                let size = (*size).unwrap_or_else(|| compute_size(&root, self.skin));
                 let instance = self.interner.intern(&instance.0, layout_uri)?;
                 Ok(CompiledNode::Module {
                     instance,

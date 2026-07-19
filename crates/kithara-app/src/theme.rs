@@ -2,10 +2,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
-/// Application color palette shared between TUI and GUI frontends.
-///
-/// Single source of truth — both frontends convert from this
-/// to their framework-specific color types via [`From`].
+/// Application color palette for the TUI frontend.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct Palette {
@@ -39,82 +36,6 @@ pub struct Palette {
     pub text_dim: Rgb,
     /// Warning indicator.
     pub warning: Rgb,
-    /// Darker surfaces used by the modular GUI canvas.
-    pub canvas: CanvasPalette,
-}
-
-/// Dark modular-canvas palette layered on the canonical application colors.
-#[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
-pub struct CanvasPalette {
-    /// Window background.
-    pub bg: Rgb,
-    /// Structural-gap and waveform background.
-    pub bg_deep: Rgb,
-    /// Module background.
-    pub bg_inset: Rgb,
-    /// Control background.
-    pub bg_panel: Rgb,
-    /// Hover and grip background.
-    pub bg_panel_2: Rgb,
-    /// Structural border.
-    pub line: Rgb,
-    /// Subtle divider.
-    pub line_soft: Rgb,
-    /// Inactive label text.
-    pub muted: Rgb,
-    /// Primary text.
-    pub text: Rgb,
-    /// Secondary text.
-    pub text_dim: Rgb,
-    /// High-frequency waveform band.
-    pub wave_high: Rgb,
-    /// Low-frequency waveform band.
-    pub wave_low: Rgb,
-    /// Mid-frequency waveform band.
-    pub wave_mid: Rgb,
-}
-
-impl CanvasPalette {
-    const BG: Rgb = Rgb(18, 18, 31);
-    const BG_DEEP: Rgb = Rgb(11, 11, 22);
-    const BG_INSET: Rgb = Rgb(21, 21, 42);
-    const BG_PANEL: Rgb = Rgb(32, 32, 58);
-    const BG_PANEL_2: Rgb = Rgb(38, 38, 74);
-    const LINE: Rgb = Rgb(59, 59, 103);
-    const LINE_SOFT: Rgb = Rgb(42, 42, 76);
-    const MUTED: Rgb = Rgb(111, 113, 137);
-    const TEXT: Rgb = Rgb(230, 230, 230);
-    const TEXT_DIM: Rgb = Rgb(167, 170, 194);
-    const WAVE_HIGH: Rgb = Rgb(46, 199, 235);
-    const WAVE_LOW: Rgb = Rgb(235, 41, 140);
-    const WAVE_MID: Rgb = Rgb(242, 209, 41);
-
-    /// Default palette for the modular canvas.
-    #[must_use]
-    pub const fn kithara() -> Self {
-        Self {
-            bg: Self::BG,
-            bg_deep: Self::BG_DEEP,
-            bg_inset: Self::BG_INSET,
-            bg_panel: Self::BG_PANEL,
-            bg_panel_2: Self::BG_PANEL_2,
-            line: Self::LINE,
-            line_soft: Self::LINE_SOFT,
-            muted: Self::MUTED,
-            text: Self::TEXT,
-            text_dim: Self::TEXT_DIM,
-            wave_high: Self::WAVE_HIGH,
-            wave_low: Self::WAVE_LOW,
-            wave_mid: Self::WAVE_MID,
-        }
-    }
-}
-
-impl Default for CanvasPalette {
-    fn default() -> Self {
-        Self::kithara()
-    }
 }
 
 impl Palette {
@@ -178,7 +99,6 @@ impl Palette {
             success: Rgb(Self::SUCCESS_R, Self::SUCCESS_G, Self::SUCCESS_B),
             danger: Rgb(Self::DANGER_R, Self::DANGER_G, Self::DANGER_B),
             warning: Rgb(Self::WARNING_R, Self::WARNING_G, Self::WARNING_B),
-            canvas: CanvasPalette::kithara(),
         }
     }
 }
@@ -187,42 +107,6 @@ impl Default for Palette {
     fn default() -> Self {
         Self::kithara()
     }
-}
-
-#[cfg(feature = "gui")]
-impl From<Palette> for kithara_ui::render::RenderPalette {
-    fn from(p: Palette) -> Self {
-        let canvas = p.canvas;
-        Self::builder()
-            .bg(to_iced(canvas.bg))
-            .bg_deep(to_iced(canvas.bg_deep))
-            .bg_inset(to_iced(canvas.bg_inset))
-            .bg_panel(to_iced(canvas.bg_panel))
-            .bg_panel_2(to_iced(canvas.bg_panel_2))
-            .bg_select(iced::Color::from_rgb8(0x26, 0x26, 0x4a))
-            .line(to_iced(canvas.line))
-            .line_soft(to_iced(canvas.line_soft))
-            .text(to_iced(canvas.text))
-            .text_dim(to_iced(canvas.text_dim))
-            .muted(to_iced(canvas.muted))
-            .accent(to_iced(p.accent))
-            .accent_strong(to_iced(p.accent_strong))
-            .accent_soft(iced::Color::from_rgba8(
-                p.accent.0, p.accent.1, p.accent.2, 0.18,
-            ))
-            .danger(to_iced(p.danger))
-            .success(to_iced(p.success))
-            .warning(to_iced(p.warning))
-            .wave_low(to_iced(canvas.wave_low))
-            .wave_mid(to_iced(canvas.wave_mid))
-            .wave_high(to_iced(canvas.wave_high))
-            .build()
-    }
-}
-
-#[cfg(feature = "gui")]
-fn to_iced(rgb: Rgb) -> iced::Color {
-    iced::Color::from_rgb8(rgb.0, rgb.1, rgb.2)
 }
 
 #[cfg(feature = "tui")]

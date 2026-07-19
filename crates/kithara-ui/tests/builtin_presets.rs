@@ -15,6 +15,7 @@ fn micro_preset_compiles_against_player_registry() {
         builtin::MICRO_PRESET,
         &builtin::resolver(),
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -45,6 +46,7 @@ fn player_preset_compiles_against_player_registry() {
         builtin::PLAYER_PRESET,
         &builtin::resolver(),
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -56,6 +58,7 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
         builtin::PLAYER_PRESET,
         &builtin::resolver(),
         &common::player_registry(),
+        builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap();

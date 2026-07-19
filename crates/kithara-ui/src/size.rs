@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::expand::{ControlSpec, ExpandedNode};
+use crate::{
+    expand::{ControlSpec, ExpandedNode},
+    skin::SkinDoc,
+};
 
 /// One-axis size rule. `Fill` takes available space and has no intrinsic size.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
@@ -123,108 +126,37 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
     SizeSpec::new(Dim::from(width), Dim::from(height))
 }
 
-struct Consts;
-
-impl Consts {
-    const BPM: SizeSpec = SizeSpec::new(Dim::Fixed(64.0), Dim::Fixed(34.0));
-    const BRAND: SizeSpec = SizeSpec::new(Dim::Fixed(112.0), Dim::Fixed(34.0));
-    const BUTTON: SizeSpec = SizeSpec::new(
-        Dim::Range {
-            min: 72.0,
-            max: None,
-        },
-        Dim::Fixed(28.0),
-    );
-    const CHECKBOX: SizeSpec = SizeSpec::new(Dim::Fixed(10.0), Dim::Fixed(10.0));
-    const CHIP: SizeSpec = SizeSpec::new(
-        Dim::Range {
-            min: 24.0,
-            max: None,
-        },
-        Dim::Fixed(18.0),
-    );
-    const DECK_HEADER: SizeSpec = SizeSpec::new(Dim::Fill, Dim::Fixed(60.0));
-    const DECK_SUMMARY: SizeSpec = SizeSpec::new(
-        Dim::Range {
-            min: 90.0,
-            max: None,
-        },
-        Dim::Fixed(34.0),
-    );
-    const FADER: SizeSpec = SizeSpec::new(
-        Dim::Range {
-            min: 90.0,
-            max: None,
-        },
-        Dim::Fixed(34.0),
-    );
-    const GLOBAL_SPACER: SizeSpec = SizeSpec::new(Dim::Fill, Dim::Fixed(34.0));
-    const KNOB: SizeSpec = SizeSpec::new(Dim::Fixed(34.0), Dim::Fixed(34.0));
-    const PRESET_SELECTOR: SizeSpec = SizeSpec::new(Dim::Fixed(126.0), Dim::Fixed(34.0));
-    const READOUT: SizeSpec = SizeSpec::new(
-        Dim::Range {
-            min: 40.0,
-            max: None,
-        },
-        Dim::Fixed(26.0),
-    );
-    const SCALAR: SizeSpec = SizeSpec::new(Dim::Fixed(64.0), Dim::Fixed(18.0));
-    const SETTINGS_BUTTON: SizeSpec = SizeSpec::new(Dim::Fixed(34.0), Dim::Fixed(34.0));
-    const TEXT: SizeSpec = SizeSpec::new(Dim::Fill, Dim::Fixed(18.0));
-    const TIME: SizeSpec = SizeSpec::new(Dim::Fixed(144.0), Dim::Fixed(28.0));
-    const TOGGLE: SizeSpec = SizeSpec::new(Dim::Fixed(26.0), Dim::Fixed(14.0));
-    const TRACK_LIST: SizeSpec = SizeSpec::new(
-        Dim::Range {
-            min: 600.0,
-            max: None,
-        },
-        Dim::Range {
-            min: 210.0,
-            max: None,
-        },
-    );
-    const VU_STEREO: SizeSpec = SizeSpec::new(Dim::Fixed(64.0), Dim::Fixed(22.0));
-    const VU_VERTICAL: SizeSpec = SizeSpec::new(Dim::Fixed(18.0), Dim::Fixed(120.0));
-    const WAVE: SizeSpec = SizeSpec::new(
-        Dim::Fill,
-        Dim::Range {
-            min: 120.0,
-            max: None,
-        },
-    );
-}
-
 /// Returns the intrinsic size for a typed control specification.
 #[must_use]
-pub fn control_size(spec: &ControlSpec) -> SizeSpec {
+pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
     match spec {
-        ControlSpec::DeckHeader { .. } => Consts::DECK_HEADER,
-        ControlSpec::DeckSummary { .. } => Consts::DECK_SUMMARY,
-        ControlSpec::Brand => Consts::BRAND,
-        ControlSpec::Spacer => Consts::GLOBAL_SPACER,
-        ControlSpec::PresetSelector => Consts::PRESET_SELECTOR,
-        ControlSpec::SettingsButton => Consts::SETTINGS_BUTTON,
-        ControlSpec::Text { .. } => Consts::TEXT,
-        ControlSpec::Button { .. } => Consts::BUTTON,
-        ControlSpec::Bpm { .. } => Consts::BPM,
-        ControlSpec::Time => Consts::TIME,
-        ControlSpec::Scalar { .. } => Consts::SCALAR,
-        ControlSpec::Fader { .. } => Consts::FADER,
-        ControlSpec::Wave { .. } => Consts::WAVE,
-        ControlSpec::TrackList => Consts::TRACK_LIST,
-        ControlSpec::Toggle => Consts::TOGGLE,
-        ControlSpec::Checkbox => Consts::CHECKBOX,
-        ControlSpec::Readout { .. } => Consts::READOUT,
-        ControlSpec::Chip { .. } => Consts::CHIP,
-        ControlSpec::Knob => Consts::KNOB,
-        ControlSpec::VuStereo => Consts::VU_STEREO,
-        ControlSpec::VuVertical => Consts::VU_VERTICAL,
+        ControlSpec::DeckHeader { .. } => skin.deck.header_size,
+        ControlSpec::DeckSummary { .. } => skin.deck.summary_size,
+        ControlSpec::Brand => skin.global_bar.brand_size,
+        ControlSpec::Spacer => skin.global_bar.spacer_size,
+        ControlSpec::PresetSelector => skin.global_bar.preset_size,
+        ControlSpec::SettingsButton => skin.global_bar.settings_size,
+        ControlSpec::Text { .. } => skin.text.size,
+        ControlSpec::Button { .. } => skin.button.size,
+        ControlSpec::Bpm { .. } => skin.deck.bpm_size,
+        ControlSpec::Time => skin.deck.time_size,
+        ControlSpec::Scalar { .. } => skin.telemetry.size,
+        ControlSpec::Fader { .. } => skin.fader.size,
+        ControlSpec::Wave { .. } => skin.wave.size,
+        ControlSpec::TrackList => skin.track_list.size,
+        ControlSpec::Toggle => skin.toggle.size,
+        ControlSpec::Checkbox => skin.checkbox.size,
+        ControlSpec::Readout { .. } => skin.readout.size,
+        ControlSpec::Chip { .. } => skin.chip.size,
+        ControlSpec::Knob => skin.knob.size,
+        ControlSpec::VuStereo => skin.vu_stereo.size,
+        ControlSpec::VuVertical => skin.vu_vertical.size,
     }
 }
 
 /// Computes a node's intrinsic size from its override, children, or control specification.
 #[must_use]
-pub(crate) fn compute_size(node: &ExpandedNode) -> SizeSpec {
+pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
     let override_size = match node {
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
@@ -239,32 +171,42 @@ pub(crate) fn compute_size(node: &ExpandedNode) -> SizeSpec {
         ExpandedNode::Row {
             children, gap, pad, ..
         } => inset(
-            combine_horizontal(children.iter().map(compute_size)),
-            gap_total(*gap, children.len()),
+            combine_horizontal(children.iter().map(|child| compute_size(child, skin))),
+            gap_total(*gap, children.len(), skin.layout.size_gap),
             0.0,
             *pad,
+            skin.layout.size_pad,
         ),
         ExpandedNode::Column {
             children, gap, pad, ..
         } => inset(
-            combine_vertical(children.iter().map(compute_size)),
+            combine_vertical(children.iter().map(|child| compute_size(child, skin))),
             0.0,
-            gap_total(*gap, children.len()),
+            gap_total(*gap, children.len(), skin.layout.size_gap),
             *pad,
+            skin.layout.size_pad,
         ),
         ExpandedNode::Slot { children, .. } if children.is_empty() => SizeSpec::FILL,
-        ExpandedNode::Slot { children, .. } => combine_vertical(children.iter().map(compute_size)),
-        ExpandedNode::Control { spec, .. } => control_size(spec),
+        ExpandedNode::Slot { children, .. } => {
+            combine_vertical(children.iter().map(|child| compute_size(child, skin)))
+        }
+        ExpandedNode::Control { spec, .. } => control_size(spec, skin),
     }
 }
 
-fn gap_total(gap: Option<f32>, child_count: usize) -> f32 {
+fn gap_total(gap: Option<f32>, child_count: usize, default: f32) -> f32 {
     let gaps = u16::try_from(child_count.saturating_sub(1)).unwrap_or(u16::MAX);
-    gap.unwrap_or(0.0) * f32::from(gaps)
+    gap.unwrap_or(default) * f32::from(gaps)
 }
 
-fn inset(size: SizeSpec, extra_w: f32, extra_h: f32, pad: Option<f32>) -> SizeSpec {
-    let pad = pad.unwrap_or(0.0) * 2.0;
+fn inset(
+    size: SizeSpec,
+    extra_w: f32,
+    extra_h: f32,
+    pad: Option<f32>,
+    default_pad: f32,
+) -> SizeSpec {
+    let pad = pad.unwrap_or(default_pad) * 2.0;
     SizeSpec::new(grow(size.w, extra_w + pad), grow(size.h, extra_h + pad))
 }
 
@@ -288,6 +230,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        builtin,
         ids::{Interner, SourceUri},
         module::AdaptivePolicy,
     };
@@ -336,11 +279,11 @@ mod tests {
                 control(&mut interner, "right", fixed(6.0, 8.0)),
             ],
             size: None,
-            gap: None,
+            gap: Some(0.0),
             pad: None,
         };
 
-        let size = compute_size(&node);
+        let size = compute_size(&node, builtin::skin_doc());
 
         assert_eq!(size.w.min(), 16.0);
         assert_eq!(size.h.min(), 8.0);
@@ -356,13 +299,36 @@ mod tests {
                 control(&mut interner, "bottom", fixed(6.0, 8.0)),
             ],
             size: None,
-            gap: None,
+            gap: Some(0.0),
             pad: None,
         };
 
-        let size = compute_size(&node);
+        let size = compute_size(&node, builtin::skin_doc());
 
         assert_eq!(size.w.min(), 10.0);
+        assert_eq!(size.h.min(), 12.0);
+    }
+
+    #[kithara::test]
+    fn skin_supplies_unspecified_gap_and_padding() {
+        let mut interner = Interner::new(1024);
+        let node = ExpandedNode::Row {
+            id: None,
+            children: vec![
+                control(&mut interner, "left", fixed(10.0, 4.0)),
+                control(&mut interner, "right", fixed(6.0, 8.0)),
+            ],
+            size: None,
+            gap: None,
+            pad: None,
+        };
+        let mut skin = builtin::skin_doc().clone();
+        skin.layout.size_gap = 3.0;
+        skin.layout.size_pad = 2.0;
+
+        let size = compute_size(&node, &skin);
+
+        assert_eq!(size.w.min(), 23.0);
         assert_eq!(size.h.min(), 12.0);
     }
 
@@ -378,7 +344,7 @@ mod tests {
             pad: None,
         };
 
-        assert_eq!(compute_size(&node), override_size);
+        assert_eq!(compute_size(&node, builtin::skin_doc()), override_size);
     }
 
     #[kithara::test]
@@ -395,11 +361,11 @@ mod tests {
                 ),
             ],
             size: None,
-            gap: None,
+            gap: Some(0.0),
             pad: None,
         };
 
-        let size = compute_size(&node);
+        let size = compute_size(&node, builtin::skin_doc());
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.w.max(), None);

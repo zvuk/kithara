@@ -1,5 +1,3 @@
-use std::f32::consts::PI;
-
 use iced::{
     Color, Element, Event, Length, Point, Radians, Rectangle, Renderer, Theme,
     mouse::{self, Button, Cursor},
@@ -10,33 +8,24 @@ use iced::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::render::{ControlAction, ReadValue, RenderPalette, UiEvent};
-
-struct Consts;
-
-impl Consts {
-    const BODY_RATIO: f32 = 0.68;
-    const DRAG_RANGE: f32 = 140.0;
-    const INDICATOR_WIDTH: f32 = 2.0;
-    const OUTER_INSET: f32 = 3.0;
-    const START_ANGLE: f32 = 3.0 * PI / 4.0;
-    const NEUTRAL_ANGLE: f32 = 3.0 * PI / 2.0;
-    const SWEEP_ANGLE: f32 = 3.0 * PI / 2.0;
-    const TRACK_WIDTH: f32 = 2.0;
-    const BODY_STROKE_WIDTH: f32 = 1.0;
-}
+use crate::{
+    render::{ControlAction, ReadValue, Skin, UiEvent, theme::RenderPalette},
+    skin::KnobSkin,
+};
 
 pub(crate) fn view<'a>(
     path: &str,
     value: Option<&ReadValue<'_>>,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let Some(ReadValue::Scalar(value)) = value else {
         return Space::new().into();
     };
 
     Canvas::new(Knob {
-        palette,
+        body_border: skin.color(skin.knob.body_border),
+        metrics: skin.knob,
+        palette: skin.palette,
         path: path.to_owned(),
         value: value.clamp(0.0, 1.0).as_(),
     })
@@ -46,6 +35,8 @@ pub(crate) fn view<'a>(
 }
 
 struct Knob {
+    body_border: Color,
+    metrics: KnobSkin,
     palette: RenderPalette,
     path: String,
     value: f32,
@@ -78,7 +69,7 @@ impl canvas::Program<UiEvent> for Knob {
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => cursor
                 .position()
-                .map(|position| scalar_action(&self.path, state, position.y)),
+                .map(|position| scalar_action(&self.path, state, position.y, self.metrics)),
             Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
                 state.active = false;
                 Some(Action::capture())
@@ -97,39 +88,41 @@ impl canvas::Program<UiEvent> for Knob {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let side = bounds.width.min(bounds.height);
-        let radius = (side / 2.0 - Consts::OUTER_INSET).max(0.0);
+        let radius = (side / 2.0 - self.metrics.outer_inset).max(0.0);
         let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
-        let angle = Consts::START_ANGLE + Consts::SWEEP_ANGLE * self.value;
+        let angle = self.metrics.start_angle + self.metrics.sweep_angle * self.value;
 
         if radius > 0.0 {
             draw_arc(
                 &mut frame,
                 center,
                 radius,
-                Consts::START_ANGLE,
-                Consts::START_ANGLE + Consts::SWEEP_ANGLE,
+                self.metrics.start_angle,
+                self.metrics.start_angle + self.metrics.sweep_angle,
                 Color {
-                    a: 0.9,
+                    a: self.metrics.track_alpha,
                     ..self.palette.line
                 },
+                self.metrics.track_width,
             );
             draw_arc(
                 &mut frame,
                 center,
                 radius,
-                Consts::NEUTRAL_ANGLE,
+                self.metrics.neutral_angle,
                 angle,
                 self.palette.accent,
+                self.metrics.track_width,
             );
 
-            let body_radius = Consts::BODY_RATIO * radius;
+            let body_radius = self.metrics.body_ratio * radius;
             let body = Path::circle(center, body_radius);
             frame.fill(&body, self.palette.bg_select);
             frame.stroke(
                 &body,
                 Stroke::default()
-                    .with_color(self.palette.line)
-                    .with_width(Consts::BODY_STROKE_WIDTH),
+                    .with_color(self.body_border)
+                    .with_width(self.metrics.body_border_width),
             );
             frame.stroke(
                 &Path::line(
@@ -141,7 +134,7 @@ impl canvas::Program<UiEvent> for Knob {
                 ),
                 Stroke::default()
                     .with_color(self.palette.text)
-                    .with_width(Consts::INDICATOR_WIDTH),
+                    .with_width(self.metrics.indicator_width),
             );
         }
 
@@ -162,9 +155,14 @@ impl canvas::Program<UiEvent> for Knob {
     }
 }
 
-fn scalar_action(path: &str, state: &DragState, current_y: f32) -> Action<UiEvent> {
+fn scalar_action(
+    path: &str,
+    state: &DragState,
+    current_y: f32,
+    metrics: KnobSkin,
+) -> Action<UiEvent> {
     let value =
-        (state.start_value + (state.start_y - current_y) / Consts::DRAG_RANGE).clamp(0.0, 1.0);
+        (state.start_value + (state.start_y - current_y) / metrics.drag_range).clamp(0.0, 1.0);
     Action::publish(UiEvent::Control {
         path: path.to_owned(),
         action: ControlAction::SetScalar(f64::from(value)),
@@ -179,6 +177,7 @@ fn draw_arc(
     start_angle: f32,
     end_angle: f32,
     color: Color,
+    width: f32,
 ) {
     let path = Path::new(|builder| {
         builder.arc(Arc {
@@ -188,10 +187,5 @@ fn draw_arc(
             end_angle: Radians(end_angle),
         });
     });
-    frame.stroke(
-        &path,
-        Stroke::default()
-            .with_color(color)
-            .with_width(Consts::TRACK_WIDTH),
-    );
+    frame.stroke(&path, Stroke::default().with_color(color).with_width(width));
 }

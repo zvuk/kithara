@@ -1,42 +1,43 @@
 use iced::{
-    Background, Border, Element, Length,
+    Background, Element, Length,
     widget::{Space, container, container::Style as ContainerStyle},
 };
 
 use crate::{
     module::ScalarFormat,
-    render::{ReadValue, RenderPalette, UiEvent, fonts, shaped_text},
+    render::{ReadValue, Skin, UiEvent, fonts, shaped_text},
 };
-
-struct Consts;
-
-impl Consts {
-    const PADDING_X: f32 = 7.0;
-    const PADDING_Y: f32 = 4.0;
-    const PERCENT_SCALE: f64 = 100.0;
-    const TEXT_SIZE: f32 = 12.0;
-}
 
 pub(crate) fn view<'a>(
     format: ScalarFormat,
     value: Option<&ReadValue<'_>>,
-    palette: RenderPalette,
+    skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let Some(ReadValue::Scalar(value)) = value else {
         return Space::new().into();
     };
     let formatted = if format == ScalarFormat::Percent {
-        format!("{:>3.0}%", *value * Consts::PERCENT_SCALE)
+        format!(
+            "{value:>width$.precision$}%",
+            value = *value * skin.telemetry.percent_scale,
+            width = skin.telemetry.percent_width,
+            precision = skin.telemetry.percent_precision,
+        )
     } else {
-        format!("{value:.2}")
+        format!(
+            "{value:.precision$}",
+            precision = skin.telemetry.scalar_precision,
+        )
     };
+    let palette = skin.palette;
+    let border = skin.border(skin.telemetry.frame);
     container(
         shaped_text(formatted)
-            .font(fonts::MONO)
-            .size(Consts::TEXT_SIZE)
+            .font(fonts::mono(skin.telemetry.text.weight))
+            .size(skin.telemetry.text.size)
             .color(palette.text),
     )
-    .padding([Consts::PADDING_Y, Consts::PADDING_X])
+    .padding([skin.telemetry.padding_y, skin.telemetry.padding_x])
     .width(Length::Fill)
     .height(Length::Fill)
     .center_x(Length::Fill)
@@ -44,7 +45,7 @@ pub(crate) fn view<'a>(
     .style(move |_| {
         ContainerStyle::default()
             .background(Background::Color(palette.bg_inset))
-            .border(Border::default().width(1).color(palette.line))
+            .border(border)
     })
     .into()
 }
