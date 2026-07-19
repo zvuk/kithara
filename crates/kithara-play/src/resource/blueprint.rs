@@ -2,7 +2,6 @@ use std::fmt;
 
 use kithara_audio::ResamplerBackend;
 use kithara_decode::DecodeResult;
-#[cfg(not(target_arch = "wasm32"))]
 use kithara_events::EventBus;
 use kithara_platform::{
     CancelScope, CancelToken,
@@ -14,15 +13,8 @@ use super::{Resource, ResourceConfig};
 
 type OpenFuture = BoxFuture<'static, DecodeResult<Resource>>;
 
-#[derive(Clone, Copy)]
-enum EventScope {
-    Configured,
-    #[cfg(not(target_arch = "wasm32"))]
-    Isolated,
-}
-
 trait OpenResource: MaybeSend + MaybeSync {
-    fn open(&self, blueprint: ResourceBlueprint, event_scope: EventScope) -> OpenFuture;
+    fn open(&self, blueprint: ResourceBlueprint, event_bus: Option<EventBus>) -> OpenFuture;
 }
 
 struct ConfigBlueprint<B: Default> {
@@ -34,14 +26,11 @@ impl<B> OpenResource for ConfigBlueprint<B>
 where
     B: Default + ResamplerBackend,
 {
-    fn open(&self, blueprint: ResourceBlueprint, event_scope: EventScope) -> OpenFuture {
+    fn open(&self, blueprint: ResourceBlueprint, event_bus: Option<EventBus>) -> OpenFuture {
         let mut config = self.config.clone();
         config.cancel = Some(self.cancel.child());
-        #[cfg(target_arch = "wasm32")]
-        let _ = event_scope;
-        #[cfg(not(target_arch = "wasm32"))]
-        if matches!(event_scope, EventScope::Isolated) {
-            config.bus = Some(EventBus::default());
+        if let Some(event_bus) = event_bus {
+            config.bus = Some(event_bus);
         }
         Box::pin(async move { Resource::open_config(config, blueprint).await })
     }
@@ -64,14 +53,14 @@ impl ResourceBlueprint {
 
     /// Opens an independent reader with its own decoder and cancellation child.
     pub async fn open(&self) -> DecodeResult<Resource> {
-        self.0.open(self.clone(), EventScope::Configured).await
+        self.0.open(self.clone(), None).await
     }
 
     /// Opens an internal reader whose decoder lifecycle does not publish into
     /// the application-facing resource event scope.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) async fn open_isolated(&self) -> DecodeResult<Resource> {
-        self.0.open(self.clone(), EventScope::Isolated).await
+        self.0.open(self.clone(), Some(EventBus::default())).await
     }
 }
 
