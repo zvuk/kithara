@@ -24,6 +24,17 @@ impl SourceAudioCache {
         }
     }
 
+    pub(crate) fn activate(&mut self, spec: PcmSpec) {
+        self.spec = Some(spec);
+    }
+
+    pub(crate) fn validate_activation(&self, spec: PcmSpec) -> Result<(), SourceAudioError> {
+        if self.spec.is_some_and(|current| current != spec) && !self.windows.is_empty() {
+            return Err(SourceAudioError::SpecMismatch);
+        }
+        Ok(())
+    }
+
     pub(crate) fn insert(&mut self, window: SourceAudioWindow) -> SourceAudioCacheInsert {
         if self.spec.is_some_and(|spec| spec != window.spec()) || self.contains(window.range()) {
             return SourceAudioCacheInsert::Rejected { window };
@@ -97,8 +108,8 @@ impl SourceAudioCache {
         Ok(())
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.windows.is_empty()
+    pub(crate) const fn spec(&self) -> Option<PcmSpec> {
+        self.spec
     }
 
     fn window_at(&self, frame: u64) -> Option<&SourceAudioWindow> {

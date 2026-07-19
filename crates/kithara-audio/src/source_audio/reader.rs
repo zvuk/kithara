@@ -24,7 +24,6 @@ pub struct SourceAudioReader {
     lane_id: NonZeroU64,
     generation: u64,
     active: bool,
-    spec: Option<PcmSpec>,
     demand: Option<SourceAudioDemand>,
     command_outlet: Outlet<SourceAudioCommand>,
     data_inlet: Inlet<SourceAudioPacket>,
@@ -50,7 +49,6 @@ impl SourceAudioReader {
             lane_id,
             generation: 0,
             active: false,
-            spec: None,
             demand: None,
             command_outlet,
             data_inlet,
@@ -98,9 +96,7 @@ impl SourceAudioReader {
         if spec.channels == 0 {
             return Err(SourceAudioError::EmptyChannelLayout);
         }
-        if self.spec.is_some_and(|current| current != spec) && !self.cache.is_empty() {
-            return Err(SourceAudioError::SpecMismatch);
-        }
+        self.cache.validate_activation(spec)?;
         let command = SourceAudioCommand::Activate {
             lane_id: self.lane_id,
             role,
@@ -109,8 +105,8 @@ impl SourceAudioReader {
         self.command_outlet
             .try_push(command)
             .map_err(|_| SourceAudioError::CommandBackpressure)?;
+        self.cache.activate(spec);
         self.active = true;
-        self.spec = Some(spec);
         self.demand = None;
         self.terminal = None;
         Ok(())
@@ -205,7 +201,7 @@ impl SourceAudioReader {
         if range.start() < demand.coverage.start() || range.end() > demand.coverage.end() {
             return Err(SourceAudioError::RangeOutsideDemand);
         }
-        let spec = self.spec.ok_or(SourceAudioError::Inactive)?;
+        let spec = self.cache.spec().ok_or(SourceAudioError::Inactive)?;
         let expected = sample_count(range, spec)?;
         if output.len() != expected {
             return Err(SourceAudioError::OutputSizeMismatch {
@@ -241,7 +237,7 @@ impl SourceAudioReader {
     /// Return the activated decoded audio format, if known.
     #[must_use]
     pub const fn spec(&self) -> Option<PcmSpec> {
-        self.spec
+        self.cache.spec()
     }
 
     /// Move newly captured immutable windows into the local cache.
@@ -273,7 +269,7 @@ impl SourceAudioReader {
             };
             let accepted = self.demand == Some(packet.demand)
                 && packet.demand.coverage.intersects(packet.window.range())
-                && self.spec == Some(packet.window.spec());
+                && self.cache.spec() == Some(packet.window.spec());
             if !accepted {
                 self.retire(packet.window);
                 continue;
