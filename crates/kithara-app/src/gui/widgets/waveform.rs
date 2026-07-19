@@ -8,10 +8,15 @@ use kithara_platform::sync::Arc;
 use num_traits::cast::AsPrimitive;
 
 use super::waveform_viewport::{Viewport, WaveMsg};
-use crate::{
-    gui::{dj::DjMsg, message::Message},
-    theme::gui::{GuiPalette, WAVE_HIGH, WAVE_LOW, WAVE_MID},
-};
+use crate::theme::gui::{GuiPalette, WAVE_HIGH, WAVE_LOW, WAVE_MID};
+
+/// What the deck waveform reports: a view change, or a seek to a position in
+/// seconds. The widget knows nothing about which deck it draws.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum WaveEvent {
+    View(WaveMsg),
+    Seek(f64),
+}
 
 /// Beat-grid overlay data for the deck waveform: positions as track fractions
 /// in `[0, 1]`, derived from the track's analysed beat grid.
@@ -168,7 +173,7 @@ impl WaveformCanvas {
     }
 }
 
-impl canvas::Program<Message> for WaveformCanvas {
+impl canvas::Program<WaveEvent> for WaveformCanvas {
     type State = PointerState;
 
     fn draw(
@@ -276,7 +281,7 @@ impl canvas::Program<Message> for WaveformCanvas {
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<Action<Message>> {
+    ) -> Option<Action<WaveEvent>> {
         const DRAG_THRESHOLD_PX: f32 = 3.0;
 
         match event {
@@ -320,15 +325,15 @@ impl canvas::Program<Message> for WaveformCanvas {
                 let frac = ((x - bounds.x) / bounds.width).clamp(0.0, 1.0);
                 let secs = (f64::from(self.view.track_frac(frac)) * self.duration)
                     .clamp(0.0, self.duration);
-                Some(Action::publish(Message::SeekTo(secs)).and_capture())
+                Some(Action::publish(WaveEvent::Seek(secs)).and_capture())
             }
             _ => None,
         }
     }
 }
 
-fn zoom_action(msg: WaveMsg) -> Action<Message> {
-    Action::publish(Message::Dj(DjMsg::Wave(msg))).and_capture()
+fn zoom_action(msg: WaveMsg) -> Action<WaveEvent> {
+    Action::publish(WaveEvent::View(msg)).and_capture()
 }
 
 /// Deck waveform element. `view` is the zoom/pan window.
@@ -340,7 +345,7 @@ pub(crate) fn waveform<'a>(
     view: Viewport,
     height: f32,
     p: GuiPalette,
-) -> Element<'a, Message> {
+) -> Element<'a, WaveEvent> {
     Canvas::new(WaveformCanvas {
         p,
         wave,

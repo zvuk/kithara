@@ -3,6 +3,7 @@ compile_error!("Enable at least one frontend feature: `tui`, `gui`, or `lib-only
 
 mod analysis;
 pub mod baked;
+pub mod catalog;
 pub mod config;
 pub mod crossfade;
 pub mod deck;

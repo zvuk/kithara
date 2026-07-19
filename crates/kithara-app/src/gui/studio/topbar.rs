@@ -10,15 +10,19 @@ use iced::{
 
 use super::{
     module::Module,
-    styles::{ghost_button_style, vertical_divider},
+    styles::ghost_button_style,
     tokens::{studio_size, studio_space, studio_type},
 };
 use crate::{
-    gui::{dj::DjMsg, fonts, message::Message, tokens::gap},
+    gui::{fonts, tokens::gap},
     theme::gui::GuiPalette,
 };
 
-pub(super) fn view_topbar(p: GuiPalette) -> Element<'static, Message> {
+/// The topbar reports one thing: leave the studio.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ExitStudio;
+
+pub(super) fn view_topbar(p: GuiPalette) -> Element<'static, ExitStudio> {
     let exit = button(
         text("Back to compact")
             .size(studio_type::BODY_MD)
@@ -26,20 +30,16 @@ pub(super) fn view_topbar(p: GuiPalette) -> Element<'static, Message> {
     )
     .padding(studio_space::BUTTON)
     .style(ghost_button_style(p))
-    .on_press(Message::Dj(DjMsg::Toggle));
+    .on_press(ExitStudio);
 
     Module::new().bg(p.bg_panel).pad(studio_space::TOPBAR).wrap(
-        row![
-            brand_mark(p, "DJ STUDIO"),
-            Space::new().width(Length::Fill),
-            exit
-        ]
-        .align_y(Alignment::Center)
-        .spacing(gap::SECTION_ROOMY),
+        row![brand_mark(p), Space::new().width(Length::Fill), exit]
+            .align_y(Alignment::Center)
+            .spacing(gap::SECTION_ROOMY),
     )
 }
 
-pub(crate) fn brand_mark(p: GuiPalette, sub: &'static str) -> Element<'static, Message> {
+pub(crate) fn brand_mark<M: 'static>(p: GuiPalette) -> Element<'static, M> {
     let logo = Svg::new(SvgHandle::from_memory(
         include_bytes!("../../../assets/logo.svg") as &[u8],
     ))
@@ -57,15 +57,6 @@ pub(crate) fn brand_mark(p: GuiPalette, sub: &'static str) -> Element<'static, M
             .size(studio_type::BRAND)
             .font(fonts::display(Weight::Bold))
             .color(p.text),
-        vertical_divider(
-            studio_size::DIVIDER,
-            studio_size::BRAND_DIVIDER_HEIGHT,
-            p.line
-        ),
-        text(sub)
-            .size(studio_type::MONO_XS)
-            .font(fonts::mono(Weight::Medium))
-            .color(p.muted),
     ]
     .align_y(Alignment::Center)
     .spacing(gap::CONTENT)

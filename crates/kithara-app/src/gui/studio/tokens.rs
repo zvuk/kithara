@@ -12,8 +12,10 @@ pub(super) mod studio_space {
 
 pub(super) mod studio_size {
     pub(crate) const BRAND_LOGO: f32 = 28.0;
-    pub(crate) const BRAND_DIVIDER_HEIGHT: f32 = 16.0;
-    pub(crate) const LIBRARY_WIDTH: f32 = 280.0;
+    /// Library sits under the decks and spans the full width; only its
+    /// height is a layout decision.
+    pub(crate) const LIBRARY_HEIGHT: f32 = 220.0;
+    pub(crate) const MIXER_WIDTH: f32 = 224.0;
     pub(crate) const WAVEFORM_HEIGHT: f32 = 160.0;
     pub(crate) const FADER_HEIGHT: f32 = 88.0;
     pub(crate) const LIB_HEAD_HEIGHT: f32 = 26.0;

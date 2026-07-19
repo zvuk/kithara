@@ -22,14 +22,14 @@ use num_traits::cast::ToPrimitive;
 
 use super::{
     app::Kithara,
-    dj::DjMsg,
+    deck::DeckMsg,
     fonts,
     icons::Icon,
     message::{Message, Tab},
     tokens::gap,
     widgets,
 };
-use crate::{theme::gui::GuiPalette, track::TrackRow};
+use crate::{state::UiState, theme::gui::GuiPalette, track::TrackRow};
 
 const ALBUM_PLACEHOLDER_SVG: &[u8] = include_bytes!("../../assets/album-placeholder.svg");
 
@@ -141,7 +141,7 @@ impl Consts {
 }
 
 pub(crate) fn view(state: &Kithara, _window: iced::window::Id) -> Element<'_, Message> {
-    if state.dj.open {
+    if state.studio_open {
         return super::studio::view_dj_studio(state);
     }
 
@@ -185,7 +185,7 @@ fn view_header(state: &Kithara) -> Element<'_, Message> {
 
     container(
         row![
-            super::studio::brand_mark(p, "PLAYER"),
+            super::studio::brand_mark(p),
             Space::new().width(Length::Fill),
             dj_studio_button(p),
         ]
@@ -208,19 +208,21 @@ fn dj_studio_button(p: GuiPalette) -> Element<'static, Message> {
     )
     .padding([Consts::DJ_LAUNCH_PADDING_Y, Consts::DJ_LAUNCH_PADDING_X])
     .style(super::studio::ghost_button_style(p))
-    .on_press(Message::Dj(DjMsg::Toggle))
+    .on_press(Message::ToggleStudio)
     .into()
 }
 
 fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
+    let ui = &state.decks.focused().ui;
+
     let p = state.palette;
-    let track_name = if state.ui_state.track_name.trim().is_empty() {
+    let track_name = if ui.track_name.trim().is_empty() {
         "No track loaded".to_string()
     } else {
-        state.ui_state.track_name.clone()
+        ui.track_name.clone()
     };
 
-    let subtitle = track_subtitle(state);
+    let subtitle = track_subtitle(ui);
 
     let cover = Svg::new(SvgHandle::from_memory(ALBUM_PLACEHOLDER_SVG))
         .width(Length::Fixed(Consts::NOW_COVER_SIZE))
@@ -239,7 +241,7 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
     .spacing(gap::INLINE_TIGHT)
     .width(Length::Fill);
 
-    if !state.ui_state.variant_label.is_empty() {
+    if !ui.variant_label.is_empty() {
         let dot = container(Space::new())
             .width(Length::Fixed(Consts::NOW_BITRATE_DOT_SIZE))
             .height(Length::Fixed(Consts::NOW_BITRATE_DOT_SIZE))
@@ -247,7 +249,7 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
         meta = meta.push(
             row![
                 dot,
-                text(state.ui_state.variant_label.clone())
+                text(ui.variant_label.clone())
                     .size(Consts::NOW_BITRATE_FONT)
                     .font(fonts::MONO)
                     .color(p.muted),
@@ -269,21 +271,26 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_seek(state: &Kithara) -> Element<'_, Message> {
+    let focus = state.decks.focus();
+    let ui = &state.decks.focused().ui;
+
     let p = state.palette;
-    let duration = state.ui_state.duration.max(0.0);
+    let duration = ui.duration.max(0.0);
     let slider_max = duration.max(1.0);
-    let progress = if state.ui_state.is_seeking {
-        state.ui_state.seek_position
+    let progress = if ui.is_seeking {
+        ui.seek_position
     } else {
-        state.ui_state.position
+        ui.position
     }
     .clamp(0.0, slider_max);
 
-    let seek = slider(0.0..=slider_max, progress, Message::SeekChanged)
-        .step(Consts::SEEK_STEP)
-        .on_release(Message::SeekReleased)
-        .style(slider_style(p))
-        .width(Length::Fill);
+    let seek = slider(0.0..=slider_max, progress, move |v| {
+        Message::Deck(focus, DeckMsg::SeekChanged(v))
+    })
+    .step(Consts::SEEK_STEP)
+    .on_release(Message::Deck(focus, DeckMsg::SeekReleased))
+    .style(slider_style(p))
+    .width(Length::Fill);
 
     container(
         row![
@@ -305,13 +312,16 @@ fn view_seek(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_transport(state: &Kithara) -> Element<'_, Message> {
+    let focus = state.decks.focus();
+    let ui = &state.decks.focused().ui;
+
     let p = state.palette;
 
-    let shuffle_active = state.ui_state.shuffle_enabled;
+    let shuffle_active = ui.shuffle_enabled;
     // `RepeatMode` is non_exhaustive; anything other than `Off` reads as an
     // active loop. `One` gets the distinct single-repeat glyph.
-    let repeat_active = !matches!(state.ui_state.repeat_mode, RepeatMode::Off);
-    let repeat_icon = match state.ui_state.repeat_mode {
+    let repeat_active = !matches!(ui.repeat_mode, RepeatMode::Off);
+    let repeat_icon = match ui.repeat_mode {
         RepeatMode::One => Icon::RepeatOnce,
         _ => Icon::Repeat,
     };
@@ -325,7 +335,7 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
                 p,
                 active: shuffle_active,
             },
-            Message::ToggleShuffle,
+            Message::Deck(focus, DeckMsg::ToggleShuffle),
         ),
         transport_square_button(
             TransportButton {
@@ -335,9 +345,13 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
                 p,
                 active: false,
             },
-            Message::Prev,
+            Message::Deck(focus, DeckMsg::Prev),
         ),
-        widgets::play_button(state.ui_state.playing, p, Message::TogglePlayPause),
+        widgets::play_button(
+            ui.playing,
+            p,
+            Message::Deck(focus, DeckMsg::TogglePlayPause)
+        ),
         transport_square_button(
             TransportButton {
                 icon: Icon::SkipNext,
@@ -346,7 +360,7 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
                 p,
                 active: false,
             },
-            Message::Next,
+            Message::Deck(focus, DeckMsg::Next),
         ),
         transport_square_button(
             TransportButton {
@@ -356,7 +370,7 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
                 p,
                 active: repeat_active,
             },
-            Message::ToggleRepeat,
+            Message::Deck(focus, DeckMsg::ToggleRepeat),
         ),
     ]
     .spacing(Consts::TRANSPORT_GAP)
@@ -369,17 +383,23 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_speed(state: &Kithara) -> Element<'_, Message> {
+    let focus = state.decks.focus();
+    let ui = &state.decks.focused().ui;
+
     // A dead-band around 1.0x keeps the RESET pill from flickering while
     const RESET_DEADBAND: f32 = 0.06;
     let p = state.palette;
-    let rate = state.ui_state.selected_rate;
+    let rate = ui.selected_rate;
 
     let mut controls = row![
         text("SPEED")
             .size(Consts::SUBTITLE_FONT)
             .font(fonts::mono(Weight::Medium))
             .color(p.text_dim),
-        widgets::speed_slider(rate, p),
+        widgets::speed_slider(rate, p, move |v| Message::Deck(
+            focus,
+            DeckMsg::PlayRateChanged(v),
+        )),
         text(format!("{rate:.2}\u{00d7}"))
             .size(Consts::SMALL_FONT)
             .font(fonts::mono(Weight::Medium))
@@ -398,7 +418,7 @@ fn view_speed(state: &Kithara) -> Element<'_, Message> {
             )
             .padding([Consts::EQ_RESET_PADDING_Y, Consts::EQ_RESET_PADDING_X])
             .style(ghost_button_style(p))
-            .on_press(Message::PlayRateChanged(1.0)),
+            .on_press(Message::Deck(focus, DeckMsg::PlayRateChanged(1.0))),
         );
     }
 
@@ -410,10 +430,13 @@ fn view_speed(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_volume(state: &Kithara) -> Element<'_, Message> {
+    let focus = state.decks.focus();
+    let ui = &state.decks.focused().ui;
+
     let p = state.palette;
-    let volume_icon = if state.ui_state.volume <= Consts::VOLUME_MUTE_THRESHOLD {
+    let volume_icon = if ui.volume <= Consts::VOLUME_MUTE_THRESHOLD {
         Icon::VolumeMute
-    } else if state.ui_state.volume < Consts::VOLUME_LOW_THRESHOLD {
+    } else if ui.volume < Consts::VOLUME_LOW_THRESHOLD {
         Icon::VolumeLow
     } else {
         Icon::VolumeHigh
@@ -421,14 +444,12 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
 
     let volume_pct = format!(
         "{:.0}%",
-        state.ui_state.volume.clamp(0.0, 1.0) * Consts::VOLUME_PERCENT_SCALE
+        ui.volume.clamp(0.0, 1.0) * Consts::VOLUME_PERCENT_SCALE
     );
 
-    let slider = slider(
-        0.0..=1.0,
-        state.ui_state.volume.clamp(0.0, 1.0),
-        Message::VolumeChanged,
-    )
+    let slider = slider(0.0..=1.0, ui.volume.clamp(0.0, 1.0), move |v| {
+        Message::Deck(focus, DeckMsg::VolumeChanged(v))
+    })
     .step(Consts::VOLUME_STEP_SIZE)
     .style(slider_style(p))
     .width(Length::Fill);
@@ -439,14 +460,14 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
                 IconButtonStyle {
                     icon: volume_icon,
                     size: Consts::VOLUME_ICON_SIZE,
-                    color: if state.ui_state.volume <= Consts::VOLUME_MUTE_THRESHOLD {
+                    color: if ui.volume <= Consts::VOLUME_MUTE_THRESHOLD {
                         p.muted
                     } else {
                         p.accent
                     },
                     padding: Consts::TOGGLE_ICON_PADDING,
                 },
-                Message::ToggleMute
+                Message::Deck(focus, DeckMsg::ToggleMute)
             ),
             slider,
             text(volume_pct)
@@ -487,8 +508,11 @@ fn view_tab_content(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_playlist(state: &Kithara) -> Element<'_, Message> {
+    let focus = state.decks.focus();
+    let ui = &state.decks.focused().ui;
+
     let p = state.palette;
-    if state.ui_state.tracks.is_empty() {
+    if ui.tracks.is_empty() {
         return container(
             text("No tracks in playlist")
                 .size(Consts::EMPTY_PLAYLIST_FONT)
@@ -503,9 +527,9 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 
     let mut tracks = column![].spacing(gap::INLINE).width(Length::Fill);
 
-    for (index, entry) in state.ui_state.tracks.iter().enumerate() {
-        let is_current = state.ui_state.current_track_index == Some(index);
-        let is_selected = state.selected_track_index == Some(index);
+    for (index, entry) in ui.tracks.iter().enumerate() {
+        let is_current = ui.current_track_index == Some(index);
+        let is_selected = state.decks.focused().view.selected_track == Some(index);
         let blink_on = u64::from(state.blink_counter / Consts::BLINK_DIVISOR)
             .is_multiple_of(Consts::BLINK_PERIOD);
         let row = TrackRow::classify(&entry.status, is_current);
@@ -557,7 +581,7 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
             Consts::PLAYLIST_ITEM_PADDING_X,
         ])
         .style(move |_theme, status| playlist_item_style(p, is_selected, status))
-        .on_press(Message::SelectTrack(index));
+        .on_press(Message::Deck(focus, DeckMsg::SelectTrack(index)));
 
         tracks = tracks.push(item);
     }
@@ -566,12 +590,15 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
+    let focus = state.decks.focus();
+    let ui = &state.decks.focused().ui;
+
     let p = state.palette;
-    let band_count = state.ui_state.eq_bands.len();
+    let band_count = ui.eq_bands.len();
     let mut bands_row = row![].spacing(Consts::EQ_BAND_MIN_GAP).width(Length::Fill);
 
     for index in 0..band_count {
-        let value = state.ui_state.eq_bands[index].clamp(Consts::EQ_MIN_DB, Consts::EQ_MAX_DB);
+        let value = ui.eq_bands[index].clamp(Consts::EQ_MIN_DB, Consts::EQ_MAX_DB);
         let value_color = if value.abs() < Consts::EQ_ZERO_THRESHOLD {
             p.muted
         } else {
@@ -587,7 +614,7 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
                 .color(value_color),
             container(
                 vertical_slider(Consts::EQ_MIN_DB..=Consts::EQ_MAX_DB, value, move |v| {
-                    Message::EqBandChanged(index, v)
+                    Message::Deck(focus, DeckMsg::EqBandChanged(index, v))
                 })
                 .step(Consts::EQ_STEP)
                 .width(Consts::SLIDER_RAIL_WIDTH)
@@ -630,7 +657,7 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
                 )
                 .padding([Consts::EQ_RESET_PADDING_Y, Consts::EQ_RESET_PADDING_X])
                 .style(ghost_button_style(p))
-                .on_press(Message::EqResetAll)
+                .on_press(Message::Deck(focus, DeckMsg::EqResetAll))
             ]
             .align_y(Alignment::Center),
             container(bands_row)
@@ -674,6 +701,9 @@ pub(crate) fn eq_band_label(index: usize, total: usize) -> String {
 }
 
 fn view_settings(state: &Kithara) -> Element<'_, Message> {
+    let focus = state.decks.focus();
+    let ui = &state.decks.focused().ui;
+
     let p = state.palette;
     let mut col = column![
         text("Settings")
@@ -693,22 +723,22 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
     let mut quality_row = row![].spacing(gap::INLINE);
     quality_row = quality_row.push(pill_button(
         "Auto",
-        state.ui_state.abr_mode_is_auto,
+        ui.abr_mode_is_auto,
         p,
-        Message::SetAbrMode(None),
+        Message::Deck(focus, DeckMsg::SetAbrMode(None)),
     ));
-    for (idx, label) in &state.ui_state.abr_variants {
-        let active = state.ui_state.selected_variant == Some(*idx);
+    for (idx, label) in &ui.abr_variants {
+        let active = ui.selected_variant == Some(*idx);
         quality_row = quality_row.push(pill_button(
             label,
             active,
             p,
-            Message::SetAbrMode(Some(*idx)),
+            Message::Deck(focus, DeckMsg::SetAbrMode(Some(*idx))),
         ));
     }
     col = col.push(quality_row);
 
-    let secs = state.ui_state.crossfade.clamp(0.0, Consts::CROSSFADE_MAX);
+    let secs = ui.crossfade.clamp(0.0, Consts::CROSSFADE_MAX);
     col = col.push(Space::new().height(Length::Fixed(gap::SECTION)));
     col = col.push(
         row![
@@ -725,10 +755,12 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
         .align_y(Alignment::Center),
     );
 
-    let cf_slider = slider(0.0..=Consts::CROSSFADE_MAX, secs, Message::CrossfadeChanged)
-        .step(Consts::CROSSFADE_STEP)
-        .width(Length::Fill)
-        .style(slider_style(p));
+    let cf_slider = slider(0.0..=Consts::CROSSFADE_MAX, secs, move |v| {
+        Message::Deck(focus, DeckMsg::CrossfadeChanged(v))
+    })
+    .step(Consts::CROSSFADE_STEP)
+    .width(Length::Fill)
+    .style(slider_style(p));
     col = col.push(cf_slider);
 
     container(col)
@@ -1064,11 +1096,11 @@ fn pill_button<'a>(label: &str, active: bool, p: GuiPalette, msg: Message) -> El
     .into()
 }
 
-pub(crate) fn track_subtitle(state: &Kithara) -> String {
-    let Some(index) = state.ui_state.current_track_index else {
+pub(crate) fn track_subtitle(ui: &UiState) -> String {
+    let Some(index) = ui.current_track_index else {
         return "Artist / Album unavailable".to_string();
     };
-    let Some(entry) = state.ui_state.tracks.get(index) else {
+    let Some(entry) = ui.tracks.get(index) else {
         return "Artist / Album unavailable".to_string();
     };
     let Some(url) = entry.url.as_deref() else {
@@ -1099,8 +1131,8 @@ pub(crate) fn with_alpha(color: Color, alpha: f32) -> Color {
     Color { a: alpha, ..color }
 }
 
-/// Linearly interpolate `base` toward `tint` by `amount` in `[0, 1]`,
-/// channels and alpha alike.
+/// Linearly interpolate `base` toward `tint` by `amount` in `[0, 1]`
+/// (channels and alpha). Shared color-mix helper for the GUI.
 pub(crate) fn mix_colors(base: Color, tint: Color, amount: f32) -> Color {
     let amount = amount.clamp(0.0, 1.0);
     Color::from_rgba(

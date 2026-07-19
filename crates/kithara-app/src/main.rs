@@ -6,9 +6,7 @@ use std::io::{self, IsTerminal};
 use clap::Parser;
 use kithara::{
     assets::{AssetStoreBuilder, BytePool, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
-    audio::generate_log_spaced_bands,
     net::{HttpClient, NetOptions},
-    play::{PlayerConfig, PlayerImpl, StretchControls},
     stream::dl::{Downloader, DownloaderConfig},
 };
 #[cfg(not(feature = "tui"))]
@@ -25,7 +23,6 @@ use kithara_app::{
     tracing_init::init_tracing,
 };
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_queue::{Queue, QueueConfig};
 
 /// Kithara — audio player application.
 #[derive(Parser)]
@@ -42,36 +39,9 @@ struct Args {
     /// Enabled by default during testing phase.
     #[arg(long, default_value_t = true)]
     insecure: bool,
-
-    /// Number of independently mixed decks sharing one audio session (1, 2, or 4).
-    #[arg(long, default_value_t = 1)]
-    decks: usize,
 }
 
-fn build_deck(index: usize, shutdown: &CancelToken, config: &AppConfig) -> Deck {
-    let timestretch = StretchControls::new(1.0);
-    let player_config = PlayerConfig::builder()
-        .cancel(shutdown.child())
-        .crossfade_duration(config.crossfade_seconds)
-        .eq_layout(generate_log_spaced_bands(config.eq_band_count))
-        .timestretch(Arc::clone(&timestretch))
-        .build();
-    let player = Arc::new(PlayerImpl::new(player_config));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-/// Resolve `Mode::Auto` into a concrete mode.
-            .with_player(Arc::clone(&player))
-            .with_cancel(shutdown.child()),
-    ));
-
-    Deck {
-        id: DeckId(index),
-        player,
-        queue,
-        timestretch,
-    }
-}
-
+/// Application UI mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Mode {
     /// Auto-detect: TUI if terminal attached, GUI otherwise.
@@ -85,6 +55,7 @@ enum Mode {
 type AppError = Box<dyn std::error::Error + Send + Sync>;
 type AppResult<T = ()> = Result<T, AppError>;
 
+/// Resolve `Mode::Auto` into a concrete mode.
 fn resolve_mode(mode: Mode) -> Mode {
     match mode {
         Mode::Auto => {
@@ -128,10 +99,6 @@ fn main() -> AppResult {
 
     init_tracing_for_mode(mode)?;
 
-    if !matches!(args.decks, 1 | 2 | 4) {
-        return Err(format!("--decks must be 1, 2, or 4 (got {})", args.decks).into());
-    }
-
     // App master root held for the whole process: it goes into `AppConfig` and
     // every subsystem derives from `shutdown.child()`, so a frontend
     // `config.shutdown.cancel()` propagates down the shutdown subtree to all of
@@ -169,28 +136,25 @@ fn main() -> AppResult {
         .should_accept_invalid_certs(args.insecure)
         .build();
 
-    let decks: Vec<Deck> = (0..args.decks)
-        .map(|index| build_deck(index, &shutdown, &config))
-        .collect();
-    let mut deck_set = DeckSet::new(decks);
+    let mut deck_set = DeckSet::new(vec![
+        Deck::build(DeckId(0), &config),
+        Deck::build(DeckId(1), &config),
+    ]);
     deck_set.commit(deck_set.mix().clone())?;
-
-    let queue = Arc::clone(&deck_set.decks()[0].queue);
-    let timestretch = Arc::clone(&deck_set.decks()[0].timestretch);
 
     match mode {
         #[cfg(feature = "tui")]
         Mode::Tui | Mode::Auto => {
             let mut frontend = TuiFrontend::new(&config)?;
-            frontend.start(Arc::clone(&queue))?;
-            frontend.run_loop(Arc::clone(&queue), Arc::clone(&timestretch))?;
+            frontend.start(&deck_set)?;
+            frontend.run_loop(deck_set)?;
             frontend.shutdown()?;
         }
         #[cfg(feature = "gui")]
         Mode::Gui => {
             let mut frontend = GuiFrontend::new(&config)?;
-            frontend.start(Arc::clone(&queue))?;
-            frontend.run_loop(Arc::clone(&queue), Arc::clone(&timestretch))?;
+            frontend.start(&deck_set)?;
+            frontend.run_loop(deck_set)?;
             frontend.shutdown()?;
         }
         #[cfg(not(feature = "gui"))]

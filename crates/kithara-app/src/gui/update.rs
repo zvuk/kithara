@@ -1,59 +1,74 @@
 use iced::{Task, window};
-use kithara::abr::AbrMode;
-use kithara_queue::{RepeatMode, TrackId, Transition};
-use tracing::{debug, error, info};
+use tracing::error;
 
 use super::{
     app::Kithara,
-    dj,
-    message::{Message, Tab},
-    url_bar,
+    deck::{self, DeckMsg},
+    frontend::window_settings,
+    message::Message,
+    mix, url_bar,
 };
-
-fn track_id_at(state: &Kithara, index: usize) -> Option<TrackId> {
-    state.ui_state.tracks.get(index).map(|e| e.id)
-}
+use crate::{catalog, deck::DeckId};
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
-        Message::Dj(msg) => dj::handle(state, &msg),
-        Message::Url(msg) => url_bar::handle(state, msg),
-        Message::WindowCloseRequested(id) => handle_window_close_requested(state, id),
-        other => {
-            handle_player(state, &other);
+        Message::Deck(id, msg) => {
+            handle_deck(state, id, &msg);
             Task::none()
         }
+        Message::Mix(msg) => {
+            mix::handle(state, msg);
+            Task::none()
+        }
+        Message::Url(msg) => url_bar::handle(state, msg),
+        Message::TabSelected(tab) => {
+            state.active_tab = tab;
+            Task::none()
+        }
+        Message::DeleteFocusedTrack => {
+            handle_deck(state, state.decks.focus(), &DeckMsg::DeleteTrack);
+            Task::none()
+        }
+        Message::SelectCatalogTrack(index) => {
+            handle_select_catalog(state, index);
+            Task::none()
+        }
+        Message::LoadOntoDeck(index, id) => {
+            handle_load(state, index, id);
+            Task::none()
+        }
+        Message::FocusDeck(id) => {
+            state.decks.set_focus(id);
+            Task::none()
+        }
+        Message::ToggleStudio => handle_toggle_studio(state),
+        Message::Tick => {
+            handle_tick(state);
+            Task::none()
+        }
+        Message::WindowCloseRequested(id) => handle_window_close_requested(state, id),
     };
 
-    state.ui_state = state.controller.snapshot();
+    refresh_snapshots(state);
     task
 }
 
-/// All player/UI messages that mutate state without scheduling a follow-up
-/// task. Window/DJ messages are handled separately in [`update`].
-fn handle_player(state: &mut Kithara, message: &Message) {
-    match *message {
-        Message::TogglePlayPause => handle_toggle_play_pause(state),
-        Message::Next => handle_next(state),
-        Message::Prev => handle_prev(state),
-        Message::SeekChanged(pos) => handle_seek_changed(state, pos),
-        Message::SeekReleased => handle_seek_released(state),
-        Message::SeekTo(pos) => handle_seek_to(state, pos),
-        Message::VolumeChanged(vol) => handle_volume_changed(state, vol),
-        Message::EqBandChanged(band, db) => handle_eq_band_changed(state, band, db),
-        Message::PlayRateChanged(rate) => handle_play_rate_changed(state, rate),
-        Message::CrossfadeChanged(secs) => handle_crossfade_changed(state, secs),
-        Message::ToggleMute => handle_toggle_mute(state),
-        Message::ToggleShuffle => handle_toggle_shuffle(state),
-        Message::ToggleRepeat => handle_toggle_repeat(state),
-        Message::EqResetAll => handle_eq_reset_all(state),
-        Message::SelectTrack(idx) => handle_select_track(state, idx),
-        Message::DeleteTrack => handle_delete_track(state),
-        Message::TabSelected(tab) => handle_tab_selected(state, tab),
-        Message::SetAbrMode(variant) => handle_set_abr_mode(state, variant),
-        Message::Tick => handle_tick(state),
-        Message::Dj(_) | Message::Url(_) | Message::WindowCloseRequested(_) => {}
+fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {
+    if let Some(target) = state.decks.get_mut(id) {
+        deck::handle(target, msg);
     }
+}
+
+/// Swap the live window for the other mode. The new window opens before
+/// the old one closes so the daemon always has a window in flight.
+fn handle_toggle_studio(state: &mut Kithara) -> Task<Message> {
+    state.studio_open = !state.studio_open;
+
+    let old = state.window_id;
+    let (new_id, open) = window::open(window_settings(state.studio_open));
+    state.window_id = Some(new_id);
+    let close_old = old.map_or_else(Task::none, window::close);
+    open.discard().chain(close_old)
 }
 
 fn handle_window_close_requested(state: &Kithara, id: window::Id) -> Task<Message> {
@@ -64,196 +79,41 @@ fn handle_window_close_requested(state: &Kithara, id: window::Id) -> Task<Messag
     }
 }
 
-fn handle_toggle_play_pause(state: &Kithara) {
-    if state.ui_state.playing {
-        state.controller.queue().pause();
-    } else {
-        state.controller.queue().play();
-    }
-}
-
-fn handle_next(state: &Kithara) {
-    let _ = state
-        .controller
-        .queue()
-        .advance_to_next(Transition::Crossfade);
-}
-
-fn handle_prev(state: &Kithara) {
-    let _ = state
-        .controller
-        .queue()
-        .return_to_previous(Transition::Crossfade);
-}
-
-fn handle_seek_changed(state: &Kithara, pos: f64) {
-    state.controller.mutate(|st| {
-        st.is_seeking = true;
-        st.seek_position = pos;
-    });
-}
-
-fn handle_seek_released(state: &Kithara) {
-    let target = state.controller.mutate(|st| {
-        st.is_seeking = false;
-        st.seek_position
-    });
-    if let Err(e) = state.controller.queue().seek(target) {
-        error!("seek failed: {e:?}");
-    }
-}
-
-fn handle_seek_to(state: &Kithara, pos: f64) {
-    state.controller.mutate(|st| {
-        st.is_seeking = false;
-        st.seek_position = pos;
-    });
-
-    if let Err(e) = state.controller.queue().seek(pos) {
-        error!("seek failed: {e:?}");
-    }
-}
-
-fn handle_volume_changed(state: &mut Kithara, vol: f32) {
-    state.controller.queue().set_volume(vol);
-    state.controller.mutate(|st| st.volume = vol);
-    if vol > 0.0 {
-        state.previous_volume = vol;
-    }
-}
-
-fn handle_eq_band_changed(state: &Kithara, band: usize, db: f32) {
-    if band >= state.ui_state.eq_bands.len() {
+/// First click highlights the row; a second click on the same row loads it
+/// onto the focused deck. Matches the deck playlist behaviour.
+fn handle_select_catalog(state: &mut Kithara, index: usize) {
+    if state.selected_track == Some(index) {
+        handle_load(state, index, state.decks.focus());
         return;
     }
-    // `eq_bands` is the user's desired EQ and the source of truth: record it
-    // regardless of whether a playback slot exists yet. The listener re-applies
-    // it to the engine once a track becomes active.
-    state.controller.mutate(|st| {
-        if let Some(slot) = st.eq_bands.get_mut(band) {
-            *slot = db;
-        }
-    });
-    if let Err(e) = state.controller.queue().set_eq_gain(band, db) {
-        // Expected before playback starts (no active slot yet); the gain is
-        // retained in `eq_bands` and pushed down when playback begins.
-        debug!("set EQ gain band={band} db={db:.1} deferred: {e:?}");
-    }
+    state.selected_track = Some(index);
 }
 
-fn handle_play_rate_changed(state: &Kithara, rate: f32) {
-    state.controller.queue().set_default_rate(rate);
-    if state.ui_state.playing {
-        state.controller.queue().play();
-    }
-    state.controller.mutate(|st| st.selected_rate = rate);
-}
-
-fn handle_crossfade_changed(state: &Kithara, secs: f32) {
-    state.controller.queue().set_crossfade_duration(secs);
-    state.controller.mutate(|st| st.crossfade = secs);
-}
-
-fn handle_toggle_mute(state: &mut Kithara) {
-    if state.ui_state.volume > 0.0 {
-        state.previous_volume = state.ui_state.volume;
-        handle_volume_changed(state, 0.0);
-    } else {
-        let target = if state.previous_volume > 0.0 {
-            state.previous_volume
-        } else {
-            0.5
-        };
-        handle_volume_changed(state, target);
-    }
-}
-
-fn handle_toggle_shuffle(state: &Kithara) {
-    let new = !state.ui_state.shuffle_enabled;
-    state.controller.queue().set_shuffle(new);
-    state.controller.mutate(|st| st.shuffle_enabled = new);
-}
-
-fn handle_toggle_repeat(state: &Kithara) {
-    // `RepeatMode` is non_exhaustive; the wildcard covers `One` and any
-    // future variant, both cycling back to `Off`.
-    let next = match state.ui_state.repeat_mode {
-        RepeatMode::Off => RepeatMode::All,
-        RepeatMode::All => RepeatMode::One,
-        _ => RepeatMode::Off,
+fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
+    let Some(entry) = state.catalog.get(index) else {
+        return;
     };
-    state.controller.queue().set_repeat(next);
-    state.controller.mutate(|st| st.repeat_mode = next);
-}
-
-fn handle_eq_reset_all(state: &Kithara) {
-    let band_count = state.ui_state.eq_bands.len();
-    for band in 0..band_count {
-        if let Err(e) = state.controller.queue().set_eq_gain(band, 0.0) {
-            error!("reset EQ band={band} failed: {e:?}");
-        }
-    }
-    state.controller.mutate(|st| {
-        for slot in &mut st.eq_bands {
-            *slot = 0.0;
-        }
-    });
-}
-
-fn handle_select_track(state: &mut Kithara, idx: usize) {
-    if state.selected_track_index != Some(idx) {
-        state.selected_track_index = Some(idx);
+    let Some(deck) = state.decks.get(id) else {
         return;
-    }
-    if let Some(id) = track_id_at(state, idx)
-        && let Err(e) = state.controller.queue().select(id, Transition::None)
-    {
-        error!(index = idx, error = %e, "select failed");
+    };
+    if let Err(e) = catalog::load_onto(deck.controller.queue(), entry, &state.config) {
+        error!(index, deck = id.0, error = %e, "load onto deck failed");
     }
 }
 
-fn handle_delete_track(state: &mut Kithara) {
-    let target = state
-        .selected_track_index
-        .or(state.ui_state.current_track_index);
-    if let Some(idx) = target
-        && let Some(id) = track_id_at(state, idx)
-    {
-        match state.controller.queue().remove(id) {
-            Ok(()) => state.selected_track_index = None,
-            Err(e) => error!(index = idx, error = %e, "remove failed"),
-        }
-    }
-}
-
-fn handle_tab_selected(state: &mut Kithara, tab: Tab) {
-    state.active_tab = tab;
-}
-
-fn handle_set_abr_mode(state: &Kithara, variant: Option<usize>) {
-    let handle = state.controller.queue().current_abr_handle();
-    info!(
-        ?variant,
-        handle_present = handle.is_some(),
-        "GUI: SetAbrMode received"
-    );
-    if let Some(handle) = handle {
-        let mode = variant.map_or(AbrMode::Auto(None), AbrMode::manual);
-        match handle.set_mode(mode) {
-            Ok(()) => info!(?variant, ?mode, "GUI: set_mode accepted"),
-            Err(err) => error!(?err, ?variant, "SetAbrMode rejected by ABR state"),
-        }
-    } else {
-        error!(?variant, "GUI: no current AbrHandle — set_mode skipped");
-    }
-    state.controller.mutate(|st| {
-        st.abr_mode_is_auto = variant.is_none();
-        st.selected_variant = variant;
-    });
-}
-
+/// Every deck advances on the same tick: a deck the user is not looking at
+/// still plays, streams and needs its continuous values pulled.
 fn handle_tick(state: &mut Kithara) {
-    let _ = state.controller.queue().tick();
-    state.controller.refresh_continuous();
+    for deck in state.decks.iter() {
+        let _ = deck.controller.queue().tick();
+        deck.controller.refresh_continuous();
+    }
     state.blink_counter = state.blink_counter.wrapping_add(1);
+}
+
+/// One consistent snapshot per deck per frame, taken after the update.
+fn refresh_snapshots(state: &mut Kithara) {
+    for deck in state.decks.iter_mut() {
+        deck.ui = deck.controller.snapshot();
+    }
 }

@@ -1,33 +1,121 @@
-use kithara::play::{PlayError, PlayerImpl, StretchControls, apply_mix};
+use kithara::{
+    audio::generate_log_spaced_bands,
+    play::{PlayError, PlayerConfig, PlayerImpl, StretchControls, apply_mix},
+};
 use kithara_platform::sync::Arc;
-use kithara_queue::Queue;
+use kithara_queue::{Queue, QueueConfig};
 
-use crate::mix::MixState;
+use crate::{config::AppConfig, mix::MixState};
 
 /// App-local deck identity; never crosses into a shared playback crate.
+///
+/// Stable for the deck's lifetime: decks come and go at runtime, so an id is
+/// never a position in any list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeckId(pub usize);
 
+/// One app deck: its own player, queue and tempo controls.
 pub struct Deck {
     pub id: DeckId,
     pub player: Arc<PlayerImpl>,
     pub queue: Arc<Queue>,
     pub timestretch: Arc<StretchControls>,
 }
-/// One app deck: its own player, queue and tempo controls.
+
+impl Deck {
+    /// Build a deck with its own player, queue and time-stretch handle, all
+    /// hanging off the app's shutdown token.
+    #[must_use]
+    pub fn build(id: DeckId, config: &AppConfig) -> Self {
+        let timestretch = StretchControls::new(1.0);
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder()
+                .cancel(config.shutdown.child())
+                .crossfade_duration(config.crossfade_seconds)
+                .eq_layout(generate_log_spaced_bands(config.eq_band_count))
+                .timestretch(Arc::clone(&timestretch))
+                .build(),
+        ));
+        let queue = Arc::new(Queue::new(
+            QueueConfig::default()
+                .with_player(Arc::clone(&player))
+                .with_cancel(config.shutdown.child()),
+        ));
+
+        Self {
+            id,
+            player,
+            queue,
+            timestretch,
+        }
+    }
+}
 
 /// Canonical owner of the decks and the mix. Mix edits are transactional: a
 /// rejected apply leaves the stored mix untouched.
+///
+/// The deck list is dynamic. `mix.strips` is kept parallel to `decks` — same
+/// length, same order — by this type alone; every lookup goes through
+/// [`DeckSet::position`], never through a raw [`DeckId`] value.
 pub struct DeckSet {
     decks: Vec<Deck>,
     mix: MixState,
+    next_id: usize,
 }
 
 impl DeckSet {
     #[must_use]
     pub fn new(decks: Vec<Deck>) -> Self {
+        let next_id = decks.iter().map(|deck| deck.id.0 + 1).max().unwrap_or(0);
         let mix = MixState::new(decks.len());
-        Self { decks, mix }
+        Self {
+            decks,
+            mix,
+            next_id,
+        }
+    }
+
+    /// Id for the next deck; never reuses one that has been handed out.
+    pub fn next_id(&mut self) -> DeckId {
+        let id = DeckId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    /// Add a deck and re-derive the crossfader buses around it, keeping the
+    /// levels of the decks that were already playing.
+    ///
+    /// # Errors
+    /// See [`DeckSet::commit`]. A rejected apply leaves the set unchanged.
+    pub fn add(&mut self, deck: Deck) -> Result<(), PlayError> {
+        self.next_id = self.next_id.max(deck.id.0 + 1);
+        self.decks.push(deck);
+        let next = self.mix.resized(self.decks.len());
+        if let Err(e) = self.commit(next) {
+            self.decks.pop();
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Remove a deck, silencing it before it goes: its player leaves the
+    /// session with the same batch that re-derives the remaining buses.
+    ///
+    /// # Errors
+    /// See [`DeckSet::commit`]. A rejected apply leaves the set unchanged.
+    pub fn remove(&mut self, id: DeckId) -> Result<(), PlayError> {
+        let Some(index) = self.position(id) else {
+            return Ok(());
+        };
+        let deck = self.decks.remove(index);
+        let mut next = self.mix.clone();
+        next.strips.remove(index);
+        let next = next.resized(self.decks.len());
+        if let Err(e) = self.commit(next) {
+            self.decks.insert(index, deck);
+            return Err(e);
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -38,6 +126,12 @@ impl DeckSet {
     #[must_use]
     pub fn deck(&self, id: DeckId) -> Option<&Deck> {
         self.decks.iter().find(|deck| deck.id == id)
+    }
+
+    /// Where `id` currently sits in the deck list (and so in the mix).
+    #[must_use]
+    pub fn position(&self, id: DeckId) -> Option<usize> {
+        self.decks.iter().position(|deck| deck.id == id)
     }
 
     #[must_use]
@@ -62,6 +156,8 @@ impl DeckSet {
         Ok(())
     }
 
+    /// Move the DJ crossfader.
+    ///
     /// # Errors
     /// See [`DeckSet::commit`].
     pub fn set_crossfader(&mut self, position: f32) -> Result<(), PlayError> {
@@ -70,6 +166,8 @@ impl DeckSet {
         self.commit(next)
     }
 
+    /// Set the group master applied to every deck.
+    ///
     /// # Errors
     /// See [`DeckSet::commit`].
     pub fn set_group_master(&mut self, master: f32) -> Result<(), PlayError> {
@@ -84,7 +182,7 @@ impl DeckSet {
     /// See [`DeckSet::commit`].
     pub fn set_trim(&mut self, id: DeckId, trim: f32) -> Result<(), PlayError> {
         let mut next = self.mix.clone();
-        if let Some(strip) = next.strips.get_mut(id.0) {
+        if let Some(strip) = self.position(id).and_then(|at| next.strips.get_mut(at)) {
             strip.trim = trim;
         }
         self.commit(next)
@@ -96,7 +194,7 @@ impl DeckSet {
     /// See [`DeckSet::commit`].
     pub fn set_muted(&mut self, id: DeckId, muted: bool) -> Result<(), PlayError> {
         let mut next = self.mix.clone();
-        if let Some(strip) = next.strips.get_mut(id.0) {
+        if let Some(strip) = self.position(id).and_then(|at| next.strips.get_mut(at)) {
             strip.muted = muted;
         }
         self.commit(next)
@@ -110,27 +208,26 @@ mod tests {
 
     use super::*;
 
+    fn one_deck(id: DeckId) -> Deck {
+        let timestretch = StretchControls::new(1.0);
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder()
+                .timestretch(Arc::clone(&timestretch))
+                .build(),
+        ));
+        let queue = Arc::new(Queue::new(
+            QueueConfig::default().with_player(Arc::clone(&player)),
+        ));
+        Deck {
+            id,
+            player,
+            queue,
+            timestretch,
+        }
+    }
+
     fn deck_set(count: usize) -> DeckSet {
-        let decks = (0..count)
-            .map(|index| {
-                let timestretch = StretchControls::new(1.0);
-                let player = Arc::new(PlayerImpl::new(
-                    PlayerConfig::builder()
-                        .timestretch(Arc::clone(&timestretch))
-                        .build(),
-                ));
-                let queue = Arc::new(Queue::new(
-                    QueueConfig::default().with_player(Arc::clone(&player)),
-                ));
-                Deck {
-                    id: DeckId(index),
-                    player,
-                    queue,
-                    timestretch,
-                }
-            })
-            .collect();
-        DeckSet::new(decks)
+        DeckSet::new((0..count).map(|index| one_deck(DeckId(index))).collect())
     }
 
     #[test]
@@ -156,8 +253,6 @@ mod tests {
     fn crossfader_commit_reaches_every_deck() {
         let mut set = deck_set(2);
         set.set_crossfader(0.0).expect("crossfader to A");
-    /// Move the DJ crossfader.
-    ///
         assert_eq!(set.mix().levels().unwrap(), vec![1.0, 0.0]);
 
         set.set_crossfader(1.0).expect("crossfader to B");
@@ -166,8 +261,6 @@ mod tests {
 
     #[test]
     fn per_deck_trim_and_mute_are_independent() {
-    /// Set the group master applied to every deck.
-    ///
         let mut set = deck_set(4);
         let before = set.mix().levels().unwrap();
 
@@ -190,6 +283,41 @@ mod tests {
         let err = set.set_crossfader(1.5).expect_err("invalid position");
         assert!(matches!(err, PlayError::MixPosition { .. }));
         assert_eq!(set.mix(), &before);
+    }
+
+    #[test]
+    fn adding_a_second_deck_turns_the_crossfader_on() {
+        let mut set = deck_set(1);
+        assert_eq!(set.mix().levels().unwrap(), vec![1.0], "lone deck bypasses");
+
+        let id = set.next_id();
+        set.add(one_deck(id)).expect("add a deck");
+        set.set_crossfader(0.0).expect("crossfader to A");
+
+        assert_eq!(set.decks().len(), 2);
+        assert_eq!(set.mix().levels().unwrap(), vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn removing_a_deck_keeps_the_survivors_settings() {
+        let mut set = deck_set(3);
+        set.set_trim(DeckId(2), 0.25).expect("trim deck 2");
+
+        set.remove(DeckId(0)).expect("remove deck 0");
+
+        assert_eq!(set.decks().len(), 2);
+        assert_eq!(set.decks()[0].id, DeckId(1), "ids stay stable");
+        let levels = set.mix().levels().unwrap();
+        assert_eq!(levels.len(), 2);
+        // Deck 2 kept its trim and moved onto the B bus (position 1).
+        assert_eq!(set.mix().strips[1].trim, 0.25);
+    }
+
+    #[test]
+    fn a_removed_deck_leaves_no_id_reuse() {
+        let mut set = deck_set(2);
+        set.remove(DeckId(1)).expect("remove deck 1");
+        assert_eq!(set.next_id(), DeckId(2));
     }
 
     #[test]

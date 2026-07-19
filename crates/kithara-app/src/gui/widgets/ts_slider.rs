@@ -4,23 +4,21 @@ use iced::{
     widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
 };
 
-use crate::{
-    gui::{dj::DjMsg, message::Message},
-    theme::gui::GuiPalette,
-};
+use crate::theme::gui::GuiPalette;
 
 const HANDLE: f32 = 18.0;
 
 /// Horizontal timestretch slider: the gold fill spans from the centre toward
 /// the handle, snaps to 0 within `range * 0.012`, and rounds to 0.01. Five
 /// ticks with a taller centre tick; an 18x18 glowing square handle.
-struct TsSlider {
+struct TsSlider<M> {
     p: GuiPalette,
     range: f32,
     tempo: f32,
+    on_change: Box<dyn Fn(f32) -> M>,
 }
 
-impl TsSlider {
+impl<M> TsSlider<M> {
     fn to_x(&self, w: f32, v: f32) -> f32 {
         let pad = HANDLE / 2.0;
         let usable = (w - HANDLE).max(1.0);
@@ -39,7 +37,7 @@ impl TsSlider {
     }
 }
 
-impl canvas::Program<Message> for TsSlider {
+impl<M: Clone> canvas::Program<M> for TsSlider<M> {
     type State = bool;
 
     fn draw(
@@ -144,23 +142,17 @@ impl canvas::Program<Message> for TsSlider {
         event: &canvas::Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<Action<Message>> {
+    ) -> Option<Action<M>> {
         match event {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let pos = cursor.position_in(bounds)?;
                 *dragging = true;
                 let abs = Point::new(bounds.x + pos.x, bounds.y + pos.y);
-                Some(
-                    Action::publish(Message::Dj(DjMsg::SetTempo(self.value_at(bounds, abs))))
-                        .and_capture(),
-                )
+                Some(Action::publish((self.on_change)(self.value_at(bounds, abs))).and_capture())
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) if *dragging => {
                 let pos = cursor.position()?;
-                Some(
-                    Action::publish(Message::Dj(DjMsg::SetTempo(self.value_at(bounds, pos))))
-                        .and_capture(),
-                )
+                Some(Action::publish((self.on_change)(self.value_at(bounds, pos))).and_capture())
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
                 if *dragging =>
@@ -173,9 +165,20 @@ impl canvas::Program<Message> for TsSlider {
     }
 }
 
-pub(crate) fn ts_slider<'a>(tempo: f32, range: f32, p: GuiPalette) -> Element<'a, Message> {
-    Canvas::new(TsSlider { p, range, tempo })
-        .width(Length::Fill)
-        .height(Length::Fixed(30.0))
-        .into()
+/// Build the interactive timestretch slider for the DJ deck.
+pub(crate) fn ts_slider<'a, M: Clone + 'static>(
+    tempo: f32,
+    range: f32,
+    p: GuiPalette,
+    on_change: impl Fn(f32) -> M + 'static,
+) -> Element<'a, M> {
+    Canvas::new(TsSlider {
+        p,
+        range,
+        tempo,
+        on_change: Box::new(on_change),
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(30.0))
+    .into()
 }

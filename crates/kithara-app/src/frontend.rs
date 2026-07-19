@@ -1,8 +1,4 @@
-use kithara::play::StretchControls;
-use kithara_platform::sync::Arc;
-use kithara_queue::Queue;
-
-use crate::config::AppConfig;
+use crate::{config::AppConfig, deck::DeckSet};
 
 /// Boxed error type used by all frontends.
 pub type FrontendError = Box<dyn std::error::Error + Send + Sync>;
@@ -24,15 +20,12 @@ pub trait Frontend: Sized {
 
     /// Run the main event loop. Blocks until exit.
     ///
-    /// `timestretch` is the per-deck handle shared with the player.
+    /// The frontend takes ownership of the decks and their mix: it is the
+    /// only place that can actuate one while the loop runs.
     ///
     /// # Errors
     /// Returns an error if the event loop fails.
-    fn run_loop(
-        &mut self,
-        queue: Arc<Queue>,
-        timestretch: Arc<StretchControls>,
-    ) -> Result<(), FrontendError>;
+    fn run_loop(&mut self, decks: DeckSet) -> Result<(), FrontendError>;
 
     /// Clean up resources (restore terminal / close window).
     ///
@@ -44,5 +37,5 @@ pub trait Frontend: Sized {
     ///
     /// # Errors
     /// Returns an error if the frontend cannot start.
-    fn start(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError>;
+    fn start(&mut self, decks: &DeckSet) -> Result<(), FrontendError>;
 }

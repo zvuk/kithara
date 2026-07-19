@@ -1,9 +1,10 @@
 mod app;
-mod dj;
+mod deck;
 mod fonts;
 mod frontend;
 mod icons;
 mod message;
+mod mix;
 mod studio;
 mod subscription;
 mod theme;

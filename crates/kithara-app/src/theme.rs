@@ -103,6 +103,7 @@ pub(crate) mod gui {
 
     use super::{Palette, Rgb};
 
+    /// Resolved iced color palette.
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct GuiPalette {
         pub(crate) accent: Color,
@@ -182,6 +183,7 @@ pub(crate) mod tui {
 
     use super::{Palette, Rgb};
 
+    /// Resolved ratatui color palette.
     #[derive(Debug, Clone, Copy)]
     pub struct TuiPalette {
         pub accent: Color,

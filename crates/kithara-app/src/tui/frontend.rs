@@ -1,10 +1,9 @@
-use kithara::play::StretchControls;
 use kithara_platform::{sync::Arc, tokio};
-use kithara_queue::Queue;
 
 use super::runner;
 use crate::{
     config::AppConfig,
+    deck::DeckSet,
     frontend::{Frontend, FrontendError},
 };
 
@@ -20,11 +19,8 @@ impl Frontend for TuiFrontend {
         })
     }
 
-    fn run_loop(
-        &mut self,
-        queue: Arc<Queue>,
-        timestretch: Arc<StretchControls>,
-    ) -> Result<(), FrontendError> {
+    /// The TUI drives a single deck; a multi-deck session is a GUI concept.
+    fn run_loop(&mut self, decks: DeckSet) -> Result<(), FrontendError> {
         const WORKER_THREADS: usize = 2;
         const MAX_BLOCKING_THREADS: usize = 4;
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -33,7 +29,12 @@ impl Frontend for TuiFrontend {
             .enable_all()
             .build()?;
 
-        let result = rt.block_on(runner::run_tui(queue, timestretch, &self.config));
+        let deck = decks.decks().first().ok_or("no decks in the session")?;
+        let result = rt.block_on(runner::run_tui(
+            Arc::clone(&deck.queue),
+            Arc::clone(&deck.timestretch),
+            &self.config,
+        ));
 
         self.config.shutdown.cancel();
         result
@@ -43,7 +44,7 @@ impl Frontend for TuiFrontend {
         Ok(())
     }
 
-    fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
+    fn start(&mut self, _decks: &DeckSet) -> Result<(), FrontendError> {
         Ok(())
     }
 }

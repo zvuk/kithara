@@ -3,8 +3,6 @@ use iced::{
     widget::{container, container::Style as ContainerStyle},
 };
 
-use crate::gui::message::Message;
-
 /// The single block-container primitive every studio module goes through.
 #[derive(Clone, Copy)]
 pub(super) struct Module {
@@ -55,7 +53,7 @@ impl Module {
     }
 
     /// Builds the styled container around `content`.
-    pub(super) fn wrap<'a>(self, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    pub(super) fn wrap<'a, M: 'a>(self, content: impl Into<Element<'a, M>>) -> Element<'a, M> {
         let Self { bg, pad, height } = self;
         let shell = container(content).width(Length::Fill).padding(pad);
         let shell = match height {

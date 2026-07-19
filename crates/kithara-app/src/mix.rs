@@ -41,6 +41,25 @@ impl MixState {
         }
     }
 
+    /// The same mix for `count` decks: existing strips keep their trim and
+    /// mute, new ones start neutral, and every bus is re-derived for the new
+    /// size (a second deck turns the crossfader on, a lone deck bypasses it).
+    #[must_use]
+    pub fn resized(&self, count: usize) -> Self {
+        let strips = (0..count)
+            .map(|i| {
+                let bus = bus_for(i, count);
+                self.strips
+                    .get(i)
+                    .map_or_else(|| MixStrip::new(bus), |strip| MixStrip { bus, ..*strip })
+            })
+            .collect();
+        Self {
+            strips,
+            ..self.clone()
+        }
+    }
+
     /// `trim * mute * crossfader_gain(bus, position) * group_master` per deck.
     ///
     /// # Errors

@@ -80,8 +80,11 @@ pub(crate) enum FlashKind {
 /// URL-bar events, grouped so the top-level [`Message`] stays thin.
 #[derive(Debug, Clone)]
 pub(crate) enum UrlMsg {
+    /// Text field edited.
     Changed(String),
+    /// Commit the current text (Enter or submit button).
     Submit,
+    /// Clear the success flash after its lifetime elapsed.
     FlashExpired,
 }
 
@@ -125,7 +128,7 @@ fn submit(state: &mut Kithara) -> Task<Message> {
     }
 
     let fmt = detect_format(&trimmed);
-    state.controller.queue().append(trimmed.as_str());
+    state.catalog.add(trimmed.clone());
     state.url.flash = Some(Flash {
         kind: FlashKind::Ok,
         text: format!("QUEUED \u{00b7} {fmt}"),

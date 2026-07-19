@@ -10,15 +10,27 @@ use super::{
     tokens::{studio_radius, studio_size, studio_space, studio_type},
 };
 use crate::{
-    gui::{app::Kithara, fonts, message::Message, tokens::gap, view::mix_colors},
+    gui::{fonts, tokens::gap, view::mix_colors},
     theme::gui::GuiPalette,
 };
 
-pub(super) fn view_status_bar(state: &Kithara) -> Element<'static, Message> {
-    let p = state.palette;
-    let playing = state.ui_state.playing;
-    let track_count = state.ui_state.tracks.len();
-    let load = state.ui_state.engine_load;
+/// What the status bar reports about the session it is given.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct StatusProps {
+    pub(super) load: EngineLoadSnapshot,
+    pub(super) track_count: usize,
+    pub(super) playing: bool,
+}
+
+pub(super) fn view_status_bar<M: 'static>(
+    props: StatusProps,
+    p: GuiPalette,
+) -> Element<'static, M> {
+    let StatusProps {
+        playing,
+        track_count,
+        load,
+    } = props;
     // The engine readout (and its separator) appear only while a track is
     // actually producing; otherwise the section is omitted entirely.
     let show_load = playing && load.is_active();
@@ -47,7 +59,7 @@ pub(super) fn view_status_bar(state: &Kithara) -> Element<'static, Message> {
         .wrap(bar)
 }
 
-fn engine_load_view(load: EngineLoadSnapshot, p: GuiPalette) -> Element<'static, Message> {
+fn engine_load_view<M: 'static>(load: EngineLoadSnapshot, p: GuiPalette) -> Element<'static, M> {
     let pct = (load.load * 100.0).clamp(0.0, 999.0);
     row![
         status_text("load".to_string(), p),
@@ -72,7 +84,7 @@ fn load_color(load: f32, p: GuiPalette) -> Color {
     mix_colors(base, p.muted, 0.4)
 }
 
-fn status_text(label: String, p: GuiPalette) -> Element<'static, Message> {
+fn status_text<M: 'static>(label: String, p: GuiPalette) -> Element<'static, M> {
     text(label)
         .size(studio_type::MONO_XS)
         .font(fonts::mono(Weight::Medium))
@@ -80,7 +92,7 @@ fn status_text(label: String, p: GuiPalette) -> Element<'static, Message> {
         .into()
 }
 
-fn separator_text(p: GuiPalette) -> Element<'static, Message> {
+fn separator_text<M: 'static>(p: GuiPalette) -> Element<'static, M> {
     text("|")
         .size(studio_type::MONO_XS)
         .font(fonts::mono(Weight::Medium))
@@ -88,7 +100,7 @@ fn separator_text(p: GuiPalette) -> Element<'static, Message> {
         .into()
 }
 
-fn status_dot(color: Color) -> Element<'static, Message> {
+fn status_dot<M: 'static>(color: Color) -> Element<'static, M> {
     container(Space::new())
         .width(Length::Fixed(studio_size::STATUS_DOT))
         .height(Length::Fixed(studio_size::STATUS_DOT))

@@ -17,37 +17,63 @@ use super::{
     tokens::{studio_size, studio_space, studio_type},
 };
 use crate::{
-    gui::{app::Kithara, fonts, icons::Icon, message::Message, tokens::gap},
+    gui::{fonts, icons::Icon, tokens::gap},
     theme::gui::GuiPalette,
 };
+
+/// One row of the library, already resolved by the composer.
+pub(super) struct LibRow<'a> {
+    pub(super) title: &'a str,
+    pub(super) url: Option<&'a str>,
+    /// Channel letters of the decks this track is loaded on.
+    pub(super) loaded_on: Vec<char>,
+    pub(super) selected: bool,
+}
+
+pub(super) struct LibProps<'a> {
+    pub(super) rows: Vec<LibRow<'a>>,
+    /// Load targets in deck order, as channel letters.
+    pub(super) targets: Vec<char>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum LibMsg {
+    Select(usize),
+    /// Load row `.0` onto target `.1` — an index into `LibProps::targets`.
+    Load(usize, usize),
+}
+
+/// Width of the per-row load controls plus the loaded-on marks.
+const LOAD_COL_WIDTH: f32 = 76.0;
+const MARKS_WIDTH: f32 = 24.0;
 
 /// Per-track duration is not carried by `TrackEntry` on this layout, so the
 /// time column shows a stable placeholder instead of fabricating a value.
 const NO_DURATION: &str = "--:--";
 
-pub(super) fn view_library(state: &Kithara) -> Element<'_, Message> {
-    let p = state.palette;
-
-    let body = state.ui_state.tracks.iter().enumerate().fold(
-        column![].spacing(0.0),
-        |col, (index, entry)| {
-            let artist = row_artist(entry.url.as_deref());
+pub(super) fn view_library<'a>(props: LibProps<'a>, p: GuiPalette) -> Element<'a, LibMsg> {
+    let body = props
+        .rows
+        .iter()
+        .enumerate()
+        .fold(column![].spacing(0.0), |col, (index, row)| {
+            let artist = row_artist(row.url);
             col.push(library_row(
                 index,
                 LibraryRow {
-                    title: &entry.name,
+                    title: row.title,
                     artist: &artist,
-                    current: state.ui_state.current_track_index == Some(index),
-                    selected: state.selected_track_index == Some(index),
+                    loaded_on: &row.loaded_on,
+                    targets: &props.targets,
+                    selected: row.selected,
                 },
                 p,
             ))
-        },
-    );
+        });
 
     let panel = Module::new().bg(p.bg_panel).fill_height().wrap(
         column![
-            library_tabs(state.ui_state.shuffle_enabled, p),
+            library_tabs(p),
             library_head_row(p),
             container(scrollable(body))
                 .width(Length::Fill)
@@ -57,26 +83,14 @@ pub(super) fn view_library(state: &Kithara) -> Element<'_, Message> {
         .height(Length::Fill),
     );
 
-    container(panel)
-        .width(Length::Fixed(studio_size::LIBRARY_WIDTH))
-        .height(Length::Fill)
-        .into()
+    panel
 }
 
-fn library_tabs(shuffle_on: bool, p: GuiPalette) -> Element<'static, Message> {
-    // Active toggle follows the design system: gold fill with on-gold icon.
-    let shuffle_color = if shuffle_on { p.bg } else { p.muted };
+fn library_tabs(p: GuiPalette) -> Element<'static, LibMsg> {
     container(
-        row![
-            library_label(p),
-            Space::new().width(Length::Fill),
-            button(Icon::Shuffle.view(12.0, shuffle_color))
-                .padding([4.0, 8.0])
-                .style(move |_theme: &Theme, status| shuffle_button_style(p, shuffle_on, status))
-                .on_press(Message::ToggleShuffle),
-        ]
-        .align_y(Alignment::Center)
-        .spacing(0.0),
+        row![library_label(p), Space::new().width(Length::Fill),]
+            .align_y(Alignment::Center)
+            .spacing(0.0),
     )
     .width(Length::Fill)
     .center_y(Length::Fixed(studio_size::LIB_HEAD_HEIGHT))
@@ -85,7 +99,7 @@ fn library_tabs(shuffle_on: bool, p: GuiPalette) -> Element<'static, Message> {
     .into()
 }
 
-fn library_label(p: GuiPalette) -> Element<'static, Message> {
+fn library_label(p: GuiPalette) -> Element<'static, LibMsg> {
     container(
         row![
             Icon::Playlist.view(12.0, p.accent),
@@ -100,29 +114,14 @@ fn library_label(p: GuiPalette) -> Element<'static, Message> {
     .into()
 }
 
-fn shuffle_button_style(p: GuiPalette, on: bool, status: Status) -> ButtonStyle {
-    let background = if on {
-        Background::Color(p.accent)
-    } else {
-        match status {
-            Status::Hovered | Status::Pressed => Background::Color(p.bg_elev),
-            Status::Active | Status::Disabled => Background::Color(Color::TRANSPARENT),
-        }
-    };
-    ButtonStyle {
-        background: Some(background),
-        text_color: if on { p.bg } else { p.text },
-        ..ButtonStyle::default()
-    }
-}
-
-fn library_head_row(p: GuiPalette) -> Element<'static, Message> {
+fn library_head_row(p: GuiPalette) -> Element<'static, LibMsg> {
     container(
         row![
             head_cell("#", Length::Fixed(28.0), p),
             head_cell("TRACK", Length::FillPortion(14), p),
             head_cell("ARTIST", Length::FillPortion(10), p),
             head_cell("TIME", Length::Fixed(48.0), p),
+            head_cell("LOAD", Length::Fixed(LOAD_COL_WIDTH), p),
         ]
         .align_y(Alignment::Center)
         .spacing(gap::CONTENT),
@@ -133,21 +132,27 @@ fn library_head_row(p: GuiPalette) -> Element<'static, Message> {
     .into()
 }
 
+/// Track display state for a single [`library_row`]: name, derived artist,
+/// and whether the row is the current or the selected track.
 #[derive(Clone, Copy)]
 struct LibraryRow<'a> {
     artist: &'a str,
     title: &'a str,
-    current: bool,
+    loaded_on: &'a [char],
+    targets: &'a [char],
     selected: bool,
 }
 
-fn library_row(index: usize, row: LibraryRow<'_>, p: GuiPalette) -> Element<'static, Message> {
+fn library_row(index: usize, row: LibraryRow<'_>, p: GuiPalette) -> Element<'static, LibMsg> {
     let LibraryRow {
         title,
         artist,
-        current,
+        loaded_on,
+        targets,
         selected,
     } = row;
+    let current = !loaded_on.is_empty();
+    let marks = loaded_on.iter().collect::<String>();
     button(
         container(
             row![
@@ -175,6 +180,8 @@ fn library_row(index: usize, row: LibraryRow<'_>, p: GuiPalette) -> Element<'sta
                     p.muted,
                     fonts::MONO,
                 ),
+                body_cell(marks, Length::Fixed(MARKS_WIDTH), p.accent, fonts::MONO),
+                load_buttons(index, targets, p),
             ]
             .align_y(Alignment::Center)
             .spacing(gap::CONTENT),
@@ -186,11 +193,48 @@ fn library_row(index: usize, row: LibraryRow<'_>, p: GuiPalette) -> Element<'sta
     .width(Length::Fill)
     .padding(0)
     .style(move |_theme: &Theme, status| row_style(p, current, selected, status))
-    .on_press(Message::SelectTrack(index))
+    .on_press(LibMsg::Select(index))
     .into()
 }
 
-fn head_cell(label: &str, width: Length, p: GuiPalette) -> Element<'static, Message> {
+/// One `->X` button per deck. The row itself only reports positions; the
+/// composer decides which deck each position is.
+fn load_buttons(index: usize, targets: &[char], p: GuiPalette) -> Element<'static, LibMsg> {
+    targets
+        .iter()
+        .enumerate()
+        .fold(
+            row![].spacing(gap::INLINE_TIGHT).align_y(Alignment::Center),
+            |controls, (target, label)| {
+                controls.push(
+                    button(
+                        text(format!("\u{2192}{label}"))
+                            .size(studio_type::MONO_XS)
+                            .font(fonts::mono(Weight::Semibold))
+                            .color(p.text_dim),
+                    )
+                    .padding([2.0, 6.0])
+                    .style(move |_theme: &Theme, status| load_button_style(p, status))
+                    .on_press(LibMsg::Load(index, target)),
+                )
+            },
+        )
+        .into()
+}
+
+fn load_button_style(p: GuiPalette, status: Status) -> ButtonStyle {
+    let background = match status {
+        Status::Hovered | Status::Pressed => Background::Color(p.accent),
+        Status::Active | Status::Disabled => Background::Color(p.bg_inset),
+    };
+    ButtonStyle {
+        background: Some(background),
+        text_color: p.text_dim,
+        ..ButtonStyle::default()
+    }
+}
+
+fn head_cell(label: &str, width: Length, p: GuiPalette) -> Element<'static, LibMsg> {
     container(
         text(label.to_string())
             .size(studio_type::MONO_XS)
@@ -206,7 +250,7 @@ fn body_cell(
     width: Length,
     color: Color,
     font: iced::Font,
-) -> Element<'static, Message> {
+) -> Element<'static, LibMsg> {
     container(
         text(label)
             .size(studio_type::BODY_SM)

@@ -204,9 +204,9 @@ impl StateController {
         }
     }
 
-    /// The per-deck time-stretch handle.
+    /// The time-stretch handle shared with this deck's player.
     #[must_use]
-    pub fn deck(&self) -> &Arc<StretchControls> {
+    pub fn stretch(&self) -> &Arc<StretchControls> {
         &self.timestretch
     }
 

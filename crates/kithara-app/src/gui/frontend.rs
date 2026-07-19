@@ -1,21 +1,30 @@
 use iced::{Size, window::Settings};
-use kithara::play::StretchControls;
-use kithara_platform::{sync::Arc, tokio};
-use kithara_queue::Queue;
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    tokio,
+};
 
-use super::{app::Kithara, fonts, update, view};
+use super::{
+    app::{Decks, Kithara},
+    fonts, update, view,
+};
 use crate::{
+    catalog::Catalog,
     config::AppConfig,
+    deck::{DeckId, DeckSet},
     frontend::{Frontend, FrontendError},
+    state::StateController,
     theme::gui,
 };
 
 mod consts {
+    /// Compact-player window size in logical pixels.
     pub(super) const COMPACT_WIDTH: f32 = 448.0;
     pub(super) const COMPACT_HEIGHT: f32 = 784.0;
     pub(super) const COMPACT_MIN_WIDTH: f32 = 420.0;
     pub(super) const COMPACT_MIN_HEIGHT: f32 = 760.0;
 
+    /// DJ Studio window size in logical pixels.
     pub(super) const STUDIO_WIDTH: f32 = 980.0;
     pub(super) const STUDIO_HEIGHT: f32 = 700.0;
     pub(super) const STUDIO_MIN_WIDTH: f32 = 820.0;
@@ -46,6 +55,7 @@ pub(crate) fn window_settings(dj: bool) -> Settings {
     }
 }
 
+/// GUI frontend using iced.
 pub struct GuiFrontend {
     config: AppConfig,
     palette: gui::GuiPalette,
@@ -59,11 +69,7 @@ impl Frontend for GuiFrontend {
         })
     }
 
-    fn run_loop(
-        &mut self,
-        queue: Arc<Queue>,
-        timestretch: Arc<StretchControls>,
-    ) -> Result<(), FrontendError> {
+    fn run_loop(&mut self, decks: DeckSet) -> Result<(), FrontendError> {
         let palette = self.palette;
         let config = self.config.clone();
 
@@ -71,16 +77,42 @@ impl Frontend for GuiFrontend {
             .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
         let _guard = rt.enter();
 
-        queue.set_tracks(crate::sources::build_sources(&config));
-        let controller = Arc::new(crate::state::StateController::new(
-            Arc::clone(&queue),
-            timestretch,
+        // The CLI tracks start on the first deck; every deck gets its own
+        // controller, listener and analysis worker.
+        if let Some(first) = decks.decks().first() {
+            first
+                .queue
+                .set_tracks(crate::sources::build_sources(&config));
+        }
+        let controllers: Vec<(DeckId, Arc<StateController>)> = decks
+            .decks()
+            .iter()
+            .map(|deck| {
+                let controller = Arc::new(StateController::new(
+                    Arc::clone(&deck.queue),
+                    Arc::clone(&deck.timestretch),
+                    config.clone(),
+                    config.shutdown.child(),
+                ));
+                (deck.id, controller)
+            })
+            .collect();
+
+        let boot = Mutex::new(Some((
+            decks,
+            Decks::new(controllers).ok_or("no decks to render")?,
+            Catalog::new(config.tracks.clone()),
             config.clone(),
-            config.shutdown.child(),
-        ));
+        )));
 
         let result = iced::daemon(
-            move || Kithara::new(Arc::clone(&controller), palette),
+            move || {
+                let (session, decks, catalog, config) = boot
+                    .lock()
+                    .take()
+                    .expect("iced boots the application exactly once");
+                Kithara::new(session, decks, catalog, config, palette)
+            },
             update::update,
             view::view,
         )
@@ -104,7 +136,7 @@ impl Frontend for GuiFrontend {
         Ok(())
     }
 
-    fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
+    fn start(&mut self, _decks: &DeckSet) -> Result<(), FrontendError> {
         Ok(())
     }
 }

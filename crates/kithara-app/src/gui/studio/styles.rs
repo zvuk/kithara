@@ -8,9 +8,13 @@ use iced::{
     },
 };
 
-use crate::{gui::message::Message, theme::gui::GuiPalette};
+use crate::theme::gui::GuiPalette;
 
-pub(super) fn vertical_divider(width: f32, height: f32, color: Color) -> Element<'static, Message> {
+pub(super) fn vertical_divider<M: 'static>(
+    width: f32,
+    height: f32,
+    color: Color,
+) -> Element<'static, M> {
     container(Space::new())
         .width(Length::Fixed(width))
         .height(if height.is_finite() {
@@ -22,7 +26,7 @@ pub(super) fn vertical_divider(width: f32, height: f32, color: Color) -> Element
         .into()
 }
 
-pub(super) fn horizontal_divider(height: f32, color: Color) -> Element<'static, Message> {
+pub(super) fn horizontal_divider<M: 'static>(height: f32, color: Color) -> Element<'static, M> {
     container(Space::new())
         .width(Length::Fill)
         .height(Length::Fixed(height))

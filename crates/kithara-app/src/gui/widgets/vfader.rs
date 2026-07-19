@@ -4,18 +4,18 @@ use iced::{
     widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, gradient},
 };
 
-use crate::{gui::message::Message, theme::gui::GuiPalette};
+use crate::theme::gui::GuiPalette;
 
 /// Vertical EQ fader: a thin rail with a zero line, a gradient fill growing
 /// from 0 dB toward the current value and a round gold handle. Click or drag
 /// the rail to set the band gain; snaps to 0 within 0.3 dB and rounds to one
 /// decimal.
-struct VFader {
+struct VFader<M> {
     p: GuiPalette,
     max: f32,
     min: f32,
     value: f32,
-    band: usize,
+    on_change: Box<dyn Fn(f32) -> M>,
 }
 
 mod consts {
@@ -53,7 +53,7 @@ struct DragState {
     dragging: bool,
 }
 
-impl canvas::Program<Message> for VFader {
+impl<M: Clone> canvas::Program<M> for VFader<M> {
     type State = DragState;
 
     fn draw(
@@ -143,19 +143,19 @@ impl canvas::Program<Message> for VFader {
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<Action<Message>> {
+    ) -> Option<Action<M>> {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
                 cursor.position_over(bounds).map(|pos| {
                     state.dragging = true;
                     let v = value_at(self.min, self.max, bounds.height, pos.y - bounds.y);
-                    Action::publish(Message::EqBandChanged(self.band, v)).and_capture()
+                    Action::publish((self.on_change)(v)).and_capture()
                 })
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
                 cursor.position().map(|pos| {
                     let v = value_at(self.min, self.max, bounds.height, pos.y - bounds.y);
-                    Action::publish(Message::EqBandChanged(self.band, v)).and_capture()
+                    Action::publish((self.on_change)(v)).and_capture()
                 })
             }
             Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.dragging => {
@@ -167,6 +167,7 @@ impl canvas::Program<Message> for VFader {
     }
 }
 
+/// Range, current value, and pixel height for a single [`vfader`].
 #[derive(Clone, Copy)]
 pub(crate) struct VFaderParams {
     pub(crate) height: f32,
@@ -175,7 +176,13 @@ pub(crate) struct VFaderParams {
     pub(crate) value: f32,
 }
 
-pub(crate) fn vfader<'a>(band: usize, params: VFaderParams, p: GuiPalette) -> Element<'a, Message> {
+/// Build a vertical EQ fader of pixel `params.height` for `band`, with
+/// `params.value` in `params.min..=params.max` dB.
+pub(crate) fn vfader<'a, M: Clone + 'static>(
+    params: VFaderParams,
+    p: GuiPalette,
+    on_change: impl Fn(f32) -> M + 'static,
+) -> Element<'a, M> {
     let VFaderParams {
         value,
         min,
@@ -187,7 +194,7 @@ pub(crate) fn vfader<'a>(band: usize, params: VFaderParams, p: GuiPalette) -> El
         max,
         min,
         value,
-        band,
+        on_change: Box::new(on_change),
     })
     .width(Length::Fill)
     .height(Length::Fixed(height))

@@ -10,7 +10,6 @@ use iced::{
 use crate::{
     gui::{
         icons::Icon,
-        message::Message,
         view::{mix_colors, with_alpha},
     },
     theme::gui::GuiPalette,
@@ -31,12 +30,14 @@ mod consts {
 }
 use consts::*;
 
-/// Primary play/pause control shared by the compact view and DJ Studio.
-pub(crate) fn play_button(
+/// Primary play/pause control shared by compact view and DJ Studio:
+/// a solid-gold square with a hover glow. The icon swaps between
+/// play and pause based on `playing`.
+pub(crate) fn play_button<'a, M: Clone + 'a>(
     playing: bool,
     p: GuiPalette,
-    message: Message,
-) -> Element<'static, Message> {
+    message: M,
+) -> Element<'a, M> {
     let icon = if playing { Icon::Pause } else { Icon::Play };
     button(
         container(icon.view(ICON_SIZE, p.bg))

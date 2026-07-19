@@ -7,7 +7,7 @@ use iced::{
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    dj::DjView,
+    deck::DeckUi,
     frontend::window_settings,
     message::{Message, Tab},
     subscription::subscription_config,
@@ -15,57 +15,128 @@ use super::{
     url_bar::UrlBar,
 };
 use crate::{
-    state::{StateController, UiState},
+    catalog::Catalog,
+    config::AppConfig,
+    deck::{DeckId, DeckSet},
+    state::StateController,
     theme::gui,
 };
 
 /// Main GUI application state.
 ///
-/// Player state lives in [`StateController`]; this struct only holds
-/// view-local state that has no business in the shared model
-/// (selected row, active tab, transient text input, blink counter).
-/// `ui_state` is refreshed once per `Tick` so all view code reads from
-/// a single, consistent snapshot.
+/// Each deck owns its shared model ([`crate::state::StateController`]) and its
+/// own snapshot; the session mix is owned by [`DeckSet`]. This struct adds only
+/// what belongs to no single deck: the live window, the active tab, transient
+/// text input, and which deck the keyboard talks to.
 pub(crate) struct Kithara {
-    pub(crate) controller: Arc<StateController>,
-    /// View-local DJ Studio state (open / closed).
-    pub(crate) dj: DjView,
+    pub(crate) session: DeckSet,
+    pub(crate) decks: Decks,
+    /// The app's track list; decks load from it.
+    pub(crate) catalog: Catalog,
+    /// Needed to build a track source when the catalog loads onto a deck.
+    pub(crate) config: AppConfig,
 
     pub(crate) palette: gui::GuiPalette,
-    pub(crate) selected_track_index: Option<usize>,
     /// Currently live window. One window is open at a time; the DJ-mode
     /// swap opens the new window and closes this one.
     pub(crate) window_id: Option<window::Id>,
+    /// DJ Studio open (vs the compact window).
+    pub(crate) studio_open: bool,
+    /// Highlighted catalog row, shared by every deck's load buttons.
+    pub(crate) selected_track: Option<usize>,
     pub(crate) active_tab: Tab,
-    pub(crate) ui_state: UiState,
     pub(crate) url: UrlBar,
-    pub(crate) previous_volume: f32,
     pub(crate) blink_counter: u8,
 }
 
+/// A non-empty set of deck view-models with one of them focused.
+///
+/// The invariant — `items` is never empty and `focus` always indexes it — is
+/// established by [`Decks::new`] and preserved by [`Decks::set_focus`], so
+/// [`Decks::focused`] is total.
+pub(crate) struct Decks {
+    items: Vec<DeckUi>,
+    focus: DeckId,
+}
+
+impl Decks {
+    /// Returns `None` for an empty session — a GUI without a deck has nothing
+    /// to render.
+    pub(crate) fn new(controllers: Vec<(DeckId, Arc<StateController>)>) -> Option<Self> {
+        let items: Vec<DeckUi> = controllers
+            .into_iter()
+            .map(|(id, controller)| DeckUi::new(id, controller))
+            .collect();
+        let focus = items.first()?.id;
+        Some(Self { items, focus })
+    }
+
+    pub(crate) fn ids(&self) -> Vec<DeckId> {
+        self.items.iter().map(|deck| deck.id).collect()
+    }
+
+    pub(crate) fn get(&self, id: DeckId) -> Option<&DeckUi> {
+        self.items.iter().find(|deck| deck.id == id)
+    }
+
+    pub(crate) fn get_mut(&mut self, id: DeckId) -> Option<&mut DeckUi> {
+        self.items.iter_mut().find(|deck| deck.id == id)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &DeckUi> {
+        self.items.iter()
+    }
+
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut DeckUi> {
+        self.items.iter_mut()
+    }
+
+    pub(crate) fn focus(&self) -> DeckId {
+        self.focus
+    }
+
+    pub(crate) fn focused(&self) -> &DeckUi {
+        let at = self.position(self.focus).unwrap_or(0);
+        &self.items[at]
+    }
+
+    /// Ignores an id no deck answers to, keeping the focus invariant.
+    pub(crate) fn set_focus(&mut self, id: DeckId) {
+        if self.position(id).is_some() {
+            self.focus = id;
+        }
+    }
+
+    fn position(&self, id: DeckId) -> Option<usize> {
+        self.items.iter().position(|deck| deck.id == id)
+    }
+}
+
 impl Kithara {
-    /// Boot function for `iced::daemon()`. Opens the initial compact
-    /// window and tracks its id.
+    /// Boot function for `iced::daemon()`. Opens the initial window and
+    /// tracks its id.
     pub(crate) fn new(
-        controller: Arc<StateController>,
+        session: DeckSet,
+        decks: Decks,
+        catalog: Catalog,
+        config: AppConfig,
         palette: gui::GuiPalette,
     ) -> (Self, Task<Message>) {
-        let ui_state = controller.snapshot();
-
         let mut state = Self {
-            controller,
-            previous_volume: ui_state.volume.max(0.01),
-            ui_state,
+            session,
+            decks,
+            catalog,
+            config,
             palette,
+            selected_track: None,
             active_tab: Tab::Playlist,
-            selected_track_index: None,
             blink_counter: 0,
             url: UrlBar::default(),
-            dj: DjView::default(),
+            studio_open: true,
             window_id: None,
         };
 
-        let (id, open) = window::open(window_settings(state.dj.open));
+        let (id, open) = window::open(window_settings(state.studio_open));
         state.window_id = Some(id);
 
         (state, open.discard())
@@ -75,7 +146,8 @@ impl Kithara {
     /// interval scales with playback state to save CPU while idle.
     pub(crate) fn subscription(&self) -> Subscription<Message> {
         const SUBSCRIPTION_CAPACITY: usize = 3;
-        let cfg = subscription_config(self.ui_state.playing);
+        let playing = self.decks.iter().any(|deck| deck.ui.playing);
+        let cfg = subscription_config(playing);
         let mut subs = Vec::with_capacity(SUBSCRIPTION_CAPACITY);
         subs.push(
             iced_time::every(Duration::from_millis(cfg.tick_interval_ms)).map(|_| Message::Tick),
@@ -89,7 +161,7 @@ impl Kithara {
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     key: Key::Named(Named::Delete | Named::Backspace),
                     ..
-                }) if status == Status::Ignored => Some(Message::DeleteTrack),
+                }) if status == Status::Ignored => Some(Message::DeleteFocusedTrack),
                 _ => None,
             }));
         }
@@ -103,7 +175,7 @@ impl Kithara {
 
     /// Window title, reflecting the active mode.
     pub(crate) fn title(&self, _window: window::Id) -> String {
-        if self.dj.open {
+        if self.studio_open {
             "Kithara - DJ Studio".to_string()
         } else {
             "Kithara".to_string()

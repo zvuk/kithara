@@ -19,53 +19,72 @@ use super::{
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use crate::gui::icons::Icon;
 use crate::{
-    gui::{
-        app::Kithara,
-        dj::{DjMsg, TimestretchState},
-        fonts,
-        message::Message,
-        tokens::gap,
-        widgets,
-    },
+    gui::{deck::TimestretchState, fonts, tokens::gap, widgets},
     theme::gui::GuiPalette,
 };
+
+/// What the timestretch panel draws. Nothing here identifies a deck.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TsProps {
+    pub(super) state: TimestretchState,
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    pub(super) backend: StretchKind,
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    pub(super) keylock: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum TsMsg {
+    SetTempo(f32),
+    SetRange(u8),
+    Nudge(f32),
+    ResetTempo,
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    ToggleKeyLock,
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    SelectBackend(StretchKind),
+}
 
 struct Consts;
 
 impl Consts {
+    /// Range / library pill height.
     const PILL_H: f32 = 24.0;
+    /// Selectable tempo bounds in ± percent.
     const RANGES: [u8; 4] = [8, 16, 50, 100];
     /// Shared height of the stat tile / key-lock / nudge row so they align.
     const STAT_H: f32 = 38.0;
 }
 
-pub(super) fn view_timestretch_panel(state: &Kithara) -> Element<'static, Message> {
-    let p = state.palette;
-    let ts = state.dj.timestretch;
+/// The timestretch deck panel, matching the design `.ts` block: a head row
+/// (label · range pills · tempo value), the tempo slider, a stat row
+/// (ratio · key-lock · nudge), and the stretch-backend selector.
+pub(super) fn view_timestretch(props: TsProps, p: GuiPalette) -> Element<'static, TsMsg> {
+    let ts = props.state;
     Module::new()
         .bg(p.bg_panel)
         .pad(studio_space::CLUSTER)
         .wrap(
             column![
-                head_row(ts.tempo, state, p),
-    /// Range / library pill height.
+                head_row(ts.tempo, props, p),
                 ranges_row(ts.range, p),
-    /// Selectable tempo bounds in ± percent.
                 slider_row(ts.tempo, ts.range, p),
-                stats_row(ts, state, p),
+                stats_row(ts, props, p),
             ]
             .spacing(gap::INLINE_WIDE),
         )
 }
 
-fn head_row(tempo: f32, state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
+/// `[• TIMESTRETCH  library pills] … [+0.00%]` — title, backend selector,
+/// and the live tempo value.
+fn head_row(tempo: f32, props: TsProps, p: GuiPalette) -> Element<'static, TsMsg> {
     row![
         indicator_dot(p),
         text("TIMESTRETCH")
             .size(studio_type::BODY_SM)
             .font(fonts::display(Weight::Bold))
             .color(p.text),
-        library_select(state, p),
+        library_select(props, p),
         Space::new().width(Length::Fill),
         container(
             text(format!("{tempo:+.2}%"))
@@ -81,7 +100,7 @@ fn head_row(tempo: f32, state: &Kithara, p: GuiPalette) -> Element<'static, Mess
     .into()
 }
 
-fn ranges_row(range: u8, p: GuiPalette) -> Element<'static, Message> {
+fn ranges_row(range: u8, p: GuiPalette) -> Element<'static, TsMsg> {
     let mut pills = row![].spacing(gap::INLINE_TIGHT).align_y(Alignment::Center);
     for r in Consts::RANGES {
         pills = pills.push(range_pill(r, r == range, p));
@@ -92,7 +111,7 @@ fn ranges_row(range: u8, p: GuiPalette) -> Element<'static, Message> {
 }
 
 /// Pulsing accent dot from `.ts-dot` (static — iced has no panel animation).
-fn indicator_dot(p: GuiPalette) -> Element<'static, Message> {
+fn indicator_dot(p: GuiPalette) -> Element<'static, TsMsg> {
     container(Space::new())
         .width(Length::Fixed(7.0))
         .height(Length::Fixed(7.0))
@@ -104,10 +123,10 @@ fn indicator_dot(p: GuiPalette) -> Element<'static, Message> {
         .into()
 }
 
-fn slider_row(tempo: f32, range: u8, p: GuiPalette) -> Element<'static, Message> {
+fn slider_row(tempo: f32, range: u8, p: GuiPalette) -> Element<'static, TsMsg> {
     row![
         mini_label(format!("\u{2212}{range}"), p),
-        widgets::ts_slider(tempo, f32::from(range), p),
+        widgets::ts_slider(tempo, f32::from(range), p, TsMsg::SetTempo),
         mini_label(format!("+{range}"), p),
     ]
     .align_y(Alignment::Center)
@@ -115,11 +134,11 @@ fn slider_row(tempo: f32, range: u8, p: GuiPalette) -> Element<'static, Message>
     .into()
 }
 
-fn stats_row(ts: TimestretchState, state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
+fn stats_row(ts: TimestretchState, props: TsProps, p: GuiPalette) -> Element<'static, TsMsg> {
     let ratio = ts.speed();
     row![
         stat_tile("RATIO", format!("{ratio:.3}\u{00d7}"), p),
-        keylock_pill(state, p),
+        keylock_pill(props, p),
         Space::new().width(Length::Fill),
         nudge_group(p),
     ]
@@ -130,18 +149,19 @@ fn stats_row(ts: TimestretchState, state: &Kithara, p: GuiPalette) -> Element<'s
 
 /// Without a compiled-in stretch backend there is no selector to render.
 #[cfg(not(any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
-fn library_select(_state: &Kithara, _p: GuiPalette) -> Element<'static, Message> {
+fn library_select(_props: TsProps, _p: GuiPalette) -> Element<'static, TsMsg> {
     Space::new().into()
 }
 
 /// Narrow stretch-backend selector (dropdown) shown next to the title. Only
 /// backends compiled into this target appear.
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-fn library_select(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
-    let active = state.controller.deck().backend();
-    pick_list(StretchKind::all(), Some(active), |k| {
-        Message::Dj(DjMsg::SelectBackend(k))
-    })
+fn library_select(props: TsProps, p: GuiPalette) -> Element<'static, TsMsg> {
+    pick_list(
+        StretchKind::all(),
+        Some(props.backend),
+        TsMsg::SelectBackend,
+    )
     .text_size(studio_type::MONO_SM)
     .font(fonts::mono(Weight::Semibold))
     .padding([3.0, 8.0])
@@ -163,7 +183,7 @@ fn library_select(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     .into()
 }
 
-fn mini_label(label: String, p: GuiPalette) -> Element<'static, Message> {
+fn mini_label(label: String, p: GuiPalette) -> Element<'static, TsMsg> {
     container(
         text(label)
             .size(studio_type::MONO_XS)
@@ -175,7 +195,7 @@ fn mini_label(label: String, p: GuiPalette) -> Element<'static, Message> {
     .into()
 }
 
-fn stat_tile(label: &str, value: String, p: GuiPalette) -> Element<'static, Message> {
+fn stat_tile(label: &str, value: String, p: GuiPalette) -> Element<'static, TsMsg> {
     container(
         column![
             text(label.to_string())
@@ -197,13 +217,13 @@ fn stat_tile(label: &str, value: String, p: GuiPalette) -> Element<'static, Mess
 
 /// Without a compiled-in stretch backend key-lock does not exist.
 #[cfg(not(any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
-fn keylock_pill(_state: &Kithara, _p: GuiPalette) -> Element<'static, Message> {
+fn keylock_pill(_props: TsProps, _p: GuiPalette) -> Element<'static, TsMsg> {
     Space::new().into()
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-fn keylock_pill(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
-    let on = state.controller.deck().keylock();
+fn keylock_pill(props: TsProps, p: GuiPalette) -> Element<'static, TsMsg> {
+    let on = props.keylock;
     // Active toggle: gold fill with on-gold (dark) text, per the design system.
     let color = if on { p.bg } else { p.muted };
     let background = if on { p.accent } else { p.bg_inset };
@@ -230,21 +250,21 @@ fn keylock_pill(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
         border: Border::default().width(1.0).color(border),
         ..button::Style::default()
     })
-    .on_press(Message::Dj(DjMsg::ToggleKeyLock))
+    .on_press(TsMsg::ToggleKeyLock)
     .into()
 }
 
-fn nudge_group(p: GuiPalette) -> Element<'static, Message> {
+fn nudge_group(p: GuiPalette) -> Element<'static, TsMsg> {
     row![
-        nudge_button("\u{25c2}", Message::Dj(DjMsg::Nudge(-0.05)), p),
-        nudge_button("\u{27f2}", Message::Dj(DjMsg::ResetTempo), p),
-        nudge_button("\u{25b8}", Message::Dj(DjMsg::Nudge(0.05)), p),
+        nudge_button("\u{25c2}", TsMsg::Nudge(-0.05), p),
+        nudge_button("\u{27f2}", TsMsg::ResetTempo, p),
+        nudge_button("\u{25b8}", TsMsg::Nudge(0.05), p),
     ]
     .spacing(3.0)
     .into()
 }
 
-fn nudge_button(label: &str, message: Message, p: GuiPalette) -> Element<'static, Message> {
+fn nudge_button(label: &str, message: TsMsg, p: GuiPalette) -> Element<'static, TsMsg> {
     button(
         container(
             text(label.to_string())
@@ -268,16 +288,16 @@ fn nudge_button(label: &str, message: Message, p: GuiPalette) -> Element<'static
     .into()
 }
 
-fn range_pill(range: u8, active: bool, p: GuiPalette) -> Element<'static, Message> {
+fn range_pill(range: u8, active: bool, p: GuiPalette) -> Element<'static, TsMsg> {
     pill(
         format!("\u{00b1}{range}%"),
         active,
-        Message::Dj(DjMsg::SetRange(range)),
+        TsMsg::SetRange(range),
         p,
     )
 }
 
-fn pill(label: String, active: bool, message: Message, p: GuiPalette) -> Element<'static, Message> {
+fn pill(label: String, active: bool, message: TsMsg, p: GuiPalette) -> Element<'static, TsMsg> {
     // Active segment: gold fill with on-gold (dark) text, per the design system.
     let color = if active { p.bg } else { p.text_dim };
     let background = if active { p.accent } else { p.bg_inset };
