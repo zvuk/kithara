@@ -60,9 +60,11 @@ impl ElasticRateEnvelope {
 
 #[cfg(all(test, feature = "stretch-signalsmith"))]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::ElasticRateEnvelope;
 
-    #[test]
+    #[kithara::test]
     fn accepts_one_rounding_step_at_the_declared_rate_boundary() {
         let envelope = ElasticRateEnvelope::signalsmith();
         let minimum = envelope.min_source_frames_per_output();

@@ -1,5 +1,7 @@
 use std::f32::consts::TAU;
 
+use kithara_test_utils::kithara;
+
 use crate::{ElasticBackend, ElasticConfig, ElasticError, ElasticRequest, SignalsmithElastic};
 
 const CHANNELS: usize = 2;
@@ -54,7 +56,7 @@ fn assert_exact_samples(actual: &[f32], expected: &[f32]) {
     }
 }
 
-#[test]
+#[kithara::test]
 fn signalsmith_declares_reverse_input_support() {
     let config =
         ElasticConfig::new(48_000, CHANNELS, 512, 512).expect("the test configuration is valid");
@@ -63,7 +65,7 @@ fn signalsmith_declares_reverse_input_support() {
     assert!(backend.capabilities().supports_reverse());
 }
 
-#[test]
+#[kithara::test]
 fn renders_the_requested_output_frame_count() {
     let config =
         ElasticConfig::new(48_000, CHANNELS, 8192, 8192).expect("the test configuration is valid");
@@ -81,7 +83,7 @@ fn renders_the_requested_output_frame_count() {
     assert!(output.iter().any(|sample| sample.abs() > f32::EPSILON));
 }
 
-#[test]
+#[kithara::test]
 fn unity_render_exposes_the_declared_source_and_output_latency() {
     const FRAMES: usize = 8192;
 
@@ -103,7 +105,7 @@ fn unity_render_exposes_the_declared_source_and_output_latency() {
     );
 }
 
-#[test]
+#[kithara::test]
 fn warmup_request_has_exact_latency_spans() {
     let config =
         ElasticConfig::new(48_000, CHANNELS, 512, 512).expect("the test configuration is valid");
@@ -137,7 +139,7 @@ fn warmup_request_has_exact_latency_spans() {
     assert_eq!(maximum.source_frames(), 3840);
 }
 
-#[test]
+#[kithara::test]
 fn history_and_output_warmup_remove_the_initial_gap() {
     const FRAMES: usize = 512;
 
@@ -169,7 +171,7 @@ fn history_and_output_warmup_remove_the_initial_gap() {
     assert_eq!(first_audible_frame(&output, CHANNELS), Some(0));
 }
 
-#[test]
+#[kithara::test]
 fn non_unity_warmup_aligns_the_first_audible_frame() {
     const SOURCE_FRAMES: usize = 600;
     const OUTPUT_FRAMES: usize = 500;
@@ -203,7 +205,7 @@ fn non_unity_warmup_aligns_the_first_audible_frame() {
     assert_eq!(first_audible_frame(&output, CHANNELS), Some(0));
 }
 
-#[test]
+#[kithara::test]
 fn prime_rejects_every_ambiguous_buffer_count() {
     let config =
         ElasticConfig::new(48_000, CHANNELS, 1024, 512).expect("the test configuration is valid");
@@ -264,7 +266,7 @@ fn prime_rejects_every_ambiguous_buffer_count() {
     );
 }
 
-#[test]
+#[kithara::test]
 fn keeps_the_same_latency_through_unity_and_rate_changes() {
     let config =
         ElasticConfig::new(48_000, CHANNELS, 8192, 8192).expect("the test configuration is valid");
@@ -294,7 +296,7 @@ fn keeps_the_same_latency_through_unity_and_rate_changes() {
     }
 }
 
-#[test]
+#[kithara::test]
 fn reset_clears_stream_history_without_changing_capabilities() {
     const LONG_FRAMES: usize = 8192;
     const SHORT_FRAMES: usize = 4096;
@@ -332,7 +334,7 @@ fn reset_clears_stream_history_without_changing_capabilities() {
     );
 }
 
-#[test]
+#[kithara::test]
 fn reset_reprime_keeps_the_first_frame_aligned() {
     const SOURCE_FRAMES: usize = 600;
     const OUTPUT_FRAMES: usize = 500;
@@ -373,7 +375,7 @@ fn reset_reprime_keeps_the_first_frame_aligned() {
     }
 }
 
-#[test]
+#[kithara::test]
 fn prime_discards_previous_stream_state() {
     const FRAMES: usize = 4096;
 
@@ -417,7 +419,7 @@ fn prime_discards_previous_stream_state() {
     assert_exact_samples(&reused_output, &fresh_output);
 }
 
-#[test]
+#[kithara::test]
 fn primed_output_is_independent_of_unity_request_partitioning() {
     const FRAMES: usize = 4096;
     const PARTITION_FRAMES: usize = 512;
@@ -471,7 +473,7 @@ fn primed_output_is_independent_of_unity_request_partitioning() {
     assert_eq!(first_audible_frame(&partitioned_output, CHANNELS), Some(0));
 }
 
-#[test]
+#[kithara::test]
 fn preserves_tone_pitch_when_source_advance_changes() {
     const SAMPLE_RATE: u32 = 48_000;
     const SOURCE_FRAMES: usize = 19_200;
@@ -507,7 +509,7 @@ fn preserves_tone_pitch_when_source_advance_changes() {
     );
 }
 
-#[test]
+#[kithara::test]
 fn rejects_requests_outside_the_prepared_contract() {
     let config =
         ElasticConfig::new(48_000, CHANNELS, 8192, 8192).expect("the test configuration is valid");

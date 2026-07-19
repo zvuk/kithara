@@ -31,5 +31,8 @@ bungee-rs = { workspace = true, optional = true }
 fast-interleave = { workspace = true, optional = true }
 signalsmith-stretch = { workspace = true, optional = true }
 
+[dev-dependencies]
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"] }
+
 [lints]
 workspace = true

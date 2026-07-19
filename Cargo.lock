@@ -5117,6 +5117,7 @@ dependencies = [
  "derive_more",
  "fast-interleave",
  "kithara-bufpool",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "signalsmith-stretch",
