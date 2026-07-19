@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use bon::Builder;
+use delegate::delegate;
 use firewheel::dsp::fade::FadeCurve;
 use kithara_audio::ServiceClass;
 use kithara_platform::sync::Arc;
@@ -109,6 +110,23 @@ pub struct PlayerTrack {
 }
 
 impl PlayerTrack {
+    delegate! {
+        to self.resource {
+            /// Decoded-ahead frontier in seconds.
+            #[must_use]
+            pub fn decoded_frontier(&self) -> f64;
+            /// Source identifier.
+            #[must_use]
+            pub fn src(&self) -> &Arc<str>;
+        }
+        to self.binding {
+            /// Returns the immutable synchronization binding owned by this active track.
+            #[must_use]
+            #[call(as_ref)]
+            pub fn binding(&self) -> Option<&TrackBinding>;
+        }
+    }
+
     /// Create a new track in the `Preloading` state.
     ///
     /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
@@ -148,18 +166,6 @@ impl PlayerTrack {
         };
         track.update_service_class(TrackState::Preloading);
         track
-    }
-
-    /// Decoded-ahead frontier in seconds.
-    #[must_use]
-    pub fn decoded_frontier(&self) -> f64 {
-        self.resource.decoded_frontier()
-    }
-
-    /// Returns the immutable synchronization binding owned by this active track.
-    #[must_use]
-    pub fn binding(&self) -> Option<&TrackBinding> {
-        self.binding.as_ref()
     }
 
     #[cfg(test)]
@@ -297,12 +303,6 @@ impl PlayerTrack {
             self.state_dirty = true;
             self.update_service_class(new_state);
         }
-    }
-
-    /// Source identifier.
-    #[must_use]
-    pub fn src(&self) -> &Arc<str> {
-        self.resource.src()
     }
 
     /// Instantly stop (silent, finished state).

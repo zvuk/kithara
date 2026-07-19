@@ -273,10 +273,9 @@ impl ElasticRenderer {
         let source_window_frames =
             u64::try_from(source_window_frames).map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let fetch_samples = sample_count(max_fetch_frames, channels)?;
-        let mut preparation_buffers = SmallVec::new();
-        for _ in 0..Consts::READY_WINDOW_COUNT {
-            preparation_buffers.push(prepared_buffer(pool, fetch_samples)?);
-        }
+        let preparation_buffers = (0..Consts::READY_WINDOW_COUNT)
+            .map(|_| prepared_buffer(pool, fetch_samples))
+            .collect::<Result<SmallVec<_>, _>>()?;
 
         Ok(Self {
             backend: Box::new(backend),

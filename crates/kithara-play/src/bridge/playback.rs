@@ -3,20 +3,27 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use portable_atomic::{AtomicF64, AtomicU32};
 
 /// Coherent snapshot of the live playback scalars.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct PlaybackSnapshot {
     /// Whether playback is active.
+    #[field(get(copy, name = is_playing))]
     pub(crate) playing: bool,
     /// Total media duration in seconds; `0.0` when unknown.
+    #[field(get(copy))]
     pub(crate) duration: f64,
     /// Decoded-ahead frontier in seconds. Always `>= position`.
+    #[field(get(copy))]
     pub(crate) frontier: f64,
     /// Playback position in seconds.
+    #[field(get(copy))]
     pub(crate) position: f64,
     /// Current output sample rate.
+    #[field(get(copy))]
     pub(crate) sample_rate: u32,
     /// Whether more than one player track is audible.
+    #[field(get(copy, name = has_multiple_tracks))]
     pub(crate) multiple_tracks: bool,
 }
 
@@ -44,44 +51,6 @@ pub struct PlaybackShared {
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
-}
-
-impl PlaybackSnapshot {
-    /// Whether playback is active.
-    #[must_use]
-    pub fn is_playing(&self) -> bool {
-        self.playing
-    }
-
-    /// Total media duration in seconds; `0.0` when unknown.
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        self.duration
-    }
-
-    /// Decoded-ahead frontier in seconds. Always `>= position`.
-    #[must_use]
-    pub fn frontier(&self) -> f64 {
-        self.frontier
-    }
-
-    /// Playback position in seconds.
-    #[must_use]
-    pub fn position(&self) -> f64 {
-        self.position
-    }
-
-    /// Current output sample rate.
-    #[must_use]
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    /// Whether more than one player track is audible.
-    #[must_use]
-    pub fn has_multiple_tracks(&self) -> bool {
-        self.multiple_tracks
-    }
 }
 
 impl PlaybackShared {

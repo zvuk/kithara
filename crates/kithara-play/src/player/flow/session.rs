@@ -207,17 +207,17 @@ impl PlayerImpl {
         {
             return Err(PlayError::SessionMismatch);
         }
-        let mut participants = Vec::with_capacity(peers.len() + 1);
-        participants.push((
-            self.core.engine.player_id().ok_or(PlayError::NotReady)?,
-            self,
-        ));
-        for peer in peers {
-            participants.push((
-                peer.core.engine.player_id().ok_or(PlayError::NotReady)?,
-                *peer,
-            ));
-        }
+        let mut participants = std::iter::once(self)
+            .chain(peers.iter().copied())
+            .map(|player| {
+                player
+                    .core
+                    .engine
+                    .player_id()
+                    .map(|player_id| (player_id, player))
+                    .ok_or(PlayError::NotReady)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         participants.sort_unstable_by_key(|(player_id, _)| *player_id);
         participants.dedup_by_key(|(player_id, _)| *player_id);
         Ok(participants)

@@ -33,17 +33,20 @@ pub(crate) enum DeferredPlayerCmdError {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct EngineImpl {
+    #[field(get, vis = "pub(super)")]
     session: SessionHandle,
     running: AtomicBool,
     master_volume: AtomicF32,
     #[field(get)]
     worker: AudioWorkerHandle,
     config: EngineConfig,
+    #[field(get, vis = "pub(crate)")]
     bus: EventBus,
     player_id: Mutex<Option<PlayerId>>,
     slots: Mutex<SlotTable>,
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
+    #[field(get, vis = "pub(crate)")]
     pcm_pool: PcmPool,
 }
 
@@ -72,10 +75,6 @@ impl EngineImpl {
             worker: AudioWorkerHandle::with_cancel(worker_cancel),
             runtime: RuntimeHandle::try_current().ok(),
         }
-    }
-
-    pub(crate) fn bus(&self) -> &EventBus {
-        &self.bus
     }
 
     pub(crate) fn cancel(&self) {
@@ -217,14 +216,6 @@ impl EngineImpl {
 
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
         self.session.tick()
-    }
-
-    pub(crate) fn pcm_pool(&self) -> &PcmPool {
-        &self.pcm_pool
-    }
-
-    pub(super) fn session(&self) -> &SessionHandle {
-        &self.session
     }
 
     pub(crate) fn shares_session_with(&self, other: &Self) -> bool {
