@@ -1,19 +1,18 @@
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use kithara_bufpool::PcmBuf;
 use kithara_decode::{PcmChunk, PcmSpec};
 
 use super::{
-    SourceAudioActivity, SourceAudioDemand, SourceAudioError, SourceFrameRange,
+    SourceAudioActivity, SourceAudioError, SourceFrameRange,
     model::{
-        SourceAudioCaptureOutcome, SourceAudioCommand, SourceAudioPacket, SourceAudioRole,
-        SourceAudioStatus, SourceAudioTerminal, SourceAudioWindow, sample_count,
+        SourceAudioCaptureOutcome, SourceAudioCommand, SourceAudioPacket, SourceAudioRequest,
+        SourceAudioRole, SourceAudioStatus, SourceAudioTerminal, SourceAudioWindow, sample_count,
     },
 };
 use crate::runtime::{Inlet, Outlet};
 
 pub(crate) struct SourceAudioTap {
-    lane_id: NonZeroU64,
     command_inlet: Inlet<SourceAudioCommand>,
     outputs: SourceAudioOutputs,
     trash_inlet: Inlet<SourceAudioWindow>,
@@ -23,13 +22,12 @@ pub(crate) struct SourceAudioTap {
     active_spec: Option<PcmSpec>,
     prepared_spec: Option<PcmSpec>,
     role: SourceAudioRole,
-    demand: Option<SourceAudioDemand>,
+    demand: Option<SourceAudioRequest>,
     terminal_sent: Option<(u64, SourceAudioTerminal)>,
 }
 
 impl SourceAudioTap {
     pub(crate) fn new(
-        lane_id: NonZeroU64,
         command_inlet: Inlet<SourceAudioCommand>,
         outputs: SourceAudioOutputs,
         trash_inlet: Inlet<SourceAudioWindow>,
@@ -37,7 +35,6 @@ impl SourceAudioTap {
         initial_frames: NonZeroUsize,
     ) -> Self {
         Self {
-            lane_id,
             command_inlet,
             outputs,
             trash_inlet,
@@ -66,32 +63,26 @@ impl SourceAudioTap {
 
         while let Some(command) = self.command_inlet.try_pop() {
             match command {
-                SourceAudioCommand::Activate {
-                    lane_id,
-                    role,
-                    spec,
-                } if lane_id == self.lane_id => {
+                SourceAudioCommand::Activate { role, spec } => {
                     self.active_spec = Some(spec);
                     self.role = role;
                     self.demand = None;
                     self.terminal_sent = None;
                 }
-                SourceAudioCommand::Deactivate { lane_id } if lane_id == self.lane_id => {
+                SourceAudioCommand::Deactivate => {
                     self.active_spec = None;
                     self.demand = None;
                 }
-                SourceAudioCommand::Demand(demand)
-                    if demand.lane_id == self.lane_id && self.active_spec.is_some() =>
-                {
-                    self.demand = Some(demand);
+                SourceAudioCommand::Demand(request) if self.active_spec.is_some() => {
+                    self.demand = Some(request);
                     if self
                         .terminal_sent
-                        .is_some_and(|(epoch, _)| epoch != demand.decode_seek_epoch)
+                        .is_some_and(|(epoch, _)| epoch != request.decode_seek_epoch)
                     {
                         self.terminal_sent = None;
                     }
                 }
-                _ => {}
+                SourceAudioCommand::Demand(_) => {}
             }
         }
 
@@ -179,7 +170,10 @@ impl SourceAudioTap {
         }
         samples[..capture_samples].copy_from_slice(&chunk.samples);
         let window = SourceAudioWindow::validated(chunk_range, spec, samples, capture_samples);
-        let packet = SourceAudioPacket { demand, window };
+        let packet = SourceAudioPacket {
+            request: demand,
+            window,
+        };
         if let Err(packet) = self.outputs.data.try_push(packet) {
             self.buffers.push(packet.window.release_samples());
             return Err(SourceAudioError::DataBackpressure);
@@ -240,7 +234,6 @@ impl SourceAudioTap {
         }
         let status = SourceAudioStatus {
             decode_seek_epoch,
-            lane_id: self.lane_id,
             terminal,
         };
         if self.outputs.status.try_push(status).is_err() {

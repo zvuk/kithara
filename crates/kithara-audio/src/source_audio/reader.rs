@@ -1,8 +1,3 @@
-use std::{
-    num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
-};
-
 use kithara_decode::PcmSpec;
 
 use super::{
@@ -10,21 +5,19 @@ use super::{
     SourceFrameRange,
     cache::{SourceAudioCache, SourceAudioCacheInsert},
     model::{
-        SourceAudioCommand, SourceAudioPacket, SourceAudioRole, SourceAudioStatus,
-        SourceAudioTerminal, SourceAudioWindow, sample_count,
+        SourceAudioCommand, SourceAudioPacket, SourceAudioRequest, SourceAudioRole,
+        SourceAudioStatus, SourceAudioTerminal, SourceAudioWindow, sample_count,
     },
 };
 use crate::runtime::{Inlet, Outlet};
 
-static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
-
 /// Nonblocking reader for immutable decoded source-audio windows.
 #[non_exhaustive]
 pub struct SourceAudioReader {
-    lane_id: NonZeroU64,
+    connection: SourceAudioActivity,
     generation: u64,
     active: bool,
-    demand: Option<SourceAudioDemand>,
+    demand: Option<SourceAudioRequest>,
     command_outlet: Outlet<SourceAudioCommand>,
     data_inlet: Inlet<SourceAudioPacket>,
     status_inlet: Inlet<SourceAudioStatus>,
@@ -37,7 +30,6 @@ pub struct SourceAudioReader {
 
 impl SourceAudioReader {
     pub(crate) fn new(
-        lane_id: NonZeroU64,
         command_outlet: Outlet<SourceAudioCommand>,
         data_inlet: Inlet<SourceAudioPacket>,
         status_inlet: Inlet<SourceAudioStatus>,
@@ -46,7 +38,7 @@ impl SourceAudioReader {
         activity: SourceAudioActivity,
     ) -> Self {
         Self {
-            lane_id,
+            connection: activity.clone(),
             generation: 0,
             active: false,
             demand: None,
@@ -97,11 +89,7 @@ impl SourceAudioReader {
             return Err(SourceAudioError::EmptyChannelLayout);
         }
         self.cache.validate_activation(spec)?;
-        let command = SourceAudioCommand::Activate {
-            lane_id: self.lane_id,
-            role,
-            spec,
-        };
+        let command = SourceAudioCommand::Activate { role, spec };
         self.command_outlet
             .try_push(command)
             .map_err(|_| SourceAudioError::CommandBackpressure)?;
@@ -118,9 +106,7 @@ impl SourceAudioReader {
     ///
     /// Returns [`SourceAudioError::CommandBackpressure`] when the command cannot be queued.
     pub fn deactivate(&mut self) -> Result<(), SourceAudioError> {
-        let command = SourceAudioCommand::Deactivate {
-            lane_id: self.lane_id,
-        };
+        let command = SourceAudioCommand::Deactivate;
         self.command_outlet
             .try_push(command)
             .map_err(|_| SourceAudioError::CommandBackpressure)?;
@@ -156,19 +142,21 @@ impl SourceAudioReader {
             .generation
             .checked_add(1)
             .ok_or(SourceAudioError::GenerationExhausted)?;
-        let demand = SourceAudioDemand {
-            lane_id: self.lane_id,
+        let request = SourceAudioRequest {
             generation,
             decode_seek_epoch,
             requested: range,
             coverage,
         };
         self.command_outlet
-            .try_push(SourceAudioCommand::Demand(demand))
+            .try_push(SourceAudioCommand::Demand(request))
             .map_err(|_| SourceAudioError::CommandBackpressure)?;
         self.generation = generation;
-        self.demand = Some(demand);
-        Ok(demand)
+        self.demand = Some(request);
+        Ok(SourceAudioDemand {
+            connection: self.connection.clone(),
+            request,
+        })
     }
 
     /// Copy a complete demand from cache without blocking.
@@ -182,7 +170,7 @@ impl SourceAudioReader {
         demand: &SourceAudioDemand,
         output: &mut [f32],
     ) -> Result<SourceAudioReadOutcome, SourceAudioError> {
-        self.read_range_into(demand, demand.requested, output)
+        self.read_range_into(demand, demand.request.requested, output)
     }
 
     /// Copy a complete subrange of the active demand coverage without blocking.
@@ -197,8 +185,10 @@ impl SourceAudioReader {
         range: SourceFrameRange,
         output: &mut [f32],
     ) -> Result<SourceAudioReadOutcome, SourceAudioError> {
-        self.validate_demand(*demand)?;
-        if range.start() < demand.coverage.start() || range.end() > demand.coverage.end() {
+        self.validate_demand(demand)?;
+        if range.start() < demand.request.coverage.start()
+            || range.end() > demand.request.coverage.end()
+        {
             return Err(SourceAudioError::RangeOutsideDemand);
         }
         let spec = self.cache.spec().ok_or(SourceAudioError::Inactive)?;
@@ -212,10 +202,10 @@ impl SourceAudioReader {
 
         self.poll();
         if !self.cache.contains(range) {
-            return match self.terminal.filter(|status| {
-                status.lane_id == self.lane_id
-                    && status.decode_seek_epoch == demand.decode_seek_epoch
-            }) {
+            return match self
+                .terminal
+                .filter(|status| status.decode_seek_epoch == demand.request.decode_seek_epoch)
+            {
                 Some(SourceAudioStatus {
                     terminal: SourceAudioTerminal::Eof,
                     ..
@@ -252,11 +242,11 @@ impl SourceAudioReader {
         self.drain_status();
     }
 
-    fn validate_demand(&self, demand: SourceAudioDemand) -> Result<(), SourceAudioError> {
-        if demand.lane_id != self.lane_id {
+    fn validate_demand(&self, demand: &SourceAudioDemand) -> Result<(), SourceAudioError> {
+        if demand.connection != self.connection {
             return Err(SourceAudioError::ForeignDemand);
         }
-        if self.demand != Some(demand) {
+        if self.demand != Some(demand.request) {
             return Err(SourceAudioError::StaleDemand);
         }
         Ok(())
@@ -267,8 +257,8 @@ impl SourceAudioReader {
             let Some(packet) = self.data_inlet.try_pop() else {
                 break;
             };
-            let accepted = self.demand == Some(packet.demand)
-                && packet.demand.coverage.intersects(packet.window.range())
+            let accepted = self.demand == Some(packet.request)
+                && packet.request.coverage.intersects(packet.window.range())
                 && self.cache.spec() == Some(packet.window.spec());
             if !accepted {
                 self.retire(packet.window);
@@ -287,9 +277,7 @@ impl SourceAudioReader {
 
     fn drain_status(&mut self) {
         while let Some(status) = self.status_inlet.try_pop() {
-            if status.lane_id == self.lane_id {
-                self.terminal = Some(status);
-            }
+            self.terminal = Some(status);
         }
     }
 
@@ -308,13 +296,4 @@ impl SourceAudioReader {
             self.pending_retirement = Some(window);
         }
     }
-}
-
-pub(crate) fn next_lane_id() -> Result<NonZeroU64, SourceAudioError> {
-    let lane_id = NEXT_LANE_ID
-        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            current.checked_add(1)
-        })
-        .map_err(|_| SourceAudioError::LaneExhausted)?;
-    NonZeroU64::new(lane_id).ok_or(SourceAudioError::LaneExhausted)
 }

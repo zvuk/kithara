@@ -7,7 +7,6 @@ use super::{
     SourceAudioActivity, SourceAudioError, SourceAudioReader, SourceAudioTap,
     cache::SourceAudioCache,
     model::{SourceAudioCommand, SourceAudioPacket, SourceAudioStatus, SourceAudioWindow},
-    reader::next_lane_id,
     tap::SourceAudioOutputs,
 };
 use crate::{
@@ -29,7 +28,6 @@ pub(crate) fn connect_source_audio(
         .checked_add(capacity)
         .and_then(|count| count.checked_add(2))
         .ok_or(SourceAudioError::CapacityOverflow)?;
-    let lane_id = next_lane_id()?;
     let worker_wake: Arc<dyn WakeSignal> = Arc::new(SourceAudioWorkerWake(worker));
     let activity = SourceAudioActivity::for_connection();
     let activity_wake: Arc<dyn WakeSignal> = Arc::new(SourceAudioActivityWake(activity.clone()));
@@ -46,7 +44,6 @@ pub(crate) fn connect_source_audio(
         buffers.push(pool.get());
     }
     let reader = SourceAudioReader::new(
-        lane_id,
         command_outlet,
         data_inlet,
         status_inlet,
@@ -57,7 +54,6 @@ pub(crate) fn connect_source_audio(
         activity.clone(),
     );
     let tap = SourceAudioTap::new(
-        lane_id,
         command_inlet,
         SourceAudioOutputs::new(data_outlet, status_outlet, activity),
         trash_inlet,

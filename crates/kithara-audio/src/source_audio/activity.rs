@@ -1,3 +1,5 @@
+use std::fmt;
+
 use kithara_platform::sync::{Arc, ThreadGate, WaitGate};
 
 /// Edge-triggered readiness signal for one source-audio reader.
@@ -39,3 +41,18 @@ impl SourceAudioActivity {
         self.gate.signal();
     }
 }
+
+impl fmt::Debug for SourceAudioActivity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SourceAudioActivity")
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for SourceAudioActivity {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.gate, &other.gate)
+    }
+}
+
+impl Eq for SourceAudioActivity {}

@@ -232,9 +232,12 @@ impl ElasticRenderer {
         let request_sample_end = request_sample_start
             .checked_add(sample_count(request_frames, self.channels)?)
             .ok_or(ElasticPrepareError::FrameOverflow)?;
-        let demand = self.demand.ok_or(ElasticPrepareError::SourceUnavailable)?;
+        let demand = self
+            .demand
+            .as_ref()
+            .ok_or(ElasticPrepareError::SourceUnavailable)?;
         match resource.read_source_audio(
-            &demand,
+            demand,
             request,
             &mut self.fetch[request_sample_start..request_sample_end],
         )? {
@@ -302,12 +305,15 @@ impl ElasticRenderer {
             return Err(ElasticPrepareError::FetchWindowMismatch);
         }
         let samples = sample_count(frames, self.channels)?;
-        let demand = self.demand.ok_or(ElasticPrepareError::SourceUnavailable)?;
+        let demand = self
+            .demand
+            .as_ref()
+            .ok_or(ElasticPrepareError::SourceUnavailable)?;
         let buffer = self
             .preparation_buffers
             .last_mut()
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
-        match resource.read_source_audio(&demand, range, &mut buffer[..samples])? {
+        match resource.read_source_audio(demand, range, &mut buffer[..samples])? {
             Some(SourceAudioReadOutcome::Ready { .. }) => {}
             Some(SourceAudioReadOutcome::Pending) => {
                 return Ok(ElasticPreparationOutcome::Pending);

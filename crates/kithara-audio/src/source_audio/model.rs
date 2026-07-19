@@ -1,7 +1,7 @@
-use std::num::NonZeroU64;
-
 use kithara_bufpool::PcmBuf;
 use kithara_decode::PcmSpec;
+
+use super::SourceAudioActivity;
 
 /// A checked half-open frame range in decoded source coordinates.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -70,21 +70,18 @@ impl SourceFrameRange {
 }
 
 /// An opaque request token bound to one reader generation and decode seek epoch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct SourceAudioDemand {
-    pub(crate) lane_id: NonZeroU64,
-    pub(crate) generation: u64,
-    pub(crate) decode_seek_epoch: u64,
-    pub(crate) requested: SourceFrameRange,
-    pub(crate) coverage: SourceFrameRange,
+    pub(crate) connection: SourceAudioActivity,
+    pub(crate) request: SourceAudioRequest,
 }
 
 impl SourceAudioDemand {
     /// Return the decode seek epoch captured by this demand.
     #[must_use]
-    pub const fn decode_seek_epoch(self) -> u64 {
-        self.decode_seek_epoch
+    pub const fn decode_seek_epoch(&self) -> u64 {
+        self.request.decode_seek_epoch
     }
 }
 
@@ -158,9 +155,6 @@ pub enum SourceAudioError {
     /// The requested connection capacity cannot be represented.
     #[error("source audio connection capacity overflowed")]
     CapacityOverflow,
-    /// No additional lane identifier can be allocated.
-    #[error("source audio lane identifiers are exhausted")]
-    LaneExhausted,
     /// Decoding failed before the requested frames became available.
     #[error("decoded source failed before the requested audio became available")]
     SourceFailed,
@@ -208,18 +202,23 @@ impl SourceAudioWindow {
 
 pub(crate) enum SourceAudioCommand {
     Activate {
-        lane_id: NonZeroU64,
         role: SourceAudioRole,
         spec: PcmSpec,
     },
-    Deactivate {
-        lane_id: NonZeroU64,
-    },
-    Demand(SourceAudioDemand),
+    Deactivate,
+    Demand(SourceAudioRequest),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SourceAudioRequest {
+    pub(crate) generation: u64,
+    pub(crate) decode_seek_epoch: u64,
+    pub(crate) requested: SourceFrameRange,
+    pub(crate) coverage: SourceFrameRange,
 }
 
 pub(crate) struct SourceAudioPacket {
-    pub(crate) demand: SourceAudioDemand,
+    pub(crate) request: SourceAudioRequest,
     pub(crate) window: SourceAudioWindow,
 }
 
@@ -232,7 +231,6 @@ pub(crate) enum SourceAudioTerminal {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceAudioStatus {
     pub(crate) decode_seek_epoch: u64,
-    pub(crate) lane_id: NonZeroU64,
     pub(crate) terminal: SourceAudioTerminal,
 }
 
@@ -286,7 +284,6 @@ impl SourceAudioError {
             Self::BufferBudgetExhausted => "source audio buffer budget is exhausted",
             Self::BufferBankNotPrepared => "source audio buffer bank is not prepared",
             Self::CapacityOverflow => "source audio channel capacity overflowed",
-            Self::LaneExhausted => "source audio lane identifiers are exhausted",
             Self::SourceFailed => "decoded source failed before source audio became available",
         }
     }

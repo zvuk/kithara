@@ -324,9 +324,9 @@ fn look_ahead_extends_coverage_without_changing_requested_range() {
         .request(requested, 3, 2)
         .expect("look-ahead demand");
 
-    assert_eq!(demand.requested, requested);
+    assert_eq!(demand.request.requested, requested);
     assert_eq!(
-        demand.coverage,
+        demand.request.coverage,
         SourceFrameRange::new(10, 15).expect("coverage range")
     );
     assert_eq!(demand.decode_seek_epoch(), 2);
