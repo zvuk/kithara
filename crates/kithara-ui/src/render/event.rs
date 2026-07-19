@@ -16,5 +16,11 @@ pub enum UiEvent {
     ToggleModule(String),
     OpenSettings,
     CloseSettings,
+    SettingsShowLayout,
+    SettingsShowModules,
+    SettingsSelectPreset(String),
+    SettingsToggleModule(String),
+    SettingsReset,
+    SettingsDone,
     LibraryQuery(String),
 }

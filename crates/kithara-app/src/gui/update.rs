@@ -1,5 +1,6 @@
 use iced::{Task, window};
 use kithara_queue::{TrackId, Transition};
+use kithara_ui::render::UiEvent;
 use tracing::error;
 
 use super::{app::Kithara, message::Message, modular};
@@ -28,8 +29,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
 
 fn handle_window_close_requested(state: &mut Kithara, id: window::Id) -> Task<Message> {
     if state.settings_window_id == Some(id) {
-        state.settings_window_id = None;
-        window::close(id)
+        modular::update(state, UiEvent::CloseSettings)
     } else if state.window_id == Some(id) {
         iced::exit()
     } else {
