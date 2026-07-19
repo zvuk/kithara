@@ -7,13 +7,11 @@ use iced::{
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    dj::DjView,
     frontend::{WindowMode, window_settings},
-    message::{Message, Tab},
-    modular::{ModularView, ViewMode},
+    message::Message,
+    modular::{ModularView, initial_view},
     subscription::subscription_config,
     theme,
-    url_bar::UrlBar,
 };
 use crate::{
     state::{StateController, UiState},
@@ -23,15 +21,11 @@ use crate::{
 /// Main GUI application state.
 ///
 /// Player state lives in [`StateController`]; this struct only holds
-/// view-local state that has no business in the shared model
-/// (selected row, active tab, transient text input, blink counter).
+/// view-local state that has no business in the shared model.
 /// `ui_state` is refreshed once per `Tick` so all view code reads from
 /// a single, consistent snapshot.
 pub(crate) struct Kithara {
     pub(crate) controller: Arc<StateController>,
-    /// View-local DJ Studio state (open / closed).
-    pub(crate) dj: DjView,
-    pub(crate) view_mode: ViewMode,
     pub(crate) modular: ModularView,
     pub(crate) settings_window_id: Option<window::Id>,
 
@@ -40,16 +34,11 @@ pub(crate) struct Kithara {
     /// Currently live main window; mode swaps replace this ID while the
     /// optional settings window is tracked separately.
     pub(crate) window_id: Option<window::Id>,
-    pub(crate) active_tab: Tab,
     pub(crate) ui_state: UiState,
-    pub(crate) url: UrlBar,
-    pub(crate) previous_volume: f32,
-    pub(crate) blink_counter: u8,
 }
 
 impl Kithara {
-    /// Boot function for `iced::daemon()`. Opens the initial compact
-    /// window and tracks its id.
+    /// Boot function for `iced::daemon()`. Opens the modular player window.
     pub(crate) fn new(
         controller: Arc<StateController>,
         palette: gui::GuiPalette,
@@ -58,21 +47,15 @@ impl Kithara {
 
         let mut state = Self {
             controller,
-            previous_volume: ui_state.volume.max(0.01),
             ui_state,
             palette,
-            active_tab: Tab::Playlist,
             selected_track_index: None,
-            blink_counter: 0,
-            url: UrlBar::default(),
-            dj: DjView::default(),
-            view_mode: ViewMode::Compact,
-            modular: ModularView::default(),
+            modular: initial_view(),
             settings_window_id: None,
             window_id: None,
         };
 
-        let (id, open) = window::open(window_settings(WindowMode::Compact));
+        let (id, open) = window::open(window_settings(WindowMode::ModularPlayer));
         state.window_id = Some(id);
 
         (state, open.discard())
@@ -90,9 +73,8 @@ impl Kithara {
         subs.push(window::close_requests().map(Message::WindowCloseRequested));
         if cfg.is_keyboard_enabled {
             subs.push(event::listen_with(|e, status, _window| match e {
-                // Only act on Delete/Backspace the focused widget left
-                // unhandled. A focused text input (URL bar) captures these
-                // for editing, so the playlist shortcut must not also fire.
+                // Only act on Delete/Backspace when the focused widget left
+                // the key unhandled.
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     key: Key::Named(Named::Delete | Named::Backspace),
                     ..
@@ -108,15 +90,8 @@ impl Kithara {
         theme::kithara_theme(&self.palette)
     }
 
-    /// Window title, reflecting the active mode.
-    pub(crate) fn title(&self, window: window::Id) -> String {
-        if self.settings_window_id == Some(window) {
-            return "Kithara - View settings".to_owned();
-        }
-        match self.view_mode {
-            ViewMode::Compact => "Kithara".to_owned(),
-            ViewMode::Studio => "Kithara - DJ Studio".to_owned(),
-            ViewMode::Modular => "Kithara - Modular".to_owned(),
-        }
+    /// Static application title for every window.
+    pub(crate) fn title(_state: &Self, _window: window::Id) -> String {
+        "Kithara".to_owned()
     }
 }

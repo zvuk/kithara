@@ -16,8 +16,6 @@ pub struct Palette {
     pub bg: Rgb,
     /// Deep outer background.
     pub bg_deep: Rgb,
-    /// Highest elevation background.
-    pub bg_elev: Rgb,
     /// Inset surface behind strips and inline controls.
     pub bg_inset: Rgb,
     /// Panel / elevated surface background.
@@ -52,7 +50,6 @@ impl Palette {
     const BG_B: u8 = 46;
     const BG_DEEP: Rgb = Rgb(14, 14, 29);
 
-    const BG_ELEV: Rgb = Rgb(47, 47, 94);
     const BG_G: u8 = 26;
     const BG_INSET: Rgb = Rgb(20, 20, 41);
 
@@ -91,7 +88,6 @@ impl Palette {
         Self {
             bg: Rgb(Self::BG_R, Self::BG_G, Self::BG_B),
             bg_deep: Self::BG_DEEP,
-            bg_elev: Self::BG_ELEV,
             bg_inset: Self::BG_INSET,
             bg_panel: Rgb(Self::BG_PANEL_R, Self::BG_PANEL_G, Self::BG_PANEL_B),
             bg_panel_2: Self::BG_PANEL_2,
@@ -125,12 +121,10 @@ pub(crate) mod gui {
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct GuiPalette {
         pub(crate) accent: Color,
-        pub(crate) accent_glow: Color,
         pub(crate) accent_soft: Color,
         pub(crate) accent_strong: Color,
         pub(crate) bg: Color,
         pub(crate) bg_deep: Color,
-        pub(crate) bg_elev: Color,
         pub(crate) bg_inset: Color,
         pub(crate) bg_panel: Color,
         pub(crate) bg_panel_2: Color,
@@ -148,12 +142,10 @@ pub(crate) mod gui {
         fn from(p: Palette) -> Self {
             Self {
                 accent: to_iced(p.accent),
-                accent_glow: Color::from_rgba8(p.accent.0, p.accent.1, p.accent.2, 0.45),
                 accent_soft: Color::from_rgba8(p.accent.0, p.accent.1, p.accent.2, 0.18),
                 accent_strong: to_iced(p.accent_strong),
                 bg: to_iced(p.bg),
                 bg_deep: to_iced(p.bg_deep),
-                bg_elev: to_iced(p.bg_elev),
                 bg_inset: to_iced(p.bg_inset),
                 bg_panel: to_iced(p.bg_panel),
                 bg_panel_2: to_iced(p.bg_panel_2),

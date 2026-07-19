@@ -7,7 +7,6 @@ use iced::{
         container::Style as ContainerStyle,
         row, text,
     },
-    window,
 };
 use kithara_ui::{compile::CompiledNode, layout::Axis};
 use num_traits::cast::AsPrimitive;
@@ -18,7 +17,7 @@ use crate::{
     theme::gui::GuiPalette,
 };
 
-pub(crate) fn render(state: &Kithara, _window: window::Id) -> Element<'_, Message> {
+pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
     let body = state.modular.compiled.as_ref().map_or_else(
         || empty_state(state),
@@ -67,10 +66,6 @@ fn header(state: &Kithara) -> Element<'_, Message> {
         .padding([4, 7])
         .style(move |theme, status| header_button_style(p, theme, status))
         .on_press(Message::Modular(ModularMsg::OpenSettings)),
-        button(text("Exit").font(fonts::SANS).size(11.0))
-            .padding([4, 7])
-            .style(move |theme, status| header_button_style(p, theme, status))
-            .on_press(Message::Modular(ModularMsg::Exit)),
     ]
     .spacing(gap::INLINE)
     .align_y(Alignment::Center)
@@ -90,7 +85,9 @@ fn empty_state(state: &Kithara) -> Element<'_, Message> {
     button(text("Load preset").font(fonts::SANS).size(12.0))
         .padding([6, 10])
         .style(move |theme, status| header_button_style(p, theme, status))
-        .on_press(Message::Modular(ModularMsg::Enter))
+        .on_press(Message::Modular(ModularMsg::SelectPreset(
+            state.modular.preset.clone(),
+        )))
         .into()
 }
 

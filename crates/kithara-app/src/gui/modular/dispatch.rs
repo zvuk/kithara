@@ -11,7 +11,8 @@ use super::ControlAction;
 use crate::gui::{
     app::Kithara,
     update::{
-        handle_seek_to, handle_select_track, handle_toggle_play_pause, handle_volume_changed,
+        handle_next, handle_prev, handle_seek_to, handle_select_track, handle_toggle_play_pause,
+        handle_volume_changed,
     },
 };
 
@@ -69,6 +70,18 @@ fn apply_binding(
             if id.0 == "deck.transport.toggle_play" && deck_is_a(with) =>
         {
             handle_toggle_play_pause(state);
+            true
+        }
+        (BindingRef::Command { id, with }, ControlAction::Activate)
+            if id.0 == "deck.transport.prev" && deck_is_a(with) =>
+        {
+            handle_prev(state);
+            true
+        }
+        (BindingRef::Command { id, with }, ControlAction::Activate)
+            if id.0 == "deck.transport.next" && deck_is_a(with) =>
+        {
+            handle_next(state);
             true
         }
         (BindingRef::Command { id, with }, ControlAction::SetScalar(value))

@@ -6,7 +6,7 @@ use kithara_ui::{
 };
 use tracing::error;
 
-use super::{ModularMsg, ModularView, ViewMode, dispatch, endpoints};
+use super::{ModularMsg, ModularView, dispatch, endpoints};
 use crate::gui::{
     app::Kithara,
     frontend::{WindowMode, window_settings},
@@ -15,11 +15,6 @@ use crate::gui::{
 
 pub(crate) fn update(state: &mut Kithara, message: ModularMsg) -> Task<Message> {
     match message {
-        ModularMsg::Enter => {
-            let preset = state.modular.preset.clone();
-            select_preset(state, &preset)
-        }
-        ModularMsg::Exit => exit(state),
         ModularMsg::SelectPreset(preset) => select_preset(state, &preset),
         ModularMsg::ToggleModule(instance) => {
             if !state.modular.hidden.remove(&instance) {
@@ -36,12 +31,24 @@ pub(crate) fn update(state: &mut Kithara, message: ModularMsg) -> Task<Message> 
     }
 }
 
+pub(crate) fn initial_view() -> ModularView {
+    let preset = builtin::PLAYER_PRESET;
+    let mut modular = ModularView::default();
+    match compile_preset(preset) {
+        Ok(compiled) => commit_preset(&mut modular, preset, compiled),
+        Err(error) => {
+            error!(error = %error, preset, "initial modular preset compile failed");
+            modular.preset = preset.to_owned();
+            modular.error = Some(error);
+        }
+    }
+    modular
+}
+
 fn select_preset(state: &mut Kithara, preset: &str) -> Task<Message> {
     match compile_preset(preset) {
         Ok(compiled) => {
             commit_preset(&mut state.modular, preset, compiled);
-            state.view_mode = ViewMode::Modular;
-            state.dj.open = false;
             replace_main_window(state, preset_window_mode(preset))
         }
         Err(error) => {
@@ -78,12 +85,6 @@ fn preset_window_mode(preset: &str) -> WindowMode {
     } else {
         WindowMode::ModularMicro
     }
-}
-
-fn exit(state: &mut Kithara) -> Task<Message> {
-    state.view_mode = ViewMode::Compact;
-    state.dj.open = false;
-    replace_main_window(state, WindowMode::Compact)
 }
 
 fn replace_main_window(state: &mut Kithara, mode: WindowMode) -> Task<Message> {

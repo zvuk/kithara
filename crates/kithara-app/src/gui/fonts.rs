@@ -25,16 +25,8 @@ use consts::{INTER_FAMILY, JETBRAINS_MONO_FAMILY, SPACE_GROTESK_FAMILY};
 pub(crate) const SANS: Font = font(INTER_FAMILY, Weight::Normal);
 pub(crate) const MONO: Font = font(JETBRAINS_MONO_FAMILY, Weight::Normal);
 
-pub(crate) const fn sans(weight: Weight) -> Font {
-    font(INTER_FAMILY, weight)
-}
-
 pub(crate) const fn display(weight: Weight) -> Font {
     font(SPACE_GROTESK_FAMILY, weight)
-}
-
-pub(crate) const fn mono(weight: Weight) -> Font {
-    font(JETBRAINS_MONO_FAMILY, weight)
 }
 
 const fn font(family: Family, weight: Weight) -> Font {

@@ -1,7 +1,5 @@
 #[derive(Clone, Debug)]
 pub(crate) enum ModularMsg {
-    Enter,
-    Exit,
     SelectPreset(String),
     ToggleModule(String),
     OpenSettings,

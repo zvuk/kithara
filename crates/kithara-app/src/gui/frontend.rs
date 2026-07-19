@@ -11,18 +11,6 @@ use crate::{
 };
 
 mod consts {
-    /// Compact-player window size in logical pixels.
-    pub(super) const COMPACT_WIDTH: f32 = 448.0;
-    pub(super) const COMPACT_HEIGHT: f32 = 784.0;
-    pub(super) const COMPACT_MIN_WIDTH: f32 = 420.0;
-    pub(super) const COMPACT_MIN_HEIGHT: f32 = 760.0;
-
-    /// DJ Studio window size in logical pixels.
-    pub(super) const STUDIO_WIDTH: f32 = 980.0;
-    pub(super) const STUDIO_HEIGHT: f32 = 700.0;
-    pub(super) const STUDIO_MIN_WIDTH: f32 = 820.0;
-    pub(super) const STUDIO_MIN_HEIGHT: f32 = 620.0;
-
     pub(super) const MODULAR_MICRO_WIDTH: f32 = 560.0;
     pub(super) const MODULAR_MICRO_HEIGHT: f32 = 96.0;
     pub(super) const MODULAR_MICRO_MIN_WIDTH: f32 = 420.0;
@@ -37,8 +25,6 @@ use consts::*;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum WindowMode {
-    Compact,
-    Studio,
     ModularMicro,
     ModularPlayer,
 }
@@ -48,14 +34,6 @@ pub(crate) enum WindowMode {
 /// programmatic swap-close does not exit the app.
 pub(crate) fn window_settings(mode: WindowMode) -> Settings {
     let (size, min_size) = match mode {
-        WindowMode::Compact => (
-            Size::new(COMPACT_WIDTH, COMPACT_HEIGHT),
-            Size::new(COMPACT_MIN_WIDTH, COMPACT_MIN_HEIGHT),
-        ),
-        WindowMode::Studio => (
-            Size::new(STUDIO_WIDTH, STUDIO_HEIGHT),
-            Size::new(STUDIO_MIN_WIDTH, STUDIO_MIN_HEIGHT),
-        ),
         WindowMode::ModularMicro => (
             Size::new(MODULAR_MICRO_WIDTH, MODULAR_MICRO_HEIGHT),
             Size::new(MODULAR_MICRO_MIN_WIDTH, MODULAR_MICRO_MIN_HEIGHT),

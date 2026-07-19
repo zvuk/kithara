@@ -6,12 +6,24 @@
     root: Row(
         children: [
             Control(
+                id: "prev",
+                kind: "button",
+                props: { "label": Text("PREV") },
+                write: Command(id: "deck.transport.prev", with: { "deck": "$deck" }),
+            ),
+            Control(
                 id: "play",
                 kind: "button",
                 props: { "label": Text("PLAY") },
                 read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
                 adaptive: (priority: Required),
+            ),
+            Control(
+                id: "next",
+                kind: "button",
+                props: { "label": Text("NEXT") },
+                write: Command(id: "deck.transport.next", with: { "deck": "$deck" }),
             ),
             Control(
                 id: "position",

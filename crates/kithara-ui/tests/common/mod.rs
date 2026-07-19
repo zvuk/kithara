@@ -90,6 +90,16 @@ pub(crate) fn player_registry() -> TestRegistry {
     );
     registry.insert(
         EndpointCategory::Command,
+        "deck.transport.prev",
+        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "deck.transport.next",
+        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Command,
         "deck.transport.seek_normalized",
         EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
     );

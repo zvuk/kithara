@@ -12,5 +12,5 @@ pub(crate) mod view;
 
 pub(crate) use msg::{ControlAction, ModularMsg};
 pub(crate) use settings::render as render_settings;
-pub(crate) use state::{ModularView, ViewMode};
-pub(crate) use update::update;
+pub(crate) use state::ModularView;
+pub(crate) use update::{initial_view, update};

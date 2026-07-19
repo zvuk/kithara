@@ -2,14 +2,6 @@ use std::collections::BTreeSet;
 
 use kithara_ui::{builtin, compile::CompiledUi};
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum ViewMode {
-    #[default]
-    Compact,
-    Studio,
-    Modular,
-}
-
 pub(crate) struct ModularView {
     pub(crate) hidden: BTreeSet<String>,
     pub(crate) compiled: Option<CompiledUi>,
