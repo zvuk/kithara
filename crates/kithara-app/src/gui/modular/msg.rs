@@ -1,6 +1,7 @@
 #[derive(Clone, Debug)]
 pub(crate) enum ModularMsg {
     SelectPreset(String),
+    LibraryQueryChanged(String),
     ToggleModule(String),
     OpenSettings,
     CloseSettings,

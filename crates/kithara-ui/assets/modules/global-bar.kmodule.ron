@@ -1,0 +1,21 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "global-bar",
+    root: Row(
+        children: [
+            Control(id: "brand", kind: "global.brand"),
+            Control(id: "presets", kind: "preset.selector"),
+            Control(id: "spacer", kind: "global.spacer"),
+            Control(
+                id: "volume",
+                kind: "fader.horizontal",
+                size: (w: Fixed(152.0), h: Fixed(34.0)),
+                props: { "style": Text("volume-compact") },
+                read: Parameter(id: "player.output.volume"),
+                write: Parameter(id: "player.output.volume"),
+            ),
+            Control(id: "settings", kind: "view.settings"),
+        ],
+    ),
+)

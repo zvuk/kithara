@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::LazyLock};
 
 use kithara_ui::{
     ids::{ControlKind, EndpointId},
@@ -8,6 +8,8 @@ use kithara_ui::{
     },
     size::{Dim, SizeSpec},
 };
+
+use crate::gui::tokens::{deck, global_bar, track_list, transport, volume, waveform};
 
 #[derive(Default)]
 pub(crate) struct AppCatalog {
@@ -44,8 +46,52 @@ impl EndpointRegistry for AppRegistry {
     }
 }
 
-pub(crate) fn catalog() -> AppCatalog {
+fn build_catalog() -> AppCatalog {
     let mut catalog = AppCatalog::default();
+    catalog.insert(
+        "deck.header",
+        ControlKindDesc::new(Some(ValueKind::Waveform), None)
+            .with_prop("badge", PropKind::Text)
+            .with_size(SizeSpec::new(Dim::Fill, Dim::Fixed(deck::HEADER_HEIGHT))),
+    );
+    catalog.insert(
+        "deck.summary",
+        ControlKindDesc::new(Some(ValueKind::Text), None)
+            .with_prop("style", PropKind::Text)
+            .with_size(SizeSpec::new(
+                Dim::Range {
+                    min: deck::SUMMARY_MIN_WIDTH,
+                    max: None,
+                },
+                Dim::Fixed(deck::SUMMARY_HEIGHT),
+            )),
+    );
+    catalog.insert(
+        "global.brand",
+        ControlKindDesc::new(None, None).with_size(SizeSpec::new(
+            Dim::Fixed(global_bar::BRAND_WIDTH),
+            Dim::Fixed(global_bar::HEIGHT),
+        )),
+    );
+    catalog.insert(
+        "global.spacer",
+        ControlKindDesc::new(None, None)
+            .with_size(SizeSpec::new(Dim::Fill, Dim::Fixed(global_bar::HEIGHT))),
+    );
+    catalog.insert(
+        "preset.selector",
+        ControlKindDesc::new(None, None).with_size(SizeSpec::new(
+            Dim::Fixed(global_bar::SELECTOR_WIDTH),
+            Dim::Fixed(global_bar::HEIGHT),
+        )),
+    );
+    catalog.insert(
+        "view.settings",
+        ControlKindDesc::new(None, None).with_size(SizeSpec::new(
+            Dim::Fixed(global_bar::SETTINGS_WIDTH),
+            Dim::Fixed(global_bar::HEIGHT),
+        )),
+    );
     catalog.insert(
         "text",
         ControlKindDesc::new(Some(ValueKind::Text), None)
@@ -56,13 +102,31 @@ pub(crate) fn catalog() -> AppCatalog {
         "button",
         ControlKindDesc::new(Some(ValueKind::Bool), Some(ValueKind::Trigger))
             .with_prop("label", PropKind::Text)
+            .with_prop("active-label", PropKind::Text)
+            .with_prop("style", PropKind::Text)
             .with_size(SizeSpec::new(
                 Dim::Range {
-                    min: 44.0,
+                    min: transport::BUTTON_MIN_WIDTH,
                     max: None,
                 },
-                Dim::Fixed(28.0),
+                Dim::Fixed(transport::BUTTON_HEIGHT),
             )),
+    );
+    catalog.insert(
+        "telemetry.bpm",
+        ControlKindDesc::new(Some(ValueKind::Waveform), None)
+            .with_prop("fallback", PropKind::Text)
+            .with_size(SizeSpec::new(
+                Dim::Fixed(deck::BPM_CELL_WIDTH),
+                Dim::Fixed(global_bar::HEIGHT),
+            )),
+    );
+    catalog.insert(
+        "telemetry.time",
+        ControlKindDesc::new(Some(ValueKind::Scalar), None).with_size(SizeSpec::new(
+            Dim::Fixed(transport::TIME_WIDTH),
+            Dim::Fixed(transport::BUTTON_HEIGHT),
+        )),
     );
     catalog.insert(
         "telemetry.scalar",
@@ -72,32 +136,52 @@ pub(crate) fn catalog() -> AppCatalog {
     );
     catalog.insert(
         "fader.horizontal",
-        ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar)).with_size(
-            SizeSpec::new(
+        ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar))
+            .with_prop("style", PropKind::Text)
+            .with_size(SizeSpec::new(
                 Dim::Range {
-                    min: 120.0,
+                    min: volume::MIN_WIDTH,
                     max: None,
                 },
-                Dim::Fixed(24.0),
-            ),
-        ),
+                Dim::Fixed(volume::CONTROL_HEIGHT),
+            )),
     );
     catalog.insert(
         "waveform.mini",
         ControlKindDesc::new(Some(ValueKind::Waveform), Some(ValueKind::Scalar))
-            .with_size(SizeSpec::new(Dim::Fill, Dim::Fixed(56.0))),
+            .with_prop("style", PropKind::Text)
+            .with_size(SizeSpec::new(
+                Dim::Fill,
+                Dim::Range {
+                    min: waveform::HERO_HEIGHT,
+                    max: None,
+                },
+            )),
     );
     catalog.insert(
         "track_list",
         ControlKindDesc::new(Some(ValueKind::TrackList), None).with_size(SizeSpec::new(
-            Dim::Fill,
             Dim::Range {
-                min: 160.0,
+                min: track_list::MIN_WIDTH,
+                max: None,
+            },
+            Dim::Range {
+                min: track_list::MIN_HEIGHT,
                 max: None,
             },
         )),
     );
     catalog
+}
+
+static RENDER_CATALOG: LazyLock<AppCatalog> = LazyLock::new(build_catalog);
+
+pub(crate) fn catalog() -> AppCatalog {
+    build_catalog()
+}
+
+pub(crate) fn render_catalog() -> &'static AppCatalog {
+    &RENDER_CATALOG
 }
 
 pub(crate) fn registry() -> AppRegistry {
@@ -202,10 +286,30 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("player preset must compile: {error}"));
 
-        // The catalog declares real component sizes, so the root composes to a
-        // positive minimum on both axes — the window derives from constraints
-        // rather than a hardcoded default.
         assert!(ui.size.w.min() > 0.0, "width min: {}", ui.size.w.min());
         assert!(ui.size.h.min() > 0.0, "height min: {}", ui.size.h.min());
+    }
+
+    #[kithara::test]
+    fn visual_controls_declare_intrinsic_sizes() {
+        let catalog = catalog();
+        for kind in [
+            "deck.header",
+            "deck.summary",
+            "global.brand",
+            "preset.selector",
+            "telemetry.time",
+        ] {
+            let description = catalog
+                .kind(kind)
+                .unwrap_or_else(|| panic!("{kind} must be registered"));
+            assert!(description.size.w.min() > 0.0 || description.size.w == Dim::Fill);
+            assert!(description.size.h.min() > 0.0, "{kind} height");
+        }
+
+        let waveform = catalog
+            .kind("waveform.mini")
+            .unwrap_or_else(|| panic!("waveform.mini must be registered"));
+        assert!(waveform.size.h.min() >= waveform::HERO_HEIGHT);
     }
 }

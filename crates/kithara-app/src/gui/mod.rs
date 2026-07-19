@@ -7,6 +7,7 @@ mod modular;
 mod subscription;
 mod theme;
 mod tokens;
+mod typography;
 mod update;
 mod view;
 mod widgets;

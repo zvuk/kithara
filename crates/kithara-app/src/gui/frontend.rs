@@ -19,20 +19,41 @@ const ERROR_FALLBACK: SizeSpec = SizeSpec::new(Dim::Fixed(360.0), Dim::Fixed(240
 /// Derives main-window settings from the compiled body and app window policy.
 pub(crate) fn window_settings(compiled: Option<&CompiledUi>, sizing: &WindowSizing) -> Settings {
     let size = compiled.map_or(ERROR_FALLBACK, |ui| ui.size);
-    let min_size = Size::new(
-        (size.w.min() + sizing.chrome_w).max(sizing.min_floor_w),
-        (size.h.min() + sizing.chrome_h).max(sizing.min_floor_h),
+    let (min_w, initial_w) = axis_settings(
+        size.w,
+        sizing.chrome_w,
+        sizing.min_floor_w,
+        sizing.initial_scale,
     );
-    let initial_size = Size::new(
-        min_size.width * sizing.initial_scale,
-        min_size.height * sizing.initial_scale,
+    let (min_h, initial_h) = axis_settings(
+        size.h,
+        sizing.chrome_h,
+        sizing.min_floor_h,
+        sizing.initial_scale,
     );
+    let min_size = Size::new(min_w, min_h);
+    let initial_size = Size::new(initial_w, initial_h);
     Settings {
         size: initial_size,
         min_size: Some(min_size),
         exit_on_close_request: false,
         ..Settings::default()
     }
+}
+
+fn axis_settings(dim: Dim, chrome: f32, floor: f32, initial_scale: f32) -> (f32, f32) {
+    let tree_min = dim.min();
+    let min = if tree_min == 0.0 {
+        floor
+    } else {
+        tree_min + chrome
+    };
+    let initial = if dim.max().is_none() {
+        min * initial_scale
+    } else {
+        min
+    };
+    (min, initial)
 }
 
 /// GUI frontend using iced.
@@ -79,8 +100,12 @@ impl Frontend for GuiFrontend {
         .theme(Kithara::theme)
         .subscription(Kithara::subscription)
         .default_font(fonts::SANS)
-        .font(fonts::INTER_BYTES)
-        .font(fonts::SPACE_GROTESK_BYTES)
+        .font(fonts::INTER_REGULAR_BYTES)
+        .font(fonts::INTER_SEMIBOLD_BYTES)
+        .font(fonts::SPACE_GROTESK_REGULAR_BYTES)
+        .font(fonts::SPACE_GROTESK_MEDIUM_BYTES)
+        .font(fonts::SPACE_GROTESK_SEMIBOLD_BYTES)
+        .font(fonts::SPACE_GROTESK_BOLD_BYTES)
         .font(fonts::JETBRAINS_MONO_REGULAR_BYTES)
         .font(fonts::JETBRAINS_MONO_MEDIUM_BYTES)
         .font(fonts::JETBRAINS_MONO_SEMIBOLD_BYTES)
@@ -104,13 +129,13 @@ impl Frontend for GuiFrontend {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
-    use kithara_ui::{builtin, compile::compile, source::UiConfig};
+    use kithara_ui::{builtin, compile::compile, size::Dim, source::UiConfig};
 
-    use super::window_settings;
+    use super::{axis_settings, window_settings};
     use crate::{config::WindowSizing, gui::modular::endpoints};
 
     #[kithara::test]
-    fn player_window_settings_include_chrome_floor_and_initial_scale() {
+    fn player_open_axes_scale_from_their_intrinsic_minimum() {
         let ui = compile(
             builtin::PLAYER_PRESET,
             &builtin::resolver(),
@@ -126,11 +151,52 @@ mod tests {
             .min_size
             .unwrap_or_else(|| panic!("main window must have a minimum size"));
 
-        assert!(min.width >= ui.size.w.min() + sizing.chrome_w);
-        assert!(min.height >= ui.size.h.min() + sizing.chrome_h);
-        assert!(min.width >= sizing.min_floor_w);
-        assert!(min.height >= sizing.min_floor_h);
-        assert!(settings.size.width > min.width);
-        assert!(settings.size.height > min.height);
+        assert_eq!(min.width, ui.size.w.min() + sizing.chrome_w);
+        assert_eq!(min.height, ui.size.h.min() + sizing.chrome_h);
+        assert!(ui.size.w.max().is_none());
+        assert!(ui.size.h.max().is_none());
+        assert_eq!(settings.size.width, min.width * sizing.initial_scale);
+        assert_eq!(settings.size.height, min.height * sizing.initial_scale);
+    }
+
+    #[kithara::test]
+    fn micro_bounded_height_opens_at_its_intrinsic_minimum() {
+        let ui = compile(
+            builtin::MICRO_PRESET,
+            &builtin::resolver(),
+            &endpoints::catalog(),
+            &endpoints::registry(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("micro preset must compile: {error}"));
+        let sizing = WindowSizing::default();
+
+        let settings = window_settings(Some(&ui), &sizing);
+        let min = settings
+            .min_size
+            .unwrap_or_else(|| panic!("main window must have a minimum size"));
+
+        assert!(ui.size.h.min() > 0.0);
+        assert!(ui.size.h.max().is_some());
+        assert!(ui.size.w.max().is_none());
+        assert_eq!(min.height, ui.size.h.min() + sizing.chrome_h);
+        assert!(min.height < sizing.min_floor_h);
+        assert_eq!(settings.size.width, min.width * sizing.initial_scale);
+        assert_eq!(settings.size.height, min.height);
+    }
+
+    #[kithara::test]
+    fn fill_only_axis_uses_the_configured_floor_and_scale() {
+        let sizing = WindowSizing::default();
+
+        let (min, initial) = axis_settings(
+            Dim::Fill,
+            sizing.chrome_h,
+            sizing.min_floor_h,
+            sizing.initial_scale,
+        );
+
+        assert_eq!(min, sizing.min_floor_h);
+        assert_eq!(initial, min * sizing.initial_scale);
     }
 }

@@ -30,6 +30,7 @@ pub(crate) struct Kithara {
     pub(crate) modular: ModularView,
     pub(crate) settings_window_id: Option<window::Id>,
 
+    pub(crate) library_query: String,
     pub(crate) palette: gui::GuiPalette,
     pub(crate) selected_track_index: Option<usize>,
     pub(crate) window_sizing: WindowSizing,
@@ -51,6 +52,7 @@ impl Kithara {
         let mut state = Self {
             controller,
             ui_state,
+            library_query: String::new(),
             palette,
             selected_track_index: None,
             window_sizing,

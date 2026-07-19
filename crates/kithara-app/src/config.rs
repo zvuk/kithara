@@ -19,18 +19,18 @@ use crate::{baked, theme::Palette};
 #[non_exhaustive]
 pub struct WindowSizing {
     /// Fixed horizontal chrome the modular renderer adds around the compiled body.
-    #[builder(default = 16.0)]
+    #[builder(default = 0.0)]
     pub chrome_w: f32,
-    /// Fixed vertical chrome from the header, container padding, and column spacing.
-    #[builder(default = 50.0)]
+    /// Fixed vertical chrome the modular renderer adds around the compiled body.
+    #[builder(default = 0.0)]
     pub chrome_h: f32,
-    /// Absolute minimum width, including for a Fill-only preset.
+    /// Minimum width used when the compiled tree has no intrinsic width.
     #[builder(default = 200.0)]
     pub min_floor_w: f32,
-    /// Absolute minimum height, including for a Fill-only preset.
+    /// Minimum height used when the compiled tree has no intrinsic height.
     #[builder(default = 140.0)]
     pub min_floor_h: f32,
-    /// Scale from the minimum dimensions to the comfortable initial size.
+    /// Scale from an open axis minimum to its comfortable initial size.
     #[builder(default = 1.5)]
     pub initial_scale: f32,
 }

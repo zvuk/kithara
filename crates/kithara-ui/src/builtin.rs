@@ -7,6 +7,14 @@ const ASSETS: &[(&str, &str)] = &[
     (MICRO_PRESET, include_str!("../assets/micro.klayout.ron")),
     (PLAYER_PRESET, include_str!("../assets/player.klayout.ron")),
     (
+        "modules/deck-micro.kmodule.ron",
+        include_str!("../assets/modules/deck-micro.kmodule.ron"),
+    ),
+    (
+        "modules/global-bar.kmodule.ron",
+        include_str!("../assets/modules/global-bar.kmodule.ron"),
+    ),
+    (
         "modules/deck.kmodule.ron",
         include_str!("../assets/modules/deck.kmodule.ron"),
     ),

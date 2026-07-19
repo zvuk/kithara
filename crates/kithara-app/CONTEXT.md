@@ -41,8 +41,12 @@ is bumped (acceptable for a library of stable files).
 ## Modular Window Sizing
 
 `AppConfig.window_sizing` owns the main window's fixed renderer chrome,
-absolute minimum dimensions, and comfortable initial-size scale. The dimension
-floors are user-facing defaults that keep valid Fill-only presets usable. If a
+degenerate-axis floors, and comfortable initial-size scale. The modular preset
+now owns its complete visible structure, so the default renderer chrome is zero
+on both axes. A floor applies
+only when the compiled tree has no intrinsic minimum on that axis; a positive
+tree minimum remains authoritative and only receives renderer chrome. Initial
+scale applies only to an open axis. A bounded axis opens at its minimum. If a
 preset fails to compile, `ERROR_FALLBACK` supplies a degraded error-window body
 size; this is an explicit degraded-mode default, not a fallback that masks a
 state-resolution bug.

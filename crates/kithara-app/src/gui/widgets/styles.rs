@@ -1,49 +1,53 @@
 use iced::{
-    Background, Border, Color, Theme,
-    widget::slider::{Handle, HandleShape, Rail, Status as SliderStatus, Style as SliderStyle},
+    Background, Border, Theme,
+    widget::{
+        slider::{Handle, HandleShape, Rail, Status as SliderStatus, Style as SliderStyle},
+        text_input::{Status as TextInputStatus, Style as TextInputStyle},
+    },
 };
 
-use crate::theme::gui::GuiPalette;
-
-const SLIDER_RAIL_WIDTH: f32 = 4.0;
+use crate::{
+    gui::tokens::{chrome, volume},
+    theme::gui::GuiPalette,
+};
 
 pub(crate) fn slider_style(p: GuiPalette) -> impl Fn(&Theme, SliderStatus) -> SliderStyle {
-    const ACTIVE_RAIL_ALPHA: f32 = 0.95;
-    const DRAGGED_RAIL_ALPHA: f32 = 0.85;
-    const HANDLE_BORDER_ALPHA: f32 = 0.65;
-    const HANDLE_BORDER_WIDTH: f32 = 1.0;
-    const HANDLE_RADIUS: f32 = 7.0;
-    const INACTIVE_RAIL_ALPHA: f32 = 0.35;
-    const RAIL_RADIUS: f32 = 4.0;
-
-    move |_theme, status| {
-        let active = match status {
-            SliderStatus::Active => p.accent,
-            SliderStatus::Hovered => with_alpha(p.accent, ACTIVE_RAIL_ALPHA),
-            SliderStatus::Dragged => with_alpha(p.accent, DRAGGED_RAIL_ALPHA),
-        };
-
-        SliderStyle {
-            rail: Rail {
-                backgrounds: (
-                    Background::Color(active),
-                    Background::Color(with_alpha(p.muted, INACTIVE_RAIL_ALPHA)),
-                ),
-                width: SLIDER_RAIL_WIDTH,
-                border: Border::default().rounded(RAIL_RADIUS),
+    move |_theme, _status| SliderStyle {
+        rail: Rail {
+            backgrounds: (
+                Background::Color(p.accent),
+                Background::Color(p.canvas.bg_deep),
+            ),
+            width: volume::RAIL_WIDTH,
+            border: Border::default().width(1).color(p.canvas.line_soft),
+        },
+        handle: Handle {
+            shape: HandleShape::Rectangle {
+                width: volume::HANDLE_WIDTH,
+                border_radius: 0.0.into(),
             },
-            handle: Handle {
-                shape: HandleShape::Circle {
-                    radius: HANDLE_RADIUS,
-                },
-                background: Background::Color(p.text),
-                border_width: HANDLE_BORDER_WIDTH,
-                border_color: with_alpha(p.bg, HANDLE_BORDER_ALPHA),
-            },
-        }
+            background: Background::Color(p.canvas.bg_panel_2),
+            border_width: volume::HANDLE_BORDER_WIDTH,
+            border_color: p.canvas.line,
+        },
     }
 }
 
-fn with_alpha(color: Color, alpha: f32) -> Color {
-    Color { a: alpha, ..color }
+pub(crate) fn text_input_style(
+    p: GuiPalette,
+) -> impl Fn(&Theme, TextInputStatus) -> TextInputStyle {
+    move |_theme, status| TextInputStyle {
+        background: Background::Color(p.canvas.bg_inset),
+        border: Border::default()
+            .width(if matches!(status, TextInputStatus::Focused { .. }) {
+                chrome::BORDER_WIDTH
+            } else {
+                0.0
+            })
+            .color(p.accent),
+        icon: p.canvas.muted,
+        placeholder: p.canvas.muted,
+        value: p.canvas.text,
+        selection: p.accent_soft,
+    }
 }

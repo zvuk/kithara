@@ -6,8 +6,8 @@ use crate::theme::gui::GuiPalette;
 #[must_use]
 pub(crate) fn kithara_theme(p: &GuiPalette) -> Theme {
     let palette = iced::theme::Palette {
-        background: p.bg,
-        text: p.text,
+        background: p.canvas.bg,
+        text: p.canvas.text,
         primary: p.accent,
         success: p.success,
         danger: p.danger,

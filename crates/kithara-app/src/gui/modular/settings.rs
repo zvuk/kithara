@@ -6,7 +6,7 @@ use iced::{
         button::{Status as ButtonStatus, Style as ButtonStyle},
         column, container,
         container::Style as ContainerStyle,
-        scrollable, text,
+        scrollable,
     },
 };
 use kithara_ui::{
@@ -14,9 +14,15 @@ use kithara_ui::{
     compile::{CompiledNode, CompiledUi},
 };
 
-use super::ModularMsg;
+use super::{ModularMsg, view::module_chrome};
 use crate::{
-    gui::{app::Kithara, fonts, message::Message, tokens::gap},
+    gui::{
+        app::Kithara,
+        fonts,
+        message::Message,
+        tokens::{gap, settings as settings_tokens, type_scale},
+        typography::shaped_text,
+    },
     theme::gui::GuiPalette,
 };
 
@@ -36,7 +42,7 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
             state.modular.preset == builtin::PLAYER_PRESET,
         ),
     ])
-    .spacing(gap::INLINE_WIDE)
+    .spacing(gap::GRID)
     .width(Length::Fill);
 
     let modules = state
@@ -52,28 +58,31 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     let module_list: Element<'_, Message> = if state.modular.compiled.is_some() {
         scrollable(
             Column::with_children(module_rows)
-                .spacing(gap::INLINE_TIGHT)
+                .spacing(gap::GRID)
                 .width(Length::Fill),
         )
         .height(Length::Fill)
         .into()
     } else {
-        text("No preset loaded")
+        shaped_text("No preset loaded")
             .font(fonts::SANS)
-            .size(13.0)
-            .color(p.muted)
+            .size(type_scale::BODY)
+            .color(p.canvas.muted)
             .into()
     };
 
     let content = column![
-        section_title(p, "Layout"),
+        section_title(p, "LAYOUT"),
         layout,
-        section_title(p, "Modules"),
+        section_title(p, "MODULES"),
         module_list,
         Row::with_children([
             Space::new().width(Length::Fill).into(),
-            button(text("Done").font(fonts::SANS).size(13.0))
-                .padding([7, 16])
+            button(shaped_text("Done").font(fonts::SANS).size(type_scale::BODY),)
+                .padding([
+                    settings_tokens::ACTION_PADDING_Y,
+                    settings_tokens::ACTION_PADDING_X,
+                ])
                 .style(move |theme, status| action_style(p, theme, status))
                 .on_press(Message::Modular(ModularMsg::CloseSettings))
                 .into(),
@@ -84,12 +93,17 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     .spacing(gap::CONTENT)
     .width(Length::Fill)
     .height(Length::Fill);
-
-    container(content)
+    let content = container(content)
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding(16)
-        .style(move |_| ContainerStyle::default().background(Background::Color(p.bg)))
+        .padding(settings_tokens::CONTENT_PADDING);
+    let framed = module_chrome(content, p);
+
+    container(framed)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(settings_tokens::OUTER_PADDING)
+        .style(move |_| ContainerStyle::default().background(Background::Color(p.canvas.bg)))
         .into()
 }
 
@@ -101,17 +115,24 @@ fn preset_card(
 ) -> Element<'static, Message> {
     button(
         column![
-            text(label)
-                .font(fonts::display(Weight::Semibold))
-                .size(15.0),
-            text(if selected { "Selected" } else { "Select" })
-                .font(fonts::MONO)
-                .size(10.0)
-                .color(if selected { p.accent } else { p.muted }),
+            shaped_text(label)
+                .font(iced::Font {
+                    weight: Weight::Semibold,
+                    ..fonts::SANS
+                })
+                .size(settings_tokens::CARD_TITLE_SIZE)
+                .color(p.canvas.text),
+            shaped_text(if selected { "Selected" } else { "Select" })
+                .font(fonts::SANS)
+                .size(type_scale::BODY)
+                .color(if selected { p.accent } else { p.canvas.muted }),
         ]
         .spacing(gap::INLINE_TIGHT),
     )
-    .padding([10, 12])
+    .padding([
+        settings_tokens::CARD_PADDING_Y,
+        settings_tokens::CARD_PADDING_X,
+    ])
     .width(Length::FillPortion(1))
     .style(move |theme, status| preset_style(p, selected, theme, status))
     .on_press(Message::Modular(ModularMsg::SelectPreset(
@@ -124,19 +145,18 @@ fn module_row(p: GuiPalette, instance: String, visible: bool) -> Element<'static
     let message_instance = instance.clone();
     container(
         Row::with_children([
-            text(instance)
+            shaped_text(instance)
                 .font(fonts::SANS)
-                .size(13.0)
-                .color(p.text)
+                .size(type_scale::BODY)
+                .color(p.canvas.text)
                 .width(Length::Fill)
                 .into(),
-            button(
-                text(if visible { "ON" } else { "OFF" })
-                    .font(fonts::MONO)
-                    .size(10.0),
-            )
-            .padding([4, 8])
-            .style(move |theme, status| toggle_style(p, visible, theme, status))
+            button(Row::with_children([
+                toggle_segment(p, "ON", visible),
+                toggle_segment(p, "OFF", !visible),
+            ]))
+            .padding(0)
+            .style(move |theme, status| toggle_style(p, theme, status))
             .on_press(Message::Modular(ModularMsg::ToggleModule(
                 message_instance.clone(),
             )))
@@ -145,21 +165,49 @@ fn module_row(p: GuiPalette, instance: String, visible: bool) -> Element<'static
         .align_y(Alignment::Center)
         .spacing(gap::INLINE_WIDE),
     )
-    .padding([6, 8])
+    .padding([
+        settings_tokens::ROW_PADDING_Y,
+        settings_tokens::ROW_PADDING_X,
+    ])
     .width(Length::Fill)
     .style(move |_| {
         ContainerStyle::default()
-            .background(Background::Color(p.bg_panel))
-            .border(Border::default().width(1).color(p.line_soft))
+            .background(Background::Color(p.canvas.bg_panel))
+            .border(Border::default().width(1).color(p.canvas.line_soft))
+    })
+    .into()
+}
+
+fn toggle_segment(p: GuiPalette, label: &'static str, active: bool) -> Element<'static, Message> {
+    container(
+        shaped_text(label)
+            .font(fonts::SANS)
+            .size(type_scale::MICRO_LABEL)
+            .color(if active {
+                p.canvas.bg
+            } else {
+                p.canvas.text_dim
+            }),
+    )
+    .padding([
+        settings_tokens::TOGGLE_PADDING_Y,
+        settings_tokens::TOGGLE_PADDING_X,
+    ])
+    .style(move |_| {
+        ContainerStyle::default().background(Background::Color(if active {
+            p.accent
+        } else {
+            p.canvas.bg_panel
+        }))
     })
     .into()
 }
 
 fn section_title(p: GuiPalette, label: &'static str) -> Element<'static, Message> {
-    text(label)
-        .font(fonts::display(Weight::Semibold))
-        .size(14.0)
-        .color(p.text)
+    shaped_text(label)
+        .font(fonts::SANS)
+        .size(type_scale::MICRO_LABEL)
+        .color(p.canvas.muted)
         .into()
 }
 
@@ -190,31 +238,30 @@ fn preset_style(
     status: ButtonStatus,
 ) -> ButtonStyle {
     let background = match status {
-        ButtonStatus::Hovered => p.bg_panel_2,
+        ButtonStatus::Hovered => p.canvas.bg_panel_2,
         ButtonStatus::Pressed => p.accent_soft,
-        ButtonStatus::Active | ButtonStatus::Disabled => p.bg_panel,
+        ButtonStatus::Active | ButtonStatus::Disabled => p.canvas.bg_panel,
     };
     ButtonStyle {
         background: Some(Background::Color(background)),
-        text_color: p.text,
+        text_color: p.canvas.text,
         border: Border::default()
             .width(1)
-            .color(if selected { p.accent } else { p.line }),
+            .color(if selected { p.accent } else { p.canvas.line }),
         ..ButtonStyle::default()
     }
 }
 
-fn toggle_style(p: GuiPalette, visible: bool, _theme: &Theme, status: ButtonStatus) -> ButtonStyle {
-    let base = if visible { p.accent } else { p.bg_inset };
+fn toggle_style(p: GuiPalette, _theme: &Theme, status: ButtonStatus) -> ButtonStyle {
     let background = match status {
-        ButtonStatus::Hovered => p.bg_panel_2,
+        ButtonStatus::Hovered => p.canvas.bg_panel_2,
         ButtonStatus::Pressed => p.accent_soft,
-        ButtonStatus::Active | ButtonStatus::Disabled => base,
+        ButtonStatus::Active | ButtonStatus::Disabled => p.canvas.bg_deep,
     };
     ButtonStyle {
         background: Some(Background::Color(background)),
-        text_color: if visible { p.bg_deep } else { p.text_dim },
-        border: Border::default().width(1).color(p.line),
+        text_color: p.canvas.text_dim,
+        border: Border::default().width(1).color(p.canvas.line),
         ..ButtonStyle::default()
     }
 }
@@ -227,7 +274,7 @@ fn action_style(p: GuiPalette, _theme: &Theme, status: ButtonStatus) -> ButtonSt
     };
     ButtonStyle {
         background: Some(Background::Color(background)),
-        text_color: p.bg_deep,
+        text_color: p.canvas.bg,
         border: Border::default().width(1).color(p.accent),
         ..ButtonStyle::default()
     }

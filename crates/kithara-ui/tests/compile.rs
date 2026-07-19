@@ -76,7 +76,7 @@ fn unknown_endpoint_fails_with_module_origin_and_path() {
                 write: Command(id: "deck.transport.typo", with: { "deck": "$deck" })))"#,
     );
     let error = compile(
-        "micro.klayout.ron",
+        "player.klayout.ron",
         &resolver,
         &common::player_catalog(),
         &common::player_registry(),

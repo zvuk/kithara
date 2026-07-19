@@ -12,6 +12,10 @@ use crate::gui::{app::Kithara, frontend::window_settings, message::Message};
 pub(crate) fn update(state: &mut Kithara, message: ModularMsg) -> Task<Message> {
     match message {
         ModularMsg::SelectPreset(preset) => select_preset(state, &preset),
+        ModularMsg::LibraryQueryChanged(query) => {
+            state.library_query = query;
+            Task::none()
+        }
         ModularMsg::ToggleModule(instance) => {
             if !state.modular.hidden.remove(&instance) {
                 state.modular.hidden.insert(instance);

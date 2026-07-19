@@ -5,10 +5,10 @@ use kithara_ui::{compile::CompiledUi, expand::Binding, ids::InternId};
 
 use crate::{state::UiState, waveform::TrackAnalysis};
 
-pub(super) enum ReadValue<'a> {
+pub(crate) enum ReadValue<'a> {
     Bool(bool),
     Scalar(f64),
-    Text(String),
+    Text(&'a str),
     Waveform(Option<&'a TrackAnalysis>),
     Tracks(&'a [TrackEntry]),
 }
@@ -37,7 +37,7 @@ pub(super) fn resolve<'a>(
         Binding::Telemetry { id, with }
             if ui.resolve(*id) == "deck.track.title" && deck_is_a(with, ui) =>
         {
-            Some(ReadValue::Text(ui_state.track_name.clone()))
+            Some(ReadValue::Text(ui_state.track_name.as_str()))
         }
         Binding::Parameter { id, .. } if ui.resolve(*id) == "player.output.volume" => {
             Some(ReadValue::Scalar(f64::from(ui_state.volume)))

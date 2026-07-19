@@ -1,0 +1,58 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "deck-micro",
+    parameters: ["deck"],
+    root: Row(
+        children: [
+            Control(
+                id: "play",
+                kind: "button",
+                size: (w: Fixed(34.0), h: Fixed(34.0)),
+                props: {
+                    "label": Text("PLAY"),
+                    "active-label": Text("PAUSE"),
+                    "style": Text("micro-primary"),
+                },
+                read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
+                write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
+                adaptive: (priority: Required),
+            ),
+            Control(
+                id: "summary",
+                kind: "deck.summary",
+                props: { "style": Text("micro") },
+                read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
+                adaptive: (priority: Required),
+            ),
+            Control(
+                id: "bpm",
+                kind: "telemetry.bpm",
+                size: (w: Fixed(56.0), h: Fixed(34.0)),
+                props: { "fallback": Text("time") },
+                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+            ),
+            Control(
+                id: "volume",
+                kind: "fader.horizontal",
+                size: (w: Fixed(152.0), h: Fixed(34.0)),
+                props: { "style": Text("volume-compact") },
+                read: Parameter(id: "player.output.volume"),
+                write: Parameter(id: "player.output.volume"),
+            ),
+            Control(
+                id: "wave",
+                kind: "waveform.mini",
+                size: (w: Range(min: 90.0, max: None), h: Fixed(34.0)),
+                props: { "style": Text("micro") },
+                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+            ),
+            Control(
+                id: "settings",
+                kind: "view.settings",
+                size: (w: Fixed(28.0), h: Fixed(34.0)),
+            ),
+        ],
+    ),
+)

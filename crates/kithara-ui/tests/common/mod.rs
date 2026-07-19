@@ -54,13 +54,35 @@ impl EndpointRegistry for TestRegistry {
 pub(crate) fn player_catalog() -> TestCatalog {
     let mut catalog = TestCatalog::default();
     catalog.insert(
+        "deck.header",
+        ControlKindDesc::new(Some(ValueKind::Waveform), None).with_prop("badge", PropKind::Text),
+    );
+    catalog.insert(
+        "deck.summary",
+        ControlKindDesc::new(Some(ValueKind::Text), None).with_prop("style", PropKind::Text),
+    );
+    catalog.insert("global.brand", ControlKindDesc::new(None, None));
+    catalog.insert("global.spacer", ControlKindDesc::new(None, None));
+    catalog.insert("preset.selector", ControlKindDesc::new(None, None));
+    catalog.insert("view.settings", ControlKindDesc::new(None, None));
+    catalog.insert(
         "text",
         ControlKindDesc::new(Some(ValueKind::Text), None).with_prop("style", PropKind::Text),
     );
     catalog.insert(
         "button",
         ControlKindDesc::new(Some(ValueKind::Bool), Some(ValueKind::Trigger))
-            .with_prop("label", PropKind::Text),
+            .with_prop("label", PropKind::Text)
+            .with_prop("active-label", PropKind::Text)
+            .with_prop("style", PropKind::Text),
+    );
+    catalog.insert(
+        "telemetry.bpm",
+        ControlKindDesc::new(Some(ValueKind::Waveform), None).with_prop("fallback", PropKind::Text),
+    );
+    catalog.insert(
+        "telemetry.time",
+        ControlKindDesc::new(Some(ValueKind::Scalar), None),
     );
     catalog.insert(
         "telemetry.scalar",
@@ -68,11 +90,13 @@ pub(crate) fn player_catalog() -> TestCatalog {
     );
     catalog.insert(
         "fader.horizontal",
-        ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
+        ControlKindDesc::new(Some(ValueKind::Scalar), Some(ValueKind::Scalar))
+            .with_prop("style", PropKind::Text),
     );
     catalog.insert(
         "waveform.mini",
-        ControlKindDesc::new(Some(ValueKind::Waveform), Some(ValueKind::Scalar)),
+        ControlKindDesc::new(Some(ValueKind::Waveform), Some(ValueKind::Scalar))
+            .with_prop("style", PropKind::Text),
     );
     catalog.insert(
         "track_list",

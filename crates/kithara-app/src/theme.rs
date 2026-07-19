@@ -7,6 +7,7 @@ pub struct Rgb(pub u8, pub u8, pub u8);
 /// Single source of truth — both frontends convert from this
 /// to their framework-specific color types via [`From`].
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct Palette {
     /// Accent color (active elements, highlights).
     pub accent: Rgb,
@@ -38,6 +39,82 @@ pub struct Palette {
     pub text_dim: Rgb,
     /// Warning indicator.
     pub warning: Rgb,
+    /// Darker surfaces used by the modular GUI canvas.
+    pub canvas: CanvasPalette,
+}
+
+/// Dark modular-canvas palette layered on the canonical application colors.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct CanvasPalette {
+    /// Window background.
+    pub bg: Rgb,
+    /// Structural-gap and waveform background.
+    pub bg_deep: Rgb,
+    /// Module background.
+    pub bg_inset: Rgb,
+    /// Control background.
+    pub bg_panel: Rgb,
+    /// Hover and grip background.
+    pub bg_panel_2: Rgb,
+    /// Structural border.
+    pub line: Rgb,
+    /// Subtle divider.
+    pub line_soft: Rgb,
+    /// Inactive label text.
+    pub muted: Rgb,
+    /// Primary text.
+    pub text: Rgb,
+    /// Secondary text.
+    pub text_dim: Rgb,
+    /// High-frequency waveform band.
+    pub wave_high: Rgb,
+    /// Low-frequency waveform band.
+    pub wave_low: Rgb,
+    /// Mid-frequency waveform band.
+    pub wave_mid: Rgb,
+}
+
+impl CanvasPalette {
+    const BG: Rgb = Rgb(18, 18, 31);
+    const BG_DEEP: Rgb = Rgb(11, 11, 22);
+    const BG_INSET: Rgb = Rgb(21, 21, 42);
+    const BG_PANEL: Rgb = Rgb(32, 32, 58);
+    const BG_PANEL_2: Rgb = Rgb(38, 38, 74);
+    const LINE: Rgb = Rgb(59, 59, 103);
+    const LINE_SOFT: Rgb = Rgb(42, 42, 76);
+    const MUTED: Rgb = Rgb(111, 113, 137);
+    const TEXT: Rgb = Rgb(230, 230, 230);
+    const TEXT_DIM: Rgb = Rgb(167, 170, 194);
+    const WAVE_HIGH: Rgb = Rgb(46, 199, 235);
+    const WAVE_LOW: Rgb = Rgb(235, 41, 140);
+    const WAVE_MID: Rgb = Rgb(242, 209, 41);
+
+    /// Default palette for the modular canvas.
+    #[must_use]
+    pub const fn kithara() -> Self {
+        Self {
+            bg: Self::BG,
+            bg_deep: Self::BG_DEEP,
+            bg_inset: Self::BG_INSET,
+            bg_panel: Self::BG_PANEL,
+            bg_panel_2: Self::BG_PANEL_2,
+            line: Self::LINE,
+            line_soft: Self::LINE_SOFT,
+            muted: Self::MUTED,
+            text: Self::TEXT,
+            text_dim: Self::TEXT_DIM,
+            wave_high: Self::WAVE_HIGH,
+            wave_low: Self::WAVE_LOW,
+            wave_mid: Self::WAVE_MID,
+        }
+    }
+}
+
+impl Default for CanvasPalette {
+    fn default() -> Self {
+        Self::kithara()
+    }
 }
 
 impl Palette {
@@ -101,6 +178,7 @@ impl Palette {
             success: Rgb(Self::SUCCESS_R, Self::SUCCESS_G, Self::SUCCESS_B),
             danger: Rgb(Self::DANGER_R, Self::DANGER_G, Self::DANGER_B),
             warning: Rgb(Self::WARNING_R, Self::WARNING_G, Self::WARNING_B),
+            canvas: CanvasPalette::kithara(),
         }
     }
 }
@@ -115,7 +193,24 @@ impl Default for Palette {
 pub(crate) mod gui {
     use iced::Color;
 
-    use super::{Palette, Rgb};
+    use super::{CanvasPalette, Palette, Rgb};
+
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct GuiCanvasPalette {
+        pub(crate) bg: Color,
+        pub(crate) bg_deep: Color,
+        pub(crate) bg_inset: Color,
+        pub(crate) bg_panel: Color,
+        pub(crate) bg_panel_2: Color,
+        pub(crate) line: Color,
+        pub(crate) line_soft: Color,
+        pub(crate) muted: Color,
+        pub(crate) text: Color,
+        pub(crate) text_dim: Color,
+        pub(crate) wave_high: Color,
+        pub(crate) wave_low: Color,
+        pub(crate) wave_mid: Color,
+    }
 
     /// Resolved iced color palette.
     #[derive(Debug, Clone, Copy)]
@@ -123,19 +218,10 @@ pub(crate) mod gui {
         pub(crate) accent: Color,
         pub(crate) accent_soft: Color,
         pub(crate) accent_strong: Color,
-        pub(crate) bg: Color,
-        pub(crate) bg_deep: Color,
-        pub(crate) bg_inset: Color,
-        pub(crate) bg_panel: Color,
-        pub(crate) bg_panel_2: Color,
         pub(crate) danger: Color,
-        pub(crate) line: Color,
-        pub(crate) line_soft: Color,
-        pub(crate) muted: Color,
         pub(crate) success: Color,
-        pub(crate) text: Color,
-        pub(crate) text_dim: Color,
         pub(crate) warning: Color,
+        pub(crate) canvas: GuiCanvasPalette,
     }
 
     impl From<Palette> for GuiPalette {
@@ -144,19 +230,30 @@ pub(crate) mod gui {
                 accent: to_iced(p.accent),
                 accent_soft: Color::from_rgba8(p.accent.0, p.accent.1, p.accent.2, 0.18),
                 accent_strong: to_iced(p.accent_strong),
+                danger: to_iced(p.danger),
+                success: to_iced(p.success),
+                warning: to_iced(p.warning),
+                canvas: p.canvas.into(),
+            }
+        }
+    }
+
+    impl From<CanvasPalette> for GuiCanvasPalette {
+        fn from(p: CanvasPalette) -> Self {
+            Self {
                 bg: to_iced(p.bg),
                 bg_deep: to_iced(p.bg_deep),
                 bg_inset: to_iced(p.bg_inset),
                 bg_panel: to_iced(p.bg_panel),
                 bg_panel_2: to_iced(p.bg_panel_2),
-                danger: to_iced(p.danger),
                 line: to_iced(p.line),
                 line_soft: to_iced(p.line_soft),
                 muted: to_iced(p.muted),
-                success: to_iced(p.success),
                 text: to_iced(p.text),
                 text_dim: to_iced(p.text_dim),
-                warning: to_iced(p.warning),
+                wave_high: to_iced(p.wave_high),
+                wave_low: to_iced(p.wave_low),
+                wave_mid: to_iced(p.wave_mid),
             }
         }
     }
@@ -164,29 +261,6 @@ pub(crate) mod gui {
     fn to_iced(rgb: Rgb) -> Color {
         Color::from_rgb8(rgb.0, rgb.1, rgb.2)
     }
-
-    /// Deck-waveform band colors (Serato-style overlay): `low` magenta, `mid`
-    /// yellow, `high` cyan. The deck paints the three as concentric mirrored
-    /// bars (low behind, high in front), so all bands stay visible. This is the
-    /// single seam where waveform band-color policy lives.
-    pub(crate) const WAVE_LOW: Color = Color {
-        r: 0.92,
-        g: 0.16,
-        b: 0.55,
-        a: 1.0,
-    };
-    pub(crate) const WAVE_MID: Color = Color {
-        r: 0.95,
-        g: 0.82,
-        b: 0.16,
-        a: 1.0,
-    };
-    pub(crate) const WAVE_HIGH: Color = Color {
-        r: 0.18,
-        g: 0.78,
-        b: 0.92,
-        a: 1.0,
-    };
 }
 
 #[cfg(feature = "tui")]

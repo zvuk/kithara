@@ -6,12 +6,18 @@ use iced::{
 /// SVG icon used by the modular UI.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Icon {
+    Pause,
+    Play,
     Settings,
+    Volume,
 }
 
 fn icon_bytes(icon: Icon) -> &'static [u8] {
     match icon {
+        Icon::Pause => include_bytes!("../../assets/icons/pause.svg"),
+        Icon::Play => include_bytes!("../../assets/icons/play.svg"),
         Icon::Settings => include_bytes!("../../assets/icons/gear.svg"),
+        Icon::Volume => include_bytes!("../../assets/icons/speaker-high.svg"),
     }
 }
 

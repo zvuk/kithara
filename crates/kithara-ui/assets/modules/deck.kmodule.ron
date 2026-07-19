@@ -6,17 +6,19 @@
     root: Column(
         children: [
             Control(
-                id: "title",
-                kind: "text",
-                props: { "style": Text("track-title") },
-                read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
+                id: "header",
+                kind: "deck.header",
+                props: { "badge": Text("A") },
+                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                 adaptive: (priority: Required),
             ),
             Control(
                 id: "wave",
                 kind: "waveform.mini",
+                props: { "style": Text("hero") },
                 read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+                adaptive: (priority: Required),
             ),
             Include(id: "transport", source: "deck/transport.kmodule.ron", with: { "deck": "$deck" }),
             Slot(id: "extra-controls"),

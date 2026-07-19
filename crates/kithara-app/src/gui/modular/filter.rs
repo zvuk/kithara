@@ -56,7 +56,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn hides_one_of_two_modules() {
+    fn hides_one_module_keeps_the_rest() {
         let compiled = compile_player();
         let hidden = BTreeSet::from(["library".to_owned()]);
         let filtered = visible(&compiled.root, &hidden, &compiled)
@@ -65,17 +65,25 @@ mod tests {
         let CompiledNode::Split { children, .. } = filtered else {
             panic!("player root must remain a split");
         };
-        assert_eq!(children.len(), 1);
-        assert!(matches!(
-            &children[0].1,
-            CompiledNode::Module { instance, .. } if compiled.resolve(*instance) == "deck-a"
-        ));
+        let names: Vec<_> = children
+            .iter()
+            .filter_map(|(_, child)| match child {
+                CompiledNode::Module { instance, .. } => Some(compiled.resolve(*instance)),
+                _ => None,
+            })
+            .collect();
+        assert!(!names.contains(&"library"), "library must be hidden");
+        assert!(names.contains(&"deck-a"), "deck must remain visible");
     }
 
     #[kithara::test]
     fn hiding_all_modules_removes_the_tree() {
         let compiled = compile_player();
-        let hidden = BTreeSet::from(["deck-a".to_owned(), "library".to_owned()]);
+        let hidden = BTreeSet::from([
+            "global-bar".to_owned(),
+            "deck-a".to_owned(),
+            "library".to_owned(),
+        ]);
 
         assert!(visible(&compiled.root, &hidden, &compiled).is_none());
     }
