@@ -8,7 +8,7 @@ use kithara_platform::{
 use super::super::core::PlayerImpl;
 use crate::{
     PlayerId,
-    api::{SessionBeat, Tempo, TrackBinding},
+    api::{SessionBeat, SlotId, Tempo, TrackBinding},
     bridge::PlayerCmd,
     error::PlayError,
     resource::Resource,
@@ -190,13 +190,7 @@ impl PlayerImpl {
         .await;
         if let Err(error) = transaction {
             if preparation_started {
-                for ((_, player), slot) in participants.iter().zip(&slots) {
-                    player
-                        .core
-                        .engine
-                        .try_send_slot_cmd(*slot, PlayerCmd::CancelSessionSeek { revision })
-                        .map_err(|rejected| rejected.error)?;
-                }
+                cancel_session_seek(&participants, &slots, revision)?;
             }
             return Err(error);
         }
@@ -230,6 +224,25 @@ impl PlayerImpl {
     }
 }
 
+fn cancel_session_seek(
+    participants: &[(PlayerId, &PlayerImpl)],
+    slots: &[SlotId],
+    revision: u64,
+) -> Result<(), PlayError> {
+    let mut first_error = None;
+    for ((_, player), slot) in participants.iter().zip(slots) {
+        if let Err(rejected) = player
+            .core
+            .engine
+            .try_send_slot_cmd(*slot, PlayerCmd::CancelSessionSeek { revision })
+            && first_error.is_none()
+        {
+            first_error = Some(rejected.error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
 impl SessionTrackControl for PlayerImpl {
     fn join_track_at<'a>(
         &'a self,
@@ -247,5 +260,67 @@ impl SessionTrackControl for PlayerImpl {
         target: SessionBeat,
     ) -> impl Future<Output = Result<(), PlayError>> + 'a {
         Self::seek_session(self, peers, target)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::sync::Arc;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{player::PlayerConfig, session::testing};
+
+    fn fill_slot_lane(player: &PlayerImpl, slot: SlotId) -> usize {
+        let mut accepted = 0;
+        while player
+            .core
+            .engine
+            .try_send_slot_cmd(slot, PlayerCmd::SetPaused(false))
+            .is_ok()
+        {
+            accepted += 1;
+        }
+        accepted
+    }
+
+    #[kithara::test]
+    fn session_seek_cancellation_reaches_later_lanes_after_rejection() {
+        let session = testing::test_session();
+        let players: Vec<_> = (0..3)
+            .map(|_| {
+                let mut config = PlayerConfig::default();
+                config.session = Some(Arc::clone(&session));
+                PlayerImpl::new(config)
+            })
+            .collect();
+        let slots: Vec<_> = players
+            .iter()
+            .map(|player| {
+                player.ensure_engine_started().expect("engine starts");
+                player.ensure_slot().expect("slot allocates")
+            })
+            .collect();
+        let participants: Vec<_> = players[..2]
+            .iter()
+            .map(|player| {
+                (
+                    player.core.engine.player_id().expect("started player id"),
+                    player,
+                )
+            })
+            .collect();
+        assert!(fill_slot_lane(&players[0], slots[0]) > 0);
+
+        let error = cancel_session_seek(&participants, &slots[..2], 7)
+            .expect_err("the saturated first lane rejects cancellation");
+
+        assert!(matches!(
+            error,
+            PlayError::SlotChannelFull { slot } if slot == slots[0]
+        ));
+        let later_lane_remaining = fill_slot_lane(&players[1], slots[1]);
+        let empty_lane_capacity = fill_slot_lane(&players[2], slots[2]);
+        assert_eq!(later_lane_remaining + 1, empty_lane_capacity);
     }
 }
