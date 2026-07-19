@@ -13,14 +13,32 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi},
     render::{RenderPalette, UiEvent, fonts, shaped_text},
+    widgets::module_chrome,
 };
 
-use super::view::module_chrome;
-use crate::gui::{
-    app::Kithara,
-    message::Message,
-    tokens::{gap, settings as settings_tokens, type_scale},
-};
+use crate::gui::{app::Kithara, message::Message};
+
+struct Consts;
+
+impl Consts {
+    const ACTION_PADDING_X: f32 = 16.0;
+    const ACTION_PADDING_Y: f32 = 7.0;
+    const BODY_TEXT_SIZE: f32 = 13.0;
+    const CARD_PADDING_X: f32 = 12.0;
+    const CARD_PADDING_Y: f32 = 10.0;
+    const CARD_TITLE_SIZE: f32 = 15.0;
+    const CONTENT_GAP: f32 = 10.0;
+    const CONTENT_PADDING: f32 = 16.0;
+    const GRID_GAP: f32 = 1.0;
+    const INLINE_GAP: f32 = 8.0;
+    const INLINE_TIGHT_GAP: f32 = 4.0;
+    const MICRO_LABEL_SIZE: f32 = 12.0;
+    const OUTER_PADDING: f32 = 12.0;
+    const ROW_PADDING_X: f32 = 8.0;
+    const ROW_PADDING_Y: f32 = 6.0;
+    const TOGGLE_PADDING_X: f32 = 8.0;
+    const TOGGLE_PADDING_Y: f32 = 4.0;
+}
 
 pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
@@ -38,7 +56,7 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
             state.modular.preset == builtin::PLAYER_PRESET,
         ),
     ])
-    .spacing(gap::GRID)
+    .spacing(Consts::GRID_GAP)
     .width(Length::Fill);
 
     let modules = state
@@ -54,7 +72,7 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     let module_list: Element<'_, Message> = if state.modular.compiled.is_some() {
         scrollable(
             Column::with_children(module_rows)
-                .spacing(gap::GRID)
+                .spacing(Consts::GRID_GAP)
                 .width(Length::Fill),
         )
         .height(Length::Fill)
@@ -62,7 +80,7 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     } else {
         shaped_text("No preset loaded")
             .font(fonts::SANS)
-            .size(type_scale::BODY)
+            .size(Consts::BODY_TEXT_SIZE)
             .color(p.muted)
             .into()
     };
@@ -74,31 +92,32 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
         module_list,
         Row::with_children([
             Space::new().width(Length::Fill).into(),
-            button(shaped_text("Done").font(fonts::SANS).size(type_scale::BODY),)
-                .padding([
-                    settings_tokens::ACTION_PADDING_Y,
-                    settings_tokens::ACTION_PADDING_X,
-                ])
-                .style(move |theme, status| action_style(p, theme, status))
-                .on_press(Message::Modular(UiEvent::CloseSettings))
-                .into(),
+            button(
+                shaped_text("Done")
+                    .font(fonts::SANS)
+                    .size(Consts::BODY_TEXT_SIZE),
+            )
+            .padding([Consts::ACTION_PADDING_Y, Consts::ACTION_PADDING_X,])
+            .style(move |theme, status| action_style(p, theme, status))
+            .on_press(Message::Modular(UiEvent::CloseSettings))
+            .into(),
         ])
         .align_y(Alignment::Center)
         .width(Length::Fill),
     ]
-    .spacing(gap::CONTENT)
+    .spacing(Consts::CONTENT_GAP)
     .width(Length::Fill)
     .height(Length::Fill);
     let content = container(content)
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding(settings_tokens::CONTENT_PADDING);
+        .padding(Consts::CONTENT_PADDING);
     let framed = module_chrome(content, p);
 
     container(framed)
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding(settings_tokens::OUTER_PADDING)
+        .padding(Consts::OUTER_PADDING)
         .style(move |_| ContainerStyle::default().background(Background::Color(p.bg)))
         .into()
 }
@@ -116,19 +135,16 @@ fn preset_card(
                     weight: Weight::Semibold,
                     ..fonts::SANS
                 })
-                .size(settings_tokens::CARD_TITLE_SIZE)
+                .size(Consts::CARD_TITLE_SIZE)
                 .color(p.text),
             shaped_text(if selected { "Selected" } else { "Select" })
                 .font(fonts::SANS)
-                .size(type_scale::BODY)
+                .size(Consts::BODY_TEXT_SIZE)
                 .color(if selected { p.accent } else { p.muted }),
         ]
-        .spacing(gap::INLINE_TIGHT),
+        .spacing(Consts::INLINE_TIGHT_GAP),
     )
-    .padding([
-        settings_tokens::CARD_PADDING_Y,
-        settings_tokens::CARD_PADDING_X,
-    ])
+    .padding([Consts::CARD_PADDING_Y, Consts::CARD_PADDING_X])
     .width(Length::FillPortion(1))
     .style(move |theme, status| preset_style(p, selected, theme, status))
     .on_press(Message::Modular(UiEvent::SelectPreset(preset.to_owned())))
@@ -141,7 +157,7 @@ fn module_row(p: RenderPalette, instance: String, visible: bool) -> Element<'sta
         Row::with_children([
             shaped_text(instance)
                 .font(fonts::SANS)
-                .size(type_scale::BODY)
+                .size(Consts::BODY_TEXT_SIZE)
                 .color(p.text)
                 .width(Length::Fill)
                 .into(),
@@ -157,12 +173,9 @@ fn module_row(p: RenderPalette, instance: String, visible: bool) -> Element<'sta
             .into(),
         ])
         .align_y(Alignment::Center)
-        .spacing(gap::INLINE_WIDE),
+        .spacing(Consts::INLINE_GAP),
     )
-    .padding([
-        settings_tokens::ROW_PADDING_Y,
-        settings_tokens::ROW_PADDING_X,
-    ])
+    .padding([Consts::ROW_PADDING_Y, Consts::ROW_PADDING_X])
     .width(Length::Fill)
     .style(move |_| {
         ContainerStyle::default()
@@ -180,13 +193,10 @@ fn toggle_segment(
     container(
         shaped_text(label)
             .font(fonts::SANS)
-            .size(type_scale::MICRO_LABEL)
+            .size(Consts::MICRO_LABEL_SIZE)
             .color(if active { p.bg } else { p.text_dim }),
     )
-    .padding([
-        settings_tokens::TOGGLE_PADDING_Y,
-        settings_tokens::TOGGLE_PADDING_X,
-    ])
+    .padding([Consts::TOGGLE_PADDING_Y, Consts::TOGGLE_PADDING_X])
     .style(move |_| {
         ContainerStyle::default().background(Background::Color(if active {
             p.accent
@@ -200,7 +210,7 @@ fn toggle_segment(
 fn section_title(p: RenderPalette, label: &'static str) -> Element<'static, Message> {
     shaped_text(label)
         .font(fonts::SANS)
-        .size(type_scale::MICRO_LABEL)
+        .size(Consts::MICRO_LABEL_SIZE)
         .color(p.muted)
         .into()
 }

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use kithara_ui::{
     compile::{CompiledNode, CompiledUi},
     expand::{Binding, ExpandedNode},
@@ -115,13 +117,19 @@ fn resolve_write(binding: &Binding, ui: &CompiledUi) -> Option<ResolvedWrite> {
     match binding {
         Binding::Command { id, with } => Some(ResolvedWrite::Command {
             id: ui.resolve(*id).to_owned(),
-            deck_is_a: super::reads::deck_is_a(with, ui),
+            deck_is_a: deck_is_a(with, ui),
         }),
         Binding::Parameter { id, .. } => Some(ResolvedWrite::Parameter {
             id: ui.resolve(*id).to_owned(),
         }),
         _ => None,
     }
+}
+
+fn deck_is_a(scope: &BTreeMap<InternId, InternId>, ui: &CompiledUi) -> bool {
+    scope
+        .iter()
+        .any(|(key, value)| ui.resolve(*key) == "deck" && ui.resolve(*value) == "a")
 }
 
 fn find_control(compiled: &CompiledUi, path: &str) -> Option<(InternId, Option<Binding>)> {
@@ -169,6 +177,7 @@ mod tests {
     use kithara_ui::{
         compile::compile,
         expand::Binding,
+        render::tree::catalog,
         source::{MemResolver, UiConfig},
     };
 
@@ -214,7 +223,7 @@ mod tests {
         let compiled = compile(
             "mini.klayout.ron",
             &resolver,
-            &endpoints::catalog(),
+            &catalog(),
             &endpoints::registry(),
             &UiConfig::default(),
         )

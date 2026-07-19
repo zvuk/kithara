@@ -1,4 +1,3 @@
-mod controls;
 mod dispatch;
 pub(crate) mod endpoints;
 mod filter;

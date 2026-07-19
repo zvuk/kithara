@@ -3,6 +3,7 @@ pub mod fonts;
 pub mod icons;
 pub mod model;
 pub mod theme;
+pub mod tree;
 pub mod typography;
 
 pub use event::{ControlAction, UiEvent};

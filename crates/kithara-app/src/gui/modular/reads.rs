@@ -1,23 +1,34 @@
-use std::collections::BTreeMap;
-
-use kithara_ui::{
-    compile::CompiledUi,
-    expand::Binding,
-    ids::InternId,
-    render::{ReadValue, Reads, TrackRow, WaveBucket, WaveformView},
-};
+use kithara_ui::render::{ReadValue, Reads, TrackRow, WaveBucket, WaveformView};
 use num_traits::ToPrimitive;
 
 use crate::state::UiState;
 
+struct Consts;
+
+impl Consts {
+    const CONFIGURED_SOURCE: &'static str = "configured source";
+    const EM_DASH: &'static str = "\u{2014}";
+    const HLS_SOURCE: &'static str = "HLS stream";
+    const NETWORK_SOURCE: &'static str = "network stream";
+    const LOCAL_SOURCE: &'static str = "local file";
+    const NO_SOURCE: &'static str = "no source";
+}
+
 pub(super) struct UiReads<'state> {
     state: &'state UiState,
+    query: &'state str,
+    preset: &'state str,
     buckets: Vec<WaveBucket>,
     tracks: Vec<TrackRow<'state>>,
 }
 
 impl<'state> UiReads<'state> {
-    pub(super) fn new(state: &'state UiState) -> Self {
+    pub(super) fn new(
+        state: &'state UiState,
+        query: &'state str,
+        preset: &'state str,
+        selected: Option<usize>,
+    ) -> Self {
         let buckets = state
             .analysis
             .as_ref()
@@ -37,14 +48,20 @@ impl<'state> UiReads<'state> {
         let tracks = state
             .tracks
             .iter()
-            .map(|track| TrackRow {
+            .enumerate()
+            .map(|(index, track)| TrackRow {
                 title: track.name.as_str(),
                 artist: None,
                 time: None,
+                search: track.url.as_deref(),
+                current: state.current_track_index == Some(index),
+                selected: selected == Some(index),
             })
             .collect();
         Self {
             state,
+            query,
+            preset,
             buckets,
             tracks,
         }
@@ -58,6 +75,11 @@ impl Reads for UiReads<'_> {
             "deck.playback.position_normalized" => {
                 Some(ReadValue::Scalar(position_normalized(self.state)))
             }
+            "deck.playback.remaining_secs" => Some(ReadValue::Scalar(
+                (self.state.duration - self.state.position).max(0.0),
+            )),
+            "deck.playback.position_secs" => Some(ReadValue::Scalar(self.state.position)),
+            "deck.playback.duration_secs" => Some(ReadValue::Scalar(self.state.duration)),
             "deck.playback.waveform" => {
                 let analysis = self.state.analysis.as_ref()?;
                 let bpm = analysis
@@ -73,26 +95,17 @@ impl Reads for UiReads<'_> {
                 }))
             }
             "deck.track.title" => Some(ReadValue::Text(self.state.track_name.as_str())),
+            "deck.track.source_kind" => Some(ReadValue::Text(source_kind(self.state))),
             "player.output.volume" => Some(ReadValue::Scalar(f64::from(self.state.volume))),
             "library.visible_tracks" => Some(ReadValue::TrackList(&self.tracks)),
+            "library.query" => Some(ReadValue::Text(self.query)),
+            "ui.preset" => Some(ReadValue::Text(self.preset)),
             _ => None,
         }
     }
 }
 
-pub(super) fn resolve<'a>(
-    reads: &'a dyn Reads,
-    binding: &Binding,
-    ui: &CompiledUi,
-) -> Option<ReadValue<'a>> {
-    match binding {
-        Binding::Telemetry { id, with } if deck_is_a(with, ui) => reads.get(ui.resolve(*id)),
-        Binding::Parameter { id, .. } | Binding::Model { id, .. } => reads.get(ui.resolve(*id)),
-        _ => None,
-    }
-}
-
-pub(super) fn position_normalized(ui: &UiState) -> f64 {
+fn position_normalized(ui: &UiState) -> f64 {
     if ui.duration > 0.0 {
         (ui.position / ui.duration).clamp(0.0, 1.0)
     } else {
@@ -100,79 +113,45 @@ pub(super) fn position_normalized(ui: &UiState) -> f64 {
     }
 }
 
-pub(super) fn deck_is_a(scope: &BTreeMap<InternId, InternId>, ui: &CompiledUi) -> bool {
-    scope
-        .iter()
-        .any(|(key, value)| ui.resolve(*key) == "deck" && ui.resolve(*value) == "a")
+fn source_kind(state: &UiState) -> &'static str {
+    if !state.variant_label.is_empty() {
+        return Consts::HLS_SOURCE;
+    }
+    let entry = state
+        .current_track_index
+        .and_then(|index| state.tracks.get(index));
+    match entry.and_then(|track| track.url.as_deref()) {
+        Some(url) if url.contains(".m3u8") => Consts::HLS_SOURCE,
+        Some(url) if url.starts_with("http://") || url.starts_with("https://") => {
+            Consts::NETWORK_SOURCE
+        }
+        Some(_) => Consts::LOCAL_SOURCE,
+        None if entry.is_some() => Consts::CONFIGURED_SOURCE,
+        _ if state.track_name.is_empty() => Consts::EM_DASH,
+        _ => Consts::NO_SOURCE,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
-    use kithara_ui::{
-        compile::{CompiledNode, CompiledUi, compile},
-        expand::{Binding, ExpandedNode},
-        render::ReadValue,
-        source::{MemResolver, UiConfig},
-    };
+    use kithara_ui::render::{ReadValue, Reads};
 
-    use super::{UiReads, resolve};
-    use crate::{gui::modular::endpoints, state::UiState};
+    use super::UiReads;
+    use crate::state::UiState;
 
-    fn compile_read(kind: &str, read: &str) -> (CompiledUi, Binding) {
-        let mut resolver = MemResolver::default();
-        resolver.insert(
-            "read.klayout.ron",
-            r#"(schema: "kithara.layout", version: 1, id: "read",
-                root: Module(instance: "deck-a", source: "read.kmodule.ron"))"#,
-        );
-        resolver.insert(
-            "read.kmodule.ron",
-            &format!(
-                r#"(schema: "kithara.module", version: 1, id: "read",
-                    root: Control(id: "control", kind: "{kind}", read: {read}))"#
-            ),
-        );
-        let ui = compile(
-            "read.klayout.ron",
-            &resolver,
-            &endpoints::catalog(),
-            &endpoints::registry(),
-            &UiConfig::default(),
-        )
-        .unwrap_or_else(|error| panic!("read fixture must compile: {error}"));
-        let binding = {
-            let CompiledNode::Module { root, .. } = &ui.root else {
-                panic!("read fixture must compile to a module");
-            };
-            let ExpandedNode::Control {
-                read: Some(binding),
-                ..
-            } = &**root
-            else {
-                panic!("read fixture must contain a read binding");
-            };
-            binding.clone()
-        };
-        (ui, binding)
-    }
-
-    fn telemetry(id: &str, deck: &str, kind: &str) -> (CompiledUi, Binding) {
-        compile_read(
-            kind,
-            &format!(r#"Telemetry(id: "{id}", with: {{ "deck": "{deck}" }})"#),
-        )
+    fn reads(ui: &UiState) -> UiReads<'_> {
+        UiReads::new(ui, "query", "preset", None)
     }
 
     #[kithara::test]
     fn resolves_playing_for_deck_a() {
-        let (compiled, binding) = telemetry("deck.playback.playing", "a", "button");
         for playing in [false, true] {
             let mut ui = UiState::empty();
             ui.playing = playing;
-            let reads = UiReads::new(&ui);
-            let Some(ReadValue::Bool(value)) = resolve(&reads, &binding, &compiled) else {
-                panic!("playing binding must resolve to bool");
+            let reads = reads(&ui);
+            let Some(ReadValue::Bool(value)) = reads.get("deck.playback.playing") else {
+                panic!("playing endpoint must resolve to bool");
             };
             assert_eq!(value, playing);
         }
@@ -180,56 +159,54 @@ mod tests {
 
     #[kithara::test]
     fn normalized_position_is_zero_without_duration() {
-        let (compiled, binding) =
-            telemetry("deck.playback.position_normalized", "a", "telemetry.scalar");
         let mut ui = UiState::empty();
         ui.position = 12.0;
-        let reads = UiReads::new(&ui);
+        let reads = reads(&ui);
 
-        let Some(ReadValue::Scalar(value)) = resolve(&reads, &binding, &compiled) else {
-            panic!("position binding must resolve to scalar");
+        let Some(ReadValue::Scalar(value)) = reads.get("deck.playback.position_normalized") else {
+            panic!("position endpoint must resolve to scalar");
         };
         assert!(value.abs() < f64::EPSILON);
     }
 
     #[kithara::test]
     fn normalized_position_is_clamped() {
-        let (compiled, binding) =
-            telemetry("deck.playback.position_normalized", "a", "telemetry.scalar");
         for (position, expected) in [(-2.0, 0.0), (25.0, 0.25), (120.0, 1.0)] {
             let mut ui = UiState::empty();
             ui.duration = 100.0;
             ui.position = position;
-            let reads = UiReads::new(&ui);
-            let Some(ReadValue::Scalar(value)) = resolve(&reads, &binding, &compiled) else {
-                panic!("position binding must resolve to scalar");
+            let reads = reads(&ui);
+            let Some(ReadValue::Scalar(value)) = reads.get("deck.playback.position_normalized")
+            else {
+                panic!("position endpoint must resolve to scalar");
             };
             assert!((value - expected).abs() < f64::EPSILON);
         }
     }
 
     #[kithara::test]
-    fn resolves_volume_without_deck_scope() {
-        let (compiled, binding) = compile_read(
-            "fader.horizontal",
-            r#"Parameter(id: "player.output.volume")"#,
-        );
+    fn resolves_new_renderer_endpoints() {
         let mut ui = UiState::empty();
-        ui.volume = 0.37;
-        let reads = UiReads::new(&ui);
+        ui.position = 12.0;
+        ui.duration = 30.0;
+        let reads = UiReads::new(&ui, "needle", "player.klayout.ron", None);
 
-        let Some(ReadValue::Scalar(value)) = resolve(&reads, &binding, &compiled) else {
-            panic!("volume binding must resolve to scalar");
-        };
-        assert!((value - f64::from(ui.volume)).abs() < f64::EPSILON);
-    }
-
-    #[kithara::test]
-    fn rejects_unknown_deck_scope() {
-        let ui = UiState::empty();
-        let reads = UiReads::new(&ui);
-        let (compiled, binding) = telemetry("deck.playback.playing", "b", "button");
-
-        assert!(resolve(&reads, &binding, &compiled).is_none());
+        assert_eq!(
+            reads.get("deck.playback.position_secs"),
+            Some(ReadValue::Scalar(12.0))
+        );
+        assert_eq!(
+            reads.get("deck.playback.duration_secs"),
+            Some(ReadValue::Scalar(30.0))
+        );
+        assert_eq!(
+            reads.get("deck.playback.remaining_secs"),
+            Some(ReadValue::Scalar(18.0))
+        );
+        assert_eq!(reads.get("library.query"), Some(ReadValue::Text("needle")));
+        assert_eq!(
+            reads.get("ui.preset"),
+            Some(ReadValue::Text("player.klayout.ron"))
+        );
     }
 }

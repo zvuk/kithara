@@ -3,15 +3,75 @@ use iced::{
     mouse::{self, Button, Cursor},
     widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
 };
-use kithara_ui::render::{ControlAction, RenderPalette, UiEvent, WaveBucket, WaveformView};
 use num_traits::cast::AsPrimitive;
 
-use crate::gui::{
-    message::Message,
-    tokens::{chrome, waveform},
+use super::chrome;
+use crate::{
+    registry::{ControlKindDesc, PropKind, ValueKind},
+    render::{ControlAction, ReadValue, Reads, RenderPalette, UiEvent, WaveBucket},
+    size::{Dim, SizeSpec},
 };
 
-pub(crate) struct MiniWave {
+struct Consts;
+
+impl Consts {
+    const BAR_GAP: f32 = 1.0;
+    const CONTENT_INSET: f32 = 2.0;
+    const DOWNBEAT_ALPHA: f32 = 0.72;
+    const GRID_ALPHA: f32 = 0.55;
+    const GRID_WIDTH: f32 = 1.0;
+    const HERO_HEIGHT: f32 = 120.0;
+    const HIGH_BAR_WIDTH: f32 = 1.0;
+    const LOW_BAR_WIDTH: f32 = 3.0;
+    const MID_BAR_WIDTH: f32 = 2.0;
+    const PLAYHEAD_WIDTH: f32 = 2.0;
+}
+
+pub(crate) fn desc() -> ControlKindDesc {
+    ControlKindDesc::new(Some(ValueKind::Waveform), Some(ValueKind::Scalar))
+        .with_prop("style", PropKind::Text)
+        .with_size(SizeSpec::new(
+            Dim::Fill,
+            Dim::Range {
+                min: Consts::HERO_HEIGHT,
+                max: None,
+            },
+        ))
+}
+
+pub(crate) fn view(
+    path: &str,
+    style: Option<&str>,
+    value: Option<&ReadValue<'_>>,
+    reads: &dyn Reads,
+    palette: RenderPalette,
+) -> Element<'static, UiEvent> {
+    let waveform = match value {
+        Some(ReadValue::Waveform(waveform)) => Some(*waveform),
+        _ => None,
+    };
+    let progress = match reads.get("deck.playback.position_normalized") {
+        Some(ReadValue::Scalar(value)) => value.as_(),
+        _ => 0.0,
+    };
+    let waveform = waveform.map(|view| WaveformData {
+        buckets: view.buckets.to_vec().into_boxed_slice(),
+        beats: view.beats.to_vec().into_boxed_slice(),
+        downbeats: view.downbeats.to_vec().into_boxed_slice(),
+    });
+    Canvas::new(MiniWave {
+        palette,
+        waveform,
+        path: path.to_owned(),
+        progress,
+        show_beats: style == Some("hero"),
+    })
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
+}
+
+struct MiniWave {
     palette: RenderPalette,
     waveform: Option<WaveformData>,
     path: String,
@@ -25,7 +85,7 @@ struct WaveformData {
     downbeats: Box<[f32]>,
 }
 
-impl canvas::Program<Message> for MiniWave {
+impl canvas::Program<UiEvent> for MiniWave {
     type State = ();
 
     fn draw(
@@ -53,7 +113,7 @@ impl canvas::Program<Message> for MiniWave {
             &Path::line(Point::new(head_x, 0.0), Point::new(head_x, bounds.height)),
             Stroke::default()
                 .with_color(self.palette.accent_strong)
-                .with_width(waveform::PLAYHEAD_WIDTH),
+                .with_width(Consts::PLAYHEAD_WIDTH),
         );
         draw_border(&mut frame, bounds, self.palette.line);
         vec![frame.into_geometry()]
@@ -78,7 +138,7 @@ impl canvas::Program<Message> for MiniWave {
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<Action<Message>> {
+    ) -> Option<Action<UiEvent>> {
         let has_waveform = self
             .waveform
             .as_ref()
@@ -90,10 +150,10 @@ impl canvas::Program<Message> for MiniWave {
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
                 cursor.position_over(bounds).map(|position| {
                     let value = (position.x / bounds.width).clamp(0.0, 1.0);
-                    Action::publish(Message::Modular(UiEvent::Control {
+                    Action::publish(UiEvent::Control {
                         path: self.path.clone(),
                         action: ControlAction::SetScalar(f64::from(value)),
-                    }))
+                    })
                     .and_capture()
                 })
             }
@@ -102,41 +162,16 @@ impl canvas::Program<Message> for MiniWave {
     }
 }
 
-pub(crate) fn view(
-    waveform: Option<WaveformView<'_>>,
-    progress: f32,
-    palette: RenderPalette,
-    path: String,
-    height: Length,
-    show_beats: bool,
-) -> Element<'static, Message> {
-    let waveform = waveform.map(|view| WaveformData {
-        buckets: view.buckets.to_vec().into_boxed_slice(),
-        beats: view.beats.to_vec().into_boxed_slice(),
-        downbeats: view.downbeats.to_vec().into_boxed_slice(),
-    });
-    Canvas::new(MiniWave {
-        palette,
-        waveform,
-        path,
-        progress,
-        show_beats,
-    })
-    .width(Length::Fill)
-    .height(height)
-    .into()
-}
-
 fn draw_bars(frame: &mut Frame, bounds: Rectangle, buckets: &[WaveBucket], palette: RenderPalette) {
-    let step = waveform::LOW_BAR_WIDTH + waveform::BAR_GAP;
-    let content_width = (bounds.width - waveform::CONTENT_INSET * 2.0).max(0.0);
-    let max_columns: usize = ((content_width + waveform::BAR_GAP) / step).floor().as_();
+    let step = Consts::LOW_BAR_WIDTH + Consts::BAR_GAP;
+    let content_width = (bounds.width - Consts::CONTENT_INSET * 2.0).max(0.0);
+    let max_columns: usize = ((content_width + Consts::BAR_GAP) / step).floor().as_();
     let columns = max_columns.min(buckets.len());
     if columns == 0 {
         return;
     }
 
-    let available_height = (bounds.height - waveform::CONTENT_INSET * 2.0).max(0.0);
+    let available_height = (bounds.height - Consts::CONTENT_INSET * 2.0).max(0.0);
     for column in 0..columns {
         let start = column * buckets.len() / columns;
         let end = ((column + 1) * buckets.len() / columns)
@@ -153,14 +188,14 @@ fn draw_bars(frame: &mut Frame, bounds: Rectangle, buckets: &[WaveBucket], palet
             },
         );
         let column_x: f32 = column.as_();
-        let center_x = waveform::CONTENT_INSET + column_x * step + waveform::LOW_BAR_WIDTH / 2.0;
+        let center_x = Consts::CONTENT_INSET + column_x * step + Consts::LOW_BAR_WIDTH / 2.0;
         draw_band(
             frame,
             bounds,
             center_x,
             low,
             available_height,
-            waveform::LOW_BAR_WIDTH,
+            Consts::LOW_BAR_WIDTH,
             palette.wave_low,
         );
         draw_band(
@@ -169,7 +204,7 @@ fn draw_bars(frame: &mut Frame, bounds: Rectangle, buckets: &[WaveBucket], palet
             center_x,
             mid,
             available_height,
-            waveform::MID_BAR_WIDTH,
+            Consts::MID_BAR_WIDTH,
             palette.wave_mid,
         );
         draw_band(
@@ -178,7 +213,7 @@ fn draw_bars(frame: &mut Frame, bounds: Rectangle, buckets: &[WaveBucket], palet
             center_x,
             high,
             available_height,
-            waveform::HIGH_BAR_WIDTH,
+            Consts::HIGH_BAR_WIDTH,
             palette.wave_high,
         );
     }
@@ -214,13 +249,13 @@ fn draw_beat_grid(
         frame,
         bounds,
         &data.beats,
-        with_alpha(palette.line, waveform::GRID_ALPHA),
+        with_alpha(palette.line, Consts::GRID_ALPHA),
     );
     draw_marks(
         frame,
         bounds,
         &data.downbeats,
-        with_alpha(palette.accent, waveform::DOWNBEAT_ALPHA),
+        with_alpha(palette.accent, Consts::DOWNBEAT_ALPHA),
     );
 }
 
@@ -231,7 +266,7 @@ fn draw_marks(frame: &mut Frame, bounds: Rectangle, marks: &[f32], color: Color)
             &Path::line(Point::new(x, 0.0), Point::new(x, bounds.height)),
             Stroke::default()
                 .with_color(color)
-                .with_width(waveform::GRID_WIDTH),
+                .with_width(Consts::GRID_WIDTH),
         );
     }
 }
@@ -241,15 +276,14 @@ fn with_alpha(color: Color, alpha: f32) -> Color {
 }
 
 fn draw_border(frame: &mut Frame, bounds: Rectangle, color: Color) {
-    let inset = chrome::BORDER_WIDTH / 2.0;
+    let width = chrome::border_width();
+    let inset = width / 2.0;
     frame.stroke_rectangle(
         Point::new(inset, inset),
         Size::new(
-            (bounds.width - chrome::BORDER_WIDTH).max(0.0),
-            (bounds.height - chrome::BORDER_WIDTH).max(0.0),
+            (bounds.width - width).max(0.0),
+            (bounds.height - width).max(0.0),
         ),
-        Stroke::default()
-            .with_color(color)
-            .with_width(chrome::BORDER_WIDTH),
+        Stroke::default().with_color(color).with_width(width),
     );
 }

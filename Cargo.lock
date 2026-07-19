@@ -5165,6 +5165,7 @@ dependencies = [
  "iced",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "num-traits",
  "ron",
  "serde",
  "thiserror 2.0.18",

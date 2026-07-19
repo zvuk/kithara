@@ -21,6 +21,9 @@ pub struct TrackRow<'a> {
     pub title: &'a str,
     pub artist: Option<&'a str>,
     pub time: Option<&'a str>,
+    pub search: Option<&'a str>,
+    pub current: bool,
+    pub selected: bool,
 }
 
 /// Value resolved from a renderer-facing read endpoint.

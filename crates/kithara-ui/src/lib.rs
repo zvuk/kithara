@@ -10,6 +10,8 @@ pub mod registry;
 pub mod render;
 pub mod size;
 pub mod source;
+#[cfg(feature = "render")]
+pub mod widgets;
 
 pub use doc::{envelope, layout, module};
 
