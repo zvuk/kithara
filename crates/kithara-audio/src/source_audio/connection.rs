@@ -39,10 +39,7 @@ pub(crate) fn connect_source_audio(
     let (trash_outlet, trash_inlet) =
         connect::<SourceAudioWindow>(trash_capacity, Some(worker_wake));
 
-    let mut buffers = Vec::with_capacity(buffer_count);
-    for _ in 0..buffer_count {
-        buffers.push(pool.get());
-    }
+    let buffers = (0..buffer_count).map(|_| pool.get()).collect();
     let reader = SourceAudioReader::new(
         command_outlet,
         data_inlet,

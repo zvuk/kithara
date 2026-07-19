@@ -138,31 +138,24 @@ impl PreparedElasticRenderer {
         &mut self.renderer
     }
 
-    pub(super) fn decoded_frontier(&self) -> f64 {
-        self.renderer.decoded_frontier()
-    }
-
-    pub(crate) fn validate_retarget(
-        &self,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
-    ) -> Result<(), ElasticPrepareError> {
-        self.renderer.validate_retarget(binding, anchor, tempo)
-    }
-
-    pub(crate) fn retarget(
-        &mut self,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
-        revision: u64,
-    ) -> Result<(), ElasticPrepareError> {
-        self.renderer.retarget(binding, anchor, tempo, revision)
-    }
-
-    pub(super) fn set_service_class(&mut self, class: ServiceClass) {
-        self.renderer.set_service_class(class);
+    delegate::delegate! {
+        to self.renderer {
+            pub(super) fn decoded_frontier(&self) -> f64;
+            pub(crate) fn validate_retarget(
+                &self,
+                binding: &TrackBinding,
+                anchor: SessionBeat,
+                tempo: Tempo,
+            ) -> Result<(), ElasticPrepareError>;
+            pub(crate) fn retarget(
+                &mut self,
+                binding: &TrackBinding,
+                anchor: SessionBeat,
+                tempo: Tempo,
+                revision: u64,
+            ) -> Result<(), ElasticPrepareError>;
+            pub(super) fn set_service_class(&mut self, class: ServiceClass);
+        }
     }
 }
 
@@ -180,10 +173,24 @@ impl PlayerResource {
         }
     }
 
-    pub(crate) fn activate_source_audio_authoritative(&mut self) -> Result<bool, SourceAudioError> {
-        self.resource
-            .get_mut()
-            .activate_source_audio_authoritative()
+    delegate::delegate! {
+        to self.resource.get_mut() {
+            pub(crate) fn activate_source_audio_authoritative(
+                &mut self,
+            ) -> Result<bool, SourceAudioError>;
+            pub(crate) fn deactivate_source_audio(&mut self) -> Result<(), SourceAudioError>;
+            pub(crate) fn request_source_audio(
+                &mut self,
+                range: SourceFrameRange,
+                look_ahead_frames: u64,
+            ) -> Result<Option<SourceAudioDemand>, SourceAudioError>;
+            pub(crate) fn read_source_audio(
+                &mut self,
+                demand: &SourceAudioDemand,
+                range: SourceFrameRange,
+                output: &mut [f32],
+            ) -> Result<Option<SourceAudioReadOutcome>, SourceAudioError>;
+        }
     }
 
     pub(crate) fn begin_session_seek(
@@ -234,31 +241,6 @@ impl PlayerResource {
             .map_err(|error| PlayError::ElasticPreparation {
                 reason: error.to_string(),
             })
-    }
-
-    pub(crate) fn deactivate_source_audio(&mut self) -> Result<(), SourceAudioError> {
-        self.resource.get_mut().deactivate_source_audio()
-    }
-
-    pub(crate) fn request_source_audio(
-        &mut self,
-        range: SourceFrameRange,
-        look_ahead_frames: u64,
-    ) -> Result<Option<SourceAudioDemand>, SourceAudioError> {
-        self.resource
-            .get_mut()
-            .request_source_audio(range, look_ahead_frames)
-    }
-
-    pub(crate) fn read_source_audio(
-        &mut self,
-        demand: &SourceAudioDemand,
-        range: SourceFrameRange,
-        output: &mut [f32],
-    ) -> Result<Option<SourceAudioReadOutcome>, SourceAudioError> {
-        self.resource
-            .get_mut()
-            .read_source_audio(demand, range, output)
     }
 
     pub(crate) fn seek_source_frame(&mut self, frame: u64) -> Result<(), DecodeError> {

@@ -24,21 +24,18 @@ impl SourceAudioActivity {
         Self::for_connection()
     }
 
-    /// Capture the edge observed before a nonblocking read.
-    #[must_use]
-    pub fn snapshot(&self) -> u64 {
-        self.gate.current()
-    }
-
-    /// Block the native caller until activity advances past `snapshot`.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn wait(&self, snapshot: u64) {
-        self.gate.wait(snapshot);
-    }
-
-    /// Advance the edge without blocking or allocating; safe on real-time paths.
-    pub fn signal(&self) {
-        self.gate.signal();
+    delegate::delegate! {
+        to self.gate {
+            /// Capture the edge observed before a nonblocking read.
+            #[must_use]
+            #[call(current)]
+            pub fn snapshot(&self) -> u64;
+            /// Block the native caller until activity advances past `snapshot`.
+            #[cfg(not(target_arch = "wasm32"))]
+            pub fn wait(&self, snapshot: u64);
+            /// Advance the edge without blocking or allocating; safe on real-time paths.
+            pub fn signal(&self);
+        }
     }
 }
 

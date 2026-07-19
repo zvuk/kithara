@@ -27,13 +27,21 @@ impl From<BeatMapError> for SyncUnavailable {
 }
 
 /// Immutable relationship between one session beat anchor and one analysed track.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
 #[non_exhaustive]
 pub struct TrackBinding {
+    /// Audible direction encoded by this binding.
+    #[field(get, copy)]
     direction: PlaybackDirection,
-    map: TrackBeatMap,
+    /// Session beat anchoring this binding.
+    #[field(get, copy)]
     session_anchor: SessionBeat,
+    /// Track beat anchoring this binding.
+    #[field(get, copy)]
     track_anchor: TrackBeat,
+    /// Immutable analysed map used by this binding.
+    map: TrackBeatMap,
 }
 
 impl TrackBinding {
@@ -47,28 +55,10 @@ impl TrackBinding {
     ) -> Result<Self, SyncUnavailable> {
         Ok(Self {
             direction,
-            map: TrackBeatMap::new(analysis, host_sample_rate)?,
             session_anchor,
             track_anchor,
+            map: TrackBeatMap::new(analysis, host_sample_rate)?,
         })
-    }
-
-    /// Returns the audible direction encoded by this binding.
-    #[must_use]
-    pub fn direction(&self) -> PlaybackDirection {
-        self.direction
-    }
-
-    /// Returns the immutable analysed map used by this binding.
-    #[must_use]
-    pub fn map(&self) -> &TrackBeatMap {
-        &self.map
-    }
-
-    /// Returns the session beat that anchors this binding.
-    #[must_use]
-    pub fn session_anchor(&self) -> SessionBeat {
-        self.session_anchor
     }
 
     /// Resolves a session beat through the binding and analysed source map.
@@ -90,11 +80,5 @@ impl TrackBinding {
             PlaybackDirection::Reverse => self.track_anchor.get() - delta,
         };
         TrackBeat::new(value).map_err(|_| SyncUnavailable::CoordinateOverflow)
-    }
-
-    /// Returns the track beat that anchors this binding.
-    #[must_use]
-    pub fn track_anchor(&self) -> TrackBeat {
-        self.track_anchor
     }
 }
