@@ -4,7 +4,7 @@ use super::{
     BufferedSourceWindow, Consts, ElasticPreparation, ElasticPreparationOutcome,
     ElasticPrepareError, ElasticRenderer, PlaybackDirection, PlayerResource, SessionBeat,
     SourceAudioReadOutcome, SourceCopy, SourceCursor, SourceFrameRange, Tempo, TrackBinding,
-    copy_source, sample_count,
+    sample_count,
 };
 
 fn expand_preparation_history(
@@ -381,7 +381,7 @@ impl ElasticRenderer {
                 .and_then(|start| start.checked_add(history_frames_i64)),
         }
         .ok_or(ElasticPrepareError::FrameOverflow)?;
-        copy_source(SourceCopy {
+        SourceCopy {
             start: history_start,
             frames: history_frames,
             direction: preparation.direction,
@@ -390,7 +390,8 @@ impl ElasticRenderer {
             target: &mut self.history,
             channels: self.channels,
             source_frame_count: self.source_frame_count,
-        })
+        }
+        .copy()
         .map_err(ElasticPrepareError::from)?;
         let warmup_start = match preparation.direction {
             PlaybackDirection::Forward => {
@@ -401,7 +402,7 @@ impl ElasticRenderer {
             }
         }
         .ok_or(ElasticPrepareError::FrameOverflow)?;
-        copy_source(SourceCopy {
+        SourceCopy {
             start: warmup_start,
             frames: usize::try_from(warm_source_frames)
                 .map_err(|_| ElasticPrepareError::FrameOverflow)?,
@@ -411,7 +412,8 @@ impl ElasticRenderer {
             target: &mut self.source,
             channels: self.channels,
             source_frame_count: self.source_frame_count,
-        })
+        }
+        .copy()
         .map_err(ElasticPrepareError::from)?;
         self.backend.prime(
             preparation.warmup,

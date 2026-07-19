@@ -14,7 +14,7 @@ use kithara_stretch::{
     SignalsmithElastic,
 };
 use num_traits::ToPrimitive;
-use rendering::{SourceCopy, copy_source};
+use rendering::SourceCopy;
 use smallvec::SmallVec;
 
 use super::{

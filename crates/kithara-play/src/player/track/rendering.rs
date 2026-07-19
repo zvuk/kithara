@@ -195,7 +195,7 @@ impl ElasticRenderer {
         if source_frames > self.max_source_frames {
             return Err(ElasticRenderError::FrameOverflow);
         }
-        copy_source(SourceCopy {
+        SourceCopy {
             start: segment.source_start,
             frames: source_frames,
             direction,
@@ -204,7 +204,8 @@ impl ElasticRenderer {
             target: &mut self.source,
             channels: self.channels,
             source_frame_count: self.source_frame_count,
-        })
+        }
+        .copy()
         .map_err(ElasticRenderError::from)?;
         let request = ElasticRequest::new(source_frames, segment.output_frames)?;
         let source_samples = sample_count(source_frames, self.channels)
@@ -647,61 +648,64 @@ const fn direction_sign(direction: PlaybackDirection) -> f64 {
     }
 }
 
-pub(super) fn copy_source(copy: SourceCopy<'_>) -> Result<(), ElasticCopyError> {
-    let SourceCopy {
-        start,
-        frames,
-        direction,
-        fetch_range,
-        fetch,
-        target,
-        channels,
-        source_frame_count,
-    } = copy;
-    let samples = frames
-        .checked_mul(channels)
-        .ok_or(ElasticCopyError::FrameOverflow)?;
-    if target.len() < samples {
-        return Err(ElasticCopyError::FrameOverflow);
-    }
-    for frame in 0..frames {
-        let offset = i64::try_from(frame).map_err(|_| ElasticCopyError::FrameOverflow)?;
-        let coordinate = match direction {
-            PlaybackDirection::Forward => start.checked_add(offset),
-            PlaybackDirection::Reverse => start
-                .checked_sub(offset)
-                .and_then(|value| value.checked_sub(1)),
-        }
-        .ok_or(ElasticCopyError::FrameOverflow)?;
-        let target_start = frame
+impl SourceCopy<'_> {
+    pub(super) fn copy(self) -> Result<(), ElasticCopyError> {
+        let Self {
+            start,
+            frames,
+            direction,
+            fetch_range,
+            fetch,
+            target,
+            channels,
+            source_frame_count,
+        } = self;
+        let samples = frames
             .checked_mul(channels)
             .ok_or(ElasticCopyError::FrameOverflow)?;
-        let target_end = target_start
-            .checked_add(channels)
-            .ok_or(ElasticCopyError::FrameOverflow)?;
-        if coordinate < 0 {
-            target[target_start..target_end].fill(0.0);
-            continue;
+        if target.len() < samples {
+            return Err(ElasticCopyError::FrameOverflow);
         }
-        let coordinate = u64::try_from(coordinate).map_err(|_| ElasticCopyError::FrameOverflow)?;
-        if coordinate >= source_frame_count {
-            target[target_start..target_end].fill(0.0);
-            continue;
-        }
-        if coordinate < fetch_range.start() || coordinate >= fetch_range.end() {
-            return Err(ElasticCopyError::FetchWindowMismatch);
-        }
-        let source_frame = usize::try_from(coordinate - fetch_range.start())
-            .map_err(|_| ElasticCopyError::FrameOverflow)?;
-        let source_start = source_frame
-            .checked_mul(channels)
+        for frame in 0..frames {
+            let offset = i64::try_from(frame).map_err(|_| ElasticCopyError::FrameOverflow)?;
+            let coordinate = match direction {
+                PlaybackDirection::Forward => start.checked_add(offset),
+                PlaybackDirection::Reverse => start
+                    .checked_sub(offset)
+                    .and_then(|value| value.checked_sub(1)),
+            }
             .ok_or(ElasticCopyError::FrameOverflow)?;
-        let source_end = source_start
-            .checked_add(channels)
-            .ok_or(ElasticCopyError::FrameOverflow)?;
-        target[target_start..target_end].copy_from_slice(&fetch[source_start..source_end]);
+            let target_start = frame
+                .checked_mul(channels)
+                .ok_or(ElasticCopyError::FrameOverflow)?;
+            let target_end = target_start
+                .checked_add(channels)
+                .ok_or(ElasticCopyError::FrameOverflow)?;
+            if coordinate < 0 {
+                target[target_start..target_end].fill(0.0);
+                continue;
+            }
+            let coordinate =
+                u64::try_from(coordinate).map_err(|_| ElasticCopyError::FrameOverflow)?;
+            if coordinate >= source_frame_count {
+                target[target_start..target_end].fill(0.0);
+                continue;
+            }
+            if coordinate < fetch_range.start() || coordinate >= fetch_range.end() {
+                return Err(ElasticCopyError::FetchWindowMismatch);
+            }
+            let source_frame = usize::try_from(coordinate - fetch_range.start())
+                .map_err(|_| ElasticCopyError::FrameOverflow)?;
+            let source_start = source_frame
+                .checked_mul(channels)
+                .ok_or(ElasticCopyError::FrameOverflow)?;
+            let source_end = source_start
+                .checked_add(channels)
+                .ok_or(ElasticCopyError::FrameOverflow)?;
+            target[target_start..target_end].copy_from_slice(&fetch[source_start..source_end]);
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -792,7 +796,7 @@ mod tests {
         let source = [20.0, 30.0, 40.0, 50.0];
         let mut output = [0.0; 2];
 
-        copy_source(SourceCopy {
+        SourceCopy {
             start: 4,
             frames: 2,
             direction: PlaybackDirection::Forward,
@@ -801,7 +805,8 @@ mod tests {
             target: &mut output,
             channels: 1,
             source_frame_count: 6,
-        })
+        }
+        .copy()
         .expect("forward copy succeeds");
 
         assert_eq!(output, [40.0, 50.0]);
@@ -813,7 +818,7 @@ mod tests {
         let source = [20.0, 30.0, 40.0, 50.0];
         let mut output = [0.0; 3];
 
-        copy_source(SourceCopy {
+        SourceCopy {
             start: 6,
             frames: 3,
             direction: PlaybackDirection::Reverse,
@@ -822,7 +827,8 @@ mod tests {
             target: &mut output,
             channels: 1,
             source_frame_count: 6,
-        })
+        }
+        .copy()
         .expect("reverse copy succeeds");
 
         assert_eq!(output, [50.0, 40.0, 30.0]);
@@ -834,7 +840,7 @@ mod tests {
         let source = [10.0, 20.0];
         let mut output = [f32::NAN; 4];
 
-        copy_source(SourceCopy {
+        SourceCopy {
             start: 2,
             frames: 4,
             direction: PlaybackDirection::Reverse,
@@ -843,7 +849,8 @@ mod tests {
             target: &mut output,
             channels: 1,
             source_frame_count: 2,
-        })
+        }
+        .copy()
         .expect("reverse copy reaches source start");
 
         assert_eq!(output, [20.0, 10.0, 0.0, 0.0]);
