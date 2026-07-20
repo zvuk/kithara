@@ -8,8 +8,8 @@ use crate::{
         ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, DeckSkin, FaderSkin,
         FrameSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin, LayoutSkin, NavSkin, ReadoutSkin,
         SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, TabLargeSkin, TelemetrySkin,
-        TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, VuStereoSkin, VuVerticalSkin, WaveSkin,
-        parse_color,
+        TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin, VuStereoSkin, VuVerticalSkin,
+        WaveSkin, parse_color,
     },
 };
 
@@ -42,6 +42,7 @@ pub struct Skin {
     pub deck: DeckSkin,
     pub global_bar: GlobalBarSkin,
     pub telemetry: TelemetrySkin,
+    pub tree: TreeSkin,
     pub track_list: TrackListSkin,
     pub layout_preview: LayoutPreviewSkin,
 }
@@ -100,6 +101,7 @@ impl Skin {
             deck: document.deck,
             global_bar: document.global_bar,
             telemetry: document.telemetry,
+            tree: document.tree.clone(),
             track_list: document.track_list.clone(),
             layout_preview: document.layout_preview,
             document,

@@ -91,6 +91,8 @@ pub enum ControlSpec {
         columns: Vec<TrackColumn>,
         columns_state: Option<Binding>,
     },
+    Tree,
+    ContextBar,
     Toggle,
     Checkbox,
     Segmented {

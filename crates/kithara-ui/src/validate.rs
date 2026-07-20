@@ -177,6 +177,8 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Fader { id, .. }
         | ControlNode::Wave { id, .. }
         | ControlNode::TrackList { id, .. }
+        | ControlNode::Tree { id, .. }
+        | ControlNode::ContextBar { id, .. }
         | ControlNode::Toggle { id, .. }
         | ControlNode::Checkbox { id, .. }
         | ControlNode::Segmented { id, .. }
@@ -329,7 +331,8 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         ControlNode::Bpm { .. } => (Some(ValueKind::Waveform), None),
         ControlNode::DeckSummary { .. }
         | ControlNode::Text { .. }
-        | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),
+        | ControlNode::Readout { .. }
+        | ControlNode::ContextBar { .. } => (Some(ValueKind::Text), None),
         ControlNode::Button { .. }
         | ControlNode::NavItem { .. }
         | ControlNode::TabLarge { .. }
@@ -343,6 +346,7 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         }
         ControlNode::Wave { .. } => (Some(ValueKind::Waveform), Some(ValueKind::Scalar)),
         ControlNode::TrackList { .. } => (Some(ValueKind::TrackList), None),
+        ControlNode::Tree { .. } => (Some(ValueKind::Tree), None),
         ControlNode::VuStereo { .. } | ControlNode::VuVertical { .. } => {
             (Some(ValueKind::Stereo), Some(ValueKind::Scalar))
         }

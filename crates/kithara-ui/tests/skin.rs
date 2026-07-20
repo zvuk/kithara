@@ -95,6 +95,9 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.telemetry.percent_scale, 100.0);
     assert_eq!(document.telemetry.percent_width, 3);
     assert_eq!(document.telemetry.scalar_precision, 2);
+    assert_eq!(document.tree.size.w, Dim::Fixed(232.0));
+    assert_eq!(document.tree.row_height, 24.0);
+    assert_eq!(document.tree.context_height, 26.0);
     let track_list = &document.track_list;
     assert_eq!(track_list.header_height, 22.0);
     assert_eq!(track_list.row_height, 28.0);

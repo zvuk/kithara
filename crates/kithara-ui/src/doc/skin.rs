@@ -39,6 +39,7 @@ pub struct SkinDoc {
     pub deck: DeckSkin,
     pub global_bar: GlobalBarSkin,
     pub telemetry: TelemetrySkin,
+    pub tree: TreeSkin,
     pub track_list: TrackListSkin,
     pub layout_preview: LayoutPreviewSkin,
 }
@@ -609,6 +610,43 @@ pub struct TelemetrySkin {
     pub percent_width: usize,
     pub scalar_precision: usize,
     pub text: FontSkin,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct TreeSkin {
+    pub size: SizeSpec,
+    pub search_placeholder: String,
+    pub search_height: f32,
+    pub search_icon_width: f32,
+    pub search_icon_size: f32,
+    pub search_padding_x: f32,
+    pub search_text: FontSkin,
+    pub search_background: ColorRole,
+    pub search_divider: ColorRole,
+    pub panel_background: ColorRole,
+    pub panel_padding_top: f32,
+    pub panel_padding_bottom: f32,
+    pub row_height: f32,
+    pub row_padding_right: f32,
+    pub indent_base: f32,
+    pub indent_step: f32,
+    pub marker_width: f32,
+    pub chevron_width: f32,
+    pub chevron_size: f32,
+    pub icon_size: f32,
+    pub content_gap: f32,
+    pub label_text: FontSkin,
+    pub count_text: FontSkin,
+    pub context_height: f32,
+    pub context_padding_x: f32,
+    pub context_icon_size: f32,
+    pub context_gap: f32,
+    pub context_text: FontSkin,
+    pub context_background: ColorRole,
+    pub context_divider: ColorRole,
+    pub context_divider_width: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

@@ -71,6 +71,14 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-tracklist.klayout.ron"),
     ),
     (
+        "gallery-tree.klayout.ron",
+        include_str!("assets/gallery-tree.klayout.ron"),
+    ),
+    (
+        "gallery-library2.klayout.ron",
+        include_str!("assets/gallery-library2.klayout.ron"),
+    ),
+    (
         "gallery-stress.klayout.ron",
         include_str!("assets/gallery-stress.klayout.ron"),
     ),
@@ -133,6 +141,14 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/tracklist.kmodule.ron",
         include_str!("assets/modules/tabs/tracklist.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/tree.kmodule.ron",
+        include_str!("assets/modules/tabs/tree.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/library2.kmodule.ron",
+        include_str!("assets/modules/tabs/library2.kmodule.ron"),
     ),
     (
         "modules/primitives/knobs.kmodule.ron",

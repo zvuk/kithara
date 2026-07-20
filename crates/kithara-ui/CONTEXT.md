@@ -77,3 +77,11 @@ renderer owns table geometry and cell presentation but not column visibility. Wh
 `<binding-id>.<column-name>`; a missing derived endpoint means that column is visible. This keeps
 one declarative column inventory while allowing library, playlist, and set-queue hosts to apply
 presets without introducing renderer-owned mutable state.
+
+## Browser Tree Ownership
+
+`Tree` reads a borrowed flat row slice whose depth, branch state, selection, and presentation flags
+are host-owned. The renderer never mutates or filters that state; activating any visible row emits
+`ControlAction::SelectIndex` on the control path, and the host decides whether that index toggles a
+branch or selects a leaf. `TreeSkin` owns the search, row, indentation, panel, and Zvuk context-bar
+metrics. `ContextBar` is a read-only text control so breadcrumb state stays endpoint-owned.

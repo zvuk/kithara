@@ -21,7 +21,7 @@ use crate::{
     ids::InternId,
     layout::Axis,
     module::{ChromeStyle, IconName, Tone, TrackColumn},
-    render::{Icon, ReadValue, Reads, Skin, UiEvent},
+    render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent},
     size::{Dim, SizeSpec, control_size},
     widgets::{
         ModuleChrome, Widget,
@@ -30,7 +30,7 @@ use crate::{
         fader::Fader,
         global_bar::{Brand, PresetSelector, SettingsButton, Spacer},
         mini_wave::MiniWave,
-        nav::{Glyph, NavItem, TabLarge},
+        nav::{ContextBar, Glyph, NavItem, TabLarge, Tree},
         telemetry::Telemetry,
         text::Text,
         track_list::TrackList,
@@ -339,6 +339,8 @@ fn render_control<'a>(
             reads,
             skin,
         ),
+        ControlSpec::Tree => render_browser_tree(path, value.as_ref(), skin),
+        ControlSpec::ContextBar => render_context_bar(value.as_ref(), skin),
     }
 }
 
@@ -357,6 +359,28 @@ fn render_track_list<'a>(
         .maybe_columns_state(columns_state.map(|binding| binding_id(binding, ui)))
         .maybe_value(value)
         .reads(reads)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_browser_tree<'a>(
+    path: &str,
+    value: Option<&ReadValue<'_>>,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    Tree::builder()
+        .path(path)
+        .maybe_value(value)
+        .icon(render_tree_icon)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_context_bar<'a>(value: Option<&ReadValue<'_>>, skin: &Skin) -> Element<'a, UiEvent> {
+    ContextBar::builder()
+        .maybe_value(value)
         .skin(skin)
         .build()
         .view()
@@ -503,6 +527,24 @@ fn render_icon(icon: IconName) -> Icon {
         IconName::Play => Icon::Play,
         IconName::Playlist => Icon::Playlist,
         IconName::SpeakerHigh => Icon::SpeakerHigh,
+    }
+}
+
+fn render_tree_icon(icon: TreeIcon) -> Icon {
+    match icon {
+        TreeIcon::Collection => Icon::Collection,
+        TreeIcon::Playlist => Icon::Playlist,
+        TreeIcon::Folder => Icon::Folder,
+        TreeIcon::Plus => Icon::Plus,
+        TreeIcon::Zvuk => Icon::Zvuk,
+        TreeIcon::Search => Icon::Search,
+        TreeIcon::Charts => Icon::Charts,
+        TreeIcon::Monitor => Icon::Monitor,
+        TreeIcon::Home => Icon::Home,
+        TreeIcon::Usb => Icon::Usb,
+        TreeIcon::Instrument => Icon::Instrument,
+        TreeIcon::Waveform => Icon::Waveform,
+        TreeIcon::Clock => Icon::Clock,
     }
 }
 

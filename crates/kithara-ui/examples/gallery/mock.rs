@@ -8,7 +8,10 @@ use kithara_ui::{
     ids::EndpointId,
     module::TrackColumn,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-    render::{ControlAction, ReadValue, Reads, StereoLevels, TrackRow, WaveBucket, WaveformView},
+    render::{
+        ControlAction, ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket,
+        WaveformView,
+    },
 };
 use num_traits::cast::AsPrimitive;
 use serde::Deserialize;
@@ -48,7 +51,62 @@ impl Consts {
 struct MockData {
     title: String,
     artist: String,
+    breadcrumb: String,
+    tree: Vec<MockTreeRow>,
     tracks: Vec<MockTrack>,
+}
+
+#[derive(Deserialize)]
+struct MockTreeRow {
+    #[serde(default)]
+    depth: u8,
+    label: String,
+    icon: MockTreeIcon,
+    #[serde(default)]
+    count: Option<u32>,
+    #[serde(default)]
+    expanded: Option<bool>,
+    #[serde(default)]
+    selected: bool,
+    #[serde(default)]
+    muted: bool,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+enum MockTreeIcon {
+    Collection,
+    Playlist,
+    Folder,
+    Plus,
+    Zvuk,
+    Search,
+    Charts,
+    Monitor,
+    Home,
+    Usb,
+    Instrument,
+    Waveform,
+    Clock,
+}
+
+impl From<MockTreeIcon> for TreeIcon {
+    fn from(value: MockTreeIcon) -> Self {
+        match value {
+            MockTreeIcon::Collection => Self::Collection,
+            MockTreeIcon::Playlist => Self::Playlist,
+            MockTreeIcon::Folder => Self::Folder,
+            MockTreeIcon::Plus => Self::Plus,
+            MockTreeIcon::Zvuk => Self::Zvuk,
+            MockTreeIcon::Search => Self::Search,
+            MockTreeIcon::Charts => Self::Charts,
+            MockTreeIcon::Monitor => Self::Monitor,
+            MockTreeIcon::Home => Self::Home,
+            MockTreeIcon::Usb => Self::Usb,
+            MockTreeIcon::Instrument => Self::Instrument,
+            MockTreeIcon::Waveform => Self::Waveform,
+            MockTreeIcon::Clock => Self::Clock,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -67,7 +125,9 @@ struct MockTrack {
 struct Catalog {
     title: &'static str,
     artist: &'static str,
+    breadcrumb: &'static str,
     rows: &'static [TrackRow<'static>],
+    tree: &'static [TreeRow<'static>],
 }
 
 static CATALOG: LazyLock<Catalog> = LazyLock::new(load_catalog);
@@ -94,10 +154,25 @@ fn load_catalog() -> Catalog {
             selected: index == 0,
         })
         .collect();
+    let tree: Vec<TreeRow<'static>> = data
+        .tree
+        .iter()
+        .map(|row| TreeRow {
+            depth: row.depth,
+            label: &row.label,
+            icon: row.icon.into(),
+            count: row.count,
+            expanded: row.expanded,
+            selected: row.selected,
+            muted: row.muted,
+        })
+        .collect();
     Catalog {
         title: &data.title,
         artist: &data.artist,
+        breadcrumb: &data.breadcrumb,
         rows: Box::leak(rows.into_boxed_slice()),
+        tree: Box::leak(tree.into_boxed_slice()),
     }
 }
 
@@ -111,11 +186,13 @@ pub(super) enum Tab {
     Cells,
     Sizes,
     Tracklist,
+    Tree,
+    Library2,
     Stress,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 11] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -124,6 +201,8 @@ impl Tab {
         Self::Cells,
         Self::Sizes,
         Self::Tracklist,
+        Self::Tree,
+        Self::Library2,
         Self::Stress,
     ];
 
@@ -137,6 +216,8 @@ impl Tab {
             Self::Cells => "gallery-cells.klayout.ron",
             Self::Sizes => "gallery-sizes.klayout.ron",
             Self::Tracklist => "gallery-tracklist.klayout.ron",
+            Self::Tree => "gallery-tree.klayout.ron",
+            Self::Library2 => "gallery-library2.klayout.ron",
             Self::Stress => "gallery-stress.klayout.ron",
         }
     }
@@ -151,7 +232,9 @@ impl Tab {
             Self::Cells => 5,
             Self::Sizes => 6,
             Self::Tracklist => 7,
-            Self::Stress => 8,
+            Self::Tree => 8,
+            Self::Library2 => 9,
+            Self::Stress => 10,
         }
     }
 }
@@ -169,6 +252,8 @@ impl TryFrom<&str> for Tab {
             "gallery/cells" => Ok(Self::Cells),
             "gallery/sizes" => Ok(Self::Sizes),
             "gallery/tracklist" => Ok(Self::Tracklist),
+            "gallery/tree" => Ok(Self::Tree),
+            "gallery/library2" => Ok(Self::Library2),
             "gallery/stress" => Ok(Self::Stress),
             _ => Err(()),
         }
@@ -247,11 +332,25 @@ pub(super) struct MockReads {
     stress_waveforms: [Vec<WaveBucket>; 4],
     tracklist_columns: [bool; 9],
     tracklist_preset: usize,
+    tree_expanded: Vec<bool>,
+    tree_rows: Vec<TreeRow<'static>>,
+    tree_selected: usize,
+    tree_visible_indices: Vec<usize>,
 }
 
 impl Default for MockReads {
     fn default() -> Self {
-        Self {
+        let tree_expanded = CATALOG
+            .tree
+            .iter()
+            .map(|row| row.expanded.unwrap_or(false))
+            .collect();
+        let tree_selected = CATALOG
+            .tree
+            .iter()
+            .position(|row| row.selected)
+            .unwrap_or_default();
+        let mut reads = Self {
             active_module: ModuleDemo::Deck,
             active_tab: Tab::Atoms,
             button_cue: false,
@@ -284,7 +383,13 @@ impl Default for MockReads {
             stress_waveforms: std::array::from_fn(stress_waveform),
             tracklist_columns: Consts::TRACKLIST_QUEUE,
             tracklist_preset: Consts::TRACKLIST_QUEUE_PRESET,
-        }
+            tree_expanded,
+            tree_rows: Vec::with_capacity(CATALOG.tree.len()),
+            tree_selected,
+            tree_visible_indices: Vec::with_capacity(CATALOG.tree.len()),
+        };
+        reads.rebuild_tree();
+        reads
     }
 }
 
@@ -339,6 +444,46 @@ impl MockReads {
             self.segmented_index = index.as_();
         } else if path == "tracklist/column-preset" {
             self.set_tracklist_preset(index);
+        } else if matches!(path, "tree/browser" | "library2/browser") {
+            self.select_tree_row(index);
+        }
+    }
+
+    fn select_tree_row(&mut self, index: usize) {
+        let Some(base_index) = self.tree_visible_indices.get(index).copied() else {
+            return;
+        };
+        let row = CATALOG.tree[base_index];
+        if row.muted {
+            return;
+        }
+        if row.expanded.is_some() {
+            self.tree_expanded[base_index] = !self.tree_expanded[base_index];
+        } else {
+            self.tree_selected = base_index;
+        }
+        self.rebuild_tree();
+    }
+
+    fn rebuild_tree(&mut self) {
+        self.tree_rows.clear();
+        self.tree_visible_indices.clear();
+        let mut ancestors = Vec::new();
+        for (index, base) in CATALOG.tree.iter().copied().enumerate() {
+            let depth = usize::from(base.depth);
+            ancestors.truncate(depth);
+            let visible = ancestors.iter().all(|expanded| *expanded);
+            if visible {
+                self.tree_rows.push(TreeRow {
+                    expanded: base.expanded.map(|_| self.tree_expanded[index]),
+                    selected: index == self.tree_selected,
+                    ..base
+                });
+                self.tree_visible_indices.push(index);
+            }
+            if base.expanded.is_some() {
+                ancestors.push(self.tree_expanded[index]);
+            }
         }
     }
 
@@ -454,6 +599,8 @@ impl Reads for MockReads {
             "gallery.tab.cells" => ReadValue::Bool(self.active_tab == Tab::Cells),
             "gallery.tab.sizes" => ReadValue::Bool(self.active_tab == Tab::Sizes),
             "gallery.tab.tracklist" => ReadValue::Bool(self.active_tab == Tab::Tracklist),
+            "gallery.tab.tree" => ReadValue::Bool(self.active_tab == Tab::Tree),
+            "gallery.tab.library2" => ReadValue::Bool(self.active_tab == Tab::Library2),
             "gallery.tab.stress" => ReadValue::Bool(self.active_tab == Tab::Stress),
             "gallery.module.deck" => ReadValue::Bool(self.active_module == ModuleDemo::Deck),
             "gallery.module.deck_micro" => {
@@ -507,6 +654,8 @@ impl Reads for MockReads {
             "deck.track.key" | "mock.key" => ReadValue::Text(Consts::KEY),
             "player.output.volume" | "mock.volume" => ReadValue::Scalar(self.volume),
             "library.visible_tracks" => ReadValue::TrackList(CATALOG.rows),
+            "library.tree" => ReadValue::Tree(&self.tree_rows),
+            "library.breadcrumb" => ReadValue::Text(CATALOG.breadcrumb),
             "library.query" => ReadValue::Text(&self.library_query),
             "ui.preset" => ReadValue::Text("player"),
             "mock.bpm" => ReadValue::Text(Consts::BPM),
@@ -672,13 +821,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Scalar),
         );
     }
-    for (id, kind) in [
-        ("library.visible_tracks", ValueKind::TrackList),
-        ("library.query", ValueKind::Text),
-        ("ui.preset", ValueKind::Text),
-    ] {
-        registry.insert(EndpointCategory::Model, id, EndpointDesc::new(kind));
-    }
+    insert_library_endpoints(&mut registry);
     for id in [
         "gallery.label.knobs",
         "gallery.label.meters",
@@ -716,6 +859,8 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.tab.cells",
         "gallery.tab.sizes",
         "gallery.tab.tracklist",
+        "gallery.tab.tree",
+        "gallery.tab.library2",
         "gallery.tab.stress",
         "gallery.module.deck",
         "gallery.module.deck_micro",
@@ -799,6 +944,18 @@ fn insert_tracklist_endpoints(registry: &mut MockRegistry) {
             &format!("gallery.tracklist.columns.{}", column.endpoint_name()),
             EndpointDesc::new(ValueKind::Bool),
         );
+    }
+}
+
+fn insert_library_endpoints(registry: &mut MockRegistry) {
+    for (id, kind) in [
+        ("library.visible_tracks", ValueKind::TrackList),
+        ("library.tree", ValueKind::Tree),
+        ("library.breadcrumb", ValueKind::Text),
+        ("library.query", ValueKind::Text),
+        ("ui.preset", ValueKind::Text),
+    ] {
+        registry.insert(EndpointCategory::Model, id, EndpointDesc::new(kind));
     }
 }
 
@@ -910,5 +1067,47 @@ mod tests {
             reads.get("gallery.tracklist.preset"),
             Some(ReadValue::Scalar(1.0))
         );
+    }
+
+    #[kithara::test]
+    fn tree_branch_selection_toggles_visible_descendants() {
+        let mut reads = MockReads::default();
+        let before = match reads.get("library.tree") {
+            Some(ReadValue::Tree(rows)) => rows.len(),
+            value => panic!("expected tree rows, got {value:?}"),
+        };
+
+        reads.apply("tree/browser", &ControlAction::SelectIndex(0));
+
+        let after = match reads.get("library.tree") {
+            Some(ReadValue::Tree(rows)) => rows.len(),
+            value => panic!("expected tree rows, got {value:?}"),
+        };
+        assert_eq!(before - after, 2);
+    }
+
+    #[kithara::test]
+    fn tree_leaf_selection_is_host_owned() {
+        let mut reads = MockReads::default();
+
+        reads.apply("library2/browser", &ControlAction::SelectIndex(1));
+
+        let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
+            panic!("expected tree rows");
+        };
+        assert!(rows[1].selected);
+        assert!(!rows[9].selected);
+    }
+
+    #[kithara::test]
+    fn muted_tree_row_does_not_change_selection() {
+        let mut reads = MockReads::default();
+
+        reads.apply("tree/browser", &ControlAction::SelectIndex(7));
+
+        let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
+            panic!("expected tree rows");
+        };
+        assert!(rows[9].selected);
     }
 }

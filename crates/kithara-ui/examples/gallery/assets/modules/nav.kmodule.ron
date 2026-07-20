@@ -70,6 +70,18 @@
                 read: Model(id: "gallery.tab.tracklist"),
             ),
             NavItem(
+                id: "tree",
+                label: "ДЕРЕВО",
+                icon: Playlist,
+                read: Model(id: "gallery.tab.tree"),
+            ),
+            NavItem(
+                id: "library2",
+                label: "БИБЛИОТЕКА V2",
+                icon: Playlist,
+                read: Model(id: "gallery.tab.library2"),
+            ),
+            NavItem(
                 id: "stress",
                 label: "СТРЕСС",
                 icon: SpeakerHigh,

@@ -421,6 +421,8 @@ fn expand_control(
                 .map(|binding| intern_binding(machine.interner, binding, &context.origin))
                 .transpose()?,
         },
+        ControlNode::Tree { .. } => ControlSpec::Tree,
+        ControlNode::ContextBar { .. } => ControlSpec::ContextBar,
         ControlNode::Toggle { .. } => ControlSpec::Toggle,
         ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
         ControlNode::Segmented { items, .. } => ControlSpec::Segmented {
@@ -633,6 +635,20 @@ fn expand_value_control(
             write,
             adaptive,
             ..
+        }
+        | ControlNode::Tree {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+        }
+        | ControlNode::ContextBar {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
         }) => expand_control(
             context,
             control,
@@ -833,7 +849,9 @@ fn walk(
         | ControlNode::Scalar { .. }
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
-        | ControlNode::TrackList { .. }) => expand_value_control(context, control, depth, machine),
+        | ControlNode::TrackList { .. }
+        | ControlNode::Tree { .. }
+        | ControlNode::ContextBar { .. }) => expand_value_control(context, control, depth, machine),
         control @ (ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Segmented { .. }

@@ -23,6 +23,37 @@ pub struct WaveformView<'a> {
     pub bpm: Option<f32>,
 }
 
+/// Icon associated with a renderer-facing tree row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum TreeIcon {
+    Collection,
+    Playlist,
+    Folder,
+    Plus,
+    Zvuk,
+    Search,
+    Charts,
+    Monitor,
+    Home,
+    Usb,
+    Instrument,
+    Waveform,
+    Clock,
+}
+
+/// Borrowed browser-tree row exposed to renderers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TreeRow<'a> {
+    pub depth: u8,
+    pub label: &'a str,
+    pub icon: TreeIcon,
+    pub count: Option<u32>,
+    pub expanded: Option<bool>,
+    pub selected: bool,
+    pub muted: bool,
+}
+
 /// Borrowed track-list row exposed to renderers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TrackRow<'a> {
@@ -49,6 +80,7 @@ pub enum ReadValue<'a> {
     Stereo(StereoLevels),
     Waveform(WaveformView<'a>),
     TrackList(&'a [TrackRow<'a>]),
+    Tree(&'a [TreeRow<'a>]),
 }
 
 /// Renderer-facing endpoint reader.

@@ -283,6 +283,28 @@ pub enum ControlNode {
         #[serde(default)]
         columns_state: Option<BindingRef>,
     },
+    Tree {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
+    ContextBar {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
     Toggle {
         id: NodeId,
         #[serde(default)]
@@ -647,6 +669,32 @@ mod tests {
         };
 
         assert_eq!(size, None);
+    }
+
+    #[kithara::test]
+    fn tree_control_parses_renderer_bindings() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "tree",
+            root: Tree(
+                id: "browser",
+                read: Model(id: "library.tree"),
+                size: Some((w: Fixed(232.0), h: Fill)),
+                adaptive: (priority: Required),
+            ))"#;
+
+        let document = parse_module(text, &origin()).unwrap();
+        let ControlNode::Tree {
+            read,
+            size,
+            adaptive,
+            ..
+        } = document.root
+        else {
+            panic!("expected tree");
+        };
+
+        assert!(matches!(read, Some(BindingRef::Model { .. })));
+        assert_eq!(size, Some(SizeSpec::new(Dim::Fixed(232.0), Dim::Fill)));
+        assert_eq!(adaptive.priority, Priority::Required);
     }
 
     #[kithara::test]

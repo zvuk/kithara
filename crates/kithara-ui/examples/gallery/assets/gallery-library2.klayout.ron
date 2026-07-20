@@ -1,0 +1,20 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "gallery-library2",
+    root: Split(
+        axis: Horizontal,
+        children: [
+            (weight: 1.0, node: Module(
+                instance: "gallery",
+                source: "modules/nav.kmodule.ron",
+                size: (w: Fixed(198.0), h: Fill),
+            )),
+            (weight: 1.0, node: Module(
+                instance: "library2",
+                source: "modules/tabs/library2.kmodule.ron",
+                size: (w: Fill, h: Fill),
+            )),
+        ],
+    ),
+)

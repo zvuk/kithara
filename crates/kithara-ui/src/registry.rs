@@ -12,6 +12,7 @@ pub enum ValueKind {
     Text,
     Waveform,
     TrackList,
+    Tree,
 }
 
 #[derive(Clone, Copy, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd)]

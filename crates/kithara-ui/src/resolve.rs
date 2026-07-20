@@ -118,6 +118,8 @@ fn walk_includes(
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
         | ControlNode::TrackList { .. }
+        | ControlNode::Tree { .. }
+        | ControlNode::ContextBar { .. }
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Segmented { .. }
