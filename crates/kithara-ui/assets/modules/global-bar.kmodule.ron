@@ -7,11 +7,10 @@
             Brand(id: "brand"),
             PresetSelector(id: "presets"),
             Spacer(id: "spacer"),
-            Fader(
+            VuStereo(
                 id: "volume",
-                size: (w: Fixed(152.0), h: Fixed(34.0)),
-                style: VolumeCompact,
-                read: Parameter(id: "player.output.volume"),
+                size: (w: Fixed(64.0), h: Fixed(22.0)),
+                read: Telemetry(id: "player.output.levels"),
                 write: Parameter(id: "player.output.volume"),
             ),
             SettingsButton(id: "settings"),

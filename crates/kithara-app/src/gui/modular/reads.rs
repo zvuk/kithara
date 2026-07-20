@@ -1,4 +1,4 @@
-use kithara_ui::render::{ReadValue, Reads, TrackRow, WaveBucket, WaveformView};
+use kithara_ui::render::{ReadValue, Reads, StereoLevels, TrackRow, WaveBucket, WaveformView};
 use num_traits::ToPrimitive;
 
 use crate::state::UiState;
@@ -102,6 +102,11 @@ impl Reads for UiReads<'_> {
             "deck.track.title" => Some(ReadValue::Text(self.state.track_name.as_str())),
             "deck.track.source_kind" => Some(ReadValue::Text(source_kind(self.state))),
             "deck.track.key" => Some(ReadValue::Text(Consts::EM_DASH)),
+            "player.output.levels" => Some(ReadValue::Stereo(StereoLevels {
+                l: 0.0,
+                r: 0.0,
+                volume: self.state.volume,
+            })),
             "player.output.volume" => Some(ReadValue::Scalar(f64::from(self.state.volume))),
             "library.visible_tracks" => Some(ReadValue::TrackList(&self.tracks)),
             "library.query" => Some(ReadValue::Text(self.query)),
@@ -141,7 +146,7 @@ fn source_kind(state: &UiState) -> &'static str {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
-    use kithara_ui::render::{ReadValue, Reads};
+    use kithara_ui::render::{ReadValue, Reads, StereoLevels};
 
     use super::UiReads;
     use crate::state::UiState;
@@ -188,6 +193,22 @@ mod tests {
             };
             assert!((value - expected).abs() < f64::EPSILON);
         }
+    }
+
+    #[kithara::test]
+    fn output_levels_include_the_current_volume() {
+        let mut ui = UiState::empty();
+        ui.volume = 0.42;
+        let reads = reads(&ui);
+
+        assert_eq!(
+            reads.get("player.output.levels"),
+            Some(ReadValue::Stereo(StereoLevels {
+                l: 0.0,
+                r: 0.0,
+                volume: 0.42,
+            }))
+        );
     }
 
     #[kithara::test]

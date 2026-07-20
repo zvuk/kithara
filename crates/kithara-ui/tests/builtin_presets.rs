@@ -36,7 +36,7 @@ fn micro_preset_compiles_against_player_registry() {
     assert!(matches!(specs[0], ControlSpec::Button { .. }));
     assert!(matches!(specs[1], ControlSpec::DeckSummary { .. }));
     assert!(matches!(specs[2], ControlSpec::Bpm { .. }));
-    assert!(matches!(specs[3], ControlSpec::Fader { .. }));
+    assert!(matches!(specs[3], ControlSpec::VuStereo));
     assert!(matches!(specs[4], ControlSpec::Wave { .. }));
     assert!(matches!(specs[5], ControlSpec::SettingsButton));
 }

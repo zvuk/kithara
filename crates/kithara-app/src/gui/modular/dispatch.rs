@@ -174,8 +174,9 @@ fn find_expanded_node(
 mod tests {
     use kithara_test_utils::kithara;
     use kithara_ui::{
+        builtin,
         compile::compile,
-        expand::Binding,
+        expand::{Binding, ControlSpec},
         source::{MemResolver, UiConfig},
     };
 
@@ -233,5 +234,30 @@ mod tests {
         };
         assert_eq!(compiled.resolve(id), "deck.transport.toggle_play");
         assert!(find_control(&compiled, "deck-a/missing").is_none());
+    }
+
+    #[kithara::test]
+    fn builtin_volume_meters_write_the_output_volume_parameter() {
+        for (preset, path) in [
+            (builtin::MICRO_PRESET, "deck-a/volume"),
+            (builtin::PLAYER_PRESET, "global-bar/volume"),
+        ] {
+            let compiled = compile(
+                preset,
+                &builtin::resolver(),
+                &endpoints::registry(),
+                builtin::skin_doc(),
+                &UiConfig::default(),
+            )
+            .unwrap_or_else(|error| panic!("{preset} must compile: {error}"));
+            let (spec, write) = find_control(&compiled, path)
+                .unwrap_or_else(|| panic!("{path} must resolve in {preset}"));
+
+            assert!(matches!(spec, ControlSpec::VuStereo));
+            let Some(Binding::Parameter { id, .. }) = write else {
+                panic!("{path} must write a parameter");
+            };
+            assert_eq!(compiled.resolve(id), "player.output.volume");
+        }
     }
 }

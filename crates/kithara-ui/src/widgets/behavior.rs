@@ -232,6 +232,32 @@ mod tests {
     }
 
     #[kithara::test]
+    fn horizontal_drag_publishes_normalized_scalar() {
+        let drag = ScalarDrag::builder()
+            .path("volume".to_owned())
+            .mode(ScalarDragMode::Horizontal)
+            .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+            .build();
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(64.0, 22.0));
+        let cursor = Cursor::Available(Point::new(16.0, 11.0));
+        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+        let mut state = ScalarDragState::default();
+
+        let action = drag
+            .update(&mut state, &press, bounds, cursor)
+            .unwrap_or_else(|| panic!("horizontal drag must publish an action"));
+        let (message, _, _) = action.into_inner();
+
+        assert_eq!(
+            message,
+            Some(UiEvent::Control {
+                path: "volume".to_owned(),
+                action: ControlAction::SetScalar(0.25),
+            })
+        );
+    }
+
+    #[kithara::test]
     fn relative_drag_double_click_resets_to_configured_value() {
         let drag = ScalarDrag::builder()
             .path("knob".to_owned())

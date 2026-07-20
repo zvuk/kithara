@@ -91,6 +91,11 @@ pub(crate) fn registry() -> AppRegistry {
         EndpointDesc::new(ValueKind::Text).with_scope("deck"),
     );
     registry.insert(
+        EndpointCategory::Telemetry,
+        "player.output.levels",
+        EndpointDesc::new(ValueKind::Stereo),
+    );
+    registry.insert(
         EndpointCategory::Parameter,
         "player.output.volume",
         EndpointDesc::new(ValueKind::Scalar),

@@ -38,7 +38,7 @@ impl<'a> Widget<'a> for Fader<'_, '_, '_, '_> {
         let Some(ReadValue::Scalar(value)) = self.value else {
             return Space::new().into();
         };
-        if matches!(self.style, FaderStyle::Volume | FaderStyle::VolumeCompact) {
+        if matches!(self.style, FaderStyle::Volume) {
             return SegmentedFader::builder()
                 .skin(self.skin)
                 .path(self.path)

@@ -187,6 +187,7 @@ mod tests {
     struct Registry {
         bool_value: EndpointDesc,
         scalar: EndpointDesc,
+        stereo: EndpointDesc,
         scoped_scalar: EndpointDesc,
         scoped_text: EndpointDesc,
         scoped_trigger: EndpointDesc,
@@ -199,6 +200,7 @@ mod tests {
             Self {
                 bool_value: EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
                 scalar: EndpointDesc::new(ValueKind::Scalar),
+                stereo: EndpointDesc::new(ValueKind::Stereo),
                 scoped_scalar: EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
                 scoped_text: EndpointDesc::new(ValueKind::Text).with_scope("deck"),
                 scoped_trigger: EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
@@ -225,6 +227,7 @@ mod tests {
                 }
                 (EndpointCategory::Telemetry, "deck.track.title") => Some(&self.scoped_text),
                 (EndpointCategory::Parameter, "player.output.volume") => Some(&self.scalar),
+                (EndpointCategory::Telemetry, "player.output.levels") => Some(&self.stereo),
                 (EndpointCategory::Model, "library.visible_tracks") => Some(&self.track_list),
                 _ => None,
             }

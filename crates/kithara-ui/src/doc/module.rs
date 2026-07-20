@@ -502,7 +502,6 @@ pub enum FaderStyle {
     #[default]
     Default,
     Volume,
-    VolumeCompact,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

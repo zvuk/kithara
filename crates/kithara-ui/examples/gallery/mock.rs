@@ -652,6 +652,11 @@ impl Reads for MockReads {
             "deck.track.title" | "mock.track.title" => ReadValue::Text(CATALOG.title),
             "deck.track.source_kind" | "mock.track.artist" => ReadValue::Text(CATALOG.artist),
             "deck.track.key" | "mock.key" => ReadValue::Text(Consts::KEY),
+            "player.output.levels" => ReadValue::Stereo(StereoLevels {
+                l: 0.66,
+                r: 0.52,
+                volume: self.volume.as_(),
+            }),
             "player.output.volume" | "mock.volume" => ReadValue::Scalar(self.volume),
             "library.visible_tracks" => ReadValue::TrackList(CATALOG.rows),
             "library.tree" => ReadValue::Tree(&self.tree_rows),
@@ -783,6 +788,14 @@ impl EndpointRegistry for MockRegistry {
     }
 }
 
+fn insert_output_levels(registry: &mut MockRegistry) {
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "player.output.levels",
+        EndpointDesc::new(ValueKind::Stereo),
+    );
+}
+
 pub(super) fn registry() -> impl EndpointRegistry {
     let mut registry = MockRegistry::default();
     for (id, kind) in [
@@ -814,6 +827,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(kind).with_scope("deck"),
         );
     }
+    insert_output_levels(&mut registry);
     for id in ["player.output.volume", "mock.cells.segmented"] {
         registry.insert(
             EndpointCategory::Parameter,
