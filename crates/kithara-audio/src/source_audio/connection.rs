@@ -4,10 +4,9 @@ use kithara_bufpool::PcmPool;
 use kithara_platform::sync::Arc;
 
 use super::{
-    SourceAudioActivity, SourceAudioError, SourceAudioReader, SourceAudioTap,
+    SourceAudioError, SourceAudioReader, SourceAudioTap,
     cache::SourceAudioCache,
     model::{SourceAudioCommand, SourceAudioPacket, SourceAudioStatus, SourceAudioWindow},
-    tap::SourceAudioOutputs,
 };
 use crate::{
     renderer::AudioWorkerHandle,
@@ -29,13 +28,10 @@ pub(crate) fn connect_source_audio(
         .and_then(|count| count.checked_add(2))
         .ok_or(SourceAudioError::CapacityOverflow)?;
     let worker_wake: Arc<dyn WakeSignal> = Arc::new(SourceAudioWorkerWake(worker));
-    let activity = SourceAudioActivity::for_connection();
-    let activity_wake: Arc<dyn WakeSignal> = Arc::new(SourceAudioActivityWake(activity.clone()));
     let (command_outlet, command_inlet) =
         connect::<SourceAudioCommand>(capacity, Some(Arc::clone(&worker_wake)));
-    let (data_outlet, data_inlet) =
-        connect::<SourceAudioPacket>(capacity, Some(Arc::clone(&activity_wake)));
-    let (status_outlet, status_inlet) = connect::<SourceAudioStatus>(capacity, Some(activity_wake));
+    let (data_outlet, data_inlet) = connect::<SourceAudioPacket>(capacity, None);
+    let (status_outlet, status_inlet) = connect::<SourceAudioStatus>(capacity, None);
     let (trash_outlet, trash_inlet) =
         connect::<SourceAudioWindow>(trash_capacity, Some(worker_wake));
 
@@ -48,11 +44,11 @@ pub(crate) fn connect_source_audio(
         SourceAudioCache::new(
             NonZeroUsize::new(capacity).ok_or(SourceAudioError::CapacityOverflow)?,
         ),
-        activity.clone(),
     );
     let tap = SourceAudioTap::new(
         command_inlet,
-        SourceAudioOutputs::new(data_outlet, status_outlet, activity),
+        data_outlet,
+        status_outlet,
         trash_inlet,
         buffers,
         max_frames,
@@ -65,13 +61,5 @@ struct SourceAudioWorkerWake(AudioWorkerHandle);
 impl WakeSignal for SourceAudioWorkerWake {
     fn wake(&self) {
         self.0.wake();
-    }
-}
-
-struct SourceAudioActivityWake(SourceAudioActivity);
-
-impl WakeSignal for SourceAudioActivityWake {
-    fn wake(&self) {
-        self.0.signal();
     }
 }

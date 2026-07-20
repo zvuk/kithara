@@ -3,8 +3,6 @@ mod core;
 mod elastic;
 #[cfg(not(target_arch = "wasm32"))]
 mod elastic_renderer;
-#[cfg(not(target_arch = "wasm32"))]
-mod elastic_source;
 mod fade;
 mod feeder;
 mod read;

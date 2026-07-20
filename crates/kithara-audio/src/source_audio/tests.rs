@@ -98,25 +98,17 @@ fn demand_tokens_are_rejected_across_reader_lanes() {
 }
 
 #[kithara::test]
-#[cfg(not(target_arch = "wasm32"))]
-fn source_activity_wakes_when_data_becomes_ready() {
+fn captured_data_becomes_ready_when_the_reader_polls() {
     let mut fixture = Fixture::new(2, 4, mono());
-    let activity = fixture
-        .reader
-        .take_activity()
-        .expect("source activity ownership");
-    assert!(fixture.reader.take_activity().is_none());
     let range = SourceFrameRange::new(0, 2).expect("valid source range");
     let demand = fixture.reader.request(range, 0, 1).expect("source demand");
     fixture.tap.service().expect("install demand");
-    let snapshot = activity.snapshot();
 
     let chunk = fixture.chunk(mono(), 0, &[1.0, 2.0]);
     assert_eq!(
         fixture.tap.capture(&chunk, 1),
         Ok(SourceAudioCaptureOutcome::Captured)
     );
-    activity.wait(snapshot);
 
     let mut output = [0.0; 2];
     assert_eq!(
@@ -127,26 +119,18 @@ fn source_activity_wakes_when_data_becomes_ready() {
 }
 
 #[kithara::test]
-#[cfg(not(target_arch = "wasm32"))]
-fn source_activity_wakes_when_terminal_status_arrives() {
+fn terminal_status_becomes_visible_when_the_reader_polls() {
     let mut fixture = Fixture::new(2, 4, mono());
     fixture
         .reader
         .activate_authoritative(mono())
         .expect("authoritative activation");
     fixture.tap.service().expect("install activation");
-    let activity = fixture
-        .reader
-        .take_activity()
-        .expect("source activity ownership");
     let range = SourceFrameRange::new(0, 2).expect("valid source range");
     let demand = fixture.reader.request(range, 0, 1).expect("source demand");
     fixture.tap.service().expect("install demand");
-    let snapshot = activity.snapshot();
 
     assert!(fixture.tap.finish(1, super::SourceAudioTerminal::Eof));
-    assert_ne!(activity.snapshot(), snapshot);
-    activity.wait(snapshot);
 
     let mut output = [0.0; 2];
     assert_eq!(
@@ -174,10 +158,10 @@ fn deactivation_stops_capture_and_keeps_cached_ranges_reusable() {
 
     fixture.reader.deactivate().expect("deactivate source lane");
     fixture.tap.service().expect("install deactivation");
-    assert_eq!(
+    assert!(matches!(
         fixture.reader.request(range, 0, 2),
         Err(SourceAudioError::Inactive)
-    );
+    ));
     assert_eq!(
         fixture.tap.capture(&cached, 1),
         Ok(SourceAudioCaptureOutcome::Ignored)
@@ -375,7 +359,6 @@ fn returned_source_buffers_release_data_backpressure() {
 }
 
 #[kithara::test]
-#[cfg(not(target_arch = "wasm32"))]
 fn closed_capture_lane_fails_an_uncached_demand() {
     let pool = PcmPool::default();
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
@@ -386,16 +369,12 @@ fn closed_capture_lane_fails_an_uncached_demand() {
         worker.clone(),
     )
     .expect("source audio connection");
-    let activity = reader.take_activity().expect("source activity ownership");
     reader.activate(mono()).expect("source audio activation");
     tap.service().expect("install activation");
     let range = SourceFrameRange::new(0, 2).expect("valid source range");
     let demand = reader.request(range, 0, 1).expect("source demand");
     tap.service().expect("install demand");
-    let snapshot = activity.snapshot();
     drop(tap);
-    assert_ne!(activity.snapshot(), snapshot);
-    activity.wait(snapshot);
 
     let mut output = [0.0; 2];
     assert_eq!(

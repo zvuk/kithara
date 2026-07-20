@@ -222,15 +222,12 @@ Activation/demand, data, and retirement use separate bounded SPSC ports; cache
 polling and reads copy no ownership. In authoritative mode, demand gates decode
 and the ordinary processed-audio ring is no longer an output requirement.
 
-`SourceAudioActivity` is the sole readiness edge for one reader lane. Data and
-terminal-status producers signal it when their ports become readable, and a
-drop-ordered guard signals only after both producers have closed. The reader
-transfers one activity handle to an external blocking consumer; all clones share
-one `ThreadGate` and therefore permit one waiting thread. A waiter snapshots the
-edge before a nonblocking read and parks only after that read reports pending,
-so a racing producer signal cannot be lost. Signaling is nonblocking and
-allocation-free for real-time callers; readiness never depends on timer polling
-or a runtime `Notify` from the audio callback.
+The reader owner polls its bounded data and terminal-status inputs before each
+nonblocking cache read. A demand carries a private connection identity so a
+reader rejects tokens from another lane without exposing a readiness primitive
+or another mutable state owner. Producer close is observed through the existing
+port lifecycle. Source-audio readiness therefore adds no blocking waiter,
+thread gate, timer, or runtime notification to the audio callback.
 
 ## Waveform
 

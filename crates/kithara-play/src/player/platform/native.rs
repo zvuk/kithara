@@ -1,6 +1,5 @@
 use kithara_audio::ServiceClass;
-use kithara_bufpool::PcmPool;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::sync::Arc;
 use kithara_stretch::{ElasticError, ElasticRateEnvelope, SignalsmithElastic};
 
 use super::{
@@ -146,12 +145,6 @@ impl PlayerImpl {
         }
         ensure_join_target(current, target)?;
         let stamp = prepared.stamp;
-        let cancel = self
-            .core
-            .engine
-            .cancel_token()
-            .ok_or_else(|| PlayError::Internal("player join has no cancel owner".into()))?
-            .child();
         let dispatched = dispatch_join(
             &self.core.items,
             QueuedResource {
@@ -166,7 +159,6 @@ impl PlayerImpl {
                 Some(current.tempo()),
                 self.core.engine.pcm_pool(),
                 stamp,
-                cancel,
             ),
             &self.core.engine,
             slot,
@@ -375,22 +367,6 @@ impl ItemQueue {
     }
 }
 
-pub(crate) fn activate_load(
-    player_resource: &mut Option<PlayerResource>,
-    activation: &mut Option<(CancelToken, PcmPool)>,
-) -> Result<(), PlayError> {
-    let Some((cancel, pool)) = activation.take() else {
-        return Ok(());
-    };
-    player_resource
-        .as_mut()
-        .ok_or_else(|| PlayError::Internal("load transaction lost its resource".into()))?
-        .activate_prepared_elastic(cancel, pool)
-        .map_err(|error| PlayError::ElasticPreparation {
-            reason: error.to_string(),
-        })
-}
-
 pub(crate) fn prepare_bound_load(
     playlist: &mut Playlist,
     index: usize,
@@ -445,7 +421,6 @@ pub(crate) fn prepare_bound_load(
         player_resource,
         prepared_stamp: Some(prepared_stamp),
         abr_handle,
-        activation: Some((context.cancel, context.pool.clone())),
     })
 }
 

@@ -1,8 +1,8 @@
 use num_traits::ToPrimitive;
 
 use super::{
-    BufferedSourceWindow, Consts, ElasticPreparation, ElasticPreparationOutcome,
-    ElasticPrepareError, ElasticRenderer, PlaybackDirection, PlayerResource, SessionBeat,
+    BufferedSourceWindow, ElasticPreparation, ElasticPreparationOutcome, ElasticPrepareError,
+    ElasticRenderer, PlaybackDirection, PlayerResource, READY_WINDOW_COUNT, SessionBeat,
     SourceAudioReadOutcome, SourceCopy, SourceCursor, SourceFrameRange, Tempo, TrackBinding,
     sample_count,
 };
@@ -271,7 +271,6 @@ impl ElasticRenderer {
         }
         self.preparation = None;
         self.demand = None;
-        self.preparation_buffers.clear();
         Ok(ElasticPreparationOutcome::Ready)
     }
 
@@ -311,7 +310,7 @@ impl ElasticRenderer {
             .as_ref()
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
         let buffer = self
-            .preparation_buffers
+            .window_buffers
             .last_mut()
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
         match resource.read_source_audio(demand, range, &mut buffer[..samples])? {
@@ -324,7 +323,7 @@ impl ElasticRenderer {
             None => return Err(ElasticPrepareError::SourceUnavailable),
         }
         let samples = self
-            .preparation_buffers
+            .window_buffers
             .pop()
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
         self.ready_windows
@@ -334,13 +333,12 @@ impl ElasticRenderer {
         let preparation = self
             .preparation
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
-        if self.ready_windows.len() < Consts::READY_WINDOW_COUNT
+        if self.ready_windows.len() < READY_WINDOW_COUNT
             && self.begin_preparation_window(resource, range, preparation.direction)?
         {
             return Ok(ElasticPreparationOutcome::Pending);
         }
         self.preparation = None;
-        self.preparation_buffers.clear();
         Ok(ElasticPreparationOutcome::Ready)
     }
 
@@ -436,18 +434,14 @@ impl ElasticRenderer {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{mem::replace, num::NonZeroU32};
 
     use kithara_audio::{BeatGrid, TrackBeat, analysis::TrackAnalysis};
     use kithara_bufpool::PcmPool;
-    use kithara_platform::CancelScope;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::player::{
-        node::StreamShape,
-        track::elastic_source::{PORT_CAPACITY, elastic_source_test_pair},
-    };
+    use crate::player::{node::StreamShape, track::elastic_renderer::RelocationRead};
 
     const SAMPLE_RATE: u32 = 44_100;
 
@@ -524,54 +518,67 @@ mod tests {
 
         let pool = PcmPool::default();
         let mut renderer = renderer(&pool);
-        let scope = CancelScope::new(None);
-        let (port, mut peer) = elastic_source_test_pair(scope.token());
-        renderer.source_port = Some(port);
         renderer.source_window = Some(initial);
-        renderer
-            .schedule_window(direction)
-            .expect("initial successor schedules");
-
-        for ready_count in 1..=Consts::READY_WINDOW_COUNT {
-            let request = peer.pop_request().expect("successor request is bounded");
-            assert!(request.range().start() < request.range().end());
-            assert!(request.range().len() <= renderer.source_window_frames);
-            assert!(peer.push_ready(request.generation(), request.range(), pool.get()));
+        while renderer.ready_windows.len() < READY_WINDOW_COUNT {
+            let frontier = renderer
+                .ready_windows
+                .last()
+                .map_or(initial, |window| window.range);
+            let range = renderer
+                .next_source_window(frontier, direction)
+                .expect("successor range calculation")
+                .expect("source has another successor window");
+            let samples = renderer
+                .window_buffers
+                .pop()
+                .expect("fixed window buffer is available");
             renderer
-                .poll_source_port(direction)
-                .expect("successor reply advances the directional frontier");
-            assert_eq!(renderer.ready_windows.len(), ready_count);
-            renderer
-                .schedule_window(direction)
-                .expect("ready pipeline replenishes within capacity");
+                .stage_ready_window(range, samples, direction)
+                .expect("successor advances the directional frontier");
         }
-        assert!(peer.pop_request().is_none());
+        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
 
         for _ in 0..PROMOTIONS {
-            let next = renderer
-                .ready_windows
-                .first()
-                .expect("full pipeline has a successor")
-                .range;
-            renderer
-                .ensure_window(next, direction)
-                .expect("ready successor promotes without a deadline miss");
+            let window = renderer.ready_windows.remove(0);
+            let next = window.range;
+            let old = replace(&mut renderer.fetch, window.samples);
+            renderer.window_buffers.push(old);
+            renderer.source_window = Some(next);
             assert_eq!(renderer.source_window, Some(next));
-            assert_eq!(renderer.ready_windows.len(), Consts::READY_WINDOW_COUNT - 1);
-            while peer.pop_recycled().is_some() {}
+            assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT - 1);
 
-            let request = peer
-                .pop_request()
-                .expect("promotion schedules one successor");
-            assert!(peer.pop_request().is_none());
-            assert!(request.range().start() < request.range().end());
-            assert!(request.range().len() <= renderer.source_window_frames);
-            assert!(peer.push_ready(request.generation(), request.range(), pool.get()));
+            let frontier = renderer
+                .ready_windows
+                .last()
+                .map_or(next, |ready| ready.range);
+            let range = renderer
+                .next_source_window(frontier, direction)
+                .expect("successor range calculation")
+                .expect("stress range stays away from source boundary");
+            let samples = renderer
+                .window_buffers
+                .pop()
+                .expect("promoted buffer replenishes the fixed bank");
             renderer
-                .poll_source_port(direction)
+                .stage_ready_window(range, samples, direction)
                 .expect("scheduled successor restores the full pipeline");
-            assert_eq!(renderer.ready_windows.len(), Consts::READY_WINDOW_COUNT);
+            assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT);
+            assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
+            assert!(!renderer.ready_windows.spilled());
+            assert!(!renderer.window_buffers.spilled());
         }
+    }
+
+    fn fixed_buffer_count(renderer: &ElasticRenderer) -> usize {
+        let primary_pending = usize::from(renderer.pending_source_read.is_some());
+        let relocation_read = renderer.relocation.as_ref().map_or(0, |relocation| {
+            usize::from(!matches!(&relocation.read, RelocationRead::Idle))
+        });
+        1 + renderer.window_buffers.len()
+            + renderer.ready_windows.len()
+            + primary_pending
+            + usize::from(renderer.relocation_buffer.is_some())
+            + relocation_read
     }
 
     #[kithara::test]
@@ -647,62 +654,59 @@ mod tests {
     fn reverse_window_renewal_keeps_the_active_window_until_successor_use() {
         let pool = PcmPool::default();
         let mut renderer = renderer(&pool);
-        let scope = CancelScope::new(None);
-        let (port, mut peer) = elastic_source_test_pair(scope.token());
-        renderer.source_port = Some(port);
-        renderer.source_window =
-            Some(SourceFrameRange::new(10_000, 20_000).expect("valid current source window"));
+        let current = SourceFrameRange::new(10_000, 20_000).expect("valid current source window");
+        renderer.source_window = Some(current);
 
-        renderer
-            .schedule_window(PlaybackDirection::Reverse)
-            .expect("reverse renewal schedules");
-        let request = peer.pop_request().expect("reverse renewal request");
-        assert!(request.range().start() < 10_000);
+        let request = renderer
+            .next_source_window(current, PlaybackDirection::Reverse)
+            .expect("reverse range calculation")
+            .expect("reverse renewal range");
+        assert!(request.start() < 10_000);
         assert_eq!(
-            request.range().end(),
+            request.end(),
             10_000 + u64::try_from(renderer.max_source_frames).expect("window overlap fits u64")
         );
-        assert!(request.range().len() <= renderer.source_window_frames);
-        assert!(request.range().start() < request.range().end());
-        assert!(peer.push_ready(request.generation(), request.range(), pool.get()));
-
+        assert!(request.len() <= renderer.source_window_frames);
+        let samples = renderer
+            .window_buffers
+            .pop()
+            .expect("first fixed window buffer");
         renderer
-            .poll_source_port(PlaybackDirection::Reverse)
+            .stage_ready_window(request, samples, PlaybackDirection::Reverse)
             .expect("earlier source window is accepted");
-        assert_eq!(
-            renderer.source_window,
-            Some(SourceFrameRange::new(10_000, 20_000).expect("valid current source window"))
-        );
+        assert_eq!(renderer.source_window, Some(current));
         assert_eq!(
             renderer.ready_windows.first().map(|window| window.range),
-            Some(request.range())
+            Some(request)
         );
+
+        let second = renderer
+            .next_source_window(request, PlaybackDirection::Reverse)
+            .expect("second reverse range calculation")
+            .expect("second reverse successor range");
+        assert!(second.start() < request.start());
+        let samples = renderer
+            .window_buffers
+            .pop()
+            .expect("second fixed window buffer");
         renderer
-            .schedule_window(PlaybackDirection::Reverse)
-            .expect("second reverse successor schedules");
-        let second = peer
-            .pop_request()
-            .expect("second reverse successor request");
-        assert!(second.range().start() < request.range().start());
-        assert!(peer.push_ready(second.generation(), second.range(), pool.get()));
-        renderer
-            .poll_source_port(PlaybackDirection::Reverse)
+            .stage_ready_window(second, samples, PlaybackDirection::Reverse)
             .expect("second reverse successor is accepted");
-        assert_eq!(renderer.ready_windows.len(), Consts::READY_WINDOW_COUNT);
+        assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT);
 
         let successor_range = SourceFrameRange::new(9_000, 9_512).expect("valid successor range");
-        renderer
-            .ensure_window(successor_range, PlaybackDirection::Reverse)
-            .expect("ready successor window is promoted at its boundary");
-        assert_eq!(renderer.source_window, Some(request.range()));
+        assert!(request.start() <= successor_range.start());
+        assert!(successor_range.end() <= request.end());
+        let window = renderer.ready_windows.remove(0);
+        let old = replace(&mut renderer.fetch, window.samples);
+        renderer.window_buffers.push(old);
+        renderer.source_window = Some(window.range);
+        assert_eq!(renderer.source_window, Some(request));
         assert_eq!(
             renderer.ready_windows.first().map(|window| window.range),
-            Some(second.range())
+            Some(second)
         );
-        let third = peer
-            .pop_request()
-            .expect("FIFO promotion replenishes one successor");
-        assert!(third.range().start() < second.range().start());
+        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
     }
 
     #[kithara::test]
@@ -711,9 +715,10 @@ mod tests {
         let mut renderer = renderer(&pool);
         renderer.source_window =
             Some(SourceFrameRange::new(10_000, 20_000).expect("valid active window"));
+        let samples = renderer.window_buffers.pop().expect("fixed window buffer");
         renderer.ready_windows.push(BufferedSourceWindow {
             range: SourceFrameRange::new(19_000, 30_000).expect("valid ready window"),
-            samples: pool.get(),
+            samples,
         });
 
         assert_eq!(
@@ -723,67 +728,17 @@ mod tests {
     }
 
     #[kithara::test]
-    fn recycle_backpressure_preserves_multiple_ready_windows() {
+    fn relocation_commit_reuses_only_the_fixed_buffer_bank() {
         let pool = PcmPool::default();
         let mut renderer = renderer(&pool);
-        let scope = CancelScope::new(None);
-        let (mut port, mut peer) = elastic_source_test_pair(scope.token());
-        for _ in 0..4 {
-            assert!(port.recycle(pool.get()).is_ok());
-        }
-        let range = SourceFrameRange::new(0, 1).expect("valid source range");
-        assert!(peer.push_ready(1, range, pool.get()));
-        assert!(peer.push_ready(2, range, pool.get()));
-        renderer.source_port = Some(port);
-
-        renderer
-            .poll_source_port(PlaybackDirection::Forward)
-            .expect("first reply poll");
-        assert_eq!(renderer.pending_retirements.len(), 1);
-
-        let mut retired = usize::from(peer.pop_recycled().is_some());
-        renderer
-            .poll_source_port(PlaybackDirection::Forward)
-            .expect("second reply poll");
-        assert_eq!(renderer.pending_retirements.len(), 1);
-        while peer.pop_recycled().is_some() {
-            retired += 1;
-        }
-
-        renderer
-            .poll_source_port(PlaybackDirection::Forward)
-            .expect("final retirement flush");
-        while peer.pop_recycled().is_some() {
-            retired += 1;
-        }
-
-        assert_eq!(retired, 6);
-        assert!(renderer.pending_retirements.is_empty());
-        assert!(
-            renderer
-                .source_port
-                .as_mut()
-                .expect("test source port")
-                .receive()
-                .is_none()
-        );
-    }
-
-    #[kithara::test]
-    fn relocation_backpressure_preserves_every_retired_buffer() {
-        let pool = PcmPool::default();
-        let mut renderer = renderer(&pool);
-        let scope = CancelScope::new(None);
-        let (mut source_port, mut source_peer) = elastic_source_test_pair(scope.token());
-        let (relocation_port, _relocation_peer) = elastic_source_test_pair(scope.token());
-        for _ in 0..4 {
-            assert!(source_port.recycle(pool.get()).is_ok());
-        }
-        renderer.attach_source_ports(source_port, relocation_port);
         for offset in [0, 1] {
+            let samples = renderer
+                .window_buffers
+                .pop()
+                .expect("fixed ready-window buffer");
             renderer.ready_windows.push(BufferedSourceWindow {
                 range: SourceFrameRange::new(offset, offset + 1).expect("valid ready range"),
-                samples: pool.get(),
+                samples,
             });
         }
         let target = SessionBeat::new(0.0).expect("finite target");
@@ -795,52 +750,34 @@ mod tests {
                 ElasticRenderer::RELOCATION_PREFETCH_BLOCKS,
             )
             .expect("relocation preparation");
-        let fetch_frames =
-            usize::try_from(preparation.fetch_range.len()).expect("test fetch range fits usize");
-        let samples =
-            super::super::prepared_buffer(&pool, fetch_frames).expect("relocation buffer");
+        let samples = renderer
+            .relocation_buffer
+            .take()
+            .expect("fixed relocation buffer");
         renderer.relocation = Some(super::super::ElasticRelocation {
             preparation,
+            read: RelocationRead::Ready(samples),
             revision: 1,
-            samples: Some(samples),
             target,
         });
+        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
 
         renderer
             .commit_relocation(1)
-            .expect("relocation commits under recycle backpressure");
+            .expect("prepared relocation commits");
 
-        let mut retired = 0;
-        while source_peer.pop_recycled().is_some() {
-            retired += 1;
-        }
-        renderer
-            .poll_source_port(PlaybackDirection::Forward)
-            .expect("deferred retirements flush");
-        while source_peer.pop_recycled().is_some() {
-            retired += 1;
-        }
-
-        assert_eq!(retired, 7);
-        assert!(renderer.pending_retirements.is_empty());
-        assert!(!renderer.pending_retirements.spilled());
+        assert!(renderer.ready_windows.is_empty());
+        assert_eq!(renderer.window_buffers.len(), READY_WINDOW_COUNT);
+        assert!(renderer.relocation_buffer.is_some());
+        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
+        assert!(!renderer.ready_windows.spilled());
+        assert!(!renderer.window_buffers.spilled());
     }
 
     #[kithara::test]
-    fn relocation_cancel_reserves_bounded_retirement_capacity() {
+    fn relocation_cancel_returns_the_reserved_buffer() {
         let pool = PcmPool::default();
         let mut renderer = renderer(&pool);
-        let scope = CancelScope::new(None);
-        let (mut source_port, mut source_peer) = elastic_source_test_pair(scope.token());
-        let (mut relocation_port, _relocation_peer) = elastic_source_test_pair(scope.token());
-        for _ in 0..PORT_CAPACITY {
-            assert!(source_port.recycle(pool.get()).is_ok());
-            assert!(relocation_port.recycle(pool.get()).is_ok());
-        }
-        renderer.attach_source_ports(source_port, relocation_port);
-        for _ in 1..Consts::RETIREMENT_CAPACITY {
-            renderer.pending_retirements.push(pool.get());
-        }
         let target = SessionBeat::new(1.0).expect("finite target");
         renderer
             .begin_relocation(
@@ -850,30 +787,21 @@ mod tests {
                 7,
             )
             .expect("relocation begins");
+        let samples = renderer
+            .relocation_buffer
+            .take()
+            .expect("fixed relocation buffer");
         renderer
             .relocation
             .as_mut()
             .expect("relocation remains owned")
-            .samples = Some(pool.get());
-        assert!(source_peer.push_ready(
-            99,
-            SourceFrameRange::new(0, 1).expect("valid stale range"),
-            pool.get(),
-        ));
-
-        renderer
-            .poll_source_port(PlaybackDirection::Forward)
-            .expect("source poll remains bounded");
-        renderer
-            .discard_relocation(7)
-            .expect("relocation cancellation succeeds");
+            .read = RelocationRead::Ready(samples);
+        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
+        renderer.discard_relocation(7);
 
         assert!(renderer.relocation.is_none());
-        assert_eq!(
-            renderer.pending_retirements.len(),
-            Consts::RETIREMENT_CAPACITY
-        );
-        assert!(!renderer.pending_retirements.spilled());
+        assert!(renderer.relocation_buffer.is_some());
+        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
     }
 
     #[kithara::test]
@@ -887,11 +815,15 @@ mod tests {
         renderer
             .begin_relocation(&binding, first, tempo, 7)
             .expect("first relocation begins");
+        let samples = renderer
+            .relocation_buffer
+            .take()
+            .expect("fixed relocation buffer");
         renderer
             .relocation
             .as_mut()
             .expect("first relocation is retained")
-            .samples = Some(pool.get());
+            .read = RelocationRead::Ready(samples);
 
         let error = renderer
             .begin_relocation(&binding, second, tempo, 8)
@@ -904,6 +836,7 @@ mod tests {
             .expect("first relocation remains pending");
         assert_eq!(relocation.revision, 7);
         assert_eq!(relocation.target, first);
-        assert!(relocation.samples.is_some());
+        assert!(matches!(&relocation.read, RelocationRead::Ready(_)));
+        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
     }
 }

@@ -1,12 +1,12 @@
 use kithara_decode::PcmSpec;
+use kithara_platform::sync::Arc;
 
 use super::{
-    SourceAudioActivity, SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome,
-    SourceFrameRange,
+    SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome, SourceFrameRange,
     cache::{SourceAudioCache, SourceAudioCacheInsert},
     model::{
-        SourceAudioCommand, SourceAudioPacket, SourceAudioRequest, SourceAudioRole,
-        SourceAudioStatus, SourceAudioTerminal, SourceAudioWindow, sample_count,
+        SourceAudioCommand, SourceAudioConnection, SourceAudioPacket, SourceAudioRequest,
+        SourceAudioRole, SourceAudioStatus, SourceAudioTerminal, SourceAudioWindow, sample_count,
     },
 };
 use crate::runtime::{Inlet, Outlet};
@@ -14,7 +14,7 @@ use crate::runtime::{Inlet, Outlet};
 /// Nonblocking reader for immutable decoded source-audio windows.
 #[non_exhaustive]
 pub struct SourceAudioReader {
-    connection: SourceAudioActivity,
+    connection: Arc<SourceAudioConnection>,
     generation: u64,
     active: bool,
     demand: Option<SourceAudioRequest>,
@@ -25,7 +25,6 @@ pub struct SourceAudioReader {
     cache: SourceAudioCache,
     pending_retirement: Option<SourceAudioWindow>,
     terminal: Option<SourceAudioStatus>,
-    activity: Option<SourceAudioActivity>,
 }
 
 impl SourceAudioReader {
@@ -35,10 +34,9 @@ impl SourceAudioReader {
         status_inlet: Inlet<SourceAudioStatus>,
         trash_outlet: Outlet<SourceAudioWindow>,
         cache: SourceAudioCache,
-        activity: SourceAudioActivity,
     ) -> Self {
         Self {
-            connection: activity.clone(),
+            connection: Arc::new(SourceAudioConnection::default()),
             generation: 0,
             active: false,
             demand: None,
@@ -49,15 +47,7 @@ impl SourceAudioReader {
             cache,
             pending_retirement: None,
             terminal: None,
-            activity: Some(activity),
         }
-    }
-
-    /// Transfer the activity edge to the external waiter.
-    /// Returns `None` after the handle has already been taken.
-    #[must_use = "the source activity handle can be taken only once"]
-    pub fn take_activity(&mut self) -> Option<SourceAudioActivity> {
-        self.activity.take()
     }
 
     /// Activate capture for one decoded audio format.
@@ -243,7 +233,7 @@ impl SourceAudioReader {
     }
 
     fn validate_demand(&self, demand: &SourceAudioDemand) -> Result<(), SourceAudioError> {
-        if demand.connection != self.connection {
+        if !Arc::ptr_eq(&demand.connection, &self.connection) {
             return Err(SourceAudioError::ForeignDemand);
         }
         if self.demand != Some(demand.request) {

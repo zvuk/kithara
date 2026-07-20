@@ -178,12 +178,6 @@ impl PlayerImpl {
             (self.core.engine.stream_shape()?, 0, None)
         };
         let stamp = PreparedBindingStamp::new(shape, transport_revision);
-        let cancel = self
-            .core
-            .engine
-            .cancel_token()
-            .ok_or_else(|| PlayError::Internal("player load has no cancel owner".into()))?
-            .child();
         let dispatched = self.core.items.dispatch_load(
             index,
             ItemLoadContext::new(
@@ -192,7 +186,6 @@ impl PlayerImpl {
                 tempo,
                 self.core.engine.pcm_pool(),
                 stamp,
-                cancel,
             ),
             &self.core.engine,
             slot_id,

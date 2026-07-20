@@ -46,8 +46,8 @@ pub use renderer::{
     AudioWorkerHandle, AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass,
 };
 pub use source_audio::{
-    SourceAudioActivity, SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome,
-    SourceAudioReader, SourceFrameRange,
+    SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome, SourceAudioReader,
+    SourceFrameRange,
 };
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,

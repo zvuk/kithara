@@ -6,7 +6,7 @@ mod rendering;
 use std::{mem::replace, num::NonZeroU32};
 
 use kithara_audio::{
-    ServiceClass, SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome, SourceFrameRange,
+    SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome, SourceFrameRange,
 };
 use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
 use kithara_stretch::{
@@ -20,23 +20,15 @@ use smallvec::SmallVec;
 use super::{
     PlayerResource,
     elastic::{ElasticPlanError, ElasticRenderSegment, plan_elastic_segments},
-    elastic_source::{
-        ElasticSourcePort, ElasticSourceReply, ElasticSourceRequest, ElasticSourceWindow,
-        PORT_CAPACITY,
-    },
 };
 use crate::{
     api::{PlaybackDirection, SessionBeat, SyncUnavailable, Tempo, TrackBinding},
     player::node::StreamShape,
+    resource::Resource,
     session::render::RenderContext,
 };
 
-struct Consts;
-
-impl Consts {
-    const READY_WINDOW_COUNT: usize = 2;
-    const RETIREMENT_CAPACITY: usize = Self::READY_WINDOW_COUNT + PORT_CAPACITY + 1;
-}
+const READY_WINDOW_COUNT: usize = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ElasticPrepareError {
@@ -102,10 +94,10 @@ pub(crate) enum ElasticRenderError {
     NotPrepared,
     #[error("elastic renderer history was prepared for a different playback direction")]
     DirectionMismatch,
-    #[error("elastic source preparation worker is unavailable")]
-    SourceWorkerUnavailable,
-    #[error("elastic source preparation worker failed")]
-    SourceWorkerFailed,
+    #[error("elastic source reader is unavailable")]
+    SourceUnavailable,
+    #[error("elastic source read failed")]
+    SourceReadFailed,
     #[error("elastic relocation was not ready at the committed session boundary")]
     RelocationNotReady,
     #[error("elastic relocation could not be primed at the committed session boundary")]
@@ -174,14 +166,26 @@ struct ElasticPreparation {
 
 struct ElasticRelocation {
     preparation: ElasticPreparation,
+    read: RelocationRead,
     revision: u64,
-    samples: Option<PcmBuf>,
     target: SessionBeat,
 }
 
 struct BufferedSourceWindow {
     range: SourceFrameRange,
     samples: PcmBuf,
+}
+
+struct PendingSourceRead {
+    demand: SourceAudioDemand,
+    range: SourceFrameRange,
+    samples: PcmBuf,
+}
+
+enum RelocationRead {
+    Idle,
+    Pending(PendingSourceRead),
+    Ready(PcmBuf),
 }
 
 pub(crate) struct ElasticRenderer {
@@ -198,21 +202,17 @@ pub(crate) struct ElasticRenderer {
     demand: Option<SourceAudioDemand>,
     cursor: Option<SourceCursor>,
     direction: Option<PlaybackDirection>,
-    pending_request: Option<ElasticSourceRequest>,
-    pending_relocation_request: Option<ElasticSourceRequest>,
-    pending_retirements: SmallVec<[PcmBuf; Consts::RETIREMENT_CAPACITY]>,
+    pending_source_read: Option<PendingSourceRead>,
     preparation: Option<ElasticPreparation>,
-    preparation_buffers: SmallVec<[PcmBuf; Consts::READY_WINDOW_COUNT]>,
+    window_buffers: SmallVec<[PcmBuf; READY_WINDOW_COUNT]>,
     preparation_extension: Option<SourceFrameRange>,
     preparation_request: Option<SourceFrameRange>,
     preparation_window: Option<SourceFrameRange>,
     primed: bool,
     relocation: Option<ElasticRelocation>,
-    relocation_port: Option<ElasticSourcePort>,
-    source_generation: u64,
-    source_port: Option<ElasticSourcePort>,
+    relocation_buffer: Option<PcmBuf>,
     source_window: Option<SourceFrameRange>,
-    ready_windows: SmallVec<[BufferedSourceWindow; Consts::READY_WINDOW_COUNT]>,
+    ready_windows: SmallVec<[BufferedSourceWindow; READY_WINDOW_COUNT]>,
     fetch: PcmBuf,
     history: PcmBuf,
     source: PcmBuf,
@@ -273,7 +273,7 @@ impl ElasticRenderer {
         let source_window_frames =
             u64::try_from(source_window_frames).map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let fetch_samples = sample_count(max_fetch_frames, channels)?;
-        let preparation_buffers = (0..Consts::READY_WINDOW_COUNT)
+        let window_buffers = (0..READY_WINDOW_COUNT)
             .map(|_| prepared_buffer(pool, fetch_samples))
             .collect::<Result<SmallVec<_>, _>>()?;
 
@@ -291,19 +291,15 @@ impl ElasticRenderer {
             demand: None,
             cursor: None,
             direction: None,
-            pending_request: None,
-            pending_relocation_request: None,
-            pending_retirements: SmallVec::new(),
+            pending_source_read: None,
             preparation: None,
-            preparation_buffers,
+            window_buffers,
             preparation_extension: None,
             preparation_request: None,
             preparation_window: None,
             primed: false,
             relocation: None,
-            relocation_port: None,
-            source_generation: 0,
-            source_port: None,
+            relocation_buffer: Some(prepared_buffer(pool, fetch_samples)?),
             source_window: None,
             ready_windows: SmallVec::new(),
             fetch: prepared_buffer(pool, fetch_samples)?,
@@ -324,35 +320,18 @@ impl ElasticRenderer {
             .map_or(0.0, |frame| frame / f64::from(self.sample_rate.get()))
     }
 
-    pub(super) fn set_service_class(&mut self, class: ServiceClass) {
-        if let Some(port) = self.source_port.as_mut() {
-            port.set_service_class(class);
-        }
-        if let Some(port) = self.relocation_port.as_mut() {
-            port.set_service_class(class);
-        }
-    }
-
-    pub(crate) fn attach_source_ports(
-        &mut self,
-        port: ElasticSourcePort,
-        relocation_port: ElasticSourcePort,
-    ) {
-        self.source_port = Some(port);
-        self.relocation_port = Some(relocation_port);
-    }
-
     pub(super) fn ensure_window(
         &mut self,
+        source: &mut Resource,
         range: SourceFrameRange,
         direction: PlaybackDirection,
     ) -> Result<(), ElasticRenderError> {
-        self.poll_source_port(direction)?;
+        self.poll_source_read(source, direction)?;
         if self
             .source_window
             .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
         {
-            self.schedule_window(direction)?;
+            self.schedule_window(source, direction)?;
             return Ok(());
         }
         if self
@@ -361,28 +340,26 @@ impl ElasticRenderer {
             .map(|window| window.range)
             .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
         {
-            if !self.has_retirement_capacity_with_relocation(1) {
-                return Err(ElasticRenderError::SourceWindowDeadlineMissed);
-            }
             let window = self.ready_windows.remove(0);
             let old = replace(&mut self.fetch, window.samples);
-            self.recycle_samples(old);
+            self.window_buffers.push(old);
             self.source_window = Some(window.range);
-            self.schedule_window(direction)?;
+            self.schedule_window(source, direction)?;
             return Ok(());
         }
-        self.schedule_window(direction)?;
+        self.schedule_window(source, direction)?;
         Err(ElasticRenderError::SourceWindowDeadlineMissed)
     }
 
     pub(super) fn schedule_window(
         &mut self,
+        source: &mut Resource,
         direction: PlaybackDirection,
     ) -> Result<(), ElasticRenderError> {
-        if self.ready_windows.len() >= Consts::READY_WINDOW_COUNT {
+        if self.ready_windows.len() >= READY_WINDOW_COUNT {
             return Ok(());
         }
-        if self.pending_request.is_some() {
+        if self.pending_source_read.is_some() || self.window_buffers.is_empty() {
             return Ok(());
         }
         let current = self
@@ -394,95 +371,90 @@ impl ElasticRenderer {
         let Some(request_range) = self.next_source_window(current, direction)? else {
             return Ok(());
         };
-        let generation = self
-            .source_generation
-            .checked_add(1)
-            .ok_or(ElasticRenderError::FrameOverflow)?;
-        let request = ElasticSourceRequest::new(generation, request_range);
-        let port = self
-            .source_port
-            .as_mut()
-            .ok_or(ElasticRenderError::SourceWorkerUnavailable)?;
-        if port.request(request).is_ok() {
-            self.source_generation = generation;
-            self.pending_request = Some(request);
-        }
+        source
+            .seek_source_frame(request_range.start())
+            .map_err(|_| ElasticRenderError::SourceReadFailed)?;
+        let demand = source
+            .request_source_audio(request_range, 0)?
+            .ok_or(ElasticRenderError::SourceUnavailable)?;
+        let samples = self
+            .window_buffers
+            .pop()
+            .ok_or(ElasticRenderError::SourceUnavailable)?;
+        self.pending_source_read = Some(PendingSourceRead {
+            demand,
+            range: request_range,
+            samples,
+        });
         Ok(())
     }
 
-    pub(super) fn poll_source_port(
+    pub(super) fn poll_source_read(
         &mut self,
+        source: &mut Resource,
         direction: PlaybackDirection,
     ) -> Result<(), ElasticRenderError> {
-        if self.source_port.is_none() {
-            return Err(ElasticRenderError::SourceWorkerUnavailable);
-        }
-        self.flush_retirements();
-        while self.has_retirement_capacity_with_relocation(1) {
-            let Some(reply) = self
-                .source_port
-                .as_mut()
-                .ok_or(ElasticRenderError::SourceWorkerUnavailable)?
-                .receive()
-            else {
-                break;
-            };
-            let pending = self
-                .pending_request
-                .filter(|pending| pending.generation() == reply.generation());
-            let expected = pending.is_some();
-            if !expected {
-                if let ElasticSourceReply::Ready(window) = reply {
-                    self.recycle_window(window);
-                    if !self.pending_retirements.is_empty() {
-                        return Ok(());
-                    }
-                }
-                continue;
+        let Some(pending) = self.pending_source_read.as_mut() else {
+            return Ok(());
+        };
+        let frames =
+            usize::try_from(pending.range.len()).map_err(|_| ElasticRenderError::FrameOverflow)?;
+        let sample_len = frames
+            .checked_mul(self.capabilities.channels())
+            .ok_or(ElasticRenderError::FrameOverflow)?;
+        let outcome = source.read_source_audio(
+            &pending.demand,
+            pending.range,
+            &mut pending.samples[..sample_len],
+        );
+        match outcome {
+            Ok(Some(SourceAudioReadOutcome::Pending)) => Ok(()),
+            Ok(Some(SourceAudioReadOutcome::Ready { .. })) => {
+                let pending = self
+                    .pending_source_read
+                    .take()
+                    .ok_or(ElasticRenderError::SourceUnavailable)?;
+                self.stage_ready_window(pending.range, pending.samples, direction)
             }
-            match reply {
-                ElasticSourceReply::Ready(window) => {
-                    let range = window.range();
-                    let pending = pending.ok_or(ElasticRenderError::SourceWorkerFailed)?;
-                    if range != pending.range() {
-                        self.recycle_window(window);
-                        self.pending_request = None;
-                        return Err(ElasticRenderError::SourceWorkerFailed);
-                    }
-                    let samples = window.release_samples();
-                    let frontier = self
-                        .ready_windows
-                        .last()
-                        .map(|window| window.range)
-                        .or(self.source_window);
-                    let advances = frontier.is_none_or(|current| match direction {
-                        PlaybackDirection::Forward => range.end() > current.end(),
-                        PlaybackDirection::Reverse => range.start() < current.start(),
-                    });
-                    if !advances {
-                        self.recycle_samples(samples);
-                        self.pending_request = None;
-                        return Err(ElasticRenderError::SourceWorkerFailed);
-                    }
-                    if self.ready_windows.len() >= Consts::READY_WINDOW_COUNT {
-                        self.recycle_samples(samples);
-                        self.pending_request = None;
-                        return Err(ElasticRenderError::SourceWorkerFailed);
-                    }
-                    self.ready_windows
-                        .push(BufferedSourceWindow { range, samples });
-                    self.pending_request = None;
-                    if !self.pending_retirements.is_empty() {
-                        return Ok(());
-                    }
-                }
-                ElasticSourceReply::Eof { .. } | ElasticSourceReply::Failed { .. } => {
-                    self.pending_request = None;
-                    return Err(ElasticRenderError::SourceWorkerFailed);
-                }
+            Ok(Some(SourceAudioReadOutcome::Eof)) | Ok(None) | Ok(Some(_)) => {
+                self.release_pending_source_read();
+                Err(ElasticRenderError::SourceReadFailed)
+            }
+            Err(error) => {
+                self.release_pending_source_read();
+                Err(error.into())
             }
         }
+    }
+
+    fn stage_ready_window(
+        &mut self,
+        range: SourceFrameRange,
+        samples: PcmBuf,
+        direction: PlaybackDirection,
+    ) -> Result<(), ElasticRenderError> {
+        let frontier = self
+            .ready_windows
+            .last()
+            .map(|window| window.range)
+            .or(self.source_window);
+        let advances = frontier.is_none_or(|current| match direction {
+            PlaybackDirection::Forward => range.end() > current.end(),
+            PlaybackDirection::Reverse => range.start() < current.start(),
+        });
+        if !advances || self.ready_windows.len() >= READY_WINDOW_COUNT {
+            self.window_buffers.push(samples);
+            return Err(ElasticRenderError::SourceReadFailed);
+        }
+        self.ready_windows
+            .push(BufferedSourceWindow { range, samples });
         Ok(())
+    }
+
+    fn release_pending_source_read(&mut self) {
+        if let Some(pending) = self.pending_source_read.take() {
+            self.window_buffers.push(pending.samples);
+        }
     }
 
     pub(super) fn next_source_window(

@@ -1,7 +1,6 @@
 use kithara_bufpool::PcmBuf;
 use kithara_decode::PcmSpec;
-
-use super::SourceAudioActivity;
+use kithara_platform::sync::Arc;
 
 /// A checked half-open frame range in decoded source coordinates.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -70,10 +69,10 @@ impl SourceFrameRange {
 }
 
 /// An opaque request token bound to one reader generation and decode seek epoch.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct SourceAudioDemand {
-    pub(crate) connection: SourceAudioActivity,
+    pub(crate) connection: Arc<SourceAudioConnection>,
     pub(crate) request: SourceAudioRequest,
 }
 
@@ -83,6 +82,11 @@ impl SourceAudioDemand {
     pub const fn decode_seek_epoch(&self) -> u64 {
         self.request.decode_seek_epoch
     }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SourceAudioConnection {
+    _identity: u8,
 }
 
 /// Result of a nonblocking source-audio read.

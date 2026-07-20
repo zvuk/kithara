@@ -4,13 +4,13 @@ use num_traits::ToPrimitive;
 use smallvec::SmallVec;
 
 use super::{
-    Consts, ElasticCopyError, ElasticPreparationOutcome, ElasticPrepareError, ElasticRelocation,
+    ElasticCopyError, ElasticPreparationOutcome, ElasticPrepareError, ElasticRelocation,
     ElasticRenderError, ElasticRenderOutcome, ElasticRenderSegment, ElasticRenderer,
-    ElasticRequest, ElasticSourceReply, ElasticSourceRequest, ElasticSourceWindow, IntegerSegment,
-    PcmBuf, PlaybackDirection, RenderContext, SessionBeat, SourceCursor, SourceFrameRange, Tempo,
+    ElasticRequest, IntegerSegment, PendingSourceRead, PlaybackDirection, RelocationRead,
+    RenderContext, SessionBeat, SourceAudioReadOutcome, SourceCursor, SourceFrameRange, Tempo,
     TrackBinding, plan_elastic_segments, quantize_source, sample_count,
 };
-use crate::session::render::SessionTransportCommit;
+use crate::{resource::Resource, session::render::SessionTransportCommit};
 
 pub(super) struct SourceCopy<'a> {
     pub(super) start: i64,
@@ -61,6 +61,8 @@ impl PhasePlan {
 impl ElasticRenderer {
     pub(crate) fn render(
         &mut self,
+        source: &mut Resource,
+        relocation_source: &mut Resource,
         binding: &TrackBinding,
         context: &RenderContext,
         output_range: Range<usize>,
@@ -79,12 +81,13 @@ impl ElasticRenderer {
             .transport_commit()
             .ok_or(ElasticRenderError::TransportCommitUnavailable)?;
         let revision = commit.revision();
+        self.poll_relocation_read(relocation_source)?;
         if let Some(relocation) = self.relocation.as_ref() {
             if relocation_matches_commit(relocation, commit) {
                 self.commit_relocation(revision)?;
             } else if revision >= relocation.revision {
                 let stale_revision = relocation.revision;
-                self.discard_relocation(stale_revision)?;
+                self.discard_relocation(stale_revision);
             }
         }
         if revision < self.revision {
@@ -124,7 +127,7 @@ impl ElasticRenderer {
             return Ok(ElasticRenderOutcome::Eof);
         }
         let fetch_range = SourceFrameRange::new(source_start, source_end)?;
-        self.ensure_window(fetch_range, direction)?;
+        self.ensure_window(source, fetch_range, direction)?;
         let source_window = self
             .source_window
             .ok_or(ElasticRenderError::FetchWindowMismatch)?;
@@ -251,11 +254,10 @@ impl ElasticRenderer {
         }
         let preparation =
             self.plan_preparation(binding, target, tempo, Self::RELOCATION_PREFETCH_BLOCKS)?;
-        self.pending_relocation_request = None;
         self.relocation = Some(ElasticRelocation {
             preparation,
+            read: RelocationRead::Idle,
             revision,
-            samples: None,
             target,
         });
         Ok(())
@@ -263,57 +265,32 @@ impl ElasticRenderer {
 
     pub(crate) fn poll_relocation(
         &mut self,
+        source: &mut Resource,
         revision: u64,
     ) -> Result<ElasticPreparationOutcome, ElasticRenderError> {
-        self.poll_relocation_port()?;
+        self.poll_relocation_read(source)?;
         let Some(relocation) = self.relocation.as_ref() else {
             return Err(ElasticRenderError::RelocationNotReady);
         };
         if relocation.revision != revision {
             return Err(ElasticRenderError::RevisionMismatch);
         }
-        if relocation.samples.is_some() {
+        if matches!(relocation.read, RelocationRead::Ready(_)) {
             return Ok(ElasticPreparationOutcome::Ready);
         }
-        if self.pending_relocation_request.is_some() {
+        if matches!(relocation.read, RelocationRead::Pending(_)) {
             return Ok(ElasticPreparationOutcome::Pending);
         }
-        let generation = self
-            .source_generation
-            .checked_add(1)
-            .ok_or(ElasticRenderError::FrameOverflow)?;
-        let request = ElasticSourceRequest::new(generation, relocation.preparation.fetch_range);
-        let port = self
-            .relocation_port
-            .as_mut()
-            .ok_or(ElasticRenderError::SourceWorkerUnavailable)?;
-        if port.request(request).is_ok() {
-            self.source_generation = generation;
-            self.pending_relocation_request = Some(request);
-        }
+        self.begin_relocation_read(source)?;
         Ok(ElasticPreparationOutcome::Pending)
     }
 
     pub(crate) fn commit_relocation(&mut self, revision: u64) -> Result<(), ElasticRenderError> {
-        self.poll_relocation_port()?;
-        if !self.has_retirement_capacity(self.ready_windows.len() + 1) {
-            return Err(ElasticRenderError::RelocationNotReady);
-        }
-        let Some(mut relocation) = self.relocation.take() else {
+        let Some(relocation) = self.relocation.as_ref() else {
             return Err(ElasticRenderError::RelocationNotReady);
         };
         if relocation.revision != revision {
-            self.relocation = Some(relocation);
             return Err(ElasticRenderError::RevisionMismatch);
-        }
-        let Some(samples) = relocation.samples.take() else {
-            self.relocation = Some(relocation);
-            return Err(ElasticRenderError::RelocationNotReady);
-        };
-        self.pending_request = None;
-        self.pending_relocation_request = None;
-        while let Some(window) = self.ready_windows.pop() {
-            self.recycle_samples(window.samples);
         }
         let range = relocation.preparation.fetch_range;
         let fetch_frames =
@@ -323,8 +300,24 @@ impl ElasticRenderer {
         }
         let fetch_samples = sample_count(fetch_frames, self.capabilities.channels())
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
+        let Some(mut relocation) = self.relocation.take() else {
+            return Err(ElasticRenderError::RelocationNotReady);
+        };
+        let samples = match mem::replace(&mut relocation.read, RelocationRead::Idle) {
+            RelocationRead::Ready(samples) => samples,
+            read => {
+                relocation.read = read;
+                self.relocation = Some(relocation);
+                return Err(ElasticRenderError::RelocationNotReady);
+            }
+        };
+        self.release_pending_source_read();
+        while let Some(window) = self.ready_windows.pop() {
+            self.window_buffers.push(window.samples);
+        }
         let old = mem::replace(&mut self.fetch, samples);
-        self.recycle_samples(old);
+        debug_assert!(self.relocation_buffer.is_none());
+        self.relocation_buffer = Some(old);
         self.prime(relocation.preparation, fetch_samples)
             .map_err(|_| ElasticRenderError::RelocationPreparationFailed)?;
         self.cursor = Some(relocation.preparation.anchor);
@@ -335,119 +328,113 @@ impl ElasticRenderer {
         Ok(())
     }
 
-    pub(crate) fn discard_relocation(&mut self, revision: u64) -> Result<(), ElasticRenderError> {
+    pub(crate) fn discard_relocation(&mut self, revision: u64) {
         if self
             .relocation
             .as_ref()
             .is_none_or(|relocation| relocation.revision != revision)
         {
-            return Ok(());
-        }
-        self.poll_relocation_port()?;
-        if !self.has_retirement_capacity_with_relocation(0) {
-            return Err(ElasticRenderError::RelocationNotReady);
+            return;
         }
         let Some(mut relocation) = self.relocation.take() else {
-            self.pending_relocation_request = None;
-            return Ok(());
-        };
-        if let Some(samples) = relocation.samples.take() {
-            self.recycle_samples(samples);
-        }
-        self.pending_relocation_request = None;
-        Ok(())
-    }
-
-    fn poll_relocation_port(&mut self) -> Result<(), ElasticRenderError> {
-        self.flush_retirements();
-        while self.has_retirement_capacity_with_relocation(1) {
-            let Some(reply) = self
-                .relocation_port
-                .as_mut()
-                .ok_or(ElasticRenderError::SourceWorkerUnavailable)?
-                .receive()
-            else {
-                break;
-            };
-            let pending = self
-                .pending_relocation_request
-                .filter(|pending| pending.generation() == reply.generation());
-            if pending.is_none() {
-                if let ElasticSourceReply::Ready(window) = reply {
-                    self.recycle_window(window);
-                }
-                continue;
-            }
-            match reply {
-                ElasticSourceReply::Ready(window) => {
-                    let range = window.range();
-                    let pending = pending.ok_or(ElasticRenderError::SourceWorkerFailed)?;
-                    if range != pending.range() {
-                        self.recycle_window(window);
-                        self.pending_relocation_request = None;
-                        return Err(ElasticRenderError::SourceWorkerFailed);
-                    }
-                    let samples = window.release_samples();
-                    let Some(relocation) = self.relocation.as_mut() else {
-                        self.recycle_samples(samples);
-                        self.pending_relocation_request = None;
-                        return Err(ElasticRenderError::SourceWorkerFailed);
-                    };
-                    let old = relocation.samples.replace(samples);
-                    if let Some(old) = old {
-                        self.recycle_samples(old);
-                    }
-                    self.pending_relocation_request = None;
-                }
-                ElasticSourceReply::Eof { .. } | ElasticSourceReply::Failed { .. } => {
-                    self.pending_relocation_request = None;
-                    return Err(ElasticRenderError::SourceWorkerFailed);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn recycle_window(&mut self, window: ElasticSourceWindow) {
-        self.recycle_samples(window.release_samples());
-    }
-
-    pub(super) fn flush_retirements(&mut self) {
-        while let Some(samples) = self.pending_retirements.pop() {
-            let Some(port) = self.source_port.as_mut() else {
-                self.pending_retirements.push(samples);
-                return;
-            };
-            if let Err(samples) = port.recycle(samples) {
-                self.pending_retirements.push(samples);
-                return;
-            }
-        }
-    }
-
-    pub(super) fn has_retirement_capacity(&self, count: usize) -> bool {
-        count <= Consts::RETIREMENT_CAPACITY.saturating_sub(self.pending_retirements.len())
-    }
-
-    pub(super) fn has_retirement_capacity_with_relocation(&self, count: usize) -> bool {
-        let relocation = usize::from(
-            self.relocation
-                .as_ref()
-                .is_some_and(|relocation| relocation.samples.is_some()),
-        );
-        count
-            .checked_add(relocation)
-            .is_some_and(|count| self.has_retirement_capacity(count))
-    }
-
-    pub(super) fn recycle_samples(&mut self, samples: PcmBuf) {
-        debug_assert!(self.has_retirement_capacity_with_relocation(1));
-        let Some(port) = self.source_port.as_mut() else {
-            self.pending_retirements.push(samples);
             return;
         };
-        if let Err(samples) = port.recycle(samples) {
-            self.pending_retirements.push(samples);
+        let samples = match mem::replace(&mut relocation.read, RelocationRead::Idle) {
+            RelocationRead::Pending(pending) => Some(pending.samples),
+            RelocationRead::Ready(samples) => Some(samples),
+            RelocationRead::Idle => None,
+        };
+        if let Some(samples) = samples {
+            debug_assert!(self.relocation_buffer.is_none());
+            self.relocation_buffer = Some(samples);
+        }
+    }
+
+    fn begin_relocation_read(&mut self, source: &mut Resource) -> Result<(), ElasticRenderError> {
+        let range = self
+            .relocation
+            .as_ref()
+            .ok_or(ElasticRenderError::RelocationNotReady)?
+            .preparation
+            .fetch_range;
+        source
+            .seek_source_frame(range.start())
+            .map_err(|_| ElasticRenderError::SourceReadFailed)?;
+        let demand = source
+            .request_source_audio(range, 0)?
+            .ok_or(ElasticRenderError::SourceUnavailable)?;
+        let samples = self
+            .relocation_buffer
+            .take()
+            .ok_or(ElasticRenderError::SourceUnavailable)?;
+        self.relocation
+            .as_mut()
+            .ok_or(ElasticRenderError::RelocationNotReady)?
+            .read = RelocationRead::Pending(PendingSourceRead {
+            demand,
+            range,
+            samples,
+        });
+        Ok(())
+    }
+
+    fn poll_relocation_read(&mut self, source: &mut Resource) -> Result<(), ElasticRenderError> {
+        let outcome = {
+            let Some(relocation) = self.relocation.as_mut() else {
+                return Ok(());
+            };
+            let RelocationRead::Pending(pending) = &mut relocation.read else {
+                return Ok(());
+            };
+            let frames = usize::try_from(pending.range.len())
+                .map_err(|_| ElasticRenderError::FrameOverflow)?;
+            let sample_len = frames
+                .checked_mul(self.capabilities.channels())
+                .ok_or(ElasticRenderError::FrameOverflow)?;
+            source.read_source_audio(
+                &pending.demand,
+                pending.range,
+                &mut pending.samples[..sample_len],
+            )
+        };
+        match outcome {
+            Ok(Some(SourceAudioReadOutcome::Pending)) => Ok(()),
+            Ok(Some(SourceAudioReadOutcome::Ready { .. })) => {
+                let relocation = self
+                    .relocation
+                    .as_mut()
+                    .ok_or(ElasticRenderError::RelocationNotReady)?;
+                let RelocationRead::Pending(pending) =
+                    mem::replace(&mut relocation.read, RelocationRead::Idle)
+                else {
+                    return Err(ElasticRenderError::RelocationNotReady);
+                };
+                relocation.read = RelocationRead::Ready(pending.samples);
+                Ok(())
+            }
+            Ok(Some(SourceAudioReadOutcome::Eof)) | Ok(None) | Ok(Some(_)) => {
+                self.release_relocation_read();
+                Err(ElasticRenderError::SourceReadFailed)
+            }
+            Err(error) => {
+                self.release_relocation_read();
+                Err(error.into())
+            }
+        }
+    }
+
+    fn release_relocation_read(&mut self) {
+        let Some(relocation) = self.relocation.as_mut() else {
+            return;
+        };
+        let samples = match mem::replace(&mut relocation.read, RelocationRead::Idle) {
+            RelocationRead::Pending(pending) => Some(pending.samples),
+            RelocationRead::Ready(samples) => Some(samples),
+            RelocationRead::Idle => None,
+        };
+        if let Some(samples) = samples {
+            debug_assert!(self.relocation_buffer.is_none());
+            self.relocation_buffer = Some(samples);
         }
     }
 }
@@ -757,7 +744,7 @@ mod tests {
                 warmup: ElasticRequest::new(1, 1).expect("valid elastic request"),
             },
             revision: 2,
-            samples: None,
+            read: RelocationRead::Idle,
             target,
         };
 

@@ -1,17 +1,11 @@
 use kithara_abr::AbrHandle;
 use kithara_audio::ServiceClass;
-use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex, MutexGuard},
-};
+use kithara_platform::sync::{Arc, Mutex, MutexGuard};
 use tracing::debug;
 
 use super::{
-    super::platform::{
-        ItemLoadContext, activate_load, prepare_bound_load, restore_prepared_binding,
-    },
+    super::platform::{ItemLoadContext, prepare_bound_load, restore_prepared_binding},
     PreparedBindingResource, PreparedBindingStamp, QueuedResource,
     playlist::{Playlist, QueuedLoad},
 };
@@ -34,7 +28,6 @@ pub(in crate::player) struct BoundLoad {
     pub(in crate::player) player_resource: PlayerResource,
     pub(in crate::player) prepared_stamp: Option<PreparedBindingStamp>,
     pub(in crate::player) abr_handle: Option<AbrHandle>,
-    pub(in crate::player) activation: Option<(CancelToken, PcmPool)>,
 }
 
 #[derive(Clone, Copy)]
@@ -52,7 +45,6 @@ pub(in crate::player) struct LoadTransaction<'a> {
     player_resource: PlayerResource,
     prepared_stamp: Option<PreparedBindingStamp>,
     abr_handle: Option<AbrHandle>,
-    activation: Option<(CancelToken, PcmPool)>,
     duration_seconds: f64,
     join: Option<JoinLoad>,
     rollback_insert: bool,
@@ -72,7 +64,6 @@ impl LoadTransaction<'_> {
             player_resource,
             prepared_stamp,
             abr_handle,
-            mut activation,
             duration_seconds,
             join,
             rollback_insert,
@@ -80,7 +71,6 @@ impl LoadTransaction<'_> {
         let src = Arc::clone(player_resource.src());
         let mut player_resource = Some(player_resource);
         let result = engine.try_send_slot_cmd_deferred(slot, || {
-            activate_load(&mut player_resource, &mut activation)?;
             let resource = player_resource
                 .take()
                 .ok_or_else(|| PlayError::Internal("load transaction lost its resource".into()))?;
@@ -354,7 +344,6 @@ impl ItemQueue {
             player_resource,
             prepared_stamp,
             abr_handle,
-            activation,
         } = if let Some(binding) = binding.as_ref() {
             match prepare_bound_load(&mut playlist, index, resource, binding, prepared, context) {
                 Ok(load) => load,
@@ -366,12 +355,10 @@ impl ItemQueue {
             resource.set_transport_bend(pitch_bend);
             resource.set_host_sample_rate(shape.sample_rate);
             let src = Arc::clone(resource.src());
-            drop(context.cancel);
             BoundLoad {
                 player_resource: PlayerResource::new(resource, src, context.pool),
                 prepared_stamp: None,
                 abr_handle,
-                activation: None,
             }
         };
 
@@ -387,7 +374,6 @@ impl ItemQueue {
             player_resource,
             prepared_stamp,
             abr_handle,
-            activation,
             duration_seconds,
             join,
             rollback_insert,
@@ -438,7 +424,7 @@ mod tests {
     use kithara_bufpool::PcmPool;
     use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
     use kithara_events::{Envelope, Event, PlayerEvent};
-    use kithara_platform::{CancelScope, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -539,7 +525,7 @@ mod tests {
         .expect("valid binding")
     }
 
-    fn load_context(pool: &PcmPool, cancel: CancelToken) -> ItemLoadContext<'_> {
+    fn load_context(pool: &PcmPool) -> ItemLoadContext<'_> {
         let shape = StreamShape {
             sample_rate: NonZeroU32::new(44_100).expect("static rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
@@ -550,7 +536,6 @@ mod tests {
             Some(Tempo::new(120.0).expect("valid tempo")),
             pool,
             PreparedBindingStamp::new(shape, 0),
-            cancel,
         )
     }
 
@@ -631,9 +616,8 @@ mod tests {
         let queue = ItemQueue::new(EventBus::default());
         queue.insert(resource("original"), None, None);
         let pool = PcmPool::default();
-        let scope = CancelScope::new(None);
         let transaction = queue
-            .take_for_load(0, load_context(&pool, scope.token()))
+            .take_for_load(0, load_context(&pool))
             .expect("load preparation succeeds")
             .expect("original resource is available");
 

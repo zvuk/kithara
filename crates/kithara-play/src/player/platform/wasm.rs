@@ -1,5 +1,4 @@
-use kithara_bufpool::PcmPool;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::sync::Arc;
 
 use super::{
     super::{
@@ -89,19 +88,6 @@ impl PlayerImpl {
         _target: SessionBeat,
     ) -> Result<(), PlayError> {
         Err(PlayError::ElasticBackendUnavailable)
-    }
-}
-
-pub(crate) fn activate_load(
-    _player_resource: &mut Option<PlayerResource>,
-    activation: &mut Option<(CancelToken, PcmPool)>,
-) -> Result<(), PlayError> {
-    if activation.take().is_none() {
-        Ok(())
-    } else {
-        Err(PlayError::Internal(
-            "browser load unexpectedly requested elastic activation".into(),
-        ))
     }
 }
 

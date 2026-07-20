@@ -1,11 +1,17 @@
 use kithara_audio::{
-    SourceAudioActivity, SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome,
-    SourceAudioReader, SourceFrameRange,
+    SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome, SourceFrameRange,
 };
+use kithara_decode::{DecodeError, duration_for_frames};
 
 use super::Resource;
 
 impl Resource {
+    pub(crate) fn seek_source_frame(&mut self, frame: u64) -> Result<(), DecodeError> {
+        let sample_rate = self.spec().sample_rate.get();
+        self.seek(duration_for_frames(sample_rate, frame))?;
+        Ok(())
+    }
+
     pub(crate) fn activate_source_audio_authoritative(&mut self) -> Result<bool, SourceAudioError> {
         let Some(source_audio) = self.source_audio.as_mut() else {
             return Ok(false);
@@ -49,11 +55,5 @@ impl Resource {
 
     pub(crate) const fn supports_reverse_source(&self) -> bool {
         self.supports_reverse_source
-    }
-
-    pub(crate) fn take_source_audio_activity(&mut self) -> Option<SourceAudioActivity> {
-        self.source_audio
-            .as_mut()
-            .and_then(SourceAudioReader::take_activity)
     }
 }

@@ -351,25 +351,23 @@ For each render range it derives the desired source path from `TrackBinding` and
 the shared `RenderContext`, then submits an integer source/output span to a
 pitch-preserving backend. The backend declares its rate envelope and
 deterministic latency, is primed before activation, and reads immutable bounded
-source windows from a dedicated non-real-time worker. Decoder position, legacy
+source windows from `kithara-audio`'s existing `SourceAudioReader`. Decoder position, legacy
 pitch bend, and the processed-audio compatibility ring are not parallel phase
 authorities for a bound item.
 
-The source worker is a dedicated named platform thread started only after the
-slot command lane accepts activation. Its lifetime is independent of Tokio and
-is owned by the source port's cancellation and activity signal. It snapshots
-`SourceAudioActivity` before probing cancellation, requests, source readiness,
-or reply capacity and parks only while the predicate remains unresolved.
-Successful request, recycle, service, and reply-consume edges signal the same
-activity from the real-time side through nonblocking `ThreadGate::signal`;
-decoded data, terminal status, and producer close are signaled by
-`kithara-audio`. No periodic timer or runtime `Notify` participates in this
-path.
+The prepared renderer retains two independently seekable `Resource` lanes: one
+for continuous source windows and one for relocation preparation. Both use the
+same shared `AudioWorker` and bounded `SourceAudioReader` contract owned by
+`kithara-audio`; `kithara-play` adds no source thread, port protocol, or player
+infrastructure. The renderer advances each lane through nonblocking seek,
+demand, and cache-read steps and rotates a fixed preallocated `PcmBuf` bank.
+Polling, deadline failure, commit, and cancellation never allocate, block, or
+return a buffer to the pool on the audio callback.
 
 Bound elastic rendering supports native forward playback and reverse playback
 for files and single-variant HLS. Activation requires a session-created node
 and its shared `RenderContext`; browser WASM returns a typed backend capability
-error. Every source-worker request remains one bounded ascending
+error. Every source-audio request remains one bounded ascending
 `SourceFrameRange`. A reverse renderer primes history and two successor windows
 before publication, consumes each window toward lower frames, and replenishes
 the same fixed-depth inline FIFO with earlier ascending ranges. A ready
