@@ -15,8 +15,14 @@ impl Consts {
     const FADERS_SELECT_TICK: u32 = 45;
     const MODULES_CAPTURE_TICK: u32 = 60;
     const MODULES_SELECT_TICK: u32 = 55;
-    const STRESS_CAPTURE_TICK: u32 = 465;
-    const STRESS_SELECT_TICK: u32 = 65;
+    const TYPOGRAPHY_CAPTURE_TICK: u32 = 75;
+    const TYPOGRAPHY_SELECT_TICK: u32 = 70;
+    const CELLS_CAPTURE_TICK: u32 = 85;
+    const CELLS_SELECT_TICK: u32 = 80;
+    const SIZES_CAPTURE_TICK: u32 = 95;
+    const SIZES_SELECT_TICK: u32 = 90;
+    const STRESS_CAPTURE_TICK: u32 = 500;
+    const STRESS_SELECT_TICK: u32 = 100;
 }
 
 pub(super) struct ShotPlan {
@@ -64,6 +70,21 @@ pub(super) fn drive(state: &mut Gallery) -> Task<Message> {
             Task::none()
         }
         Consts::MODULES_CAPTURE_TICK => capture(state.window_id, "tab-modules"),
+        Consts::TYPOGRAPHY_SELECT_TICK => {
+            state.select_tab(Tab::Typography);
+            Task::none()
+        }
+        Consts::TYPOGRAPHY_CAPTURE_TICK => capture(state.window_id, "tab-typography"),
+        Consts::CELLS_SELECT_TICK => {
+            state.select_tab(Tab::Cells);
+            Task::none()
+        }
+        Consts::CELLS_CAPTURE_TICK => capture(state.window_id, "tab-cells"),
+        Consts::SIZES_SELECT_TICK => {
+            state.select_tab(Tab::Sizes);
+            Task::none()
+        }
+        Consts::SIZES_CAPTURE_TICK => capture(state.window_id, "tab-sizes"),
         Consts::STRESS_SELECT_TICK => {
             state.select_tab(Tab::Stress);
             Task::none()

@@ -46,6 +46,24 @@
                 read: Model(id: "gallery.tab.modules"),
             ),
             NavItem(
+                id: "typography",
+                label: "ТИПОГРАФИКА",
+                icon: Playlist,
+                read: Model(id: "gallery.tab.typography"),
+            ),
+            NavItem(
+                id: "cells",
+                label: "ЯЧЕЙКИ",
+                icon: Disc,
+                read: Model(id: "gallery.tab.cells"),
+            ),
+            NavItem(
+                id: "sizes",
+                label: "РАЗМЕРЫ",
+                icon: Faders,
+                read: Model(id: "gallery.tab.sizes"),
+            ),
+            NavItem(
                 id: "stress",
                 label: "СТРЕСС",
                 icon: SpeakerHigh,

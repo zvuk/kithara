@@ -5,7 +5,7 @@ use kithara_ui::{
     error::UiDocError,
     ids::{DocId, SourceUri},
     size::{Dim, SizeSpec},
-    skin::{ColorRole, FontWeight, parse_skin},
+    skin::{ColorRole, FontFamily, FontWeight, parse_skin},
 };
 
 fn origin() -> SourceUri {
@@ -64,7 +64,22 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.tab_large.height, 28.0);
     assert_eq!(document.tab_large.pad_y, 0.0);
     assert_eq!(document.tab_large.underline_width, 2.0);
-    assert_eq!(document.text.track_title.weight, FontWeight::Semibold);
+    assert_eq!(document.text.brand.font, FontFamily::Display);
+    assert_eq!(document.text.brand.weight, FontWeight::Bold);
+    assert_eq!(document.text.brand.spacing, 0.3);
+    assert_eq!(document.text.deck_letter.size, 12.0);
+    assert_eq!(document.text.track_title.weight, FontWeight::Medium);
+    assert_eq!(document.text.track_title.size, 12.0);
+    assert_eq!(document.text.body.size, 11.0);
+    assert_eq!(document.text.telemetry.font, FontFamily::Mono);
+    assert_eq!(document.text.telemetry.color, ColorRole::Accent);
+    assert_eq!(document.text.micro_label.spacing, 0.12);
+    assert_eq!(document.text.micro_label.color, ColorRole::Muted);
+    assert_eq!(document.segmented.frame.border_width, 1.0);
+    assert_eq!(document.segmented.active_background, ColorRole::Accent);
+    assert_eq!(document.select.background, ColorRole::BgInset);
+    assert_eq!(document.status_dot.dot_size, 6.0);
+    assert_eq!(document.cell.frame.radius, 0.0);
     assert_eq!(document.fader.handle_frame.radius, 0.0);
     assert_eq!(document.fader.handle_width, 9);
     assert_eq!(document.fader.handle_color, ColorRole::Accent);

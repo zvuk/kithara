@@ -2,7 +2,7 @@ use iced::{Element, Length, alignment::Vertical, widget::container};
 
 use crate::{
     module::TextStyle,
-    render::{ReadValue, Skin, UiEvent, fonts, shaped_text},
+    render::{ReadValue, Skin, UiEvent, typography::styled_text},
     widgets::Widget,
 };
 
@@ -23,33 +23,24 @@ impl<'a> Widget<'a> for Text<'_, '_, '_> {
         let Some(value) = value else {
             return iced::widget::Space::new().into();
         };
-        let palette = self.skin.palette;
-        let (font, size, color) = match self.style {
-            TextStyle::TrackTitle => (
-                fonts::display(self.skin.text.track_title.weight),
-                self.skin.text.track_title.size,
-                palette.text,
-            ),
-            TextStyle::Section => (
-                fonts::mono(self.skin.text.section.weight),
-                self.skin.text.section.size,
-                palette.muted,
-            ),
-            TextStyle::Body => (
-                fonts::sans(self.skin.text.body.weight),
-                self.skin.text.body.size,
-                palette.text,
-            ),
+        let role = match self.style {
+            TextStyle::Brand => self.skin.text.brand,
+            TextStyle::DeckLetter => self.skin.text.deck_letter,
+            TextStyle::TrackTitle => self.skin.text.track_title,
+            TextStyle::Body => self.skin.text.body,
+            TextStyle::Telemetry => self.skin.text.telemetry,
+            TextStyle::MicroLabel => self.skin.text.micro_label,
+            TextStyle::Section => self.skin.text.section,
         };
-        container(
-            shaped_text(value.to_owned())
-                .font(font)
-                .size(size)
-                .color(color),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_y(Vertical::Center)
-        .into()
+        let content = if self.style == TextStyle::MicroLabel {
+            value.to_uppercase()
+        } else {
+            value.to_owned()
+        };
+        container(styled_text(content, role, self.skin))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(Vertical::Center)
+            .into()
     }
 }

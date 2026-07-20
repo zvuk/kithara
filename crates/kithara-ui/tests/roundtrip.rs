@@ -3,7 +3,7 @@ use kithara_ui::{
     error::UiDocError,
     ids::SourceUri,
     layout::{LayoutNode, parse_layout},
-    module::{ChipStyle, ControlNode, IconName, Priority, parse_module},
+    module::{ChipStyle, ControlNode, IconName, Priority, TextStyle, Tone, parse_module},
 };
 use ron::extensions::Extensions;
 
@@ -232,6 +232,59 @@ fn navigation_controls_roundtrip_with_typed_icons() {
         }
     ));
     assert!(matches!(&children[2], ControlNode::TabLarge { .. }));
+}
+
+#[kithara::test]
+fn design_system_controls_and_text_roles_roundtrip() {
+    let text = r#"(
+        schema: "kithara.module",
+        version: 1,
+        id: "design-system",
+        root: Column(children: [
+            Text(id: "brand", style: Brand, label: "KITHARA"),
+            Text(id: "deck", style: DeckLetter, label: "A B C D"),
+            Text(id: "telemetry", style: Telemetry, label: "124.00"),
+            Text(id: "micro", style: MicroLabel, label: "MICRO LABEL"),
+            Segmented(id: "beat", items: ["MICRO", "1", "2", "4"]),
+            Select(id: "device", label: "Scarlett 4i4 USB"),
+            StatusDot(id: "ok", label: "OK", tone: Success),
+            Cell(id: "size", label: Some("26"), highlighted: true),
+        ]),
+    )"#;
+
+    let doc = parse_module(text, &module_origin()).unwrap();
+    let printed = to_ron_pretty(&doc);
+    let reparsed = parse_module(&printed, &module_origin()).unwrap();
+    assert_eq!(doc, reparsed);
+
+    let ControlNode::Column { children, .. } = &doc.root else {
+        panic!("expected column root");
+    };
+    assert!(matches!(
+        children[0],
+        ControlNode::Text {
+            style: TextStyle::Brand,
+            ..
+        }
+    ));
+    assert!(matches!(
+        children[4],
+        ControlNode::Segmented { ref items, .. } if items.len() == 4
+    ));
+    assert!(matches!(
+        children[6],
+        ControlNode::StatusDot {
+            tone: Tone::Success,
+            ..
+        }
+    ));
+    assert!(matches!(
+        children[7],
+        ControlNode::Cell {
+            highlighted: true,
+            ..
+        }
+    ));
 }
 
 #[kithara::test]

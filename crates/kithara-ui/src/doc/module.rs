@@ -301,6 +301,59 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
     },
+    Segmented {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+        items: Vec<String>,
+    },
+    Select {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+        label: String,
+    },
+    StatusDot {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+        label: String,
+        #[serde(default)]
+        tone: Tone,
+    },
+    Cell {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        highlighted: bool,
+    },
     Readout {
         id: NodeId,
         #[serde(default)]
@@ -391,7 +444,11 @@ pub enum DeckSummaryStyle {
 pub enum TextStyle {
     #[default]
     Body,
+    Brand,
+    DeckLetter,
     TrackTitle,
+    Telemetry,
+    MicroLabel,
     Section,
 }
 
@@ -445,6 +502,8 @@ pub enum Tone {
     #[default]
     Neutral,
     Accent,
+    Success,
+    Danger,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

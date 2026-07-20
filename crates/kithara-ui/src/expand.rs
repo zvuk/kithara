@@ -90,6 +90,20 @@ pub enum ControlSpec {
     TrackList,
     Toggle,
     Checkbox,
+    Segmented {
+        items: Vec<InternId>,
+    },
+    Select {
+        label: InternId,
+    },
+    StatusDot {
+        label: InternId,
+        tone: Tone,
+    },
+    Cell {
+        label: Option<InternId>,
+        highlighted: bool,
+    },
     Readout {
         label: Option<InternId>,
         tone: Tone,
@@ -567,6 +581,31 @@ fn expand_control(
         ControlNode::TrackList { .. } => ControlSpec::TrackList,
         ControlNode::Toggle { .. } => ControlSpec::Toggle,
         ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
+        ControlNode::Segmented { items, .. } => ControlSpec::Segmented {
+            items: items
+                .iter()
+                .map(|item| intern_text(context, machine.interner, item, &path, &context.origin))
+                .collect::<Result<_, _>>()?,
+        },
+        ControlNode::Select { label, .. } => ControlSpec::Select {
+            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+        },
+        ControlNode::StatusDot { label, tone, .. } => ControlSpec::StatusDot {
+            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+            tone: *tone,
+        },
+        ControlNode::Cell {
+            label, highlighted, ..
+        } => ControlSpec::Cell {
+            label: intern_optional_text(
+                context,
+                machine.interner,
+                label.as_deref(),
+                &path,
+                &context.origin,
+            )?,
+            highlighted: *highlighted,
+        },
         ControlNode::Readout {
             label,
             tone,
@@ -775,6 +814,38 @@ fn expand_atom_control(
             write,
             adaptive,
         }
+        | ControlNode::Segmented {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::Select {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::StatusDot {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::Cell {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
         | ControlNode::Readout {
             id,
             size,
@@ -914,6 +985,10 @@ fn walk(
         | ControlNode::TrackList { .. }) => expand_value_control(context, control, depth, machine),
         control @ (ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
+        | ControlNode::Segmented { .. }
+        | ControlNode::Select { .. }
+        | ControlNode::StatusDot { .. }
+        | ControlNode::Cell { .. }
         | ControlNode::Readout { .. }
         | ControlNode::Chip { .. }
         | ControlNode::Knob { .. }

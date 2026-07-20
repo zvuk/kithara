@@ -120,6 +120,10 @@ fn walk_includes(
         | ControlNode::TrackList { .. }
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
+        | ControlNode::Segmented { .. }
+        | ControlNode::Select { .. }
+        | ControlNode::StatusDot { .. }
+        | ControlNode::Cell { .. }
         | ControlNode::Readout { .. }
         | ControlNode::Chip { .. }
         | ControlNode::Knob { .. }

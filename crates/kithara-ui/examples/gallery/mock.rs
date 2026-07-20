@@ -80,15 +80,21 @@ pub(super) enum Tab {
     Buttons,
     Faders,
     Modules,
+    Typography,
+    Cells,
+    Sizes,
     Stress,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 8] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
         Self::Modules,
+        Self::Typography,
+        Self::Cells,
+        Self::Sizes,
         Self::Stress,
     ];
 
@@ -98,6 +104,9 @@ impl Tab {
             Self::Buttons => "gallery-buttons.klayout.ron",
             Self::Faders => "gallery-faders.klayout.ron",
             Self::Modules => "gallery-modules.klayout.ron",
+            Self::Typography => "gallery-typography.klayout.ron",
+            Self::Cells => "gallery-cells.klayout.ron",
+            Self::Sizes => "gallery-sizes.klayout.ron",
             Self::Stress => "gallery-stress.klayout.ron",
         }
     }
@@ -108,7 +117,10 @@ impl Tab {
             Self::Buttons => 1,
             Self::Faders => 2,
             Self::Modules => 3,
-            Self::Stress => 4,
+            Self::Typography => 4,
+            Self::Cells => 5,
+            Self::Sizes => 6,
+            Self::Stress => 7,
         }
     }
 }
@@ -122,6 +134,9 @@ impl TryFrom<&str> for Tab {
             "gallery/buttons" => Ok(Self::Buttons),
             "gallery/faders" => Ok(Self::Faders),
             "gallery/modules" => Ok(Self::Modules),
+            "gallery/typography" => Ok(Self::Typography),
+            "gallery/cells" => Ok(Self::Cells),
+            "gallery/sizes" => Ok(Self::Sizes),
             "gallery/stress" => Ok(Self::Stress),
             _ => Err(()),
         }
@@ -189,6 +204,7 @@ pub(super) struct MockReads {
     library_query: String,
     playing: bool,
     position_secs: f64,
+    segmented_index: f64,
     toggle_off: bool,
     toggle_on: bool,
     volume: f64,
@@ -223,6 +239,7 @@ impl Default for MockReads {
             library_query: String::new(),
             playing: true,
             position_secs: Consts::POSITION_SECS,
+            segmented_index: 2.0,
             toggle_off: false,
             toggle_on: true,
             volume: 0.7,
@@ -276,7 +293,14 @@ impl MockReads {
         match action {
             ControlAction::SetScalar(value) => self.set_scalar(path, *value),
             ControlAction::Activate => self.activate(path),
+            ControlAction::SelectIndex(index) => self.select_index(path, *index),
             _ => {}
+        }
+    }
+
+    fn select_index(&mut self, path: &str, index: usize) {
+        if path == "cells/beat" {
+            self.segmented_index = index.as_();
         }
     }
 
@@ -308,10 +332,14 @@ impl MockReads {
             "modules/selector/global-bar" => self.active_module = ModuleDemo::GlobalBar,
             "modules/selector/telemetry" => self.active_module = ModuleDemo::Telemetry,
             "modules/selector/layout" => self.active_module = ModuleDemo::Layout,
-            "atoms/toggles/toggle-on" => self.toggle_on = !self.toggle_on,
-            "atoms/toggles/toggle-off" => self.toggle_off = !self.toggle_off,
-            "atoms/toggles/checkbox-on" => self.checkbox_on = !self.checkbox_on,
-            "atoms/toggles/checkbox-off" => self.checkbox_off = !self.checkbox_off,
+            "atoms/toggles/toggle-on" | "cells/toggle-on" => self.toggle_on = !self.toggle_on,
+            "atoms/toggles/toggle-off" | "cells/toggle-off" => self.toggle_off = !self.toggle_off,
+            "atoms/toggles/checkbox-on" | "cells/checkbox-on" => {
+                self.checkbox_on = !self.checkbox_on;
+            }
+            "atoms/toggles/checkbox-off" | "cells/checkbox-off" => {
+                self.checkbox_off = !self.checkbox_off;
+            }
             "atoms/chips/active" => self.chip_active = !self.chip_active,
             "atoms/chips/inactive" => self.chip_inactive = !self.chip_inactive,
             "buttons/play" => self.button_play = !self.button_play,
@@ -346,6 +374,9 @@ impl Reads for MockReads {
             "gallery.tab.buttons" => ReadValue::Bool(self.active_tab == Tab::Buttons),
             "gallery.tab.faders" => ReadValue::Bool(self.active_tab == Tab::Faders),
             "gallery.tab.modules" => ReadValue::Bool(self.active_tab == Tab::Modules),
+            "gallery.tab.typography" => ReadValue::Bool(self.active_tab == Tab::Typography),
+            "gallery.tab.cells" => ReadValue::Bool(self.active_tab == Tab::Cells),
+            "gallery.tab.sizes" => ReadValue::Bool(self.active_tab == Tab::Sizes),
             "gallery.tab.stress" => ReadValue::Bool(self.active_tab == Tab::Stress),
             "gallery.module.deck" => ReadValue::Bool(self.active_module == ModuleDemo::Deck),
             "gallery.module.deck_micro" => {
@@ -421,6 +452,7 @@ impl Reads for MockReads {
             "mock.button.play" => ReadValue::Bool(self.button_play),
             "mock.button.cue" => ReadValue::Bool(self.button_cue),
             "mock.button.sync" => ReadValue::Bool(self.button_sync),
+            "mock.cells.segmented" => ReadValue::Scalar(self.segmented_index),
             _ => return None,
         };
         Some(value)
@@ -555,11 +587,13 @@ pub(super) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(kind).with_scope("deck"),
         );
     }
-    registry.insert(
-        EndpointCategory::Parameter,
-        "player.output.volume",
-        EndpointDesc::new(ValueKind::Scalar),
-    );
+    for id in ["player.output.volume", "mock.cells.segmented"] {
+        registry.insert(
+            EndpointCategory::Parameter,
+            id,
+            EndpointDesc::new(ValueKind::Scalar),
+        );
+    }
     for (id, kind) in [
         ("library.visible_tracks", ValueKind::TrackList),
         ("library.query", ValueKind::Text),
@@ -600,6 +634,9 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.tab.buttons",
         "gallery.tab.faders",
         "gallery.tab.modules",
+        "gallery.tab.typography",
+        "gallery.tab.cells",
+        "gallery.tab.sizes",
         "gallery.tab.stress",
         "gallery.module.deck",
         "gallery.module.deck_micro",
@@ -628,6 +665,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "mock.knob.34",
         "mock.knob.38",
         "mock.volume",
+        "mock.cells.segmented",
     ] {
         registry.insert(
             EndpointCategory::Model,
@@ -715,5 +753,20 @@ mod tests {
         reads.apply("atoms/knobs/size-26", &ControlAction::SetScalar(0.45));
         assert_eq!(reads.get("mock.knob.26"), Some(ReadValue::Scalar(0.45)));
         assert_eq!(reads.get("mock.knob.38"), Some(ReadValue::Scalar(0.8)));
+    }
+
+    #[kithara::test]
+    fn segmented_gallery_selects_an_index() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(
+            reads.get("mock.cells.segmented"),
+            Some(ReadValue::Scalar(2.0))
+        );
+        reads.apply("cells/beat", &ControlAction::SelectIndex(3));
+        assert_eq!(
+            reads.get("mock.cells.segmented"),
+            Some(ReadValue::Scalar(3.0))
+        );
     }
 }

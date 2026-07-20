@@ -9,6 +9,7 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     atoms::{
         chip::Chip,
+        design::{cell::Cell, segmented::Segmented, select::Select, status_dot::StatusDot},
         knob::Knob,
         meter::StereoMeter,
         readout::Readout,
@@ -19,7 +20,7 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    module::{ChromeStyle, IconName},
+    module::{ChromeStyle, IconName, Tone},
     render::{Icon, ReadValue, Reads, Skin, UiEvent},
     size::{Dim, SizeSpec, control_size},
     widgets::{
@@ -275,6 +276,10 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
+        ControlSpec::Segmented { items } => render_segmented(path, items, value.as_ref(), ui, skin),
+        ControlSpec::Select { label } => render_select(*label, ui, skin),
+        ControlSpec::StatusDot { label, tone } => render_status_dot(*label, *tone, ui, skin),
+        ControlSpec::Cell { label, highlighted } => render_cell(*label, *highlighted, ui, skin),
         ControlSpec::Readout {
             label,
             tone,
@@ -330,6 +335,58 @@ fn render_control<'a>(
             .build()
             .view(),
     }
+}
+
+fn render_segmented<'a>(
+    path: &'a str,
+    items: &[InternId],
+    value: Option<&ReadValue<'_>>,
+    ui: &'a CompiledUi,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    Segmented::builder()
+        .path(path)
+        .items(items.iter().map(|id| ui.resolve(*id)).collect())
+        .maybe_value(value)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_select<'a>(label: InternId, ui: &'a CompiledUi, skin: &Skin) -> Element<'a, UiEvent> {
+    Select::builder()
+        .label(ui.resolve(label))
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_status_dot<'a>(
+    label: InternId,
+    tone: Tone,
+    ui: &'a CompiledUi,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    StatusDot::builder()
+        .label(ui.resolve(label))
+        .tone(tone)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_cell<'a>(
+    label: Option<InternId>,
+    highlighted: bool,
+    ui: &'a CompiledUi,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    Cell::builder()
+        .maybe_label(label.map(|id| ui.resolve(id)))
+        .highlighted(highlighted)
+        .skin(skin)
+        .build()
+        .view()
 }
 
 fn render_glyph(icon: IconName, skin: &Skin) -> Element<'static, UiEvent> {

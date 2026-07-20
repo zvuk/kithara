@@ -29,10 +29,11 @@ impl<'a> Widget<'a> for Readout<'a, '_, '_, '_> {
             _ => return Space::new().into(),
         };
         let palette = self.skin.palette;
-        let value_color = if self.tone == Tone::Accent {
-            palette.accent
-        } else {
-            palette.text
+        let value_color = match self.tone {
+            Tone::Neutral => palette.text,
+            Tone::Accent => palette.accent,
+            Tone::Success => palette.success,
+            Tone::Danger => palette.danger,
         };
         let content = Column::with_children([
             shaped_text(label)

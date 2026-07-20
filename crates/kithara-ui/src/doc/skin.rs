@@ -30,6 +30,10 @@ pub struct SkinDoc {
     pub nav: NavSkin,
     pub tab_large: TabLargeSkin,
     pub text: TextSkin,
+    pub segmented: SegmentedSkin,
+    pub select: SelectSkin,
+    pub status_dot: StatusDotSkin,
+    pub cell: CellSkin,
     pub fader: FaderSkin,
     pub wave: WaveSkin,
     pub deck: DeckSkin,
@@ -135,12 +139,31 @@ pub enum FontWeight {
     Bold,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum FontFamily {
+    Display,
+    Sans,
+    Mono,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct FontSkin {
     pub size: f32,
     pub weight: FontWeight,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct TextRoleSkin {
+    pub font: FontFamily,
+    pub weight: FontWeight,
+    pub size: f32,
+    pub spacing: f32,
+    pub color: ColorRole,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -367,9 +390,65 @@ pub struct TabLargeSkin {
 #[non_exhaustive]
 pub struct TextSkin {
     pub size: SizeSpec,
-    pub track_title: FontSkin,
-    pub section: FontSkin,
-    pub body: FontSkin,
+    pub brand: TextRoleSkin,
+    pub deck_letter: TextRoleSkin,
+    pub track_title: TextRoleSkin,
+    pub body: TextRoleSkin,
+    pub telemetry: TextRoleSkin,
+    pub micro_label: TextRoleSkin,
+    pub section: TextRoleSkin,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct SegmentedSkin {
+    pub size: SizeSpec,
+    pub frame: FrameSkin,
+    pub background: ColorRole,
+    pub active_background: ColorRole,
+    pub active_text: ColorRole,
+    pub inactive_text: ColorRole,
+    pub padding_x: f32,
+    pub text: FontSkin,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct SelectSkin {
+    pub size: SizeSpec,
+    pub frame: FrameSkin,
+    pub background: ColorRole,
+    pub padding_x: f32,
+    pub padding_y: f32,
+    pub text: FontSkin,
+    pub text_color: ColorRole,
+    pub chevron_size: f32,
+    pub chevron_color: ColorRole,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct StatusDotSkin {
+    pub size: SizeSpec,
+    pub dot_size: f32,
+    pub gap: f32,
+    pub text: FontSkin,
+    pub text_color: ColorRole,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct CellSkin {
+    pub size: SizeSpec,
+    pub frame: FrameSkin,
+    pub highlighted_frame: FrameSkin,
+    pub background: ColorRole,
+    pub label_gap: f32,
+    pub label_height: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

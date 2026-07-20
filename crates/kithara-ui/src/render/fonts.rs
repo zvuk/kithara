@@ -3,7 +3,7 @@ use iced::{
     font::{Family, Stretch, Style, Weight},
 };
 
-use crate::skin::FontWeight;
+use crate::skin::{FontFamily, FontWeight};
 
 pub const INTER_REGULAR_BYTES: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
 pub const INTER_SEMIBOLD_BYTES: &[u8] = include_bytes!("../../assets/fonts/Inter-SemiBold.ttf");
@@ -50,6 +50,15 @@ pub const fn mono(weight: FontWeight) -> Font {
 #[must_use]
 pub const fn display(weight: FontWeight) -> Font {
     font(display_family(), iced_weight(weight))
+}
+
+#[must_use]
+pub const fn family(family: FontFamily, weight: FontWeight) -> Font {
+    match family {
+        FontFamily::Display => display(weight),
+        FontFamily::Sans => sans(weight),
+        FontFamily::Mono => mono(weight),
+    }
 }
 
 const fn inter_family() -> Family {

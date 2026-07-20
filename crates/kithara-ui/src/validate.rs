@@ -179,6 +179,10 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::TrackList { id, .. }
         | ControlNode::Toggle { id, .. }
         | ControlNode::Checkbox { id, .. }
+        | ControlNode::Segmented { id, .. }
+        | ControlNode::Select { id, .. }
+        | ControlNode::StatusDot { id, .. }
+        | ControlNode::Cell { id, .. }
         | ControlNode::Readout { id, .. }
         | ControlNode::Chip { id, .. }
         | ControlNode::Knob { id, .. }
@@ -252,6 +256,7 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
+        ControlNode::Segmented { .. } => (Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
         ControlNode::Time { .. } | ControlNode::Scalar { .. } => (Some(ValueKind::Scalar), None),
         ControlNode::Fader { .. } | ControlNode::Knob { .. } => {
             (Some(ValueKind::Scalar), Some(ValueKind::Scalar))
@@ -269,7 +274,10 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Spacer { .. }
         | ControlNode::PresetSelector { .. }
         | ControlNode::SettingsButton { .. }
-        | ControlNode::Glyph { .. } => (None, None),
+        | ControlNode::Glyph { .. }
+        | ControlNode::Select { .. }
+        | ControlNode::StatusDot { .. }
+        | ControlNode::Cell { .. } => (None, None),
     }
 }
 

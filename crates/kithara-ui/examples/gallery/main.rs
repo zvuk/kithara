@@ -55,6 +55,18 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-modules-layout.klayout.ron"),
     ),
     (
+        "gallery-typography.klayout.ron",
+        include_str!("assets/gallery-typography.klayout.ron"),
+    ),
+    (
+        "gallery-cells.klayout.ron",
+        include_str!("assets/gallery-cells.klayout.ron"),
+    ),
+    (
+        "gallery-sizes.klayout.ron",
+        include_str!("assets/gallery-sizes.klayout.ron"),
+    ),
+    (
         "gallery-stress.klayout.ron",
         include_str!("assets/gallery-stress.klayout.ron"),
     ),
@@ -101,6 +113,18 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/faders.kmodule.ron",
         include_str!("assets/modules/tabs/faders.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/typography.kmodule.ron",
+        include_str!("assets/modules/tabs/typography.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/cells.kmodule.ron",
+        include_str!("assets/modules/tabs/cells.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/sizes.kmodule.ron",
+        include_str!("assets/modules/tabs/sizes.kmodule.ron"),
     ),
     (
         "modules/primitives/knobs.kmodule.ron",
@@ -324,13 +348,20 @@ mod tests {
             let CompiledNode::Split { children, .. } = &ui.root else {
                 panic!("expected gallery split");
             };
+            let CompiledNode::Split {
+                children: module_children,
+                ..
+            } = &children[1].1
+            else {
+                panic!("expected module demo stack");
+            };
             let CompiledNode::Module {
                 title,
                 chip,
                 chrome,
                 footer,
                 ..
-            } = &children[1].1
+            } = &module_children[1].1
             else {
                 panic!("expected module demo");
             };
@@ -339,6 +370,23 @@ mod tests {
             assert!(title.is_some(), "{}", module.entry());
             assert!(chip.is_some(), "{}", module.entry());
             assert!(footer.is_some(), "{}", module.entry());
+        }
+    }
+
+    #[kithara::test]
+    fn every_gallery_tab_compiles() {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+
+        for tab in Tab::ALL {
+            compile(
+                tab.entry(),
+                &resolver,
+                &endpoints,
+                builtin::skin_doc(),
+                &UiConfig::default(),
+            )
+            .unwrap_or_else(|error| panic!("{} must compile: {error}", tab.entry()));
         }
     }
 }
