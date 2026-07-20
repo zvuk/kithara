@@ -10,6 +10,7 @@ publish = false
 ignored = ["kithara-workspace-hack"]
 
 [dependencies]
+kithara-agent-hook = { workspace = true }
 kithara-devtools = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../crates/kithara-workspace-hack" }
 

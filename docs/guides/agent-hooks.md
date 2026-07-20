@@ -6,7 +6,7 @@ still enforced by `ast-grep` and `cargo xtask lint`.
 
 ## Pre Bash Guard
 
-`cargo xtask agent-hook pre-bash` reads Claude hook JSON from stdin and denies
+`tools/agent-hook/run pre-bash` reads agent hook JSON from stdin and denies
 only common expensive command mistakes:
 
 - Broad raw test acceptance: `cargo test`, `cargo test --workspace`, or
@@ -27,14 +27,44 @@ run with a filter expression.
 
 ## Post Edit Format
 
-`cargo xtask agent-hook post-edit` formats only known edited file classes:
+`tools/agent-hook/run post-edit` formats only the reported file for known edited
+file classes:
 
-- `.rs` -> `cargo xtask format --only rust --allow-dirty`
+- `.rs` -> nightly `rustfmt` with child-module traversal disabled
 - `Cargo.toml` -> `cargo xtask format --only manifest --allow-dirty`
-- other `.toml` -> `cargo xtask format --only toml --allow-dirty`
-- `.json` / `.jsonc` -> `cargo xtask format --only json --allow-dirty`
+- other `.toml` -> `taplo format`
+- `.json` / `.jsonc` -> `tidy-json --write`
 
-It does not run tests, lints, markdown formatting, or architecture checks.
+The manifest path is the deliberate exception to the Cargo-free edit path: it
+keeps the canonical workspace-wide dependency-order rewrite instead of copying
+that policy into the hook tool. The hook does not run tests, lints, markdown
+formatting, or architecture checks.
+
+## Runner Cache
+
+The checked-in runner builds the small `kithara-agent-hook` package once into a
+cache owned by the current Git worktree. Its fingerprint covers the hook source,
+package manifest, Cargo config, toolchain file, and host platform. The
+steady-state path executes the cached binary directly. Bootstrap Cargo runs only
+when that cache is missing or stale; `post-edit` for `Cargo.toml` remains the
+separate formatting exception described above.
+
+Workspace manifest and lockfile changes intentionally do not invalidate the
+already linked policy binary. When hook policy inputs do change, bootstrap uses
+`cargo build --locked`, so it never rewrites the workspace lockfile.
+
+The bootstrap uses the host's kernel file lock, removes its temporary Cargo
+target after copying the binary, and preserves a cached post-edit binary long
+enough to format a just-changed manifest. Tool adapters locate the runner by
+walking up from the host project directory using shell builtins, so neither a
+nested session directory nor Git discovery adds work to the hot path.
+The runner passes its resolved checkout root to the binary as the canonical
+path-containment owner; only the compatibility `xtask` entry point falls back to
+the hook payload directory.
+
+`cargo xtask agent-hook pre-bash|post-edit` remains a compatibility entry point,
+but tool adapters must use the checked-in runner so routine commands do not enter
+Cargo's global package-cache lock.
 
 ## Tool Adapter Rule
 

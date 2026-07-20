@@ -69,6 +69,9 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if let Command::AgentHook(args) = &cli.command {
+        return agent_hook::run(args);
+    }
     let ctx = Ctx::load()?;
 
     match cli.command {

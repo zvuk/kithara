@@ -4438,6 +4438,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-agent-hook"
+version = "0.0.1-alpha4"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "kithara-app"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -11638,6 +11648,7 @@ dependencies = [
  "cargo_metadata 0.23.1",
  "clap",
  "glob",
+ "kithara-agent-hook",
  "kithara-devtools",
  "kithara-workspace-hack",
  "plist",

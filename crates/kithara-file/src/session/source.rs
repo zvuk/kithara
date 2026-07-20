@@ -294,8 +294,7 @@ impl FileByteMap {
 impl kithara_stream::ByteMap for FileByteMap {
     fn init_segment_range(&self) -> Range<u64> {
         self.segment_index()
-            .map(FileSegmentIndex::init_range)
-            .unwrap_or(0..0)
+            .map_or(0..0, FileSegmentIndex::init_range)
     }
 
     fn len(&self) -> Option<u64> {
