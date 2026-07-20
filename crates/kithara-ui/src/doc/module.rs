@@ -561,7 +561,7 @@ pub enum WaveStyle {
     Micro,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[non_exhaustive]
 pub enum TrackColumn {
     Index,

@@ -32,6 +32,69 @@ impl HoverState {
 }
 
 #[derive(bon::Builder)]
+pub(crate) struct HorizontalPixelDrag {
+    path: String,
+    value: f32,
+    minimum: f32,
+    hover: HoverState,
+}
+
+#[derive(Default)]
+pub(crate) struct HorizontalPixelDragState {
+    active: bool,
+    start_position: f32,
+    start_value: f32,
+}
+
+impl HorizontalPixelDrag {
+    pub(crate) fn mouse_interaction(
+        &self,
+        state: &HorizontalPixelDragState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        self.hover.interaction(state.active, bounds, cursor)
+    }
+
+    fn publish(&self, value: f32) -> Action<UiEvent> {
+        Action::publish(UiEvent::Control {
+            path: self.path.clone(),
+            action: ControlAction::SetScalar(f64::from(value)),
+        })
+        .and_capture()
+    }
+
+    pub(crate) fn update(
+        &self,
+        state: &mut HorizontalPixelDragState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
+                state.start_position = cursor.position()?.x;
+                state.start_value = self.value;
+                state.active = true;
+                Some(Action::capture())
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => {
+                cursor.position().map(|position| {
+                    self.publish(
+                        (state.start_value + position.x - state.start_position).max(self.minimum),
+                    )
+                })
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
+                state.active = false;
+                Some(Action::capture())
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(bon::Builder)]
 pub(crate) struct ClickActivate {
     path: String,
     hover: HoverState,
@@ -363,5 +426,63 @@ mod tests {
             )
             .unwrap_or_else(|| panic!("relative drag must capture its release"));
         assert_eq!(released.into_inner().0, None);
+    }
+
+    #[kithara::test]
+    fn horizontal_pixel_drag_uses_start_width_and_clamps_minimum() {
+        let drag = HorizontalPixelDrag::builder()
+            .path("tracklist/table/width/artist".to_owned())
+            .value(180.0)
+            .minimum(28.0)
+            .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+            .build();
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(7.0, 22.0));
+        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+        let mut state = HorizontalPixelDragState::default();
+
+        assert!(
+            drag.update(
+                &mut state,
+                &press,
+                bounds,
+                Cursor::Available(Point::new(3.0, 11.0)),
+            )
+            .is_some()
+        );
+        let grown = drag
+            .update(
+                &mut state,
+                &Event::Mouse(mouse::Event::CursorMoved {
+                    position: Point::new(43.0, 11.0),
+                }),
+                bounds,
+                Cursor::Available(Point::new(43.0, 11.0)),
+            )
+            .unwrap_or_else(|| panic!("pixel drag must publish movement"));
+        assert_eq!(
+            grown.into_inner().0,
+            Some(UiEvent::Control {
+                path: "tracklist/table/width/artist".to_owned(),
+                action: ControlAction::SetScalar(220.0),
+            })
+        );
+
+        let clamped = drag
+            .update(
+                &mut state,
+                &Event::Mouse(mouse::Event::CursorMoved {
+                    position: Point::new(-300.0, 11.0),
+                }),
+                bounds,
+                Cursor::Available(Point::new(-300.0, 11.0)),
+            )
+            .unwrap_or_else(|| panic!("pixel drag must publish clamped movement"));
+        assert_eq!(
+            clamped.into_inner().0,
+            Some(UiEvent::Control {
+                path: "tracklist/table/width/artist".to_owned(),
+                action: ControlAction::SetScalar(28.0),
+            })
+        );
     }
 }

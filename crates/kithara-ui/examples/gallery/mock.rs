@@ -84,6 +84,7 @@ pub(super) struct MockReads {
     stress_waveforms: [Vec<WaveBucket>; 4],
     tracklist_columns: [bool; 9],
     tracklist_preset: usize,
+    tracklist_widths: BTreeMap<TrackColumn, f64>,
     tree_expanded: Vec<bool>,
     tree_rows: Vec<TreeRow<'static>>,
     tree_selected: usize,
@@ -145,6 +146,7 @@ impl Default for MockReads {
             stress_waveforms: std::array::from_fn(stress_waveform),
             tracklist_columns: Consts::TRACKLIST_QUEUE,
             tracklist_preset: Consts::TRACKLIST_QUEUE_PRESET,
+            tracklist_widths: BTreeMap::new(),
             tree_expanded,
             tree_rows: Vec::with_capacity(CATALOG.tree.len()),
             tree_selected,
@@ -279,7 +281,25 @@ impl MockReads {
         self.tracklist_columns[index] = !self.tracklist_columns[index];
     }
 
+    fn set_tracklist_width(&mut self, name: &str, value: f64) {
+        let Some(column) = Consts::TRACK_COLUMNS
+            .iter()
+            .find(|column| column.endpoint_name() == name)
+            .copied()
+        else {
+            return;
+        };
+        if value.is_finite() {
+            let minimum = f64::from(kithara_ui::builtin::skin().track_list.min_column_width);
+            self.tracklist_widths.insert(column, value.max(minimum));
+        }
+    }
+
     fn set_scalar(&mut self, path: &str, value: f64) {
+        if let Some((_, name)) = path.rsplit_once("/width/") {
+            self.set_tracklist_width(name, value);
+            return;
+        }
         let value = value.clamp(0.0, 1.0);
         if path.ends_with("/zoom") {
             self.transport.set_zoom(value);
@@ -345,6 +365,16 @@ impl Reads for MockReads {
             .and_then(|value| value.strip_suffix(".collapsed"))
         {
             return Some(ReadValue::Bool(self.collapsed.contains(module)));
+        }
+        if let Some(name) = endpoint.strip_prefix("gallery.tracklist.columns.width.") {
+            let column = Consts::TRACK_COLUMNS
+                .iter()
+                .find(|column| column.endpoint_name() == name)?;
+            return self
+                .tracklist_widths
+                .get(column)
+                .copied()
+                .map(ReadValue::Scalar);
         }
         if let Some(name) = endpoint.strip_prefix("gallery.tracklist.columns.") {
             let index = Consts::TRACK_COLUMNS
@@ -778,6 +808,11 @@ fn insert_tracklist_endpoints(registry: &mut MockRegistry) {
             &format!("gallery.tracklist.columns.{}", column.endpoint_name()),
             EndpointDesc::new(ValueKind::Bool),
         );
+        registry.insert(
+            EndpointCategory::Model,
+            &format!("gallery.tracklist.columns.width.{}", column.endpoint_name()),
+            EndpointDesc::new(ValueKind::Scalar),
+        );
     }
 }
 
@@ -983,6 +1018,30 @@ mod tests {
         assert_eq!(
             reads.get("gallery.tracklist.preset"),
             Some(ReadValue::Scalar(1.0))
+        );
+    }
+
+    #[kithara::test]
+    fn tracklist_width_write_is_host_owned_and_clamped() {
+        let mut reads = MockReads::default();
+        let endpoint = "gallery.tracklist.columns.width.artist";
+
+        assert_eq!(reads.get(endpoint), None);
+        reads.apply(
+            "tracklist/table/width/artist",
+            &ControlAction::SetScalar(240.0),
+        );
+        assert_eq!(reads.get(endpoint), Some(ReadValue::Scalar(240.0)));
+
+        reads.apply(
+            "tracklist/table/width/artist",
+            &ControlAction::SetScalar(1.0),
+        );
+        assert_eq!(
+            reads.get(endpoint),
+            Some(ReadValue::Scalar(f64::from(
+                kithara_ui::builtin::skin().track_list.min_column_width
+            )))
         );
     }
 

@@ -96,6 +96,11 @@ renderer owns table geometry and cell presentation but not column visibility. Wh
 one declarative column inventory while allowing library, playlist, and set-queue hosts to apply
 presets without introducing renderer-owned mutable state.
 
+Column widths are host-owned through Scalar reads at `<binding-id>.width.<column-name>` and
+`SetScalar` controls emitted at `<track-list-path>/width/<column-name>`. A missing width read uses
+the skin default. The renderer retains only canvas drag state, clamps resizable fixed columns to
+the skin minimum, and keeps the required Title column flexible with its skin-owned minimum.
+
 ## Browser Tree Ownership
 
 `Tree` reads a borrowed flat row slice whose depth, branch state, selection, and presentation flags

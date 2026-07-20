@@ -11,6 +11,7 @@ pub struct RenderPalette {
     pub bg_panel_2: Color,
     pub bg_select: Color,
     pub line: Color,
+    pub line_dim: Color,
     pub line_inner: Color,
     pub line_soft: Color,
     pub text: Color,
