@@ -467,11 +467,6 @@ pub enum FfiPlayerEvent {
         track_anchor_beats: f64,
         direction: FfiPlaybackDirection,
     },
-    SyncLockAcquired { slot: u64, revision: u64 },
-    SyncLockLost { slot: u64, revision: u64 },
-    SyncRelockCommitted { slot: u64, position_beats: f64, revision: u64 },
-    SyncDirectionCommitted { slot: u64, direction: FfiPlaybackDirection, revision: u64 },
-    SyncUnavailable { slot: u64, reason: String },
 }
 
 /// Transition style for a track switch.

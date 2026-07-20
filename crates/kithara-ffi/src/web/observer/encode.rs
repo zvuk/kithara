@@ -197,41 +197,6 @@ pub(crate) fn encode(event: &FfiPlayerEvent) -> JsValue {
             set_f64(&obj, "track_anchor_beats", *track_anchor_beats);
             set_str(&obj, "direction", playback_direction_str(*direction));
         }
-        FfiPlayerEvent::SyncLockAcquired { slot, revision } => {
-            set_str(&obj, KIND, "SyncLockAcquired");
-            set_f64(&obj, "slot", num_traits::cast(*slot).unwrap_or(0.0));
-            set_f64(&obj, "revision", num_traits::cast(*revision).unwrap_or(0.0));
-        }
-        FfiPlayerEvent::SyncLockLost { slot, revision } => {
-            set_str(&obj, KIND, "SyncLockLost");
-            set_f64(&obj, "slot", num_traits::cast(*slot).unwrap_or(0.0));
-            set_f64(&obj, "revision", num_traits::cast(*revision).unwrap_or(0.0));
-        }
-        FfiPlayerEvent::SyncRelockCommitted {
-            slot,
-            position_beats,
-            revision,
-        } => {
-            set_str(&obj, KIND, "SyncRelockCommitted");
-            set_f64(&obj, "slot", num_traits::cast(*slot).unwrap_or(0.0));
-            set_f64(&obj, "position_beats", *position_beats);
-            set_f64(&obj, "revision", num_traits::cast(*revision).unwrap_or(0.0));
-        }
-        FfiPlayerEvent::SyncDirectionCommitted {
-            slot,
-            direction,
-            revision,
-        } => {
-            set_str(&obj, KIND, "SyncDirectionCommitted");
-            set_f64(&obj, "slot", num_traits::cast(*slot).unwrap_or(0.0));
-            set_str(&obj, "direction", playback_direction_str(*direction));
-            set_f64(&obj, "revision", num_traits::cast(*revision).unwrap_or(0.0));
-        }
-        FfiPlayerEvent::SyncUnavailable { slot, reason } => {
-            set_str(&obj, KIND, "SyncUnavailable");
-            set_f64(&obj, "slot", num_traits::cast(*slot).unwrap_or(0.0));
-            set_str(&obj, "reason", reason);
-        }
         FfiPlayerEvent::AssetCommitted {
             asset_root,
             rel_path,

@@ -6662,16 +6662,6 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     )
     case syncBindingCommitted(slot: UInt64, sessionAnchorBeats: Double, trackAnchorBeats: Double, direction: FfiPlaybackDirection
     )
-    case syncLockAcquired(slot: UInt64, revision: UInt64
-    )
-    case syncLockLost(slot: UInt64, revision: UInt64
-    )
-    case syncRelockCommitted(slot: UInt64, positionBeats: Double, revision: UInt64
-    )
-    case syncDirectionCommitted(slot: UInt64, direction: FfiPlaybackDirection, revision: UInt64
-    )
-    case syncUnavailable(slot: UInt64, reason: String
-    )
 
 
 
@@ -6802,21 +6792,6 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         )
 
         case 39: return .syncBindingCommitted(slot: try FfiConverterUInt64.read(from: &buf), sessionAnchorBeats: try FfiConverterDouble.read(from: &buf), trackAnchorBeats: try FfiConverterDouble.read(from: &buf), direction: try FfiConverterTypeFfiPlaybackDirection.read(from: &buf)
-        )
-
-        case 40: return .syncLockAcquired(slot: try FfiConverterUInt64.read(from: &buf), revision: try FfiConverterUInt64.read(from: &buf)
-        )
-
-        case 41: return .syncLockLost(slot: try FfiConverterUInt64.read(from: &buf), revision: try FfiConverterUInt64.read(from: &buf)
-        )
-
-        case 42: return .syncRelockCommitted(slot: try FfiConverterUInt64.read(from: &buf), positionBeats: try FfiConverterDouble.read(from: &buf), revision: try FfiConverterUInt64.read(from: &buf)
-        )
-
-        case 43: return .syncDirectionCommitted(slot: try FfiConverterUInt64.read(from: &buf), direction: try FfiConverterTypeFfiPlaybackDirection.read(from: &buf), revision: try FfiConverterUInt64.read(from: &buf)
-        )
-
-        case 44: return .syncUnavailable(slot: try FfiConverterUInt64.read(from: &buf), reason: try FfiConverterString.read(from: &buf)
         )
 
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -7035,38 +7010,6 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
             FfiConverterDouble.write(sessionAnchorBeats, into: &buf)
             FfiConverterDouble.write(trackAnchorBeats, into: &buf)
             FfiConverterTypeFfiPlaybackDirection.write(direction, into: &buf)
-
-
-        case let .syncLockAcquired(slot,revision):
-            writeInt(&buf, Int32(40))
-            FfiConverterUInt64.write(slot, into: &buf)
-            FfiConverterUInt64.write(revision, into: &buf)
-
-
-        case let .syncLockLost(slot,revision):
-            writeInt(&buf, Int32(41))
-            FfiConverterUInt64.write(slot, into: &buf)
-            FfiConverterUInt64.write(revision, into: &buf)
-
-
-        case let .syncRelockCommitted(slot,positionBeats,revision):
-            writeInt(&buf, Int32(42))
-            FfiConverterUInt64.write(slot, into: &buf)
-            FfiConverterDouble.write(positionBeats, into: &buf)
-            FfiConverterUInt64.write(revision, into: &buf)
-
-
-        case let .syncDirectionCommitted(slot,direction,revision):
-            writeInt(&buf, Int32(43))
-            FfiConverterUInt64.write(slot, into: &buf)
-            FfiConverterTypeFfiPlaybackDirection.write(direction, into: &buf)
-            FfiConverterUInt64.write(revision, into: &buf)
-
-
-        case let .syncUnavailable(slot,reason):
-            writeInt(&buf, Int32(44))
-            FfiConverterUInt64.write(slot, into: &buf)
-            FfiConverterString.write(reason, into: &buf)
 
         }
     }

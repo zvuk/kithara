@@ -100,11 +100,6 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
              .transportSeekCommitted,
              .transportFailed,
              .syncBindingCommitted,
-             .syncLockAcquired,
-             .syncLockLost,
-             .syncRelockCommitted,
-             .syncDirectionCommitted,
-             .syncUnavailable,
              .assetCommitted,
              .assetFailed,
              .assetEvicted:

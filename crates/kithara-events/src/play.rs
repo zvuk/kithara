@@ -436,28 +436,6 @@ pub enum SyncEvent {
         track_anchor_beats: f64,
         direction: PlaybackDirection,
     },
-    LockAcquired {
-        slot: SlotId,
-        revision: u64,
-    },
-    LockLost {
-        slot: SlotId,
-        revision: u64,
-    },
-    RelockCommitted {
-        slot: SlotId,
-        position_beats: f64,
-        revision: u64,
-    },
-    DirectionCommitted {
-        slot: SlotId,
-        direction: PlaybackDirection,
-        revision: u64,
-    },
-    Unavailable {
-        slot: SlotId,
-        reason: String,
-    },
 }
 
 #[derive(Clone, Debug)]

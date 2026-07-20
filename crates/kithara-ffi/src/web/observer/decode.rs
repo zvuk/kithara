@@ -148,28 +148,6 @@ fn decode_transport(data: &JsValue, kind: &str) -> Option<FfiPlayerEvent> {
             track_anchor_beats: get_f64(data, "track_anchor_beats")?,
             direction: decode_playback_direction(get_str(data, "direction").as_deref())?,
         },
-        "SyncLockAcquired" => FfiPlayerEvent::SyncLockAcquired {
-            slot: get_u64(data, "slot")?,
-            revision: get_u64(data, "revision")?,
-        },
-        "SyncLockLost" => FfiPlayerEvent::SyncLockLost {
-            slot: get_u64(data, "slot")?,
-            revision: get_u64(data, "revision")?,
-        },
-        "SyncRelockCommitted" => FfiPlayerEvent::SyncRelockCommitted {
-            slot: get_u64(data, "slot")?,
-            position_beats: get_f64(data, "position_beats")?,
-            revision: get_u64(data, "revision")?,
-        },
-        "SyncDirectionCommitted" => FfiPlayerEvent::SyncDirectionCommitted {
-            slot: get_u64(data, "slot")?,
-            direction: decode_playback_direction(get_str(data, "direction").as_deref())?,
-            revision: get_u64(data, "revision")?,
-        },
-        "SyncUnavailable" => FfiPlayerEvent::SyncUnavailable {
-            slot: get_u64(data, "slot")?,
-            reason: get_str(data, "reason")?,
-        },
         _ => return None,
     })
 }

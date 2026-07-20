@@ -45,13 +45,15 @@ consumer directly on the shared `StretchControls` handle.
 <tr><td><code>EngineEvent</code></td><td>Slot lifecycle, master volume</td></tr>
 <tr><td><code>SessionEvent</code></td><td>Interruption, route change, media services</td></tr>
 <tr><td><code>TransportEvent</code></td><td>Committed session tempo, play state, seek, and failure facts</td></tr>
-<tr><td><code>SyncEvent</code></td><td>Committed binding, lock, relock, direction, and unavailability facts</td></tr>
+<tr><td><code>SyncEvent</code></td><td>Committed track binding facts</td></tr>
 <tr><td><code>DjEvent</code></td><td>Legacy BPM analysis, beat tick, key-lock, and stretch-backend facts only</td></tr>
 </table>
 
 New transport or synchronization facts must not be added to `DjEvent`.
 `TransportEvent` and `SyncEvent` are the canonical vocabulary for the shared
-session subsystem.
+session subsystem. A new event variant requires a committed producer path in
+the owning transport or track module; the public event surface does not reserve
+future lifecycle states.
 
 Status types: `PlayerStatus`, `TimeControlStatus`, `ItemStatus`,
 `WaitingReason`. `SessionDuckingMode` describes ducking policy. Identity:
