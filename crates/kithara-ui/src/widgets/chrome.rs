@@ -3,7 +3,7 @@ use iced::{
     alignment::Vertical,
     widget::{
         Canvas, Row, Space, Stack, button,
-        button::{Status as ButtonStatus, Style as ButtonStyle},
+        button::Style as ButtonStyle,
         canvas::{self, Frame, Geometry, Path, Stroke},
         column, container,
         container::Style as ContainerStyle,
