@@ -5,6 +5,7 @@ use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
     ids::{DocId, SourceUri},
+    module::WindowControlsStyle,
     size::SizeSpec,
 };
 
@@ -18,6 +19,7 @@ pub struct SkinDoc {
     pub palette: PaletteDoc,
     pub layout: LayoutSkin,
     pub chrome: ChromeSkin,
+    pub window: WindowSkin,
     pub text_input: TextInputSkin,
     pub knob: KnobSkin,
     pub vu_stereo: VuStereoSkin,
@@ -224,6 +226,94 @@ pub struct ChromeSkin {
     pub corner_width: f32,
     pub corner_offset: f32,
     pub corner_color: ColorRole,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct WindowSkin {
+    pub titlebar_height: f32,
+    pub titlebar_padding_x: f32,
+    pub titlebar_background: ColorRole,
+    pub titlebar_text: TextRoleSkin,
+    pub icon_color: ColorRole,
+    pub icon_hover_color: ColorRole,
+    pub icon_stroke_width: f32,
+    pub standard_minus_icon_size: f32,
+    pub standard_maximize_icon_size: f32,
+    pub standard_close_icon_size: f32,
+    pub standard_gap: f32,
+    pub standard_padding: f32,
+    pub compact_minus_icon_size: f32,
+    pub compact_maximize_icon_size: f32,
+    pub compact_close_icon_size: f32,
+    pub compact_gap: f32,
+    pub compact_padding: f32,
+    pub close_wide_cell_size: f32,
+    pub close_wide_icon_size: f32,
+    pub close_wide_divider_width: f32,
+    pub close_wide_divider_color: ColorRole,
+    pub close_micro_cell_size: f32,
+    pub close_micro_icon_size: f32,
+    pub close_framed_cell_size: f32,
+    pub close_framed_icon_size: f32,
+    pub close_framed_frame: FrameSkin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum WindowControlSkin {
+    Buttons {
+        minus_icon_size: f32,
+        maximize_icon_size: f32,
+        close_icon_size: f32,
+        gap: f32,
+        padding: f32,
+    },
+    Close {
+        cell_size: f32,
+        icon_size: f32,
+        frame: Option<FrameSkin>,
+        divider: Option<(f32, ColorRole)>,
+    },
+}
+
+impl WindowSkin {
+    pub(crate) const fn controls(self, style: WindowControlsStyle) -> WindowControlSkin {
+        match style {
+            WindowControlsStyle::Standard => WindowControlSkin::Buttons {
+                minus_icon_size: self.standard_minus_icon_size,
+                maximize_icon_size: self.standard_maximize_icon_size,
+                close_icon_size: self.standard_close_icon_size,
+                gap: self.standard_gap,
+                padding: self.standard_padding,
+            },
+            WindowControlsStyle::Compact => WindowControlSkin::Buttons {
+                minus_icon_size: self.compact_minus_icon_size,
+                maximize_icon_size: self.compact_maximize_icon_size,
+                close_icon_size: self.compact_close_icon_size,
+                gap: self.compact_gap,
+                padding: self.compact_padding,
+            },
+            WindowControlsStyle::CloseWide => WindowControlSkin::Close {
+                cell_size: self.close_wide_cell_size,
+                icon_size: self.close_wide_icon_size,
+                frame: None,
+                divider: Some((self.close_wide_divider_width, self.close_wide_divider_color)),
+            },
+            WindowControlsStyle::CloseMicro => WindowControlSkin::Close {
+                cell_size: self.close_micro_cell_size,
+                icon_size: self.close_micro_icon_size,
+                frame: None,
+                divider: None,
+            },
+            WindowControlsStyle::CloseFramed => WindowControlSkin::Close {
+                cell_size: self.close_framed_cell_size,
+                icon_size: self.close_framed_icon_size,
+                frame: Some(self.close_framed_frame),
+                divider: None,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

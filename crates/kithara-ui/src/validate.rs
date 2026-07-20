@@ -166,6 +166,8 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Spacer { id, .. }
         | ControlNode::PresetSelector { id, .. }
         | ControlNode::SettingsButton { id, .. }
+        | ControlNode::TitleBar { id, .. }
+        | ControlNode::WindowControls { id, .. }
         | ControlNode::Text { id, .. }
         | ControlNode::Glyph { id, .. }
         | ControlNode::NavItem { id, .. }
@@ -392,6 +394,8 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Spacer { .. }
         | ControlNode::PresetSelector { .. }
         | ControlNode::SettingsButton { .. }
+        | ControlNode::TitleBar { .. }
+        | ControlNode::WindowControls { .. }
         | ControlNode::Glyph { .. }
         | ControlNode::Select { .. }
         | ControlNode::StatusDot { .. }

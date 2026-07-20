@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     expand::{ControlSpec, ExpandedNode},
     module::ChromeStyle,
-    skin::SkinDoc,
+    skin::{SkinDoc, WindowControlSkin},
 };
 
 /// One-axis size rule. `Fill` takes available space and has no intrinsic size.
@@ -136,6 +136,30 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Spacer => skin.global_bar.spacer_size,
         ControlSpec::PresetSelector => skin.global_bar.preset_size,
         ControlSpec::SettingsButton => skin.global_bar.settings_size,
+        ControlSpec::TitleBar { .. } => {
+            SizeSpec::new(Dim::Fill, Dim::Fixed(skin.window.titlebar_height))
+        }
+        ControlSpec::WindowControls { style } => match skin.window.controls(*style) {
+            WindowControlSkin::Buttons {
+                minus_icon_size,
+                maximize_icon_size,
+                close_icon_size,
+                gap,
+                padding,
+            } => SizeSpec::new(
+                Dim::Fixed(
+                    minus_icon_size
+                        + maximize_icon_size
+                        + close_icon_size
+                        + gap * 2.0
+                        + padding * 2.0,
+                ),
+                Dim::Fixed(skin.window.titlebar_height),
+            ),
+            WindowControlSkin::Close { cell_size, .. } => {
+                SizeSpec::new(Dim::Fixed(cell_size), Dim::Fixed(cell_size))
+            }
+        },
         ControlSpec::Text { .. } => skin.text.size,
         ControlSpec::Glyph { .. } => SizeSpec::new(
             Dim::Fixed(skin.nav.header_icon_size),

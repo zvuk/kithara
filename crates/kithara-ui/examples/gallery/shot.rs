@@ -17,18 +17,20 @@ impl Consts {
     const CHROME_SELECT_TICK: u32 = 100;
     const FADERS_CAPTURE_TICK: u32 = 50;
     const FADERS_SELECT_TICK: u32 = 45;
-    const LIBRARY2_CAPTURE_TICK: u32 = 145;
-    const LIBRARY2_SELECT_TICK: u32 = 140;
+    const LIBRARY2_CAPTURE_TICK: u32 = 160;
+    const LIBRARY2_SELECT_TICK: u32 = 155;
     const MODULES_CAPTURE_TICK: u32 = 60;
     const MODULES_SELECT_TICK: u32 = 55;
     const SIZES_CAPTURE_TICK: u32 = 95;
     const SIZES_SELECT_TICK: u32 = 90;
-    const STRESS_CAPTURE_TICK: u32 = 540;
-    const STRESS_SELECT_TICK: u32 = 150;
-    const TRACKLIST_CAPTURE_TICK: u32 = 120;
-    const TRACKLIST_SELECT_TICK: u32 = 115;
-    const TREE_CAPTURE_TICK: u32 = 135;
-    const TREE_SELECT_TICK: u32 = 130;
+    const STRESS_CAPTURE_TICK: u32 = 560;
+    const STRESS_SELECT_TICK: u32 = 165;
+    const TITLEBARS_CAPTURE_TICK: u32 = 115;
+    const TITLEBARS_SELECT_TICK: u32 = 110;
+    const TRACKLIST_CAPTURE_TICK: u32 = 130;
+    const TRACKLIST_SELECT_TICK: u32 = 125;
+    const TREE_CAPTURE_TICK: u32 = 145;
+    const TREE_SELECT_TICK: u32 = 140;
     const TYPOGRAPHY_CAPTURE_TICK: u32 = 75;
     const TYPOGRAPHY_SELECT_TICK: u32 = 70;
 }
@@ -98,6 +100,11 @@ pub(super) fn drive(state: &mut Gallery) -> Task<Message> {
             Task::none()
         }
         Consts::CHROME_CAPTURE_TICK => capture(state.window_id, "tab-chrome"),
+        Consts::TITLEBARS_SELECT_TICK => {
+            state.select_tab(Tab::Titlebars);
+            Task::none()
+        }
+        Consts::TITLEBARS_CAPTURE_TICK => capture(state.window_id, "tab-titlebars"),
         Consts::TRACKLIST_SELECT_TICK => {
             state.select_tab(Tab::Tracklist);
             Task::none()

@@ -107,6 +107,8 @@ fn walk_includes(
         | ControlNode::Spacer { .. }
         | ControlNode::PresetSelector { .. }
         | ControlNode::SettingsButton { .. }
+        | ControlNode::TitleBar { .. }
+        | ControlNode::WindowControls { .. }
         | ControlNode::Text { .. }
         | ControlNode::Glyph { .. }
         | ControlNode::NavItem { .. }

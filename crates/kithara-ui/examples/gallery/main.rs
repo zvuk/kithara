@@ -6,7 +6,7 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
-    render::{Skin, UiEvent, fonts, tree},
+    render::{Skin, UiEvent, WindowCommand, fonts, tree},
     source::{MemResolver, UiConfig},
 };
 
@@ -33,6 +33,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "gallery-chrome.klayout.ron",
         include_str!("assets/gallery-chrome.klayout.ron"),
+    ),
+    (
+        "gallery-titlebars.klayout.ron",
+        include_str!("assets/gallery-titlebars.klayout.ron"),
     ),
     (
         "gallery-faders.klayout.ron",
@@ -89,6 +93,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/nav.kmodule.ron",
         include_str!("assets/modules/nav.kmodule.ron"),
+    ),
+    (
+        "modules/titlebar.kmodule.ron",
+        include_str!("assets/modules/titlebar.kmodule.ron"),
     ),
     (
         "modules/module-tabs.kmodule.ron",
@@ -183,6 +191,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/tree.kmodule.ron"),
     ),
     (
+        "modules/tabs/titlebars.kmodule.ron",
+        include_str!("assets/modules/tabs/titlebars.kmodule.ron"),
+    ),
+    (
         "modules/tabs/library2.kmodule.ron",
         include_str!("assets/modules/tabs/library2.kmodule.ron"),
     ),
@@ -262,6 +274,7 @@ impl Gallery {
         let settings = Settings {
             size: Size::new(Consts::WIDTH, Consts::HEIGHT),
             min_size: Some(Size::new(Consts::WIDTH, Consts::HEIGHT)),
+            decorations: false,
             exit_on_close_request: false,
             ..Settings::default()
         };
@@ -329,6 +342,13 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             state.reads.toggle_module(module);
             Task::none()
         }
+        Message::Ui(UiEvent::Window(command)) => match command {
+            WindowCommand::Drag => window::drag(state.window_id),
+            WindowCommand::Minimize => window::minimize(state.window_id, true),
+            WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
+            WindowCommand::Close => window::close(state.window_id),
+            _ => Task::none(),
+        },
         Message::Ui(_) => Task::none(),
     }
 }
@@ -414,9 +434,16 @@ mod tests {
                 panic!("expected gallery split");
             };
             let CompiledNode::Split {
-                children: module_children,
+                children: gallery_children,
                 ..
             } = &children[1].1
+            else {
+                panic!("expected gallery content");
+            };
+            let CompiledNode::Split {
+                children: module_children,
+                ..
+            } = &gallery_children[1].1
             else {
                 panic!("expected module demo stack");
             };

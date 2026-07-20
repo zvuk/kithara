@@ -1,7 +1,7 @@
 (
     schema: "kithara.layout",
     version: 1,
-    id: "gallery-stress",
+    id: "gallery-titlebars",
     root: Split(
         axis: Vertical,
         children: [
@@ -21,8 +21,8 @@
                         size: (w: Fixed(198.0), h: Fill),
                     )),
                     (weight: 1.0, node: Module(
-                        instance: "stress",
-                        source: "modules/stress.kmodule.ron",
+                        instance: "titlebars",
+                        source: "modules/tabs/titlebars.kmodule.ron",
                         frame: (left: false),
                         size: (w: Fill, h: Fill),
                     )),

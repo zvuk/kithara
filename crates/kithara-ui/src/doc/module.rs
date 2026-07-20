@@ -135,6 +135,23 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
     },
+    TitleBar {
+        id: NodeId,
+        label: String,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
+    WindowControls {
+        id: NodeId,
+        #[serde(default)]
+        style: WindowControlsStyle,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
     Text {
         id: NodeId,
         #[serde(default)]
@@ -473,6 +490,17 @@ pub enum DeckSummaryStyle {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
+pub enum WindowControlsStyle {
+    #[default]
+    Standard,
+    Compact,
+    CloseWide,
+    CloseMicro,
+    CloseFramed,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub enum TextStyle {
     #[default]
     Body,
@@ -703,6 +731,61 @@ mod tests {
         assert!(matches!(query, Some(BindingRef::Model { .. })));
         assert_eq!(size, Some(SizeSpec::new(Dim::Fixed(232.0), Dim::Fill)));
         assert_eq!(adaptive.priority, Priority::Required);
+    }
+
+    #[kithara::test]
+    fn window_chrome_controls_parse_without_bindings() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "window",
+            root: Row(children: [
+                TitleBar(id: "title", label: "KITHARA"),
+                WindowControls(id: "standard", style: Standard),
+                WindowControls(id: "compact", style: Compact),
+                WindowControls(id: "wide", style: CloseWide),
+                WindowControls(id: "micro", style: CloseMicro),
+                WindowControls(id: "framed", style: CloseFramed),
+            ]))"#;
+
+        let document = parse_module(text, &origin()).unwrap();
+        let ControlNode::Row { children, .. } = document.root else {
+            panic!("expected row");
+        };
+
+        assert!(matches!(children[0], ControlNode::TitleBar { .. }));
+        assert!(matches!(
+            children[1],
+            ControlNode::WindowControls {
+                style: WindowControlsStyle::Standard,
+                ..
+            }
+        ));
+        assert!(matches!(
+            children[2],
+            ControlNode::WindowControls {
+                style: WindowControlsStyle::Compact,
+                ..
+            }
+        ));
+        assert!(matches!(
+            children[3],
+            ControlNode::WindowControls {
+                style: WindowControlsStyle::CloseWide,
+                ..
+            }
+        ));
+        assert!(matches!(
+            children[4],
+            ControlNode::WindowControls {
+                style: WindowControlsStyle::CloseMicro,
+                ..
+            }
+        ));
+        assert!(matches!(
+            children[5],
+            ControlNode::WindowControls {
+                style: WindowControlsStyle::CloseFramed,
+                ..
+            }
+        ));
     }
 
     #[kithara::test]

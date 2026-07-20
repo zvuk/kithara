@@ -7,7 +7,7 @@ pub mod theme;
 pub mod tree;
 pub mod typography;
 
-pub use event::{ControlAction, UiEvent};
+pub use event::{ControlAction, UiEvent, WindowCommand};
 pub use icons::Icon;
 pub use model::{
     ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,

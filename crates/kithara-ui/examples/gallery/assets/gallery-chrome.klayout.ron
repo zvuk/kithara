@@ -3,75 +3,85 @@
     version: 1,
     id: "gallery-chrome",
     root: Split(
-        axis: Horizontal,
+        axis: Vertical,
         children: [
             (weight: 1.0, node: Module(
-                instance: "gallery",
-                source: "modules/nav.kmodule.ron",
-                frame: (right: false),
-                corners: false,
-                size: (w: Fixed(198.0), h: Fill),
+                instance: "titlebar",
+                source: "modules/titlebar.kmodule.ron",
+                size: (w: Fill, h: Fixed(26.0)),
             )),
             (weight: 1.0, node: Split(
-                axis: Vertical,
+                axis: Horizontal,
                 children: [
-                    (weight: 1.0, node: Split(
-                        axis: Horizontal,
-                        children: [
-                            (weight: 1.0, node: Module(
-                                instance: "chrome-row-a",
-                                source: "modules/tabs/chrome-row-a.kmodule.ron",
-                                size: (w: Fixed(180.0), h: Fill),
-                            )),
-                            (weight: 1.0, node: Module(
-                                instance: "chrome-full-all",
-                                source: "modules/tabs/chrome-full-all.kmodule.ron",
-                                size: (w: Fill, h: Fill),
-                            )),
-                        ],
+                    (weight: 1.0, node: Module(
+                        instance: "gallery",
+                        source: "modules/nav.kmodule.ron",
+                        frame: (right: false),
+                        corners: false,
+                        size: (w: Fixed(198.0), h: Fill),
                     )),
                     (weight: 1.0, node: Split(
-                        axis: Horizontal,
+                        axis: Vertical,
                         children: [
-                            (weight: 1.0, node: Module(
-                                instance: "chrome-row-b",
-                                source: "modules/tabs/chrome-row-b.kmodule.ron",
-                                size: (w: Fixed(180.0), h: Fill),
+                            (weight: 1.0, node: Split(
+                                axis: Horizontal,
+                                children: [
+                                    (weight: 1.0, node: Module(
+                                        instance: "chrome-row-a",
+                                        source: "modules/tabs/chrome-row-a.kmodule.ron",
+                                        size: (w: Fixed(180.0), h: Fill),
+                                    )),
+                                    (weight: 1.0, node: Module(
+                                        instance: "chrome-full-all",
+                                        source: "modules/tabs/chrome-full-all.kmodule.ron",
+                                        size: (w: Fill, h: Fill),
+                                    )),
+                                ],
                             )),
-                            (weight: 1.0, node: Module(
-                                instance: "chrome-join-left",
-                                source: "modules/tabs/chrome-join-left.kmodule.ron",
-                                frame: (right: false),
-                                size: (w: Fill, h: Fill),
+                            (weight: 1.0, node: Split(
+                                axis: Horizontal,
+                                children: [
+                                    (weight: 1.0, node: Module(
+                                        instance: "chrome-row-b",
+                                        source: "modules/tabs/chrome-row-b.kmodule.ron",
+                                        size: (w: Fixed(180.0), h: Fill),
+                                    )),
+                                    (weight: 1.0, node: Module(
+                                        instance: "chrome-join-left",
+                                        source: "modules/tabs/chrome-join-left.kmodule.ron",
+                                        frame: (right: false),
+                                        size: (w: Fill, h: Fill),
+                                    )),
+                                    (weight: 1.0, node: Module(
+                                        instance: "chrome-join-right",
+                                        source: "modules/tabs/chrome-join-right.kmodule.ron",
+                                        frame: (left: false),
+                                        size: (w: Fill, h: Fill),
+                                    )),
+                                ],
                             )),
-                            (weight: 1.0, node: Module(
-                                instance: "chrome-join-right",
-                                source: "modules/tabs/chrome-join-right.kmodule.ron",
-                                frame: (left: false),
-                                size: (w: Fill, h: Fill),
-                            )),
-                        ],
-                    )),
-                    (weight: 1.0, node: Split(
-                        axis: Horizontal,
-                        children: [
-                            (weight: 1.0, node: Module(
-                                instance: "chrome-row-c",
-                                source: "modules/tabs/chrome-row-c.kmodule.ron",
-                                size: (w: Fixed(180.0), h: Fill),
-                            )),
-                            (weight: 1.0, node: Module(
-                                instance: "chrome-no-corners",
-                                source: "modules/tabs/chrome-no-corners.kmodule.ron",
-                                frame: (right: false),
-                                corners: false,
-                                size: (w: Fill, h: Fill),
-                            )),
-                            (weight: 1.0, node: Module(
-                                instance: "chrome-open-top",
-                                source: "modules/tabs/chrome-open-top.kmodule.ron",
-                                frame: (top: false, left: false),
-                                size: (w: Fill, h: Fill),
+                            (weight: 1.0, node: Split(
+                                axis: Horizontal,
+                                children: [
+                                    (weight: 1.0, node: Module(
+                                        instance: "chrome-row-c",
+                                        source: "modules/tabs/chrome-row-c.kmodule.ron",
+                                        size: (w: Fixed(180.0), h: Fill),
+                                    )),
+                                    (weight: 1.0, node: Module(
+                                        instance: "chrome-no-corners",
+                                        source: "modules/tabs/chrome-no-corners.kmodule.ron",
+                                        frame: (right: false),
+                                        corners: false,
+                                        size: (w: Fill, h: Fill),
+                                    )),
+                                    (weight: 1.0, node: Module(
+                                        instance: "chrome-open-top",
+                                        source: "modules/tabs/chrome-open-top.kmodule.ron",
+                                        frame: (top: false, left: false),
+                                        size: (w: Fill, h: Fill),
+                                    )),
+                                ],
                             )),
                         ],
                     )),

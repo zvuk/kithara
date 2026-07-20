@@ -1,0 +1,21 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-titlebar",
+    chrome: Plain,
+    root: Row(
+        gap: Some(0.0),
+        size: (w: Fill, h: Fixed(26.0)),
+        children: [
+            TitleBar(
+                id: "drag",
+                label: "KITHARA UI GALLERY",
+                size: (w: Fill, h: Fixed(26.0)),
+            ),
+            WindowControls(
+                id: "controls",
+                style: Standard,
+            ),
+        ],
+    ),
+)

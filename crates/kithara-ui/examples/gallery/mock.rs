@@ -186,6 +186,7 @@ pub(super) enum Tab {
     Cells,
     Sizes,
     Chrome,
+    Titlebars,
     Tracklist,
     Tree,
     Library2,
@@ -193,7 +194,7 @@ pub(super) enum Tab {
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 12] = [
+    pub(super) const ALL: [Self; 13] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -202,6 +203,7 @@ impl Tab {
         Self::Cells,
         Self::Sizes,
         Self::Chrome,
+        Self::Titlebars,
         Self::Tracklist,
         Self::Tree,
         Self::Library2,
@@ -218,6 +220,7 @@ impl Tab {
             Self::Cells => "gallery-cells.klayout.ron",
             Self::Sizes => "gallery-sizes.klayout.ron",
             Self::Chrome => "gallery-chrome.klayout.ron",
+            Self::Titlebars => "gallery-titlebars.klayout.ron",
             Self::Tracklist => "gallery-tracklist.klayout.ron",
             Self::Tree => "gallery-tree.klayout.ron",
             Self::Library2 => "gallery-library2.klayout.ron",
@@ -235,10 +238,11 @@ impl Tab {
             Self::Cells => 5,
             Self::Sizes => 6,
             Self::Chrome => 7,
-            Self::Tracklist => 8,
-            Self::Tree => 9,
-            Self::Library2 => 10,
-            Self::Stress => 11,
+            Self::Titlebars => 8,
+            Self::Tracklist => 9,
+            Self::Tree => 10,
+            Self::Library2 => 11,
+            Self::Stress => 12,
         }
     }
 }
@@ -256,6 +260,7 @@ impl TryFrom<&str> for Tab {
             "gallery/cells" => Ok(Self::Cells),
             "gallery/sizes" => Ok(Self::Sizes),
             "gallery/chrome" => Ok(Self::Chrome),
+            "gallery/titlebars" => Ok(Self::Titlebars),
             "gallery/tracklist" => Ok(Self::Tracklist),
             "gallery/tree" => Ok(Self::Tree),
             "gallery/library2" => Ok(Self::Library2),
@@ -608,6 +613,7 @@ impl Reads for MockReads {
             "gallery.tab.cells" => ReadValue::Bool(self.active_tab == Tab::Cells),
             "gallery.tab.sizes" => ReadValue::Bool(self.active_tab == Tab::Sizes),
             "gallery.tab.chrome" => ReadValue::Bool(self.active_tab == Tab::Chrome),
+            "gallery.tab.titlebars" => ReadValue::Bool(self.active_tab == Tab::Titlebars),
             "gallery.tab.tracklist" => ReadValue::Bool(self.active_tab == Tab::Tracklist),
             "gallery.tab.tree" => ReadValue::Bool(self.active_tab == Tab::Tree),
             "gallery.tab.library2" => ReadValue::Bool(self.active_tab == Tab::Library2),
@@ -884,6 +890,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.tab.cells",
         "gallery.tab.sizes",
         "gallery.tab.chrome",
+        "gallery.tab.titlebars",
         "gallery.tab.tracklist",
         "gallery.tab.tree",
         "gallery.tab.library2",

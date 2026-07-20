@@ -6,7 +6,7 @@ use crate::{
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
         DeckSummaryStyle, FaderStyle, IconName, ScalarFormat, TextStyle, Tone, TrackColumn,
-        WaveStyle,
+        WaveStyle, WindowControlsStyle,
     },
     size::SizeSpec,
 };
@@ -54,6 +54,12 @@ pub enum ControlSpec {
     Spacer,
     PresetSelector,
     SettingsButton,
+    TitleBar {
+        label: InternId,
+    },
+    WindowControls {
+        style: WindowControlsStyle,
+    },
     Text {
         style: TextStyle,
         label: Option<InternId>,

@@ -14,6 +14,16 @@ pub enum ControlAction {
     SelectIndex(usize),
 }
 
+/// Command emitted by portable window-chrome controls and executed by the host.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WindowCommand {
+    Drag,
+    Minimize,
+    ToggleMaximize,
+    Close,
+}
+
 /// Event emitted by the shared UI contract.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -30,4 +40,5 @@ pub enum UiEvent {
     SettingsReset,
     SettingsDone,
     LibraryQuery(String),
+    Window(WindowCommand),
 }

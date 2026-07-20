@@ -70,6 +70,12 @@
                 read: Model(id: "gallery.tab.chrome"),
             ),
             NavItem(
+                id: "titlebars",
+                label: "ЗАГОЛОВКИ",
+                icon: Disc,
+                read: Model(id: "gallery.tab.titlebars"),
+            ),
+            NavItem(
                 id: "tracklist",
                 label: "ТРЕКЛИСТ",
                 icon: Playlist,

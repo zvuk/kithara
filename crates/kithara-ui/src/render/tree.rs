@@ -20,7 +20,7 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    module::{ChromeStyle, IconName, Tone, TrackColumn},
+    module::{ChromeStyle, DeckSummaryStyle, IconName, Tone, TrackColumn, WindowControlsStyle},
     render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent},
     size::{Dim, SizeSpec, control_size},
     widgets::{
@@ -34,6 +34,7 @@ use crate::{
         telemetry::Telemetry,
         text::Text,
         track_list::TrackList,
+        window::{TitleBar, WindowControls},
     },
 };
 
@@ -201,13 +202,7 @@ fn render_control<'a>(
     let value = value.as_ref();
     let path = ui.resolve(path);
     match spec {
-        ControlSpec::DeckSummary { style } => DeckSummary::builder()
-            .style(*style)
-            .maybe_value(value)
-            .reads(reads)
-            .skin(skin)
-            .build()
-            .view(),
+        ControlSpec::DeckSummary { style } => render_deck_summary(*style, value, reads, skin),
         ControlSpec::Brand => Brand::builder().skin(skin).build().view(),
         ControlSpec::Spacer => Spacer::builder().skin(skin).build().view(),
         ControlSpec::PresetSelector => PresetSelector::builder()
@@ -216,6 +211,8 @@ fn render_control<'a>(
             .build()
             .view(),
         ControlSpec::SettingsButton => SettingsButton::builder().skin(skin).build().view(),
+        ControlSpec::TitleBar { label } => render_titlebar(*label, ui, skin),
+        ControlSpec::WindowControls { style } => render_window_controls(*style, skin),
         ControlSpec::Bpm { placeholder } => Bpm::builder()
             .maybe_placeholder(placeholder.map(|id| ui.resolve(id)))
             .maybe_value(value)
@@ -347,6 +344,37 @@ fn render_control<'a>(
             render_context_bar(path, scope_items, scope.as_ref(), value, ui, reads, skin)
         }
     }
+}
+
+fn render_deck_summary<'a>(
+    style: DeckSummaryStyle,
+    value: Option<&ReadValue<'_>>,
+    reads: &dyn Reads,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    DeckSummary::builder()
+        .style(style)
+        .maybe_value(value)
+        .reads(reads)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_titlebar<'a>(label: InternId, ui: &'a CompiledUi, skin: &Skin) -> Element<'a, UiEvent> {
+    TitleBar::builder()
+        .label(ui.resolve(label))
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_window_controls(style: WindowControlsStyle, skin: &Skin) -> Element<'static, UiEvent> {
+    WindowControls::builder()
+        .style(style)
+        .skin(skin)
+        .build()
+        .view()
 }
 
 fn render_track_list<'a>(

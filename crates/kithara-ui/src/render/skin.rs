@@ -9,7 +9,7 @@ use crate::{
         FrameSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin, LayoutSkin, NavSkin, ReadoutSkin,
         SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, TabLargeSkin, TelemetrySkin,
         TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin, VuStereoSkin, VuVerticalSkin,
-        WaveSkin, parse_color,
+        WaveSkin, WindowSkin, parse_color,
     },
 };
 
@@ -21,6 +21,7 @@ pub struct Skin {
     pub palette: RenderPalette,
     pub layout: LayoutSkin,
     pub chrome: ChromeSkin,
+    pub window: WindowSkin,
     pub text_input: TextInputSkin,
     pub knob: KnobSkin,
     pub vu_stereo: VuStereoSkin,
@@ -80,6 +81,7 @@ impl Skin {
             },
             layout: document.layout,
             chrome: document.chrome,
+            window: document.window,
             text_input: document.text_input,
             knob: document.knob,
             vu_stereo: document.vu_stereo,

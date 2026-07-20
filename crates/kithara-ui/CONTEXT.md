@@ -73,6 +73,13 @@ Collapse state remains host-owned. A Full module reads `Bool` from
 `UiEvent::ToggleModule(<module-doc-id>)`. The renderer does not retain or mutate collapse state,
 and Frame or Plain modules ignore that endpoint.
 
+## Window Chrome Ownership
+
+`TitleBar` and `WindowControls` are portable, binding-free controls. They emit typed
+`UiEvent::Window(WindowCommand)` values; the host that owns the native window ID executes drag,
+minimize, maximize, and close operations. `kithara-ui` owns their declarative schema and
+skin-driven presentation, but never retains or mutates native window state.
+
 ## Track List Column Ownership
 
 `TrackList` owns an ordered typed `Vec<TrackColumn>` and requires `Title` during compilation. The
