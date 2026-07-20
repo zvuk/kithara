@@ -151,13 +151,11 @@ pub(crate) struct Inlet<T> {
 }
 
 impl<T> Inlet<T> {
-    /// Whether the write end of this port is still owned by a producer.
-    pub(crate) fn has_producer(&self) -> bool {
-        self.consumer.write_is_held()
-    }
-
     delegate::delegate! {
         to self.consumer {
+            /// Whether the write end of this port is still owned by a producer.
+            #[call(write_is_held)]
+            pub(crate) fn has_producer(&self) -> bool;
             /// Check if the inlet is empty.
             #[cfg(test)]
             pub(crate) fn is_empty(&self) -> bool;

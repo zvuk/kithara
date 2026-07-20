@@ -7,49 +7,31 @@ use crate::{
 };
 
 impl EngineImpl {
-    /// Changes the tempo of the shared session transport.
-    /// Returns an error when the session is inactive or rejects the update.
-    pub fn set_session_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
-        self.session().set_session_tempo(tempo)
-    }
-
-    pub(crate) fn set_session_tempo_checked(
-        &self,
-        tempo: Tempo,
-        expected_revision: u64,
-        expected_shape: StreamShape,
-        player_ids: Vec<PlayerId>,
-    ) -> Result<(), PlayError> {
-        self.session().set_session_tempo_checked(
-            tempo,
-            expected_revision,
-            expected_shape,
-            player_ids,
-        )
-    }
-
-    pub(crate) fn seek_session_checked(
-        &self,
-        target: SessionBeat,
-        expected_revision: u64,
-        expected_shape: StreamShape,
-        player_ids: Vec<PlayerId>,
-    ) -> Result<(), PlayError> {
-        self.session()
-            .seek_session_checked(target, expected_revision, expected_shape, player_ids)
-    }
-
-    /// Returns the last transport state processed by the audio graph.
-    /// Returns an error before the active graph has processed a render block.
-    pub fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
-        self.session().session_transport()
-    }
-
-    pub(crate) fn binding_preparation(&self) -> Result<BindingPreparation, PlayError> {
-        self.session().binding_preparation()
-    }
-
-    pub(crate) fn stream_shape(&self) -> Result<StreamShape, PlayError> {
-        self.session().query_stream_shape()
+    delegate::delegate! {
+        to self.session() {
+            /// Changes the tempo of the shared session transport.
+            /// Returns an error when the session is inactive or rejects the update.
+            pub fn set_session_tempo(&self, tempo: Tempo) -> Result<(), PlayError>;
+            pub(crate) fn set_session_tempo_checked(
+                &self,
+                tempo: Tempo,
+                expected_revision: u64,
+                expected_shape: StreamShape,
+                player_ids: Vec<PlayerId>,
+            ) -> Result<(), PlayError>;
+            pub(crate) fn seek_session_checked(
+                &self,
+                target: SessionBeat,
+                expected_revision: u64,
+                expected_shape: StreamShape,
+                player_ids: Vec<PlayerId>,
+            ) -> Result<(), PlayError>;
+            /// Returns the last transport state processed by the audio graph.
+            /// Returns an error before the active graph has processed a render block.
+            pub fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError>;
+            pub(crate) fn binding_preparation(&self) -> Result<BindingPreparation, PlayError>;
+            #[call(query_stream_shape)]
+            pub(crate) fn stream_shape(&self) -> Result<StreamShape, PlayError>;
+        }
     }
 }
