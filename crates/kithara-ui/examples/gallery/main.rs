@@ -351,7 +351,12 @@ fn theme(skin: &Skin) -> Theme {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
-    use kithara_ui::{compile::CompiledNode, module::ChromeStyle};
+    use kithara_ui::{
+        compile::CompiledNode,
+        expand::{Binding, ControlSpec, ExpandedNode},
+        module::ChromeStyle,
+        render::ControlAction,
+    };
 
     use super::*;
 
@@ -411,6 +416,119 @@ mod tests {
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| panic!("{} must compile: {error}", tab.entry()));
+        }
+    }
+
+    #[kithara::test]
+    fn module_demo_tabs_activate_their_compiled_control_paths() {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        let ui = compile(
+            Tab::Modules.entry(),
+            &resolver,
+            &endpoints,
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap();
+        let mut paths = Vec::new();
+        collect_tab_large_paths(&ui.root, &ui, &mut paths);
+
+        assert_eq!(paths.len(), ModuleDemo::ALL.len());
+        let mut reads = MockReads::default();
+        for (path, module) in paths.iter().zip(ModuleDemo::ALL) {
+            reads.apply(path, &ControlAction::Activate);
+            assert_eq!(reads.active_module(), module, "{path}");
+        }
+    }
+
+    #[kithara::test]
+    fn tree_query_binding_reaches_the_compiled_control() {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        let ui = compile(
+            Tab::Tree.entry(),
+            &resolver,
+            &endpoints,
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap();
+        let mut queries = Vec::new();
+        collect_tree_queries(&ui.root, &ui, &mut queries);
+
+        assert_eq!(queries, ["library.query"]);
+    }
+
+    fn collect_tab_large_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                for (_, child) in children {
+                    collect_tab_large_paths(child, ui, paths);
+                }
+            }
+            CompiledNode::Module { root, .. } => collect_expanded_tab_paths(root, ui, paths),
+            _ => {}
+        }
+    }
+
+    fn collect_expanded_tab_paths(node: &ExpandedNode, ui: &CompiledUi, paths: &mut Vec<String>) {
+        match node {
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => {
+                for child in children {
+                    collect_expanded_tab_paths(child, ui, paths);
+                }
+            }
+            ExpandedNode::Control {
+                path,
+                spec: ControlSpec::TabLarge { .. },
+                ..
+            } => paths.push(ui.resolve(*path).to_owned()),
+            ExpandedNode::Control { .. } => {}
+            _ => {}
+        }
+    }
+
+    fn collect_tree_queries<'a>(
+        node: &'a CompiledNode,
+        ui: &'a CompiledUi,
+        queries: &mut Vec<&'a str>,
+    ) {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                for (_, child) in children {
+                    collect_tree_queries(child, ui, queries);
+                }
+            }
+            CompiledNode::Module { root, .. } => collect_expanded_tree_queries(root, ui, queries),
+            _ => {}
+        }
+    }
+
+    fn collect_expanded_tree_queries<'a>(
+        node: &'a ExpandedNode,
+        ui: &'a CompiledUi,
+        queries: &mut Vec<&'a str>,
+    ) {
+        match node {
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => {
+                for child in children {
+                    collect_expanded_tree_queries(child, ui, queries);
+                }
+            }
+            ExpandedNode::Control {
+                spec:
+                    ControlSpec::Tree {
+                        query: Some(Binding::Model { id, .. }),
+                    },
+                ..
+            } => queries.push(ui.resolve(*id)),
+            ExpandedNode::Control { .. } => {}
+            _ => {}
         }
     }
 }

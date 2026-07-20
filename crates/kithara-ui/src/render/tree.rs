@@ -194,11 +194,12 @@ fn render_control<'a>(
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let value = read.and_then(|binding| resolve(reads, binding, ui));
+    let value = value.as_ref();
     let path = ui.resolve(path);
     match spec {
         ControlSpec::DeckSummary { style } => DeckSummary::builder()
             .style(*style)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .reads(reads)
             .skin(skin)
             .build()
@@ -213,31 +214,29 @@ fn render_control<'a>(
         ControlSpec::SettingsButton => SettingsButton::builder().skin(skin).build().view(),
         ControlSpec::Bpm { placeholder } => Bpm::builder()
             .maybe_placeholder(placeholder.map(|id| ui.resolve(id)))
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .reads(reads)
             .skin(skin)
             .build()
             .view(),
         ControlSpec::Time => Time::builder()
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .reads(reads)
             .skin(skin)
             .build()
             .view(),
         ControlSpec::Text { style, label } => Text::builder()
             .style(*style)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .maybe_label(label.as_ref().map(|id| ui.resolve(*id)))
             .skin(skin)
             .build()
             .view(),
         ControlSpec::Glyph { icon } => render_glyph(*icon, skin),
         ControlSpec::NavItem { label, icon } => {
-            render_nav_item(path, ui.resolve(*label), *icon, value.as_ref(), skin)
+            render_nav_item(path, ui.resolve(*label), *icon, value, skin)
         }
-        ControlSpec::TabLarge { label } => {
-            render_tab_large(path, ui.resolve(*label), value.as_ref(), skin)
-        }
+        ControlSpec::TabLarge { label } => render_tab_large(path, ui.resolve(*label), value, skin),
         ControlSpec::Button {
             label,
             active_label,
@@ -247,36 +246,36 @@ fn render_control<'a>(
             .label(ui.resolve(*label))
             .maybe_active_label(active_label.map(|id| ui.resolve(id)))
             .style(*style)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
         ControlSpec::Scalar { format } => Telemetry::builder()
             .format(*format)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
         ControlSpec::Fader { style } => Fader::builder()
             .path(path)
             .style(*style)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
         ControlSpec::Toggle => Toggle::builder()
             .path(path)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
         ControlSpec::Checkbox => Checkbox::builder()
             .path(path)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Segmented { items } => render_segmented(path, items, value.as_ref(), ui, skin),
+        ControlSpec::Segmented { items } => render_segmented(path, items, value, ui, skin),
         ControlSpec::Select { label } => render_select(*label, ui, skin),
         ControlSpec::StatusDot { label, tone } => render_status_dot(*label, *tone, ui, skin),
         ControlSpec::Cell { label, highlighted } => render_cell(*label, *highlighted, ui, skin),
@@ -288,7 +287,7 @@ fn render_control<'a>(
             .maybe_label(label.map(|id| ui.resolve(id)))
             .tone(*tone)
             .framed(*framed)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
@@ -296,25 +295,25 @@ fn render_control<'a>(
             .path(path)
             .label(ui.resolve(*label))
             .style(*style)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
         ControlSpec::Knob => Knob::builder()
             .path(path)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
         ControlSpec::VuStereo => StereoMeter::builder()
             .path(path)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
         ControlSpec::VuVertical => VerticalVu::builder()
             .path(path)
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .skin(skin)
             .build()
             .view(),
@@ -322,7 +321,7 @@ fn render_control<'a>(
             .path(path)
             .style(*style)
             .maybe_badge(badge.map(|id| ui.resolve(id)))
-            .maybe_value(value.as_ref())
+            .maybe_value(value)
             .reads(reads)
             .skin(skin)
             .build()
@@ -334,13 +333,13 @@ fn render_control<'a>(
             path,
             columns,
             columns_state.as_ref(),
-            value.as_ref(),
+            value,
             ui,
             reads,
             skin,
         ),
-        ControlSpec::Tree => render_browser_tree(path, value.as_ref(), skin),
-        ControlSpec::ContextBar => render_context_bar(value.as_ref(), skin),
+        ControlSpec::Tree { query } => render_tree(path, query.as_ref(), value, ui, reads, skin),
+        ControlSpec::ContextBar => render_context_bar(value, skin),
     }
 }
 
@@ -364,13 +363,24 @@ fn render_track_list<'a>(
         .view()
 }
 
-fn render_browser_tree<'a>(
-    path: &str,
+fn render_tree<'a>(
+    path: &'a str,
+    query: Option<&Binding>,
     value: Option<&ReadValue<'_>>,
+    ui: &CompiledUi,
+    reads: &dyn Reads,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
+    let query = query
+        .and_then(|binding| resolve(reads, binding, ui))
+        .and_then(|value| match value {
+            ReadValue::Text(query) => Some(query),
+            _ => None,
+        })
+        .unwrap_or_default();
     Tree::builder()
         .path(path)
+        .query(query)
         .maybe_value(value)
         .icon(render_tree_icon)
         .skin(skin)

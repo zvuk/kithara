@@ -293,6 +293,8 @@ pub enum ControlNode {
         write: Option<BindingRef>,
         #[serde(default)]
         adaptive: AdaptivePolicy,
+        #[serde(default)]
+        query: Option<BindingRef>,
     },
     ContextBar {
         id: NodeId,
@@ -676,6 +678,7 @@ mod tests {
             root: Tree(
                 id: "browser",
                 read: Model(id: "library.tree"),
+                query: Model(id: "library.query"),
                 size: Some((w: Fixed(232.0), h: Fill)),
                 adaptive: (priority: Required),
             ))"#;
@@ -683,6 +686,7 @@ mod tests {
         let document = parse_module(text, &origin()).unwrap();
         let ControlNode::Tree {
             read,
+            query,
             size,
             adaptive,
             ..
@@ -692,6 +696,7 @@ mod tests {
         };
 
         assert!(matches!(read, Some(BindingRef::Model { .. })));
+        assert!(matches!(query, Some(BindingRef::Model { .. })));
         assert_eq!(size, Some(SizeSpec::new(Dim::Fixed(232.0), Dim::Fill)));
         assert_eq!(adaptive.priority, Priority::Required);
     }

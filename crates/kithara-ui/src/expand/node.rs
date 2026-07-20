@@ -91,7 +91,9 @@ pub enum ControlSpec {
         columns: Vec<TrackColumn>,
         columns_state: Option<Binding>,
     },
-    Tree,
+    Tree {
+        query: Option<Binding>,
+    },
     ContextBar,
     Toggle,
     Checkbox,
@@ -162,6 +164,7 @@ pub(crate) struct ControlSite<'a> {
     pub(crate) read: Option<&'a BindingRef>,
     pub(crate) write: Option<&'a BindingRef>,
     pub(crate) columns_state: Option<&'a BindingRef>,
+    pub(crate) query: Option<&'a BindingRef>,
 }
 
 pub(crate) type ControlVisitor<'v> =

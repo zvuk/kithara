@@ -201,6 +201,16 @@ pub(crate) fn check_controls(
     if let ControlNode::TrackList { columns, .. } = site.control {
         check_track_list(columns, site.columns_state, site.path, origin, endpoints)?;
     }
+    if let Some(query) = site.query {
+        check_binding(
+            query,
+            BindingSide::Read,
+            Some(ValueKind::Text),
+            site.path,
+            origin,
+            endpoints,
+        )?;
+    }
     let (read_kind, write_kind) = value_kinds(site.control);
     if let Some(binding) = site.read {
         check_binding(
@@ -580,6 +590,7 @@ mod tests {
                 read: None,
                 write,
                 columns_state: None,
+                query: None,
             },
             &origin(),
             &registry(),
@@ -617,6 +628,46 @@ mod tests {
             Some(&binding),
         )
         .unwrap();
+    }
+
+    #[kithara::test]
+    fn tree_query_binding_must_be_text() {
+        let document = parse_module(
+            r#"(schema: "kithara.module", version: 1, id: "tree",
+                root: Tree(
+                    id: "browser",
+                    query: Parameter(id: "player.output.volume"),
+                ))"#,
+            &origin(),
+        )
+        .unwrap();
+        let ControlNode::Tree { query, .. } = &document.root else {
+            panic!("expected tree");
+        };
+
+        let error = check_controls(
+            ControlSite {
+                path: "tree/browser",
+                control: &document.root,
+                read: None,
+                write: None,
+                columns_state: None,
+                query: query.as_ref(),
+            },
+            &origin(),
+            &registry(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::BindingType {
+                expected,
+                got,
+                path,
+                ..
+            } if expected == "Text" && got == "Scalar" && path == "tree/browser"
+        ));
     }
 
     #[kithara::test]

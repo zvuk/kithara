@@ -9,6 +9,7 @@
                 id: "browser",
                 size: (w: Fixed(232.0), h: Fill),
                 read: Model(id: "library.tree"),
+                query: Model(id: "library.query"),
                 adaptive: (priority: Required),
             ),
         ],

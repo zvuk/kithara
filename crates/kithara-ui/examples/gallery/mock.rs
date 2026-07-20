@@ -538,11 +538,11 @@ impl MockReads {
 
     fn activate(&mut self, path: &str) {
         match path {
-            "modules/selector/deck" => self.active_module = ModuleDemo::Deck,
-            "modules/selector/deck-micro" => self.active_module = ModuleDemo::DeckMicro,
-            "modules/selector/global-bar" => self.active_module = ModuleDemo::GlobalBar,
-            "modules/selector/telemetry" => self.active_module = ModuleDemo::Telemetry,
-            "modules/selector/layout" => self.active_module = ModuleDemo::Layout,
+            "modules-tabs/deck" => self.active_module = ModuleDemo::Deck,
+            "modules-tabs/deck-micro" => self.active_module = ModuleDemo::DeckMicro,
+            "modules-tabs/global-bar" => self.active_module = ModuleDemo::GlobalBar,
+            "modules-tabs/telemetry" => self.active_module = ModuleDemo::Telemetry,
+            "modules-tabs/layout" => self.active_module = ModuleDemo::Layout,
             "atoms/toggles/toggle-on" | "cells/toggle-on" => self.toggle_on = !self.toggle_on,
             "atoms/toggles/toggle-off" | "cells/toggle-off" => self.toggle_off = !self.toggle_off,
             "atoms/toggles/checkbox-on" | "cells/checkbox-on" => {
@@ -979,6 +979,50 @@ mod tests {
 
     use super::*;
 
+    fn visible_tree_row_selected(reads: &MockReads, label: &str) -> bool {
+        let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
+            panic!("expected tree rows");
+        };
+        rows.iter()
+            .find(|row| row.label == label)
+            .map(|row| row.selected)
+            .unwrap_or_else(|| panic!("missing visible tree row {label}"))
+    }
+
+    fn visible_tree_row_index(reads: &MockReads, label: &str) -> usize {
+        let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
+            panic!("expected tree rows");
+        };
+        rows.iter()
+            .position(|row| row.label == label)
+            .unwrap_or_else(|| panic!("missing visible tree row {label}"))
+    }
+
+    fn selected_visible_index(reads: &MockReads) -> usize {
+        let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
+            panic!("expected tree rows");
+        };
+        rows.iter()
+            .position(|row| row.selected)
+            .expect("a selected tree row")
+    }
+
+    fn muted_visible_index(reads: &MockReads) -> usize {
+        let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
+            panic!("expected tree rows");
+        };
+        rows.iter()
+            .position(|row| row.muted)
+            .expect("a muted tree row")
+    }
+
+    fn visible_tree_len(reads: &MockReads) -> usize {
+        let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
+            panic!("expected tree rows");
+        };
+        rows.len()
+    }
+
     #[kithara::test]
     fn wave_scalar_write_updates_normalized_playback_position() {
         let mut reads = MockReads::default();
@@ -1086,42 +1130,60 @@ mod tests {
     #[kithara::test]
     fn tree_branch_selection_toggles_visible_descendants() {
         let mut reads = MockReads::default();
-        let before = match reads.get("library.tree") {
-            Some(ReadValue::Tree(rows)) => rows.len(),
-            value => panic!("expected tree rows, got {value:?}"),
-        };
+        let before = visible_tree_len(&reads);
+        let explorer = visible_tree_row_index(&reads, "Explorer");
 
-        reads.apply("tree/browser", &ControlAction::SelectIndex(0));
+        reads.apply("tree/browser", &ControlAction::SelectIndex(explorer));
+        let collapsed = visible_tree_len(&reads);
+        assert!(collapsed < before);
 
-        let after = match reads.get("library.tree") {
-            Some(ReadValue::Tree(rows)) => rows.len(),
-            value => panic!("expected tree rows, got {value:?}"),
-        };
-        assert_eq!(before - after, 2);
+        reads.apply("tree/browser", &ControlAction::SelectIndex(explorer));
+        assert_eq!(visible_tree_len(&reads), before);
     }
 
     #[kithara::test]
     fn tree_leaf_selection_is_host_owned() {
         let mut reads = MockReads::default();
+        let previous = selected_visible_index(&reads);
+        let all_tracks = visible_tree_row_index(&reads, "All tracks");
+        assert_ne!(previous, all_tracks);
 
-        reads.apply("library2/browser", &ControlAction::SelectIndex(1));
+        reads.apply("library2/browser", &ControlAction::SelectIndex(all_tracks));
 
-        let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
-            panic!("expected tree rows");
-        };
-        assert!(rows[1].selected);
-        assert!(!rows[9].selected);
+        assert!(visible_tree_row_selected(&reads, "All tracks"));
+        assert_eq!(selected_visible_index(&reads), all_tracks);
     }
 
     #[kithara::test]
     fn muted_tree_row_does_not_change_selection() {
         let mut reads = MockReads::default();
+        let muted = muted_visible_index(&reads);
+        let selected = selected_visible_index(&reads);
 
-        reads.apply("tree/browser", &ControlAction::SelectIndex(7));
+        reads.apply("tree/browser", &ControlAction::SelectIndex(muted));
 
+        assert_eq!(selected_visible_index(&reads), selected);
+    }
+
+    #[kithara::test]
+    fn expanded_mock_tree_overflows_the_gallery_viewport() {
+        let reads = MockReads::default();
         let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
             panic!("expected tree rows");
         };
-        assert!(rows[9].selected);
+
+        assert!(rows.len() >= 30, "visible rows: {}", rows.len());
+    }
+
+    #[kithara::test]
+    fn library_query_read_reflects_host_updates() {
+        let mut reads = MockReads::default();
+
+        reads.set_library_query("acid bass".to_owned());
+
+        assert_eq!(
+            reads.get("library.query"),
+            Some(ReadValue::Text("acid bass"))
+        );
     }
 }

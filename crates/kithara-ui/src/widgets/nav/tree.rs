@@ -6,7 +6,11 @@ use iced::{
         button::{Status as ButtonStatus, Style as ButtonStyle},
         column, container,
         container::Style as ContainerStyle,
-        row, scrollable, text_input,
+        row, scrollable,
+        scrollable::{
+            Direction as ScrollDirection, Rail, Scrollbar, Scroller, Style as ScrollableStyle,
+        },
+        text_input,
         text_input::Style as TextInputStyle,
     },
 };
@@ -19,14 +23,15 @@ use crate::{
 };
 
 #[derive(bon::Builder)]
-pub(crate) struct Tree<'path, 'value, 'data, 'skin> {
+pub(crate) struct Tree<'path, 'query, 'value, 'data, 'skin> {
     path: &'path str,
+    query: &'query str,
     value: Option<&'value ReadValue<'data>>,
     icon: fn(TreeIcon) -> Icon,
     skin: &'skin Skin,
 }
 
-impl<'a> Widget<'a> for Tree<'_, '_, '_, '_> {
+impl<'a> Widget<'a> for Tree<'_, '_, '_, '_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
         let Some(ReadValue::Tree(rows)) = self.value else {
             return Space::new().into();
@@ -38,7 +43,30 @@ impl<'a> Widget<'a> for Tree<'_, '_, '_, '_> {
                 .map(|(index, row)| tree_row(self.path, index, row, self.icon, self.skin)),
         )
         .width(Length::Fill);
-        let panel = container(scrollable(rows).width(Length::Fill).height(Length::Fill))
+        let scrollbar = Scrollbar::new()
+            .width(self.skin.tree.scrollbar_width)
+            .margin(self.skin.tree.scrollbar_margin)
+            .scroller_width(self.skin.tree.scrollbar_width);
+        let tree = scrollable(rows)
+            .direction(ScrollDirection::Vertical(scrollbar))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style({
+                let background = self.skin.color(self.skin.tree.scrollbar_background);
+                let scroller = self.skin.color(self.skin.tree.scroller_color);
+                move |theme, status| ScrollableStyle {
+                    vertical_rail: Rail {
+                        background: Some(Background::Color(background)),
+                        border: Border::default(),
+                        scroller: Scroller {
+                            background: Background::Color(scroller),
+                            border: Border::default(),
+                        },
+                    },
+                    ..scrollable::default(theme, status)
+                }
+            });
+        let panel = container(tree)
             .padding(Padding {
                 top: self.skin.tree.panel_padding_top,
                 right: 0.0,
@@ -52,7 +80,7 @@ impl<'a> Widget<'a> for Tree<'_, '_, '_, '_> {
                 move |_| ContainerStyle::default().background(Background::Color(background))
             });
 
-        column![search_bar(self.skin), panel]
+        column![search_bar(self.query, self.skin), panel]
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -105,7 +133,7 @@ impl<'a> Widget<'a> for ContextBar<'_, '_, '_> {
     }
 }
 
-fn search_bar(skin: &Skin) -> Element<'static, UiEvent> {
+fn search_bar(query: &str, skin: &Skin) -> Element<'static, UiEvent> {
     let icon = container(Icon::Search.view(skin.tree.search_icon_size, skin.palette.muted))
         .width(Length::Fixed(skin.tree.search_icon_width))
         .height(Length::Fill)
@@ -115,7 +143,8 @@ fn search_bar(skin: &Skin) -> Element<'static, UiEvent> {
             let background = skin.color(skin.tree.search_background);
             move |_| ContainerStyle::default().background(Background::Color(background))
         });
-    let input = text_input(&skin.tree.search_placeholder, "")
+    let input = text_input(&skin.tree.search_placeholder, query)
+        .on_input(UiEvent::LibraryQuery)
         .padding([0.0, skin.tree.search_padding_x])
         .font(fonts::sans(skin.tree.search_text.weight))
         .size(skin.tree.search_text.size)

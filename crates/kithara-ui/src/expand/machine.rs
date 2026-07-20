@@ -275,6 +275,51 @@ struct ControlFields<'a> {
     adaptive: &'a AdaptivePolicy,
 }
 
+struct ExtraBindings {
+    columns_state: Option<BindingRef>,
+    query: Option<BindingRef>,
+}
+
+#[derive(Clone, Copy)]
+struct ExtraBindingRefs<'a> {
+    columns_state: Option<&'a BindingRef>,
+    query: Option<&'a BindingRef>,
+}
+
+impl ExtraBindings {
+    fn substitute(
+        context: &Context<'_>,
+        control: &ControlNode,
+        path: &str,
+    ) -> Result<Self, UiDocError> {
+        let columns_state = match control {
+            ControlNode::TrackList { columns_state, .. } => columns_state
+                .as_ref()
+                .map(|binding| substitute_binding(context, binding, path))
+                .transpose()?,
+            _ => None,
+        };
+        let query = match control {
+            ControlNode::Tree { query, .. } => query
+                .as_ref()
+                .map(|binding| substitute_binding(context, binding, path))
+                .transpose()?,
+            _ => None,
+        };
+        Ok(Self {
+            columns_state,
+            query,
+        })
+    }
+
+    fn as_refs(&self) -> ExtraBindingRefs<'_> {
+        ExtraBindingRefs {
+            columns_state: self.columns_state.as_ref(),
+            query: self.query.as_ref(),
+        }
+    }
+}
+
 impl<'a> ControlFields<'a> {
     fn new(
         id: &'a NodeId,
@@ -298,7 +343,7 @@ fn finish_control(
     control: &ControlNode,
     fields: ControlFields<'_>,
     path: &str,
-    columns_state: Option<&BindingRef>,
+    extra: ExtraBindingRefs<'_>,
     spec: ControlSpec,
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
@@ -316,7 +361,8 @@ fn finish_control(
             control,
             read: read.as_ref(),
             write: write.as_ref(),
-            columns_state,
+            columns_state: extra.columns_state,
+            query: extra.query,
         },
         &context.origin,
     )?;
@@ -345,13 +391,7 @@ fn expand_control(
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     let path = begin_control(context, fields.id, machine)?;
-    let columns_state = match control {
-        ControlNode::TrackList { columns_state, .. } => columns_state
-            .as_ref()
-            .map(|binding| substitute_binding(context, binding, &path))
-            .transpose()?,
-        _ => None,
-    };
+    let extra = ExtraBindings::substitute(context, control, &path)?;
     let spec = match control {
         ControlNode::DeckSummary { style, .. } => ControlSpec::DeckSummary { style: *style },
         ControlNode::Brand { .. } => ControlSpec::Brand,
@@ -416,12 +456,19 @@ fn expand_control(
         },
         ControlNode::TrackList { columns, .. } => ControlSpec::TrackList {
             columns: columns.clone(),
-            columns_state: columns_state
+            columns_state: extra
+                .columns_state
                 .as_ref()
                 .map(|binding| intern_binding(machine.interner, binding, &context.origin))
                 .transpose()?,
         },
-        ControlNode::Tree { .. } => ControlSpec::Tree,
+        ControlNode::Tree { .. } => ControlSpec::Tree {
+            query: extra
+                .query
+                .as_ref()
+                .map(|binding| intern_binding(machine.interner, binding, &context.origin))
+                .transpose()?,
+        },
         ControlNode::ContextBar { .. } => ControlSpec::ContextBar,
         ControlNode::Toggle { .. } => ControlSpec::Toggle,
         ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
@@ -483,7 +530,7 @@ fn expand_control(
         control,
         fields,
         &path,
-        columns_state.as_ref(),
+        extra.as_refs(),
         spec,
         machine,
     )
@@ -642,6 +689,7 @@ fn expand_value_control(
             read,
             write,
             adaptive,
+            ..
         }
         | ControlNode::ContextBar {
             id,

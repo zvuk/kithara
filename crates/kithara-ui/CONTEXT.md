@@ -94,4 +94,4 @@ By owner decision the application was reverted to its pre-modular GUI and PR #11
 gallery example, which the `dead_exports` scan classifies as testish; those three names
 are exempted in `.config/arch/thresholds.toml` with the same rationale. Builtin module
 docs under `assets/modules/` remain the canonical presets and are consumed by the gallery
-МОДУЛИ page; nothing outside this crate reads them right now.
+modules page; nothing outside this crate reads them right now.
