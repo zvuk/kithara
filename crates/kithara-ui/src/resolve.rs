@@ -127,6 +127,7 @@ fn walk_includes(
         | ControlNode::Segmented { .. }
         | ControlNode::Select { .. }
         | ControlNode::StatusDot { .. }
+        | ControlNode::Swatch { .. }
         | ControlNode::Cell { .. }
         | ControlNode::Readout { .. }
         | ControlNode::Chip { .. }

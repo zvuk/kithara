@@ -9,6 +9,7 @@ use crate::{
         WaveStyle, WindowControlsStyle,
     },
     size::SizeSpec,
+    skin::ColorRole,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -117,6 +118,10 @@ pub enum ControlSpec {
     StatusDot {
         label: InternId,
         tone: Tone,
+    },
+    Swatch {
+        role: ColorRole,
+        label: InternId,
     },
     Cell {
         label: Option<InternId>,

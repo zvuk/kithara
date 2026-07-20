@@ -183,6 +183,7 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Segmented { .. } => skin.segmented.size,
         ControlSpec::Select { .. } => skin.select.size,
         ControlSpec::StatusDot { .. } => skin.status_dot.size,
+        ControlSpec::Swatch { .. } => skin.swatch.size,
         ControlSpec::Cell { .. } => skin.cell.size,
         ControlSpec::Readout { .. } => skin.readout.size,
         ControlSpec::Chip { .. } => skin.chip.size,

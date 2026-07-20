@@ -35,6 +35,7 @@ pub struct SkinDoc {
     pub segmented: SegmentedSkin,
     pub select: SelectSkin,
     pub status_dot: StatusDotSkin,
+    pub swatch: SwatchSkin,
     pub cell: CellSkin,
     pub fader: FaderSkin,
     pub wave: WaveSkin,
@@ -532,6 +533,19 @@ pub struct StatusDotSkin {
     pub gap: f32,
     pub text: FontSkin,
     pub text_color: ColorRole,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct SwatchSkin {
+    pub size: SizeSpec,
+    pub box_height: f32,
+    pub frame: FrameSkin,
+    pub box_label_gap: f32,
+    pub label_hex_gap: f32,
+    pub label: TextRoleSkin,
+    pub hex: TextRoleSkin,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

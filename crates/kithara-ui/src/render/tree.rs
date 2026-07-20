@@ -9,7 +9,9 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     atoms::{
         chip::Chip,
-        design::{cell::Cell, segmented::Segmented, select::Select, status_dot::StatusDot},
+        design::{
+            cell::Cell, segmented::Segmented, select::Select, status_dot::StatusDot, swatch::Swatch,
+        },
         knob::Knob,
         meter::StereoMeter,
         readout::Readout,
@@ -25,6 +27,7 @@ use crate::{
     },
     render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent},
     size::{Dim, SizeSpec, control_size},
+    skin::ColorRole,
     widgets::{
         ModuleChrome, Widget,
         button::ControlButton,
@@ -284,6 +287,7 @@ fn render_control<'a>(
         ControlSpec::Segmented { items } => render_segmented(path, items, value, ui, skin),
         ControlSpec::Select { label } => render_select(*label, ui, skin),
         ControlSpec::StatusDot { label, tone } => render_status_dot(*label, *tone, ui, skin),
+        ControlSpec::Swatch { role, label } => render_swatch(*role, *label, ui, skin),
         ControlSpec::Cell { label, highlighted } => render_cell(*label, *highlighted, ui, skin),
         ControlSpec::Readout {
             label,
@@ -495,6 +499,20 @@ fn render_segmented<'a>(
 
 fn render_select<'a>(label: InternId, ui: &'a CompiledUi, skin: &Skin) -> Element<'a, UiEvent> {
     Select::builder()
+        .label(ui.resolve(label))
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_swatch<'a>(
+    role: ColorRole,
+    label: InternId,
+    ui: &'a CompiledUi,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    Swatch::builder()
+        .role(role)
         .label(ui.resolve(label))
         .skin(skin)
         .build()

@@ -10,7 +10,7 @@ use super::{
 use crate::{
     error::UiDocError,
     ids::{Interner, NodeId, SourceUri},
-    module::{AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, IconName},
+    module::{AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, IconName, TextStyle},
     resolve::ModuleSet,
     size::SizeSpec,
 };
@@ -157,6 +157,19 @@ fn title_bar_spec(
 ) -> Result<ControlSpec, UiDocError> {
     Ok(ControlSpec::TitleBar {
         label: intern_text(context, machine.interner, label, path, &context.origin)?,
+    })
+}
+
+fn text_spec(
+    context: &Context<'_>,
+    interner: &mut Interner,
+    style: TextStyle,
+    label: Option<&str>,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::Text {
+        style,
+        label: intern_optional_text(context, interner, label, path, &context.origin)?,
     })
 }
 
@@ -335,16 +348,9 @@ fn expand_control(
         ControlNode::SettingsButton { .. } => ControlSpec::SettingsButton,
         ControlNode::TitleBar { label, .. } => title_bar_spec(context, machine, label, &path)?,
         ControlNode::WindowControls { style, .. } => ControlSpec::WindowControls { style: *style },
-        ControlNode::Text { style, label, .. } => ControlSpec::Text {
-            style: *style,
-            label: intern_optional_text(
-                context,
-                machine.interner,
-                label.as_deref(),
-                &path,
-                &context.origin,
-            )?,
-        },
+        ControlNode::Text { style, label, .. } => {
+            text_spec(context, machine.interner, *style, label.as_deref(), &path)?
+        }
         ControlNode::Glyph { icon, .. } => ControlSpec::Glyph { icon: *icon },
         ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
             label: intern_text(context, machine.interner, label, &path, &context.origin)?,
@@ -424,6 +430,10 @@ fn expand_control(
         ControlNode::StatusDot { label, tone, .. } => ControlSpec::StatusDot {
             label: intern_text(context, machine.interner, label, &path, &context.origin)?,
             tone: *tone,
+        },
+        ControlNode::Swatch { role, label, .. } => ControlSpec::Swatch {
+            role: *role,
+            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
         },
         ControlNode::Cell {
             label, highlighted, ..
@@ -696,6 +706,15 @@ fn expand_atom_control(
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     match control {
+        ControlNode::Swatch {
+            id, size, adaptive, ..
+        } => expand_control(
+            context,
+            control,
+            ControlFields::new(id, *size, None, None, adaptive),
+            depth,
+            machine,
+        ),
         control @ (ControlNode::Toggle {
             id,
             size,
@@ -889,6 +908,7 @@ fn walk(
         | ControlNode::Segmented { .. }
         | ControlNode::Select { .. }
         | ControlNode::StatusDot { .. }
+        | ControlNode::Swatch { .. }
         | ControlNode::Cell { .. }
         | ControlNode::Readout { .. }
         | ControlNode::Chip { .. }

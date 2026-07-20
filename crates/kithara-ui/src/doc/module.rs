@@ -8,6 +8,7 @@ use crate::{
     error::UiDocError,
     ids::{DocId, EndpointId, NodeId, SourceUri},
     size::SizeSpec,
+    skin::ColorRole,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -391,6 +392,15 @@ pub enum ControlNode {
         label: String,
         #[serde(default)]
         tone: Tone,
+    },
+    Swatch {
+        id: NodeId,
+        role: ColorRole,
+        label: String,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
     },
     Cell {
         id: NodeId,

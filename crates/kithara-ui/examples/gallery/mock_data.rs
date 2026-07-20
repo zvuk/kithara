@@ -8,6 +8,7 @@ struct MockData {
     title: String,
     artist: String,
     breadcrumb: String,
+    footer_tokens_anatomy: String,
     tree: Vec<MockTreeRow>,
     tracks: Vec<MockTrack>,
 }
@@ -82,6 +83,7 @@ pub(crate) struct Catalog {
     pub(crate) title: &'static str,
     pub(crate) artist: &'static str,
     pub(crate) breadcrumb: &'static str,
+    pub(crate) footer_tokens_anatomy: &'static str,
     pub(crate) rows: &'static [TrackRow<'static>],
     pub(crate) tree: &'static [TreeRow<'static>],
 }
@@ -127,6 +129,7 @@ fn load_catalog() -> Catalog {
         title: &data.title,
         artist: &data.artist,
         breadcrumb: &data.breadcrumb,
+        footer_tokens_anatomy: &data.footer_tokens_anatomy,
         rows: Box::leak(rows.into_boxed_slice()),
         tree: Box::leak(tree.into_boxed_slice()),
     }

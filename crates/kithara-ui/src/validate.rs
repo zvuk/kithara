@@ -186,6 +186,7 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Segmented { id, .. }
         | ControlNode::Select { id, .. }
         | ControlNode::StatusDot { id, .. }
+        | ControlNode::Swatch { id, .. }
         | ControlNode::Cell { id, .. }
         | ControlNode::Readout { id, .. }
         | ControlNode::Chip { id, .. }
@@ -409,6 +410,7 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Glyph { .. }
         | ControlNode::Select { .. }
         | ControlNode::StatusDot { .. }
+        | ControlNode::Swatch { .. }
         | ControlNode::Cell { .. } => (None, None),
     }
 }

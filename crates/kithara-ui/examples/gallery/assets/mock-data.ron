@@ -2,6 +2,7 @@
     title: "MoonShine_Секрет",
     artist: "teo_van_bo",
     breadcrumb: "ПОИСК",
+    footer_tokens_anatomy: "ФУТЕР-СТАТУС · 22 PX",
     tree: [
         (depth: 0, label: "Коллекция", icon: Collection, expanded: Some(true)),
         (depth: 1, label: "All tracks", icon: Playlist, count: Some(29)),

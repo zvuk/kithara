@@ -7,6 +7,7 @@ pub(super) enum Tab {
     Typography,
     Cells,
     Sizes,
+    Tokens,
     Chrome,
     Titlebars,
     Tracklist,
@@ -16,7 +17,7 @@ pub(super) enum Tab {
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 13] = [
+    pub(super) const ALL: [Self; 14] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -24,6 +25,7 @@ impl Tab {
         Self::Typography,
         Self::Cells,
         Self::Sizes,
+        Self::Tokens,
         Self::Chrome,
         Self::Titlebars,
         Self::Tracklist,
@@ -41,6 +43,7 @@ impl Tab {
             Self::Typography => "gallery-typography.klayout.ron",
             Self::Cells => "gallery-cells.klayout.ron",
             Self::Sizes => "gallery-sizes.klayout.ron",
+            Self::Tokens => "gallery-tokens.klayout.ron",
             Self::Chrome => "gallery-chrome.klayout.ron",
             Self::Titlebars => "gallery-titlebars.klayout.ron",
             Self::Tracklist => "gallery-tracklist.klayout.ron",
@@ -59,12 +62,13 @@ impl Tab {
             Self::Typography => 4,
             Self::Cells => 5,
             Self::Sizes => 6,
-            Self::Chrome => 7,
-            Self::Titlebars => 8,
-            Self::Tracklist => 9,
-            Self::Tree => 10,
-            Self::Library2 => 11,
-            Self::Stress => 12,
+            Self::Tokens => 7,
+            Self::Chrome => 8,
+            Self::Titlebars => 9,
+            Self::Tracklist => 10,
+            Self::Tree => 11,
+            Self::Library2 => 12,
+            Self::Stress => 13,
         }
     }
 }
@@ -81,6 +85,7 @@ impl TryFrom<&str> for Tab {
             "gallery/typography" => Ok(Self::Typography),
             "gallery/cells" => Ok(Self::Cells),
             "gallery/sizes" => Ok(Self::Sizes),
+            "gallery/tokens" => Ok(Self::Tokens),
             "gallery/chrome" => Ok(Self::Chrome),
             "gallery/titlebars" => Ok(Self::Titlebars),
             "gallery/tracklist" => Ok(Self::Tracklist),

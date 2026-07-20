@@ -64,6 +64,12 @@
                 read: Model(id: "gallery.tab.sizes"),
             ),
             NavItem(
+                id: "tokens",
+                label: "ТОКЕНЫ",
+                icon: Disc,
+                read: Model(id: "gallery.tab.tokens"),
+            ),
+            NavItem(
                 id: "chrome",
                 label: "ХРОМ",
                 icon: Disc,

@@ -81,6 +81,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-sizes.klayout.ron"),
     ),
     (
+        "gallery-tokens.klayout.ron",
+        include_str!("assets/gallery-tokens.klayout.ron"),
+    ),
+    (
         "gallery-tracklist.klayout.ron",
         include_str!("assets/gallery-tracklist.klayout.ron"),
     ),
@@ -187,6 +191,18 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/sizes.kmodule.ron",
         include_str!("assets/modules/tabs/sizes.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/tokens-anatomy.kmodule.ron",
+        include_str!("assets/modules/tabs/tokens-anatomy.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/tokens-notes.kmodule.ron",
+        include_str!("assets/modules/tabs/tokens-notes.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/tokens.kmodule.ron",
+        include_str!("assets/modules/tabs/tokens.kmodule.ron"),
     ),
     (
         "modules/tabs/tracklist.kmodule.ron",

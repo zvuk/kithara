@@ -81,6 +81,10 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.segmented.active_background, ColorRole::Accent);
     assert_eq!(document.select.background, ColorRole::BgInset);
     assert_eq!(document.status_dot.dot_size, 6.0);
+    assert_eq!(document.swatch.box_height, 44.0);
+    assert_eq!(document.swatch.frame.border, ColorRole::Line);
+    assert_eq!(document.swatch.label.font, FontFamily::Mono);
+    assert_eq!(document.swatch.hex.color, ColorRole::TextDim);
     assert_eq!(document.cell.frame.radius, 0.0);
     assert_eq!(document.fader.handle_frame.radius, 0.0);
     assert_eq!(document.fader.handle_width, 9);

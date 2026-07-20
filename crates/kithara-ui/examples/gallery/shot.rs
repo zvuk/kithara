@@ -13,24 +13,26 @@ impl Consts {
     const BUTTONS_SELECT_TICK: u32 = 35;
     const CELLS_CAPTURE_TICK: u32 = 85;
     const CELLS_SELECT_TICK: u32 = 80;
-    const CHROME_CAPTURE_TICK: u32 = 105;
-    const CHROME_SELECT_TICK: u32 = 100;
+    const CHROME_CAPTURE_TICK: u32 = 115;
+    const CHROME_SELECT_TICK: u32 = 110;
     const FADERS_CAPTURE_TICK: u32 = 50;
     const FADERS_SELECT_TICK: u32 = 45;
-    const LIBRARY2_CAPTURE_TICK: u32 = 160;
-    const LIBRARY2_SELECT_TICK: u32 = 155;
+    const LIBRARY2_CAPTURE_TICK: u32 = 170;
+    const LIBRARY2_SELECT_TICK: u32 = 165;
     const MODULES_CAPTURE_TICK: u32 = 60;
     const MODULES_SELECT_TICK: u32 = 55;
     const SIZES_CAPTURE_TICK: u32 = 95;
     const SIZES_SELECT_TICK: u32 = 90;
-    const STRESS_CAPTURE_TICK: u32 = 560;
-    const STRESS_SELECT_TICK: u32 = 165;
-    const TITLEBARS_CAPTURE_TICK: u32 = 115;
-    const TITLEBARS_SELECT_TICK: u32 = 110;
-    const TRACKLIST_CAPTURE_TICK: u32 = 130;
-    const TRACKLIST_SELECT_TICK: u32 = 125;
-    const TREE_CAPTURE_TICK: u32 = 145;
-    const TREE_SELECT_TICK: u32 = 140;
+    const STRESS_CAPTURE_TICK: u32 = 570;
+    const STRESS_SELECT_TICK: u32 = 175;
+    const TITLEBARS_CAPTURE_TICK: u32 = 125;
+    const TITLEBARS_SELECT_TICK: u32 = 120;
+    const TOKENS_CAPTURE_TICK: u32 = 105;
+    const TOKENS_SELECT_TICK: u32 = 100;
+    const TRACKLIST_CAPTURE_TICK: u32 = 140;
+    const TRACKLIST_SELECT_TICK: u32 = 135;
+    const TREE_CAPTURE_TICK: u32 = 155;
+    const TREE_SELECT_TICK: u32 = 150;
     const TYPOGRAPHY_CAPTURE_TICK: u32 = 75;
     const TYPOGRAPHY_SELECT_TICK: u32 = 70;
 }
@@ -95,6 +97,11 @@ pub(super) fn drive(state: &mut Gallery) -> Task<Message> {
             Task::none()
         }
         Consts::SIZES_CAPTURE_TICK => capture(state.window_id, "tab-sizes"),
+        Consts::TOKENS_SELECT_TICK => {
+            state.select_tab(Tab::Tokens);
+            Task::none()
+        }
+        Consts::TOKENS_CAPTURE_TICK => capture(state.window_id, "tab-tokens"),
         Consts::CHROME_SELECT_TICK => {
             state.select_tab(Tab::Chrome);
             Task::none()

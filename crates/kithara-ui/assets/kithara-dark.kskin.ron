@@ -252,6 +252,15 @@
         text: (size: 9.0, weight: Medium),
         text_color: TextDim,
     ),
+    swatch: (
+        size: (w: Fill, h: Fixed(78.0)),
+        box_height: 44.0,
+        frame: (radius: 0.0, border_width: 1.0, border: Line),
+        box_label_gap: 5.0,
+        label_hex_gap: 1.0,
+        label: (font: Mono, weight: Normal, size: 9.0, spacing: 0.08, color: Muted),
+        hex: (font: Mono, weight: Medium, size: 10.0, spacing: 0.0, color: TextDim),
+    ),
     cell: (
         size: (w: Fixed(50.0), h: Fixed(40.0)),
         frame: (radius: 0.0, border_width: 1.0, border: Line),
