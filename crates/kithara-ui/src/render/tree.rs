@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use iced::{
     Background, Element, Length,
-    widget::{Column, Row, container, container::Style as ContainerStyle},
+    widget::{Column, Row, Space, container, container::Style as ContainerStyle},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -19,7 +19,7 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    module::IconName,
+    module::{ChromeStyle, IconName},
     render::{Icon, ReadValue, Reads, Skin, UiEvent},
     size::{Dim, SizeSpec, control_size},
     widgets::{
@@ -89,11 +89,45 @@ fn render_compiled<'a>(
             })
             .into(),
         },
-        CompiledNode::Module { root, .. } => ModuleChrome::builder()
-            .content(render_node(root, ui, reads, skin))
-            .skin(skin)
-            .build()
-            .view(),
+        CompiledNode::Module {
+            module,
+            title,
+            chip,
+            chrome,
+            footer,
+            collapsed,
+            root,
+            ..
+        } => {
+            let collapsed = *chrome == ChromeStyle::Full
+                && matches!(
+                    reads.get(ui.resolve(*collapsed)),
+                    Some(ReadValue::Bool(true))
+                );
+            let footer = footer
+                .as_ref()
+                .and_then(|binding| resolve(reads, binding, ui))
+                .and_then(|value| match value {
+                    ReadValue::Text(text) => Some(text.to_owned()),
+                    _ => None,
+                });
+            let content: Element<'a, UiEvent> = if collapsed {
+                Space::new().into()
+            } else {
+                render_node(root, ui, reads, skin)
+            };
+            ModuleChrome::builder()
+                .content(content)
+                .maybe_title(title.map(|id| ui.resolve(id)))
+                .maybe_chip(chip.map(|id| ui.resolve(id)))
+                .style(*chrome)
+                .maybe_footer(footer)
+                .on_toggle(UiEvent::ToggleModule(ui.resolve(*module).to_owned()))
+                .collapsed(collapsed)
+                .skin(skin)
+                .build()
+                .view()
+        }
     }
 }
 

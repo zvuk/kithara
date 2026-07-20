@@ -2,6 +2,7 @@
     schema: "kithara.module",
     version: 1,
     id: "gallery-module-tabs",
+    chrome: Plain,
     root: Row(
         children: [
             TabLarge(

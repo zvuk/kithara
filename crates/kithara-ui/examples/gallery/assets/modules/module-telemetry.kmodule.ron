@@ -2,9 +2,12 @@
     schema: "kithara.module",
     version: 1,
     id: "gallery-module-telemetry",
+    title: Some("Телеметрия"),
+    chip: Some("TLM"),
+    chrome: Full,
+    footer: Some(Model(id: "gallery.footer.telemetry")),
     root: Column(
         children: [
-            Include(id: "selector", source: "module-tabs.kmodule.ron"),
             Slot(
                 id: "content",
                 size: (w: Fill, h: Fill),

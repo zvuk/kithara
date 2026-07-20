@@ -217,6 +217,24 @@ pub(crate) fn check_controls(
     Ok(())
 }
 
+pub(crate) fn check_module_footer(
+    doc: &ModuleDoc,
+    origin: &SourceUri,
+    endpoints: &dyn EndpointRegistry,
+) -> Result<(), UiDocError> {
+    let Some(binding) = doc.footer.as_ref() else {
+        return Ok(());
+    };
+    check_binding(
+        binding,
+        BindingSide::Read,
+        Some(ValueKind::Text),
+        "root/footer",
+        origin,
+        endpoints,
+    )
+}
+
 #[derive(Clone, Copy)]
 enum BindingSide {
     Read,

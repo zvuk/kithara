@@ -1,8 +1,9 @@
 use crate::{
     error::UiDocError,
-    expand::{Budget, ControlSite, ExpandedNode, Expander},
+    expand::{Binding, Budget, ControlSite, ExpandedNode, Expander},
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, LayoutNode, parse_layout},
+    module::ChromeStyle,
     registry::EndpointRegistry,
     resolve::load_module_graph,
     size::{SizeSpec, combine_horizontal, combine_vertical, compute_size},
@@ -39,6 +40,12 @@ pub enum CompiledNode {
     },
     Module {
         instance: InternId,
+        module: InternId,
+        title: Option<InternId>,
+        chip: Option<InternId>,
+        chrome: ChromeStyle,
+        footer: Option<Binding>,
+        collapsed: InternId,
         root: Box<ExpandedNode>,
         size: SizeSpec,
     },
@@ -150,18 +157,38 @@ impl Compiler<'_> {
                 let mut visitor = |site: ControlSite<'_>, origin: &SourceUri| {
                     validate::check_controls(site, origin, self.endpoints)
                 };
-                let root = Expander::new(
+                let document = set
+                    .defs
+                    .get(&module_uri)
+                    .ok_or_else(|| UiDocError::NotFound {
+                        origin: module_uri.clone(),
+                        rel: module_uri.0.clone(),
+                    })?;
+                validate::check_module_footer(document, &module_uri, self.endpoints)?;
+                let expanded = Expander::new(
                     self.config.limits.max_depth,
                     self.budget,
                     self.interner,
                     &mut visitor,
                 )
                 .expand_module(&set, &module_uri, &args, &instance.0)?;
-                let size = (*size).unwrap_or_else(|| compute_size(&root, self.skin));
+                let size = (*size).unwrap_or_else(|| {
+                    crate::size::with_module_chrome(
+                        compute_size(&expanded.root, self.skin),
+                        expanded.chrome,
+                        self.skin,
+                    )
+                });
                 let instance = self.interner.intern(&instance.0, layout_uri)?;
                 Ok(CompiledNode::Module {
                     instance,
-                    root: Box::new(root),
+                    module: expanded.module,
+                    title: expanded.title,
+                    chip: expanded.chip,
+                    chrome: expanded.chrome,
+                    footer: expanded.footer,
+                    collapsed: expanded.collapsed,
+                    root: Box::new(expanded.root),
                     size,
                 })
             }

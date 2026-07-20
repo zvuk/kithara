@@ -2,9 +2,12 @@
     schema: "kithara.module",
     version: 1,
     id: "gallery-module-layout",
+    title: Some("Раскладка"),
+    chip: Some("LAY"),
+    chrome: Full,
+    footer: Some(Model(id: "gallery.footer.layout")),
     root: Column(
         children: [
-            Include(id: "selector", source: "module-tabs.kmodule.ron"),
             Slot(
                 id: "content",
                 size: (w: Fill, h: Fill),

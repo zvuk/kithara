@@ -10,10 +10,20 @@
                 source: "modules/nav.kmodule.ron",
                 size: (w: Fixed(198.0), h: Fill),
             )),
-            (weight: 1.0, node: Module(
-                instance: "modules",
-                source: "modules/module-telemetry.kmodule.ron",
-                size: (w: Fill, h: Fill),
+            (weight: 1.0, node: Split(
+                axis: Vertical,
+                children: [
+                    (weight: 1.0, node: Module(
+                        instance: "modules-tabs",
+                        source: "modules/module-tabs.kmodule.ron",
+                        size: (w: Fill, h: Fixed(28.0)),
+                    )),
+                    (weight: 1.0, node: Module(
+                        instance: "modules",
+                        source: "modules/module-telemetry.kmodule.ron",
+                        size: (w: Fill, h: Fill),
+                    )),
+                ],
             )),
         ],
     ),

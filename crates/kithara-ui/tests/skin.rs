@@ -20,6 +20,17 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.layout.grid_gap, 1.0);
     assert_eq!(document.layout.size_gap, 0.0);
     assert_eq!(document.chrome.frame.border, ColorRole::Line);
+    assert_eq!(document.palette.line_inner, "#2a2a4c");
+    assert_eq!(document.palette.bg_footer, "#1b1b32");
+    assert_eq!(document.chrome.header_height, 26.0);
+    assert_eq!(document.chrome.chip_pad, 9.0);
+    assert_eq!(document.chrome.chip_text_size, 9.0);
+    assert_eq!(document.chrome.title_text_size, 11.0);
+    assert_eq!(document.chrome.chevron_size, 26.0);
+    assert_eq!(document.chrome.footer_height, 22.0);
+    assert_eq!(document.chrome.footer_text_size, 9.0);
+    assert_eq!(document.chrome.inner_line, ColorRole::LineInner);
+    assert_eq!(document.chrome.footer_background, ColorRole::BgFooter);
     assert_eq!(document.text_input.idle_border_width, 0.0);
     assert_eq!(document.knob.body_border, ColorRole::Line);
     assert_eq!(document.knob.drag_range, 140.0);

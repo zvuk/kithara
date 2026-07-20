@@ -57,3 +57,14 @@ not part of the schema contract.
 are selected exhaustively from `ControlSpec` and the supplied `SkinDoc` by
 `size::control_size`; this remains available in non-render and wasm builds. Renderers match
 `ControlSpec` directly and do not resolve a runtime control catalog.
+
+## Module Chrome And Collapse Ownership
+
+`ModuleDoc` owns optional shell labels and footer binding plus a typed `ChromeStyle`. `Frame` is
+the serde default so existing documents retain the original frame and corner ticks; `Plain`
+renders only module content; `Full` adds the skin-owned 12e header, separators, and footer.
+
+Collapse state remains host-owned. A Full module reads `Bool` from
+`ui.module.<module-doc-id>.collapsed`; an absent value means expanded. Header activation emits
+`UiEvent::ToggleModule(<module-doc-id>)`. The renderer does not retain or mutate collapse state,
+and Frame or Plain modules ignore that endpoint.

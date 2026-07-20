@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     expand::{ControlSpec, ExpandedNode},
+    module::ChromeStyle,
     skin::SkinDoc,
 };
 
@@ -200,6 +201,15 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
     }
 }
 
+pub(crate) fn with_module_chrome(size: SizeSpec, chrome: ChromeStyle, skin: &SkinDoc) -> SizeSpec {
+    if chrome != ChromeStyle::Full {
+        return size;
+    }
+    let lines = skin.chrome.inner_line_width * 2.0;
+    let height = skin.chrome.header_height + skin.chrome.footer_height + lines;
+    SizeSpec::new(size.w, grow(size.h, height))
+}
+
 fn gap_total(gap: Option<f32>, child_count: usize, default: f32) -> f32 {
     let gaps = u16::try_from(child_count.saturating_sub(1)).unwrap_or(u16::MAX);
     gap.unwrap_or(default) * f32::from(gaps)
@@ -256,6 +266,19 @@ mod tests {
 
     fn fixed(w: f32, h: f32) -> SizeSpec {
         SizeSpec::new(Dim::Fixed(w), Dim::Fixed(h))
+    }
+
+    #[kithara::test]
+    fn full_module_chrome_adds_header_footer_and_internal_lines() {
+        let size = fixed(100.0, 40.0);
+        let skin = builtin::skin_doc();
+
+        assert_eq!(with_module_chrome(size, ChromeStyle::Frame, skin), size);
+        assert_eq!(with_module_chrome(size, ChromeStyle::Plain, skin), size);
+        assert_eq!(
+            with_module_chrome(size, ChromeStyle::Full, skin),
+            fixed(100.0, 90.0)
+        );
     }
 
     #[kithara::test]

@@ -5,7 +5,8 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, compile},
     error::UiDocError,
-    expand::{ControlSpec, ExpandedNode},
+    expand::{Binding, ControlSpec, ExpandedNode},
+    module::ChromeStyle,
     size::{Dim, SizeSpec},
     source::{Limits, MemResolver, UiConfig},
 };
@@ -63,6 +64,96 @@ fn layout_module_size_override_wins_over_computed_size() {
 
     assert_eq!(*size, expected);
     assert_eq!(ui.size, expected);
+}
+
+#[kithara::test]
+fn module_shell_metadata_compiles_into_the_module_node() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "shell.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "shell",
+            root: Module(instance: "deck-a", source: "shell.kmodule.ron", with: {
+                "deck": "a",
+            }))"#,
+    );
+    resolver.insert(
+        "shell.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "deck", parameters: ["deck"],
+            title: Some("Deck"), chip: Some("DECK"), chrome: Full,
+            footer: Some(Telemetry(id: "deck.track.title", with: { "deck": "$deck" })),
+            root: Text(id: "label"))"#,
+    );
+
+    let ui = compile(
+        "shell.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module {
+        module,
+        title,
+        chip,
+        chrome,
+        footer,
+        collapsed,
+        ..
+    } = &ui.root
+    else {
+        panic!("expected module root");
+    };
+
+    assert_eq!(ui.resolve(*module), "deck");
+    assert_eq!(title.map(|id| ui.resolve(id)), Some("Deck"));
+    assert_eq!(chip.map(|id| ui.resolve(id)), Some("DECK"));
+    assert_eq!(*chrome, ChromeStyle::Full);
+    assert_eq!(ui.resolve(*collapsed), "ui.module.deck.collapsed");
+    let Some(Binding::Telemetry { id, with }) = footer else {
+        panic!("expected telemetry footer");
+    };
+    assert_eq!(ui.resolve(*id), "deck.track.title");
+    assert_eq!(
+        with.iter()
+            .map(|(key, value)| (ui.resolve(*key), ui.resolve(*value)))
+            .collect::<Vec<_>>(),
+        vec![("deck", "a")]
+    );
+}
+
+#[kithara::test]
+fn module_footer_requires_a_text_read_endpoint() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "shell.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "shell",
+            root: Module(instance: "deck-a", source: "shell.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "shell.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "deck",
+            footer: Some(Parameter(id: "player.output.volume")),
+            root: Text(id: "label"))"#,
+    );
+
+    let error = compile(
+        "shell.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            UiDocError::BindingType { expected, got, .. }
+                if expected == "Text" && got == "Scalar"
+        ),
+        "{error:?}"
+    );
 }
 
 #[kithara::test]

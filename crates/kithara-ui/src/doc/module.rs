@@ -18,8 +18,25 @@ pub struct ModuleDoc {
     pub version: u32,
     pub id: DocId,
     #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub chip: Option<String>,
+    #[serde(default)]
+    pub chrome: ChromeStyle,
+    #[serde(default)]
+    pub footer: Option<BindingRef>,
+    #[serde(default)]
     pub parameters: Vec<String>,
     pub root: ControlNode,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum ChromeStyle {
+    Full,
+    #[default]
+    Frame,
+    Plain,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -537,5 +554,35 @@ mod tests {
         };
 
         assert_eq!(size, None);
+    }
+
+    #[kithara::test]
+    fn module_chrome_defaults_to_frame() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "frame",
+            root: Text(id: "label"))"#;
+
+        let document = parse_module(text, &origin()).unwrap();
+
+        assert_eq!(document.title, None);
+        assert_eq!(document.chip, None);
+        assert_eq!(document.chrome, ChromeStyle::Frame);
+        assert_eq!(document.footer, None);
+    }
+
+    #[kithara::test]
+    fn full_module_chrome_metadata_parses() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "full",
+            title: Some("Module title"),
+            chip: Some("MOD"),
+            chrome: Full,
+            footer: Some(Model(id: "module.status")),
+            root: Text(id: "label"))"#;
+
+        let document = parse_module(text, &origin()).unwrap();
+
+        assert_eq!(document.title.as_deref(), Some("Module title"));
+        assert_eq!(document.chip.as_deref(), Some("MOD"));
+        assert_eq!(document.chrome, ChromeStyle::Full);
+        assert!(matches!(document.footer, Some(BindingRef::Model { .. })));
     }
 }

@@ -4,8 +4,8 @@ use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
     module::{
-        AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, DeckSummaryStyle, FaderStyle,
-        IconName, ScalarFormat, TextStyle, Tone, WaveStyle,
+        AdaptivePolicy, BindingRef, ButtonStyle, ChromeStyle, ControlNode, DeckSummaryStyle,
+        FaderStyle, IconName, ScalarFormat, TextStyle, Tone, WaveStyle,
     },
     resolve::ModuleSet,
     size::SizeSpec,
@@ -126,6 +126,17 @@ pub enum Binding {
     },
 }
 
+#[derive(Debug)]
+pub(crate) struct ExpandedModule {
+    pub(crate) module: InternId,
+    pub(crate) title: Option<InternId>,
+    pub(crate) chip: Option<InternId>,
+    pub(crate) chrome: ChromeStyle,
+    pub(crate) footer: Option<Binding>,
+    pub(crate) collapsed: InternId,
+    pub(crate) root: ExpandedNode,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct ControlSite<'a> {
     pub(crate) path: &'a str,
@@ -197,8 +208,50 @@ impl<'m, 'v> Expander<'m, 'v> {
         entry: &SourceUri,
         args: &BTreeMap<String, String>,
         prefix: &str,
-    ) -> Result<ExpandedNode, UiDocError> {
-        expand_at(set, entry, args.clone(), prefix.to_owned(), 0, self)
+    ) -> Result<ExpandedModule, UiDocError> {
+        let doc = set.defs.get(entry).ok_or_else(|| UiDocError::NotFound {
+            origin: entry.clone(),
+            rel: entry.0.clone(),
+        })?;
+        let root = expand_at(set, entry, args.clone(), prefix.to_owned(), 0, self)?;
+        let context = Context {
+            set,
+            origin: entry.clone(),
+            args: args.clone(),
+            prefix: prefix.to_owned(),
+        };
+        let footer = doc
+            .footer
+            .as_ref()
+            .map(|binding| {
+                let path = format!("{prefix}/footer");
+                let binding = substitute_binding(&context, binding, &path)?;
+                intern_binding(self.interner, &binding, entry)
+            })
+            .transpose()?;
+        let module = self.interner.intern(&doc.id.0, entry)?;
+        let title = doc
+            .title
+            .as_deref()
+            .map(|title| self.interner.intern(title, entry))
+            .transpose()?;
+        let chip = doc
+            .chip
+            .as_deref()
+            .map(|chip| self.interner.intern(chip, entry))
+            .transpose()?;
+        let collapsed = self
+            .interner
+            .intern(&format!("ui.module.{}.collapsed", doc.id.0), entry)?;
+        Ok(ExpandedModule {
+            module,
+            title,
+            chip,
+            chrome: doc.chrome,
+            footer,
+            collapsed,
+            root,
+        })
     }
 }
 
@@ -926,14 +979,14 @@ mod tests {
         let mut budget = Budget::new(Limits::default().max_nodes);
         let mut interner = Interner::new(64 * 1024);
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
-        let root = Expander::new(
+        let module = Expander::new(
             Limits::default().max_depth,
             &mut budget,
             &mut interner,
             &mut visitor,
         )
         .expand_module(set, uri, args, "")?;
-        Ok((root, interner.finish()))
+        Ok((module.root, interner.finish()))
     }
 
     fn expand_with_depth(
@@ -944,9 +997,9 @@ mod tests {
         let mut budget = Budget::new(Limits::default().max_nodes);
         let mut interner = Interner::new(64 * 1024);
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
-        let root = Expander::new(max_depth, &mut budget, &mut interner, &mut visitor)
+        let module = Expander::new(max_depth, &mut budget, &mut interner, &mut visitor)
             .expand_module(set, uri, &BTreeMap::new(), "")?;
-        Ok((root, interner.finish()))
+        Ok((module.root, interner.finish()))
     }
 
     fn depth_fixture(reverse: bool) -> MemResolver {

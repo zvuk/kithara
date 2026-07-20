@@ -241,6 +241,10 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             state.reads.set_library_query(query);
             Task::none()
         }
+        Message::Ui(UiEvent::ToggleModule(module)) => {
+            state.reads.toggle_module(module);
+            Task::none()
+        }
         Message::Ui(_) => Task::none(),
     }
 }
@@ -294,4 +298,47 @@ fn theme(skin: &Skin) -> Theme {
             warning: palette.warning,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use kithara_ui::{compile::CompiledNode, module::ChromeStyle};
+
+    use super::*;
+
+    #[kithara::test]
+    fn every_module_demo_compiles_with_full_chrome() {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+
+        for module in ModuleDemo::ALL {
+            let ui = compile(
+                module.entry(),
+                &resolver,
+                &endpoints,
+                builtin::skin_doc(),
+                &UiConfig::default(),
+            )
+            .unwrap();
+            let CompiledNode::Split { children, .. } = &ui.root else {
+                panic!("expected gallery split");
+            };
+            let CompiledNode::Module {
+                title,
+                chip,
+                chrome,
+                footer,
+                ..
+            } = &children[1].1
+            else {
+                panic!("expected module demo");
+            };
+
+            assert_eq!(*chrome, ChromeStyle::Full, "{}", module.entry());
+            assert!(title.is_some(), "{}", module.entry());
+            assert!(chip.is_some(), "{}", module.entry());
+            assert!(footer.is_some(), "{}", module.entry());
+        }
+    }
 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::LazyLock,
 };
 
@@ -177,6 +177,7 @@ pub(super) struct MockReads {
     checkbox_on: bool,
     chip_active: bool,
     chip_inactive: bool,
+    collapsed: BTreeSet<String>,
     frame_ms: VecDeque<f64>,
     frame_ms_ordered: Vec<f64>,
     frame_ms_avg: String,
@@ -210,6 +211,7 @@ impl Default for MockReads {
             checkbox_on: true,
             chip_active: true,
             chip_inactive: false,
+            collapsed: BTreeSet::new(),
             frame_ms: VecDeque::with_capacity(Consts::FRAME_WINDOW),
             frame_ms_ordered: Vec::with_capacity(Consts::FRAME_WINDOW),
             frame_ms_avg: "--".to_owned(),
@@ -264,6 +266,12 @@ impl MockReads {
         self.library_query = query;
     }
 
+    pub(super) fn toggle_module(&mut self, module: String) {
+        if !self.collapsed.remove(&module) {
+            self.collapsed.insert(module);
+        }
+    }
+
     pub(super) fn apply(&mut self, path: &str, action: &ControlAction) {
         match action {
             ControlAction::SetScalar(value) => self.set_scalar(path, *value),
@@ -311,6 +319,12 @@ impl MockReads {
 
 impl Reads for MockReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        if let Some(module) = endpoint
+            .strip_prefix("ui.module.")
+            .and_then(|value| value.strip_suffix(".collapsed"))
+        {
+            return Some(ReadValue::Bool(self.collapsed.contains(module)));
+        }
         let value = match endpoint {
             "gallery.label.knobs" => ReadValue::Text("KNOB · 26 / 28 / 34 / 38"),
             "gallery.label.meters" => ReadValue::Text("VU · STEREO / VERTICAL"),
@@ -338,6 +352,11 @@ impl Reads for MockReads {
                 ReadValue::Bool(self.active_module == ModuleDemo::Telemetry)
             }
             "gallery.module.layout" => ReadValue::Bool(self.active_module == ModuleDemo::Layout),
+            "gallery.footer.deck" => ReadValue::Text("48kHz / 24bit"),
+            "gallery.footer.deck_micro" => ReadValue::Text("READY"),
+            "gallery.footer.global_bar" => ReadValue::Text("MASTER READY"),
+            "gallery.footer.telemetry" => ReadValue::Text("LIVE"),
+            "gallery.footer.layout" => ReadValue::Text("5 MODULES"),
             "bench.fps" => ReadValue::Text(&self.fps),
             "bench.frame_ms_avg" => ReadValue::Text(&self.frame_ms_avg),
             "bench.frame_ms_p99" => ReadValue::Text(&self.frame_ms_p99),
@@ -554,6 +573,11 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "mock.bpm",
         "mock.key",
         "mock.remain",
+        "gallery.footer.deck",
+        "gallery.footer.deck_micro",
+        "gallery.footer.global_bar",
+        "gallery.footer.telemetry",
+        "gallery.footer.layout",
     ] {
         registry.insert(
             EndpointCategory::Model,
@@ -627,4 +651,23 @@ pub(super) fn registry() -> impl EndpointRegistry {
         );
     }
     registry
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn toggle_module_owns_the_collapsed_read_endpoint() {
+        let mut reads = MockReads::default();
+        let endpoint = "ui.module.gallery-module-deck.collapsed";
+
+        assert_eq!(reads.get(endpoint), Some(ReadValue::Bool(false)));
+        reads.toggle_module("gallery-module-deck".to_owned());
+        assert_eq!(reads.get(endpoint), Some(ReadValue::Bool(true)));
+        reads.toggle_module("gallery-module-deck".to_owned());
+        assert_eq!(reads.get(endpoint), Some(ReadValue::Bool(false)));
+    }
 }
