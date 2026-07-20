@@ -601,9 +601,9 @@ mod tests {
 
     use kithara_events::{
         AssetEvent, CancelReason, DownloaderEvent, DrmEvent, EngineEvent, Event, EvictReason,
-        FileEvent, KeyFailureStage, KeySource, PlaybackDirection, QueueEvent, RequestId,
-        RouteChangeReason, SessionEvent, StretchBackendKind, SyncEvent, TotalBytesSource, TrackId,
-        TransportEvent,
+        FileEvent, KeyFailureStage, KeySource, MediaTime, PlaybackDirection, QueueEvent, RequestId,
+        RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind, SyncEvent,
+        TotalBytesSource, TrackId, TransportEvent,
     };
     use kithara_platform::time::Duration;
     use kithara_play::PlayerEvent;
@@ -615,10 +615,7 @@ mod tests {
     };
 
     fn request_id(value: u64) -> RequestId {
-        match NonZeroU64::new(value) {
-            Some(id) => RequestId::new(id),
-            None => panic!("request id must be non-zero"),
-        }
+        NonZeroU64::new(value).map_or_else(|| panic!("request id must be non-zero"), RequestId::new)
     }
 
     #[kithara::test]
@@ -771,7 +768,7 @@ mod tests {
         assert!(matches!(
             FfiPlayerEvent::try_from(&SessionEvent::RouteChanged {
                 reason: RouteChangeReason::CategoryChange,
-                previous_route: Default::default(),
+                previous_route: RouteDescription::default(),
             }),
             Ok(FfiPlayerEvent::AudioRouteChanged {
                 reason: FfiRouteChangeReason::CategoryChange,
@@ -829,7 +826,7 @@ mod tests {
             FfiPlayerEvent::try_from(&kithara_events::DjEvent::BeatTick {
                 slot: kithara_events::SlotId::new(9),
                 beat_number: 4,
-                timestamp: Default::default(),
+                timestamp: MediaTime::default(),
             }),
             Err(NotForwarded)
         ));
