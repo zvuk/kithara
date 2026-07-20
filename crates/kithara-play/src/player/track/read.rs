@@ -77,14 +77,11 @@ impl PlayerTrack {
         if let TrackRenderMode::Session(context) = mode {
             self.last_render_context = Some((std::ptr::from_ref(context).addr(), context.clone()));
         }
-        if self.binding().is_some() {
-            let TrackRenderMode::Session(context) = mode else {
-                self.handle_failed_end(notification_tx);
-                return TrackReadOutcome::Failed;
-            };
-            return self.read_elastic(context, scratch_bufs, mix_bufs, range, notification_tx);
+        if self.binding().is_some() && matches!(mode, TrackRenderMode::Standalone) {
+            self.handle_failed_end(notification_tx);
+            return TrackReadOutcome::Failed;
         }
-        self.read(scratch_bufs, mix_bufs, range, notification_tx)
+        self.read_with_mode(mode, scratch_bufs, mix_bufs, range, notification_tx)
     }
 
     fn advance_served_frames(&mut self, frames: u64) {
@@ -259,17 +256,18 @@ impl PlayerTrack {
         range: Range<usize>,
         notification_tx: &mut HeapProd<PlayerNotification>,
     ) -> TrackReadOutcome {
-        if self.state == TrackState::Finished {
-            return TrackReadOutcome::Eof;
-        }
-
-        let read_outcome = self.read_resource(scratch_bufs, range.clone());
-        self.finish_read(scratch_bufs, mix_bufs, range, notification_tx, read_outcome)
+        self.read_with_mode(
+            TrackRenderMode::Standalone,
+            scratch_bufs,
+            mix_bufs,
+            range,
+            notification_tx,
+        )
     }
 
-    fn read_elastic(
+    fn read_with_mode(
         &mut self,
-        context: &RenderContext,
+        mode: TrackRenderMode<'_>,
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
         range: Range<usize>,
@@ -278,7 +276,7 @@ impl PlayerTrack {
         if self.state == TrackState::Finished {
             return TrackReadOutcome::Eof;
         }
-        let read_outcome = self.read_elastic_resource(context, scratch_bufs, range.clone());
+        let read_outcome = self.read_resource(mode, scratch_bufs, range.clone());
         self.finish_read(scratch_bufs, mix_bufs, range, notification_tx, read_outcome)
     }
 
@@ -320,62 +318,62 @@ impl PlayerTrack {
         }
     }
 
-    fn read_elastic_resource(
-        &mut self,
-        context: &RenderContext,
-        scratch_bufs: &mut [&mut [f32]],
-        range: Range<usize>,
-    ) -> TrackReadOutcome {
-        let Some(binding) = self.binding.as_ref() else {
-            return TrackReadOutcome::Failed;
-        };
-        let duration = self.resource.duration();
-        match self
-            .resource
-            .read_elastic(binding, context, range.clone(), scratch_bufs)
-        {
-            ReadOutcome::Full { frames } if frames == range.len() => TrackReadOutcome::Full {
-                duration,
-                frames,
-                frames_until_eof: None,
-                position: 0.0,
-            },
-            ReadOutcome::Eof => {
-                fill_silence(scratch_bufs, range);
-                TrackReadOutcome::Eof
-            }
-            ReadOutcome::Full { .. } | ReadOutcome::Partial { .. } | ReadOutcome::Failed => {
-                fill_silence(scratch_bufs, range);
-                TrackReadOutcome::Failed
-            }
-        }
-    }
-
     fn read_resource(
         &mut self,
+        mode: TrackRenderMode<'_>,
         scratch_bufs: &mut [&mut [f32]],
         range: Range<usize>,
     ) -> TrackReadOutcome {
-        let resource = &mut self.resource;
-        let (scratch_left, scratch_right) = scratch_bufs.split_at_mut(1);
-        let mut scratch_window = [
-            &mut scratch_left[0][range.clone()],
-            &mut scratch_right[0][range.clone()],
-        ];
+        match (mode, self.binding.as_ref()) {
+            (TrackRenderMode::Session(context), Some(binding)) => {
+                let duration = self.resource.duration();
+                match self
+                    .resource
+                    .read_elastic(binding, context, range.clone(), scratch_bufs)
+                {
+                    ReadOutcome::Full { frames } if frames == range.len() => {
+                        TrackReadOutcome::Full {
+                            duration,
+                            frames,
+                            frames_until_eof: None,
+                            position: 0.0,
+                        }
+                    }
+                    ReadOutcome::Eof => {
+                        fill_silence(scratch_bufs, range);
+                        TrackReadOutcome::Eof
+                    }
+                    ReadOutcome::Full { .. }
+                    | ReadOutcome::Partial { .. }
+                    | ReadOutcome::Failed => {
+                        fill_silence(scratch_bufs, range);
+                        TrackReadOutcome::Failed
+                    }
+                }
+            }
+            (TrackRenderMode::Standalone, _) | (TrackRenderMode::Session(_), None) => {
+                let resource = &mut self.resource;
+                let (scratch_left, scratch_right) = scratch_bufs.split_at_mut(1);
+                let mut scratch_window = [
+                    &mut scratch_left[0][range.clone()],
+                    &mut scratch_right[0][range.clone()],
+                ];
 
-        match resource.read(&mut scratch_window, 0..range.len()) {
-            ReadOutcome::Full { frames } => TrackReadOutcome::Full {
-                duration: resource.duration(),
-                frames,
-                frames_until_eof: resource.frames_until_eof(),
-                position: 0.0,
-            },
-            ReadOutcome::Partial { frames } => TrackReadOutcome::Partial {
-                frames,
-                duration: resource.duration(),
-            },
-            ReadOutcome::Eof => TrackReadOutcome::Eof,
-            ReadOutcome::Failed => TrackReadOutcome::Failed,
+                match resource.read(&mut scratch_window, 0..range.len()) {
+                    ReadOutcome::Full { frames } => TrackReadOutcome::Full {
+                        duration: resource.duration(),
+                        frames,
+                        frames_until_eof: resource.frames_until_eof(),
+                        position: 0.0,
+                    },
+                    ReadOutcome::Partial { frames } => TrackReadOutcome::Partial {
+                        frames,
+                        duration: resource.duration(),
+                    },
+                    ReadOutcome::Eof => TrackReadOutcome::Eof,
+                    ReadOutcome::Failed => TrackReadOutcome::Failed,
+                }
+            }
         }
     }
 
