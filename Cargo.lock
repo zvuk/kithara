@@ -4457,7 +4457,6 @@ dependencies = [
  "kithara-queue",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-ui",
  "kithara-workspace-hack",
  "num-traits",
  "obfstr",

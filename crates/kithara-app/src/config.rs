@@ -14,33 +14,6 @@ use kithara_platform::{CancelToken, sync::Arc};
 
 use crate::{baked, theme::Palette};
 
-#[derive(Clone, Copy, Debug, Builder)]
-#[builder(state_mod(vis = "pub"))]
-#[non_exhaustive]
-pub struct WindowSizing {
-    /// Fixed horizontal chrome the modular renderer adds around the compiled body.
-    #[builder(default = 0.0)]
-    pub chrome_w: f32,
-    /// Fixed vertical chrome the modular renderer adds around the compiled body.
-    #[builder(default = 0.0)]
-    pub chrome_h: f32,
-    /// Minimum width used when the compiled tree has no intrinsic width.
-    #[builder(default = 200.0)]
-    pub min_floor_w: f32,
-    /// Minimum height used when the compiled tree has no intrinsic height.
-    #[builder(default = 140.0)]
-    pub min_floor_h: f32,
-    /// Scale from an open axis minimum to its comfortable initial size.
-    #[builder(default = 1.5)]
-    pub initial_scale: f32,
-}
-
-impl Default for WindowSizing {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
 /// Application configuration passed to frontends.
 ///
 /// Shared owners and the downloader are mandatory; product knobs default to
@@ -69,9 +42,6 @@ pub struct AppConfig {
     /// Color palette for the UI.
     #[builder(default)]
     pub palette: Palette,
-    /// Main-window chrome, floors, and initial-size policy.
-    #[builder(default)]
-    pub window_sizing: WindowSizing,
     /// HLS size-estimation probe strategy (see
     /// [`kithara::hls::SizeProbeMethod`]).
     #[builder(default = baked::BAKED_SIZE_PROBE_METHOD)]
@@ -108,7 +78,6 @@ impl fmt::Debug for AppConfig {
         f.debug_struct("AppConfig")
             .field("key_registry", &self.key_registry)
             .field("palette", &self.palette)
-            .field("window_sizing", &self.window_sizing)
             .field("log_directives", &self.log_directives)
             .field("tracks", &self.tracks)
             .field("byte_pool", &self.byte_pool)

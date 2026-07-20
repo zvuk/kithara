@@ -464,6 +464,10 @@ export_attrs = ["no_mangle", "export_name", "wasm_bindgen", "uniffi"]
 #   session_client — no production reader by design. Shared by the core.rs and
 #   queue.rs test modules, so it cannot relocate into either without
 #   duplicating the backend mock.
+#   compile / with_scope / FONT_BYTES: kithara-ui public library surface. The
+#   application consumer is detached by owner decision (PR #117 ships the
+#   library alone); the only in-tree caller is the gallery example, which the
+#   scan classifies as testish. Re-audit when the app integration returns.
 exempt = [
   "advance_to_next_item",
   "ensure_thread_pool",
@@ -472,6 +476,9 @@ exempt = [
   "track_mut",
   "try_pop_notification",
   "test_session",
+  "compile",
+  "with_scope",
+  "FONT_BYTES",
 ]
 # Path fragments whose defs `--fix` must never auto-delete: platform-gated
 # module dirs whose callers live in cfg-disabled or non-Rust (JNI) code the

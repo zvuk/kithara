@@ -324,26 +324,6 @@ impl<Message> canvas::Program<Message> for Chevron {
     }
 }
 
-pub fn secondary_button_style(
-    skin: &Skin,
-) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle + 'static {
-    let palette = skin.palette;
-    let border = skin.border(skin.chrome.secondary_frame);
-    move |_theme, status| {
-        let background = match status {
-            ButtonStatus::Hovered => palette.bg_panel_2,
-            ButtonStatus::Pressed => palette.accent_soft,
-            ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_panel,
-        };
-        ButtonStyle {
-            background: Some(Background::Color(background)),
-            text_color: palette.text,
-            border,
-            ..ButtonStyle::default()
-        }
-    }
-}
-
 fn panel_frame_style(background: Color, border: Border) -> ContainerStyle {
     ContainerStyle::default()
         .background(Background::Color(background))

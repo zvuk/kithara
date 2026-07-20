@@ -5,66 +5,67 @@ use iced::{
     time as iced_time, window,
 };
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_ui::render::Skin;
 
 use super::{
+    dj::DjView,
     frontend::window_settings,
-    message::Message,
-    modular::{ModularView, initial_view},
+    message::{Message, Tab},
     subscription::subscription_config,
     theme,
+    url_bar::UrlBar,
 };
 use crate::{
-    config::WindowSizing,
     state::{StateController, UiState},
+    theme::gui,
 };
 
 /// Main GUI application state.
 ///
 /// Player state lives in [`StateController`]; this struct only holds
-/// view-local state that has no business in the shared model.
+/// view-local state that has no business in the shared model
+/// (selected row, active tab, transient text input, blink counter).
 /// `ui_state` is refreshed once per `Tick` so all view code reads from
 /// a single, consistent snapshot.
 pub(crate) struct Kithara {
     pub(crate) controller: Arc<StateController>,
-    pub(crate) modular: ModularView,
-    pub(crate) settings_window_id: Option<window::Id>,
+    /// View-local DJ Studio state (open / closed).
+    pub(crate) dj: DjView,
 
-    pub(crate) library_query: String,
-    pub(crate) skin: &'static Skin,
+    pub(crate) palette: gui::GuiPalette,
     pub(crate) selected_track_index: Option<usize>,
-    pub(crate) window_sizing: WindowSizing,
-    /// Currently live main window; mode swaps replace this ID while the
-    /// optional settings window is tracked separately.
+    /// Currently live window. One window is open at a time; the DJ-mode
+    /// swap opens the new window and closes this one.
     pub(crate) window_id: Option<window::Id>,
+    pub(crate) active_tab: Tab,
     pub(crate) ui_state: UiState,
+    pub(crate) url: UrlBar,
+    pub(crate) previous_volume: f32,
+    pub(crate) blink_counter: u8,
 }
 
 impl Kithara {
-    /// Boot function for `iced::daemon()`. Opens the modular player window.
+    /// Boot function for `iced::daemon()`. Opens the initial compact
+    /// window and tracks its id.
     pub(crate) fn new(
         controller: Arc<StateController>,
-        skin: &'static Skin,
-        window_sizing: WindowSizing,
+        palette: gui::GuiPalette,
     ) -> (Self, Task<Message>) {
         let ui_state = controller.snapshot();
 
         let mut state = Self {
             controller,
+            previous_volume: ui_state.volume.max(0.01),
             ui_state,
-            library_query: String::new(),
-            skin,
+            palette,
+            active_tab: Tab::Playlist,
             selected_track_index: None,
-            window_sizing,
-            modular: initial_view(),
-            settings_window_id: None,
+            blink_counter: 0,
+            url: UrlBar::default(),
+            dj: DjView::default(),
             window_id: None,
         };
 
-        let (id, open) = window::open(window_settings(
-            state.modular.compiled.as_ref(),
-            &state.window_sizing,
-        ));
+        let (id, open) = window::open(window_settings(state.dj.open));
         state.window_id = Some(id);
 
         (state, open.discard())
@@ -82,8 +83,9 @@ impl Kithara {
         subs.push(window::close_requests().map(Message::WindowCloseRequested));
         if cfg.is_keyboard_enabled {
             subs.push(event::listen_with(|e, status, _window| match e {
-                // Only act on Delete/Backspace when the focused widget left
-                // the key unhandled.
+                // Only act on Delete/Backspace the focused widget left
+                // unhandled. A focused text input (URL bar) captures these
+                // for editing, so the playlist shortcut must not also fire.
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     key: Key::Named(Named::Delete | Named::Backspace),
                     ..
@@ -96,11 +98,15 @@ impl Kithara {
 
     /// The dark + gold theme.
     pub(crate) fn theme(&self, _window: window::Id) -> Theme {
-        theme::kithara_theme(self.skin)
+        theme::kithara_theme(&self.palette)
     }
 
-    /// Static application title for every window.
-    pub(crate) fn title(_state: &Self, _window: window::Id) -> String {
-        "Kithara".to_owned()
+    /// Window title, reflecting the active mode.
+    pub(crate) fn title(&self, _window: window::Id) -> String {
+        if self.dj.open {
+            "Kithara - DJ Studio".to_string()
+        } else {
+            "Kithara".to_string()
+        }
     }
 }

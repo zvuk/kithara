@@ -10,7 +10,7 @@ pub(crate) mod nav;
 pub(crate) mod telemetry;
 pub(crate) mod text;
 pub(crate) mod track_list;
-pub use chrome::{ModuleChrome, secondary_button_style};
+pub use chrome::ModuleChrome;
 pub use layout_preview::LayoutPreview;
 
 pub(crate) use crate::render::event::Widget;

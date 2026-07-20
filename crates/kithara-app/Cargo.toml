@@ -23,7 +23,7 @@ client-reqwest = ["kithara/client-reqwest", "kithara-queue/client-reqwest"]
 client-wreq = ["kithara/client-wreq", "kithara-queue/client-wreq"]
 tls-rustls = ["kithara/tls-rustls", "kithara-queue/tls-rustls"]
 tls-native = ["kithara/tls-native", "kithara-queue/tls-native"]
-gui = ["dep:iced", "kithara-ui/render"]
+gui = ["dep:iced"]
 # NN beat/downbeat detection.
 beat-nn = ["kithara/beat-nn"]
 # Waveform analysis for the deck overview.
@@ -48,7 +48,6 @@ kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
 kithara-test-utils = { workspace = true }
-kithara-ui = { workspace = true }
 
 fieldwork = { workspace = true }
 

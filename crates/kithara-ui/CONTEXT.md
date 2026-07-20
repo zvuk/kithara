@@ -85,3 +85,13 @@ are host-owned. The renderer never mutates or filters that state; activating any
 `ControlAction::SelectIndex` on the control path, and the host decides whether that index toggles a
 branch or selects a leaf. `TreeSkin` owns the search, row, indentation, panel, and Zvuk context-bar
 metrics. `ContextBar` is a read-only text control so breadcrumb state stays endpoint-owned.
+
+## Detached application consumer (2026-07-20)
+
+By owner decision the application was reverted to its pre-modular GUI and PR #117 ships
+`kithara-ui` alone. Until the app integration returns, the crate's public surface
+(`compile`, `EndpointDesc::with_scope`, `fonts::FONT_BYTES`) is exercised only by the
+gallery example, which the `dead_exports` scan classifies as testish; those three names
+are exempted in `.config/arch/thresholds.toml` with the same rationale. Builtin module
+docs under `assets/modules/` remain the canonical presets and are consumed by the gallery
+МОДУЛИ page; nothing outside this crate reads them right now.
