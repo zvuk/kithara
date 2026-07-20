@@ -241,11 +241,19 @@ mod handle {
             self.0.exec_ok(cmd)
         }
 
+        fn exec_unit(&self, cmd: Cmd) -> Result<(), PlayError> {
+            match self.exec_ok(cmd)? {
+                Reply::Ok => Ok(()),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for unit session command".into(),
+                )),
+            }
+        }
+
         pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::InvalidateAudioRoute {
+            self.exec_unit(Cmd::InvalidateAudioRoute {
                 reason: reason.to_owned(),
             })
-            .map(|_| ())
         }
 
         #[must_use]
@@ -275,8 +283,7 @@ mod handle {
         }
 
         pub fn release_slot(&self, player_id: PlayerId, slot: SlotId) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::ReleaseSlot { player_id, slot })
-                .map(|_| ())
+            self.exec_unit(Cmd::ReleaseSlot { player_id, slot })
         }
 
         pub fn set_player_eq_gain(
@@ -285,12 +292,11 @@ mod handle {
             band: usize,
             gain_db: f32,
         ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetPlayerEqGain {
+            self.exec_unit(Cmd::SetPlayerEqGain {
                 band,
                 gain_db,
                 player_id,
             })
-            .map(|_| ())
         }
 
         pub fn set_player_master_volume(
@@ -298,8 +304,7 @@ mod handle {
             player_id: PlayerId,
             volume: f32,
         ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetPlayerMasterVolume { player_id, volume })
-                .map(|_| ())
+            self.exec_unit(Cmd::SetPlayerMasterVolume { player_id, volume })
         }
 
         pub fn set_player_slot_volume(
@@ -308,16 +313,15 @@ mod handle {
             slot: SlotId,
             volume: f32,
         ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetPlayerSlotVolume {
+            self.exec_unit(Cmd::SetPlayerSlotVolume {
                 player_id,
                 slot,
                 volume,
             })
-            .map(|_| ())
         }
 
         pub(crate) fn set_session_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetSessionTempo { tempo }).map(|_| ())
+            self.exec_unit(Cmd::SetSessionTempo { tempo })
         }
 
         pub(crate) fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
@@ -336,13 +340,12 @@ mod handle {
             expected_shape: StreamShape,
             player_ids: Vec<PlayerId>,
         ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetSessionTempoChecked {
+            self.exec_unit(Cmd::SetSessionTempoChecked {
                 tempo,
                 expected_revision,
                 expected_shape,
                 player_ids,
             })
-            .map(|_| ())
         }
 
         pub(crate) fn seek_session_checked(
@@ -352,13 +355,12 @@ mod handle {
             expected_shape: StreamShape,
             player_ids: Vec<PlayerId>,
         ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SeekSessionChecked {
+            self.exec_unit(Cmd::SeekSessionChecked {
                 target,
                 expected_revision,
                 expected_shape,
                 player_ids,
             })
-            .map(|_| ())
         }
 
         pub(crate) fn binding_preparation(&self) -> Result<BindingPreparation, PlayError> {
@@ -385,25 +387,49 @@ mod handle {
             sample_rate: u32,
             master_volume: f32,
         ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::StartPlayer {
+            self.exec_unit(Cmd::StartPlayer {
                 master_volume,
                 player_id,
                 sample_rate,
             })
-            .map(|_| ())
         }
 
         pub fn stop_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::StopPlayer { player_id }).map(|_| ())
+            self.exec_unit(Cmd::StopPlayer { player_id })
         }
 
         pub fn tick(&self) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::Tick).map(|_| ())
+            self.exec_unit(Cmd::Tick)
         }
 
         pub fn unregister_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::UnregisterPlayer { player_id })
-                .map(|_| ())
+            self.exec_unit(Cmd::UnregisterPlayer { player_id })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use kithara_test_utils::kithara;
+
+        use super::*;
+
+        struct WrongReplyDispatcher;
+
+        impl SessionDispatcher for WrongReplyDispatcher {
+            fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+                Ok(Reply::SampleRate(48_000))
+            }
+        }
+
+        #[kithara::test]
+        fn unit_command_rejects_a_non_unit_reply() {
+            let handle = SessionHandle::new(Arc::new(WrongReplyDispatcher));
+
+            assert!(matches!(
+                handle.stop_player(7),
+                Err(PlayError::Internal(message))
+                    if message == "unexpected reply for unit session command"
+            ));
         }
     }
 }
