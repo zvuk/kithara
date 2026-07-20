@@ -4,7 +4,7 @@ use iced::{
 };
 use kithara_ui::{
     render::{Skin, UiEvent, fonts, shaped_text, tree},
-    widgets::{module_chrome, secondary_button_style},
+    widgets::{ModuleChrome, secondary_button_style},
 };
 
 use super::{filter, reads::UiReads};
@@ -83,7 +83,11 @@ fn empty_state(state: &Kithara) -> Element<'_, Message> {
             .into()
         },
     );
-    module_chrome(content, skin)
+    ModuleChrome::builder()
+        .content(content)
+        .skin(skin)
+        .build()
+        .view()
 }
 
 fn hidden_state(skin: &Skin) -> Element<'static, Message> {
@@ -98,5 +102,9 @@ fn hidden_state(skin: &Skin) -> Element<'static, Message> {
     .height(Length::Fill)
     .center_x(Length::Fill)
     .center_y(Length::Fill);
-    module_chrome(content, skin)
+    ModuleChrome::builder()
+        .content(content)
+        .skin(skin)
+        .build()
+        .view()
 }

@@ -1,6 +1,6 @@
 use iced::{
     Color, Element, Event, Length, Point, Radians, Rectangle, Renderer, Theme,
-    mouse::{self, Button, Cursor},
+    mouse::{self, Cursor},
     widget::{
         Space,
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, path::Arc},
@@ -9,78 +9,61 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    render::{ControlAction, ReadValue, Skin, UiEvent, theme::RenderPalette},
+    render::{ReadValue, Skin, UiEvent, theme::RenderPalette},
     skin::KnobSkin,
+    widgets::{
+        Widget,
+        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+    },
 };
 
-pub(crate) fn view<'a>(
-    path: &str,
-    value: Option<&ReadValue<'_>>,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Scalar(value)) = value else {
-        return Space::new().into();
-    };
-
-    Canvas::new(Knob {
-        body_border: skin.color(skin.knob.body_border),
-        metrics: skin.knob,
-        palette: skin.palette,
-        path: path.to_owned(),
-        value: value.clamp(0.0, 1.0).as_(),
-    })
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+#[derive(bon::Builder)]
+pub(crate) struct Knob<'path, 'value, 'data, 'skin> {
+    path: &'path str,
+    value: Option<&'value ReadValue<'data>>,
+    skin: &'skin Skin,
 }
 
-struct Knob {
+impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        let Some(ReadValue::Scalar(value)) = self.value else {
+            return Space::new().into();
+        };
+        let value = value.clamp(0.0, 1.0).as_();
+        Canvas::new(KnobCanvas {
+            body_border: self.skin.color(self.skin.knob.body_border),
+            drag: ScalarDrag::builder()
+                .path(self.path.to_owned())
+                .mode(ScalarDragMode::RelativeVertical {
+                    value,
+                    range: self.skin.knob.drag_range,
+                })
+                .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+                .build(),
+            metrics: self.skin.knob,
+            palette: self.skin.palette,
+            value,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+}
+
+struct KnobCanvas {
     body_border: Color,
+    drag: ScalarDrag,
     metrics: KnobSkin,
     palette: RenderPalette,
-    path: String,
     value: f32,
 }
 
-#[derive(Default)]
-struct DragState {
-    active: bool,
-    start_value: f32,
-    start_y: f32,
-}
-
-impl canvas::Program<UiEvent> for Knob {
-    type State = DragState;
-
-    fn update(
-        &self,
-        state: &mut DragState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
-                let position = cursor.position()?;
-                state.active = true;
-                state.start_value = self.value;
-                state.start_y = position.y;
-                Some(Action::capture())
-            }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => cursor
-                .position()
-                .map(|position| scalar_action(&self.path, state, position.y, self.metrics)),
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
-                state.active = false;
-                Some(Action::capture())
-            }
-            _ => None,
-        }
-    }
+impl canvas::Program<UiEvent> for KnobCanvas {
+    type State = ScalarDragState;
 
     fn draw(
         &self,
-        _state: &DragState,
+        _state: &ScalarDragState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -141,33 +124,23 @@ impl canvas::Program<UiEvent> for Knob {
         vec![frame.into_geometry()]
     }
 
-    fn mouse_interaction(
-        &self,
-        state: &DragState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        if state.active || cursor.is_over(bounds) {
-            mouse::Interaction::ResizingVertically
-        } else {
-            mouse::Interaction::default()
+    delegate::delegate! {
+        to self.drag {
+            fn update(
+                &self,
+                state: &mut ScalarDragState,
+                event: &Event,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> Option<Action<UiEvent>>;
+            fn mouse_interaction(
+                &self,
+                state: &ScalarDragState,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> mouse::Interaction;
         }
     }
-}
-
-fn scalar_action(
-    path: &str,
-    state: &DragState,
-    current_y: f32,
-    metrics: KnobSkin,
-) -> Action<UiEvent> {
-    let value =
-        (state.start_value + (state.start_y - current_y) / metrics.drag_range).clamp(0.0, 1.0);
-    Action::publish(UiEvent::Control {
-        path: path.to_owned(),
-        action: ControlAction::SetScalar(f64::from(value)),
-    })
-    .and_capture()
 }
 
 fn draw_arc(

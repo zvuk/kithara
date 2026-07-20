@@ -1,0 +1,164 @@
+use iced::{
+    Event, Rectangle,
+    mouse::{self, Button, Cursor},
+    widget::canvas::Action,
+};
+
+use crate::render::{ControlAction, UiEvent};
+
+#[derive(Clone, Copy)]
+pub(crate) struct HoverState {
+    interaction: mouse::Interaction,
+}
+
+impl HoverState {
+    pub(crate) const fn new(interaction: mouse::Interaction) -> Self {
+        Self { interaction }
+    }
+
+    pub(crate) fn interaction(
+        self,
+        active: bool,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        if active || cursor.is_over(bounds) {
+            self.interaction
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+
+    pub(crate) fn mouse_interaction(self, bounds: Rectangle, cursor: Cursor) -> mouse::Interaction {
+        self.interaction(false, bounds, cursor)
+    }
+}
+
+#[derive(bon::Builder)]
+pub(crate) struct ClickActivate {
+    path: String,
+    hover: HoverState,
+}
+
+impl ClickActivate {
+    pub(crate) fn mouse_interaction(
+        &self,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        self.hover.interaction(false, bounds, cursor)
+    }
+
+    pub(crate) fn update(
+        &self,
+        _state: &mut (),
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
+                Some(
+                    Action::publish(UiEvent::Control {
+                        path: self.path.clone(),
+                        action: ControlAction::Activate,
+                    })
+                    .and_capture(),
+                )
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ScalarDragMode {
+    Horizontal,
+    Vertical,
+    RelativeVertical { value: f32, range: f32 },
+}
+
+#[derive(bon::Builder)]
+pub(crate) struct ScalarDrag {
+    path: String,
+    mode: ScalarDragMode,
+    hover: HoverState,
+}
+
+#[derive(Default)]
+pub(crate) struct ScalarDragState {
+    active: bool,
+    start_position: f32,
+}
+
+impl ScalarDrag {
+    fn absolute_action(&self, bounds: Rectangle, cursor: Cursor) -> Option<Action<UiEvent>> {
+        let position = cursor.position_from(bounds.position())?;
+        let value = match self.mode {
+            ScalarDragMode::Horizontal if bounds.width > 0.0 => position.x / bounds.width,
+            ScalarDragMode::Vertical if bounds.height > 0.0 => 1.0 - position.y / bounds.height,
+            ScalarDragMode::Horizontal
+            | ScalarDragMode::Vertical
+            | ScalarDragMode::RelativeVertical { .. } => return None,
+        };
+        Some(self.publish(value.clamp(0.0, 1.0)))
+    }
+
+    pub(crate) fn mouse_interaction(
+        &self,
+        state: &ScalarDragState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        self.hover.interaction(state.active, bounds, cursor)
+    }
+
+    fn publish(&self, value: f32) -> Action<UiEvent> {
+        Action::publish(UiEvent::Control {
+            path: self.path.clone(),
+            action: ControlAction::SetScalar(f64::from(value)),
+        })
+        .and_capture()
+    }
+
+    pub(crate) fn update(
+        &self,
+        state: &mut ScalarDragState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
+                match self.mode {
+                    ScalarDragMode::RelativeVertical { .. } => {
+                        state.start_position = cursor.position()?.y;
+                        state.active = true;
+                        Some(Action::capture())
+                    }
+                    ScalarDragMode::Horizontal | ScalarDragMode::Vertical => {
+                        state.active = true;
+                        self.absolute_action(bounds, cursor)
+                    }
+                }
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => match self.mode {
+                ScalarDragMode::RelativeVertical { value, range } => {
+                    cursor.position().map(|position| {
+                        self.publish(
+                            (value + (state.start_position - position.y) / range).clamp(0.0, 1.0),
+                        )
+                    })
+                }
+                ScalarDragMode::Horizontal | ScalarDragMode::Vertical => {
+                    self.absolute_action(bounds, cursor)
+                }
+            },
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
+                state.active = false;
+                Some(Action::capture())
+            }
+            _ => None,
+        }
+    }
+}

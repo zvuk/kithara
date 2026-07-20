@@ -1,7 +1,7 @@
 use iced::{
     Alignment, Background, Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
-    mouse::{self, Button, Cursor},
+    mouse::{self, Cursor},
     widget::{
         Canvas, Space, Stack,
         canvas::{self, Action, Frame, Geometry, Path, Stroke},
@@ -19,88 +19,126 @@ use crate::{
         ControlAction, Icon, ReadValue, Skin, UiEvent, fonts, shaped_text, theme::RenderPalette,
     },
     skin::{FaderSkin, FrameSkin},
+    widgets::{
+        Widget,
+        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+    },
 };
 
-pub(crate) fn view<'a>(
-    path: &str,
+#[derive(bon::Builder)]
+pub(crate) struct Fader<'path, 'value, 'data, 'skin> {
+    path: &'path str,
     style: FaderStyle,
-    value: Option<&ReadValue<'_>>,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Scalar(value)) = value else {
-        return Space::new().into();
-    };
-    if matches!(style, FaderStyle::Volume | FaderStyle::VolumeCompact) {
-        return segmented_volume(skin, path, *value);
-    }
-
-    let palette = skin.palette;
-    let event_path = path.to_owned();
-    let slider = slider(0.0..=1.0, value.clamp(0.0, 1.0), move |value| {
-        UiEvent::Control {
-            path: event_path.clone(),
-            action: ControlAction::SetScalar(value),
-        }
-    })
-    .step(skin.fader.step)
-    .height(skin.fader.slider_height)
-    .style(slider_style(skin))
-    .width(Length::Fill);
-    let ticks = Canvas::new(FaderTicks {
-        metrics: skin.fader,
-        color: palette.line_soft,
-    })
-    .height(Length::Fixed(skin.fader.ticks_height))
-    .width(Length::Fill);
-    let slider = container(slider)
-        .height(Length::Fixed(skin.fader.ticks_height))
-        .align_y(Vertical::Top);
-    let rail = Stack::with_children([ticks.into(), slider.into()])
-        .height(Length::Fixed(skin.fader.ticks_height))
-        .width(Length::Fill);
-    let label = container(
-        shaped_text("VOL")
-            .font(fonts::sans(skin.fader.label.weight))
-            .size(skin.fader.label.size)
-            .color(palette.muted),
-    )
-    .width(Length::Fixed(skin.fader.label_width))
-    .height(Length::Fill)
-    .center_y(Length::Fill);
-    let control = row![label, rail]
-        .align_y(Alignment::Center)
-        .height(Length::Fixed(skin.fader.control_height))
-        .width(Length::Fill);
-
-    container(control)
-        .padding([skin.fader.control_padding_y, skin.fader.control_padding_x])
-        .height(Length::Fixed(skin.fader.control_height))
-        .width(Length::Fill)
-        .align_y(Vertical::Center)
-        .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
-        .into()
+    value: Option<&'value ReadValue<'data>>,
+    skin: &'skin Skin,
 }
 
-fn segmented_volume(skin: &Skin, path: &str, value: f64) -> Element<'static, UiEvent> {
-    let palette = skin.palette;
-    let icon = container(Icon::SpeakerHigh.view(skin.fader.icon_size, palette.muted))
-        .width(Length::Fixed(skin.fader.label_width))
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill);
-    let control = row![icon, volume_strip(skin, path.to_owned(), value)]
-        .spacing(skin.fader.content_gap)
-        .align_y(Alignment::Center)
-        .height(Length::Fixed(skin.fader.control_height))
+impl<'a> Widget<'a> for Fader<'_, '_, '_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        let Some(ReadValue::Scalar(value)) = self.value else {
+            return Space::new().into();
+        };
+        if matches!(self.style, FaderStyle::Volume | FaderStyle::VolumeCompact) {
+            return SegmentedFader::builder()
+                .skin(self.skin)
+                .path(self.path)
+                .value(*value)
+                .build()
+                .view();
+        }
+        let palette = self.skin.palette;
+        let event_path = self.path.to_owned();
+        let slider = slider(0.0..=1.0, value.clamp(0.0, 1.0), move |value| {
+            UiEvent::Control {
+                path: event_path.clone(),
+                action: ControlAction::SetScalar(value),
+            }
+        })
+        .step(self.skin.fader.step)
+        .height(self.skin.fader.slider_height)
+        .style(slider_style(self.skin))
         .width(Length::Fill);
+        let ticks = Canvas::new(FaderTicks {
+            metrics: self.skin.fader,
+            color: palette.line_soft,
+        })
+        .height(Length::Fixed(self.skin.fader.ticks_height))
+        .width(Length::Fill);
+        let slider = container(slider)
+            .height(Length::Fixed(self.skin.fader.ticks_height))
+            .align_y(Vertical::Top);
+        let rail = Stack::with_children([ticks.into(), slider.into()])
+            .height(Length::Fixed(self.skin.fader.ticks_height))
+            .width(Length::Fill);
+        let label = container(
+            shaped_text("VOL")
+                .font(fonts::sans(self.skin.fader.label.weight))
+                .size(self.skin.fader.label.size)
+                .color(palette.muted),
+        )
+        .width(Length::Fixed(self.skin.fader.label_width))
+        .height(Length::Fill)
+        .center_y(Length::Fill);
+        let control = row![label, rail]
+            .align_y(Alignment::Center)
+            .height(Length::Fixed(self.skin.fader.control_height))
+            .width(Length::Fill);
 
-    container(control)
-        .padding([skin.fader.control_padding_y, skin.fader.control_padding_x])
-        .height(Length::Fixed(skin.fader.control_height))
-        .width(Length::Fill)
-        .align_y(Vertical::Center)
-        .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_panel)))
-        .into()
+        container(control)
+            .padding([
+                self.skin.fader.control_padding_y,
+                self.skin.fader.control_padding_x,
+            ])
+            .height(Length::Fixed(self.skin.fader.control_height))
+            .width(Length::Fill)
+            .align_y(Vertical::Center)
+            .style(move |_| {
+                ContainerStyle::default().background(Background::Color(palette.bg_panel))
+            })
+            .into()
+    }
+}
+
+#[derive(bon::Builder)]
+struct SegmentedFader<'path, 'skin> {
+    skin: &'skin Skin,
+    path: &'path str,
+    value: f64,
+}
+
+impl<'a> Widget<'a> for SegmentedFader<'_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        let palette = self.skin.palette;
+        let icon = container(Icon::SpeakerHigh.view(self.skin.fader.icon_size, palette.muted))
+            .width(Length::Fixed(self.skin.fader.label_width))
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill);
+        let strip = VolumeStrip::builder()
+            .skin(self.skin)
+            .path(self.path)
+            .value(self.value)
+            .build()
+            .view();
+        let control = row![icon, strip]
+            .spacing(self.skin.fader.content_gap)
+            .align_y(Alignment::Center)
+            .height(Length::Fixed(self.skin.fader.control_height))
+            .width(Length::Fill);
+
+        container(control)
+            .padding([
+                self.skin.fader.control_padding_y,
+                self.skin.fader.control_padding_x,
+            ])
+            .height(Length::Fixed(self.skin.fader.control_height))
+            .width(Length::Fill)
+            .align_y(Vertical::Center)
+            .style(move |_| {
+                ContainerStyle::default().background(Background::Color(palette.bg_panel))
+            })
+            .into()
+    }
 }
 
 fn slider_style(skin: &Skin) -> impl Fn(&Theme, SliderStatus) -> SliderStyle + 'static {
@@ -160,48 +198,20 @@ impl canvas::Program<UiEvent> for FaderTicks {
     }
 }
 
-struct SegmentedVolume {
+struct SegmentedVolumeCanvas {
+    drag: ScalarDrag,
     metrics: FaderSkin,
     border_color: Color,
     palette: RenderPalette,
-    path: String,
     volume: f32,
 }
 
-#[derive(Default)]
-struct DragState {
-    active: bool,
-}
-
-impl canvas::Program<UiEvent> for SegmentedVolume {
-    type State = DragState;
-
-    fn update(
-        &self,
-        state: &mut DragState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
-                state.active = true;
-                scalar_action(&self.path, bounds, cursor)
-            }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => {
-                scalar_action(&self.path, bounds, cursor)
-            }
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
-                state.active = false;
-                Some(Action::capture())
-            }
-            _ => None,
-        }
-    }
+impl canvas::Program<UiEvent> for SegmentedVolumeCanvas {
+    type State = ScalarDragState;
 
     fn draw(
         &self,
-        _state: &DragState,
+        _state: &ScalarDragState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -219,45 +229,49 @@ impl canvas::Program<UiEvent> for SegmentedVolume {
         vec![frame.into_geometry()]
     }
 
-    fn mouse_interaction(
-        &self,
-        state: &DragState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        if state.active || cursor.is_over(bounds) {
-            mouse::Interaction::ResizingHorizontally
-        } else {
-            mouse::Interaction::default()
+    delegate::delegate! {
+        to self.drag {
+            fn update(
+                &self,
+                state: &mut ScalarDragState,
+                event: &Event,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> Option<Action<UiEvent>>;
+            fn mouse_interaction(
+                &self,
+                state: &ScalarDragState,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> mouse::Interaction;
         }
     }
 }
 
-fn volume_strip(skin: &Skin, path: String, value: f64) -> Element<'static, UiEvent> {
-    Canvas::new(SegmentedVolume {
-        metrics: skin.fader,
-        border_color: skin.color(skin.fader.strip_frame.border),
-        palette: skin.palette,
-        path,
-        volume: value.clamp(0.0, 1.0).as_(),
-    })
-    .width(Length::Fill)
-    .height(Length::Fixed(skin.fader.strip_height))
-    .into()
+#[derive(bon::Builder)]
+struct VolumeStrip<'path, 'skin> {
+    skin: &'skin Skin,
+    path: &'path str,
+    value: f64,
 }
 
-fn scalar_action(path: &str, bounds: Rectangle, cursor: Cursor) -> Option<Action<UiEvent>> {
-    if bounds.width <= 0.0 {
-        return None;
-    }
-    cursor.position_from(bounds.position()).map(|position| {
-        let value = (position.x / bounds.width).clamp(0.0, 1.0);
-        Action::publish(UiEvent::Control {
-            path: path.to_owned(),
-            action: ControlAction::SetScalar(f64::from(value)),
+impl<'a> Widget<'a> for VolumeStrip<'_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        Canvas::new(SegmentedVolumeCanvas {
+            drag: ScalarDrag::builder()
+                .path(self.path.to_owned())
+                .mode(ScalarDragMode::Horizontal)
+                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+                .build(),
+            metrics: self.skin.fader,
+            border_color: self.skin.color(self.skin.fader.strip_frame.border),
+            palette: self.skin.palette,
+            volume: self.value.clamp(0.0, 1.0).as_(),
         })
-        .and_capture()
-    })
+        .width(Length::Fill)
+        .height(Length::Fixed(self.skin.fader.strip_height))
+        .into()
+    }
 }
 
 fn draw_segments(

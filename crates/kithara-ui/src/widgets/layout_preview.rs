@@ -13,17 +13,26 @@ use crate::{
     skin::LayoutPreviewSkin,
 };
 
-/// Renders the split and module geometry of a compiled layout as a small canvas.
-#[must_use]
-pub fn layout_preview<Message: 'static>(ui: &CompiledUi, skin: &Skin) -> Element<'static, Message> {
-    Canvas::new(Preview {
-        geometry: PreviewGeometry::new(&ui.root),
-        metrics: skin.layout_preview,
-        palette: skin.palette,
-    })
-    .width(Length::Fill)
-    .height(Length::Fixed(skin.layout_preview.height))
-    .into()
+/// Small canvas representation of compiled split and module geometry.
+#[derive(bon::Builder)]
+#[non_exhaustive]
+pub struct LayoutPreview<'a> {
+    ui: &'a CompiledUi,
+    skin: &'a Skin,
+}
+
+impl LayoutPreview<'_> {
+    #[must_use]
+    pub fn view<Message: 'static>(self) -> Element<'static, Message> {
+        Canvas::new(Preview {
+            geometry: PreviewGeometry::new(&self.ui.root),
+            metrics: self.skin.layout_preview,
+            palette: self.skin.palette,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(self.skin.layout_preview.height))
+        .into()
+    }
 }
 
 struct Preview {
@@ -46,7 +55,7 @@ impl<Message> canvas::Program<Message> for Preview {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
 
-        for area in &self.geometry.areas {
+        for area in self.geometry.iter() {
             let mut point = Point::new(area.bounds.x * bounds.width, area.bounds.y * bounds.height);
             let mut size = Size::new(
                 area.bounds.width * bounds.width,
@@ -76,15 +85,14 @@ impl<Message> canvas::Program<Message> for Preview {
     }
 }
 
-struct PreviewGeometry {
-    areas: Vec<PreviewArea>,
-}
+#[derive(derive_more::Deref, derive_more::From)]
+struct PreviewGeometry(Vec<PreviewArea>);
 
 impl PreviewGeometry {
     fn new(root: &CompiledNode) -> Self {
         let mut areas = Vec::new();
         collect_areas(root, UnitRect::root(), &mut areas);
-        Self { areas }
+        areas.into()
     }
 }
 
@@ -239,7 +247,6 @@ mod tests {
         });
         let module_counts = geometry.map(|preview| {
             preview
-                .areas
                 .iter()
                 .filter(|area| area.kind == AreaKind::Module)
                 .count()

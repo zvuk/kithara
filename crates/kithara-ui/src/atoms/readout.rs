@@ -6,55 +6,68 @@ use iced::{
 use crate::{
     module::Tone,
     render::{ReadValue, Skin, UiEvent, fonts, shaped_text},
+    widgets::Widget,
 };
 
-pub(crate) fn view<'a>(
+#[derive(bon::Builder)]
+pub(crate) struct Readout<'a, 'value, 'data, 'skin> {
     label: Option<&'a str>,
     tone: Tone,
     framed: bool,
-    value: Option<&ReadValue<'_>>,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    let Some(label) = label else {
-        return Space::new().into();
-    };
-    let value = match value {
-        Some(ReadValue::Text(value)) => (*value).to_owned(),
-        Some(ReadValue::Scalar(value)) => format!("{value:.2}"),
-        _ => return Space::new().into(),
-    };
-    let palette = skin.palette;
-    let value_color = if tone == Tone::Accent {
-        palette.accent
-    } else {
-        palette.text
-    };
-    let content = Column::with_children([
-        shaped_text(label)
-            .font(fonts::mono(skin.readout.label.weight))
-            .size(skin.readout.label.size)
-            .color(palette.muted)
-            .into(),
-        shaped_text(value)
-            .font(fonts::mono(skin.readout.value.weight))
-            .size(skin.readout.value.size)
-            .color(value_color)
-            .into(),
-    ])
-    .spacing(skin.readout.spacing);
+    value: Option<&'value ReadValue<'data>>,
+    skin: &'skin Skin,
+}
 
-    let border = skin.border(skin.readout.frame);
-
-    container(content)
-        .padding([
-            skin.readout.padding_y,
-            if framed { skin.readout.padding_x } else { 0.0 },
+impl<'a> Widget<'a> for Readout<'a, '_, '_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        let Some(label) = self.label else {
+            return Space::new().into();
+        };
+        let value = match self.value {
+            Some(ReadValue::Text(value)) => (*value).to_owned(),
+            Some(ReadValue::Scalar(value)) => format!("{value:.2}"),
+            _ => return Space::new().into(),
+        };
+        let palette = self.skin.palette;
+        let value_color = if self.tone == Tone::Accent {
+            palette.accent
+        } else {
+            palette.text
+        };
+        let content = Column::with_children([
+            shaped_text(label)
+                .font(fonts::mono(self.skin.readout.label.weight))
+                .size(self.skin.readout.label.size)
+                .color(palette.muted)
+                .into(),
+            shaped_text(value)
+                .font(fonts::mono(self.skin.readout.value.weight))
+                .size(self.skin.readout.value.size)
+                .color(value_color)
+                .into(),
         ])
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(move |_| {
-            let style = ContainerStyle::default();
-            if framed { style.border(border) } else { style }
-        })
-        .into()
+        .spacing(self.skin.readout.spacing);
+        let border = self.skin.border(self.skin.readout.frame);
+
+        container(content)
+            .padding([
+                self.skin.readout.padding_y,
+                if self.framed {
+                    self.skin.readout.padding_x
+                } else {
+                    0.0
+                },
+            ])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_| {
+                let style = ContainerStyle::default();
+                if self.framed {
+                    style.border(border)
+                } else {
+                    style
+                }
+            })
+            .into()
+    }
 }

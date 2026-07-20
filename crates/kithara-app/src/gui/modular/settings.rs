@@ -14,7 +14,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi},
     render::{Skin, UiEvent, fonts, shaped_text, theme::RenderPalette},
-    widgets::{layout_preview, module_chrome, secondary_button_style},
+    widgets::{LayoutPreview, ModuleChrome, secondary_button_style},
 };
 
 use super::state::{BuiltinPreset, SettingsDraft, SettingsSection};
@@ -107,7 +107,11 @@ pub(crate) fn render(state: &Kithara) -> Element<'_, Message> {
     ]
     .width(Length::Fill)
     .height(Length::Fill);
-    let framed = module_chrome(panel, skin);
+    let framed = ModuleChrome::builder()
+        .content(panel)
+        .skin(skin)
+        .build()
+        .view();
 
     container(framed)
         .width(Length::Fill)
@@ -232,7 +236,11 @@ fn preset_card(
     let palette = skin.palette;
     button(
         column![
-            layout_preview(compiled, skin),
+            LayoutPreview::builder()
+                .ui(compiled)
+                .skin(skin)
+                .build()
+                .view(),
             shaped_text(label)
                 .font(iced::Font {
                     weight: Weight::Semibold,

@@ -7,7 +7,14 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    atoms::{chip, knob, meter, readout, toggle, vu},
+    atoms::{
+        chip::Chip,
+        knob::Knob,
+        meter::StereoMeter,
+        readout::Readout,
+        toggle::{Checkbox, Toggle},
+        vu::VerticalVu,
+    },
     compile::{CompiledNode, CompiledUi},
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
@@ -15,7 +22,15 @@ use crate::{
     render::{ReadValue, Reads, Skin, UiEvent},
     size::{Dim, SizeSpec, control_size},
     widgets::{
-        button, deck, fader, global_bar, mini_wave, module_chrome, telemetry, text, track_list,
+        ModuleChrome, Widget,
+        button::ControlButton,
+        deck::{Bpm, DeckHeader, DeckSummary, Time},
+        fader::Fader,
+        global_bar::{Brand, PresetSelector, SettingsButton, Spacer},
+        mini_wave::MiniWave,
+        telemetry::Telemetry,
+        text::Text,
+        track_list::TrackList,
     },
 };
 
@@ -72,9 +87,11 @@ fn render_compiled<'a>(
             })
             .into(),
         },
-        CompiledNode::Module { root, .. } => {
-            module_chrome(render_node(root, ui, reads, skin), skin)
-        }
+        CompiledNode::Module { root, .. } => ModuleChrome::builder()
+            .content(render_node(root, ui, reads, skin))
+            .skin(skin)
+            .build()
+            .view(),
     }
 }
 
@@ -142,55 +159,137 @@ fn render_control<'a>(
     let value = read.and_then(|binding| resolve(reads, binding, ui));
     let path = ui.resolve(path);
     match spec {
-        ControlSpec::DeckHeader { badge } => {
-            deck::header(badge.map(|id| ui.resolve(id)), value.as_ref(), reads, skin)
-        }
-        ControlSpec::DeckSummary { style } => deck::summary(*style, value.as_ref(), reads, skin),
-        ControlSpec::Brand => global_bar::brand(skin),
-        ControlSpec::Spacer => global_bar::spacer(skin),
-        ControlSpec::PresetSelector => global_bar::preset_selector(reads, skin),
-        ControlSpec::SettingsButton => global_bar::settings_button(skin),
-        ControlSpec::Bpm { placeholder } => deck::bpm(
-            placeholder.map(|id| ui.resolve(id)),
-            value.as_ref(),
-            reads,
-            skin,
-        ),
-        ControlSpec::Time => deck::time(value.as_ref(), reads, skin),
-        ControlSpec::Text { style } => text::view(*style, value.as_ref(), skin),
+        ControlSpec::DeckHeader { badge } => DeckHeader::builder()
+            .maybe_badge(badge.map(|id| ui.resolve(id)))
+            .maybe_value(value.as_ref())
+            .reads(reads)
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::DeckSummary { style } => DeckSummary::builder()
+            .style(*style)
+            .maybe_value(value.as_ref())
+            .reads(reads)
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::Brand => Brand::builder().skin(skin).build().view(),
+        ControlSpec::Spacer => Spacer::builder().skin(skin).build().view(),
+        ControlSpec::PresetSelector => PresetSelector::builder()
+            .reads(reads)
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::SettingsButton => SettingsButton::builder().skin(skin).build().view(),
+        ControlSpec::Bpm { placeholder } => Bpm::builder()
+            .maybe_placeholder(placeholder.map(|id| ui.resolve(id)))
+            .maybe_value(value.as_ref())
+            .reads(reads)
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::Time => Time::builder()
+            .maybe_value(value.as_ref())
+            .reads(reads)
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::Text { style } => Text::builder()
+            .style(*style)
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
         ControlSpec::Button {
             label,
             active_label,
             style,
-        } => button::view(
-            path,
-            ui.resolve(*label),
-            active_label.map(|id| ui.resolve(id)),
-            *style,
-            value.as_ref(),
-            skin,
-        ),
-        ControlSpec::Scalar { format } => telemetry::view(*format, value.as_ref(), skin),
-        ControlSpec::Fader { style } => fader::view(path, *style, value.as_ref(), skin),
-        ControlSpec::Toggle => toggle::toggle(path, value.as_ref(), skin),
-        ControlSpec::Checkbox => toggle::checkbox(path, value.as_ref(), skin),
+        } => ControlButton::builder()
+            .path(path)
+            .label(ui.resolve(*label))
+            .maybe_active_label(active_label.map(|id| ui.resolve(id)))
+            .style(*style)
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::Scalar { format } => Telemetry::builder()
+            .format(*format)
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::Fader { style } => Fader::builder()
+            .path(path)
+            .style(*style)
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::Toggle => Toggle::builder()
+            .path(path)
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::Checkbox => Checkbox::builder()
+            .path(path)
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
         ControlSpec::Readout {
             label,
             tone,
             framed,
-        } => readout::view(
-            label.map(|id| ui.resolve(id)),
-            *tone,
-            *framed,
-            value.as_ref(),
-            skin,
-        ),
-        ControlSpec::Chip { label } => chip::view(path, ui.resolve(*label), value.as_ref(), skin),
-        ControlSpec::Knob => knob::view(path, value.as_ref(), skin),
-        ControlSpec::VuStereo => meter::view(path, value.as_ref(), skin),
-        ControlSpec::VuVertical => vu::view(path, value.as_ref(), skin),
-        ControlSpec::Wave { style } => mini_wave::view(path, *style, value.as_ref(), reads, skin),
-        ControlSpec::TrackList => track_list::view(path, value.as_ref(), reads, skin),
+        } => Readout::builder()
+            .maybe_label(label.map(|id| ui.resolve(id)))
+            .tone(*tone)
+            .framed(*framed)
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::Chip { label } => Chip::builder()
+            .path(path)
+            .label(ui.resolve(*label))
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::Knob => Knob::builder()
+            .path(path)
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::VuStereo => StereoMeter::builder()
+            .path(path)
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::VuVertical => VerticalVu::builder()
+            .path(path)
+            .maybe_value(value.as_ref())
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::Wave { style } => MiniWave::builder()
+            .path(path)
+            .style(*style)
+            .maybe_value(value.as_ref())
+            .reads(reads)
+            .skin(skin)
+            .build()
+            .view(),
+        ControlSpec::TrackList => TrackList::builder()
+            .path(path)
+            .maybe_value(value.as_ref())
+            .reads(reads)
+            .skin(skin)
+            .build()
+            .view(),
     }
 }
 

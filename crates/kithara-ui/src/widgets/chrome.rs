@@ -12,29 +12,40 @@ use iced::{
 
 use crate::render::Skin;
 
-pub fn module_chrome<'a, Message: 'a, C: Into<Element<'a, Message>>>(
-    content: C,
-    skin: &Skin,
-) -> Element<'a, Message> {
-    let palette = skin.palette;
-    let border = skin.border(skin.chrome.frame);
-    let body = container(content)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(move |_| module_style(palette, border));
-    let ticks = Canvas::new(CornerTicks {
-        color: skin.color(skin.chrome.corner_color),
-        size: skin.chrome.corner_size,
-        width: skin.chrome.corner_width,
-        offset: skin.chrome.corner_offset,
-    })
-    .width(Length::Fill)
-    .height(Length::Fill);
+/// Framed module shell shared by renderer and application surfaces.
+#[derive(bon::Builder)]
+#[non_exhaustive]
+pub struct ModuleChrome<'a, Content> {
+    content: Content,
+    skin: &'a Skin,
+}
 
-    Stack::with_children([body.into(), ticks.into()])
+impl<Content> ModuleChrome<'_, Content> {
+    pub fn view<'a, Message>(self) -> Element<'a, Message>
+    where
+        Message: 'a,
+        Content: Into<Element<'a, Message>>,
+    {
+        let palette = self.skin.palette;
+        let border = self.skin.border(self.skin.chrome.frame);
+        let body = container(self.content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_| module_style(palette, border));
+        let ticks = Canvas::new(CornerTicks {
+            color: self.skin.color(self.skin.chrome.corner_color),
+            size: self.skin.chrome.corner_size,
+            width: self.skin.chrome.corner_width,
+            offset: self.skin.chrome.corner_offset,
+        })
         .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        .height(Length::Fill);
+
+        Stack::with_children([body.into(), ticks.into()])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
 }
 
 pub fn secondary_button_style(

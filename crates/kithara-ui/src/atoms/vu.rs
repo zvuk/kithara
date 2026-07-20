@@ -1,6 +1,6 @@
 use iced::{
     Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
-    mouse::{self, Button, Cursor},
+    mouse::{self, Cursor},
     widget::{
         Space,
         canvas::{self, Action, Canvas, Frame, Geometry},
@@ -9,71 +9,55 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    render::{ControlAction, ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
+    render::{ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
     skin::VuVerticalSkin,
+    widgets::{
+        Widget,
+        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+    },
 };
 
-pub(crate) fn view<'a>(
-    path: &str,
-    value: Option<&ReadValue<'_>>,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Stereo(levels)) = value else {
-        return Space::new().into();
-    };
-
-    Canvas::new(VerticalVu {
-        metrics: skin.vu_vertical,
-        levels: *levels,
-        palette: skin.palette,
-        path: path.to_owned(),
-    })
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+#[derive(bon::Builder)]
+pub(crate) struct VerticalVu<'path, 'value, 'data, 'skin> {
+    path: &'path str,
+    value: Option<&'value ReadValue<'data>>,
+    skin: &'skin Skin,
 }
 
-struct VerticalVu {
+impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        let Some(ReadValue::Stereo(levels)) = self.value else {
+            return Space::new().into();
+        };
+        Canvas::new(VerticalVuCanvas {
+            drag: ScalarDrag::builder()
+                .path(self.path.to_owned())
+                .mode(ScalarDragMode::Vertical)
+                .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+                .build(),
+            metrics: self.skin.vu_vertical,
+            levels: *levels,
+            palette: self.skin.palette,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+}
+
+struct VerticalVuCanvas {
+    drag: ScalarDrag,
     metrics: VuVerticalSkin,
     levels: StereoLevels,
     palette: RenderPalette,
-    path: String,
 }
 
-#[derive(Default)]
-struct DragState {
-    active: bool,
-}
-
-impl canvas::Program<UiEvent> for VerticalVu {
-    type State = DragState;
-
-    fn update(
-        &self,
-        state: &mut DragState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
-                state.active = true;
-                scalar_action(&self.path, bounds, cursor)
-            }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => {
-                scalar_action(&self.path, bounds, cursor)
-            }
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
-                state.active = false;
-                Some(Action::capture())
-            }
-            _ => None,
-        }
-    }
+impl canvas::Program<UiEvent> for VerticalVuCanvas {
+    type State = ScalarDragState;
 
     fn draw(
         &self,
-        _state: &DragState,
+        _state: &ScalarDragState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -92,32 +76,23 @@ impl canvas::Program<UiEvent> for VerticalVu {
         vec![frame.into_geometry()]
     }
 
-    fn mouse_interaction(
-        &self,
-        state: &DragState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        if state.active || cursor.is_over(bounds) {
-            mouse::Interaction::ResizingVertically
-        } else {
-            mouse::Interaction::default()
+    delegate::delegate! {
+        to self.drag {
+            fn update(
+                &self,
+                state: &mut ScalarDragState,
+                event: &Event,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> Option<Action<UiEvent>>;
+            fn mouse_interaction(
+                &self,
+                state: &ScalarDragState,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> mouse::Interaction;
         }
     }
-}
-
-fn scalar_action(path: &str, bounds: Rectangle, cursor: Cursor) -> Option<Action<UiEvent>> {
-    if bounds.height <= 0.0 {
-        return None;
-    }
-    cursor.position_from(bounds.position()).map(|position| {
-        let volume = (1.0 - position.y / bounds.height).clamp(0.0, 1.0);
-        Action::publish(UiEvent::Control {
-            path: path.to_owned(),
-            action: ControlAction::SetScalar(f64::from(volume)),
-        })
-        .and_capture()
-    })
 }
 
 fn draw_segments(

@@ -1,6 +1,6 @@
 use iced::{
     Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
-    mouse::{self, Button, Cursor},
+    mouse::{self, Cursor},
     widget::{
         Space,
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
@@ -8,63 +8,86 @@ use iced::{
 };
 
 use crate::{
-    render::{ControlAction, ReadValue, Skin, UiEvent, theme::RenderPalette},
+    render::{ReadValue, Skin, UiEvent, theme::RenderPalette},
     skin::{CheckboxSkin, FrameSkin, ToggleSkin},
+    widgets::{
+        Widget,
+        behavior::{ClickActivate, HoverState},
+    },
 };
 
-pub(crate) fn toggle<'a>(
-    path: &str,
-    value: Option<&ReadValue<'_>>,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    binary_control(
-        path,
-        value,
-        skin,
-        Shape::Toggle {
-            metrics: skin.toggle,
-            active_border: skin.color(skin.toggle.active_frame.border),
-            inactive_border: skin.color(skin.toggle.inactive_frame.border),
-        },
-    )
+#[derive(bon::Builder)]
+pub(crate) struct Toggle<'path, 'value, 'data, 'skin> {
+    path: &'path str,
+    value: Option<&'value ReadValue<'data>>,
+    skin: &'skin Skin,
 }
 
-pub(crate) fn checkbox<'a>(
-    path: &str,
-    value: Option<&ReadValue<'_>>,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    binary_control(
-        path,
-        value,
-        skin,
-        Shape::Checkbox {
-            metrics: skin.checkbox,
-            active_border: skin.color(skin.checkbox.active_frame.border),
-            inactive_border: skin.color(skin.checkbox.inactive_frame.border),
-        },
-    )
+impl<'a> Widget<'a> for Toggle<'_, '_, '_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        BinaryControl::builder()
+            .path(self.path)
+            .maybe_value(self.value)
+            .skin(self.skin)
+            .shape(Shape::Toggle {
+                metrics: self.skin.toggle,
+                active_border: self.skin.color(self.skin.toggle.active_frame.border),
+                inactive_border: self.skin.color(self.skin.toggle.inactive_frame.border),
+            })
+            .build()
+            .view()
+    }
 }
 
-fn binary_control<'a>(
-    path: &str,
-    value: Option<&ReadValue<'_>>,
-    skin: &Skin,
+#[derive(bon::Builder)]
+pub(crate) struct Checkbox<'path, 'value, 'data, 'skin> {
+    path: &'path str,
+    value: Option<&'value ReadValue<'data>>,
+    skin: &'skin Skin,
+}
+
+impl<'a> Widget<'a> for Checkbox<'_, '_, '_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        BinaryControl::builder()
+            .path(self.path)
+            .maybe_value(self.value)
+            .skin(self.skin)
+            .shape(Shape::Checkbox {
+                metrics: self.skin.checkbox,
+                active_border: self.skin.color(self.skin.checkbox.active_frame.border),
+                inactive_border: self.skin.color(self.skin.checkbox.inactive_frame.border),
+            })
+            .build()
+            .view()
+    }
+}
+
+#[derive(bon::Builder)]
+struct BinaryControl<'path, 'value, 'data, 'skin> {
+    path: &'path str,
+    value: Option<&'value ReadValue<'data>>,
+    skin: &'skin Skin,
     shape: Shape,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Bool(active)) = value else {
-        return Space::new().into();
-    };
+}
 
-    Canvas::new(BinaryControl {
-        active: *active,
-        palette: skin.palette,
-        path: path.to_owned(),
-        shape,
-    })
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+impl<'a> Widget<'a> for BinaryControl<'_, '_, '_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        let Some(ReadValue::Bool(active)) = self.value else {
+            return Space::new().into();
+        };
+        Canvas::new(BinaryControlCanvas {
+            active: *active,
+            click: ClickActivate::builder()
+                .path(self.path.to_owned())
+                .hover(HoverState::new(mouse::Interaction::Pointer))
+                .build(),
+            palette: self.skin.palette,
+            shape: self.shape,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -81,36 +104,15 @@ enum Shape {
     },
 }
 
-struct BinaryControl {
+struct BinaryControlCanvas {
     active: bool,
+    click: ClickActivate,
     palette: RenderPalette,
-    path: String,
     shape: Shape,
 }
 
-impl canvas::Program<UiEvent> for BinaryControl {
+impl canvas::Program<UiEvent> for BinaryControlCanvas {
     type State = ();
-
-    fn update(
-        &self,
-        _state: &mut (),
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
-                Some(
-                    Action::publish(UiEvent::Control {
-                        path: self.path.clone(),
-                        action: ControlAction::Activate,
-                    })
-                    .and_capture(),
-                )
-            }
-            _ => None,
-        }
-    }
 
     fn draw(
         &self,
@@ -158,10 +160,18 @@ impl canvas::Program<UiEvent> for BinaryControl {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> mouse::Interaction {
-        if cursor.is_over(bounds) {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::default()
+        self.click.mouse_interaction(bounds, cursor)
+    }
+
+    delegate::delegate! {
+        to self.click {
+            fn update(
+                &self,
+                state: &mut (),
+                event: &Event,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> Option<Action<UiEvent>>;
         }
     }
 }

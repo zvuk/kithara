@@ -6,32 +6,39 @@ use iced::{
     },
 };
 
-use crate::render::{ControlAction, ReadValue, Skin, UiEvent, fonts, shaped_text};
+use crate::{
+    render::{ControlAction, ReadValue, Skin, UiEvent, fonts, shaped_text},
+    widgets::Widget,
+};
 
-pub(crate) fn view<'a>(
-    path: &str,
+#[derive(bon::Builder)]
+pub(crate) struct Chip<'a, 'value, 'data, 'skin> {
+    path: &'a str,
     label: &'a str,
-    value: Option<&ReadValue<'_>>,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Bool(active)) = value else {
-        return Space::new().into();
-    };
+    value: Option<&'value ReadValue<'data>>,
+    skin: &'skin Skin,
+}
 
-    button(
-        shaped_text(label)
-            .font(fonts::mono(skin.chip.text.weight))
-            .size(skin.chip.text.size),
-    )
-    .padding([skin.chip.padding_y, skin.chip.padding_x])
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .style(chip_style(skin, *active))
-    .on_press(UiEvent::Control {
-        path: path.to_owned(),
-        action: ControlAction::Activate,
-    })
-    .into()
+impl<'a> Widget<'a> for Chip<'a, '_, '_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        let Some(ReadValue::Bool(active)) = self.value else {
+            return Space::new().into();
+        };
+        button(
+            shaped_text(self.label)
+                .font(fonts::mono(self.skin.chip.text.weight))
+                .size(self.skin.chip.text.size),
+        )
+        .padding([self.skin.chip.padding_y, self.skin.chip.padding_x])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(chip_style(self.skin, *active))
+        .on_press(UiEvent::Control {
+            path: self.path.to_owned(),
+            action: ControlAction::Activate,
+        })
+        .into()
+    }
 }
 
 fn chip_style(skin: &Skin, active: bool) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle + 'static {

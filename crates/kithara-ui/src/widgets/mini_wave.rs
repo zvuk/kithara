@@ -9,45 +9,53 @@ use crate::{
     module::WaveStyle,
     render::{ControlAction, ReadValue, Reads, Skin, UiEvent, WaveBucket, theme::RenderPalette},
     skin::{FrameSkin, WaveSkin},
+    widgets::{Widget, behavior::HoverState},
 };
 
-pub(crate) fn view(
-    path: &str,
+#[derive(bon::Builder)]
+pub(crate) struct MiniWave<'path, 'value, 'data, 'reads, 'skin> {
+    path: &'path str,
     style: WaveStyle,
-    value: Option<&ReadValue<'_>>,
-    reads: &dyn Reads,
-    skin: &Skin,
-) -> Element<'static, UiEvent> {
-    let waveform = match value {
-        Some(ReadValue::Waveform(waveform)) => Some(*waveform),
-        _ => None,
-    };
-    let progress = match reads.get("deck.playback.position_normalized") {
-        Some(ReadValue::Scalar(value)) => value.as_(),
-        _ => 0.0,
-    };
-    let waveform = waveform.map(|view| WaveformData {
-        buckets: view.buckets.to_vec().into_boxed_slice(),
-        beats: view.beats.to_vec().into_boxed_slice(),
-        downbeats: view.downbeats.to_vec().into_boxed_slice(),
-    });
-    Canvas::new(MiniWave {
-        metrics: skin.wave,
-        border_color: skin.color(skin.wave.frame.border),
-        palette: skin.palette,
-        waveform,
-        path: path.to_owned(),
-        progress,
-        show_beats: style == WaveStyle::Hero,
-    })
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+    value: Option<&'value ReadValue<'data>>,
+    reads: &'reads dyn Reads,
+    skin: &'skin Skin,
 }
 
-struct MiniWave {
+impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        let waveform = match self.value {
+            Some(ReadValue::Waveform(waveform)) => Some(*waveform),
+            _ => None,
+        };
+        let progress = match self.reads.get("deck.playback.position_normalized") {
+            Some(ReadValue::Scalar(value)) => value.as_(),
+            _ => 0.0,
+        };
+        let waveform = waveform.map(|view| WaveformData {
+            buckets: view.buckets.to_vec().into_boxed_slice(),
+            beats: view.beats.to_vec().into_boxed_slice(),
+            downbeats: view.downbeats.to_vec().into_boxed_slice(),
+        });
+        Canvas::new(MiniWaveCanvas {
+            metrics: self.skin.wave,
+            border_color: self.skin.color(self.skin.wave.frame.border),
+            hover: HoverState::new(mouse::Interaction::Pointer),
+            palette: self.skin.palette,
+            waveform,
+            path: self.path.to_owned(),
+            progress,
+            show_beats: self.style == WaveStyle::Hero,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+}
+
+struct MiniWaveCanvas {
     metrics: WaveSkin,
     border_color: Color,
+    hover: HoverState,
     palette: RenderPalette,
     waveform: Option<WaveformData>,
     path: String,
@@ -61,7 +69,7 @@ struct WaveformData {
     downbeats: Box<[f32]>,
 }
 
-impl canvas::Program<UiEvent> for MiniWave {
+impl canvas::Program<UiEvent> for MiniWaveCanvas {
     type State = ();
 
     fn draw(
@@ -107,11 +115,7 @@ impl canvas::Program<UiEvent> for MiniWave {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> mouse::Interaction {
-        if cursor.is_over(bounds) {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::default()
-        }
+        self.hover.mouse_interaction(bounds, cursor)
     }
 
     fn update(

@@ -1,6 +1,6 @@
 use iced::{
     Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
-    mouse::{self, Button, Cursor},
+    mouse::{self, Cursor},
     widget::{
         Space,
         canvas::{self, Action, Canvas, Frame, Geometry},
@@ -9,71 +9,55 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    render::{ControlAction, ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
+    render::{ReadValue, Skin, StereoLevels, UiEvent, theme::RenderPalette},
     skin::VuStereoSkin,
+    widgets::{
+        Widget,
+        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+    },
 };
 
-pub(crate) fn view<'a>(
-    path: &str,
-    value: Option<&ReadValue<'_>>,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    let Some(ReadValue::Stereo(levels)) = value else {
-        return Space::new().into();
-    };
-
-    Canvas::new(StereoMeter {
-        metrics: skin.vu_stereo,
-        levels: *levels,
-        palette: skin.palette,
-        path: path.to_owned(),
-    })
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+#[derive(bon::Builder)]
+pub(crate) struct StereoMeter<'path, 'value, 'data, 'skin> {
+    path: &'path str,
+    value: Option<&'value ReadValue<'data>>,
+    skin: &'skin Skin,
 }
 
-struct StereoMeter {
+impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, '_> {
+    fn view(self) -> Element<'a, UiEvent> {
+        let Some(ReadValue::Stereo(levels)) = self.value else {
+            return Space::new().into();
+        };
+        Canvas::new(StereoMeterCanvas {
+            drag: ScalarDrag::builder()
+                .path(self.path.to_owned())
+                .mode(ScalarDragMode::Horizontal)
+                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+                .build(),
+            metrics: self.skin.vu_stereo,
+            levels: *levels,
+            palette: self.skin.palette,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+}
+
+struct StereoMeterCanvas {
+    drag: ScalarDrag,
     metrics: VuStereoSkin,
     levels: StereoLevels,
     palette: RenderPalette,
-    path: String,
 }
 
-#[derive(Default)]
-struct DragState {
-    active: bool,
-}
-
-impl canvas::Program<UiEvent> for StereoMeter {
-    type State = DragState;
-
-    fn update(
-        &self,
-        state: &mut DragState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
-                state.active = true;
-                scalar_action(&self.path, bounds, cursor)
-            }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => {
-                scalar_action(&self.path, bounds, cursor)
-            }
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
-                state.active = false;
-                Some(Action::capture())
-            }
-            _ => None,
-        }
-    }
+impl canvas::Program<UiEvent> for StereoMeterCanvas {
+    type State = ScalarDragState;
 
     fn draw(
         &self,
-        _state: &DragState,
+        _state: &ScalarDragState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -98,32 +82,23 @@ impl canvas::Program<UiEvent> for StereoMeter {
         vec![frame.into_geometry()]
     }
 
-    fn mouse_interaction(
-        &self,
-        state: &DragState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        if state.active || cursor.is_over(bounds) {
-            mouse::Interaction::ResizingHorizontally
-        } else {
-            mouse::Interaction::default()
+    delegate::delegate! {
+        to self.drag {
+            fn update(
+                &self,
+                state: &mut ScalarDragState,
+                event: &Event,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> Option<Action<UiEvent>>;
+            fn mouse_interaction(
+                &self,
+                state: &ScalarDragState,
+                bounds: Rectangle,
+                cursor: Cursor,
+            ) -> mouse::Interaction;
         }
     }
-}
-
-fn scalar_action(path: &str, bounds: Rectangle, cursor: Cursor) -> Option<Action<UiEvent>> {
-    if bounds.width <= 0.0 {
-        return None;
-    }
-    cursor.position_from(bounds.position()).map(|position| {
-        let volume = (position.x / bounds.width).clamp(0.0, 1.0);
-        Action::publish(UiEvent::Control {
-            path: path.to_owned(),
-            action: ControlAction::SetScalar(f64::from(volume)),
-        })
-        .and_capture()
-    })
 }
 
 fn draw_channel(
