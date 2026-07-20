@@ -7,5 +7,4 @@ mod query;
 mod session;
 mod transport;
 
-pub use session::SessionTrackControl;
 pub use transport::SelectTransition;

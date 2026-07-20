@@ -41,32 +41,10 @@ use crate::{
 const BLOCK_FRAMES: usize = 480;
 const SAMPLE_RATE: u32 = 48_000;
 
-#[kithara::test]
-fn render_context_maps_an_exact_join_beat_to_its_output_frame() {
-    let start = SessionBeat::new(2.0).expect("finite start beat");
-    let end = SessionBeat::new(2.02).expect("finite end beat");
-    let context = RenderContext::new(
-        RenderFrame::new(10)..RenderFrame::new(490),
-        sample_rate(),
-        Some(start..end),
-        Some(SessionTransportCommit::new(
-            Tempo::new(120.0).expect("valid tempo"),
-            true,
-            7,
-        )),
-    )
-    .expect("valid render context");
-    let target = SessionBeat::new(2.0 + 37.0 * 0.02 / 480.0).expect("finite target beat");
-
-    assert_eq!(context.output_offset_for_beat(target), Some(37));
-    assert_eq!(context.output_offset_for_beat(start), Some(0));
-    assert_eq!(context.output_offset_for_beat(end), None);
-}
-
 struct EofReader {
     bus: EventBus,
-    metadata: TrackMetadata,
     spec: PcmSpec,
+    metadata: TrackMetadata,
 }
 
 impl Default for EofReader {
@@ -80,6 +58,10 @@ impl Default for EofReader {
 }
 
 impl PcmRead for EofReader {
+    fn position(&self) -> Duration {
+        Duration::ZERO
+    }
+
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Ok(ReadOutcome::Eof {
             position: Duration::ZERO,
@@ -98,23 +80,19 @@ impl PcmRead for EofReader {
     fn spec(&self) -> PcmSpec {
         self.spec
     }
-
-    fn position(&self) -> Duration {
-        Duration::ZERO
-    }
 }
 
 impl PcmSession for EofReader {
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(1))
     }
 
     fn event_bus(&self) -> &EventBus {
         &self.bus
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
     }
 }
 
@@ -138,6 +116,7 @@ fn proc_info() -> ProcInfo {
 fn proc_info_at(clock_samples: i64) -> ProcInfo {
     let sample_rate = sample_rate();
     ProcInfo {
+        sample_rate,
         frames: BLOCK_FRAMES,
         in_silence_mask: SilenceMask::default(),
         out_silence_mask: SilenceMask::default(),
@@ -146,7 +125,6 @@ fn proc_info_at(clock_samples: i64) -> ProcInfo {
         in_connected_mask: ConnectedMask::default(),
         out_connected_mask: ConnectedMask::default(),
         prev_output_was_silent: true,
-        sample_rate,
         sample_rate_recip: f64::from(SAMPLE_RATE).recip(),
         clock_samples: InstantSamples(clock_samples),
         duration_since_stream_start: Duration::ZERO,
@@ -189,10 +167,10 @@ fn proc_extra_with_observation(
     );
     (
         ProcExtra {
-            scratch_buffers: ChannelBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(BLOCK_FRAMES),
-            declick_values: DeclickValues::new(NonZeroU32::new(16).expect("static fade")),
             logger,
             store,
+            scratch_buffers: ChannelBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(BLOCK_FRAMES),
+            declick_values: DeclickValues::new(NonZeroU32::new(16).expect("static fade")),
         },
         observation_output,
     )
@@ -428,54 +406,6 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
     assert_eq!(context.transport_commit(), Some(next));
     let beats = context.session_beats().expect("matching beat range");
     assert!((beats.start.get() - 0.04).abs() <= f64::EPSILON);
-}
-
-#[kithara::test]
-fn seek_commit_reanchors_the_matching_render_boundary() {
-    let old = SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, 1);
-    let target = SessionBeat::new(3.0).expect("finite seek target");
-    let next = SessionTransportCommit::new_at_beat(
-        Tempo::new(120.0).expect("valid tempo"),
-        true,
-        2,
-        target,
-    );
-    let mut extra = proc_extra(Some(120.0));
-    let mut processor = RenderContextProcessor;
-    process_context(&mut processor, &proc_info_at(0), &mut extra);
-
-    let stage = proc_info_at(BLOCK_FRAMES as i64);
-    let stamp = TransportCommitStamp::new_at_beat(
-        Some(old),
-        next,
-        RenderFrame::new((BLOCK_FRAMES * 2) as i64),
-        target,
-        sample_rate(),
-    );
-    process_context_event(
-        &mut processor,
-        &stage,
-        &mut extra,
-        Some(NodeEventType::custom(TransportCommitEvent::Stage(stamp))),
-    );
-
-    let matching = proc_info_at((BLOCK_FRAMES * 2) as i64);
-    process_context_event(
-        &mut processor,
-        &matching,
-        &mut extra,
-        Some(NodeEventType::custom(TransportCommitEvent::Apply(2))),
-    );
-    let context = read_render_context(&extra.store, &matching).expect("seek context becomes valid");
-    let beats = context.session_beats().expect("seek beat range");
-    assert_eq!(context.transport_commit(), Some(next));
-    assert_eq!(
-        context
-            .transport_commit()
-            .and_then(SessionTransportCommit::seek_target),
-        Some(target)
-    );
-    assert!((beats.start.get() - target.get()).abs() <= f64::EPSILON);
 }
 
 #[kithara::test]

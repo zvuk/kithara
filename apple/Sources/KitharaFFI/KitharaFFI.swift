@@ -6656,8 +6656,6 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     )
     case transportPlayStateCommitted(playing: Bool, revision: UInt64
     )
-    case transportSeekCommitted(positionBeats: Double, revision: UInt64
-    )
     case transportFailed(revision: UInt64?, reason: String
     )
     case syncBindingCommitted(slot: UInt64, sessionAnchorBeats: Double, trackAnchorBeats: Double, direction: FfiPlaybackDirection
@@ -6785,13 +6783,10 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         case 36: return .transportPlayStateCommitted(playing: try FfiConverterBool.read(from: &buf), revision: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 37: return .transportSeekCommitted(positionBeats: try FfiConverterDouble.read(from: &buf), revision: try FfiConverterUInt64.read(from: &buf)
+        case 37: return .transportFailed(revision: try FfiConverterOptionUInt64.read(from: &buf), reason: try FfiConverterString.read(from: &buf)
         )
 
-        case 38: return .transportFailed(revision: try FfiConverterOptionUInt64.read(from: &buf), reason: try FfiConverterString.read(from: &buf)
-        )
-
-        case 39: return .syncBindingCommitted(slot: try FfiConverterUInt64.read(from: &buf), sessionAnchorBeats: try FfiConverterDouble.read(from: &buf), trackAnchorBeats: try FfiConverterDouble.read(from: &buf), direction: try FfiConverterTypeFfiPlaybackDirection.read(from: &buf)
+        case 38: return .syncBindingCommitted(slot: try FfiConverterUInt64.read(from: &buf), sessionAnchorBeats: try FfiConverterDouble.read(from: &buf), trackAnchorBeats: try FfiConverterDouble.read(from: &buf), direction: try FfiConverterTypeFfiPlaybackDirection.read(from: &buf)
         )
 
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -6992,20 +6987,14 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
             FfiConverterUInt64.write(revision, into: &buf)
 
 
-        case let .transportSeekCommitted(positionBeats,revision):
-            writeInt(&buf, Int32(37))
-            FfiConverterDouble.write(positionBeats, into: &buf)
-            FfiConverterUInt64.write(revision, into: &buf)
-
-
         case let .transportFailed(revision,reason):
-            writeInt(&buf, Int32(38))
+            writeInt(&buf, Int32(37))
             FfiConverterOptionUInt64.write(revision, into: &buf)
             FfiConverterString.write(reason, into: &buf)
 
 
         case let .syncBindingCommitted(slot,sessionAnchorBeats,trackAnchorBeats,direction):
-            writeInt(&buf, Int32(39))
+            writeInt(&buf, Int32(38))
             FfiConverterUInt64.write(slot, into: &buf)
             FfiConverterDouble.write(sessionAnchorBeats, into: &buf)
             FfiConverterDouble.write(trackAnchorBeats, into: &buf)

@@ -11,14 +11,18 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ElasticRenderRequest {
+    source_end: f64,
+    source_start: f64,
     request_id: u64,
     revision: u64,
-    source_start: f64,
-    source_end: f64,
     output_frames: usize,
 }
 
 impl ElasticRenderRequest {
+    pub(crate) const fn output_frames(self) -> usize {
+        self.output_frames
+    }
+
     pub(crate) const fn request_id(self) -> u64 {
         self.request_id
     }
@@ -27,16 +31,12 @@ impl ElasticRenderRequest {
         self.revision
     }
 
-    pub(crate) const fn source_start(self) -> f64 {
-        self.source_start
-    }
-
     pub(crate) const fn source_end(self) -> f64 {
         self.source_end
     }
 
-    pub(crate) const fn output_frames(self) -> usize {
-        self.output_frames
+    pub(crate) const fn source_start(self) -> f64 {
+        self.source_start
     }
 }
 
@@ -70,8 +70,8 @@ pub(crate) enum ElasticPlanError {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ElasticRenderSegment {
-    pub(crate) output_start: usize,
     pub(crate) request: ElasticRenderRequest,
+    pub(crate) output_start: usize,
 }
 
 pub(crate) fn plan_elastic_segments(
@@ -106,8 +106,8 @@ pub(crate) fn plan_elastic_segments(
                     return Err(ElasticPlanError::TooManySegments);
                 }
                 segments.push(ElasticRenderSegment {
-                    output_start: range.start,
                     request,
+                    output_start: range.start,
                 });
             }
             Err(ElasticPlanError::MarkerBoundaryCrossing { boundary }) => {
@@ -118,6 +118,7 @@ pub(crate) fn plan_elastic_segments(
                 pending.push(split..range.end);
                 pending.push(range.start..split);
             }
+            Err(ElasticPlanError::OutsideMarkerDomain { .. }) if !segments.is_empty() => {}
             Err(error) => return Err(error),
         }
     }
@@ -156,6 +157,11 @@ pub(crate) fn plan_elastic_render(
         .ok_or(ElasticPlanError::SessionBeatsUnavailable)?;
     let track_start = binding.track_beat_at(beats.start)?;
     let track_end = binding.track_beat_at(beats.end)?;
+    if let Some(boundary) =
+        crossed_marker_boundary(track_start.get(), track_end.get(), output_frames)
+    {
+        return Err(ElasticPlanError::MarkerBoundaryCrossing { boundary });
+    }
     let source_start = binding
         .map()
         .source_frame_at(track_start)
@@ -170,12 +176,6 @@ pub(crate) fn plan_elastic_render(
             beat: track_end.get(),
         })?
         .get();
-    if let Some(boundary) =
-        crossed_marker_boundary(track_start.get(), track_end.get(), output_frames)
-    {
-        return Err(ElasticPlanError::MarkerBoundaryCrossing { boundary });
-    }
-
     let minimum = supported_rates.min_source_frames_per_output();
     let maximum = supported_rates.max_source_frames_per_output();
     let output_frames_f64 = output_frames
@@ -191,10 +191,10 @@ pub(crate) fn plan_elastic_render(
     }
 
     Ok(ElasticRenderRequest {
+        source_end,
+        source_start,
         request_id,
         revision,
-        source_start,
-        source_end,
         output_frames,
     })
 }
@@ -267,12 +267,12 @@ mod tests {
     struct TestSpec;
 
     impl TestSpec {
-        const SAMPLE_RATE: u32 = 48_000;
+        const MAXIMUM_RATE: f64 = 4.0 / 3.0;
+        const MINIMUM_RATE: f64 = 2.0 / 3.0;
         const OUTPUT_FRAMES: usize = 480;
         const REQUEST_ID: u64 = 17;
         const REVISION: u64 = 23;
-        const MINIMUM_RATE: f64 = 2.0 / 3.0;
-        const MAXIMUM_RATE: f64 = 4.0 / 3.0;
+        const SAMPLE_RATE: u32 = 48_000;
 
         fn supported_rates() -> ElasticRateEnvelope {
             SignalsmithElastic::rate_envelope()
@@ -280,6 +280,14 @@ mod tests {
     }
 
     fn binding(track_tempo: f64) -> TrackBinding {
+        directional_binding(track_tempo, 0.0, PlaybackDirection::Forward)
+    }
+
+    fn directional_binding(
+        track_tempo: f64,
+        track_anchor: f64,
+        direction: PlaybackDirection,
+    ) -> TrackBinding {
         let sample_rate = NonZeroU32::new(TestSpec::SAMPLE_RATE).expect("static sample rate");
         let beat_frames = (60.0 * f64::from(TestSpec::SAMPLE_RATE) / track_tempo)
             .to_u64()
@@ -305,8 +313,8 @@ mod tests {
             &analysis,
             sample_rate,
             SessionBeat::new(0.0).expect("finite session beat"),
-            TrackBeat::new(0.0).expect("finite track beat"),
-            PlaybackDirection::Forward,
+            TrackBeat::new(track_anchor).expect("finite track beat"),
+            direction,
         )
         .expect("valid track binding")
     }
@@ -435,6 +443,25 @@ mod tests {
         );
         assert_eq!(segments[0].request.request_id(), TestSpec::REQUEST_ID);
         assert_eq!(segments[1].request.request_id(), TestSpec::REQUEST_ID + 1);
+    }
+
+    #[kithara::test]
+    fn reverse_source_start_keeps_the_valid_output_prefix() {
+        let segments = plan_elastic_segments(
+            &directional_binding(100.0, 0.01, PlaybackDirection::Reverse),
+            &context(0.0..0.02),
+            0..TestSpec::OUTPUT_FRAMES,
+            TestSpec::REQUEST_ID,
+            TestSpec::REVISION,
+            TestSpec::supported_rates(),
+        )
+        .expect("source-start crossing retains the renderable prefix");
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].output_start, 0);
+        assert_eq!(segments[0].request.output_frames(), 240);
+        assert_eq!(segments[0].request.source_start(), 288.0);
+        assert_eq!(segments[0].request.source_end(), 0.0);
     }
 
     #[kithara::test]

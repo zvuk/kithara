@@ -11,7 +11,6 @@ use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 use super::{PlayerResource, ReadOutcome};
 use crate::{
     api::{SessionBeat, Tempo, TrackBinding},
-    error::PlayError,
     player::{
         node::StreamShape,
         track::elastic_renderer::{
@@ -23,86 +22,27 @@ use crate::{
     session::render::RenderContext,
 };
 
-struct ElasticSources {
-    source: WasmSend<Resource>,
-    relocation_source: WasmSend<Resource>,
-}
-
 pub(crate) struct PreparedElasticRenderer {
     renderer: ElasticRenderer,
-    sources: Option<ElasticSources>,
+    source: Option<WasmSend<Resource>>,
 }
 
 impl PreparedElasticRenderer {
-    fn preparing(renderer: ElasticRenderer) -> Self {
-        Self {
-            renderer,
-            sources: None,
-        }
-    }
-
-    fn with_sources(
-        self,
-        source: WasmSend<Resource>,
-        relocation_source: Resource,
-    ) -> Result<Self, ElasticPrepareError> {
-        if self.sources.is_some() {
-            return Err(ElasticPrepareError::SourceUnavailable);
-        }
-        Ok(Self {
-            renderer: self.renderer,
-            sources: Some(ElasticSources {
-                source,
-                relocation_source: WasmSend::new(relocation_source),
-            }),
-        })
-    }
-
     pub(crate) fn abr_handle(&self) -> Option<AbrHandle> {
-        self.sources
+        self.source
             .as_ref()
-            .and_then(|sources| sources.source.get().abr_handle())
+            .and_then(|source| source.get().abr_handle())
     }
 
     fn is_ready(&self) -> bool {
-        self.sources.is_some()
+        self.source.is_some()
     }
 
-    fn renderer_mut(&mut self) -> &mut ElasticRenderer {
-        &mut self.renderer
-    }
-
-    fn begin_relocation(
-        &mut self,
-        binding: &TrackBinding,
-        target: SessionBeat,
-        tempo: Tempo,
-        revision: u64,
-    ) -> Result<(), ElasticPrepareError> {
-        if !self.is_ready() {
-            return Err(ElasticPrepareError::SourceUnavailable);
+    fn preparing(renderer: ElasticRenderer) -> Self {
+        Self {
+            renderer,
+            source: None,
         }
-        self.renderer
-            .begin_relocation(binding, target, tempo, revision)
-    }
-
-    fn poll_relocation(
-        &mut self,
-        revision: u64,
-    ) -> Result<ElasticPreparationOutcome, ElasticRenderError> {
-        let Self { renderer, sources } = self;
-        let sources = sources
-            .as_mut()
-            .ok_or(ElasticRenderError::SourceUnavailable)?;
-        renderer.poll_relocation(sources.relocation_source.get_mut(), revision)
-    }
-
-    fn discard_relocation(&mut self, revision: u64) -> Result<(), ElasticRenderError> {
-        if !self.is_ready() {
-            return Err(ElasticRenderError::SourceUnavailable);
-        }
-        self.renderer.discard_relocation(revision);
-        Ok(())
     }
 
     fn render(
@@ -112,25 +52,31 @@ impl PreparedElasticRenderer {
         range: Range<usize>,
         output: &mut [&mut [f32]],
     ) -> Result<ElasticRenderOutcome, ElasticRenderError> {
-        let Self { renderer, sources } = self;
-        let sources = sources
+        let Self { renderer, source } = self;
+        let source = source
             .as_mut()
             .ok_or(ElasticRenderError::SourceUnavailable)?;
-        renderer.render(
-            sources.source.get_mut(),
-            sources.relocation_source.get_mut(),
-            binding,
-            context,
-            range,
-            output,
-        )
+        renderer.render(source.get_mut(), binding, context, range, output)
+    }
+
+    fn renderer_mut(&mut self) -> &mut ElasticRenderer {
+        &mut self.renderer
     }
 
     pub(super) fn set_service_class(&mut self, class: ServiceClass) {
-        if let Some(sources) = self.sources.as_ref() {
-            sources.source.get().set_service_class(class);
-            sources.relocation_source.get().set_service_class(class);
+        if let Some(source) = self.source.as_ref() {
+            source.get().set_service_class(class);
         }
+    }
+
+    fn with_source(self, source: WasmSend<Resource>) -> Result<Self, ElasticPrepareError> {
+        if self.source.is_some() {
+            return Err(ElasticPrepareError::SourceUnavailable);
+        }
+        Ok(Self {
+            renderer: self.renderer,
+            source: Some(source),
+        })
     }
 
     delegate::delegate! {
@@ -154,6 +100,23 @@ impl PreparedElasticRenderer {
 }
 
 impl PlayerResource {
+    pub(crate) fn finish_elastic_preparation(
+        self,
+    ) -> Result<PreparedElasticRenderer, ElasticPrepareError> {
+        let Self {
+            resource,
+            elastic_renderer,
+            ..
+        } = self;
+        elastic_renderer
+            .ok_or(ElasticPrepareError::SourceUnavailable)?
+            .with_source(resource)
+    }
+
+    pub(crate) fn install_prepared_elastic(&mut self, prepared: PreparedElasticRenderer) {
+        self.elastic_renderer = Some(prepared);
+    }
+
     pub(crate) fn new_elastic(resource: Resource, src: Arc<str>) -> Self {
         Self {
             src,
@@ -167,59 +130,15 @@ impl PlayerResource {
         }
     }
 
-    delegate::delegate! {
-        to self.resource.get_mut() {
-            pub(crate) fn activate_source_audio_authoritative(
-                &mut self,
-            ) -> Result<bool, SourceAudioError>;
-            pub(crate) fn deactivate_source_audio(&mut self) -> Result<(), SourceAudioError>;
-            pub(crate) fn request_source_audio(
-                &mut self,
-                range: SourceFrameRange,
-                look_ahead_frames: u64,
-            ) -> Result<Option<SourceAudioDemand>, SourceAudioError>;
-            pub(crate) fn read_source_audio(
-                &mut self,
-                demand: &SourceAudioDemand,
-                range: SourceFrameRange,
-                output: &mut [f32],
-            ) -> Result<Option<SourceAudioReadOutcome>, SourceAudioError>;
-            pub(crate) fn seek_source_frame(&mut self, frame: u64) -> Result<(), DecodeError>;
-        }
-    }
-
-    pub(crate) fn begin_session_seek(
+    pub(crate) fn poll_elastic_preparation(
         &mut self,
-        binding: &TrackBinding,
-        target: SessionBeat,
-        tempo: Tempo,
-        revision: u64,
-    ) -> Result<(), PlayError> {
-        let renderer = self.elastic_renderer.as_mut().ok_or(PlayError::NotReady)?;
-        renderer
-            .begin_relocation(binding, target, tempo, revision)
-            .map_err(|error| PlayError::ElasticPreparation {
-                reason: error.to_string(),
-            })
-    }
-
-    pub(crate) fn poll_session_seek(&mut self, revision: u64) -> Result<bool, PlayError> {
-        let renderer = self.elastic_renderer.as_mut().ok_or(PlayError::NotReady)?;
-        renderer
-            .poll_relocation(revision)
-            .map(|outcome| outcome == ElasticPreparationOutcome::Ready)
-            .map_err(|error| PlayError::ElasticPreparation {
-                reason: error.to_string(),
-            })
-    }
-
-    pub(crate) fn cancel_session_seek(&mut self, revision: u64) -> Result<(), PlayError> {
-        let renderer = self.elastic_renderer.as_mut().ok_or(PlayError::NotReady)?;
-        renderer
-            .discard_relocation(revision)
-            .map_err(|error| PlayError::ElasticPreparation {
-                reason: error.to_string(),
-            })
+    ) -> Result<ElasticPreparationOutcome, ElasticPrepareError> {
+        let Some(mut renderer) = self.elastic_renderer.take() else {
+            return Err(ElasticPrepareError::SourceUnavailable);
+        };
+        let outcome = renderer.renderer_mut().poll_preparation(self);
+        self.elastic_renderer = Some(renderer);
+        outcome
     }
 
     pub(crate) fn prepare_elastic(
@@ -250,35 +169,6 @@ impl PlayerResource {
         Ok(())
     }
 
-    pub(crate) fn poll_elastic_preparation(
-        &mut self,
-    ) -> Result<ElasticPreparationOutcome, ElasticPrepareError> {
-        let Some(mut renderer) = self.elastic_renderer.take() else {
-            return Err(ElasticPrepareError::SourceUnavailable);
-        };
-        let outcome = renderer.renderer_mut().poll_preparation(self);
-        self.elastic_renderer = Some(renderer);
-        outcome
-    }
-
-    pub(crate) fn finish_elastic_preparation(
-        self,
-        relocation_source: Resource,
-    ) -> Result<PreparedElasticRenderer, ElasticPrepareError> {
-        let Self {
-            resource,
-            elastic_renderer,
-            ..
-        } = self;
-        elastic_renderer
-            .ok_or(ElasticPrepareError::SourceUnavailable)?
-            .with_sources(resource, relocation_source)
-    }
-
-    pub(crate) fn install_prepared_elastic(&mut self, prepared: PreparedElasticRenderer) {
-        self.elastic_renderer = Some(prepared);
-    }
-
     pub(crate) fn read_elastic(
         &mut self,
         binding: &TrackBinding,
@@ -302,6 +192,27 @@ impl PlayerResource {
             }
             Ok(ElasticRenderOutcome::Eof) => ReadOutcome::Eof,
             Ok(ElasticRenderOutcome::Ready { .. }) | Err(_) => ReadOutcome::Failed,
+        }
+    }
+
+    delegate::delegate! {
+        to self.resource.get_mut() {
+            pub(crate) fn activate_source_audio_authoritative(
+                &mut self,
+            ) -> Result<bool, SourceAudioError>;
+            pub(crate) fn deactivate_source_audio(&mut self) -> Result<(), SourceAudioError>;
+            pub(crate) fn request_source_audio(
+                &mut self,
+                range: SourceFrameRange,
+                look_ahead_frames: u64,
+            ) -> Result<Option<SourceAudioDemand>, SourceAudioError>;
+            pub(crate) fn read_source_audio(
+                &mut self,
+                demand: &SourceAudioDemand,
+                range: SourceFrameRange,
+                output: &mut [f32],
+            ) -> Result<Option<SourceAudioReadOutcome>, SourceAudioError>;
+            pub(crate) fn seek_source_frame(&mut self, frame: u64) -> Result<(), DecodeError>;
         }
     }
 }

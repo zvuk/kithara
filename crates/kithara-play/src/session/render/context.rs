@@ -6,33 +6,17 @@ use crate::api::{SessionBeat, Tempo};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SessionTransportCommit {
+    tempo: Tempo,
     playing: bool,
     revision: u64,
-    seek_target: Option<SessionBeat>,
-    tempo: Tempo,
 }
 
 impl SessionTransportCommit {
     pub(crate) const fn new(tempo: Tempo, playing: bool, revision: u64) -> Self {
         Self {
+            tempo,
             playing,
             revision,
-            seek_target: None,
-            tempo,
-        }
-    }
-
-    pub(crate) const fn new_at_beat(
-        tempo: Tempo,
-        playing: bool,
-        revision: u64,
-        seek_target: SessionBeat,
-    ) -> Self {
-        Self {
-            playing,
-            revision,
-            seek_target: Some(seek_target),
-            tempo,
         }
     }
 
@@ -42,10 +26,6 @@ impl SessionTransportCommit {
 
     pub(crate) const fn revision(self) -> u64 {
         self.revision
-    }
-
-    pub(crate) const fn seek_target(self) -> Option<SessionBeat> {
-        self.seek_target
     }
 
     pub(crate) const fn tempo(self) -> Tempo {
@@ -68,10 +48,10 @@ impl RenderFrame {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RenderContext {
-    render_frames: Range<RenderFrame>,
     sample_rate: NonZeroU32,
     session_beats: Option<Range<SessionBeat>>,
     transport_commit: Option<SessionTransportCommit>,
+    render_frames: Range<RenderFrame>,
 }
 
 impl RenderContext {
@@ -88,78 +68,11 @@ impl RenderContext {
             (true, None) => false,
         };
         (render_frames.start <= render_frames.end && transport_matches_beats).then_some(Self {
-            render_frames,
             sample_rate,
             session_beats,
             transport_commit,
+            render_frames,
         })
-    }
-
-    pub(crate) fn render_frames(&self) -> &Range<RenderFrame> {
-        &self.render_frames
-    }
-
-    pub(crate) const fn sample_rate(&self) -> NonZeroU32 {
-        self.sample_rate
-    }
-
-    pub(crate) const fn transport_revision(&self) -> Option<u64> {
-        match self.transport_commit {
-            Some(commit) => Some(commit.revision()),
-            None => None,
-        }
-    }
-
-    pub(crate) const fn transport_seek_target(&self) -> Option<SessionBeat> {
-        match self.transport_commit {
-            Some(commit) => commit.seek_target(),
-            None => None,
-        }
-    }
-
-    pub(crate) fn output_offset_for_beat(&self, target: SessionBeat) -> Option<usize> {
-        let beats = self.session_beats.as_ref()?;
-        let frames = self
-            .render_frames
-            .end
-            .get()
-            .checked_sub(self.render_frames.start.get())
-            .and_then(|frames| usize::try_from(frames).ok())?;
-        if target == beats.start {
-            return Some(0);
-        }
-        if target < beats.start || target >= beats.end || frames == 0 {
-            return None;
-        }
-        let span = beats.end.get() - beats.start.get();
-        if span <= 0.0 {
-            return None;
-        }
-        let exact = (target.get() - beats.start.get()) * frames.to_f64()? / span;
-        let nearest = exact.round();
-        let offset = if (exact - nearest).abs() <= 1.0e-6 {
-            nearest
-        } else {
-            exact.ceil()
-        }
-        .to_usize()?;
-        (offset < frames).then_some(offset)
-    }
-
-    pub(crate) fn beat_is_before_output(&self, target: SessionBeat) -> bool {
-        self.session_beats
-            .as_ref()
-            .is_some_and(|beats| target < beats.start)
-    }
-
-    #[cfg(any(not(target_arch = "wasm32"), test))]
-    pub(crate) fn session_beats(&self) -> Option<&Range<SessionBeat>> {
-        self.session_beats.as_ref()
-    }
-
-    #[cfg(any(not(target_arch = "wasm32"), test))]
-    pub(crate) const fn transport_commit(&self) -> Option<SessionTransportCommit> {
-        self.transport_commit
     }
 
     pub(crate) fn for_output_range(&self, range: Range<usize>) -> Option<Self> {
@@ -186,6 +99,24 @@ impl RenderContext {
             session_beats,
             self.transport_commit,
         )
+    }
+
+    pub(crate) fn render_frames(&self) -> &Range<RenderFrame> {
+        &self.render_frames
+    }
+
+    pub(crate) const fn sample_rate(&self) -> NonZeroU32 {
+        self.sample_rate
+    }
+
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    pub(crate) fn session_beats(&self) -> Option<&Range<SessionBeat>> {
+        self.session_beats.as_ref()
+    }
+
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    pub(crate) const fn transport_commit(&self) -> Option<SessionTransportCommit> {
+        self.transport_commit
     }
 }
 

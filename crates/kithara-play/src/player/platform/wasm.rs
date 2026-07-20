@@ -11,37 +11,31 @@ use super::{
     ItemLoadContext,
 };
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding},
+    api::{SessionTransportSnapshot, Tempo, TrackBinding},
     error::PlayError,
-    player::{
-        node::StreamShape,
-        track::{PlayerResource, PreparedElasticRenderer},
-    },
+    player::{node::StreamShape, track::PreparedElasticRenderer},
     resource::Resource,
 };
 
 pub(crate) enum PreparedBindingResource {}
 
 impl PlayerImpl {
+    /// Rejects session-bound elastic insertion because the browser backend
+    /// does not provide the required renderer.
+    pub async fn insert_with_binding(
+        &self,
+        _resource: Resource,
+        _item_id: Option<Arc<str>>,
+        _binding: TrackBinding,
+        _at_position: Option<usize>,
+    ) -> Result<(), PlayError> {
+        Err(PlayError::ElasticBackendUnavailable)
+    }
+
     pub(in crate::player) fn validate_session_tempo(
         &self,
         _snapshot: SessionTransportSnapshot,
         _tempo: Tempo,
-        _shape: StreamShape,
-        binding: Option<&TrackBinding>,
-    ) -> Result<(), PlayError> {
-        if binding.is_some() {
-            Err(PlayError::ElasticBackendUnavailable)
-        } else {
-            Ok(())
-        }
-    }
-
-    pub(in crate::player) fn validate_session_seek(
-        &self,
-        _target: SessionBeat,
-        _tempo: Tempo,
-        _revision: u64,
         _shape: StreamShape,
         binding: Option<&TrackBinding>,
     ) -> Result<(), PlayError> {
@@ -66,28 +60,6 @@ impl PlayerImpl {
         } else {
             Ok(())
         }
-    }
-
-    /// Rejects session-bound elastic insertion because the browser backend
-    /// does not provide the required renderer.
-    pub async fn insert_with_binding(
-        &self,
-        _resource: Resource,
-        _item_id: Option<Arc<str>>,
-        _binding: TrackBinding,
-        _at_position: Option<usize>,
-    ) -> Result<(), PlayError> {
-        Err(PlayError::ElasticBackendUnavailable)
-    }
-
-    pub(in crate::player) async fn join_track_at(
-        &self,
-        _resource: Resource,
-        _item_id: Option<Arc<str>>,
-        _binding: TrackBinding,
-        _target: SessionBeat,
-    ) -> Result<(), PlayError> {
-        Err(PlayError::ElasticBackendUnavailable)
     }
 }
 

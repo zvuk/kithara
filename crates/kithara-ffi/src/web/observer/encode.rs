@@ -172,14 +172,6 @@ pub(crate) fn encode(event: &FfiPlayerEvent) -> JsValue {
             set_bool(&obj, "playing", *playing);
             set_f64(&obj, "revision", num_traits::cast(*revision).unwrap_or(0.0));
         }
-        FfiPlayerEvent::TransportSeekCommitted {
-            position_beats,
-            revision,
-        } => {
-            set_str(&obj, KIND, "TransportSeekCommitted");
-            set_f64(&obj, "position_beats", *position_beats);
-            set_f64(&obj, "revision", num_traits::cast(*revision).unwrap_or(0.0));
-        }
         FfiPlayerEvent::TransportFailed { revision, reason } => {
             set_str(&obj, KIND, "TransportFailed");
             set_opt_f64(&obj, "revision", revision.and_then(num_traits::cast));

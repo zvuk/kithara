@@ -459,7 +459,6 @@ pub enum FfiPlayerEvent {
     AssetEvicted { asset_root: String, reason: FfiEvictReason },
     TransportTempoCommitted { beats_per_minute: f64, revision: u64 },
     TransportPlayStateCommitted { playing: bool, revision: u64 },
-    TransportSeekCommitted { position_beats: f64, revision: u64 },
     TransportFailed { revision: Option<u64>, reason: String },
     SyncBindingCommitted {
         slot: u64,

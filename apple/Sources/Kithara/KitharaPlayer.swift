@@ -97,7 +97,6 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
              .djStretchBackendChanged,
              .transportTempoCommitted,
              .transportPlayStateCommitted,
-             .transportSeekCommitted,
              .transportFailed,
              .syncBindingCommitted,
              .assetCommitted,

@@ -19,6 +19,14 @@ use crate::{
 };
 
 impl PlayerImpl {
+    fn current_binding_preparation(&self) -> Result<(Tempo, PreparedBindingStamp), PlayError> {
+        let preparation = self.core.engine.binding_preparation()?;
+        Ok((
+            preparation.tempo,
+            PreparedBindingStamp::new(preparation.shape, preparation.revision),
+        ))
+    }
+
     pub(in crate::player) async fn prepare_bound_resource(
         &self,
         resource: &Resource,
@@ -72,37 +80,10 @@ impl PlayerImpl {
                 reason: error.to_string(),
             }),
         }?;
-        let mut relocation_resource = select! {
-            biased;
-            () = cancel.cancelled() => Err(PlayError::BindingPreparationCancelled),
-            result = blueprint.open_isolated() => result.map_err(|error| PlayError::ItemFailed {
-                reason: error.to_string(),
-            }),
-        }?;
-        select! {
-            biased;
-            () = cancel.cancelled() => Err(PlayError::BindingPreparationCancelled),
-            result = relocation_resource.preload() => result.map_err(|error| PlayError::ItemFailed {
-                reason: error.to_string(),
-            }),
-        }?;
         ensure_preparation_active(&cancel)?;
         prepared_resource.set_playback_rate(self.core.timestretch.speed());
         prepared_resource.set_transport_bend(self.core.params.pitch_bend());
         prepared_resource.set_host_sample_rate(stamp.shape.sample_rate);
-        relocation_resource.set_playback_rate(self.core.timestretch.speed());
-        relocation_resource.set_transport_bend(self.core.params.pitch_bend());
-        relocation_resource.set_host_sample_rate(stamp.shape.sample_rate);
-        if !relocation_resource
-            .activate_source_audio_authoritative()
-            .map_err(|error| PlayError::ElasticPreparation {
-                reason: error.to_string(),
-            })?
-        {
-            return Err(PlayError::ElasticPreparation {
-                reason: "relocation source audio is unavailable".into(),
-            });
-        }
         let mut prepared = PlayerResource::new_elastic(prepared_resource, src);
         prepared
             .prepare_elastic(
@@ -134,21 +115,13 @@ impl PlayerImpl {
         if stamp != current_stamp {
             return Err(PlayError::BindingPreparationContextChanged);
         }
-        let renderer = prepared
-            .finish_elastic_preparation(relocation_resource)
-            .map_err(|error| PlayError::ElasticPreparation {
+        let renderer = prepared.finish_elastic_preparation().map_err(|error| {
+            PlayError::ElasticPreparation {
                 reason: error.to_string(),
-            })?;
+            }
+        })?;
 
-        Ok(PreparedBindingResource { renderer, stamp })
-    }
-
-    fn current_binding_preparation(&self) -> Result<(Tempo, PreparedBindingStamp), PlayError> {
-        let preparation = self.core.engine.binding_preparation()?;
-        Ok((
-            preparation.tempo,
-            PreparedBindingStamp::new(preparation.shape, preparation.revision),
-        ))
+        Ok(PreparedBindingResource { stamp, renderer })
     }
 }
 

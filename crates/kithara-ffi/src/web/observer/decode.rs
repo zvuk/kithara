@@ -134,10 +134,6 @@ fn decode_transport(data: &JsValue, kind: &str) -> Option<FfiPlayerEvent> {
             playing: get_bool(data, "playing")?,
             revision: get_u64(data, "revision")?,
         },
-        "TransportSeekCommitted" => FfiPlayerEvent::TransportSeekCommitted {
-            position_beats: get_f64(data, "position_beats")?,
-            revision: get_u64(data, "revision")?,
-        },
         "TransportFailed" => FfiPlayerEvent::TransportFailed {
             revision: get_optional_u64(data, "revision")?,
             reason: get_str(data, "reason")?,

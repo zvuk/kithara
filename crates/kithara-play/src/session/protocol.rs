@@ -6,7 +6,7 @@ mod wire {
     use kithara_platform::sync::mpsc;
 
     use crate::{
-        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::SlotControl,
         player::node::StreamShape,
     };
@@ -19,12 +19,12 @@ mod wire {
     #[derive(Clone, Copy)]
     #[non_exhaustive]
     pub struct BindingPreparation {
-        /// Render-observed session transport revision.
-        pub revision: u64,
         /// Stream dimensions paired with the observed revision.
         pub shape: StreamShape,
         /// Session tempo paired with the observed revision.
         pub tempo: Tempo,
+        /// Render-observed session transport revision.
+        pub revision: u64,
     }
 
     #[derive(Debug, Clone, thiserror::Error)]
@@ -134,13 +134,6 @@ mod wire {
             expected_shape: StreamShape,
             player_ids: Vec<PlayerId>,
         },
-        /// Commit a prepared session seek while its revision and player roster remain current.
-        SeekSessionChecked {
-            target: SessionBeat,
-            expected_revision: u64,
-            expected_shape: StreamShape,
-            player_ids: Vec<PlayerId>,
-        },
         /// Query the transport state last processed by the audio graph.
         SessionTransport,
         /// Query one canonical transport and stream-shape preparation snapshot.
@@ -177,8 +170,8 @@ mod wire {
 
     #[non_exhaustive]
     pub struct AllocatedSlot {
-        pub slot: SlotId,
         pub control: SlotControl,
+        pub slot: SlotId,
     }
 }
 
@@ -190,7 +183,7 @@ mod handle {
 
     use super::wire::{AllocatedSlot, BindingPreparation, Cmd, PlayerId, Reply};
     use crate::{
-        api::{SessionBeat, SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionTransportSnapshot, SlotId, Tempo},
         error::PlayError,
         player::node::StreamShape,
     };
@@ -215,15 +208,6 @@ mod handle {
             Self(dispatcher)
         }
 
-        #[must_use]
-        pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
-            Arc::clone(&self.0)
-        }
-
-        pub(crate) fn shares_dispatcher(&self, other: &Self) -> bool {
-            Arc::ptr_eq(&self.0, &other.0)
-        }
-
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
             match self.exec_ok(Cmd::AllocateSlot { player_id })? {
                 Reply::SlotAllocated(allocated) => Ok(allocated),
@@ -231,6 +215,20 @@ mod handle {
                     "unexpected reply for session allocate slot".into(),
                 )),
             }
+        }
+
+        pub(crate) fn binding_preparation(&self) -> Result<BindingPreparation, PlayError> {
+            match self.exec_ok(Cmd::BindingPreparation)? {
+                Reply::BindingPreparation(preparation) => Ok(preparation),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for binding preparation query".into(),
+                )),
+            }
+        }
+
+        #[must_use]
+        pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
+            Arc::clone(&self.0)
         }
 
         pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
@@ -264,6 +262,15 @@ mod handle {
             }
         }
 
+        pub(crate) fn query_stream_shape(&self) -> Result<StreamShape, PlayError> {
+            match self.exec_ok(Cmd::QueryStreamShape)? {
+                Reply::StreamShape(shape) => Ok(shape),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session stream-shape query".into(),
+                )),
+            }
+        }
+
         pub fn register_player(
             &self,
             bus: EventBus,
@@ -284,6 +291,15 @@ mod handle {
 
         pub fn release_slot(&self, player_id: PlayerId, slot: SlotId) -> Result<(), PlayError> {
             self.exec_unit(Cmd::ReleaseSlot { player_id, slot })
+        }
+
+        pub(crate) fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
+            match self.exec_ok(Cmd::SessionTransport)? {
+                Reply::SessionTransport(snapshot) => Ok(snapshot),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session transport query".into(),
+                )),
+            }
         }
 
         pub fn set_player_eq_gain(
@@ -324,15 +340,6 @@ mod handle {
             self.exec_unit(Cmd::SetSessionTempo { tempo })
         }
 
-        pub(crate) fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
-            match self.exec_ok(Cmd::SessionTransport)? {
-                Reply::SessionTransport(snapshot) => Ok(snapshot),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session transport query".into(),
-                )),
-            }
-        }
-
         pub(crate) fn set_session_tempo_checked(
             &self,
             tempo: Tempo,
@@ -348,37 +355,8 @@ mod handle {
             })
         }
 
-        pub(crate) fn seek_session_checked(
-            &self,
-            target: SessionBeat,
-            expected_revision: u64,
-            expected_shape: StreamShape,
-            player_ids: Vec<PlayerId>,
-        ) -> Result<(), PlayError> {
-            self.exec_unit(Cmd::SeekSessionChecked {
-                target,
-                expected_revision,
-                expected_shape,
-                player_ids,
-            })
-        }
-
-        pub(crate) fn binding_preparation(&self) -> Result<BindingPreparation, PlayError> {
-            match self.exec_ok(Cmd::BindingPreparation)? {
-                Reply::BindingPreparation(preparation) => Ok(preparation),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for binding preparation query".into(),
-                )),
-            }
-        }
-
-        pub(crate) fn query_stream_shape(&self) -> Result<StreamShape, PlayError> {
-            match self.exec_ok(Cmd::QueryStreamShape)? {
-                Reply::StreamShape(shape) => Ok(shape),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session stream-shape query".into(),
-                )),
-            }
+        pub(crate) fn shares_dispatcher(&self, other: &Self) -> bool {
+            Arc::ptr_eq(&self.0, &other.0)
         }
 
         pub fn start_player(

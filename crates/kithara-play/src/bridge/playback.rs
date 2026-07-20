@@ -7,6 +7,9 @@ use portable_atomic::{AtomicF64, AtomicU32};
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct PlaybackSnapshot {
+    /// Whether more than one player track is audible.
+    #[field(get(copy, name = has_multiple_tracks))]
+    pub(crate) multiple_tracks: bool,
     /// Whether playback is active.
     #[field(get(copy, name = is_playing))]
     pub(crate) playing: bool,
@@ -22,31 +25,24 @@ pub struct PlaybackSnapshot {
     /// Current output sample rate.
     #[field(get(copy))]
     pub(crate) sample_rate: u32,
-    /// Whether more than one player track is audible.
-    #[field(get(copy, name = has_multiple_tracks))]
-    pub(crate) multiple_tracks: bool,
 }
 
 /// Atomic playback state written by the RT processor and read by control code.
 #[derive(Default)]
 #[non_exhaustive]
 pub struct PlaybackShared {
-    /// Whether playback is active.
-    pub playing: AtomicBool,
-    /// Playback position in seconds.
-    pub position: AtomicF64,
-    /// Decoded-ahead frontier in seconds.
-    pub frontier: AtomicF64,
-    /// Total media duration in seconds; `0.0` when unknown.
-    pub duration: AtomicF64,
-    /// Current output sample rate.
-    pub sample_rate: AtomicU32,
     /// Whether more than one player track is audible.
     pub multiple_tracks: AtomicBool,
-    /// Latest session-seek revision prepared by the active callback track.
-    pub(crate) session_seek_prepared: AtomicU64,
-    /// Latest session-seek revision rejected by the active callback track.
-    pub(crate) session_seek_failed: AtomicU64,
+    /// Whether playback is active.
+    pub playing: AtomicBool,
+    /// Total media duration in seconds; `0.0` when unknown.
+    pub duration: AtomicF64,
+    /// Decoded-ahead frontier in seconds.
+    pub frontier: AtomicF64,
+    /// Playback position in seconds.
+    pub position: AtomicF64,
+    /// Current output sample rate.
+    pub sample_rate: AtomicU32,
     /// Number of audio-thread process calls.
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
@@ -93,8 +89,6 @@ mod tests {
         assert_eq!(playback.duration.load(Ordering::Relaxed), 0.0);
         assert_eq!(playback.sample_rate.load(Ordering::Relaxed), 0);
         assert!(!playback.multiple_tracks.load(Ordering::Relaxed));
-        assert_eq!(playback.session_seek_prepared.load(Ordering::Relaxed), 0);
-        assert_eq!(playback.session_seek_failed.load(Ordering::Relaxed), 0);
     }
 
     #[kithara::test]

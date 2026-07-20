@@ -1,6 +1,6 @@
 use super::EngineImpl;
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo},
+    api::{SessionTransportSnapshot, Tempo},
     error::PlayError,
     player::node::StreamShape,
     session::{PlayerId, protocol::BindingPreparation},
@@ -15,13 +15,6 @@ impl EngineImpl {
             pub(crate) fn set_session_tempo_checked(
                 &self,
                 tempo: Tempo,
-                expected_revision: u64,
-                expected_shape: StreamShape,
-                player_ids: Vec<PlayerId>,
-            ) -> Result<(), PlayError>;
-            pub(crate) fn seek_session_checked(
-                &self,
-                target: SessionBeat,
                 expected_revision: u64,
                 expected_shape: StreamShape,
                 player_ids: Vec<PlayerId>,

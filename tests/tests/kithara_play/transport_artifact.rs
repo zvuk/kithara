@@ -9,7 +9,7 @@ use kithara::{
         time::{Duration, sleep},
     },
     play::{
-        PlaybackDirection, PlayerEvent, Resource, ResourceConfig, SessionBeat, SessionTrackControl,
+        PlaybackDirection, PlayerEvent, Resource, ResourceConfig, SessionBeat,
         SessionTransportSnapshot, Tempo, TrackBinding,
     },
 };
@@ -164,46 +164,6 @@ fn commit_tempo(harnesses: &[OfflinePlayerHarness], tempo: Tempo) {
     assert_eq!(committed.tempo(), tempo);
 }
 
-async fn commit_seek(harnesses: &[OfflinePlayerHarness], target: SessionBeat) {
-    let before = shared_transport(harnesses);
-    let players: Vec<_> = harnesses
-        .iter()
-        .map(|harness| Arc::clone(harness.player()))
-        .collect();
-    let seek = kithara::platform::tokio::task::spawn(async move {
-        let peers: Vec<_> = players[1..].iter().map(AsRef::as_ref).collect();
-        players[0].seek_session(&peers, target).await
-    });
-
-    for frame in 0..512 {
-        if seek.is_finished() {
-            break;
-        }
-        let _ = harnesses[0].render(1);
-        drain_players(harnesses, "seek preparation", frame + 1);
-        sleep(Duration::from_millis(10)).await;
-    }
-    assert!(seek.is_finished(), "session seek preparation stays bounded");
-    seek.await
-        .expect("session seek task joins")
-        .expect("session seek preparation succeeds");
-
-    let committed = (0..BLOCK_FRAMES * 8)
-        .find_map(|frame| {
-            let _ = harnesses[0].render(1);
-            drain_players(harnesses, "seek commit", frame + 1);
-            harnesses[0]
-                .tick_session()
-                .expect("seek transaction progresses");
-            let snapshot = shared_transport(harnesses);
-            (snapshot.revision() != before.revision()).then_some(snapshot)
-        })
-        .expect("seek commits within the render budget");
-    let one_frame = committed.tempo().beats_per_minute() / (f64::from(SAMPLE_RATE) * 60.0);
-    assert_eq!(committed.revision(), before.revision() + 1);
-    assert!((committed.position().get() - target.get() - one_frame).abs() <= one_frame);
-}
-
 async fn render_transport_artifact(source: &Path) -> Vec<f32> {
     let session = Arc::new(OfflineSession::new_manual());
     let harnesses: Vec<_> = (0..2)
@@ -273,27 +233,12 @@ async fn render_transport_artifact(source: &Path) -> Vec<f32> {
 
     let mut rendered = render_exact(&harnesses, "initial tempo", frames_per_beat(120) * 3).await;
     commit_tempo(&harnesses, Tempo::new(100.0).expect("valid changed tempo"));
-    commit_seek(
-        &harnesses,
-        SessionBeat::new(1.25).expect("finite seek target"),
-    )
-    .await;
-    rendered.extend(
-        render_exact(
-            &harnesses,
-            "changed tempo after seek",
-            frames_per_beat(100) * 3,
-        )
-        .await,
-    );
+    rendered.extend(render_exact(&harnesses, "changed tempo", frames_per_beat(100) * 3).await);
     let playing: Vec<_> = harnesses
         .iter()
         .map(|harness| harness.player().is_playing())
         .collect();
-    assert!(
-        playing.iter().all(|playing| *playing),
-        "players stopped: {playing:?}"
-    );
+    assert_eq!(playing, [true, false]);
     rendered
 }
 
@@ -333,7 +278,7 @@ fn write_rendered_wav(path: &Path, rendered: &[f32]) {
 }
 
 #[kithara::test(tokio, flash(false))]
-async fn multi_track_transport_writes_deterministic_tempo_seek_reverse_wav(temp_dir: TestTempDir) {
+async fn multi_track_transport_writes_deterministic_tempo_reverse_wav(temp_dir: TestTempDir) {
     let source = temp_dir.path().join("transport-markers.wav");
     fs::write(&source, marker_source_wav()).expect("write marker fixture");
 
@@ -346,11 +291,10 @@ async fn multi_track_transport_writes_deterministic_tempo_seek_reverse_wav(temp_
     let initial_frames = frames_per_beat(120) * 3;
     let initial_samples = initial_frames * usize::from(CHANNELS);
     let initial = beat_means(&first[..initial_samples], frames_per_beat(120));
-    let seeked = beat_means(&first[initial_samples..], frames_per_beat(100));
+    let changed = beat_means(&first[initial_samples..], frames_per_beat(100));
     assert!(initial.windows(2).all(|pair| pair[0] > pair[1]));
-    assert!(seeked.windows(2).all(|pair| pair[0] > pair[1]));
-    assert!((seeked[0] - initial[1]).abs() <= 0.02);
-    assert!((seeked[1] - initial[2]).abs() <= 0.02);
+    assert!(changed.windows(2).all(|pair| pair[0] > pair[1]));
+    assert!(changed[0] < initial[2]);
 
     let artifact = temp_dir.path().join("transport-acceptance.wav");
     write_rendered_wav(&artifact, &first);

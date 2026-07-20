@@ -44,7 +44,7 @@ consumer directly on the shared `StretchControls` handle.
 <tr><td><code>ItemEvent</code></td><td>Item status, buffering, seek, stall, end-of-stream</td></tr>
 <tr><td><code>EngineEvent</code></td><td>Slot lifecycle, master volume</td></tr>
 <tr><td><code>SessionEvent</code></td><td>Interruption, route change, media services</td></tr>
-<tr><td><code>TransportEvent</code></td><td>Committed session tempo, play state, seek, and failure facts</td></tr>
+<tr><td><code>TransportEvent</code></td><td>Committed session tempo, play state, and failure facts</td></tr>
 <tr><td><code>SyncEvent</code></td><td>Committed track binding facts</td></tr>
 <tr><td><code>DjEvent</code></td><td>Legacy BPM analysis, beat tick, key-lock, and stretch-backend facts only</td></tr>
 </table>
@@ -217,7 +217,7 @@ the current graph frame plus one declared maximum callback, preserving the beat
 at that exact frame and changing only the analytical slope from that frame
 onward. Firewheel musical transport, dynamic keyframes, and transport speed are
 not part of this contract. The public session mutation surface changes tempo
-and performs transactional session seek; pause/resume transactions are outside
+only; session seek, explicit join, and pause/resume transactions are outside
 this slice.
 
 Successful tempo commits advance one monotonic revision; repeating the same
@@ -246,49 +246,12 @@ tempo change explicitly because one control-side current binding cannot
 describe both callback tracks. These are transient checks over player- and
 session-owned state; the session stores no copy of player bindings or readiness.
 
-`SessionTrackControl::seek_session` is implemented by `PlayerImpl`; it owns no
-state and introduces no alternate command or rendering path. The implementation
-acquires the existing participant `ItemQueue` locks in `PlayerId` order,
-captures each current binding and slot, and publishes `PrepareSessionSeek`
-through the existing slot command lanes while queue identities remain stable.
-It releases the playlist locks before waiting for callback-side preparation,
-then reacquires them and verifies the exact slot, current index, binding,
-transport revision, and stream shape before the checked session commit.
-
-Preparation uses the existing track's `ElasticRenderer`. A second source port
-fills a dormant relocation window while the first port continues serving the
-audible cursor; there is no second renderer or phase authority. The transport
-commit carries the requested seek target as well as its revision, so stale seek
-work cannot match an unrelated tempo commit that allocates the same next
-revision. Any failure after preparation starts sends `CancelSessionSeek`
-through each original slot lane, leaves the session transport unchanged, and
-allows a later retry.
-
 Each prepared elastic renderer consumes its declared source history and
 discards its declared output latency before becoming audible. The resulting
 presentation cursor is therefore latency-compensated per track, while every
 track continues to receive the same immutable session context and revision.
 The browser path retains the same player API but rejects a current bound track
 with `ElasticBackendUnavailable` until a browser elastic backend exists.
-
-`SessionTrackControl::join_track_at` adds one bound resource to an idle
-`PlayerImpl`; joining over an existing playlist or an elapsed beat is rejected.
-The native player prepares the resource and its existing `ElasticRenderer` at
-the requested `SessionBeat`, then holds the `ItemQueue` playlist lock from
-insertion through publication on the existing slot command lane. A rejected
-publication removes that exact inserted entry, so no partially joined queue
-state remains.
-
-The callback stores only the pending join beat and observed transport revision
-on the new `PlayerTrack`. The immutable `RenderContext` maps that beat to the
-first matching output frame; the track stays silent before that offset and
-begins rendering at the offset within the same callback. Join never commits or
-reanchors session transport. A changed revision rejects preparation before
-publication, while a stale revision observed by the callback fails the joined
-track through the existing playback failure path. Native join ownership lives
-in `player/platform/native.rs`; the separate browser implementation in
-`player/platform/wasm.rs` returns `ElasticBackendUnavailable` without adding
-native-only queue state to the WASM path.
 
 `SessionTransportSnapshot` is published as one render-observed value by the
 same adapter node. It never combines a control-side tempo or revision with an
@@ -337,7 +300,7 @@ a shifted or replaced coordinate.
 
 `ItemQueue` also owns successor demand. A future bound entry keeps one binding,
 one prepared renderer, and its original resource; the binding session anchor is
-its expected join beat. Initial preparation retains the maximum backend warm-up
+its intended start coordinate. Initial preparation retains the maximum backend warm-up
 history together with the normal directional look-ahead. The exact-tempo range
 and only the additional envelope history are fetched as separate bounded demands
 into the same prepared PCM window. Before a tempo commit, the player validates
@@ -357,14 +320,13 @@ source windows from `kithara-audio`'s existing `SourceAudioReader`. Decoder posi
 pitch bend, and the processed-audio compatibility ring are not parallel phase
 authorities for a bound item.
 
-The prepared renderer retains two independently seekable `Resource` lanes: one
-for continuous source windows and one for relocation preparation. Both use the
-same shared `AudioWorker` and bounded `SourceAudioReader` contract owned by
-`kithara-audio`; `kithara-play` adds no source thread, port protocol, or player
-infrastructure. The renderer advances each lane through nonblocking seek,
-demand, and cache-read steps and rotates a fixed preallocated `PcmBuf` bank.
-Polling, deadline failure, commit, and cancellation never allocate, block, or
-return a buffer to the pool on the audio callback.
+The prepared renderer retains one independently seekable `Resource` lane for
+continuous source windows. It uses the shared `AudioWorker` and bounded
+`SourceAudioReader` contract owned by `kithara-audio`; `kithara-play` adds no
+source thread, port protocol, allocator, or player infrastructure. The renderer
+advances that lane through nonblocking seek, demand, and cache-read steps and
+rotates a fixed preallocated `PcmBuf` bank. Polling and deadline failure never
+allocate, block, or return a buffer to the pool on the audio callback.
 
 Bound elastic rendering supports native forward playback and reverse playback
 for files and single-variant HLS. Activation requires a session-created node
@@ -386,8 +348,8 @@ variant. Adaptive/multi-variant HLS is rejected with
 re-aiming across variant discontinuities has its own proven protocol contract.
 Other resources that do not declare reverse range access fail through the same
 typed capability gate. Ordinary track-local seek is rejected for a bound
-current item because only a session relocation transaction may move the
-session-owned audible cursor and renderer state.
+current item because moving the session-owned audible cursor and renderer state
+requires a session-level transaction, which is outside this slice.
 
 Inter-block phase correction is bounded in the source-frame domain. An error of
 at most one source frame is corrected continuously at no more than one frame per

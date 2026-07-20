@@ -59,8 +59,6 @@ pub(crate) enum ElasticPrepareError {
     UnsupportedSourceOutcome,
     #[error("elastic preparation source range is outside the prepared fetch window")]
     FetchWindowMismatch,
-    #[error("another elastic relocation is still pending")]
-    RelocationPending,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -97,10 +95,6 @@ pub(crate) enum ElasticRenderError {
     SourceUnavailable,
     #[error("elastic source read failed")]
     SourceReadFailed,
-    #[error("elastic relocation was not ready at the committed session boundary")]
-    RelocationNotReady,
-    #[error("elastic relocation could not be primed at the committed session boundary")]
-    RelocationPreparationFailed,
     #[error("elastic source window missed its render deadline")]
     SourceWindowDeadlineMissed,
 }
@@ -143,10 +137,10 @@ pub(crate) enum ElasticPreparationOutcome {
 
 #[derive(Clone, Copy, Debug)]
 struct IntegerSegment {
-    output_start: usize,
-    output_frames: usize,
-    source_start: i64,
     source_end: i64,
+    source_start: i64,
+    output_frames: usize,
+    output_start: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -157,72 +151,169 @@ struct SourceCursor {
 
 #[derive(Clone, Copy)]
 struct ElasticPreparation {
-    anchor: SourceCursor,
-    direction: PlaybackDirection,
-    fetch_range: SourceFrameRange,
     warmup: ElasticRequest,
-}
-
-struct ElasticRelocation {
-    preparation: ElasticPreparation,
-    read: RelocationRead,
-    revision: u64,
-    target: SessionBeat,
+    direction: PlaybackDirection,
+    anchor: SourceCursor,
+    fetch_range: SourceFrameRange,
 }
 
 struct BufferedSourceWindow {
-    range: SourceFrameRange,
     samples: PcmBuf,
+    range: SourceFrameRange,
 }
 
 struct PendingSourceRead {
+    samples: PcmBuf,
     demand: SourceAudioDemand,
     range: SourceFrameRange,
-    samples: PcmBuf,
-}
-
-enum RelocationRead {
-    Idle,
-    Pending(PendingSourceRead),
-    Ready(PcmBuf),
 }
 
 pub(crate) struct ElasticRenderer {
-    backend: SignalsmithElastic,
     capabilities: ElasticCapabilities,
-    max_warm_frames: usize,
-    max_source_frames: usize,
-    max_fetch_frames: usize,
     sample_rate: NonZeroU32,
-    source_frame_count: u64,
-    source_window_frames: u64,
-    request_id: u64,
-    revision: u64,
-    demand: Option<SourceAudioDemand>,
     cursor: Option<SourceCursor>,
+    demand: Option<SourceAudioDemand>,
     direction: Option<PlaybackDirection>,
     pending_source_read: Option<PendingSourceRead>,
     preparation: Option<ElasticPreparation>,
-    window_buffers: SmallVec<[PcmBuf; READY_WINDOW_COUNT]>,
     preparation_extension: Option<SourceFrameRange>,
     preparation_request: Option<SourceFrameRange>,
     preparation_window: Option<SourceFrameRange>,
-    primed: bool,
-    relocation: Option<ElasticRelocation>,
-    relocation_buffer: Option<PcmBuf>,
     source_window: Option<SourceFrameRange>,
-    ready_windows: SmallVec<[BufferedSourceWindow; READY_WINDOW_COUNT]>,
+    discarded: PcmBuf,
     fetch: PcmBuf,
     history: PcmBuf,
-    source: PcmBuf,
     output: PcmBuf,
-    discarded: PcmBuf,
+    source: PcmBuf,
+    backend: SignalsmithElastic,
+    ready_windows: SmallVec<[BufferedSourceWindow; READY_WINDOW_COUNT]>,
+    window_buffers: SmallVec<[PcmBuf; READY_WINDOW_COUNT]>,
+    primed: bool,
+    request_id: u64,
+    revision: u64,
+    source_frame_count: u64,
+    source_window_frames: u64,
+    max_fetch_frames: usize,
+    max_source_frames: usize,
+    max_warm_frames: usize,
 }
 
 impl ElasticRenderer {
     const PREFETCH_BLOCKS: usize = 8;
-    const RELOCATION_PREFETCH_BLOCKS: usize = 1;
     const SOURCE_WINDOW_BLOCKS: usize = 8;
+
+    pub(super) fn decoded_frontier(&self) -> f64 {
+        self.source_window
+            .iter()
+            .map(|window| window.end())
+            .chain(self.ready_windows.iter().map(|window| window.range.end()))
+            .max()
+            .and_then(|frame| frame.to_f64())
+            .map_or(0.0, |frame| frame / f64::from(self.sample_rate.get()))
+    }
+
+    pub(super) fn ensure_window(
+        &mut self,
+        source: &mut Resource,
+        range: SourceFrameRange,
+        direction: PlaybackDirection,
+    ) -> Result<(), ElasticRenderError> {
+        self.poll_source_read(source, direction)?;
+        if self
+            .source_window
+            .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
+        {
+            self.schedule_window(source, direction)?;
+            return Ok(());
+        }
+        if self
+            .ready_windows
+            .first()
+            .map(|window| window.range)
+            .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
+        {
+            let window = self.ready_windows.remove(0);
+            let old = replace(&mut self.fetch, window.samples);
+            self.window_buffers.push(old);
+            self.source_window = Some(window.range);
+            self.schedule_window(source, direction)?;
+            return Ok(());
+        }
+        self.schedule_window(source, direction)?;
+        Err(ElasticRenderError::SourceWindowDeadlineMissed)
+    }
+
+    pub(super) fn next_source_window(
+        &self,
+        current: SourceFrameRange,
+        direction: PlaybackDirection,
+    ) -> Result<Option<SourceFrameRange>, SourceAudioError> {
+        let overlap =
+            u64::try_from(self.max_source_frames).map_err(|_| SourceAudioError::FrameOverflow)?;
+        let (start, end) = match direction {
+            PlaybackDirection::Forward => {
+                let start = current.end().saturating_sub(overlap);
+                let end = start
+                    .saturating_add(self.source_window_frames)
+                    .min(self.source_frame_count);
+                (start, end)
+            }
+            PlaybackDirection::Reverse => {
+                let end = current
+                    .start()
+                    .saturating_add(overlap)
+                    .min(self.source_frame_count);
+                let start = end.saturating_sub(self.source_window_frames);
+                (start, end)
+            }
+        };
+        let advances = match direction {
+            PlaybackDirection::Forward => end > current.end(),
+            PlaybackDirection::Reverse => start < current.start(),
+        };
+        if !advances || start >= end {
+            return Ok(None);
+        }
+        SourceFrameRange::new(start, end).map(Some)
+    }
+
+    pub(super) fn poll_source_read(
+        &mut self,
+        source: &mut Resource,
+        direction: PlaybackDirection,
+    ) -> Result<(), ElasticRenderError> {
+        let Some(pending) = self.pending_source_read.as_mut() else {
+            return Ok(());
+        };
+        let frames =
+            usize::try_from(pending.range.len()).map_err(|_| ElasticRenderError::FrameOverflow)?;
+        let sample_len = frames
+            .checked_mul(self.capabilities.channels())
+            .ok_or(ElasticRenderError::FrameOverflow)?;
+        let outcome = source.read_source_audio(
+            &pending.demand,
+            pending.range,
+            &mut pending.samples[..sample_len],
+        );
+        match outcome {
+            Ok(Some(SourceAudioReadOutcome::Pending)) => Ok(()),
+            Ok(Some(SourceAudioReadOutcome::Ready { .. })) => {
+                let pending = self
+                    .pending_source_read
+                    .take()
+                    .ok_or(ElasticRenderError::SourceUnavailable)?;
+                self.stage_ready_window(pending.range, pending.samples, direction)
+            }
+            Ok(Some(SourceAudioReadOutcome::Eof)) | Ok(None) | Ok(Some(_)) => {
+                self.release_pending_source_read();
+                Err(ElasticRenderError::SourceReadFailed)
+            }
+            Err(error) => {
+                self.release_pending_source_read();
+                Err(error.into())
+            }
+        }
+    }
 
     pub(crate) fn prepare(
         spec_sample_rate: NonZeroU32,
@@ -282,9 +373,10 @@ impl ElasticRenderer {
             max_warm_frames,
             max_source_frames,
             max_fetch_frames,
-            sample_rate: shape.sample_rate,
             source_frame_count,
             source_window_frames,
+            window_buffers,
+            sample_rate: shape.sample_rate,
             request_id: 1,
             revision: 0,
             demand: None,
@@ -292,13 +384,10 @@ impl ElasticRenderer {
             direction: None,
             pending_source_read: None,
             preparation: None,
-            window_buffers,
             preparation_extension: None,
             preparation_request: None,
             preparation_window: None,
             primed: false,
-            relocation: None,
-            relocation_buffer: Some(prepared_buffer(pool, fetch_samples)?),
             source_window: None,
             ready_windows: SmallVec::new(),
             fetch: prepared_buffer(pool, fetch_samples)?,
@@ -309,45 +398,10 @@ impl ElasticRenderer {
         })
     }
 
-    pub(super) fn decoded_frontier(&self) -> f64 {
-        self.source_window
-            .iter()
-            .map(|window| window.end())
-            .chain(self.ready_windows.iter().map(|window| window.range.end()))
-            .max()
-            .and_then(|frame| frame.to_f64())
-            .map_or(0.0, |frame| frame / f64::from(self.sample_rate.get()))
-    }
-
-    pub(super) fn ensure_window(
-        &mut self,
-        source: &mut Resource,
-        range: SourceFrameRange,
-        direction: PlaybackDirection,
-    ) -> Result<(), ElasticRenderError> {
-        self.poll_source_read(source, direction)?;
-        if self
-            .source_window
-            .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
-        {
-            self.schedule_window(source, direction)?;
-            return Ok(());
+    fn release_pending_source_read(&mut self) {
+        if let Some(pending) = self.pending_source_read.take() {
+            self.window_buffers.push(pending.samples);
         }
-        if self
-            .ready_windows
-            .first()
-            .map(|window| window.range)
-            .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
-        {
-            let window = self.ready_windows.remove(0);
-            let old = replace(&mut self.fetch, window.samples);
-            self.window_buffers.push(old);
-            self.source_window = Some(window.range);
-            self.schedule_window(source, direction)?;
-            return Ok(());
-        }
-        self.schedule_window(source, direction)?;
-        Err(ElasticRenderError::SourceWindowDeadlineMissed)
     }
 
     pub(super) fn schedule_window(
@@ -382,48 +436,10 @@ impl ElasticRenderer {
             .ok_or(ElasticRenderError::SourceUnavailable)?;
         self.pending_source_read = Some(PendingSourceRead {
             demand,
-            range: request_range,
             samples,
+            range: request_range,
         });
         Ok(())
-    }
-
-    pub(super) fn poll_source_read(
-        &mut self,
-        source: &mut Resource,
-        direction: PlaybackDirection,
-    ) -> Result<(), ElasticRenderError> {
-        let Some(pending) = self.pending_source_read.as_mut() else {
-            return Ok(());
-        };
-        let frames =
-            usize::try_from(pending.range.len()).map_err(|_| ElasticRenderError::FrameOverflow)?;
-        let sample_len = frames
-            .checked_mul(self.capabilities.channels())
-            .ok_or(ElasticRenderError::FrameOverflow)?;
-        let outcome = source.read_source_audio(
-            &pending.demand,
-            pending.range,
-            &mut pending.samples[..sample_len],
-        );
-        match outcome {
-            Ok(Some(SourceAudioReadOutcome::Pending)) => Ok(()),
-            Ok(Some(SourceAudioReadOutcome::Ready { .. })) => {
-                let pending = self
-                    .pending_source_read
-                    .take()
-                    .ok_or(ElasticRenderError::SourceUnavailable)?;
-                self.stage_ready_window(pending.range, pending.samples, direction)
-            }
-            Ok(Some(SourceAudioReadOutcome::Eof)) | Ok(None) | Ok(Some(_)) => {
-                self.release_pending_source_read();
-                Err(ElasticRenderError::SourceReadFailed)
-            }
-            Err(error) => {
-                self.release_pending_source_read();
-                Err(error.into())
-            }
-        }
     }
 
     fn stage_ready_window(
@@ -446,48 +462,8 @@ impl ElasticRenderer {
             return Err(ElasticRenderError::SourceReadFailed);
         }
         self.ready_windows
-            .push(BufferedSourceWindow { range, samples });
+            .push(BufferedSourceWindow { samples, range });
         Ok(())
-    }
-
-    fn release_pending_source_read(&mut self) {
-        if let Some(pending) = self.pending_source_read.take() {
-            self.window_buffers.push(pending.samples);
-        }
-    }
-
-    pub(super) fn next_source_window(
-        &self,
-        current: SourceFrameRange,
-        direction: PlaybackDirection,
-    ) -> Result<Option<SourceFrameRange>, SourceAudioError> {
-        let overlap =
-            u64::try_from(self.max_source_frames).map_err(|_| SourceAudioError::FrameOverflow)?;
-        let (start, end) = match direction {
-            PlaybackDirection::Forward => {
-                let start = current.end().saturating_sub(overlap);
-                let end = start
-                    .saturating_add(self.source_window_frames)
-                    .min(self.source_frame_count);
-                (start, end)
-            }
-            PlaybackDirection::Reverse => {
-                let end = current
-                    .start()
-                    .saturating_add(overlap)
-                    .min(self.source_frame_count);
-                let start = end.saturating_sub(self.source_window_frames);
-                (start, end)
-            }
-        };
-        let advances = match direction {
-            PlaybackDirection::Forward => end > current.end(),
-            PlaybackDirection::Reverse => start < current.start(),
-        };
-        if !advances || start >= end {
-            return Ok(None);
-        }
-        SourceFrameRange::new(start, end).map(Some)
     }
 }
 

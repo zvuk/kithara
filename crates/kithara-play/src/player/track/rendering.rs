@@ -1,41 +1,40 @@
-use std::{mem, ops::Range};
+use std::ops::Range;
 
 use num_traits::ToPrimitive;
 use smallvec::SmallVec;
 
 use super::{
-    ElasticCopyError, ElasticPreparationOutcome, ElasticPrepareError, ElasticRelocation,
-    ElasticRenderError, ElasticRenderOutcome, ElasticRenderSegment, ElasticRenderer,
-    ElasticRequest, IntegerSegment, PendingSourceRead, PlaybackDirection, RelocationRead,
-    RenderContext, SessionBeat, SourceAudioReadOutcome, SourceCursor, SourceFrameRange, Tempo,
-    TrackBinding, plan_elastic_segments, quantize_source, sample_count,
+    ElasticCopyError, ElasticPlanError, ElasticRenderError, ElasticRenderOutcome,
+    ElasticRenderSegment, ElasticRenderer, ElasticRequest, IntegerSegment, PlaybackDirection,
+    RenderContext, SourceCursor, SourceFrameRange, TrackBinding, plan_elastic_segments,
+    quantize_source, sample_count,
 };
-use crate::{resource::Resource, session::render::SessionTransportCommit};
+use crate::resource::Resource;
 
 pub(super) struct SourceCopy<'a> {
-    pub(super) start: i64,
-    pub(super) frames: usize,
-    pub(super) direction: PlaybackDirection,
-    pub(super) fetch_range: SourceFrameRange,
     pub(super) fetch: &'a [f32],
     pub(super) target: &'a mut [f32],
-    pub(super) channels: usize,
+    pub(super) direction: PlaybackDirection,
+    pub(super) fetch_range: SourceFrameRange,
+    pub(super) start: i64,
     pub(super) source_frame_count: u64,
+    pub(super) channels: usize,
+    pub(super) frames: usize,
 }
 
 #[derive(Clone, Copy)]
 struct ContinuousSegment {
-    output_start: usize,
-    output_frames: usize,
-    source_start: f64,
     source_end: f64,
+    source_start: f64,
+    output_frames: usize,
+    output_start: usize,
 }
 
 #[derive(Clone, Copy)]
 struct PhasePlan {
-    source_origin: f64,
-    cursor_origin: f64,
     correction: f64,
+    cursor_origin: f64,
+    source_origin: f64,
     output_frames: usize,
 }
 
@@ -59,10 +58,38 @@ impl PhasePlan {
 }
 
 impl ElasticRenderer {
+    fn integer_segments(
+        &self,
+        planned: &[ElasticRenderSegment],
+        revision: u64,
+        direction: PlaybackDirection,
+    ) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
+        let mut continuous = SmallVec::<[ContinuousSegment; 4]>::new();
+        for segment in planned {
+            if segment.request.revision() != revision {
+                return Err(ElasticRenderError::RevisionMismatch);
+            }
+            continuous.push(ContinuousSegment {
+                output_start: segment.output_start,
+                output_frames: segment.request.output_frames(),
+                source_start: segment.request.source_start(),
+                source_end: segment.request.source_end(),
+            });
+        }
+        let envelope = self.capabilities.rate_envelope();
+        quantize_segments(
+            &continuous,
+            self.cursor,
+            self.capabilities.max_output_frames(),
+            envelope.min_source_frames_per_output(),
+            envelope.max_source_frames_per_output(),
+            direction,
+        )
+    }
+
     pub(crate) fn render(
         &mut self,
         source: &mut Resource,
-        relocation_source: &mut Resource,
         binding: &TrackBinding,
         context: &RenderContext,
         output_range: Range<usize>,
@@ -81,27 +108,39 @@ impl ElasticRenderer {
             .transport_commit()
             .ok_or(ElasticRenderError::TransportCommitUnavailable)?;
         let revision = commit.revision();
-        self.poll_relocation_read(relocation_source)?;
-        if let Some(relocation) = self.relocation.as_ref() {
-            if relocation_matches_commit(relocation, commit) {
-                self.commit_relocation(revision)?;
-            } else if revision >= relocation.revision {
-                let stale_revision = relocation.revision;
-                self.discard_relocation(stale_revision);
-            }
-        }
         if revision < self.revision {
             return Err(ElasticRenderError::RevisionMismatch);
         }
         let envelope = self.capabilities.rate_envelope();
-        let planned = plan_elastic_segments(
+        let requested_frames = output_range.len();
+        let requested_end = output_range.end;
+        let planned = match plan_elastic_segments(
             binding,
             context,
             output_range,
             self.request_id,
             revision,
             envelope,
-        )?;
+        ) {
+            Ok(planned) => planned,
+            Err(ElasticPlanError::OutsideMarkerDomain { .. }) if self.cursor.is_some() => {
+                return Ok(ElasticRenderOutcome::Eof);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let rendered_end = planned
+            .last()
+            .and_then(|segment| {
+                segment
+                    .output_start
+                    .checked_add(segment.request.output_frames())
+            })
+            .ok_or(ElasticRenderError::FrameOverflow)?;
+        if rendered_end < requested_end {
+            for channel in output.iter_mut() {
+                channel[rendered_end..requested_end].fill(0.0);
+            }
+        }
         let direction = binding.direction();
         let (segments, staged_cursor) = self.integer_segments(&planned, revision, direction)?;
         let source_start = segments
@@ -152,37 +191,8 @@ impl ElasticRenderer {
             .checked_add(1)
             .ok_or(ElasticRenderError::FrameOverflow)?;
         Ok(ElasticRenderOutcome::Ready {
-            frames: segments.iter().map(|segment| segment.output_frames).sum(),
+            frames: requested_frames,
         })
-    }
-
-    fn integer_segments(
-        &self,
-        planned: &[ElasticRenderSegment],
-        revision: u64,
-        direction: PlaybackDirection,
-    ) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
-        let mut continuous = SmallVec::<[ContinuousSegment; 4]>::new();
-        for segment in planned {
-            if segment.request.revision() != revision {
-                return Err(ElasticRenderError::RevisionMismatch);
-            }
-            continuous.push(ContinuousSegment {
-                output_start: segment.output_start,
-                output_frames: segment.request.output_frames(),
-                source_start: segment.request.source_start(),
-                source_end: segment.request.source_end(),
-            });
-        }
-        let envelope = self.capabilities.rate_envelope();
-        quantize_segments(
-            &continuous,
-            self.cursor,
-            self.capabilities.max_output_frames(),
-            envelope.min_source_frames_per_output(),
-            envelope.max_source_frames_per_output(),
-            direction,
-        )
     }
 
     fn render_segment(
@@ -200,13 +210,13 @@ impl ElasticRenderer {
             return Err(ElasticRenderError::FrameOverflow);
         }
         SourceCopy {
-            start: segment.source_start,
-            frames: source_frames,
             direction,
             fetch_range,
+            channels,
+            start: segment.source_start,
+            frames: source_frames,
             fetch: &self.fetch[..fetch_samples],
             target: &mut self.source,
-            channels,
             source_frame_count: self.source_frame_count,
         }
         .copy()
@@ -236,214 +246,6 @@ impl ElasticRenderer {
         }
         Ok(())
     }
-
-    pub(crate) fn begin_relocation(
-        &mut self,
-        binding: &TrackBinding,
-        target: SessionBeat,
-        tempo: Tempo,
-        revision: u64,
-    ) -> Result<(), ElasticPrepareError> {
-        if binding.direction() == PlaybackDirection::Reverse
-            && !self.capabilities.supports_reverse()
-        {
-            return Err(ElasticPrepareError::ReverseUnsupported);
-        }
-        if self.relocation.is_some() {
-            return Err(ElasticPrepareError::RelocationPending);
-        }
-        let preparation =
-            self.plan_preparation(binding, target, tempo, Self::RELOCATION_PREFETCH_BLOCKS)?;
-        self.relocation = Some(ElasticRelocation {
-            preparation,
-            read: RelocationRead::Idle,
-            revision,
-            target,
-        });
-        Ok(())
-    }
-
-    pub(crate) fn poll_relocation(
-        &mut self,
-        source: &mut Resource,
-        revision: u64,
-    ) -> Result<ElasticPreparationOutcome, ElasticRenderError> {
-        self.poll_relocation_read(source)?;
-        let Some(relocation) = self.relocation.as_ref() else {
-            return Err(ElasticRenderError::RelocationNotReady);
-        };
-        if relocation.revision != revision {
-            return Err(ElasticRenderError::RevisionMismatch);
-        }
-        if matches!(relocation.read, RelocationRead::Ready(_)) {
-            return Ok(ElasticPreparationOutcome::Ready);
-        }
-        if matches!(relocation.read, RelocationRead::Pending(_)) {
-            return Ok(ElasticPreparationOutcome::Pending);
-        }
-        self.begin_relocation_read(source)?;
-        Ok(ElasticPreparationOutcome::Pending)
-    }
-
-    pub(crate) fn commit_relocation(&mut self, revision: u64) -> Result<(), ElasticRenderError> {
-        let Some(relocation) = self.relocation.as_ref() else {
-            return Err(ElasticRenderError::RelocationNotReady);
-        };
-        if relocation.revision != revision {
-            return Err(ElasticRenderError::RevisionMismatch);
-        }
-        let range = relocation.preparation.fetch_range;
-        let fetch_frames =
-            usize::try_from(range.len()).map_err(|_| ElasticRenderError::FrameOverflow)?;
-        if fetch_frames > self.max_fetch_frames {
-            return Err(ElasticRenderError::FetchWindowMismatch);
-        }
-        let fetch_samples = sample_count(fetch_frames, self.capabilities.channels())
-            .map_err(|_| ElasticRenderError::FrameOverflow)?;
-        let Some(mut relocation) = self.relocation.take() else {
-            return Err(ElasticRenderError::RelocationNotReady);
-        };
-        let samples = match mem::replace(&mut relocation.read, RelocationRead::Idle) {
-            RelocationRead::Ready(samples) => samples,
-            read => {
-                relocation.read = read;
-                self.relocation = Some(relocation);
-                return Err(ElasticRenderError::RelocationNotReady);
-            }
-        };
-        self.release_pending_source_read();
-        while let Some(window) = self.ready_windows.pop() {
-            self.window_buffers.push(window.samples);
-        }
-        let old = mem::replace(&mut self.fetch, samples);
-        debug_assert!(self.relocation_buffer.is_none());
-        self.relocation_buffer = Some(old);
-        self.prime(relocation.preparation, fetch_samples)
-            .map_err(|_| ElasticRenderError::RelocationPreparationFailed)?;
-        self.cursor = Some(relocation.preparation.anchor);
-        self.direction = Some(relocation.preparation.direction);
-        self.source_window = Some(range);
-        self.revision = revision;
-        self.primed = true;
-        Ok(())
-    }
-
-    pub(crate) fn discard_relocation(&mut self, revision: u64) {
-        if self
-            .relocation
-            .as_ref()
-            .is_none_or(|relocation| relocation.revision != revision)
-        {
-            return;
-        }
-        let Some(mut relocation) = self.relocation.take() else {
-            return;
-        };
-        let samples = match mem::replace(&mut relocation.read, RelocationRead::Idle) {
-            RelocationRead::Pending(pending) => Some(pending.samples),
-            RelocationRead::Ready(samples) => Some(samples),
-            RelocationRead::Idle => None,
-        };
-        if let Some(samples) = samples {
-            debug_assert!(self.relocation_buffer.is_none());
-            self.relocation_buffer = Some(samples);
-        }
-    }
-
-    fn begin_relocation_read(&mut self, source: &mut Resource) -> Result<(), ElasticRenderError> {
-        let range = self
-            .relocation
-            .as_ref()
-            .ok_or(ElasticRenderError::RelocationNotReady)?
-            .preparation
-            .fetch_range;
-        source
-            .seek_source_frame(range.start())
-            .map_err(|_| ElasticRenderError::SourceReadFailed)?;
-        let demand = source
-            .request_source_audio(range, 0)?
-            .ok_or(ElasticRenderError::SourceUnavailable)?;
-        let samples = self
-            .relocation_buffer
-            .take()
-            .ok_or(ElasticRenderError::SourceUnavailable)?;
-        self.relocation
-            .as_mut()
-            .ok_or(ElasticRenderError::RelocationNotReady)?
-            .read = RelocationRead::Pending(PendingSourceRead {
-            demand,
-            range,
-            samples,
-        });
-        Ok(())
-    }
-
-    fn poll_relocation_read(&mut self, source: &mut Resource) -> Result<(), ElasticRenderError> {
-        let outcome = {
-            let Some(relocation) = self.relocation.as_mut() else {
-                return Ok(());
-            };
-            let RelocationRead::Pending(pending) = &mut relocation.read else {
-                return Ok(());
-            };
-            let frames = usize::try_from(pending.range.len())
-                .map_err(|_| ElasticRenderError::FrameOverflow)?;
-            let sample_len = frames
-                .checked_mul(self.capabilities.channels())
-                .ok_or(ElasticRenderError::FrameOverflow)?;
-            source.read_source_audio(
-                &pending.demand,
-                pending.range,
-                &mut pending.samples[..sample_len],
-            )
-        };
-        match outcome {
-            Ok(Some(SourceAudioReadOutcome::Pending)) => Ok(()),
-            Ok(Some(SourceAudioReadOutcome::Ready { .. })) => {
-                let relocation = self
-                    .relocation
-                    .as_mut()
-                    .ok_or(ElasticRenderError::RelocationNotReady)?;
-                let RelocationRead::Pending(pending) =
-                    mem::replace(&mut relocation.read, RelocationRead::Idle)
-                else {
-                    return Err(ElasticRenderError::RelocationNotReady);
-                };
-                relocation.read = RelocationRead::Ready(pending.samples);
-                Ok(())
-            }
-            Ok(Some(SourceAudioReadOutcome::Eof)) | Ok(None) | Ok(Some(_)) => {
-                self.release_relocation_read();
-                Err(ElasticRenderError::SourceReadFailed)
-            }
-            Err(error) => {
-                self.release_relocation_read();
-                Err(error.into())
-            }
-        }
-    }
-
-    fn release_relocation_read(&mut self) {
-        let Some(relocation) = self.relocation.as_mut() else {
-            return;
-        };
-        let samples = match mem::replace(&mut relocation.read, RelocationRead::Idle) {
-            RelocationRead::Pending(pending) => Some(pending.samples),
-            RelocationRead::Ready(samples) => Some(samples),
-            RelocationRead::Idle => None,
-        };
-        if let Some(samples) = samples {
-            debug_assert!(self.relocation_buffer.is_none());
-            self.relocation_buffer = Some(samples);
-        }
-    }
-}
-
-fn relocation_matches_commit(
-    relocation: &ElasticRelocation,
-    commit: SessionTransportCommit,
-) -> bool {
-    relocation.revision == commit.revision() && commit.seek_target() == Some(relocation.target)
 }
 
 fn quantize_segments(
@@ -550,10 +352,10 @@ fn plan_phase(
         return Err(ElasticRenderError::PhaseCorrectionUnavailable { error });
     }
     Ok(PhasePlan {
-        source_origin: first.source_start,
         cursor_origin,
         correction,
         output_frames,
+        source_origin: first.source_start,
     })
 }
 
@@ -710,52 +512,22 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::api::{SessionBeat, Tempo};
 
     struct Consts;
 
     impl Consts {
+        const MAXIMUM_RATE: f64 = 4.0 / 3.0;
         const MAX_OUTPUT_FRAMES: usize = 480;
         const MINIMUM_RATE: f64 = 2.0 / 3.0;
-        const MAXIMUM_RATE: f64 = 4.0 / 3.0;
     }
 
     fn segment(source_start: f64, source_end: f64, output_frames: usize) -> ContinuousSegment {
         ContinuousSegment {
-            output_start: 0,
             output_frames,
             source_start,
             source_end,
+            output_start: 0,
         }
-    }
-
-    #[kithara::test]
-    fn seek_relocation_does_not_match_a_tempo_commit_with_the_same_revision() {
-        let target = SessionBeat::new(2.0).expect("finite seek target");
-        let tempo = Tempo::new(120.0).expect("valid tempo");
-        let relocation = ElasticRelocation {
-            preparation: super::super::ElasticPreparation {
-                anchor: SourceCursor {
-                    continuous: 0.0,
-                    integer: 0,
-                },
-                direction: PlaybackDirection::Forward,
-                fetch_range: SourceFrameRange::new(0, 1).expect("valid source range"),
-                warmup: ElasticRequest::new(1, 1).expect("valid elastic request"),
-            },
-            revision: 2,
-            read: RelocationRead::Idle,
-            target,
-        };
-
-        assert!(!relocation_matches_commit(
-            &relocation,
-            SessionTransportCommit::new(tempo, true, 2)
-        ));
-        assert!(relocation_matches_commit(
-            &relocation,
-            SessionTransportCommit::new_at_beat(tempo, true, 2, target)
-        ));
     }
 
     fn quantize(

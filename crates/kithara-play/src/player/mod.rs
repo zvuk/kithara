@@ -9,5 +9,5 @@ pub mod track;
 pub use core::PlayerImpl;
 
 pub use config::PlayerConfig;
-pub use flow::{SelectTransition, SessionTrackControl};
+pub use flow::SelectTransition;
 pub use node::{PlayerNode, PlayerNodeProcessor, StreamShape};

@@ -15,11 +15,10 @@ use crate::api::{SessionBeat, SessionTransportSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TransportCommitStamp {
-    next: SessionTransportCommit,
-    previous: Option<SessionTransportCommit>,
     sample_rate: NonZeroU32,
-    target_beat: Option<SessionBeat>,
+    previous: Option<SessionTransportCommit>,
     target_frame: RenderFrame,
+    next: SessionTransportCommit,
 }
 
 impl TransportCommitStamp {
@@ -30,27 +29,10 @@ impl TransportCommitStamp {
         sample_rate: NonZeroU32,
     ) -> Self {
         Self {
-            next,
-            previous,
             sample_rate,
-            target_beat: None,
-            target_frame,
-        }
-    }
-
-    pub(crate) const fn new_at_beat(
-        previous: Option<SessionTransportCommit>,
-        next: SessionTransportCommit,
-        target_frame: RenderFrame,
-        target_beat: SessionBeat,
-        sample_rate: NonZeroU32,
-    ) -> Self {
-        Self {
-            next,
             previous,
-            sample_rate,
-            target_beat: Some(target_beat),
             target_frame,
+            next,
         }
     }
 
@@ -110,6 +92,17 @@ impl RenderContextControl {
         }
     }
 
+    pub(crate) fn observation(&mut self) -> TransportObservation {
+        *self.observation.read()
+    }
+
+    pub(crate) fn queue_abort<B: AudioBackend>(&self, ctx: &mut FirewheelCtx<B>, revision: u64) {
+        ctx.queue_event_for(
+            self.node_id,
+            NodeEventType::custom(TransportCommitEvent::Abort(revision)),
+        );
+    }
+
     pub(crate) fn queue_stamp<B: AudioBackend>(
         &self,
         ctx: &mut FirewheelCtx<B>,
@@ -127,17 +120,6 @@ impl RenderContextControl {
             ))),
         );
     }
-
-    pub(crate) fn queue_abort<B: AudioBackend>(&self, ctx: &mut FirewheelCtx<B>, revision: u64) {
-        ctx.queue_event_for(
-            self.node_id,
-            NodeEventType::custom(TransportCommitEvent::Abort(revision)),
-        );
-    }
-
-    pub(crate) fn observation(&mut self) -> TransportObservation {
-        *self.observation.read()
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -149,10 +131,10 @@ pub(super) enum TransportCommitEvent {
 
 #[derive(Clone, Copy, Debug)]
 struct TransportAnchor {
+    sample_rate: NonZeroU32,
+    frame: RenderFrame,
     beat: SessionBeat,
     commit: SessionTransportCommit,
-    frame: RenderFrame,
-    sample_rate: NonZeroU32,
 }
 
 impl TransportAnchor {
@@ -171,8 +153,8 @@ impl TransportAnchor {
 
 #[derive(Clone, Copy, Debug)]
 struct RenderBoundary {
-    beat: SessionBeat,
     frame: RenderFrame,
+    beat: SessionBeat,
 }
 
 #[derive(Debug, Default)]
@@ -181,10 +163,10 @@ pub(super) struct TransportCommitState {
     anchor: Option<TransportAnchor>,
     boundary: Option<RenderBoundary>,
     completion: Option<TransportCommitResult>,
-    ignored_through_revision: u64,
     pending: Option<TransportCommitStamp>,
     reanchor_beat: Option<SessionBeat>,
     snapshot: Option<SessionTransportSnapshot>,
+    ignored_through_revision: u64,
 }
 
 #[derive(Debug)]
@@ -278,40 +260,70 @@ fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessErro
 }
 
 impl TransportCommitState {
-    #[cfg(test)]
-    pub(super) fn with_active(
-        active: SessionTransportCommit,
-        frame: RenderFrame,
-        beat: SessionBeat,
-        sample_rate: NonZeroU32,
-    ) -> Self {
-        Self {
-            active: Some(active),
-            anchor: Some(TransportAnchor {
-                beat,
-                commit: active,
-                frame,
-                sample_rate,
-            }),
-            ..Self::default()
+    fn apply_abort(&mut self, revision: u64) -> Result<(), TransportProcessError> {
+        if self.ignored_through_revision >= revision
+            || self.completion == Some(TransportCommitResult::Aborted(revision))
+        {
+            self.completion = Some(TransportCommitResult::Aborted(revision));
+            return Ok(());
         }
+        if self
+            .active
+            .is_some_and(|active| active.revision() >= revision)
+        {
+            return Err(TransportProcessError::AbortMismatch);
+        }
+        if self
+            .pending
+            .is_some_and(|stamp| stamp.revision() == revision)
+        {
+            self.pending = None;
+        }
+        self.ignored_through_revision = revision;
+        self.completion = Some(TransportCommitResult::Aborted(revision));
+        Ok(())
     }
 
-    fn process(
+    fn apply_commit(
         &mut self,
         info: &ProcInfo,
-        events: &mut ProcEvents,
-    ) -> Result<TransportFrame, TransportProcessError> {
-        self.reanchor(info)?;
-        self.validate_frame(info)?;
-        self.apply_events(info, events)?;
-        let session_beats = self.session_beats(info)?;
-        self.boundary = Self::next_boundary(info, session_beats.as_ref(), self.boundary)?;
-        self.snapshot = Self::next_snapshot(self.active, session_beats.as_ref(), self.snapshot)?;
-        Ok(TransportFrame {
-            commit: self.active,
-            session_beats,
-        })
+        revision: u64,
+    ) -> Result<(), TransportProcessError> {
+        if revision <= self.ignored_through_revision
+            || self
+                .active
+                .is_some_and(|active| active.revision() >= revision)
+        {
+            return Ok(());
+        }
+        let Some(stamp) = self.pending.filter(|stamp| stamp.revision() == revision) else {
+            self.reject_revision(revision);
+            return Ok(());
+        };
+        if stamp.previous != self.active
+            || stamp.sample_rate != info.sample_rate
+            || stamp.target_frame.get() != info.clock_samples.0
+        {
+            self.reject_revision(revision);
+            return Ok(());
+        }
+        let beat = match stamp.previous {
+            Some(_) => self
+                .anchor
+                .ok_or(TransportProcessError::InvalidBeatRange)?
+                .beat_at(stamp.target_frame)?,
+            None => SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?,
+        };
+        self.active = Some(stamp.next);
+        self.anchor = Some(TransportAnchor {
+            beat,
+            commit: stamp.next,
+            frame: stamp.target_frame,
+            sample_rate: stamp.sample_rate,
+        });
+        self.pending = None;
+        self.completion = Some(TransportCommitResult::Applied(revision));
+        Ok(())
     }
 
     fn apply_events(
@@ -351,37 +363,6 @@ impl TransportCommitState {
         Ok(())
     }
 
-    fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), TransportProcessError> {
-        if slot.replace(value).is_some() {
-            return Err(TransportProcessError::DuplicateEvent);
-        }
-        Ok(())
-    }
-
-    fn apply_abort(&mut self, revision: u64) -> Result<(), TransportProcessError> {
-        if self.ignored_through_revision >= revision
-            || self.completion == Some(TransportCommitResult::Aborted(revision))
-        {
-            self.completion = Some(TransportCommitResult::Aborted(revision));
-            return Ok(());
-        }
-        if self
-            .active
-            .is_some_and(|active| active.revision() >= revision)
-        {
-            return Err(TransportProcessError::AbortMismatch);
-        }
-        if self
-            .pending
-            .is_some_and(|stamp| stamp.revision() == revision)
-        {
-            self.pending = None;
-        }
-        self.ignored_through_revision = revision;
-        self.completion = Some(TransportCommitResult::Aborted(revision));
-        Ok(())
-    }
-
     fn apply_stage(&mut self, info: &ProcInfo, stamp: TransportCommitStamp) {
         let revision = stamp.revision();
         if revision <= self.ignored_through_revision {
@@ -397,103 +378,6 @@ impl TransportCommitState {
         }
         self.pending = Some(stamp);
         self.completion = None;
-    }
-
-    fn apply_commit(
-        &mut self,
-        info: &ProcInfo,
-        revision: u64,
-    ) -> Result<(), TransportProcessError> {
-        if revision <= self.ignored_through_revision
-            || self
-                .active
-                .is_some_and(|active| active.revision() >= revision)
-        {
-            return Ok(());
-        }
-        let Some(stamp) = self.pending.filter(|stamp| stamp.revision() == revision) else {
-            self.reject_revision(revision);
-            return Ok(());
-        };
-        if stamp.previous != self.active
-            || stamp.sample_rate != info.sample_rate
-            || stamp.target_frame.get() != info.clock_samples.0
-        {
-            self.reject_revision(revision);
-            return Ok(());
-        }
-        let beat = match (stamp.target_beat, stamp.previous) {
-            (Some(target), _) => target,
-            (None, Some(_)) => self
-                .anchor
-                .ok_or(TransportProcessError::InvalidBeatRange)?
-                .beat_at(stamp.target_frame)?,
-            (None, None) => {
-                SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?
-            }
-        };
-        self.active = Some(stamp.next);
-        self.anchor = Some(TransportAnchor {
-            beat,
-            commit: stamp.next,
-            frame: stamp.target_frame,
-            sample_rate: stamp.sample_rate,
-        });
-        self.pending = None;
-        self.completion = Some(TransportCommitResult::Applied(revision));
-        Ok(())
-    }
-
-    fn reanchor(&mut self, info: &ProcInfo) -> Result<(), TransportProcessError> {
-        let Some(beat) = self.reanchor_beat.take() else {
-            return Ok(());
-        };
-        let commit = self.active.ok_or(TransportProcessError::InvalidBeatRange)?;
-        self.anchor = Some(TransportAnchor {
-            beat,
-            commit,
-            frame: RenderFrame::new(info.clock_samples.0),
-            sample_rate: info.sample_rate,
-        });
-        self.boundary = None;
-        Ok(())
-    }
-
-    fn validate_frame(&self, info: &ProcInfo) -> Result<(), TransportProcessError> {
-        if let Some(anchor) = self.anchor
-            && anchor.sample_rate != info.sample_rate
-        {
-            return Err(TransportProcessError::FrameDiscontinuity);
-        }
-        if let Some(boundary) = self.boundary
-            && boundary.frame.get() != info.clock_samples.0
-        {
-            return Err(TransportProcessError::FrameDiscontinuity);
-        }
-        Ok(())
-    }
-
-    fn session_beats(
-        &self,
-        info: &ProcInfo,
-    ) -> Result<Option<Range<SessionBeat>>, TransportProcessError> {
-        let Some(active) = self.active else {
-            return Ok(None);
-        };
-        if !active.is_playing() {
-            return Ok(None);
-        }
-        let anchor = self.anchor.ok_or(TransportProcessError::InvalidBeatRange)?;
-        let frames =
-            i64::try_from(info.frames).map_err(|_| TransportProcessError::InvalidBeatRange)?;
-        let start = RenderFrame::new(info.clock_samples.0);
-        let end = RenderFrame::new(
-            info.clock_samples
-                .0
-                .checked_add(frames)
-                .ok_or(TransportProcessError::InvalidBeatRange)?,
-        );
-        Ok(Some(anchor.beat_at(start)?..anchor.beat_at(end)?))
     }
 
     fn next_boundary(
@@ -544,6 +428,44 @@ impl TransportCommitState {
         }))
     }
 
+    fn process(
+        &mut self,
+        info: &ProcInfo,
+        events: &mut ProcEvents,
+    ) -> Result<TransportFrame, TransportProcessError> {
+        self.reanchor(info)?;
+        self.validate_frame(info)?;
+        self.apply_events(info, events)?;
+        let session_beats = self.session_beats(info)?;
+        self.boundary = Self::next_boundary(info, session_beats.as_ref(), self.boundary)?;
+        self.snapshot = Self::next_snapshot(self.active, session_beats.as_ref(), self.snapshot)?;
+        Ok(TransportFrame {
+            session_beats,
+            commit: self.active,
+        })
+    }
+
+    fn reanchor(&mut self, info: &ProcInfo) -> Result<(), TransportProcessError> {
+        let Some(beat) = self.reanchor_beat.take() else {
+            return Ok(());
+        };
+        let commit = self.active.ok_or(TransportProcessError::InvalidBeatRange)?;
+        self.anchor = Some(TransportAnchor {
+            beat,
+            commit,
+            frame: RenderFrame::new(info.clock_samples.0),
+            sample_rate: info.sample_rate,
+        });
+        self.boundary = None;
+        Ok(())
+    }
+
+    fn reject_pending(&mut self) {
+        if let Some(stamp) = self.pending.take() {
+            self.reject_revision(stamp.revision());
+        }
+    }
+
     fn reject_revision(&mut self, revision: u64) {
         if self
             .pending
@@ -555,12 +477,6 @@ impl TransportCommitState {
         self.completion = Some(TransportCommitResult::Rejected(revision));
     }
 
-    fn reject_pending(&mut self) {
-        if let Some(stamp) = self.pending.take() {
-            self.reject_revision(stamp.revision());
-        }
-    }
-
     fn restart(&mut self) {
         self.reject_pending();
         self.reanchor_beat = self
@@ -569,5 +485,68 @@ impl TransportCommitState {
             .or_else(|| self.snapshot.map(SessionTransportSnapshot::position));
         self.anchor = None;
         self.boundary = None;
+    }
+
+    fn session_beats(
+        &self,
+        info: &ProcInfo,
+    ) -> Result<Option<Range<SessionBeat>>, TransportProcessError> {
+        let Some(active) = self.active else {
+            return Ok(None);
+        };
+        if !active.is_playing() {
+            return Ok(None);
+        }
+        let anchor = self.anchor.ok_or(TransportProcessError::InvalidBeatRange)?;
+        let frames =
+            i64::try_from(info.frames).map_err(|_| TransportProcessError::InvalidBeatRange)?;
+        let start = RenderFrame::new(info.clock_samples.0);
+        let end = RenderFrame::new(
+            info.clock_samples
+                .0
+                .checked_add(frames)
+                .ok_or(TransportProcessError::InvalidBeatRange)?,
+        );
+        Ok(Some(anchor.beat_at(start)?..anchor.beat_at(end)?))
+    }
+
+    fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), TransportProcessError> {
+        if slot.replace(value).is_some() {
+            return Err(TransportProcessError::DuplicateEvent);
+        }
+        Ok(())
+    }
+
+    fn validate_frame(&self, info: &ProcInfo) -> Result<(), TransportProcessError> {
+        if let Some(anchor) = self.anchor
+            && anchor.sample_rate != info.sample_rate
+        {
+            return Err(TransportProcessError::FrameDiscontinuity);
+        }
+        if let Some(boundary) = self.boundary
+            && boundary.frame.get() != info.clock_samples.0
+        {
+            return Err(TransportProcessError::FrameDiscontinuity);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_active(
+        active: SessionTransportCommit,
+        frame: RenderFrame,
+        beat: SessionBeat,
+        sample_rate: NonZeroU32,
+    ) -> Self {
+        Self {
+            active: Some(active),
+            anchor: Some(TransportAnchor {
+                beat,
+                frame,
+                sample_rate,
+                commit: active,
+            }),
+            ..Self::default()
+        }
     }
 }

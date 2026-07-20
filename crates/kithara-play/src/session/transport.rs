@@ -13,7 +13,7 @@ use super::{
     state::{PendingTransportCommit, SessionState, SessionTransportState, TransportCommitPhase},
 };
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo},
+    api::{SessionTransportSnapshot, Tempo},
     player::node::StreamShape,
 };
 
@@ -34,34 +34,6 @@ pub(super) fn set_tempo_checked<B: AudioBackend>(
 ) -> Result<(), SessionError> {
     let _ = validate_checked_transport(state, expected_revision, expected_shape, player_ids)?;
     set_tempo_after_refresh(state, tempo)
-}
-
-pub(super) fn seek_checked<B: AudioBackend>(
-    state: &mut SessionState<B>,
-    target: SessionBeat,
-    expected_revision: u64,
-    expected_shape: StreamShape,
-    player_ids: &[PlayerId],
-) -> Result<(), SessionError> {
-    let snapshot =
-        validate_checked_transport(state, expected_revision, expected_shape, player_ids)?;
-    ensure_no_pending_commit(state)?;
-    let revision = next_revision(state)?;
-    let (target_frame, sample_rate) = commit_boundary(state)?;
-    let next = SessionTransportCommit::new_at_beat(
-        snapshot.tempo(),
-        snapshot.is_playing(),
-        revision,
-        target,
-    );
-    let stamp = TransportCommitStamp::new_at_beat(
-        state.transport.observed,
-        next,
-        target_frame,
-        target,
-        sample_rate,
-    );
-    schedule_commit(state, next, stamp)
 }
 
 fn validate_checked_transport<B: AudioBackend>(
@@ -157,8 +129,8 @@ fn schedule_commit<B: AudioBackend>(
 
     state.transport.accepted = Some(next);
     state.transport.pending = Some(PendingTransportCommit {
-        phase: TransportCommitPhase::Applying,
         revision,
+        phase: TransportCommitPhase::Applying,
     });
     Ok(())
 }
@@ -214,8 +186,8 @@ fn abort_commit<B: AudioBackend>(
         .ok_or_else(|| SessionError::Graph("render context control is missing".into()))?;
     control.queue_abort(ctx, revision);
     state.transport.pending = Some(PendingTransportCommit {
-        phase: TransportCommitPhase::AbortPending,
         revision,
+        phase: TransportCommitPhase::AbortPending,
     });
     deliver_abort(state)
 }
@@ -403,27 +375,21 @@ fn publish_transport_commit<B: AudioBackend>(
 fn transport_events(
     previous: Option<SessionTransportCommit>,
     next: SessionTransportCommit,
-) -> [Option<TransportEvent>; 3] {
+) -> [Option<TransportEvent>; 2] {
     let revision = next.revision();
     let tempo = previous
         .is_none_or(|commit| commit.tempo() != next.tempo())
         .then(|| TransportEvent::TempoCommitted {
-            beats_per_minute: next.tempo().beats_per_minute(),
             revision,
+            beats_per_minute: next.tempo().beats_per_minute(),
         });
     let play_state = previous
         .is_none_or(|commit| commit.is_playing() != next.is_playing())
         .then(|| TransportEvent::PlayStateCommitted {
+            revision,
             playing: next.is_playing(),
-            revision,
         });
-    let seek = next
-        .seek_target()
-        .map(|target| TransportEvent::SeekCommitted {
-            position_beats: target.get(),
-            revision,
-        });
-    [tempo, play_state, seek]
+    [tempo, play_state]
 }
 
 fn publish_transport_event<B: AudioBackend>(state: &SessionState<B>, event: &TransportEvent) {
@@ -494,25 +460,5 @@ mod tests {
             preparation_commit(&SessionTransportState::default()),
             Err(SessionError::TransportNotConfigured)
         ));
-    }
-
-    #[kithara::test]
-    fn seek_commit_uses_only_transport_seek_vocabulary() {
-        let current = commit(120.0, 1);
-        let target = SessionBeat::new(16.0).expect("finite target");
-        let next =
-            SessionTransportCommit::new_at_beat(current.tempo(), current.is_playing(), 2, target);
-
-        assert_eq!(
-            transport_events(Some(current), next),
-            [
-                None,
-                None,
-                Some(TransportEvent::SeekCommitted {
-                    position_beats: 16.0,
-                    revision: 2,
-                }),
-            ]
-        );
     }
 }

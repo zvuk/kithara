@@ -23,13 +23,6 @@ impl TryFrom<&TransportEvent> for FfiPlayerEvent {
                     revision: *revision,
                 }
             }
-            TransportEvent::SeekCommitted {
-                position_beats,
-                revision,
-            } => Self::TransportSeekCommitted {
-                position_beats: *position_beats,
-                revision: *revision,
-            },
             TransportEvent::Failed { revision, reason } => Self::TransportFailed {
                 revision: *revision,
                 reason: reason.clone(),

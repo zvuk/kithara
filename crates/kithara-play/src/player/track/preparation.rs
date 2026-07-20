@@ -55,9 +55,6 @@ impl ElasticRenderer {
         {
             return Err(ElasticPrepareError::ReverseUnsupported);
         }
-        if self.relocation.is_some() {
-            return Err(ElasticPrepareError::RelocationPending);
-        }
         let mut preparation =
             self.plan_preparation(binding, anchor, tempo, Self::PREFETCH_BLOCKS)?;
         let request = preparation.fetch_range;
@@ -70,6 +67,20 @@ impl ElasticRenderer {
         self.revision = revision;
         self.preparation = Some(preparation);
         Ok(())
+    }
+
+    fn begin_preparation_window(
+        &mut self,
+        resource: &mut PlayerResource,
+        current: SourceFrameRange,
+        direction: PlaybackDirection,
+    ) -> Result<bool, ElasticPrepareError> {
+        let Some(range) = self.next_source_window(current, direction)? else {
+            return Ok(false);
+        };
+        self.request_source_range(resource, range)?;
+        self.preparation_window = Some(range);
+        Ok(true)
     }
 
     pub(super) fn plan_preparation(
@@ -138,64 +149,14 @@ impl ElasticRenderer {
         let end = u64::try_from(end).map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let range = SourceFrameRange::new(start, end)?;
         Ok(ElasticPreparation {
+            warmup,
             anchor: SourceCursor {
                 continuous: anchor_continuous,
                 integer: anchor_integer,
             },
             direction: binding.direction(),
             fetch_range: range,
-            warmup,
         })
-    }
-
-    pub(crate) fn validate_retarget(
-        &self,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
-    ) -> Result<(), ElasticPrepareError> {
-        self.retarget_preparation(binding, anchor, tempo).map(drop)
-    }
-
-    pub(crate) fn retarget(
-        &mut self,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
-        revision: u64,
-    ) -> Result<(), ElasticPrepareError> {
-        let preparation = self.retarget_preparation(binding, anchor, tempo)?;
-        let fetch_frames = usize::try_from(preparation.fetch_range.len())
-            .map_err(|_| ElasticPrepareError::FrameOverflow)?;
-        let fetch_samples = sample_count(fetch_frames, self.capabilities.channels())?;
-        self.prime(preparation, fetch_samples)?;
-        self.cursor = Some(preparation.anchor);
-        self.direction = Some(preparation.direction);
-        self.revision = revision;
-        Ok(())
-    }
-
-    fn retarget_preparation(
-        &self,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
-    ) -> Result<ElasticPreparation, ElasticPrepareError> {
-        if !self.primed || self.preparation.is_some() {
-            return Err(ElasticPrepareError::SourceUnavailable);
-        }
-        let mut preparation =
-            self.plan_preparation(binding, anchor, tempo, Self::PREFETCH_BLOCKS)?;
-        let fetch_range = self
-            .source_window
-            .ok_or(ElasticPrepareError::SourceUnavailable)?;
-        if fetch_range.start() > preparation.fetch_range.start()
-            || fetch_range.end() < preparation.fetch_range.end()
-        {
-            return Err(ElasticPrepareError::FetchWindowMismatch);
-        }
-        preparation.fetch_range = fetch_range;
-        Ok(preparation)
     }
 
     pub(crate) fn poll_preparation(
@@ -274,22 +235,6 @@ impl ElasticRenderer {
         Ok(ElasticPreparationOutcome::Ready)
     }
 
-    fn request_preparation_range(
-        &mut self,
-        resource: &mut PlayerResource,
-        range: SourceFrameRange,
-    ) -> Result<(), ElasticPrepareError> {
-        resource
-            .seek_source_frame(range.start())
-            .map_err(|_| ElasticPrepareError::SourceSeek)?;
-        self.demand = resource.request_source_audio(range, 0)?;
-        if self.demand.is_none() {
-            return Err(ElasticPrepareError::SourceUnavailable);
-        }
-        self.preparation_request = Some(range);
-        Ok(())
-    }
-
     fn poll_preparation_window(
         &mut self,
         resource: &mut PlayerResource,
@@ -327,7 +272,7 @@ impl ElasticRenderer {
             .pop()
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
         self.ready_windows
-            .push(BufferedSourceWindow { range, samples });
+            .push(BufferedSourceWindow { samples, range });
         self.preparation_window = None;
         self.demand = None;
         let preparation = self
@@ -340,26 +285,6 @@ impl ElasticRenderer {
         }
         self.preparation = None;
         Ok(ElasticPreparationOutcome::Ready)
-    }
-
-    fn begin_preparation_window(
-        &mut self,
-        resource: &mut PlayerResource,
-        current: SourceFrameRange,
-        direction: PlaybackDirection,
-    ) -> Result<bool, ElasticPrepareError> {
-        let Some(range) = self.next_source_window(current, direction)? else {
-            return Ok(false);
-        };
-        resource
-            .seek_source_frame(range.start())
-            .map_err(|_| ElasticPrepareError::SourceSeek)?;
-        self.demand = resource.request_source_audio(range, 0)?;
-        if self.demand.is_none() {
-            return Err(ElasticPrepareError::SourceUnavailable);
-        }
-        self.preparation_window = Some(range);
-        Ok(true)
     }
 
     pub(super) fn prime(
@@ -388,13 +313,13 @@ impl ElasticRenderer {
         }
         .ok_or(ElasticPrepareError::FrameOverflow)?;
         SourceCopy {
+            channels,
             start: history_start,
             frames: history_frames,
             direction: preparation.direction,
             fetch_range: preparation.fetch_range,
             fetch: &self.fetch[..fetch_samples],
             target: &mut self.history,
-            channels,
             source_frame_count: self.source_frame_count,
         }
         .copy()
@@ -409,6 +334,7 @@ impl ElasticRenderer {
         }
         .ok_or(ElasticPrepareError::FrameOverflow)?;
         SourceCopy {
+            channels,
             start: warmup_start,
             frames: usize::try_from(warm_source_frames)
                 .map_err(|_| ElasticPrepareError::FrameOverflow)?,
@@ -416,7 +342,6 @@ impl ElasticRenderer {
             fetch_range: preparation.fetch_range,
             fetch: &self.fetch[..fetch_samples],
             target: &mut self.source,
-            channels,
             source_frame_count: self.source_frame_count,
         }
         .copy()
@@ -430,6 +355,81 @@ impl ElasticRenderer {
         )?;
         Ok(())
     }
+
+    fn request_preparation_range(
+        &mut self,
+        resource: &mut PlayerResource,
+        range: SourceFrameRange,
+    ) -> Result<(), ElasticPrepareError> {
+        self.request_source_range(resource, range)?;
+        self.preparation_request = Some(range);
+        Ok(())
+    }
+
+    fn request_source_range(
+        &mut self,
+        resource: &mut PlayerResource,
+        range: SourceFrameRange,
+    ) -> Result<(), ElasticPrepareError> {
+        resource
+            .seek_source_frame(range.start())
+            .map_err(|_| ElasticPrepareError::SourceSeek)?;
+        self.demand = resource.request_source_audio(range, 0)?;
+        if self.demand.is_none() {
+            return Err(ElasticPrepareError::SourceUnavailable);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn retarget(
+        &mut self,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
+        tempo: Tempo,
+        revision: u64,
+    ) -> Result<(), ElasticPrepareError> {
+        let preparation = self.retarget_preparation(binding, anchor, tempo)?;
+        let fetch_frames = usize::try_from(preparation.fetch_range.len())
+            .map_err(|_| ElasticPrepareError::FrameOverflow)?;
+        let fetch_samples = sample_count(fetch_frames, self.capabilities.channels())?;
+        self.prime(preparation, fetch_samples)?;
+        self.cursor = Some(preparation.anchor);
+        self.direction = Some(preparation.direction);
+        self.revision = revision;
+        Ok(())
+    }
+
+    fn retarget_preparation(
+        &self,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
+        tempo: Tempo,
+    ) -> Result<ElasticPreparation, ElasticPrepareError> {
+        if !self.primed || self.preparation.is_some() {
+            return Err(ElasticPrepareError::SourceUnavailable);
+        }
+        let mut preparation =
+            self.plan_preparation(binding, anchor, tempo, Self::PREFETCH_BLOCKS)?;
+        let fetch_range = self
+            .source_window
+            .ok_or(ElasticPrepareError::SourceUnavailable)?;
+        if fetch_range.start() > preparation.fetch_range.start()
+            || fetch_range.end() < preparation.fetch_range.end()
+        {
+            return Err(ElasticPrepareError::FetchWindowMismatch);
+        }
+        preparation.fetch_range = fetch_range;
+        Ok(preparation)
+    }
+
+    pub(crate) fn validate_retarget(
+        &self,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
+        tempo: Tempo,
+    ) -> Result<(), ElasticPrepareError> {
+        self.retarget_preparation(binding, anchor, tempo).map(drop)
+    }
 }
 
 #[cfg(test)]
@@ -441,7 +441,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::player::{node::StreamShape, track::elastic_renderer::RelocationRead};
+    use crate::player::node::StreamShape;
 
     const SAMPLE_RATE: u32 = 44_100;
 
@@ -536,7 +536,7 @@ mod tests {
                 .stage_ready_window(range, samples, direction)
                 .expect("successor advances the directional frontier");
         }
-        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
+        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 1);
 
         for _ in 0..PROMOTIONS {
             let window = renderer.ready_windows.remove(0);
@@ -563,7 +563,7 @@ mod tests {
                 .stage_ready_window(range, samples, direction)
                 .expect("scheduled successor restores the full pipeline");
             assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT);
-            assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
+            assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 1);
             assert!(!renderer.ready_windows.spilled());
             assert!(!renderer.window_buffers.spilled());
         }
@@ -571,14 +571,7 @@ mod tests {
 
     fn fixed_buffer_count(renderer: &ElasticRenderer) -> usize {
         let primary_pending = usize::from(renderer.pending_source_read.is_some());
-        let relocation_read = renderer.relocation.as_ref().map_or(0, |relocation| {
-            usize::from(!matches!(&relocation.read, RelocationRead::Idle))
-        });
-        1 + renderer.window_buffers.len()
-            + renderer.ready_windows.len()
-            + primary_pending
-            + usize::from(renderer.relocation_buffer.is_some())
-            + relocation_read
+        1 + renderer.window_buffers.len() + renderer.ready_windows.len() + primary_pending
     }
 
     #[kithara::test]
@@ -706,7 +699,7 @@ mod tests {
             renderer.ready_windows.first().map(|window| window.range),
             Some(second)
         );
-        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
+        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 1);
     }
 
     #[kithara::test]
@@ -717,126 +710,13 @@ mod tests {
             Some(SourceFrameRange::new(10_000, 20_000).expect("valid active window"));
         let samples = renderer.window_buffers.pop().expect("fixed window buffer");
         renderer.ready_windows.push(BufferedSourceWindow {
-            range: SourceFrameRange::new(19_000, 30_000).expect("valid ready window"),
             samples,
+            range: SourceFrameRange::new(19_000, 30_000).expect("valid ready window"),
         });
 
         assert_eq!(
             renderer.decoded_frontier(),
             30_000.0 / f64::from(SAMPLE_RATE)
         );
-    }
-
-    #[kithara::test]
-    fn relocation_commit_reuses_only_the_fixed_buffer_bank() {
-        let pool = PcmPool::default();
-        let mut renderer = renderer(&pool);
-        for offset in [0, 1] {
-            let samples = renderer
-                .window_buffers
-                .pop()
-                .expect("fixed ready-window buffer");
-            renderer.ready_windows.push(BufferedSourceWindow {
-                range: SourceFrameRange::new(offset, offset + 1).expect("valid ready range"),
-                samples,
-            });
-        }
-        let target = SessionBeat::new(0.0).expect("finite target");
-        let preparation = renderer
-            .plan_preparation(
-                &binding(PlaybackDirection::Forward),
-                target,
-                Tempo::new(120.0).expect("valid tempo"),
-                ElasticRenderer::RELOCATION_PREFETCH_BLOCKS,
-            )
-            .expect("relocation preparation");
-        let samples = renderer
-            .relocation_buffer
-            .take()
-            .expect("fixed relocation buffer");
-        renderer.relocation = Some(super::super::ElasticRelocation {
-            preparation,
-            read: RelocationRead::Ready(samples),
-            revision: 1,
-            target,
-        });
-        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
-
-        renderer
-            .commit_relocation(1)
-            .expect("prepared relocation commits");
-
-        assert!(renderer.ready_windows.is_empty());
-        assert_eq!(renderer.window_buffers.len(), READY_WINDOW_COUNT);
-        assert!(renderer.relocation_buffer.is_some());
-        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
-        assert!(!renderer.ready_windows.spilled());
-        assert!(!renderer.window_buffers.spilled());
-    }
-
-    #[kithara::test]
-    fn relocation_cancel_returns_the_reserved_buffer() {
-        let pool = PcmPool::default();
-        let mut renderer = renderer(&pool);
-        let target = SessionBeat::new(1.0).expect("finite target");
-        renderer
-            .begin_relocation(
-                &binding(PlaybackDirection::Forward),
-                target,
-                Tempo::new(120.0).expect("valid tempo"),
-                7,
-            )
-            .expect("relocation begins");
-        let samples = renderer
-            .relocation_buffer
-            .take()
-            .expect("fixed relocation buffer");
-        renderer
-            .relocation
-            .as_mut()
-            .expect("relocation remains owned")
-            .read = RelocationRead::Ready(samples);
-        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
-        renderer.discard_relocation(7);
-
-        assert!(renderer.relocation.is_none());
-        assert!(renderer.relocation_buffer.is_some());
-        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
-    }
-
-    #[kithara::test]
-    fn pending_relocation_rejects_replacement_and_retains_ready_samples() {
-        let pool = PcmPool::default();
-        let mut renderer = renderer(&pool);
-        let binding = binding(PlaybackDirection::Forward);
-        let tempo = Tempo::new(120.0).expect("valid tempo");
-        let first = SessionBeat::new(1.0).expect("finite first target");
-        let second = SessionBeat::new(2.0).expect("finite second target");
-        renderer
-            .begin_relocation(&binding, first, tempo, 7)
-            .expect("first relocation begins");
-        let samples = renderer
-            .relocation_buffer
-            .take()
-            .expect("fixed relocation buffer");
-        renderer
-            .relocation
-            .as_mut()
-            .expect("first relocation is retained")
-            .read = RelocationRead::Ready(samples);
-
-        let error = renderer
-            .begin_relocation(&binding, second, tempo, 8)
-            .expect_err("second relocation is rejected");
-
-        assert!(matches!(error, ElasticPrepareError::RelocationPending));
-        let relocation = renderer
-            .relocation
-            .as_ref()
-            .expect("first relocation remains pending");
-        assert_eq!(relocation.revision, 7);
-        assert_eq!(relocation.target, first);
-        assert!(matches!(&relocation.read, RelocationRead::Ready(_)));
-        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 2);
     }
 }

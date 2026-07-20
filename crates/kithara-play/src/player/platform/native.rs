@@ -6,18 +6,14 @@ use super::{
     super::{
         core::PlayerImpl,
         state::{
-            items::{
-                BoundLoad, DispatchedLoad, ItemQueue, JoinLoad, LoadTransaction,
-                restore_queued_resource,
-            },
+            items::{BoundLoad, ItemQueue, restore_queued_resource},
             playlist::{Playlist, PreparedBindingStamp, QueuedResource},
         },
     },
     ItemLoadContext,
 };
 use crate::{
-    api::{PlayerStatus, SessionBeat, SessionTransportSnapshot, SlotId, Tempo, TrackBinding},
-    engine::EngineImpl,
+    api::{SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding},
     error::PlayError,
     player::{
         node::StreamShape,
@@ -31,11 +27,27 @@ use crate::{
 };
 
 pub(crate) struct PreparedBindingResource {
-    pub(crate) renderer: PreparedElasticRenderer,
     pub(crate) stamp: PreparedBindingStamp,
+    pub(crate) renderer: PreparedElasticRenderer,
 }
 
 impl PlayerImpl {
+    /// Prepares and queues a stream-backed resource for session-bound elastic
+    /// playback. Failure leaves the playlist unchanged.
+    pub async fn insert_with_binding(
+        &self,
+        resource: Resource,
+        item_id: Option<Arc<str>>,
+        binding: TrackBinding,
+        at_position: Option<usize>,
+    ) -> Result<(), PlayError> {
+        let prepared = self.prepare_bound_resource(&resource, &binding).await?;
+        self.core
+            .items
+            .insert_with_binding(resource, item_id, binding, prepared, at_position);
+        Ok(())
+    }
+
     pub(in crate::player) fn validate_session_tempo(
         &self,
         snapshot: SessionTransportSnapshot,
@@ -52,31 +64,6 @@ impl PlayerImpl {
         }
         let available = playback.frontier() * f64::from(shape.sample_rate.get());
         validate_tempo_change(binding, snapshot, tempo, shape, available)
-    }
-
-    pub(in crate::player) fn validate_session_seek(
-        &self,
-        target: SessionBeat,
-        tempo: Tempo,
-        revision: u64,
-        shape: StreamShape,
-        binding: Option<&TrackBinding>,
-    ) -> Result<(), PlayError> {
-        let Some(binding) = binding else {
-            return Ok(());
-        };
-        let playback = self.playback_snapshot().ok_or(PlayError::NotReady)?;
-        if playback.has_multiple_tracks() {
-            return Err(PlayError::SessionSeekHandoverActive);
-        }
-        let context = tempo_context(target, tempo, revision, shape)?;
-        required_source_frame(
-            binding,
-            &context,
-            shape,
-            SignalsmithElastic::rate_envelope(),
-        )?;
-        Ok(())
     }
 
     pub(in crate::player) fn validate_successor_tempo(
@@ -104,134 +91,6 @@ impl PlayerImpl {
                 .map_err(map_successor_retarget_error)?;
         }
         Ok(())
-    }
-
-    /// Prepares and queues a stream-backed resource for session-bound elastic
-    /// playback. Failure leaves the playlist unchanged.
-    pub async fn insert_with_binding(
-        &self,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-        binding: TrackBinding,
-        at_position: Option<usize>,
-    ) -> Result<(), PlayError> {
-        let prepared = self.prepare_bound_resource(&resource, &binding).await?;
-        self.core
-            .items
-            .insert_with_binding(resource, item_id, binding, prepared, at_position);
-        Ok(())
-    }
-
-    pub(in crate::player) async fn join_track_at(
-        &self,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-        binding: TrackBinding,
-        target: SessionBeat,
-    ) -> Result<(), PlayError> {
-        if self.item_count() != 0 {
-            return Err(PlayError::SessionJoinPlayerNotEmpty);
-        }
-        self.ensure_engine_started()?;
-        let slot = self.ensure_slot()?;
-        let before = self.core.engine.session_transport()?;
-        ensure_join_target(before, target)?;
-        let prepared = self
-            .prepare_bound_resource_at(&resource, &binding, target)
-            .await?;
-        let current = self.core.engine.session_transport()?;
-        if current.revision() != before.revision() || current.tempo() != before.tempo() {
-            return Err(PlayError::BindingPreparationContextChanged);
-        }
-        ensure_join_target(current, target)?;
-        let stamp = prepared.stamp;
-        let dispatched = dispatch_join(
-            &self.core.items,
-            QueuedResource {
-                binding: Some(binding),
-                item_id,
-                prepared: Some(prepared),
-                resource: Some(resource),
-            },
-            ItemLoadContext::new(
-                self.core.timestretch.speed(),
-                self.core.params.pitch_bend(),
-                Some(current.tempo()),
-                self.core.engine.pcm_pool(),
-                stamp,
-            ),
-            &self.core.engine,
-            slot,
-            target,
-            current.revision(),
-        )?;
-        self.phase.lock().set_abr_handle(dispatched.abr_handle);
-        self.publish_current_track_snapshot(dispatched.duration_seconds);
-        self.enter_playing();
-        self.set_status(PlayerStatus::ReadyToPlay);
-        Ok(())
-    }
-}
-
-fn dispatch_join(
-    items: &ItemQueue,
-    queued: QueuedResource,
-    context: ItemLoadContext<'_>,
-    engine: &EngineImpl,
-    slot: SlotId,
-    target: SessionBeat,
-    transport_revision: u64,
-) -> Result<DispatchedLoad, PlayError> {
-    prepare_join(items, queued, context, target, transport_revision)?.dispatch(engine, slot)
-}
-
-fn prepare_join<'a>(
-    items: &'a ItemQueue,
-    queued: QueuedResource,
-    context: ItemLoadContext<'_>,
-    target: SessionBeat,
-    transport_revision: u64,
-) -> Result<LoadTransaction<'a>, PlayError> {
-    let mut playlist = items.lock_playlist();
-    if playlist.len() != 0 {
-        return Err(PlayError::SessionJoinPlayerNotEmpty);
-    }
-    let index = playlist.insert(queued, None);
-    let transaction = match ItemQueue::prepare_load(
-        playlist,
-        index,
-        context,
-        Some(JoinLoad {
-            target,
-            transport_revision,
-        }),
-        true,
-    ) {
-        Ok(Some(transaction)) => transaction,
-        Ok(None) => {
-            return Err(PlayError::Internal(
-                "inserted join resource is unavailable".into(),
-            ));
-        }
-        Err((mut playlist, error)) => {
-            let _ = playlist.remove_at(index);
-            return Err(error);
-        }
-    };
-    Ok(transaction)
-}
-
-fn ensure_join_target(
-    snapshot: SessionTransportSnapshot,
-    target: SessionBeat,
-) -> Result<(), PlayError> {
-    if target > snapshot.position() {
-        Ok(())
-    } else {
-        Err(PlayError::SessionJoinTargetElapsed {
-            target: target.get(),
-            position: snapshot.position().get(),
-        })
     }
 }
 
@@ -357,8 +216,8 @@ impl ItemQueue {
     ) {
         self.insert_queued(
             QueuedResource {
-                binding: Some(binding),
                 item_id,
+                binding: Some(binding),
                 prepared: Some(prepared),
                 resource: Some(resource),
             },
@@ -419,8 +278,8 @@ pub(crate) fn prepare_bound_load(
     player_resource.install_prepared_elastic(renderer);
     Ok(BoundLoad {
         player_resource,
-        prepared_stamp: Some(prepared_stamp),
         abr_handle,
+        prepared_stamp: Some(prepared_stamp),
     })
 }
 
@@ -447,7 +306,7 @@ pub(crate) fn restore_prepared_binding(
 ) -> Result<Option<PreparedBindingResource>, PlayError> {
     match (bound, renderer, stamp) {
         (true, Some(renderer), Some(stamp)) => {
-            Ok(Some(PreparedBindingResource { renderer, stamp }))
+            Ok(Some(PreparedBindingResource { stamp, renderer }))
         }
         (false, None, None) => Ok(None),
         _ => Err(PlayError::Internal(

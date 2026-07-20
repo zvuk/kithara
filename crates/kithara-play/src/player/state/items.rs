@@ -10,7 +10,7 @@ use super::{
     playlist::{Playlist, QueuedLoad},
 };
 use crate::{
-    api::{PlayerEvent, SessionBeat, SlotId, TrackBinding},
+    api::{PlayerEvent, SlotId, TrackBinding},
     bridge::PlayerCmd,
     engine::{DeferredPlayerCmdError, EngineImpl},
     error::PlayError,
@@ -19,35 +19,27 @@ use crate::{
 };
 
 pub(crate) struct DispatchedLoad {
+    pub(crate) src: Arc<str>,
     pub(crate) abr_handle: Option<AbrHandle>,
     pub(crate) duration_seconds: f64,
-    pub(crate) src: Arc<str>,
 }
 
 pub(in crate::player) struct BoundLoad {
-    pub(in crate::player) player_resource: PlayerResource,
-    pub(in crate::player) prepared_stamp: Option<PreparedBindingStamp>,
     pub(in crate::player) abr_handle: Option<AbrHandle>,
-}
-
-#[derive(Clone, Copy)]
-pub(in crate::player) struct JoinLoad {
-    pub(in crate::player) target: SessionBeat,
-    pub(in crate::player) transport_revision: u64,
+    pub(in crate::player) prepared_stamp: Option<PreparedBindingStamp>,
+    pub(in crate::player) player_resource: PlayerResource,
 }
 
 #[must_use = "load transactions must be dispatched"]
 pub(in crate::player) struct LoadTransaction<'a> {
     playlist: MutexGuard<'a, Playlist>,
-    index: usize,
+    abr_handle: Option<AbrHandle>,
     binding: Option<TrackBinding>,
     item_id: Option<Arc<str>>,
-    player_resource: PlayerResource,
     prepared_stamp: Option<PreparedBindingStamp>,
-    abr_handle: Option<AbrHandle>,
+    player_resource: PlayerResource,
     duration_seconds: f64,
-    join: Option<JoinLoad>,
-    rollback_insert: bool,
+    index: usize,
 }
 
 impl LoadTransaction<'_> {
@@ -65,8 +57,6 @@ impl LoadTransaction<'_> {
             prepared_stamp,
             abr_handle,
             duration_seconds,
-            join,
-            rollback_insert,
         } = self;
         let src = Arc::clone(player_resource.src());
         let mut player_resource = Some(player_resource);
@@ -74,30 +64,19 @@ impl LoadTransaction<'_> {
             let resource = player_resource
                 .take()
                 .ok_or_else(|| PlayError::Internal("load transaction lost its resource".into()))?;
-            match join {
-                Some(join) => Ok(PlayerCmd::JoinTrack {
-                    binding: binding.clone().ok_or_else(|| {
-                        PlayError::Internal("join transaction lost its binding".into())
-                    })?,
-                    item_id: item_id.clone(),
-                    resource: Box::new(resource),
-                    target: join.target,
-                    transport_revision: join.transport_revision,
-                }),
-                None => Ok(PlayerCmd::LoadTrack {
-                    binding: binding.clone(),
-                    item_id: item_id.clone(),
-                    resource: Box::new(resource),
-                }),
-            }
+            Ok(PlayerCmd::LoadTrack {
+                binding: binding.clone(),
+                item_id: item_id.clone(),
+                resource: Box::new(resource),
+            })
         });
         match result {
             Ok(()) => {
                 drop(playlist);
                 Ok(DispatchedLoad {
+                    src,
                     abr_handle,
                     duration_seconds,
-                    src,
                 })
             }
             Err(DeferredPlayerCmdError::Unsent(error)) => {
@@ -111,25 +90,17 @@ impl LoadTransaction<'_> {
                     resource,
                     prepared_stamp,
                 )?;
-                if rollback_insert {
-                    let _ = playlist.remove_at(index);
-                }
                 Err(error)
             }
             Err(DeferredPlayerCmdError::Rejected(rejected)) => {
                 let error = rejected.error;
-                let (binding, resource) = match *rejected.command {
-                    PlayerCmd::LoadTrack {
-                        binding, resource, ..
-                    } => (binding, resource),
-                    PlayerCmd::JoinTrack {
-                        binding, resource, ..
-                    } => (Some(binding), resource),
-                    _ => {
-                        return Err(PlayError::Internal(
-                            "load dispatch rejected a non-load command".into(),
-                        ));
-                    }
+                let PlayerCmd::LoadTrack {
+                    binding, resource, ..
+                } = *rejected.command
+                else {
+                    return Err(PlayError::Internal(
+                        "load dispatch rejected a non-load command".into(),
+                    ));
                 };
                 restore_queue_resource(
                     &mut playlist,
@@ -138,9 +109,6 @@ impl LoadTransaction<'_> {
                     *resource,
                     prepared_stamp,
                 )?;
-                if rollback_insert {
-                    let _ = playlist.remove_at(index);
-                }
                 Err(error)
             }
         }
@@ -176,15 +144,15 @@ pub(in crate::player) fn restore_queued_resource(
 }
 
 pub(crate) struct ItemQueue {
-    playlist: Mutex<Playlist>,
     bus: EventBus,
+    playlist: Mutex<Playlist>,
 }
 
 impl ItemQueue {
     pub(crate) fn new(bus: EventBus) -> Self {
         Self {
-            playlist: Mutex::default(),
             bus,
+            playlist: Mutex::default(),
         }
     }
 
@@ -215,6 +183,32 @@ impl ItemQueue {
         }
     }
 
+    pub(crate) fn current_has_binding(&self) -> bool {
+        let playlist = self.playlist.lock();
+        playlist
+            .get(playlist.current())
+            .is_some_and(|item| item.binding.is_some())
+    }
+
+    pub(crate) fn dispatch_load(
+        &self,
+        index: usize,
+        context: ItemLoadContext<'_>,
+        engine: &EngineImpl,
+        slot: SlotId,
+    ) -> Result<Option<DispatchedLoad>, PlayError> {
+        self.take_for_load(index, context)?
+            .map(|transaction| transaction.dispatch(engine, slot))
+            .transpose()
+    }
+
+    pub(crate) fn has_binding(&self, index: usize) -> bool {
+        self.playlist
+            .lock()
+            .get(index)
+            .is_some_and(|item| item.binding.is_some())
+    }
+
     pub(crate) fn insert(
         &self,
         resource: Resource,
@@ -223,8 +217,8 @@ impl ItemQueue {
     ) {
         self.insert_queued(
             QueuedResource {
-                binding: None,
                 item_id,
+                binding: None,
                 prepared: None,
                 resource: Some(resource),
             },
@@ -245,87 +239,20 @@ impl ItemQueue {
         debug!(count, pos, "item inserted");
     }
 
-    pub(crate) fn remove_at(&self, index: usize) -> Option<QueuedResource> {
-        let mut playlist = self.playlist.lock();
-        let removed = playlist.remove_at(index);
-        let remaining = playlist.len();
-        drop(playlist);
-        debug!(index, remaining, "item removed");
-        removed
+    pub(crate) fn lock_playlist(&self) -> MutexGuard<'_, Playlist> {
+        self.playlist.lock()
     }
 
-    pub(crate) fn replace_item_tagged(
-        &self,
-        index: usize,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-    ) {
-        let mut playlist = self.playlist.lock();
-        if index < playlist.len() {
-            playlist.replace(
-                index,
-                QueuedResource {
-                    binding: None,
-                    item_id,
-                    prepared: None,
-                    resource: Some(resource),
-                },
-            );
-            drop(playlist);
-            debug!(index, "item replaced");
-        }
-    }
-
-    pub(crate) fn reserve_slots(&self, count: usize) {
-        self.playlist.lock().reserve(count);
-        debug!(count, "slots reserved");
-    }
-
-    pub(crate) fn dispatch_load(
-        &self,
-        index: usize,
-        context: ItemLoadContext<'_>,
-        engine: &EngineImpl,
-        slot: SlotId,
-    ) -> Result<Option<DispatchedLoad>, PlayError> {
-        self.take_for_load(index, context)?
-            .map(|transaction| transaction.dispatch(engine, slot))
-            .transpose()
-    }
-
-    fn take_for_load(
-        &self,
-        index: usize,
-        context: ItemLoadContext<'_>,
-    ) -> Result<Option<LoadTransaction<'_>>, PlayError> {
-        let playlist = self.playlist.lock();
-        Self::prepare_load(playlist, index, context, None, false).map_err(|(_, error)| error)
-    }
-
-    pub(in crate::player) fn prepare_load<'a>(
+    fn prepare_load<'a>(
         mut playlist: MutexGuard<'a, Playlist>,
         index: usize,
         context: ItemLoadContext<'_>,
-        join: Option<JoinLoad>,
-        rollback_insert: bool,
     ) -> Result<Option<LoadTransaction<'a>>, (MutexGuard<'a, Playlist>, PlayError)> {
         if index >= playlist.len() {
-            if rollback_insert {
-                return Err((
-                    playlist,
-                    PlayError::Internal("inserted join index is unavailable".into()),
-                ));
-            }
             return Ok(None);
         }
 
         let Some(queued) = playlist.take(index) else {
-            if rollback_insert {
-                return Err((
-                    playlist,
-                    PlayError::Internal("inserted join resource is unavailable".into()),
-                ));
-            }
             return Ok(None);
         };
         let QueuedLoad {
@@ -356,9 +283,9 @@ impl ItemQueue {
             resource.set_host_sample_rate(shape.sample_rate);
             let src = Arc::clone(resource.src());
             BoundLoad {
+                abr_handle,
                 player_resource: PlayerResource::new(resource, src, context.pool),
                 prepared_stamp: None,
-                abr_handle,
             }
         };
 
@@ -368,16 +295,59 @@ impl ItemQueue {
 
         Ok(Some(LoadTransaction {
             playlist,
-            index,
+            abr_handle,
             binding,
             item_id,
-            player_resource,
             prepared_stamp,
-            abr_handle,
+            player_resource,
             duration_seconds,
-            join,
-            rollback_insert,
+            index,
         }))
+    }
+
+    pub(crate) fn remove_at(&self, index: usize) -> Option<QueuedResource> {
+        let mut playlist = self.playlist.lock();
+        let removed = playlist.remove_at(index);
+        let remaining = playlist.len();
+        drop(playlist);
+        debug!(index, remaining, "item removed");
+        removed
+    }
+
+    pub(crate) fn replace_item_tagged(
+        &self,
+        index: usize,
+        resource: Resource,
+        item_id: Option<Arc<str>>,
+    ) {
+        let mut playlist = self.playlist.lock();
+        if index < playlist.len() {
+            playlist.replace(
+                index,
+                QueuedResource {
+                    item_id,
+                    binding: None,
+                    prepared: None,
+                    resource: Some(resource),
+                },
+            );
+            drop(playlist);
+            debug!(index, "item replaced");
+        }
+    }
+
+    pub(crate) fn reserve_slots(&self, count: usize) {
+        self.playlist.lock().reserve(count);
+        debug!(count, "slots reserved");
+    }
+
+    fn take_for_load(
+        &self,
+        index: usize,
+        context: ItemLoadContext<'_>,
+    ) -> Result<Option<LoadTransaction<'_>>, PlayError> {
+        let playlist = self.playlist.lock();
+        Self::prepare_load(playlist, index, context).map_err(|(_, error)| error)
     }
 
     delegate::delegate! {
@@ -392,24 +362,6 @@ impl ItemQueue {
             pub(crate) fn item_count(&self) -> usize;
             pub(crate) fn set_current(&self, index: usize);
         }
-    }
-
-    pub(crate) fn has_binding(&self, index: usize) -> bool {
-        self.playlist
-            .lock()
-            .get(index)
-            .is_some_and(|item| item.binding.is_some())
-    }
-
-    pub(crate) fn current_has_binding(&self) -> bool {
-        let playlist = self.playlist.lock();
-        playlist
-            .get(playlist.current())
-            .is_some_and(|item| item.binding.is_some())
-    }
-
-    pub(crate) fn lock_playlist(&self) -> MutexGuard<'_, Playlist> {
-        self.playlist.lock()
     }
 }
 

@@ -59,8 +59,8 @@ impl AudioNode for PlayerNode {
         let sample_rate = cx.stream_info.sample_rate;
         let max_block_frames = cx.stream_info.max_block_frames;
         let shape = StreamShape {
-            sample_rate,
             max_block_frames,
+            sample_rate,
         };
         let inputs = self
             .inputs

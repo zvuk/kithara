@@ -16,7 +16,6 @@ use tracing::warn;
 
 use super::{ArenaRegistry, RenderPass, RenderTargets};
 use crate::{
-    api::SessionBeat,
     bridge::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
     },
@@ -74,24 +73,23 @@ pub struct PlayerNodeProcessor {
     pub(super) crossfade: CrossfadeSettings,
     pub(super) cmd_rx: HeapCons<PlayerCmd>,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
-    trash_tx: HeapProd<PlayerTrack>,
-    pending_retirement: Option<PlayerTrack>,
     pub(super) sample_rate: NonZeroU32,
-    pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) render: RenderPass,
+    pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) prefetch_duration: f32,
     context_requirement: ContextRequirement,
-    pub(super) session_seek: Option<(u64, SessionBeat)>,
+    trash_tx: HeapProd<PlayerTrack>,
+    pending_retirement: Option<PlayerTrack>,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct StreamShape {
-    /// Output sample rate observed by the render graph.
-    pub sample_rate: NonZeroU32,
     /// Maximum frames the graph may request in one render block.
     pub max_block_frames: NonZeroU32,
+    /// Output sample rate observed by the render graph.
+    pub sample_rate: NonZeroU32,
 }
 
 impl StreamShape {
@@ -99,8 +97,8 @@ impl StreamShape {
     #[must_use]
     pub const fn new(sample_rate: NonZeroU32, max_block_frames: NonZeroU32) -> Self {
         Self {
-            sample_rate,
             max_block_frames,
+            sample_rate,
         }
     }
 }
@@ -116,50 +114,6 @@ impl PlayerNodeProcessor {
     #[must_use]
     pub fn new(inputs: NodeInputs, shape: StreamShape, pool: &PcmPool) -> Self {
         Self::with_context_requirement(inputs, shape, pool, ContextRequirement::Standalone)
-    }
-
-    pub(crate) fn with_context_requirement(
-        inputs: NodeInputs,
-        shape: StreamShape,
-        pool: &PcmPool,
-        context_requirement: ContextRequirement,
-    ) -> Self {
-        Self {
-            cmd_rx: inputs.cmd_rx,
-            notif_tx: inputs.notif_tx,
-            trash_tx: inputs.trash_tx,
-            pending_retirement: None,
-            playback: inputs.playback,
-            sample_rate: shape.sample_rate,
-            render: RenderPass::new(pool, shape.max_block_frames.get().as_()),
-            crossfade: CrossfadeSettings::default(),
-            prefetch_duration: 0.0,
-            tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
-            tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
-            context_requirement,
-            session_seek: None,
-        }
-    }
-
-    /// Hand a retired track to the control thread without dropping it here.
-    pub(super) fn discard_track(&mut self, track: PlayerTrack) {
-        debug_assert!(self.pending_retirement.is_none());
-        if let Err(track) = self.trash_tx.try_push(track) {
-            self.pending_retirement = Some(track);
-        }
-    }
-
-    pub(super) fn retirement_blocked(&self) -> bool {
-        self.pending_retirement.is_some()
-    }
-
-    fn flush_retirement(&mut self) {
-        let Some(track) = self.pending_retirement.take() else {
-            return;
-        };
-        if let Err(track) = self.trash_tx.try_push(track) {
-            self.pending_retirement = Some(track);
-        }
     }
 
     /// Clean up finished tracks.
@@ -236,6 +190,14 @@ impl PlayerNodeProcessor {
         }
     }
 
+    /// Hand a retired track to the control thread without dropping it here.
+    pub(super) fn discard_track(&mut self, track: PlayerTrack) {
+        debug_assert!(self.pending_retirement.is_none());
+        if let Err(track) = self.trash_tx.try_push(track) {
+            self.pending_retirement = Some(track);
+        }
+    }
+
     /// Evict tracks to make room when at capacity.
     ///
     /// Tracks are evicted in priority order: `Finished` first, then `FadingOut`,
@@ -276,26 +238,19 @@ impl PlayerNodeProcessor {
         }
     }
 
+    fn flush_retirement(&mut self) {
+        let Some(track) = self.pending_retirement.take() else {
+            return;
+        };
+        if let Err(track) = self.trash_tx.try_push(track) {
+            self.pending_retirement = Some(track);
+        }
+    }
+
     /// Reference to the playback atomics used by the processor.
     #[must_use]
     pub fn playback(&self) -> &Arc<PlaybackShared> {
         &self.playback
-    }
-
-    delegate::delegate! {
-        to self.tracks {
-            /// Look up a track by its source identifier.
-            #[must_use]
-            #[call(get)]
-            pub fn track(&self, src: &Arc<str>) -> Option<&PlayerTrack>;
-            /// Number of tracks currently held in the processor arena.
-            #[must_use]
-            #[call(len)]
-            pub fn track_count(&self) -> usize;
-            /// Look up a track by its source identifier (mutable).
-            #[call(get_mut)]
-            pub fn track_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack>;
-        }
     }
 
     pub fn render_audio(
@@ -327,29 +282,39 @@ impl PlayerNodeProcessor {
         self.playback
             .multiple_tracks
             .store(multiple_tracks, Ordering::SeqCst);
-        if let TrackRenderMode::Session(context) = mode
-            && self.session_seek.is_some_and(|(revision, target)| {
-                context.transport_revision() == Some(revision)
-                    && context.transport_seek_target() == Some(target)
-            })
-        {
-            self.session_seek = None;
-        }
         (playback_started, leading_outcome)
+    }
+
+    pub(super) fn retirement_blocked(&self) -> bool {
+        self.pending_retirement.is_some()
+    }
+
+    fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.tracks
+            .iter_mut()
+            .for_each(|(_, track)| track.update_host_sample_rate(sample_rate));
     }
 
     /// Unload a track from the arena.
     pub(super) fn unload_track(&mut self, src: &Arc<str>) {
         if let Some(track) = self.tracks.remove(src) {
-            if let Some((revision, _)) = self.session_seek {
-                self.fail_session_seek(revision);
-            }
             self.discard_track(track);
             self.notif_tx
                 .try_push(PlayerNotification::Unloaded {
                     src: Arc::clone(src),
                 })
                 .ok();
+        }
+    }
+
+    fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        let rate_changed = self.sample_rate != sample_rate;
+        self.sample_rate = sample_rate;
+        self.playback
+            .sample_rate
+            .store(sample_rate.get(), Ordering::Relaxed);
+        if rate_changed {
+            self.set_tracks_host_sample_rate(sample_rate);
         }
     }
 
@@ -392,20 +357,41 @@ impl PlayerNodeProcessor {
         }
     }
 
-    fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.tracks
-            .iter_mut()
-            .for_each(|(_, track)| track.update_host_sample_rate(sample_rate));
+    pub(crate) fn with_context_requirement(
+        inputs: NodeInputs,
+        shape: StreamShape,
+        pool: &PcmPool,
+        context_requirement: ContextRequirement,
+    ) -> Self {
+        Self {
+            context_requirement,
+            cmd_rx: inputs.cmd_rx,
+            notif_tx: inputs.notif_tx,
+            trash_tx: inputs.trash_tx,
+            pending_retirement: None,
+            playback: inputs.playback,
+            sample_rate: shape.sample_rate,
+            render: RenderPass::new(pool, shape.max_block_frames.get().as_()),
+            crossfade: CrossfadeSettings::default(),
+            prefetch_duration: 0.0,
+            tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
+            tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
+        }
     }
 
-    fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        let rate_changed = self.sample_rate != sample_rate;
-        self.sample_rate = sample_rate;
-        self.playback
-            .sample_rate
-            .store(sample_rate.get(), Ordering::Relaxed);
-        if rate_changed {
-            self.set_tracks_host_sample_rate(sample_rate);
+    delegate::delegate! {
+        to self.tracks {
+            /// Look up a track by its source identifier.
+            #[must_use]
+            #[call(get)]
+            pub fn track(&self, src: &Arc<str>) -> Option<&PlayerTrack>;
+            /// Number of tracks currently held in the processor arena.
+            #[must_use]
+            #[call(len)]
+            pub fn track_count(&self) -> usize;
+            /// Look up a track by its source identifier (mutable).
+            #[call(get_mut)]
+            pub fn track_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack>;
         }
     }
 }
@@ -447,8 +433,6 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let (playback_started, leading_outcome_pos_dur) =
             self.render_with_mode(render_mode, &mut buffers, info.frames, is_playing);
-        self.poll_session_seek();
-
         self.update_position_duration(leading_outcome_pos_dur);
 
         if playback_started {
@@ -465,7 +449,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        api::Tempo,
         bridge::{PlayerCmd, SharedEq, SlotControl, slot_channels},
         player::track::PlayerResource,
         test_support::empty_resource,
@@ -491,126 +474,6 @@ mod tests {
             resource: Box::new(resource),
             item_id: None,
         }
-    }
-
-    fn assert_track_mutation_aborts_pending_seek(command: PlayerCmd) {
-        let (mut processor, mut control) = processor_and_control();
-        let src: Arc<str> = Arc::from("pending-seek.wav");
-        control
-            .cmd_tx
-            .try_push(load(&src))
-            .expect("load command fits");
-        processor.drain_commands();
-        processor.session_seek = Some((7, SessionBeat::new(1.0).expect("finite pending target")));
-
-        control
-            .cmd_tx
-            .try_push(command)
-            .expect("mutation command fits");
-        processor.drain_commands();
-
-        assert_eq!(processor.session_seek, None);
-        assert_eq!(
-            processor
-                .playback
-                .session_seek_failed
-                .load(Ordering::SeqCst),
-            7
-        );
-    }
-
-    #[kithara::test]
-    fn track_mutations_abort_a_pending_session_seek() {
-        let src: Arc<str> = Arc::from("pending-seek.wav");
-        assert_track_mutation_aborts_pending_seek(PlayerCmd::UnloadTrack {
-            src: Arc::clone(&src),
-        });
-        assert_track_mutation_aborts_pending_seek(PlayerCmd::Transition(TrackTransition::FadeIn(
-            Arc::clone(&src),
-        )));
-        assert_track_mutation_aborts_pending_seek(PlayerCmd::Clear);
-        assert_track_mutation_aborts_pending_seek(load(&src));
-    }
-
-    #[kithara::test]
-    fn session_seek_cancel_clears_the_matching_preparation() {
-        let (mut processor, mut control) = processor_and_control();
-        let src: Arc<str> = Arc::from("cancel-seek.wav");
-        control
-            .cmd_tx
-            .try_push(load(&src))
-            .expect("load command fits");
-        processor.drain_commands();
-        processor.session_seek = Some((7, SessionBeat::new(1.0).expect("finite pending target")));
-        processor
-            .playback
-            .session_seek_prepared
-            .store(7, Ordering::SeqCst);
-
-        control
-            .cmd_tx
-            .try_push(PlayerCmd::CancelSessionSeek { revision: 7 })
-            .expect("cancel command fits");
-        processor.drain_commands();
-
-        assert_eq!(processor.session_seek, None);
-        assert_eq!(
-            processor
-                .playback
-                .session_seek_prepared
-                .load(Ordering::SeqCst),
-            0
-        );
-    }
-
-    #[kithara::test]
-    fn second_session_seek_prepare_does_not_replace_the_pending_owner() {
-        let (mut processor, mut control) = processor_and_control();
-        let src: Arc<str> = Arc::from("concurrent-seek.wav");
-        control
-            .cmd_tx
-            .try_push(load(&src))
-            .expect("load command fits");
-        control
-            .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
-                &src,
-            ))))
-            .expect("transition command fits");
-        processor.drain_commands();
-
-        let first = SessionBeat::new(1.0).expect("finite first target");
-        let second = SessionBeat::new(2.0).expect("finite second target");
-        let tempo = Tempo::new(120.0).expect("valid tempo");
-        control
-            .cmd_tx
-            .try_push(PlayerCmd::PrepareSessionSeek {
-                target: first,
-                tempo,
-                revision: 7,
-            })
-            .expect("first prepare command fits");
-        processor.drain_commands();
-        assert_eq!(processor.session_seek, Some((7, first)));
-
-        control
-            .cmd_tx
-            .try_push(PlayerCmd::PrepareSessionSeek {
-                target: second,
-                tempo,
-                revision: 7,
-            })
-            .expect("second prepare command fits");
-        processor.drain_commands();
-
-        assert_eq!(processor.session_seek, Some((7, first)));
-        assert_eq!(
-            processor
-                .playback
-                .session_seek_failed
-                .load(Ordering::SeqCst),
-            7
-        );
     }
 
     #[kithara::test]

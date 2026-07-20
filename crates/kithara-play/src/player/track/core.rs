@@ -8,26 +8,23 @@ use kithara_platform::sync::Arc;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
-use crate::{
-    api::{SessionBeat, Tempo, TrackBinding},
-    bridge::TrackState,
-    error::PlayError,
-    session::render::RenderContext,
-};
+#[cfg(test)]
+use crate::session::render::RenderContext;
+use crate::{api::TrackBinding, bridge::TrackState};
 
 /// Canonical host-frame axis and optional musical binding for a track.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct TrackAxis {
-    binding: Option<TrackBinding>,
     host_sample_rate: NonZeroU32,
+    binding: Option<TrackBinding>,
 }
 
 impl From<NonZeroU32> for TrackAxis {
     fn from(host_sample_rate: NonZeroU32) -> Self {
         Self {
-            binding: None,
             host_sample_rate,
+            binding: None,
         }
     }
 }
@@ -44,22 +41,16 @@ impl From<TrackBinding> for TrackAxis {
 /// Parameters used to create a track around an owned resource.
 #[derive(Builder)]
 pub struct TrackParams {
+    src: Arc<str>,
+    #[builder(default = FadeCurve::SquareRoot)]
+    fade_curve: FadeCurve,
+    item_id: Option<Arc<str>>,
     #[builder(into)]
     axis: TrackAxis,
-    item_id: Option<Arc<str>>,
-    src: Arc<str>,
     #[builder(default)]
     fade_duration: f32,
     #[builder(default)]
     prefetch_duration: f32,
-    #[builder(default = FadeCurve::SquareRoot)]
-    fade_curve: FadeCurve,
-}
-
-#[derive(Clone, Copy)]
-struct PendingJoin {
-    revision: u64,
-    target: SessionBeat,
 }
 
 /// Per-track state in the processor arena.
@@ -96,7 +87,6 @@ pub struct PlayerTrack {
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
     /// duration) captured under the resource lock.
     pub(super) observed_duration: f64,
-    pending_join: Option<PendingJoin>,
     pub(super) sample_rate: u32,
     /// Cumulative frames this track has actually served into the mix output.
     ///
@@ -110,23 +100,6 @@ pub struct PlayerTrack {
 }
 
 impl PlayerTrack {
-    delegate! {
-        to self.resource {
-            /// Decoded-ahead frontier in seconds.
-            #[must_use]
-            pub fn decoded_frontier(&self) -> f64;
-            /// Source identifier.
-            #[must_use]
-            pub fn src(&self) -> &Arc<str>;
-        }
-        to self.binding {
-            /// Returns the immutable synchronization binding owned by this active track.
-            #[must_use]
-            #[call(as_ref)]
-            pub fn binding(&self) -> Option<&TrackBinding>;
-        }
-    }
-
     /// Create a new track in the `Preloading` state.
     ///
     /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
@@ -151,15 +124,14 @@ impl PlayerTrack {
             resource,
             binding,
             item_id,
+            observed_duration,
             state: TrackState::Preloading,
             state_dirty: false,
             triggers: TrackTriggers::default(),
             fade: TrackFade::new(fade_duration, fade_curve, sample_rate),
             prefetch_duration: prefetch_duration.max(0.0),
-            pending_join: None,
             sample_rate: sample_rate.get(),
             served_frames: 0,
-            observed_duration,
             ended_at_eof: false,
             #[cfg(test)]
             last_render_context: None,
@@ -168,11 +140,20 @@ impl PlayerTrack {
         track
     }
 
-    #[cfg(test)]
-    pub(crate) fn last_render_context(&self) -> Option<(usize, &RenderContext)> {
-        self.last_render_context
+    fn apply_host_sample_rate(&mut self, sample_rate: NonZeroU32) -> bool {
+        if self.sample_rate == sample_rate.get() {
+            return false;
+        }
+        if self
+            .binding
             .as_ref()
-            .map(|(address, context)| (*address, context))
+            .is_some_and(|binding| binding.map().host_sample_rate() != sample_rate)
+        {
+            return false;
+        }
+        self.resource.set_host_sample_rate(sample_rate);
+        self.sample_rate = sample_rate.get();
+        true
     }
 
     /// Current visible (post-gapless-trim) duration in seconds.
@@ -192,6 +173,13 @@ impl PlayerTrack {
     pub fn fade_out(&mut self) {
         self.set_state(TrackState::FadingOut);
         self.fade.fade_out();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_render_context(&self) -> Option<(usize, &RenderContext)> {
+        self.last_render_context
+            .as_ref()
+            .map(|(address, context)| (*address, context))
     }
 
     /// Instantly start playing at full volume.
@@ -234,60 +222,6 @@ impl PlayerTrack {
         true
     }
 
-    pub(crate) fn begin_session_seek(
-        &mut self,
-        target: SessionBeat,
-        tempo: Tempo,
-        revision: u64,
-    ) -> Result<(), PlayError> {
-        let Some(binding) = self.binding.as_ref() else {
-            return Ok(());
-        };
-        self.resource
-            .begin_session_seek(binding, target, tempo, revision)
-    }
-
-    pub(crate) fn poll_session_seek(&mut self, revision: u64) -> Result<bool, PlayError> {
-        if self.binding.is_none() {
-            return Ok(true);
-        }
-        self.resource.poll_session_seek(revision)
-    }
-
-    pub(crate) fn cancel_session_seek(&mut self, revision: u64) -> Result<(), PlayError> {
-        if self.binding.is_none() {
-            return Ok(());
-        }
-        self.resource.cancel_session_seek(revision)
-    }
-
-    pub(crate) fn schedule_join(&mut self, target: SessionBeat, revision: u64) {
-        self.pending_join = Some(PendingJoin { revision, target });
-    }
-
-    pub(crate) fn activate_pending_join(
-        &mut self,
-        context: &RenderContext,
-    ) -> Result<Option<usize>, ()> {
-        let Some(join) = self.pending_join else {
-            return Ok(None);
-        };
-        if context.transport_revision() != Some(join.revision) {
-            self.pending_join = None;
-            return Err(());
-        }
-        if context.beat_is_before_output(join.target) {
-            self.pending_join = None;
-            return Err(());
-        }
-        let Some(offset) = context.output_offset_for_beat(join.target) else {
-            return Ok(None);
-        };
-        self.pending_join = None;
-        self.play();
-        Ok(Some(offset))
-    }
-
     /// Update the prefetch lead time used for the preload trigger.
     pub fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
         self.prefetch_duration = prefetch_duration.max(0.0);
@@ -327,26 +261,27 @@ impl PlayerTrack {
         }
     }
 
-    fn apply_host_sample_rate(&mut self, sample_rate: NonZeroU32) -> bool {
-        if self.sample_rate == sample_rate.get() {
-            return false;
-        }
-        if self
-            .binding
-            .as_ref()
-            .is_some_and(|binding| binding.map().host_sample_rate() != sample_rate)
-        {
-            return false;
-        }
-        self.resource.set_host_sample_rate(sample_rate);
-        self.sample_rate = sample_rate.get();
-        true
-    }
-
     /// Map track state to worker scheduling priority and push the update.
     fn update_service_class(&mut self, state: TrackState) {
         self.resource
             .set_service_class(service_class_for_state(state));
+    }
+
+    delegate! {
+        to self.resource {
+            /// Decoded-ahead frontier in seconds.
+            #[must_use]
+            pub fn decoded_frontier(&self) -> f64;
+            /// Source identifier.
+            #[must_use]
+            pub fn src(&self) -> &Arc<str>;
+        }
+        to self.binding {
+            /// Returns the immutable synchronization binding owned by this active track.
+            #[must_use]
+            #[call(as_ref)]
+            pub fn binding(&self) -> Option<&TrackBinding>;
+        }
     }
 }
 
@@ -390,83 +325,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        session::render::{RenderFrame, SessionTransportCommit},
-        test_support::empty_resource,
-    };
-
-    fn pending_join_track() -> PlayerTrack {
-        let src: Arc<str> = Arc::from("joining.wav");
-        let resource =
-            PlayerResource::new(empty_resource(&src), Arc::clone(&src), &PcmPool::default());
-        let params = TrackParams::builder()
-            .axis(NonZeroU32::new(48_000).expect("static sample rate"))
-            .src(src)
-            .build();
-        PlayerTrack::new(Box::new(resource), params)
-    }
-
-    fn join_context(revision: u64) -> RenderContext {
-        RenderContext::new(
-            RenderFrame::new(0)..RenderFrame::new(480),
-            NonZeroU32::new(48_000).expect("static sample rate"),
-            Some(
-                SessionBeat::new(2.0).expect("finite start beat")
-                    ..SessionBeat::new(2.02).expect("finite end beat"),
-            ),
-            Some(SessionTransportCommit::new(
-                Tempo::new(120.0).expect("valid tempo"),
-                true,
-                revision,
-            )),
-        )
-        .expect("valid join context")
-    }
-
-    #[kithara::test]
-    fn pending_join_activates_at_the_exact_context_offset() {
-        let mut track = pending_join_track();
-        let target = SessionBeat::new(2.0 + 37.0 * 0.02 / 480.0).expect("finite join beat");
-        track.schedule_join(target, 7);
-
-        assert_eq!(
-            track
-                .activate_pending_join(&join_context(7))
-                .expect("matching revision activates"),
-            Some(37)
-        );
-        assert_eq!(track.state(), TrackState::Playing);
-    }
-
-    #[kithara::test]
-    fn pending_join_rejects_a_newer_transport_revision() {
-        let mut track = pending_join_track();
-        track.schedule_join(SessionBeat::new(2.01).expect("finite join beat"), 7);
-
-        assert!(track.activate_pending_join(&join_context(8)).is_err());
-        assert_eq!(track.state(), TrackState::Preloading);
-        assert_eq!(
-            track
-                .activate_pending_join(&join_context(8))
-                .expect("rejected work is cleared"),
-            None
-        );
-    }
-
-    #[kithara::test]
-    fn pending_join_rejects_an_elapsed_beat_without_a_revision_change() {
-        let mut track = pending_join_track();
-        track.schedule_join(SessionBeat::new(1.99).expect("finite join beat"), 7);
-
-        assert!(track.activate_pending_join(&join_context(7)).is_err());
-        assert_eq!(track.state(), TrackState::Preloading);
-        assert_eq!(
-            track
-                .activate_pending_join(&join_context(7))
-                .expect("rejected work is cleared"),
-            None
-        );
-    }
+    use crate::test_support::empty_resource;
 
     #[kithara::test]
     fn seek_frame_index_clamps_unrepresentable_targets() {
