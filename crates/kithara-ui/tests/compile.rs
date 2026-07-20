@@ -259,7 +259,7 @@ fn layout_doubled_dollar_passes_literal_dollar() {
         panic!("expected module");
     };
     let ExpandedNode::Control {
-        spec: ControlSpec::Chip { label },
+        spec: ControlSpec::Chip { label, .. },
         ..
     } = &**root
     else {

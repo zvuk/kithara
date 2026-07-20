@@ -287,9 +287,10 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Chip { label } => Chip::builder()
+        ControlSpec::Chip { label, style } => Chip::builder()
             .path(path)
             .label(ui.resolve(*label))
+            .style(*style)
             .maybe_value(value.as_ref())
             .skin(skin)
             .build()

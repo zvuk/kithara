@@ -110,7 +110,7 @@ impl<'a> Widget<'a> for SegmentedFader<'_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
         let palette = self.skin.palette;
         let icon = container(Icon::SpeakerHigh.view(self.skin.fader.icon_size, palette.muted))
-            .width(Length::Fixed(self.skin.fader.label_width))
+            .width(Length::Fixed(self.skin.fader.icon_width))
             .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill);
@@ -146,6 +146,7 @@ fn slider_style(skin: &Skin) -> impl Fn(&Theme, SliderStatus) -> SliderStyle + '
     let metrics = skin.fader;
     let rail_border = skin.border(metrics.rail_frame);
     let handle_border = skin.color(metrics.handle_frame.border);
+    let handle_color = skin.color(metrics.handle_color);
     move |_theme, _status| SliderStyle {
         rail: Rail {
             backgrounds: (
@@ -160,7 +161,7 @@ fn slider_style(skin: &Skin) -> impl Fn(&Theme, SliderStatus) -> SliderStyle + '
                 width: metrics.handle_width,
                 border_radius: metrics.handle_frame.radius.into(),
             },
-            background: Background::Color(palette.bg_panel_2),
+            background: Background::Color(handle_color),
             border_width: metrics.handle_frame.border_width,
             border_color: handle_border,
         },

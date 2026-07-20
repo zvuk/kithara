@@ -3,7 +3,7 @@ use kithara_ui::{
     error::UiDocError,
     ids::SourceUri,
     layout::{LayoutNode, parse_layout},
-    module::{ControlNode, IconName, Priority, parse_module},
+    module::{ChipStyle, ControlNode, IconName, Priority, parse_module},
 };
 use ron::extensions::Extensions;
 
@@ -232,4 +232,36 @@ fn navigation_controls_roundtrip_with_typed_icons() {
         }
     ));
     assert!(matches!(&children[2], ControlNode::TabLarge { .. }));
+}
+
+#[kithara::test]
+fn chip_style_is_typed_and_defaults_to_deck() {
+    let text = r#"(
+        schema: "kithara.module",
+        version: 1,
+        id: "chips",
+        root: Row(children: [
+            Chip(id: "deck", label: "A"),
+            Chip(id: "routing", label: "FX1", style: Routing),
+        ]),
+    )"#;
+
+    let doc = parse_module(text, &module_origin()).unwrap();
+    let ControlNode::Row { children, .. } = &doc.root else {
+        panic!("expected row root");
+    };
+    assert!(matches!(
+        &children[0],
+        ControlNode::Chip {
+            style: ChipStyle::Deck,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &children[1],
+        ControlNode::Chip {
+            style: ChipStyle::Routing,
+            ..
+        }
+    ));
 }

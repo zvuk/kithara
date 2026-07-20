@@ -329,6 +329,8 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
         label: String,
+        #[serde(default)]
+        style: ChipStyle,
     },
     Knob {
         id: NodeId,
@@ -418,6 +420,14 @@ pub enum FaderStyle {
     Default,
     Volume,
     VolumeCompact,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum ChipStyle {
+    #[default]
+    Deck,
+    Routing,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

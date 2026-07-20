@@ -9,7 +9,7 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    render::{ReadValue, Skin, UiEvent, theme::RenderPalette},
+    render::{ReadValue, Skin, UiEvent},
     skin::KnobSkin,
     widgets::{
         Widget,
@@ -31,7 +31,11 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
         };
         let value = value.clamp(0.0, 1.0).as_();
         Canvas::new(KnobCanvas {
+            body_fill: self.skin.color(self.skin.knob.body_fill),
             body_border: self.skin.color(self.skin.knob.body_border),
+            track_color: self.skin.color(self.skin.knob.track_color),
+            value_color: self.skin.color(self.skin.knob.value_color),
+            indicator_color: self.skin.color(self.skin.knob.indicator_color),
             drag: ScalarDrag::builder()
                 .path(self.path.to_owned())
                 .mode(ScalarDragMode::RelativeVertical {
@@ -39,9 +43,9 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
                     range: self.skin.knob.drag_range,
                 })
                 .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+                .double_click_value(0.5)
                 .build(),
             metrics: self.skin.knob,
-            palette: self.skin.palette,
             value,
         })
         .width(Length::Fill)
@@ -51,10 +55,13 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
 }
 
 struct KnobCanvas {
+    body_fill: Color,
     body_border: Color,
+    track_color: Color,
+    value_color: Color,
+    indicator_color: Color,
     drag: ScalarDrag,
     metrics: KnobSkin,
-    palette: RenderPalette,
     value: f32,
 }
 
@@ -84,7 +91,7 @@ impl canvas::Program<UiEvent> for KnobCanvas {
                 self.metrics.start_angle + self.metrics.sweep_angle,
                 Color {
                     a: self.metrics.track_alpha,
-                    ..self.palette.line
+                    ..self.track_color
                 },
                 self.metrics.track_width,
             );
@@ -94,13 +101,13 @@ impl canvas::Program<UiEvent> for KnobCanvas {
                 radius,
                 self.metrics.neutral_angle,
                 angle,
-                self.palette.accent,
+                self.value_color,
                 self.metrics.track_width,
             );
 
             let body_radius = self.metrics.body_ratio * radius;
             let body = Path::circle(center, body_radius);
-            frame.fill(&body, self.palette.bg_select);
+            frame.fill(&body, self.body_fill);
             frame.stroke(
                 &body,
                 Stroke::default()
@@ -116,7 +123,7 @@ impl canvas::Program<UiEvent> for KnobCanvas {
                     ),
                 ),
                 Stroke::default()
-                    .with_color(self.palette.text)
+                    .with_color(self.indicator_color)
                     .with_width(self.metrics.indicator_width),
             );
         }

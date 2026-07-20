@@ -4,6 +4,7 @@ use kithara_ui::{
     envelope::{DocKind, probe},
     error::UiDocError,
     ids::{DocId, SourceUri},
+    size::{Dim, SizeSpec},
     skin::{ColorRole, FontWeight, parse_skin},
 };
 
@@ -32,14 +33,29 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.chrome.inner_line, ColorRole::LineInner);
     assert_eq!(document.chrome.footer_background, ColorRole::BgFooter);
     assert_eq!(document.text_input.idle_border_width, 0.0);
+    assert_eq!(document.knob.body_fill, ColorRole::BgSelect);
     assert_eq!(document.knob.body_border, ColorRole::Line);
+    assert_eq!(document.knob.track_color, ColorRole::Line);
+    assert_eq!(document.knob.value_color, ColorRole::Accent);
+    assert_eq!(document.knob.indicator_color, ColorRole::Text);
+    assert_eq!(document.knob.track_alpha, 1.0);
     assert_eq!(document.knob.drag_range, 140.0);
     assert_eq!(document.vu_stereo.segment_count, 16);
     assert_eq!(document.vu_vertical.warning_threshold, 0.66);
+    assert_eq!(
+        document.toggle.size,
+        SizeSpec::new(Dim::Fixed(26.0), Dim::Fixed(14.0))
+    );
     assert_eq!(document.toggle.active_frame.radius, 0.0);
+    assert_eq!(
+        document.checkbox.size,
+        SizeSpec::new(Dim::Fixed(10.0), Dim::Fixed(10.0))
+    );
     assert_eq!(document.checkbox.inactive_frame.border_width, 1.0);
     assert_eq!(document.readout.label.weight, FontWeight::Normal);
     assert_eq!(document.chip.inactive_frame.border, ColorRole::Line);
+    assert_eq!(document.chip.deck_text.size, 9.0);
+    assert_eq!(document.chip.routing_text.size, 7.0);
     assert_eq!(document.button.primary_text.weight, FontWeight::Bold);
     assert_eq!(document.nav.item_height, 30.0);
     assert_eq!(document.nav.marker_width, 2.0);
@@ -50,6 +66,12 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.tab_large.underline_width, 2.0);
     assert_eq!(document.text.track_title.weight, FontWeight::Semibold);
     assert_eq!(document.fader.handle_frame.radius, 0.0);
+    assert_eq!(document.fader.handle_width, 9);
+    assert_eq!(document.fader.handle_color, ColorRole::Accent);
+    assert_eq!(document.fader.icon_width, 18.0);
+    assert_eq!(document.fader.label_width, 28.0);
+    assert_eq!(document.vu_vertical.thumb_height, 9.0);
+    assert_eq!(document.vu_vertical.thumb_color, ColorRole::Accent);
     assert_eq!(document.wave.grid_alpha, 0.55);
     assert_eq!(document.wave.overlay.background, ColorRole::BgDeep);
     assert_eq!(document.wave.overlay.background_alpha, 0.84);
@@ -77,6 +99,14 @@ fn unknown_skin_field_is_rejected() {
         "id: \"kithara-dark\", unknown: 1,",
         1,
     );
+    let error = parse_skin(&text, &origin()).unwrap_err();
+
+    assert!(matches!(error, UiDocError::Syntax { .. }));
+}
+
+#[kithara::test]
+fn required_control_skin_field_is_rejected_when_missing() {
+    let text = builtin::DARK_SKIN.replacen("        body_fill: BgSelect,\n", "", 1);
     let error = parse_skin(&text, &origin()).unwrap_err();
 
     assert!(matches!(error, UiDocError::Syntax { .. }));

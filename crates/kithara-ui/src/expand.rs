@@ -4,8 +4,8 @@ use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
     module::{
-        AdaptivePolicy, BindingRef, ButtonStyle, ChromeStyle, ControlNode, DeckSummaryStyle,
-        FaderStyle, IconName, ScalarFormat, TextStyle, Tone, WaveStyle,
+        AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
+        DeckSummaryStyle, FaderStyle, IconName, ScalarFormat, TextStyle, Tone, WaveStyle,
     },
     resolve::ModuleSet,
     size::SizeSpec,
@@ -97,6 +97,7 @@ pub enum ControlSpec {
     },
     Chip {
         label: InternId,
+        style: ChipStyle,
     },
     Knob,
     VuStereo,
@@ -582,8 +583,9 @@ fn expand_control(
             tone: *tone,
             framed: *framed,
         },
-        ControlNode::Chip { label, .. } => ControlSpec::Chip {
+        ControlNode::Chip { label, style, .. } => ControlSpec::Chip {
             label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+            style: *style,
         },
         ControlNode::Knob { .. } => ControlSpec::Knob,
         ControlNode::VuStereo { .. } => ControlSpec::VuStereo,
@@ -1123,7 +1125,7 @@ mod tests {
 
         let (root, arena) = expand(&set, &uri, &BTreeMap::new()).unwrap();
         let ExpandedNode::Control {
-            spec: ControlSpec::Chip { label },
+            spec: ControlSpec::Chip { label, .. },
             ..
         } = root
         else {

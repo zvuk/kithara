@@ -222,7 +222,11 @@ pub struct TextInputSkin {
 pub struct KnobSkin {
     pub size: SizeSpec,
     pub body_ratio: f32,
+    pub body_fill: ColorRole,
     pub body_border: ColorRole,
+    pub track_color: ColorRole,
+    pub value_color: ColorRole,
+    pub indicator_color: ColorRole,
     pub drag_range: f32,
     pub indicator_width: f32,
     pub outer_inset: f32,
@@ -259,7 +263,7 @@ pub struct VuVerticalSkin {
     pub segment_height: f32,
     pub segment_inset_x: f32,
     pub thumb_height: f32,
-    pub thumb_line_height: f32,
+    pub thumb_color: ColorRole,
     pub warning_threshold: f32,
     pub danger_threshold: f32,
 }
@@ -307,7 +311,8 @@ pub struct ChipSkin {
     pub inactive_frame: FrameSkin,
     pub padding_x: f32,
     pub padding_y: f32,
-    pub text: FontSkin,
+    pub deck_text: FontSkin,
+    pub routing_text: FontSkin,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -380,7 +385,9 @@ pub struct FaderSkin {
     pub handle_frame: FrameSkin,
     pub strip_frame: FrameSkin,
     pub handle_width: u16,
+    pub handle_color: ColorRole,
     pub icon_size: f32,
+    pub icon_width: f32,
     pub label: FontSkin,
     pub label_width: f32,
     pub rail_width: f32,

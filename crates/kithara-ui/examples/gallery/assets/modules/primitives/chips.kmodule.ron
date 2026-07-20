@@ -19,6 +19,7 @@
                         id: "inactive",
                         size: (w: Fixed(28.0), h: Fixed(16.0)),
                         label: "FX1",
+                        style: Routing,
                         read: Model(id: "mock.chip.inactive"),
                     ),
                 ],

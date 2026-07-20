@@ -7,6 +7,7 @@ use iced::{
 };
 
 use crate::{
+    module::ChipStyle,
     render::{ControlAction, ReadValue, Skin, UiEvent, fonts, shaped_text},
     widgets::Widget,
 };
@@ -15,6 +16,7 @@ use crate::{
 pub(crate) struct Chip<'a, 'value, 'data, 'skin> {
     path: &'a str,
     label: &'a str,
+    style: ChipStyle,
     value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
 }
@@ -24,10 +26,14 @@ impl<'a> Widget<'a> for Chip<'a, '_, '_, '_> {
         let Some(ReadValue::Bool(active)) = self.value else {
             return Space::new().into();
         };
+        let text = match self.style {
+            ChipStyle::Deck => self.skin.chip.deck_text,
+            ChipStyle::Routing => self.skin.chip.routing_text,
+        };
         button(
             shaped_text(self.label)
-                .font(fonts::mono(self.skin.chip.text.weight))
-                .size(self.skin.chip.text.size),
+                .font(fonts::mono(text.weight))
+                .size(text.size),
         )
         .padding([self.skin.chip.padding_y, self.skin.chip.padding_x])
         .width(Length::Fill)

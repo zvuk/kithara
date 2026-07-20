@@ -1,6 +1,7 @@
 use iced::{
     Event, Point, Rectangle,
     mouse::{self, Button, Cursor},
+    time::Instant,
     widget::canvas::Action,
 };
 
@@ -80,12 +81,35 @@ pub(crate) struct ScalarDrag {
     path: String,
     mode: ScalarDragMode,
     hover: HoverState,
+    double_click_value: Option<f32>,
+}
+
+#[derive(Default)]
+struct DoubleClickState {
+    previous: Option<(Point, Instant)>,
+}
+
+impl DoubleClickState {
+    fn register(&mut self, position: Point) -> bool {
+        let now = Instant::now();
+        let consecutive = self
+            .previous
+            .is_some_and(|(previous_position, previous_time)| {
+                previous_position.distance(position) < 6.0
+                    && now
+                        .checked_duration_since(previous_time)
+                        .is_some_and(|duration| duration.as_millis() <= 300)
+            });
+        self.previous = (!consecutive).then_some((position, now));
+        consecutive
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct ScalarDragState {
     active: bool,
     start_position: f32,
+    double_click: DoubleClickState,
 }
 
 impl ScalarDrag {
@@ -120,6 +144,18 @@ impl ScalarDrag {
         .and_capture()
     }
 
+    fn double_click_action(
+        &self,
+        state: &mut ScalarDragState,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let value = self.double_click_value?;
+        state
+            .double_click
+            .register(cursor.position()?)
+            .then(|| self.publish(value))
+    }
+
     pub(crate) fn update(
         &self,
         state: &mut ScalarDragState,
@@ -129,6 +165,9 @@ impl ScalarDrag {
     ) -> Option<Action<UiEvent>> {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
+                if let Some(action) = self.double_click_action(state, cursor) {
+                    return Some(action);
+                }
                 match self.mode {
                     ScalarDragMode::RelativeVertical { .. } => {
                         state.start_position = cursor.position()?.y;
@@ -190,5 +229,36 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    #[kithara::test]
+    fn relative_drag_double_click_resets_to_configured_value() {
+        let drag = ScalarDrag::builder()
+            .path("knob".to_owned())
+            .mode(ScalarDragMode::RelativeVertical {
+                value: 0.8,
+                range: 140.0,
+            })
+            .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+            .double_click_value(0.5)
+            .build();
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(34.0, 34.0));
+        let cursor = Cursor::Available(Point::new(17.0, 17.0));
+        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+        let release = Event::Mouse(mouse::Event::ButtonReleased(Button::Left));
+        let mut state = ScalarDragState::default();
+
+        assert!(drag.update(&mut state, &press, bounds, cursor).is_some());
+        assert!(drag.update(&mut state, &release, bounds, cursor).is_some());
+        let action = drag.update(&mut state, &press, bounds, cursor).unwrap();
+        let (message, _, _) = action.into_inner();
+
+        assert_eq!(
+            message,
+            Some(UiEvent::Control {
+                path: "knob".to_owned(),
+                action: ControlAction::SetScalar(0.5),
+            })
+        );
     }
 }

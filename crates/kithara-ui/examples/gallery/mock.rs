@@ -183,7 +183,7 @@ pub(super) struct MockReads {
     frame_ms_avg: String,
     frame_ms_p99: String,
     fps: String,
-    knob: f64,
+    knobs: [f64; 4],
     last_tick: Option<Instant>,
     levels_volume: f64,
     library_query: String,
@@ -217,7 +217,7 @@ impl Default for MockReads {
             frame_ms_avg: "--".to_owned(),
             frame_ms_p99: "--".to_owned(),
             fps: "--".to_owned(),
-            knob: 0.5,
+            knobs: [0.35, 0.5, 0.65, 0.8],
             last_tick: None,
             levels_volume: 0.7,
             library_query: String::new(),
@@ -282,8 +282,14 @@ impl MockReads {
 
     fn set_scalar(&mut self, path: &str, value: f64) {
         let value = value.clamp(0.0, 1.0);
-        if path.starts_with("atoms/knobs/") {
-            self.knob = value;
+        if let Some(index) = match path {
+            "atoms/knobs/size-26" => Some(0),
+            "atoms/knobs/size-28" => Some(1),
+            "atoms/knobs/size-34" => Some(2),
+            "atoms/knobs/size-38" => Some(3),
+            _ => None,
+        } {
+            self.knobs[index] = value;
         } else if path.starts_with("atoms/meters/") {
             self.levels_volume = value;
         } else if path.starts_with("faders/") || path.ends_with("/volume") {
@@ -397,7 +403,10 @@ impl Reads for MockReads {
             "ui.preset" => ReadValue::Text("player"),
             "mock.bpm" => ReadValue::Text(Consts::BPM),
             "mock.remain" => ReadValue::Text(Consts::REMAIN),
-            "mock.knob" => ReadValue::Scalar(self.knob),
+            "mock.knob.26" => ReadValue::Scalar(self.knobs[0]),
+            "mock.knob.28" => ReadValue::Scalar(self.knobs[1]),
+            "mock.knob.34" => ReadValue::Scalar(self.knobs[2]),
+            "mock.knob.38" => ReadValue::Scalar(self.knobs[3]),
             "mock.levels" => ReadValue::Stereo(StereoLevels {
                 l: 0.66,
                 r: 0.52,
@@ -613,7 +622,13 @@ pub(super) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
-    for id in ["mock.knob", "mock.volume"] {
+    for id in [
+        "mock.knob.26",
+        "mock.knob.28",
+        "mock.knob.34",
+        "mock.knob.38",
+        "mock.volume",
+    ] {
         registry.insert(
             EndpointCategory::Model,
             id,
@@ -686,5 +701,19 @@ mod tests {
         assert_eq!(reads.get(endpoint), Some(ReadValue::Bool(true)));
         reads.toggle_module("gallery-module-deck".to_owned());
         assert_eq!(reads.get(endpoint), Some(ReadValue::Bool(false)));
+    }
+
+    #[kithara::test]
+    fn knob_gallery_values_cover_both_sides_of_center() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(reads.get("mock.knob.26"), Some(ReadValue::Scalar(0.35)));
+        assert_eq!(reads.get("mock.knob.28"), Some(ReadValue::Scalar(0.5)));
+        assert_eq!(reads.get("mock.knob.34"), Some(ReadValue::Scalar(0.65)));
+        assert_eq!(reads.get("mock.knob.38"), Some(ReadValue::Scalar(0.8)));
+
+        reads.apply("atoms/knobs/size-26", &ControlAction::SetScalar(0.45));
+        assert_eq!(reads.get("mock.knob.26"), Some(ReadValue::Scalar(0.45)));
+        assert_eq!(reads.get("mock.knob.38"), Some(ReadValue::Scalar(0.8)));
     }
 }

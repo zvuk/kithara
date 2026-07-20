@@ -25,6 +25,17 @@
                 style: Volume,
                 read: Model(id: "mock.volume"),
             ),
+            Text(id: "vertical-title", style: Section, label: Some("VERTICAL FADER + VU")),
+            Row(
+                size: (w: Fill, h: Fixed(120.0)),
+                children: [
+                    VuVertical(
+                        id: "vertical",
+                        size: (w: Fixed(18.0), h: Fixed(120.0)),
+                        read: Model(id: "mock.levels"),
+                    ),
+                ],
+            ),
             Text(id: "scalar-title", style: Section, read: Model(id: "gallery.label.scalar")),
             Scalar(
                 id: "scalar",

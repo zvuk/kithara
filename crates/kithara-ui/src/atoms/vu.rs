@@ -1,5 +1,5 @@
 use iced::{
-    Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
+    Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     mouse::{self, Cursor},
     widget::{
         Space,
@@ -38,6 +38,7 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
             metrics: self.skin.vu_vertical,
             levels: *levels,
             palette: self.skin.palette,
+            thumb_color: self.skin.color(self.skin.vu_vertical.thumb_color),
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -50,6 +51,7 @@ struct VerticalVuCanvas {
     metrics: VuVerticalSkin,
     levels: StereoLevels,
     palette: RenderPalette,
+    thumb_color: Color,
 }
 
 impl canvas::Program<UiEvent> for VerticalVuCanvas {
@@ -71,7 +73,7 @@ impl canvas::Program<UiEvent> for VerticalVuCanvas {
             bounds,
             self.levels.volume,
             self.metrics,
-            self.palette,
+            self.thumb_color,
         );
         vec![frame.into_geometry()]
     }
@@ -109,7 +111,7 @@ fn draw_segments(
     }
 
     let count_usize: usize = count.as_();
-    let level = levels.l.max(levels.r).clamp(0.0, 1.0);
+    let level = (levels.l.max(levels.r) * levels.volume).clamp(0.0, 1.0);
     let lit = (level * count).round();
     let width = (bounds.width - metrics.segment_inset_x * 2.0).max(0.0);
     for index in 0..count_usize {
@@ -138,18 +140,13 @@ fn draw_thumb(
     bounds: Rectangle,
     volume: f32,
     metrics: VuVerticalSkin,
-    palette: RenderPalette,
+    color: Color,
 ) {
-    let center_y = (1.0 - volume.clamp(0.0, 1.0)) * bounds.height;
-    let y = center_y - metrics.thumb_height / 2.0;
+    let travel = (bounds.height - metrics.thumb_height).max(0.0);
+    let y = ((1.0 - volume.clamp(0.0, 1.0)) * travel).round();
     frame.fill_rectangle(
         Point::new(0.0, y),
         Size::new(bounds.width, metrics.thumb_height),
-        palette.accent,
-    );
-    frame.fill_rectangle(
-        Point::new(0.0, center_y - metrics.thumb_line_height / 2.0),
-        Size::new(bounds.width, metrics.thumb_line_height),
-        palette.bg_deep,
+        color,
     );
 }
