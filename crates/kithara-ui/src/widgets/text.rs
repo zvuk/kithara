@@ -10,12 +10,17 @@ use crate::{
 pub(crate) struct Text<'value, 'data, 'skin> {
     style: TextStyle,
     value: Option<&'value ReadValue<'data>>,
+    label: Option<&'data str>,
     skin: &'skin Skin,
 }
 
 impl<'a> Widget<'a> for Text<'_, '_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
-        let Some(ReadValue::Text(value)) = self.value else {
+        let value = match self.value {
+            Some(ReadValue::Text(value)) => Some(*value),
+            _ => self.label,
+        };
+        let Some(value) = value else {
             return iced::widget::Space::new().into();
         };
         let palette = self.skin.palette;
@@ -37,7 +42,7 @@ impl<'a> Widget<'a> for Text<'_, '_, '_> {
             ),
         };
         container(
-            shaped_text((*value).to_owned())
+            shaped_text(value.to_owned())
                 .font(font)
                 .size(size)
                 .color(color),

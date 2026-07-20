@@ -1,0 +1,17 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-module-layout",
+    root: Column(
+        children: [
+            Include(id: "selector", source: "module-tabs.kmodule.ron"),
+            Slot(
+                id: "content",
+                size: (w: Fill, h: Fill),
+                default: [
+                    Include(id: "layout", source: "library.kmodule.ron"),
+                ],
+            ),
+        ],
+    ),
+)

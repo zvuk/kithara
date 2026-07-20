@@ -137,6 +137,12 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::PresetSelector => skin.global_bar.preset_size,
         ControlSpec::SettingsButton => skin.global_bar.settings_size,
         ControlSpec::Text { .. } => skin.text.size,
+        ControlSpec::Glyph { .. } => SizeSpec::new(
+            Dim::Fixed(skin.nav.header_icon_size),
+            Dim::Fixed(skin.nav.header_height),
+        ),
+        ControlSpec::NavItem { .. } => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.nav.item_height)),
+        ControlSpec::TabLarge { .. } => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tab_large.height)),
         ControlSpec::Button { .. } => skin.button.size,
         ControlSpec::Bpm { .. } => skin.deck.bpm_size,
         ControlSpec::Time => skin.deck.time_size,

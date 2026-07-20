@@ -6,6 +6,7 @@ pub(crate) mod fader;
 pub(crate) mod global_bar;
 mod layout_preview;
 pub(crate) mod mini_wave;
+pub(crate) mod nav;
 pub(crate) mod telemetry;
 pub(crate) mod text;
 pub(crate) mod track_list;

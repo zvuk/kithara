@@ -1,0 +1,56 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-nav",
+    root: Column(
+        children: [
+            Row(
+                gap: Some(8.0),
+                pad: Some(10.0),
+                children: [
+                    Glyph(
+                        id: "header-icon",
+                        icon: Gear,
+                        size: (w: Fixed(20.0), h: Fixed(20.0)),
+                    ),
+                    Text(
+                        id: "header-title",
+                        style: TrackTitle,
+                        label: "ГАЛЕРЕЯ",
+                        size: (w: Fill, h: Fixed(20.0)),
+                    ),
+                ],
+            ),
+            NavItem(
+                id: "atoms",
+                label: "ПРИМИТИВЫ",
+                icon: Disc,
+                read: Model(id: "gallery.tab.atoms"),
+            ),
+            NavItem(
+                id: "buttons",
+                label: "КНОПКИ",
+                icon: Play,
+                read: Model(id: "gallery.tab.buttons"),
+            ),
+            NavItem(
+                id: "faders",
+                label: "ФЕЙДЕРЫ",
+                icon: Faders,
+                read: Model(id: "gallery.tab.faders"),
+            ),
+            NavItem(
+                id: "modules",
+                label: "МОДУЛИ",
+                icon: Playlist,
+                read: Model(id: "gallery.tab.modules"),
+            ),
+            NavItem(
+                id: "stress",
+                label: "СТРЕСС",
+                icon: SpeakerHigh,
+                read: Model(id: "gallery.tab.stress"),
+            ),
+        ],
+    ),
+)

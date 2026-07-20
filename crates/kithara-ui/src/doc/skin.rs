@@ -27,6 +27,8 @@ pub struct SkinDoc {
     pub readout: ReadoutSkin,
     pub chip: ChipSkin,
     pub button: ButtonSkin,
+    pub nav: NavSkin,
+    pub tab_large: TabLargeSkin,
     pub text: TextSkin,
     pub fader: FaderSkin,
     pub wave: WaveSkin,
@@ -294,6 +296,33 @@ pub struct ButtonSkin {
     pub micro_icon_size: f32,
     pub transport_fill: u16,
     pub primary_fill: u16,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct NavSkin {
+    pub item_height: f32,
+    pub marker_width: f32,
+    pub icon_size: f32,
+    pub text_size: f32,
+    pub text_pad_x: f32,
+    pub icon_gap: f32,
+    pub header_height: f32,
+    pub header_text_size: f32,
+    pub header_icon_size: f32,
+    pub pad_y: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct TabLargeSkin {
+    pub height: f32,
+    pub pad_x: f32,
+    pub pad_y: f32,
+    pub underline_width: f32,
+    pub text_size: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

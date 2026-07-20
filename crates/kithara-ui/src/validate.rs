@@ -168,6 +168,9 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::PresetSelector { id, .. }
         | ControlNode::SettingsButton { id, .. }
         | ControlNode::Text { id, .. }
+        | ControlNode::Glyph { id, .. }
+        | ControlNode::NavItem { id, .. }
+        | ControlNode::TabLarge { id, .. }
         | ControlNode::Button { id, .. }
         | ControlNode::Bpm { id, .. }
         | ControlNode::Time { id, .. }
@@ -229,6 +232,8 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Text { .. }
         | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),
         ControlNode::Button { .. }
+        | ControlNode::NavItem { .. }
+        | ControlNode::TabLarge { .. }
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
@@ -248,7 +253,8 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
         | ControlNode::PresetSelector { .. }
-        | ControlNode::SettingsButton { .. } => (None, None),
+        | ControlNode::SettingsButton { .. }
+        | ControlNode::Glyph { .. } => (None, None),
     }
 }
 

@@ -30,6 +30,13 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.readout.label.weight, FontWeight::Normal);
     assert_eq!(document.chip.inactive_frame.border, ColorRole::Line);
     assert_eq!(document.button.primary_text.weight, FontWeight::Bold);
+    assert_eq!(document.nav.item_height, 30.0);
+    assert_eq!(document.nav.marker_width, 2.0);
+    assert_eq!(document.nav.icon_size, 14.0);
+    assert_eq!(document.nav.text_pad_x, 14.0);
+    assert_eq!(document.tab_large.height, 28.0);
+    assert_eq!(document.tab_large.pad_y, 0.0);
+    assert_eq!(document.tab_large.underline_width, 2.0);
     assert_eq!(document.text.track_title.weight, FontWeight::Semibold);
     assert_eq!(document.fader.handle_frame.radius, 0.0);
     assert_eq!(document.wave.grid_alpha, 0.55);

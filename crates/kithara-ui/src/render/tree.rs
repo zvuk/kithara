@@ -19,7 +19,8 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    render::{ReadValue, Reads, Skin, UiEvent},
+    module::IconName,
+    render::{Icon, ReadValue, Reads, Skin, UiEvent},
     size::{Dim, SizeSpec, control_size},
     widgets::{
         ModuleChrome, Widget,
@@ -28,6 +29,7 @@ use crate::{
         fader::Fader,
         global_bar::{Brand, PresetSelector, SettingsButton, Spacer},
         mini_wave::MiniWave,
+        nav::{Glyph, NavItem, TabLarge},
         telemetry::Telemetry,
         text::Text,
         track_list::TrackList,
@@ -194,12 +196,20 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Text { style } => Text::builder()
+        ControlSpec::Text { style, label } => Text::builder()
             .style(*style)
             .maybe_value(value.as_ref())
+            .maybe_label(label.as_ref().map(|id| ui.resolve(*id)))
             .skin(skin)
             .build()
             .view(),
+        ControlSpec::Glyph { icon } => render_glyph(*icon, skin),
+        ControlSpec::NavItem { label, icon } => {
+            render_nav_item(path, ui.resolve(*label), *icon, value.as_ref(), skin)
+        }
+        ControlSpec::TabLarge { label } => {
+            render_tab_large(path, ui.resolve(*label), value.as_ref(), skin)
+        }
         ControlSpec::Button {
             label,
             active_label,
@@ -293,6 +303,46 @@ fn render_control<'a>(
     }
 }
 
+fn render_glyph(icon: IconName, skin: &Skin) -> Element<'static, UiEvent> {
+    Glyph::builder()
+        .icon(render_icon(icon))
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_nav_item<'a>(
+    path: &'a str,
+    label: &'a str,
+    icon: IconName,
+    value: Option<&ReadValue<'_>>,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    NavItem::builder()
+        .path(path)
+        .label(label)
+        .icon(render_icon(icon))
+        .maybe_value(value)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_tab_large<'a>(
+    path: &'a str,
+    label: &'a str,
+    value: Option<&ReadValue<'_>>,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    TabLarge::builder()
+        .path(path)
+        .label(label)
+        .maybe_value(value)
+        .skin(skin)
+        .build()
+        .view()
+}
+
 fn resolve<'a>(reads: &'a dyn Reads, binding: &Binding, ui: &CompiledUi) -> Option<ReadValue<'a>> {
     match binding {
         Binding::Telemetry { id, with } if deck_is_a(with, ui) => reads.get(ui.resolve(*id)),
@@ -315,9 +365,24 @@ fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {
         | ExpandedNode::Control { size, .. } => *size,
     };
     declared.or_else(|| match node {
+        ExpandedNode::Control {
+            spec: ControlSpec::TabLarge { .. },
+            ..
+        } => None,
         ExpandedNode::Control { spec, .. } => Some(control_size(spec, skin.document())),
         _ => None,
     })
+}
+
+fn render_icon(icon: IconName) -> Icon {
+    match icon {
+        IconName::Disc => Icon::Disc,
+        IconName::Faders => Icon::Faders,
+        IconName::Gear => Icon::Gear,
+        IconName::Play => Icon::Play,
+        IconName::Playlist => Icon::Playlist,
+        IconName::SpeakerHigh => Icon::SpeakerHigh,
+    }
 }
 
 fn apply_size<'a>(element: Element<'a, UiEvent>, size: Option<SizeSpec>) -> Element<'a, UiEvent> {

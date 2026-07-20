@@ -109,6 +109,9 @@ fn walk_includes(
         | ControlNode::PresetSelector { .. }
         | ControlNode::SettingsButton { .. }
         | ControlNode::Text { .. }
+        | ControlNode::Glyph { .. }
+        | ControlNode::NavItem { .. }
+        | ControlNode::TabLarge { .. }
         | ControlNode::Button { .. }
         | ControlNode::Bpm { .. }
         | ControlNode::Time { .. }

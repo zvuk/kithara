@@ -1,6 +1,0 @@
-(
-    schema: "kithara.module",
-    version: 1,
-    id: "gallery-tab-bar-shell",
-    root: Include(id: "tab", source: "tab-bar.kmodule.ron"),
-)

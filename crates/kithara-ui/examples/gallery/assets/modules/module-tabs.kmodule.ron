@@ -1,0 +1,34 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-module-tabs",
+    root: Row(
+        children: [
+            TabLarge(
+                id: "deck",
+                label: "DECK",
+                read: Model(id: "gallery.module.deck"),
+            ),
+            TabLarge(
+                id: "deck-micro",
+                label: "DECK MICRO",
+                read: Model(id: "gallery.module.deck_micro"),
+            ),
+            TabLarge(
+                id: "global-bar",
+                label: "GLOBAL BAR",
+                read: Model(id: "gallery.module.global_bar"),
+            ),
+            TabLarge(
+                id: "telemetry",
+                label: "TELEMETRY",
+                read: Model(id: "gallery.module.telemetry"),
+            ),
+            TabLarge(
+                id: "layout",
+                label: "LAYOUT",
+                read: Model(id: "gallery.module.layout"),
+            ),
+        ],
+    ),
+)

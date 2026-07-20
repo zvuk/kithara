@@ -143,6 +143,45 @@ pub enum ControlNode {
         adaptive: AdaptivePolicy,
         #[serde(default)]
         style: TextStyle,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    Glyph {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+        icon: IconName,
+    },
+    NavItem {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+        label: String,
+        icon: IconName,
+    },
+    TabLarge {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+        label: String,
     },
     Button {
         id: NodeId,
@@ -318,6 +357,17 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum IconName {
+    Disc,
+    Faders,
+    Gear,
+    Play,
+    Playlist,
+    SpeakerHigh,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

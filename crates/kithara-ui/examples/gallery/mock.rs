@@ -118,17 +118,57 @@ impl TryFrom<&str> for Tab {
 
     fn try_from(path: &str) -> Result<Self, ()> {
         match path {
-            "gallery/tab/atoms" => Ok(Self::Atoms),
-            "gallery/tab/buttons" => Ok(Self::Buttons),
-            "gallery/tab/faders" => Ok(Self::Faders),
-            "gallery/tab/modules" => Ok(Self::Modules),
-            "gallery/tab/stress" => Ok(Self::Stress),
+            "gallery/atoms" => Ok(Self::Atoms),
+            "gallery/buttons" => Ok(Self::Buttons),
+            "gallery/faders" => Ok(Self::Faders),
+            "gallery/modules" => Ok(Self::Modules),
+            "gallery/stress" => Ok(Self::Stress),
             _ => Err(()),
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ModuleDemo {
+    Deck,
+    DeckMicro,
+    GlobalBar,
+    Telemetry,
+    Layout,
+}
+
+impl ModuleDemo {
+    pub(super) const ALL: [Self; 5] = [
+        Self::Deck,
+        Self::DeckMicro,
+        Self::GlobalBar,
+        Self::Telemetry,
+        Self::Layout,
+    ];
+
+    pub(super) const fn entry(self) -> &'static str {
+        match self {
+            Self::Deck => "gallery-modules.klayout.ron",
+            Self::DeckMicro => "gallery-modules-deck-micro.klayout.ron",
+            Self::GlobalBar => "gallery-modules-global-bar.klayout.ron",
+            Self::Telemetry => "gallery-modules-telemetry.klayout.ron",
+            Self::Layout => "gallery-modules-layout.klayout.ron",
+        }
+    }
+
+    pub(super) const fn index(self) -> usize {
+        match self {
+            Self::Deck => 0,
+            Self::DeckMicro => 1,
+            Self::GlobalBar => 2,
+            Self::Telemetry => 3,
+            Self::Layout => 4,
+        }
+    }
+}
+
 pub(super) struct MockReads {
+    active_module: ModuleDemo,
     active_tab: Tab,
     button_cue: bool,
     button_play: bool,
@@ -161,6 +201,7 @@ pub(super) struct MockReads {
 impl Default for MockReads {
     fn default() -> Self {
         Self {
+            active_module: ModuleDemo::Deck,
             active_tab: Tab::Atoms,
             button_cue: false,
             button_play: false,
@@ -193,6 +234,10 @@ impl Default for MockReads {
 }
 
 impl MockReads {
+    pub(super) const fn active_module(&self) -> ModuleDemo {
+        self.active_module
+    }
+
     pub(super) const fn active_tab(&self) -> Tab {
         self.active_tab
     }
@@ -244,6 +289,11 @@ impl MockReads {
 
     fn activate(&mut self, path: &str) {
         match path {
+            "modules/selector/deck" => self.active_module = ModuleDemo::Deck,
+            "modules/selector/deck-micro" => self.active_module = ModuleDemo::DeckMicro,
+            "modules/selector/global-bar" => self.active_module = ModuleDemo::GlobalBar,
+            "modules/selector/telemetry" => self.active_module = ModuleDemo::Telemetry,
+            "modules/selector/layout" => self.active_module = ModuleDemo::Layout,
             "atoms/toggles/toggle-on" => self.toggle_on = !self.toggle_on,
             "atoms/toggles/toggle-off" => self.toggle_off = !self.toggle_off,
             "atoms/toggles/checkbox-on" => self.checkbox_on = !self.checkbox_on,
@@ -277,6 +327,17 @@ impl Reads for MockReads {
             "gallery.tab.faders" => ReadValue::Bool(self.active_tab == Tab::Faders),
             "gallery.tab.modules" => ReadValue::Bool(self.active_tab == Tab::Modules),
             "gallery.tab.stress" => ReadValue::Bool(self.active_tab == Tab::Stress),
+            "gallery.module.deck" => ReadValue::Bool(self.active_module == ModuleDemo::Deck),
+            "gallery.module.deck_micro" => {
+                ReadValue::Bool(self.active_module == ModuleDemo::DeckMicro)
+            }
+            "gallery.module.global_bar" => {
+                ReadValue::Bool(self.active_module == ModuleDemo::GlobalBar)
+            }
+            "gallery.module.telemetry" => {
+                ReadValue::Bool(self.active_module == ModuleDemo::Telemetry)
+            }
+            "gallery.module.layout" => ReadValue::Bool(self.active_module == ModuleDemo::Layout),
             "bench.fps" => ReadValue::Text(&self.fps),
             "bench.frame_ms_avg" => ReadValue::Text(&self.frame_ms_avg),
             "bench.frame_ms_p99" => ReadValue::Text(&self.frame_ms_p99),
@@ -506,6 +567,11 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.tab.faders",
         "gallery.tab.modules",
         "gallery.tab.stress",
+        "gallery.module.deck",
+        "gallery.module.deck_micro",
+        "gallery.module.global_bar",
+        "gallery.module.telemetry",
+        "gallery.module.layout",
         "mock.toggle.on",
         "mock.toggle.off",
         "mock.checkbox.on",

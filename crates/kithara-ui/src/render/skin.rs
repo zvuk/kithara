@@ -6,9 +6,9 @@ use crate::{
     ids::SourceUri,
     skin::{
         ButtonSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, DeckSkin, FaderSkin, FrameSkin,
-        GlobalBarSkin, KnobSkin, LayoutPreviewSkin, LayoutSkin, ReadoutSkin, SkinDoc,
-        TelemetrySkin, TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, VuStereoSkin,
-        VuVerticalSkin, WaveSkin, parse_color,
+        GlobalBarSkin, KnobSkin, LayoutPreviewSkin, LayoutSkin, NavSkin, ReadoutSkin, SkinDoc,
+        TabLargeSkin, TelemetrySkin, TextInputSkin, TextSkin, ToggleSkin, TrackListSkin,
+        VuStereoSkin, VuVerticalSkin, WaveSkin, parse_color,
     },
 };
 
@@ -29,6 +29,8 @@ pub struct Skin {
     pub readout: ReadoutSkin,
     pub chip: ChipSkin,
     pub button: ButtonSkin,
+    pub nav: NavSkin,
+    pub tab_large: TabLargeSkin,
     pub text: TextSkin,
     pub fader: FaderSkin,
     pub wave: WaveSkin,
@@ -79,6 +81,8 @@ impl Skin {
             readout: document.readout,
             chip: document.chip,
             button: document.button,
+            nav: document.nav,
+            tab_large: document.tab_large,
             text: document.text,
             fader: document.fader,
             wave: document.wave,

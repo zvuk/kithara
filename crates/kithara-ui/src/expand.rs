@@ -5,7 +5,7 @@ use crate::{
     ids::{InternId, Interner, NodeId, SourceUri},
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, DeckSummaryStyle, FaderStyle,
-        ScalarFormat, TextStyle, Tone, WaveStyle,
+        IconName, ScalarFormat, TextStyle, Tone, WaveStyle,
     },
     resolve::ModuleSet,
     size::SizeSpec,
@@ -59,6 +59,17 @@ pub enum ControlSpec {
     SettingsButton,
     Text {
         style: TextStyle,
+        label: Option<InternId>,
+    },
+    Glyph {
+        icon: IconName,
+    },
+    NavItem {
+        label: InternId,
+        icon: IconName,
+    },
+    TabLarge {
+        label: InternId,
     },
     Button {
         label: InternId,
@@ -454,7 +465,24 @@ fn expand_control(
         ControlNode::Spacer { .. } => ControlSpec::Spacer,
         ControlNode::PresetSelector { .. } => ControlSpec::PresetSelector,
         ControlNode::SettingsButton { .. } => ControlSpec::SettingsButton,
-        ControlNode::Text { style, .. } => ControlSpec::Text { style: *style },
+        ControlNode::Text { style, label, .. } => ControlSpec::Text {
+            style: *style,
+            label: intern_optional_text(
+                context,
+                machine.interner,
+                label.as_deref(),
+                &path,
+                &context.origin,
+            )?,
+        },
+        ControlNode::Glyph { icon, .. } => ControlSpec::Glyph { icon: *icon },
+        ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
+            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+            icon: *icon,
+        },
+        ControlNode::TabLarge { label, .. } => ControlSpec::TabLarge {
+            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
+        },
         ControlNode::Button {
             label,
             active_label,
@@ -575,6 +603,14 @@ fn expand_header_control(
             write,
             adaptive,
             ..
+        }
+        | ControlNode::Glyph {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
         }) => expand_control(
             context,
             control,
@@ -594,6 +630,22 @@ fn expand_value_control(
 ) -> Result<ExpandedNode, UiDocError> {
     match control {
         control @ (ControlNode::Button {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::NavItem {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
+            ..
+        }
+        | ControlNode::TabLarge {
             id,
             size,
             read,
@@ -805,8 +857,11 @@ fn walk(
         | ControlNode::Spacer { .. }
         | ControlNode::PresetSelector { .. }
         | ControlNode::SettingsButton { .. }
-        | ControlNode::Text { .. }) => expand_header_control(context, control, depth, machine),
+        | ControlNode::Text { .. }
+        | ControlNode::Glyph { .. }) => expand_header_control(context, control, depth, machine),
         control @ (ControlNode::Button { .. }
+        | ControlNode::NavItem { .. }
+        | ControlNode::TabLarge { .. }
         | ControlNode::Bpm { .. }
         | ControlNode::Time { .. }
         | ControlNode::Scalar { .. }

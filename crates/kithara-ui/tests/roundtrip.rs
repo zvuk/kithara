@@ -3,7 +3,7 @@ use kithara_ui::{
     error::UiDocError,
     ids::SourceUri,
     layout::{LayoutNode, parse_layout},
-    module::{ControlNode, Priority, parse_module},
+    module::{ControlNode, IconName, Priority, parse_module},
 };
 use ron::extensions::Extensions;
 
@@ -183,4 +183,53 @@ fn include_arguments_are_preserved() {
         panic!("expected include");
     };
     assert_eq!(with.get("deck").map(String::as_str), Some("$deck"));
+}
+
+#[kithara::test]
+fn navigation_controls_roundtrip_with_typed_icons() {
+    let text = r#"(
+        schema: "kithara.module",
+        version: 1,
+        id: "navigation",
+        root: Column(children: [
+            Glyph(id: "header-icon", icon: Gear),
+            NavItem(
+                id: "modules",
+                label: "MODULES",
+                icon: Playlist,
+                read: Model(id: "gallery.tab.modules"),
+                write: Command(id: "gallery.tab.modules"),
+            ),
+            TabLarge(
+                id: "deck",
+                label: "DECK",
+                read: Model(id: "gallery.module.deck"),
+                write: Command(id: "gallery.module.deck"),
+            ),
+        ]),
+    )"#;
+
+    let doc = parse_module(text, &module_origin()).unwrap();
+    let printed = to_ron_pretty(&doc);
+    let reparsed = parse_module(&printed, &module_origin()).unwrap();
+    assert_eq!(doc, reparsed);
+
+    let ControlNode::Column { children, .. } = &doc.root else {
+        panic!("expected column root");
+    };
+    assert!(matches!(
+        &children[0],
+        ControlNode::Glyph {
+            icon: IconName::Gear,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &children[1],
+        ControlNode::NavItem {
+            icon: IconName::Playlist,
+            ..
+        }
+    ));
+    assert!(matches!(&children[2], ControlNode::TabLarge { .. }));
 }

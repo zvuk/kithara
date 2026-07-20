@@ -10,7 +10,7 @@ use kithara_ui::{
     source::{MemResolver, UiConfig},
 };
 
-use self::mock::{MockReads, Tab};
+use self::mock::{MockReads, ModuleDemo, Tab};
 
 struct Consts;
 
@@ -39,16 +39,52 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-modules.klayout.ron"),
     ),
     (
+        "gallery-modules-deck-micro.klayout.ron",
+        include_str!("assets/gallery-modules-deck-micro.klayout.ron"),
+    ),
+    (
+        "gallery-modules-global-bar.klayout.ron",
+        include_str!("assets/gallery-modules-global-bar.klayout.ron"),
+    ),
+    (
+        "gallery-modules-telemetry.klayout.ron",
+        include_str!("assets/gallery-modules-telemetry.klayout.ron"),
+    ),
+    (
+        "gallery-modules-layout.klayout.ron",
+        include_str!("assets/gallery-modules-layout.klayout.ron"),
+    ),
+    (
         "gallery-stress.klayout.ron",
         include_str!("assets/gallery-stress.klayout.ron"),
     ),
     (
-        "modules/tab-bar-shell.kmodule.ron",
-        include_str!("assets/modules/tab-bar-shell.kmodule.ron"),
+        "modules/nav.kmodule.ron",
+        include_str!("assets/modules/nav.kmodule.ron"),
     ),
     (
-        "modules/tab-bar.kmodule.ron",
-        include_str!("assets/modules/tab-bar.kmodule.ron"),
+        "modules/module-tabs.kmodule.ron",
+        include_str!("assets/modules/module-tabs.kmodule.ron"),
+    ),
+    (
+        "modules/module-deck.kmodule.ron",
+        include_str!("assets/modules/module-deck.kmodule.ron"),
+    ),
+    (
+        "modules/module-deck-micro.kmodule.ron",
+        include_str!("assets/modules/module-deck-micro.kmodule.ron"),
+    ),
+    (
+        "modules/module-global-bar.kmodule.ron",
+        include_str!("assets/modules/module-global-bar.kmodule.ron"),
+    ),
+    (
+        "modules/module-telemetry.kmodule.ron",
+        include_str!("assets/modules/module-telemetry.kmodule.ron"),
+    ),
+    (
+        "modules/module-layout.kmodule.ron",
+        include_str!("assets/modules/module-layout.kmodule.ron"),
     ),
     (
         "modules/stress.kmodule.ron",
@@ -98,6 +134,7 @@ enum Message {
 
 struct Gallery {
     layouts: [CompiledUi; Tab::ALL.len()],
+    module_layouts: [CompiledUi; ModuleDemo::ALL.len()],
     skin: &'static Skin,
     reads: MockReads,
     shot: Option<shot::ShotPlan>,
@@ -123,6 +160,21 @@ impl Gallery {
                 )
             })
         });
+        let module_layouts = ModuleDemo::ALL.map(|module| {
+            compile(
+                module.entry(),
+                &resolver,
+                &endpoints,
+                builtin::skin_doc(),
+                &UiConfig::default(),
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "embedded gallery document {} must compile: {error}",
+                    module.entry()
+                )
+            })
+        });
         let settings = Settings {
             size: Size::new(Consts::WIDTH, Consts::HEIGHT),
             min_size: Some(Size::new(Consts::WIDTH, Consts::HEIGHT)),
@@ -133,6 +185,7 @@ impl Gallery {
         (
             Self {
                 layouts,
+                module_layouts,
                 skin: builtin::skin(),
                 reads: MockReads::default(),
                 shot: shot::ShotPlan::read(),
@@ -143,7 +196,11 @@ impl Gallery {
     }
 
     fn compiled(&self) -> &CompiledUi {
-        &self.layouts[self.reads.active_tab().index()]
+        if self.reads.active_tab() == Tab::Modules {
+            &self.module_layouts[self.reads.active_module().index()]
+        } else {
+            &self.layouts[self.reads.active_tab().index()]
+        }
     }
 
     fn select_tab(&mut self, tab: Tab) {
