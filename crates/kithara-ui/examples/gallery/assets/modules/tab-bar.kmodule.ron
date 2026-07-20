@@ -30,6 +30,12 @@
                 label: "МОДУЛИ",
                 read: Model(id: "gallery.tab.modules"),
             ),
+            Chip(
+                id: "stress",
+                size: (w: Fixed(96.0), h: Fixed(28.0)),
+                label: "СТРЕСС",
+                read: Model(id: "gallery.tab.stress"),
+            ),
         ],
     ),
 )

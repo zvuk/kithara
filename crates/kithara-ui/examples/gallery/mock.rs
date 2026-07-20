@@ -1,5 +1,9 @@
-use std::{collections::BTreeMap, sync::LazyLock};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::LazyLock,
+};
 
+use kithara_platform::time::Instant;
 use kithara_ui::{
     ids::EndpointId,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
@@ -15,9 +19,11 @@ impl Consts {
     const BPM_VALUE: f32 = 70.0;
     const DOWNBEATS: &[f32] = &[0.0, 0.5];
     const DURATION_SECS: f64 = 360.0;
+    const FRAME_WINDOW: usize = 300;
     const KEY: &str = "4m";
     const POSITION_SECS: f64 = 103.0;
     const REMAIN: &str = "−04:17";
+    const STRESS_WAVE_BUCKETS: u16 = 8_192;
     const WAVE_BEATS: &[f32] = &[0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
 }
 
@@ -74,10 +80,17 @@ pub(super) enum Tab {
     Buttons,
     Faders,
     Modules,
+    Stress,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 4] = [Self::Atoms, Self::Buttons, Self::Faders, Self::Modules];
+    pub(super) const ALL: [Self; 5] = [
+        Self::Atoms,
+        Self::Buttons,
+        Self::Faders,
+        Self::Modules,
+        Self::Stress,
+    ];
 
     pub(super) const fn entry(self) -> &'static str {
         match self {
@@ -85,6 +98,7 @@ impl Tab {
             Self::Buttons => "gallery-buttons.klayout.ron",
             Self::Faders => "gallery-faders.klayout.ron",
             Self::Modules => "gallery-modules.klayout.ron",
+            Self::Stress => "gallery-stress.klayout.ron",
         }
     }
 
@@ -94,6 +108,7 @@ impl Tab {
             Self::Buttons => 1,
             Self::Faders => 2,
             Self::Modules => 3,
+            Self::Stress => 4,
         }
     }
 }
@@ -107,6 +122,7 @@ impl TryFrom<&str> for Tab {
             "gallery/tab/buttons" => Ok(Self::Buttons),
             "gallery/tab/faders" => Ok(Self::Faders),
             "gallery/tab/modules" => Ok(Self::Modules),
+            "gallery/tab/stress" => Ok(Self::Stress),
             _ => Err(()),
         }
     }
@@ -121,7 +137,13 @@ pub(super) struct MockReads {
     checkbox_on: bool,
     chip_active: bool,
     chip_inactive: bool,
+    frame_ms: VecDeque<f64>,
+    frame_ms_ordered: Vec<f64>,
+    frame_ms_avg: String,
+    frame_ms_p99: String,
+    fps: String,
     knob: f64,
+    last_tick: Option<Instant>,
     levels_volume: f64,
     library_query: String,
     playing: bool,
@@ -130,6 +152,10 @@ pub(super) struct MockReads {
     toggle_on: bool,
     volume: f64,
     waveform: Vec<WaveBucket>,
+    stress_fader: f64,
+    stress_levels: [StereoLevels; 8],
+    stress_phase: f32,
+    stress_waveforms: [Vec<WaveBucket>; 4],
 }
 
 impl Default for MockReads {
@@ -143,7 +169,13 @@ impl Default for MockReads {
             checkbox_on: true,
             chip_active: true,
             chip_inactive: false,
+            frame_ms: VecDeque::with_capacity(Consts::FRAME_WINDOW),
+            frame_ms_ordered: Vec::with_capacity(Consts::FRAME_WINDOW),
+            frame_ms_avg: "--".to_owned(),
+            frame_ms_p99: "--".to_owned(),
+            fps: "--".to_owned(),
             knob: 0.5,
+            last_tick: None,
             levels_volume: 0.7,
             library_query: String::new(),
             playing: true,
@@ -152,6 +184,10 @@ impl Default for MockReads {
             toggle_on: true,
             volume: 0.7,
             waveform: waveform(),
+            stress_fader: 0.7,
+            stress_levels: [StereoLevels::default(); 8],
+            stress_phase: 0.0,
+            stress_waveforms: std::array::from_fn(stress_waveform),
         }
     }
 }
@@ -162,7 +198,21 @@ impl MockReads {
     }
 
     pub(super) fn select_tab(&mut self, tab: Tab) {
+        if self.active_tab != tab {
+            self.last_tick = None;
+        }
         self.active_tab = tab;
+    }
+
+    pub(super) fn tick(&mut self) {
+        if self.active_tab != Tab::Stress {
+            return;
+        }
+        let now = Instant::now();
+        if let Some(previous) = self.last_tick.replace(now) {
+            self.record_frame(now.duration_since(previous).as_secs_f64() * 1_000.0);
+        }
+        self.push_stress_data();
     }
 
     pub(super) fn set_library_query(&mut self, query: String) {
@@ -185,6 +235,8 @@ impl MockReads {
             self.levels_volume = value;
         } else if path.starts_with("faders/") || path.ends_with("/volume") {
             self.volume = value;
+        } else if path == "stress/master" {
+            self.stress_fader = value;
         } else if path.ends_with("/wave") {
             self.position_secs = value * Consts::DURATION_SECS;
         }
@@ -224,6 +276,23 @@ impl Reads for MockReads {
             "gallery.tab.buttons" => ReadValue::Bool(self.active_tab == Tab::Buttons),
             "gallery.tab.faders" => ReadValue::Bool(self.active_tab == Tab::Faders),
             "gallery.tab.modules" => ReadValue::Bool(self.active_tab == Tab::Modules),
+            "gallery.tab.stress" => ReadValue::Bool(self.active_tab == Tab::Stress),
+            "bench.fps" => ReadValue::Text(&self.fps),
+            "bench.frame_ms_avg" => ReadValue::Text(&self.frame_ms_avg),
+            "bench.frame_ms_p99" => ReadValue::Text(&self.frame_ms_p99),
+            "bench.fader" => ReadValue::Scalar(self.stress_fader),
+            "bench.wave.0" => stress_waveform_value(&self.stress_waveforms[0]),
+            "bench.wave.1" => stress_waveform_value(&self.stress_waveforms[1]),
+            "bench.wave.2" => stress_waveform_value(&self.stress_waveforms[2]),
+            "bench.wave.3" => stress_waveform_value(&self.stress_waveforms[3]),
+            "bench.level.0" => ReadValue::Stereo(self.stress_levels[0]),
+            "bench.level.1" => ReadValue::Stereo(self.stress_levels[1]),
+            "bench.level.2" => ReadValue::Stereo(self.stress_levels[2]),
+            "bench.level.3" => ReadValue::Stereo(self.stress_levels[3]),
+            "bench.level.4" => ReadValue::Stereo(self.stress_levels[4]),
+            "bench.level.5" => ReadValue::Stereo(self.stress_levels[5]),
+            "bench.level.6" => ReadValue::Stereo(self.stress_levels[6]),
+            "bench.level.7" => ReadValue::Stereo(self.stress_levels[7]),
             "deck.playback.playing" => ReadValue::Bool(self.playing),
             "deck.playback.position_normalized" => {
                 ReadValue::Scalar(self.position_secs / Consts::DURATION_SECS)
@@ -269,6 +338,51 @@ impl Reads for MockReads {
     }
 }
 
+impl MockReads {
+    fn record_frame(&mut self, frame_ms: f64) {
+        if self.frame_ms.len() == Consts::FRAME_WINDOW {
+            self.frame_ms.pop_front();
+        }
+        self.frame_ms.push_back(frame_ms);
+        let count = u32::try_from(self.frame_ms.len()).map_or(1.0, f64::from);
+        let average = self.frame_ms.iter().sum::<f64>() / count;
+        self.frame_ms_ordered.clear();
+        self.frame_ms_ordered.extend(self.frame_ms.iter().copied());
+        self.frame_ms_ordered.sort_by(f64::total_cmp);
+        let percentile = self
+            .frame_ms_ordered
+            .len()
+            .saturating_mul(99)
+            .div_ceil(100)
+            .saturating_sub(1);
+        let Some(p99) = self.frame_ms_ordered.get(percentile).copied() else {
+            return;
+        };
+        self.fps = format!("{:.1}", 1_000.0 / average);
+        self.frame_ms_avg = format!("{average:.2}");
+        self.frame_ms_p99 = format!("{p99:.2}");
+    }
+
+    fn push_stress_data(&mut self) {
+        self.stress_phase += 0.037;
+        for (index, waveform) in self.stress_waveforms.iter_mut().enumerate() {
+            waveform.rotate_left(1);
+            let offset = u16::try_from(index).map_or(0.0, f32::from);
+            if let Some(bucket) = waveform.last_mut() {
+                *bucket = stress_bucket(self.stress_phase + offset * 0.71);
+            }
+        }
+        for (index, levels) in self.stress_levels.iter_mut().enumerate() {
+            let offset = u16::try_from(index).map_or(0.0, f32::from);
+            let carrier = (self.stress_phase * 2.3 + offset * 0.47).sin();
+            let noise = (self.stress_phase * 31.7 + offset * 7.13).sin();
+            levels.l = (carrier.mul_add(0.32, noise * 0.08 + 0.54)).clamp(0.0, 1.0);
+            levels.r = ((carrier + 0.63).sin().mul_add(0.3, noise * 0.09 + 0.5)).clamp(0.0, 1.0);
+            levels.volume = self.stress_fader.as_();
+        }
+    }
+}
+
 fn waveform() -> Vec<WaveBucket> {
     (0_u16..160)
         .map(|index| WaveBucket {
@@ -277,6 +391,30 @@ fn waveform() -> Vec<WaveBucket> {
             high: 0.12 + f32::from((index * 41 + 23) % 55) / 100.0,
         })
         .collect()
+}
+
+fn stress_waveform(index: usize) -> Vec<WaveBucket> {
+    let offset = u16::try_from(index).map_or(0.0, f32::from);
+    (0..Consts::STRESS_WAVE_BUCKETS)
+        .map(|bucket| stress_bucket(f32::from(bucket).mul_add(0.013, offset)))
+        .collect()
+}
+
+fn stress_bucket(phase: f32) -> WaveBucket {
+    WaveBucket {
+        low: phase.sin().mul_add(0.34, 0.52).clamp(0.0, 1.0),
+        mid: (phase * 1.73).sin().mul_add(0.29, 0.45).clamp(0.0, 1.0),
+        high: (phase * 3.11).sin().mul_add(0.2, 0.34).clamp(0.0, 1.0),
+    }
+}
+
+fn stress_waveform_value(waveform: &[WaveBucket]) -> ReadValue<'_> {
+    ReadValue::Waveform(WaveformView {
+        buckets: waveform,
+        beats: &[],
+        downbeats: &[],
+        bpm: None,
+    })
 }
 
 #[derive(Default)]
@@ -367,6 +505,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.tab.buttons",
         "gallery.tab.faders",
         "gallery.tab.modules",
+        "gallery.tab.stress",
         "mock.toggle.on",
         "mock.toggle.off",
         "mock.checkbox.on",
@@ -395,5 +534,31 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "mock.levels",
         EndpointDesc::new(ValueKind::Stereo),
     );
+    for id in ["bench.fps", "bench.frame_ms_avg", "bench.frame_ms_p99"] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Text),
+        );
+    }
+    registry.insert(
+        EndpointCategory::Model,
+        "bench.fader",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    for index in 0..4 {
+        registry.insert(
+            EndpointCategory::Model,
+            &format!("bench.wave.{index}"),
+            EndpointDesc::new(ValueKind::Waveform),
+        );
+    }
+    for index in 0..8 {
+        registry.insert(
+            EndpointCategory::Model,
+            &format!("bench.level.{index}"),
+            EndpointDesc::new(ValueKind::Stereo),
+        );
+    }
     registry
 }

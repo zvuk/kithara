@@ -33,6 +33,7 @@ kithara-test-utils = { path = "../kithara-test-utils", features = [
     "tls-rustls",
 ] }
 
+criterion = { workspace = true }
 ron = { workspace = true }
 
 [lints]
@@ -40,4 +41,9 @@ workspace = true
 
 [[example]]
 name = "gallery"
+required-features = ["render"]
+
+[[bench]]
+name = "ui"
+harness = false
 required-features = ["render"]

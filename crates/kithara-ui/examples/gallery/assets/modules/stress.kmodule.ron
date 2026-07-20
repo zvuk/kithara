@@ -1,0 +1,71 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-stress",
+    root: Column(
+        gap: Some(12.0),
+        pad: Some(14.0),
+        children: [
+            Row(
+                gap: Some(8.0),
+                children: [
+                    Readout(id: "fps", label: Some("FPS"), read: Model(id: "bench.fps")),
+                    Readout(
+                        id: "frame-ms-avg",
+                        label: Some("AVG MS"),
+                        read: Model(id: "bench.frame_ms_avg"),
+                    ),
+                    Readout(
+                        id: "frame-ms-p99",
+                        label: Some("P99 MS"),
+                        read: Model(id: "bench.frame_ms_p99"),
+                    ),
+                ],
+            ),
+            Row(
+                gap: Some(8.0),
+                children: [
+                    Wave(
+                        id: "wave-1",
+                        size: (w: Fill, h: Fixed(132.0)),
+                        read: Model(id: "bench.wave.0"),
+                    ),
+                    Wave(
+                        id: "wave-2",
+                        size: (w: Fill, h: Fixed(132.0)),
+                        read: Model(id: "bench.wave.1"),
+                    ),
+                    Wave(
+                        id: "wave-3",
+                        size: (w: Fill, h: Fixed(132.0)),
+                        read: Model(id: "bench.wave.2"),
+                    ),
+                    Wave(
+                        id: "wave-4",
+                        size: (w: Fill, h: Fixed(132.0)),
+                        read: Model(id: "bench.wave.3"),
+                    ),
+                ],
+            ),
+            Row(
+                gap: Some(8.0),
+                children: [
+                    VuStereo(id: "vu-1", read: Model(id: "bench.level.0")),
+                    VuStereo(id: "vu-2", read: Model(id: "bench.level.1")),
+                    VuStereo(id: "vu-3", read: Model(id: "bench.level.2")),
+                    VuStereo(id: "vu-4", read: Model(id: "bench.level.3")),
+                    VuStereo(id: "vu-5", read: Model(id: "bench.level.4")),
+                    VuStereo(id: "vu-6", read: Model(id: "bench.level.5")),
+                    VuStereo(id: "vu-7", read: Model(id: "bench.level.6")),
+                    VuStereo(id: "vu-8", read: Model(id: "bench.level.7")),
+                ],
+            ),
+            Fader(
+                id: "master",
+                size: (w: Fill, h: Fixed(34.0)),
+                style: Volume,
+                read: Model(id: "bench.fader"),
+            ),
+        ],
+    ),
+)

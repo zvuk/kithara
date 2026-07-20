@@ -1,0 +1,20 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "gallery-stress",
+    root: Split(
+        axis: Vertical,
+        children: [
+            (weight: 1.0, node: Module(
+                instance: "gallery",
+                source: "modules/tab-bar-shell.kmodule.ron",
+                size: (w: Fill, h: Fixed(28.0)),
+            )),
+            (weight: 1.0, node: Module(
+                instance: "stress",
+                source: "modules/stress.kmodule.ron",
+                size: (w: Fill, h: Fill),
+            )),
+        ],
+    ),
+)

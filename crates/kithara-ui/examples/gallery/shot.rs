@@ -15,6 +15,8 @@ impl Consts {
     const FADERS_SELECT_TICK: u32 = 45;
     const MODULES_CAPTURE_TICK: u32 = 60;
     const MODULES_SELECT_TICK: u32 = 55;
+    const STRESS_CAPTURE_TICK: u32 = 465;
+    const STRESS_SELECT_TICK: u32 = 65;
 }
 
 pub(super) struct ShotPlan {
@@ -62,6 +64,11 @@ pub(super) fn drive(state: &mut Gallery) -> Task<Message> {
             Task::none()
         }
         Consts::MODULES_CAPTURE_TICK => capture(state.window_id, "tab-modules"),
+        Consts::STRESS_SELECT_TICK => {
+            state.select_tab(Tab::Stress);
+            Task::none()
+        }
+        Consts::STRESS_CAPTURE_TICK => capture(state.window_id, "tab-stress"),
         _ => Task::none(),
     }
 }
@@ -83,7 +90,7 @@ pub(super) fn save(state: &Gallery, name: &str, screenshot: &Screenshot) -> Task
     ) {
         eprintln!("failed to save {}: {error}", path.display());
     }
-    if name == "tab-modules" {
+    if name == "tab-stress" {
         iced::exit()
     } else {
         Task::none()

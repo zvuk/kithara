@@ -17,6 +17,7 @@ struct Consts;
 impl Consts {
     const CAPTURE_TICK_MS: u64 = 100;
     const HEIGHT: f32 = 720.0;
+    const STRESS_TICK_MS: u64 = 16;
     const WIDTH: f32 = 1100.0;
 }
 
@@ -38,12 +39,20 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-modules.klayout.ron"),
     ),
     (
+        "gallery-stress.klayout.ron",
+        include_str!("assets/gallery-stress.klayout.ron"),
+    ),
+    (
         "modules/tab-bar-shell.kmodule.ron",
         include_str!("assets/modules/tab-bar-shell.kmodule.ron"),
     ),
     (
         "modules/tab-bar.kmodule.ron",
         include_str!("assets/modules/tab-bar.kmodule.ron"),
+    ),
+    (
+        "modules/stress.kmodule.ron",
+        include_str!("assets/modules/stress.kmodule.ron"),
     ),
     (
         "modules/tabs/atoms.kmodule.ron",
@@ -88,7 +97,7 @@ enum Message {
 }
 
 struct Gallery {
-    layouts: [CompiledUi; 4],
+    layouts: [CompiledUi; Tab::ALL.len()],
     skin: &'static Skin,
     reads: MockReads,
     shot: Option<shot::ShotPlan>,
@@ -159,7 +168,10 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
         Message::Close(id) if id == state.window_id => iced::exit(),
         Message::Close(id) => window::close(id),
         Message::Shot(name, screenshot) => shot::save(state, name, &screenshot),
-        Message::Tick => shot::drive(state),
+        Message::Tick => {
+            state.reads.tick();
+            shot::drive(state)
+        }
         Message::Ui(UiEvent::Control { path, action }) => {
             if let Ok(tab) = Tab::try_from(path.as_str()) {
                 state.select_tab(tab);
@@ -188,10 +200,16 @@ fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
 
 fn subscription(state: &Gallery) -> Subscription<Message> {
     let close = window::close_requests().map(Message::Close);
-    if state.shot.is_some() {
+    let stress = state.reads.active_tab() == Tab::Stress;
+    if state.shot.is_some() || stress {
+        let period = if stress {
+            Consts::STRESS_TICK_MS
+        } else {
+            Consts::CAPTURE_TICK_MS
+        };
         Subscription::batch([
             close,
-            iced_time::every(Duration::from_millis(Consts::CAPTURE_TICK_MS)).map(|_| Message::Tick),
+            iced_time::every(Duration::from_millis(period)).map(|_| Message::Tick),
         ])
     } else {
         close
