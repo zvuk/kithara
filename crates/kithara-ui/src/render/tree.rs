@@ -614,9 +614,12 @@ fn render_icon(icon: IconName) -> Icon {
     match icon {
         IconName::Disc => Icon::Disc,
         IconName::Faders => Icon::Faders,
+        IconName::FastForward => Icon::FastForward,
         IconName::Gear => Icon::Gear,
         IconName::Play => Icon::Play,
+        IconName::PlayReverse => Icon::PlayReverse,
         IconName::Playlist => Icon::Playlist,
+        IconName::Rewind => Icon::Rewind,
         IconName::SpeakerHigh => Icon::SpeakerHigh,
         IconName::ZoomIn => Icon::ZoomIn,
         IconName::ZoomOut => Icon::ZoomOut,

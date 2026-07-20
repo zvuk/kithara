@@ -22,7 +22,7 @@ pub const SPACE_GROTESK_SEMIBOLD_BYTES: &[u8] =
 pub const SPACE_GROTESK_BOLD_BYTES: &[u8] =
     include_bytes!("../../assets/fonts/SpaceGrotesk-Bold.ttf");
 
-pub const FONT_BYTES: [&[u8]; 9] = [
+pub const FONT_BYTES: [&[u8]; 10] = [
     INTER_REGULAR_BYTES,
     INTER_SEMIBOLD_BYTES,
     SPACE_GROTESK_REGULAR_BYTES,
@@ -32,10 +32,12 @@ pub const FONT_BYTES: [&[u8]; 9] = [
     JETBRAINS_MONO_REGULAR_BYTES,
     JETBRAINS_MONO_MEDIUM_BYTES,
     JETBRAINS_MONO_SEMIBOLD_BYTES,
+    lucide_icons::LUCIDE_FONT_BYTES,
 ];
 
 pub const SANS: Font = font(inter_family(), Weight::Normal);
 pub const MONO: Font = font(mono_family(), Weight::Normal);
+pub const LUCIDE: Font = Font::with_name("lucide");
 
 #[must_use]
 pub const fn sans(weight: FontWeight) -> Font {

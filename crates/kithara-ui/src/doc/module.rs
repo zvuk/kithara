@@ -478,9 +478,12 @@ pub enum ControlNode {
 pub enum IconName {
     Disc,
     Faders,
+    FastForward,
     Gear,
     Play,
+    PlayReverse,
     Playlist,
+    Rewind,
     SpeakerHigh,
     ZoomIn,
     ZoomOut,

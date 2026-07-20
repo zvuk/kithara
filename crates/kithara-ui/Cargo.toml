@@ -11,7 +11,7 @@ categories = ["gui", "config"]
 
 [features]
 default = []
-render = ["dep:iced", "dep:num-traits"]
+render = ["dep:iced", "dep:lucide-icons", "dep:num-traits"]
 
 [dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
@@ -20,6 +20,7 @@ bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 iced = { workspace = true, optional = true }
+lucide-icons = { workspace = true, optional = true }
 num-traits = { workspace = true, optional = true }
 ron = { workspace = true }
 serde = { workspace = true }

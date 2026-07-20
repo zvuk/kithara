@@ -58,7 +58,7 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.chip.routing_text.size, 7.0);
     assert_eq!(document.button.primary_text.weight, FontWeight::Bold);
     assert_eq!(document.button.height, 30.0);
-    assert_eq!(document.button.zoom_icon_size, 12.0);
+    assert_eq!(document.button.transport_icon_size, 12.0);
     assert_eq!(document.nav.item_height, 30.0);
     assert_eq!(document.nav.marker_width, 2.0);
     assert_eq!(document.nav.icon_size, 14.0);

@@ -445,7 +445,7 @@ pub struct ButtonSkin {
     pub text: FontSkin,
     pub primary_text: FontSkin,
     pub icon_size: f32,
-    pub zoom_icon_size: f32,
+    pub transport_icon_size: f32,
     pub icon_gap: f32,
     pub micro_size: f32,
     pub micro_icon_size: f32,

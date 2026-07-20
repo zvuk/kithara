@@ -100,26 +100,23 @@ fn transport_content<'a>(
     highlighted: bool,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
-    let icon = icon.or(match label {
-        "PREV" => Some(Icon::SkipBack),
-        "NEXT" => Some(Icon::SkipForward),
-        _ => None,
-    });
-    icon.map_or_else(
-        || text_content(label, font),
-        |icon| {
-            if matches!(icon, Icon::ZoomIn | Icon::ZoomOut) {
-                icon.view(skin.button.zoom_icon_size, skin.palette.text_dim)
-            } else {
-                let color = if highlighted {
-                    skin.palette.bg
-                } else {
-                    skin.palette.text
-                };
-                icon_label(icon, label, font, color, skin)
-            }
-        },
-    )
+    let Some(icon) = icon else {
+        return text_content(label, font);
+    };
+    if label.is_empty() {
+        let color = if highlighted {
+            skin.palette.bg
+        } else {
+            skin.palette.text_dim
+        };
+        return icon.view(skin.button.transport_icon_size, color);
+    }
+    let color = if highlighted {
+        skin.palette.bg
+    } else {
+        skin.palette.text
+    };
+    icon_label(icon, label, font, color, skin)
 }
 
 fn text_content<'a>(label: &'a str, font: FontSkin) -> Element<'a, UiEvent> {

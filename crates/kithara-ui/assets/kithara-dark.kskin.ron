@@ -188,7 +188,7 @@
         text: (size: 11.0, weight: Normal),
         primary_text: (size: 11.0, weight: Bold),
         icon_size: 11.0,
-        zoom_icon_size: 12.0,
+        transport_icon_size: 12.0,
         icon_gap: 4.0,
         micro_size: 34.0,
         micro_icon_size: 14.0,

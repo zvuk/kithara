@@ -5166,6 +5166,7 @@ dependencies = [
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "lucide-icons",
  "num-traits",
  "ron",
  "serde",
@@ -5489,6 +5490,12 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
+
+[[package]]
+name = "lucide-icons"
+version = "1.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "029a7582875d762cacb18cb1255779e8efb2fc78081a4fc1ddc65b49b4d42aa0"
 
 [[package]]
 name = "lyon"

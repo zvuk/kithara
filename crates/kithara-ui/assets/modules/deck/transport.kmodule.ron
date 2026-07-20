@@ -34,7 +34,8 @@
             Button(
                 id: "reverse",
                 size: (w: Fixed(48.0), h: Fixed(30.0)),
-                label: "◁",
+                label: "",
+                icon: Some(PlayReverse),
                 style: Transport,
                 read: Telemetry(id: "deck.playback.reverse", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.toggle_reverse", with: { "deck": "$deck" }),
@@ -50,14 +51,16 @@
             Button(
                 id: "jump-back",
                 size: (w: Fixed(52.0), h: Fixed(30.0)),
-                label: "≪",
+                label: "",
+                icon: Some(Rewind),
                 style: Transport,
                 write: Command(id: "deck.transport.jump_back", with: { "deck": "$deck" }),
             ),
             Button(
                 id: "jump-forward",
                 size: (w: Fixed(52.0), h: Fixed(30.0)),
-                label: "≫",
+                label: "",
+                icon: Some(FastForward),
                 style: Transport,
                 write: Command(id: "deck.transport.jump_forward", with: { "deck": "$deck" }),
             ),
@@ -65,7 +68,7 @@
             Button(
                 id: "zoom-out",
                 size: (w: Fixed(36.0), h: Fixed(30.0)),
-                label: "ZOOM OUT",
+                label: "",
                 icon: Some(ZoomOut),
                 style: Transport,
                 write: Command(id: "deck.view.zoom_out", with: { "deck": "$deck" }),
@@ -73,7 +76,7 @@
             Button(
                 id: "zoom-in",
                 size: (w: Fixed(36.0), h: Fixed(30.0)),
-                label: "ZOOM IN",
+                label: "",
                 icon: Some(ZoomIn),
                 style: Transport,
                 write: Command(id: "deck.view.zoom_in", with: { "deck": "$deck" }),
