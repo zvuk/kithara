@@ -24,19 +24,19 @@ in `kithara-audio`. The audio graph passes its existing `PcmPool` through
 `kithara-stretch` depends downward on `kithara-bufpool` for backend scratch
 storage and on `kithara-workspace-hack` for native workspace unification.
 
-The crate also owns the transport-facing numeric elastic DSP contract.
-`ElasticBackend` processes one exact source-frame span into one exact output
-span, while `ElasticCapabilities` declares the supported rate envelope,
+The crate also owns the transport-facing numeric elastic DSP implementation.
+`SignalsmithElastic` processes one exact source-frame span into one exact
+output span, while `ElasticCapabilities` declares the supported rate envelope,
 algorithmic latency, channel/sample-rate identity, prepared block limits, and
 whether caller-ordered reverse input is supported.
 `ElasticRequest` contains only frame counts; session beats, track bindings,
 phase correction, source-window policy, and graph scheduling remain in
 `kithara-play`.
 
-`ElasticBackend` is sealed. Other crates consume it through trait objects, but
-concrete adapters and the validated capability values they publish are owned
-here. Adding an elastic backend therefore changes this crate rather than
-opening an externally constructed capability surface.
+The exact-span path currently has one adapter, so callers use the concrete
+prepared `SignalsmithElastic` instead of a single-implementation trait object.
+Backend capability selection remains above this implementation; introduce an
+interface at this seam only when a second exact-span adapter exists.
 
 ## Backend Contract
 

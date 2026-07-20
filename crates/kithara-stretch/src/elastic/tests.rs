@@ -2,7 +2,7 @@ use std::f32::consts::TAU;
 
 use kithara_test_utils::kithara;
 
-use crate::{ElasticBackend, ElasticConfig, ElasticError, ElasticRequest, SignalsmithElastic};
+use crate::{ElasticConfig, ElasticError, ElasticRequest, SignalsmithElastic};
 
 const CHANNELS: usize = 2;
 

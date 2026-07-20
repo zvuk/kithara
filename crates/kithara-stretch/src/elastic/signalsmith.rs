@@ -4,8 +4,8 @@ use num_traits::ToPrimitive;
 use signalsmith_stretch::Stretch;
 
 use super::{
-    ElasticBackend, ElasticCapabilities, ElasticConfig, ElasticError, ElasticLatency,
-    ElasticRateEnvelope, ElasticRequest,
+    ElasticCapabilities, ElasticConfig, ElasticError, ElasticLatency, ElasticRateEnvelope,
+    ElasticRequest,
 };
 
 /// Prepared Signalsmith engine for continuous, exact-frame elastic rendering.
@@ -107,14 +107,18 @@ impl SignalsmithElastic {
         }
         Ok(())
     }
-}
 
-impl ElasticBackend for SignalsmithElastic {
-    fn capabilities(&self) -> ElasticCapabilities {
+    /// Returns the immutable limits and algorithmic latency of this engine.
+    #[must_use]
+    pub const fn capabilities(&self) -> ElasticCapabilities {
         self.capabilities
     }
 
-    fn prime(
+    /// Resets state and seeds exact history and warmup spans into `discarded_output`.
+    ///
+    /// # Errors
+    /// Returns [`ElasticError`] for invalid latency, shapes, arithmetic, or rates.
+    pub fn prime(
         &mut self,
         request: ElasticRequest,
         source_history: &[f32],
@@ -162,7 +166,11 @@ impl ElasticBackend for SignalsmithElastic {
         Ok(())
     }
 
-    fn process(
+    /// Processes exact source and output spans; frame counts are the sole rate control.
+    ///
+    /// # Errors
+    /// Returns [`ElasticError`] for invalid shapes, limits, arithmetic, or rates.
+    pub fn process(
         &mut self,
         request: ElasticRequest,
         source: &[f32],
@@ -173,7 +181,11 @@ impl ElasticBackend for SignalsmithElastic {
         Ok(())
     }
 
-    fn reset(&mut self) {
+    /// Clears stream history while retaining the prepared shape and latency.
+    ///
+    /// This reuses prepared storage and performs work bounded by that shape without
+    /// allocation, blocking, I/O, or logging.
+    pub fn reset(&mut self) {
         // WHY: Signalsmith sizes reset vectors during configure, so reset reuses capacity.
         self.inner.reset();
     }

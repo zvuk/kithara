@@ -23,6 +23,6 @@ mod elastic;
 #[cfg(feature = "stretch-signalsmith")]
 pub use elastic::SignalsmithElastic;
 pub use elastic::{
-    ElasticBackend, ElasticCapabilities, ElasticConfig, ElasticError, ElasticLatency,
-    ElasticRateEnvelope, ElasticRequest,
+    ElasticCapabilities, ElasticConfig, ElasticError, ElasticLatency, ElasticRateEnvelope,
+    ElasticRequest,
 };

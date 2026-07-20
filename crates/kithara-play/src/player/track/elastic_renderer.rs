@@ -10,8 +10,7 @@ use kithara_audio::{
 };
 use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
 use kithara_stretch::{
-    ElasticBackend, ElasticCapabilities, ElasticConfig, ElasticError, ElasticRequest,
-    SignalsmithElastic,
+    ElasticCapabilities, ElasticConfig, ElasticError, ElasticRequest, SignalsmithElastic,
 };
 use num_traits::ToPrimitive;
 use rendering::SourceCopy;
@@ -189,7 +188,7 @@ enum RelocationRead {
 }
 
 pub(crate) struct ElasticRenderer {
-    backend: Box<dyn ElasticBackend>,
+    backend: SignalsmithElastic,
     capabilities: ElasticCapabilities,
     max_warm_frames: usize,
     max_source_frames: usize,
@@ -278,7 +277,7 @@ impl ElasticRenderer {
             .collect::<Result<SmallVec<_>, _>>()?;
 
         Ok(Self {
-            backend: Box::new(backend),
+            backend,
             capabilities,
             max_warm_frames,
             max_source_frames,

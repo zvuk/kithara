@@ -1,6 +1,3 @@
-mod backend;
-pub use backend::ElasticBackend;
-
 mod capabilities;
 pub use capabilities::ElasticCapabilities;
 
