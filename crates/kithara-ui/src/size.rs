@@ -151,7 +151,9 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Wave { .. } => skin.wave.size,
         ControlSpec::TrackList { .. } => skin.track_list.size,
         ControlSpec::Tree { .. } => skin.tree.size,
-        ControlSpec::ContextBar => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tree.context_height)),
+        ControlSpec::ContextBar { .. } => {
+            SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tree.context_height))
+        }
         ControlSpec::Toggle => skin.toggle.size,
         ControlSpec::Checkbox => skin.checkbox.size,
         ControlSpec::Segmented { .. } => skin.segmented.size,

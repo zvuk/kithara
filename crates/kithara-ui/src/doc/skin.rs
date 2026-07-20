@@ -651,6 +651,20 @@ pub struct TreeSkin {
     pub context_background: ColorRole,
     pub context_divider: ColorRole,
     pub context_divider_width: f32,
+    pub scope_text: FontSkin,
+    pub scope_gap: f32,
+    pub scope_padding_x: f32,
+    pub scope_frame: FrameSkin,
+    pub scope_background: ColorRole,
+    pub scope_text_color: ColorRole,
+    pub scope_chevron_size: f32,
+    pub scope_chevron_color: ColorRole,
+    pub scope_menu_background: ColorRole,
+    pub scope_menu_frame: FrameSkin,
+    pub scope_item_height: f32,
+    pub scope_menu_text: ColorRole,
+    pub scope_selected_background: ColorRole,
+    pub scope_selected_text: ColorRole,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

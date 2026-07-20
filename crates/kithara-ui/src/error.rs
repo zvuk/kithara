@@ -125,6 +125,8 @@ pub enum UiDocError {
     },
     #[error("{origin}: track list at {path} must contain the Title column")]
     MissingTrackTitleColumn { origin: SourceUri, path: String },
+    #[error("{origin}: ContextBar at {path} requires scope_items, scope, and write together")]
+    InvalidContextScope { origin: SourceUri, path: String },
     #[error("{origin}: compiled node count {count} exceeds limit {max}")]
     NodesExceeded {
         origin: SourceUri,

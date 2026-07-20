@@ -198,6 +198,7 @@ pub(crate) fn check_controls(
     origin: &SourceUri,
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
+    check_context_scope(site, origin)?;
     if let ControlNode::TrackList { columns, .. } = site.control {
         check_track_list(columns, site.columns_state, site.path, origin, endpoints)?;
     }
@@ -206,6 +207,16 @@ pub(crate) fn check_controls(
             query,
             BindingSide::Read,
             Some(ValueKind::Text),
+            site.path,
+            origin,
+            endpoints,
+        )?;
+    }
+    if let Some(scope) = site.scope {
+        check_binding(
+            scope,
+            BindingSide::Read,
+            Some(ValueKind::Scalar),
             site.path,
             origin,
             endpoints,
@@ -223,16 +234,28 @@ pub(crate) fn check_controls(
         )?;
     }
     if let Some(binding) = site.write {
-        check_binding(
-            binding,
-            BindingSide::Write,
-            write_kind,
-            site.path,
-            origin,
-            endpoints,
-        )?;
+        let side = if matches!(site.control, ControlNode::ContextBar { .. }) {
+            BindingSide::ModelWrite
+        } else {
+            BindingSide::Write
+        };
+        check_binding(binding, side, write_kind, site.path, origin, endpoints)?;
     }
     Ok(())
+}
+
+fn check_context_scope(site: ControlSite<'_>, origin: &SourceUri) -> Result<(), UiDocError> {
+    let ControlNode::ContextBar { scope_items, .. } = site.control else {
+        return Ok(());
+    };
+    let enabled = !scope_items.is_empty();
+    if enabled == site.scope.is_some() && enabled == site.write.is_some() {
+        return Ok(());
+    }
+    Err(UiDocError::InvalidContextScope {
+        origin: origin.clone(),
+        path: site.path.to_owned(),
+    })
 }
 
 fn check_track_list(
@@ -334,6 +357,7 @@ pub(crate) fn check_module_footer(
 enum BindingSide {
     Read,
     Write,
+    ModelWrite,
 }
 
 pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<ValueKind>) {
@@ -341,8 +365,8 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         ControlNode::Bpm { .. } => (Some(ValueKind::Waveform), None),
         ControlNode::DeckSummary { .. }
         | ControlNode::Text { .. }
-        | ControlNode::Readout { .. }
-        | ControlNode::ContextBar { .. } => (Some(ValueKind::Text), None),
+        | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),
+        ControlNode::ContextBar { .. } => (Some(ValueKind::Text), Some(ValueKind::Scalar)),
         ControlNode::Button { .. }
         | ControlNode::NavItem { .. }
         | ControlNode::TabLarge { .. }
@@ -404,6 +428,12 @@ fn check_binding(
             category,
             EndpointCategory::Command | EndpointCategory::Parameter
         ),
+        BindingSide::ModelWrite => {
+            matches!(
+                category,
+                EndpointCategory::Command | EndpointCategory::Parameter | EndpointCategory::Model
+            )
+        }
     };
     if !allowed {
         return Err(UiDocError::BindingDirection {
@@ -583,6 +613,10 @@ mod tests {
     fn check_control(body: &str, path: &str, write: Option<&BindingRef>) -> Result<(), UiDocError> {
         let text = format!(r#"(schema: "kithara.module", version: 1, id: "test", root: {body})"#);
         let document = parse_module(&text, &origin())?;
+        let scope = match &document.root {
+            ControlNode::ContextBar { scope, .. } => scope.as_ref(),
+            _ => None,
+        };
         check_controls(
             ControlSite {
                 path,
@@ -591,6 +625,7 @@ mod tests {
                 write,
                 columns_state: None,
                 query: None,
+                scope,
             },
             &origin(),
             &registry(),
@@ -608,6 +643,11 @@ mod tests {
             EndpointCategory::Parameter,
             "player.output.volume",
             EndpointDesc::new(ValueKind::Scalar),
+        );
+        registry.insert(
+            EndpointCategory::Model,
+            "library.breadcrumb",
+            EndpointDesc::new(ValueKind::Text),
         );
         registry
     }
@@ -653,6 +693,7 @@ mod tests {
                 write: None,
                 columns_state: None,
                 query: query.as_ref(),
+                scope: None,
             },
             &origin(),
             &registry(),
@@ -667,6 +708,49 @@ mod tests {
                 path,
                 ..
             } if expected == "Text" && got == "Scalar" && path == "tree/browser"
+        ));
+    }
+
+    #[kithara::test]
+    fn context_scope_items_require_scope_binding() {
+        let error = check_control(
+            r#"ContextBar(id: "context", scope_items: ["LOCAL"])"#,
+            "library/context",
+            None,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::InvalidContextScope { path, .. } if path == "library/context"
+        ));
+    }
+
+    #[kithara::test]
+    fn context_scope_binding_must_be_scalar() {
+        let write = BindingRef::Parameter {
+            id: EndpointId("player.output.volume".into()),
+            with: BTreeMap::new(),
+        };
+        let error = check_control(
+            r#"ContextBar(
+                id: "context",
+                scope_items: ["LOCAL"],
+                scope: Model(id: "library.breadcrumb"),
+            )"#,
+            "library/context",
+            Some(&write),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::BindingType {
+                expected,
+                got,
+                path,
+                ..
+            } if expected == "Scalar" && got == "Text" && path == "library/context"
         ));
     }
 

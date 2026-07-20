@@ -460,6 +460,27 @@ mod tests {
         assert_eq!(queries, ["library.query"]);
     }
 
+    #[kithara::test]
+    fn context_scope_binding_reaches_the_compiled_control() {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        let ui = compile(
+            Tab::Library2.entry(),
+            &resolver,
+            &endpoints,
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap();
+        let mut contexts = Vec::new();
+        collect_context_scopes(&ui.root, &ui, &mut contexts);
+
+        assert_eq!(
+            contexts,
+            [("library2/context", "library.scope", "library.scope", 2)]
+        );
+    }
+
     fn collect_tab_large_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {
         match node {
             CompiledNode::Split { children, .. } => {
@@ -527,6 +548,57 @@ mod tests {
                     },
                 ..
             } => queries.push(ui.resolve(*id)),
+            ExpandedNode::Control { .. } => {}
+            _ => {}
+        }
+    }
+
+    fn collect_context_scopes<'a>(
+        node: &'a CompiledNode,
+        ui: &'a CompiledUi,
+        contexts: &mut Vec<(&'a str, &'a str, &'a str, usize)>,
+    ) {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                for (_, child) in children {
+                    collect_context_scopes(child, ui, contexts);
+                }
+            }
+            CompiledNode::Module { root, .. } => {
+                collect_expanded_context_scopes(root, ui, contexts)
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_expanded_context_scopes<'a>(
+        node: &'a ExpandedNode,
+        ui: &'a CompiledUi,
+        contexts: &mut Vec<(&'a str, &'a str, &'a str, usize)>,
+    ) {
+        match node {
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => {
+                for child in children {
+                    collect_expanded_context_scopes(child, ui, contexts);
+                }
+            }
+            ExpandedNode::Control {
+                path,
+                spec:
+                    ControlSpec::ContextBar {
+                        scope_items,
+                        scope: Some(Binding::Model { id: scope, .. }),
+                    },
+                write: Some(Binding::Model { id: write, .. }),
+                ..
+            } => contexts.push((
+                ui.resolve(*path),
+                ui.resolve(*scope),
+                ui.resolve(*write),
+                scope_items.len(),
+            )),
             ExpandedNode::Control { .. } => {}
             _ => {}
         }

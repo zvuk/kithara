@@ -306,6 +306,10 @@ pub enum ControlNode {
         write: Option<BindingRef>,
         #[serde(default)]
         adaptive: AdaptivePolicy,
+        #[serde(default)]
+        scope_items: Vec<String>,
+        #[serde(default)]
+        scope: Option<BindingRef>,
     },
     Toggle {
         id: NodeId,

@@ -319,6 +319,7 @@ pub(super) struct MockReads {
     last_tick: Option<Instant>,
     levels_volume: f64,
     library_query: String,
+    library_scope: usize,
     playing: bool,
     position_secs: f64,
     segmented_index: f64,
@@ -370,6 +371,7 @@ impl Default for MockReads {
             last_tick: None,
             levels_volume: 0.7,
             library_query: String::new(),
+            library_scope: 0,
             playing: true,
             position_secs: Consts::POSITION_SECS,
             segmented_index: 2.0,
@@ -444,6 +446,8 @@ impl MockReads {
             self.segmented_index = index.as_();
         } else if path == "tracklist/column-preset" {
             self.set_tracklist_preset(index);
+        } else if path == "library2/context" {
+            self.library_scope = index;
         } else if matches!(path, "tree/browser" | "library2/browser") {
             self.select_tree_row(index);
         }
@@ -662,6 +666,7 @@ impl Reads for MockReads {
             "library.tree" => ReadValue::Tree(&self.tree_rows),
             "library.breadcrumb" => ReadValue::Text(CATALOG.breadcrumb),
             "library.query" => ReadValue::Text(&self.library_query),
+            "library.scope" => ReadValue::Scalar(self.library_scope.as_()),
             "ui.preset" => ReadValue::Text("player"),
             "mock.bpm" => ReadValue::Text(Consts::BPM),
             "mock.remain" => ReadValue::Text(Consts::REMAIN),
@@ -967,6 +972,7 @@ fn insert_library_endpoints(registry: &mut MockRegistry) {
         ("library.tree", ValueKind::Tree),
         ("library.breadcrumb", ValueKind::Text),
         ("library.query", ValueKind::Text),
+        ("library.scope", ValueKind::Scalar),
         ("ui.preset", ValueKind::Text),
     ] {
         registry.insert(EndpointCategory::Model, id, EndpointDesc::new(kind));
@@ -1185,5 +1191,20 @@ mod tests {
             reads.get("library.query"),
             Some(ReadValue::Text("acid bass"))
         );
+    }
+
+    #[kithara::test]
+    fn context_scope_selection_is_host_owned() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(reads.get("library.scope"), Some(ReadValue::Scalar(0.0)));
+        reads.apply("library2/context", &ControlAction::SelectIndex(1));
+        assert_eq!(reads.get("library.scope"), Some(ReadValue::Scalar(1.0)));
+    }
+
+    #[kithara::test]
+    fn breadcrumb_data_excludes_the_scope_prefix() {
+        assert!(!CATALOG.breadcrumb.is_empty());
+        assert!(!CATALOG.breadcrumb.contains('\u{203a}'));
     }
 }

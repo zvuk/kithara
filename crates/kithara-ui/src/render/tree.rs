@@ -339,7 +339,9 @@ fn render_control<'a>(
             skin,
         ),
         ControlSpec::Tree { query } => render_tree(path, query.as_ref(), value, ui, reads, skin),
-        ControlSpec::ContextBar => render_context_bar(value, skin),
+        ControlSpec::ContextBar { scope_items, scope } => {
+            render_context_bar(path, scope_items, scope.as_ref(), value, ui, reads, skin)
+        }
     }
 }
 
@@ -388,8 +390,20 @@ fn render_tree<'a>(
         .view()
 }
 
-fn render_context_bar<'a>(value: Option<&ReadValue<'_>>, skin: &Skin) -> Element<'a, UiEvent> {
+fn render_context_bar<'a>(
+    path: &'a str,
+    scope_items: &[InternId],
+    scope: Option<&Binding>,
+    value: Option<&ReadValue<'_>>,
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    let scope_value = scope.and_then(|binding| resolve(reads, binding, ui));
     ContextBar::builder()
+        .path(path)
+        .scope_items(scope_items.iter().map(|id| ui.resolve(*id)).collect())
+        .maybe_scope_value(scope_value.as_ref())
         .maybe_value(value)
         .skin(skin)
         .build()

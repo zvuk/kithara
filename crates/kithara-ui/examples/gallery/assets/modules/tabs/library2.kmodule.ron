@@ -20,6 +20,9 @@
                         id: "context",
                         size: (w: Fill, h: Fixed(26.0)),
                         read: Model(id: "library.breadcrumb"),
+                        write: Model(id: "library.scope"),
+                        scope_items: ["ЗВУК", "ЛОКАЛЬНО"],
+                        scope: Model(id: "library.scope"),
                         adaptive: (priority: Required),
                     ),
                     TrackList(

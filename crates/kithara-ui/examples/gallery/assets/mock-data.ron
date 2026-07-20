@@ -1,7 +1,7 @@
 (
     title: "MoonShine_Секрет",
     artist: "teo_van_bo",
-    breadcrumb: "ЗВУК › ПОИСК",
+    breadcrumb: "ПОИСК",
     tree: [
         (depth: 0, label: "Коллекция", icon: Collection, expanded: Some(true)),
         (depth: 1, label: "All tracks", icon: Playlist, count: Some(29)),

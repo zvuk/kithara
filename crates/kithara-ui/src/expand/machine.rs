@@ -227,6 +227,16 @@ fn intern_binding(
     }
 }
 
+fn intern_optional_binding(
+    interner: &mut Interner,
+    binding: Option<&BindingRef>,
+    origin: &SourceUri,
+) -> Result<Option<Binding>, UiDocError> {
+    binding
+        .map(|binding| intern_binding(interner, binding, origin))
+        .transpose()
+}
+
 fn intern_text(
     context: &Context<'_>,
     interner: &mut Interner,
@@ -247,6 +257,32 @@ fn intern_optional_text(
     value
         .map(|value| intern_text(context, interner, value, path, origin))
         .transpose()
+}
+
+fn intern_texts(
+    context: &Context<'_>,
+    interner: &mut Interner,
+    values: &[String],
+    path: &str,
+    origin: &SourceUri,
+) -> Result<Vec<InternId>, UiDocError> {
+    values
+        .iter()
+        .map(|value| intern_text(context, interner, value, path, origin))
+        .collect()
+}
+
+fn context_bar_spec(
+    context: &Context<'_>,
+    interner: &mut Interner,
+    scope_items: &[String],
+    scope: Option<&BindingRef>,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::ContextBar {
+        scope_items: intern_texts(context, interner, scope_items, path, &context.origin)?,
+        scope: intern_optional_binding(interner, scope, &context.origin)?,
+    })
 }
 
 fn child_path(prefix: &str, id: &NodeId) -> String {
@@ -278,12 +314,14 @@ struct ControlFields<'a> {
 struct ExtraBindings {
     columns_state: Option<BindingRef>,
     query: Option<BindingRef>,
+    scope: Option<BindingRef>,
 }
 
 #[derive(Clone, Copy)]
 struct ExtraBindingRefs<'a> {
     columns_state: Option<&'a BindingRef>,
     query: Option<&'a BindingRef>,
+    scope: Option<&'a BindingRef>,
 }
 
 impl ExtraBindings {
@@ -306,9 +344,17 @@ impl ExtraBindings {
                 .transpose()?,
             _ => None,
         };
+        let scope = match control {
+            ControlNode::ContextBar { scope, .. } => scope
+                .as_ref()
+                .map(|binding| substitute_binding(context, binding, path))
+                .transpose()?,
+            _ => None,
+        };
         Ok(Self {
             columns_state,
             query,
+            scope,
         })
     }
 
@@ -316,6 +362,7 @@ impl ExtraBindings {
         ExtraBindingRefs {
             columns_state: self.columns_state.as_ref(),
             query: self.query.as_ref(),
+            scope: self.scope.as_ref(),
         }
     }
 }
@@ -363,6 +410,7 @@ fn finish_control(
             write: write.as_ref(),
             columns_state: extra.columns_state,
             query: extra.query,
+            scope: extra.scope,
         },
         &context.origin,
     )?;
@@ -456,27 +504,30 @@ fn expand_control(
         },
         ControlNode::TrackList { columns, .. } => ControlSpec::TrackList {
             columns: columns.clone(),
-            columns_state: extra
-                .columns_state
-                .as_ref()
-                .map(|binding| intern_binding(machine.interner, binding, &context.origin))
-                .transpose()?,
+            columns_state: intern_optional_binding(
+                machine.interner,
+                extra.columns_state.as_ref(),
+                &context.origin,
+            )?,
         },
         ControlNode::Tree { .. } => ControlSpec::Tree {
-            query: extra
-                .query
-                .as_ref()
-                .map(|binding| intern_binding(machine.interner, binding, &context.origin))
-                .transpose()?,
+            query: intern_optional_binding(
+                machine.interner,
+                extra.query.as_ref(),
+                &context.origin,
+            )?,
         },
-        ControlNode::ContextBar { .. } => ControlSpec::ContextBar,
+        ControlNode::ContextBar { scope_items, .. } => context_bar_spec(
+            context,
+            machine.interner,
+            scope_items,
+            extra.scope.as_ref(),
+            &path,
+        )?,
         ControlNode::Toggle { .. } => ControlSpec::Toggle,
         ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
         ControlNode::Segmented { items, .. } => ControlSpec::Segmented {
-            items: items
-                .iter()
-                .map(|item| intern_text(context, machine.interner, item, &path, &context.origin))
-                .collect::<Result<_, _>>()?,
+            items: intern_texts(context, machine.interner, items, &path, &context.origin)?,
         },
         ControlNode::Select { label, .. } => ControlSpec::Select {
             label: intern_text(context, machine.interner, label, &path, &context.origin)?,
@@ -697,6 +748,7 @@ fn expand_value_control(
             read,
             write,
             adaptive,
+            ..
         }) => expand_control(
             context,
             control,

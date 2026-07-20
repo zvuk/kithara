@@ -84,7 +84,8 @@ presets without introducing renderer-owned mutable state.
 are host-owned. The renderer never mutates or filters that state; activating any visible row emits
 `ControlAction::SelectIndex` on the control path, and the host decides whether that index toggles a
 branch or selects a leaf. `TreeSkin` owns the search, row, indentation, panel, and Zvuk context-bar
-metrics. `ContextBar` is a read-only text control so breadcrumb state stays endpoint-owned.
+metrics. `ContextBar` keeps breadcrumb text read-only; optional scope items use a separate Scalar
+read binding and emit `SelectIndex` on the control path so scope state remains host-owned.
 
 ## Detached application consumer (2026-07-20)
 

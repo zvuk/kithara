@@ -94,7 +94,10 @@ pub enum ControlSpec {
     Tree {
         query: Option<Binding>,
     },
-    ContextBar,
+    ContextBar {
+        scope_items: Vec<InternId>,
+        scope: Option<Binding>,
+    },
     Toggle,
     Checkbox,
     Segmented {
@@ -165,6 +168,7 @@ pub(crate) struct ControlSite<'a> {
     pub(crate) write: Option<&'a BindingRef>,
     pub(crate) columns_state: Option<&'a BindingRef>,
     pub(crate) query: Option<&'a BindingRef>,
+    pub(crate) scope: Option<&'a BindingRef>,
 }
 
 pub(crate) type ControlVisitor<'v> =
