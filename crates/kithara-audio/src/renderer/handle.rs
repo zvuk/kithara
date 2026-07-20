@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use kithara_platform::{CancelToken, sync::Arc};
 
 use super::{DecoderNode, HangWatchdogObserver, TrackRegistration};
-use crate::runtime::{Node, Scheduler, SchedulerHandle};
+use crate::runtime::{Node, Scheduler, SchedulerHandle, WakeSignal};
 
 /// Unique identifier for a track registered with a shared worker.
 pub(crate) type TrackId = u64;
@@ -86,6 +86,12 @@ impl AudioWorkerHandle {
         );
 
         Self { id_gen, inner }
+    }
+}
+
+impl WakeSignal for AudioWorkerHandle {
+    fn wake(&self) {
+        Self::wake(self);
     }
 }
 

@@ -27,7 +27,7 @@ pub(crate) fn connect_source_audio(
         .checked_add(capacity)
         .and_then(|count| count.checked_add(2))
         .ok_or(SourceAudioError::CapacityOverflow)?;
-    let worker_wake: Arc<dyn WakeSignal> = Arc::new(SourceAudioWorkerWake(worker));
+    let worker_wake: Arc<dyn WakeSignal> = Arc::new(worker);
     let (command_outlet, command_inlet) =
         connect::<SourceAudioCommand>(capacity, Some(Arc::clone(&worker_wake)));
     let (data_outlet, data_inlet) = connect::<SourceAudioPacket>(capacity, None);
@@ -54,12 +54,4 @@ pub(crate) fn connect_source_audio(
         max_frames,
     );
     Ok((reader, tap))
-}
-
-struct SourceAudioWorkerWake(AudioWorkerHandle);
-
-impl WakeSignal for SourceAudioWorkerWake {
-    fn wake(&self) {
-        self.0.wake();
-    }
 }
