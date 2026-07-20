@@ -216,6 +216,8 @@ pub enum ControlNode {
         adaptive: AdaptivePolicy,
         label: String,
         #[serde(default)]
+        icon: Option<IconName>,
+        #[serde(default)]
         active_label: Option<String>,
         #[serde(default)]
         style: ButtonStyle,
@@ -480,6 +482,8 @@ pub enum IconName {
     Play,
     Playlist,
     SpeakerHigh,
+    ZoomIn,
+    ZoomOut,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

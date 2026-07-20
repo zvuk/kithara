@@ -6,7 +6,8 @@ use kithara_ui::{
     compile::{CompiledNode, compile},
     expand::{Binding, ControlSpec, ExpandedNode},
     layout::Axis,
-    module::WaveStyle,
+    module::{IconName, WaveStyle},
+    size::Dim,
     source::UiConfig,
 };
 
@@ -90,6 +91,72 @@ fn player_deck_starts_with_one_hero_wave() {
 }
 
 #[kithara::test]
+fn player_deck_compiles_canonical_transport_row() {
+    let ui = compile(
+        builtin::PLAYER_PRESET,
+        &builtin::resolver(),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected split root");
+    };
+    let CompiledNode::Module { root, .. } = &children[1].1 else {
+        panic!("expected deck module");
+    };
+    let ExpandedNode::Column { children, .. } = &**root else {
+        panic!("deck must compile to one column");
+    };
+    let Some(ExpandedNode::Row {
+        size: Some(size),
+        children,
+        ..
+    }) = children.get(1)
+    else {
+        panic!("expected transport row");
+    };
+
+    assert_eq!(size.h, Dim::Fixed(30.0));
+    assert_eq!(children.len(), 12);
+    assert!(matches!(
+        children.get(8),
+        Some(ExpandedNode::Control {
+            spec: ControlSpec::Button {
+                icon: Some(IconName::ZoomOut),
+                ..
+            },
+            ..
+        })
+    ));
+    assert!(matches!(
+        children.get(9),
+        Some(ExpandedNode::Control {
+            spec: ControlSpec::Button {
+                icon: Some(IconName::ZoomIn),
+                ..
+            },
+            ..
+        })
+    ));
+    assert!(matches!(
+        children.get(10),
+        Some(ExpandedNode::Control {
+            spec: ControlSpec::Select { .. },
+            ..
+        })
+    ));
+    assert!(matches!(
+        children.get(11),
+        Some(ExpandedNode::Control {
+            spec: ControlSpec::Readout { .. },
+            ..
+        })
+    ));
+}
+
+#[kithara::test]
 fn player_preset_size_sums_global_deck_and_library_heights() {
     let ui = compile(
         builtin::PLAYER_PRESET,
@@ -128,7 +195,7 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
     };
 
     assert_eq!(global_size.h.min(), 34.0);
-    assert_eq!(deck_size.h.min(), 148.0);
+    assert_eq!(deck_size.h.min(), 150.0);
     assert_eq!(library_size.h.min(), 210.0);
     assert_eq!(
         ui.size.h.min(),

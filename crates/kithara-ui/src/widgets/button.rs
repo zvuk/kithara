@@ -18,6 +18,7 @@ use crate::{
 pub(crate) struct ControlButton<'a, 'value, 'data, 'skin> {
     path: &'a str,
     label: &'a str,
+    icon: Option<Icon>,
     active_label: Option<&'a str>,
     style: ButtonStyle,
     value: Option<&'value ReadValue<'data>>,
@@ -32,7 +33,8 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
         } else {
             self.label
         };
-        let font = if is_primary(self.style) {
+        let highlighted = is_primary(self.style) || active;
+        let font = if highlighted {
             self.skin.button.primary_text
         } else {
             self.skin.button.text
@@ -43,11 +45,20 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
                 let icon = if active { Icon::Pause } else { Icon::Play };
                 icon.view(self.skin.button.micro_icon_size, palette.bg)
             }
-            ButtonStyle::Transport => transport_content(label, font, self.skin),
-            ButtonStyle::TransportPrimary | ButtonStyle::Default => shaped_text(label)
-                .font(fonts::mono(font.weight))
-                .size(font.size)
-                .into(),
+            ButtonStyle::Transport | ButtonStyle::TransportPrimary => {
+                transport_content(self.icon, label, font, highlighted, self.skin)
+            }
+            ButtonStyle::Default => self.icon.map_or_else(
+                || text_content(label, font),
+                |icon| {
+                    let color = if highlighted {
+                        palette.bg
+                    } else {
+                        palette.text
+                    };
+                    icon_label(icon, label, font, color, self.skin)
+                },
+            ),
         };
         let height = if self.style == ButtonStyle::MicroPrimary {
             self.skin.button.micro_size
@@ -62,7 +73,7 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
         let control = button(centered)
             .height(Length::Fixed(height))
             .padding([self.skin.button.padding_y, self.skin.button.padding_x])
-            .style(control_button_style(self.skin, self.style))
+            .style(control_button_style(self.skin, self.style, active))
             .on_press(UiEvent::Control {
                 path: self.path.to_owned(),
                 action: ControlAction::Activate,
@@ -82,26 +93,51 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
     }
 }
 
-fn transport_content<'a>(label: &'a str, font: FontSkin, skin: &Skin) -> Element<'a, UiEvent> {
-    let icon = match label {
+fn transport_content<'a>(
+    icon: Option<Icon>,
+    label: &'a str,
+    font: FontSkin,
+    highlighted: bool,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    let icon = icon.or(match label {
         "PREV" => Some(Icon::SkipBack),
         "NEXT" => Some(Icon::SkipForward),
         _ => None,
-    };
+    });
     icon.map_or_else(
-        || {
-            shaped_text(label)
-                .font(fonts::mono(font.weight))
-                .size(font.size)
-                .into()
+        || text_content(label, font),
+        |icon| {
+            if matches!(icon, Icon::ZoomIn | Icon::ZoomOut) {
+                icon.view(skin.button.zoom_icon_size, skin.palette.text_dim)
+            } else {
+                let color = if highlighted {
+                    skin.palette.bg
+                } else {
+                    skin.palette.text
+                };
+                icon_label(icon, label, font, color, skin)
+            }
         },
-        |icon| icon_label(icon, label, font, skin),
     )
 }
 
-fn icon_label<'a>(icon: Icon, label: &'a str, font: FontSkin, skin: &Skin) -> Element<'a, UiEvent> {
+fn text_content<'a>(label: &'a str, font: FontSkin) -> Element<'a, UiEvent> {
+    shaped_text(label)
+        .font(fonts::mono(font.weight))
+        .size(font.size)
+        .into()
+}
+
+fn icon_label<'a>(
+    icon: Icon,
+    label: &'a str,
+    font: FontSkin,
+    color: iced::Color,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
     row![
-        icon.view(skin.button.icon_size, skin.palette.text),
+        icon.view(skin.button.icon_size, color),
         shaped_text(label)
             .font(fonts::mono(font.weight))
             .size(font.size),
@@ -121,15 +157,19 @@ fn is_primary(style: ButtonStyle) -> bool {
 fn control_button_style(
     skin: &Skin,
     style: ButtonStyle,
+    active: bool,
 ) -> impl Fn(&Theme, ButtonStatus) -> IcedButtonStyle + 'static {
     let palette = skin.palette;
-    let border = skin.border(if is_primary(style) {
+    let highlighted = is_primary(style) || active;
+    let mut border = skin.border(if is_primary(style) {
         skin.button.primary_frame
     } else {
         skin.button.frame
     });
+    if style == ButtonStyle::Transport {
+        border.color = palette.line_inner;
+    }
     move |_theme, status| {
-        let highlighted = is_primary(style);
         let background = if highlighted {
             match status {
                 ButtonStatus::Hovered => palette.accent_strong,
@@ -153,5 +193,30 @@ fn control_button_style(
             border,
             ..IcedButtonStyle::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{builtin, ids::SourceUri};
+
+    #[kithara::test]
+    fn active_transport_keeps_line_inner_separator() {
+        let origin = SourceUri("button.kskin.ron".to_owned());
+        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
+        let style = control_button_style(&skin, ButtonStyle::Transport, true)(
+            &Theme::Dark,
+            ButtonStatus::Active,
+        );
+
+        assert_eq!(
+            style.background,
+            Some(Background::Color(skin.palette.accent))
+        );
+        assert_eq!(style.border.color, skin.palette.line_inner);
+        assert_eq!(style.border.width, 1.0);
     }
 }

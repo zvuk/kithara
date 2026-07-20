@@ -1,5 +1,7 @@
 mod mock;
 mod mock_data;
+mod mock_transport;
+mod sections;
 mod shot;
 
 use iced::{Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings};
@@ -11,7 +13,10 @@ use kithara_ui::{
     source::{MemResolver, UiConfig},
 };
 
-use self::mock::{MockReads, ModuleDemo, Tab};
+use self::{
+    mock::MockReads,
+    sections::{ModuleDemo, Tab},
+};
 
 struct Consts;
 

@@ -10,7 +10,7 @@ use super::{
 use crate::{
     error::UiDocError,
     ids::{Interner, NodeId, SourceUri},
-    module::{AdaptivePolicy, BindingRef, ControlNode},
+    module::{AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, IconName},
     resolve::ModuleSet,
     size::SizeSpec,
 };
@@ -355,20 +355,19 @@ fn expand_control(
         },
         ControlNode::Button {
             label,
+            icon,
             active_label,
             style,
             ..
-        } => ControlSpec::Button {
-            label: intern_text(context, machine.interner, label, &path, &context.origin)?,
-            active_label: intern_optional_text(
-                context,
-                machine.interner,
-                active_label.as_deref(),
-                &path,
-                &context.origin,
-            )?,
-            style: *style,
-        },
+        } => button_spec(
+            context,
+            machine.interner,
+            label,
+            *icon,
+            active_label.as_deref(),
+            *style,
+            &path,
+        )?,
         ControlNode::Bpm { placeholder, .. } => ControlSpec::Bpm {
             placeholder: intern_optional_text(
                 context,
@@ -475,6 +474,23 @@ fn expand_control(
         spec,
         machine,
     )
+}
+
+fn button_spec(
+    context: &Context<'_>,
+    interner: &mut Interner,
+    label: &str,
+    icon: Option<IconName>,
+    active_label: Option<&str>,
+    style: ButtonStyle,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::Button {
+        label: intern_text(context, interner, label, path, &context.origin)?,
+        icon,
+        active_label: intern_optional_text(context, interner, active_label, path, &context.origin)?,
+        style,
+    })
 }
 
 fn expand_header_control(

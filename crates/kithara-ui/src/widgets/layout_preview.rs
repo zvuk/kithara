@@ -215,17 +215,32 @@ mod tests {
             match (category, id.0.as_str()) {
                 (
                     EndpointCategory::Command,
-                    "deck.transport.toggle_play" | "deck.transport.prev" | "deck.transport.next",
+                    "deck.transport.jump_back"
+                    | "deck.transport.jump_forward"
+                    | "deck.transport.set_cue"
+                    | "deck.transport.toggle_loop"
+                    | "deck.transport.toggle_play"
+                    | "deck.transport.toggle_reverse"
+                    | "deck.transport.toggle_sync"
+                    | "deck.view.zoom_in"
+                    | "deck.view.zoom_out",
                 ) => Some(&self.scoped_trigger),
                 (EndpointCategory::Command, "deck.transport.seek_normalized")
                 | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
                     Some(&self.scoped_scalar)
                 }
-                (EndpointCategory::Telemetry, "deck.playback.playing") => Some(&self.bool_value),
+                (
+                    EndpointCategory::Telemetry,
+                    "deck.playback.looping"
+                    | "deck.playback.playing"
+                    | "deck.playback.reverse"
+                    | "deck.playback.synced",
+                ) => Some(&self.bool_value),
                 (EndpointCategory::Telemetry, "deck.playback.waveform") => {
                     Some(&self.scoped_waveform)
                 }
                 (EndpointCategory::Telemetry, "deck.track.title") => Some(&self.scoped_text),
+                (EndpointCategory::Telemetry, "deck.playback.tempo") => Some(&self.scoped_text),
                 (EndpointCategory::Parameter, "player.output.volume") => Some(&self.scalar),
                 (EndpointCategory::Telemetry, "player.output.levels") => Some(&self.stereo),
                 (EndpointCategory::Model, "deck.view.zoom") => Some(&self.scalar),

@@ -32,19 +32,33 @@ pub(crate) fn player_registry() -> TestRegistry {
     let mut registry = TestRegistry::default();
     registry.insert(
         EndpointCategory::Command,
+        "deck.transport.jump_back",
+        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "deck.transport.jump_forward",
+        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "deck.transport.set_cue",
+        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+    );
+    for id in [
+        "deck.transport.toggle_loop",
         "deck.transport.toggle_play",
-        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
-    );
-    registry.insert(
-        EndpointCategory::Command,
-        "deck.transport.prev",
-        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
-    );
-    registry.insert(
-        EndpointCategory::Command,
-        "deck.transport.next",
-        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
-    );
+        "deck.transport.toggle_reverse",
+        "deck.transport.toggle_sync",
+        "deck.view.zoom_in",
+        "deck.view.zoom_out",
+    ] {
+        registry.insert(
+            EndpointCategory::Command,
+            id,
+            EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+        );
+    }
     registry.insert(
         EndpointCategory::Command,
         "deck.transport.seek_normalized",
@@ -59,6 +73,22 @@ pub(crate) fn player_registry() -> TestRegistry {
         EndpointCategory::Telemetry,
         "deck.playback.position_normalized",
         EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
+    );
+    for id in [
+        "deck.playback.looping",
+        "deck.playback.reverse",
+        "deck.playback.synced",
+    ] {
+        registry.insert(
+            EndpointCategory::Telemetry,
+            id,
+            EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+        );
+    }
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "deck.playback.tempo",
+        EndpointDesc::new(ValueKind::Text).with_scope("deck"),
     );
     registry.insert(
         EndpointCategory::Telemetry,

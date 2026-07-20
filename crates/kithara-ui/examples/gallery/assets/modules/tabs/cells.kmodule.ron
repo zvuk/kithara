@@ -18,7 +18,7 @@
                             Button(id: "play", label: "PLAY", style: TransportPrimary, read: Model(id: "mock.button.sync"), size: (w: Fixed(64.0), h: Fixed(28.0))),
                         ],
                     ),
-                    Text(id: "buttons-spec", style: MicroLabel, label: "КНОПКА: 1PX #3B3B67 · АКТИВ = GOLD + #12121F", size: (w: Fill, h: Fill)),
+                    Text(id: "buttons-spec", style: MicroLabel, label: "КНОПКА: 1PX #2A2A4C · АКТИВ = GOLD + #12121F", size: (w: Fill, h: Fill)),
                 ],
             ),
             Row(

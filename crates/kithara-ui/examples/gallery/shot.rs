@@ -2,7 +2,7 @@ use std::{env, fs, io, path::PathBuf};
 
 use iced::{Task, window, window::Screenshot};
 
-use super::{Gallery, Message, mock::Tab};
+use super::{Gallery, Message, sections::Tab};
 
 struct Consts;
 

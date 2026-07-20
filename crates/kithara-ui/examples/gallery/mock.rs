@@ -9,7 +9,11 @@ use kithara_ui::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::mock_data::CATALOG;
+use crate::{
+    mock_data::CATALOG,
+    mock_transport::DeckTransport,
+    sections::{ModuleDemo, Tab},
+};
 
 struct Consts;
 
@@ -23,6 +27,7 @@ impl Consts {
     const LOOP_REGION: [f32; 2] = [0.30, 0.34];
     const POSITION_SECS: f64 = 103.0;
     const REMAIN: &str = "−04:17";
+    const TEMPO: &str = "+0.0%";
     const STRESS_WAVE_BUCKETS: u16 = 8_192;
     const TRACK_COLUMNS: [TrackColumn; 9] = [
         TrackColumn::Index,
@@ -42,139 +47,6 @@ impl Consts {
     const TRACKLIST_QUEUE_PRESET: usize = 1;
     const WAVE_BUCKETS: u32 = 4_096;
     const ZOOM: f64 = 0.12;
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Tab {
-    Atoms,
-    Buttons,
-    Faders,
-    Modules,
-    Typography,
-    Cells,
-    Sizes,
-    Chrome,
-    Titlebars,
-    Tracklist,
-    Tree,
-    Library2,
-    Stress,
-}
-
-impl Tab {
-    pub(super) const ALL: [Self; 13] = [
-        Self::Atoms,
-        Self::Buttons,
-        Self::Faders,
-        Self::Modules,
-        Self::Typography,
-        Self::Cells,
-        Self::Sizes,
-        Self::Chrome,
-        Self::Titlebars,
-        Self::Tracklist,
-        Self::Tree,
-        Self::Library2,
-        Self::Stress,
-    ];
-
-    pub(super) const fn entry(self) -> &'static str {
-        match self {
-            Self::Atoms => "gallery-atoms.klayout.ron",
-            Self::Buttons => "gallery-buttons.klayout.ron",
-            Self::Faders => "gallery-faders.klayout.ron",
-            Self::Modules => "gallery-modules.klayout.ron",
-            Self::Typography => "gallery-typography.klayout.ron",
-            Self::Cells => "gallery-cells.klayout.ron",
-            Self::Sizes => "gallery-sizes.klayout.ron",
-            Self::Chrome => "gallery-chrome.klayout.ron",
-            Self::Titlebars => "gallery-titlebars.klayout.ron",
-            Self::Tracklist => "gallery-tracklist.klayout.ron",
-            Self::Tree => "gallery-tree.klayout.ron",
-            Self::Library2 => "gallery-library2.klayout.ron",
-            Self::Stress => "gallery-stress.klayout.ron",
-        }
-    }
-
-    pub(super) const fn index(self) -> usize {
-        match self {
-            Self::Atoms => 0,
-            Self::Buttons => 1,
-            Self::Faders => 2,
-            Self::Modules => 3,
-            Self::Typography => 4,
-            Self::Cells => 5,
-            Self::Sizes => 6,
-            Self::Chrome => 7,
-            Self::Titlebars => 8,
-            Self::Tracklist => 9,
-            Self::Tree => 10,
-            Self::Library2 => 11,
-            Self::Stress => 12,
-        }
-    }
-}
-
-impl TryFrom<&str> for Tab {
-    type Error = ();
-
-    fn try_from(path: &str) -> Result<Self, ()> {
-        match path {
-            "gallery/atoms" => Ok(Self::Atoms),
-            "gallery/buttons" => Ok(Self::Buttons),
-            "gallery/faders" => Ok(Self::Faders),
-            "gallery/modules" => Ok(Self::Modules),
-            "gallery/typography" => Ok(Self::Typography),
-            "gallery/cells" => Ok(Self::Cells),
-            "gallery/sizes" => Ok(Self::Sizes),
-            "gallery/chrome" => Ok(Self::Chrome),
-            "gallery/titlebars" => Ok(Self::Titlebars),
-            "gallery/tracklist" => Ok(Self::Tracklist),
-            "gallery/tree" => Ok(Self::Tree),
-            "gallery/library2" => Ok(Self::Library2),
-            "gallery/stress" => Ok(Self::Stress),
-            _ => Err(()),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ModuleDemo {
-    Deck,
-    DeckMicro,
-    GlobalBar,
-    Telemetry,
-    Layout,
-}
-
-impl ModuleDemo {
-    pub(super) const ALL: [Self; 5] = [
-        Self::Deck,
-        Self::DeckMicro,
-        Self::GlobalBar,
-        Self::Telemetry,
-        Self::Layout,
-    ];
-
-    pub(super) const fn entry(self) -> &'static str {
-        match self {
-            Self::Deck => "gallery-modules.klayout.ron",
-            Self::DeckMicro => "gallery-modules-deck-micro.klayout.ron",
-            Self::GlobalBar => "gallery-modules-global-bar.klayout.ron",
-            Self::Telemetry => "gallery-modules-telemetry.klayout.ron",
-            Self::Layout => "gallery-modules-layout.klayout.ron",
-        }
-    }
-
-    pub(super) const fn index(self) -> usize {
-        match self {
-            Self::Deck => 0,
-            Self::DeckMicro => 1,
-            Self::GlobalBar => 2,
-            Self::Telemetry => 3,
-            Self::Layout => 4,
-        }
-    }
 }
 
 pub(super) struct MockReads {
@@ -198,8 +70,6 @@ pub(super) struct MockReads {
     levels_volume: f64,
     library_query: String,
     library_scope: usize,
-    playing: bool,
-    position_secs: f64,
     segmented_index: f64,
     toggle_off: bool,
     toggle_on: bool,
@@ -207,7 +77,7 @@ pub(super) struct MockReads {
     wave_beats: Vec<f32>,
     wave_downbeats: Vec<f32>,
     waveform: Vec<WaveBucket>,
-    zoom: f64,
+    transport: DeckTransport,
     stress_fader: f64,
     stress_levels: [StereoLevels; 8],
     stress_phase: f32,
@@ -254,8 +124,6 @@ impl Default for MockReads {
             levels_volume: 0.7,
             library_query: String::new(),
             library_scope: 0,
-            playing: true,
-            position_secs: Consts::POSITION_SECS,
             segmented_index: 2.0,
             toggle_off: false,
             toggle_on: true,
@@ -263,7 +131,14 @@ impl Default for MockReads {
             wave_beats,
             wave_downbeats,
             waveform: waveform(),
-            zoom: Consts::ZOOM,
+            transport: DeckTransport::new(
+                Consts::BPM_VALUE,
+                Consts::CUES,
+                Consts::DURATION_SECS,
+                Consts::LOOP_REGION,
+                Consts::POSITION_SECS,
+                Consts::ZOOM,
+            ),
             stress_fader: 0.7,
             stress_levels: [StereoLevels::default(); 8],
             stress_phase: 0.0,
@@ -407,7 +282,7 @@ impl MockReads {
     fn set_scalar(&mut self, path: &str, value: f64) {
         let value = value.clamp(0.0, 1.0);
         if path.ends_with("/zoom") {
-            self.zoom = value.clamp(0.015, 0.5);
+            self.transport.set_zoom(value);
         } else if let Some(index) = match path {
             "atoms/knobs/size-26" => Some(0),
             "atoms/knobs/size-28" => Some(1),
@@ -423,11 +298,14 @@ impl MockReads {
         } else if path == "stress/master" {
             self.stress_fader = value;
         } else if path.ends_with("/wave") {
-            self.position_secs = value * Consts::DURATION_SECS;
+            self.transport.seek_normalized(value);
         }
     }
 
     fn activate(&mut self, path: &str) {
+        if self.transport.activate(path) {
+            return;
+        }
         match path {
             "modules-tabs/deck" => self.active_module = ModuleDemo::Deck,
             "modules-tabs/deck-micro" => self.active_module = ModuleDemo::DeckMicro,
@@ -451,7 +329,10 @@ impl MockReads {
             path if path.starts_with("tracklist/column-") => {
                 self.toggle_tracklist_column(&path["tracklist/column-".len()..]);
             }
-            path if path.ends_with("/play") => self.playing = !self.playing,
+            path if path.ends_with("/transport/sync") => {
+                self.button_sync = !self.button_sync;
+            }
+            path if path.ends_with("/play") => self.transport.toggle_play(),
             _ => {}
         }
     }
@@ -527,27 +408,31 @@ impl Reads for MockReads {
             "bench.level.5" => ReadValue::Stereo(self.stress_levels[5]),
             "bench.level.6" => ReadValue::Stereo(self.stress_levels[6]),
             "bench.level.7" => ReadValue::Stereo(self.stress_levels[7]),
-            "deck.playback.playing" => ReadValue::Bool(self.playing),
+            "deck.playback.playing" => ReadValue::Bool(self.transport.playing()),
             "deck.playback.position_normalized" => {
-                ReadValue::Scalar(self.position_secs / Consts::DURATION_SECS)
+                ReadValue::Scalar(self.transport.position_normalized())
             }
             "deck.playback.remaining_secs" => {
-                ReadValue::Scalar(Consts::DURATION_SECS - self.position_secs)
+                ReadValue::Scalar(Consts::DURATION_SECS - self.transport.position_secs())
             }
-            "deck.playback.position_secs" => ReadValue::Scalar(self.position_secs),
+            "deck.playback.position_secs" => ReadValue::Scalar(self.transport.position_secs()),
             "deck.playback.duration_secs" => ReadValue::Scalar(Consts::DURATION_SECS),
+            "deck.playback.looping" => ReadValue::Bool(self.transport.loop_region().is_some()),
+            "deck.playback.reverse" => ReadValue::Bool(self.transport.reverse()),
+            "deck.playback.synced" | "mock.button.sync" => ReadValue::Bool(self.button_sync),
+            "deck.playback.tempo" => ReadValue::Text(Consts::TEMPO),
             "deck.playback.waveform" => ReadValue::Waveform(WaveformView {
                 buckets: &self.waveform,
                 beats: &self.wave_beats,
                 downbeats: &self.wave_downbeats,
                 bpm: Some(Consts::BPM_VALUE),
-                r#loop: Some(Consts::LOOP_REGION),
-                cues: Consts::CUES,
+                r#loop: self.transport.loop_region(),
+                cues: self.transport.cues(),
             }),
             "deck.track.title" | "mock.track.title" => ReadValue::Text(CATALOG.title),
             "deck.track.source_kind" | "mock.track.artist" => ReadValue::Text(CATALOG.artist),
             "deck.track.key" | "mock.key" => ReadValue::Text(Consts::KEY),
-            "deck.view.zoom" => ReadValue::Scalar(self.zoom),
+            "deck.view.zoom" => ReadValue::Scalar(self.transport.zoom()),
             "player.output.levels" => ReadValue::Stereo(StereoLevels {
                 l: 0.66,
                 r: 0.52,
@@ -579,7 +464,6 @@ impl Reads for MockReads {
             "mock.chip.inactive" => ReadValue::Bool(self.chip_inactive),
             "mock.button.play" => ReadValue::Bool(self.button_play),
             "mock.button.cue" => ReadValue::Bool(self.button_cue),
-            "mock.button.sync" => ReadValue::Bool(self.button_sync),
             "mock.cells.segmented" => ReadValue::Scalar(self.segmented_index),
             "gallery.tracklist.preset" => ReadValue::Scalar(self.tracklist_preset.as_()),
             _ => return None,
@@ -715,13 +599,18 @@ fn insert_output_levels(registry: &mut MockRegistry) {
     );
 }
 
-pub(super) fn registry() -> impl EndpointRegistry {
-    let mut registry = MockRegistry::default();
+fn insert_deck_endpoints(registry: &mut MockRegistry) {
     for (id, kind) in [
+        ("deck.transport.jump_back", ValueKind::Trigger),
+        ("deck.transport.jump_forward", ValueKind::Trigger),
+        ("deck.transport.set_cue", ValueKind::Trigger),
+        ("deck.transport.toggle_loop", ValueKind::Trigger),
         ("deck.transport.toggle_play", ValueKind::Trigger),
-        ("deck.transport.prev", ValueKind::Trigger),
-        ("deck.transport.next", ValueKind::Trigger),
+        ("deck.transport.toggle_reverse", ValueKind::Trigger),
+        ("deck.transport.toggle_sync", ValueKind::Trigger),
         ("deck.transport.seek_normalized", ValueKind::Scalar),
+        ("deck.view.zoom_in", ValueKind::Trigger),
+        ("deck.view.zoom_out", ValueKind::Trigger),
     ] {
         registry.insert(
             EndpointCategory::Command,
@@ -735,6 +624,10 @@ pub(super) fn registry() -> impl EndpointRegistry {
         ("deck.playback.remaining_secs", ValueKind::Scalar),
         ("deck.playback.position_secs", ValueKind::Scalar),
         ("deck.playback.duration_secs", ValueKind::Scalar),
+        ("deck.playback.looping", ValueKind::Bool),
+        ("deck.playback.reverse", ValueKind::Bool),
+        ("deck.playback.synced", ValueKind::Bool),
+        ("deck.playback.tempo", ValueKind::Text),
         ("deck.playback.waveform", ValueKind::Waveform),
         ("deck.track.title", ValueKind::Text),
         ("deck.track.source_kind", ValueKind::Text),
@@ -746,6 +639,11 @@ pub(super) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(kind).with_scope("deck"),
         );
     }
+}
+
+pub(super) fn registry() -> impl EndpointRegistry {
+    let mut registry = MockRegistry::default();
+    insert_deck_endpoints(&mut registry);
     insert_output_levels(&mut registry);
     for id in ["player.output.volume", "mock.cells.segmented"] {
         registry.insert(
@@ -974,6 +872,30 @@ mod tests {
         assert_eq!(reads.get("deck.view.zoom"), Some(ReadValue::Scalar(0.015)));
         reads.apply("modules/deck/wave/zoom", &ControlAction::SetScalar(0.9));
         assert_eq!(reads.get("deck.view.zoom"), Some(ReadValue::Scalar(0.5)));
+    }
+
+    #[kithara::test]
+    fn deck_sync_and_reverse_toggles_update_active_reads() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(
+            reads.get("deck.playback.synced"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("deck.playback.reverse"),
+            Some(ReadValue::Bool(false))
+        );
+        reads.apply("modules/deck/transport/sync", &ControlAction::Activate);
+        reads.apply("modules/deck/transport/reverse", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("deck.playback.synced"),
+            Some(ReadValue::Bool(false))
+        );
+        assert_eq!(
+            reads.get("deck.playback.reverse"),
+            Some(ReadValue::Bool(true))
+        );
     }
 
     #[kithara::test]

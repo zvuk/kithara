@@ -76,6 +76,7 @@ pub enum ControlSpec {
     },
     Button {
         label: InternId,
+        icon: Option<IconName>,
         active_label: Option<InternId>,
         style: ButtonStyle,
     },

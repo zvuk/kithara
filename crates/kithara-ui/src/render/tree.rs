@@ -243,11 +243,13 @@ fn render_control<'a>(
         ControlSpec::TabLarge { label } => render_tab_large(path, ui.resolve(*label), value, skin),
         ControlSpec::Button {
             label,
+            icon,
             active_label,
             style,
         } => ControlButton::builder()
             .path(path)
             .label(ui.resolve(*label))
+            .maybe_icon(icon.map(render_icon))
             .maybe_active_label(active_label.map(|id| ui.resolve(id)))
             .style(*style)
             .maybe_value(value)
@@ -616,6 +618,8 @@ fn render_icon(icon: IconName) -> Icon {
         IconName::Play => Icon::Play,
         IconName::Playlist => Icon::Playlist,
         IconName::SpeakerHigh => Icon::SpeakerHigh,
+        IconName::ZoomIn => Icon::ZoomIn,
+        IconName::ZoomOut => Icon::ZoomOut,
     }
 }
 
