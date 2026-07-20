@@ -233,7 +233,10 @@ fn player_processor() -> (PlayerNodeProcessor, SlotControl) {
         inputs,
         StreamShape {
             sample_rate: sample_rate(),
-            max_block_frames: NonZeroU32::new(BLOCK_FRAMES as u32).expect("static block size"),
+            max_block_frames: NonZeroU32::new(
+                u32::try_from(BLOCK_FRAMES).expect("block size fits u32"),
+            )
+            .expect("static block size"),
         },
         &PcmPool::default(),
         ContextRequirement::Session,

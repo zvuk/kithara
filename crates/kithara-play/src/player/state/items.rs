@@ -616,14 +616,15 @@ mod tests {
         let queue = ItemQueue::new(EventBus::default());
         queue.insert(resource("original"), None, None);
         let pool = PcmPool::default();
-        let transaction = queue
-            .take_for_load(0, load_context(&pool))
-            .expect("load preparation succeeds")
-            .expect("original resource is available");
-
-        assert!(queue.playlist.try_lock().is_err());
         let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
-        let result = transaction.dispatch(&engine, SlotId::new(0));
+        let result = {
+            let transaction = queue
+                .take_for_load(0, load_context(&pool))
+                .expect("load preparation succeeds")
+                .expect("original resource is available");
+            assert!(queue.playlist.try_lock().is_err());
+            transaction.dispatch(&engine, SlotId::new(0))
+        };
 
         assert!(matches!(result, Err(PlayError::SlotNotFound(_))));
         assert!(queue.playlist.try_lock().is_ok());

@@ -289,8 +289,10 @@ mod tests {
         let session = testing::test_session();
         let players: Vec<_> = (0..3)
             .map(|_| {
-                let mut config = PlayerConfig::default();
-                config.session = Some(Arc::clone(&session));
+                let config = PlayerConfig {
+                    session: Some(Arc::clone(&session)),
+                    ..PlayerConfig::default()
+                };
                 PlayerImpl::new(config)
             })
             .collect();
