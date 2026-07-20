@@ -402,6 +402,7 @@ impl Reads for MockReads {
             "gallery.tab.cells" => ReadValue::Bool(self.active_tab == Tab::Cells),
             "gallery.tab.sizes" => ReadValue::Bool(self.active_tab == Tab::Sizes),
             "gallery.tab.tokens" => ReadValue::Bool(self.active_tab == Tab::Tokens),
+            "gallery.tab.micro" => ReadValue::Bool(self.active_tab == Tab::Micro),
             "gallery.tab.chrome" => ReadValue::Bool(self.active_tab == Tab::Chrome),
             "gallery.tab.titlebars" => ReadValue::Bool(self.active_tab == Tab::Titlebars),
             "gallery.tab.tracklist" => ReadValue::Bool(self.active_tab == Tab::Tracklist),
@@ -551,15 +552,20 @@ impl MockReads {
 }
 
 fn waveform() -> Vec<WaveBucket> {
+    let total: f32 = Consts::WAVE_BUCKETS.as_();
     (0..Consts::WAVE_BUCKETS)
         .map(|index| {
             let high: f32 = ((index * 41 + 23) % 55).as_();
             let low: f32 = ((index * 17) % 70).as_();
             let mid: f32 = ((index * 29 + 11) % 65).as_();
+            let phase: f32 = index.as_();
+            let phase = phase / total;
+            let envelope =
+                (phase * 44.0).sin().mul_add(0.3, 0.62) * (phase * 5.0).cos().mul_add(0.18, 0.82);
             WaveBucket {
-                low: 0.25 + low / 100.0,
-                mid: 0.18 + mid / 100.0,
-                high: 0.12 + high / 100.0,
+                low: ((0.25 + low / 100.0) * envelope).clamp(0.0, 1.0),
+                mid: ((0.18 + mid / 100.0) * envelope).clamp(0.0, 1.0),
+                high: ((0.12 + high / 100.0) * envelope).clamp(0.0, 1.0),
             }
         })
         .collect()
@@ -724,6 +730,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.tab.cells",
         "gallery.tab.sizes",
         "gallery.tab.tokens",
+        "gallery.tab.micro",
         "gallery.tab.chrome",
         "gallery.tab.titlebars",
         "gallery.tab.tracklist",

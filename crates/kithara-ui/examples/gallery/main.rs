@@ -37,20 +37,24 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-buttons.klayout.ron"),
     ),
     (
-        "gallery-chrome.klayout.ron",
-        include_str!("assets/gallery-chrome.klayout.ron"),
+        "gallery-cells.klayout.ron",
+        include_str!("assets/gallery-cells.klayout.ron"),
     ),
     (
-        "gallery-titlebars.klayout.ron",
-        include_str!("assets/gallery-titlebars.klayout.ron"),
+        "gallery-chrome.klayout.ron",
+        include_str!("assets/gallery-chrome.klayout.ron"),
     ),
     (
         "gallery-faders.klayout.ron",
         include_str!("assets/gallery-faders.klayout.ron"),
     ),
     (
-        "gallery-modules.klayout.ron",
-        include_str!("assets/gallery-modules.klayout.ron"),
+        "gallery-library2.klayout.ron",
+        include_str!("assets/gallery-library2.klayout.ron"),
+    ),
+    (
+        "gallery-micro.klayout.ron",
+        include_str!("assets/gallery-micro.klayout.ron"),
     ),
     (
         "gallery-modules-deck-micro.klayout.ron",
@@ -61,24 +65,28 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-modules-global-bar.klayout.ron"),
     ),
     (
-        "gallery-modules-telemetry.klayout.ron",
-        include_str!("assets/gallery-modules-telemetry.klayout.ron"),
-    ),
-    (
         "gallery-modules-layout.klayout.ron",
         include_str!("assets/gallery-modules-layout.klayout.ron"),
     ),
     (
-        "gallery-typography.klayout.ron",
-        include_str!("assets/gallery-typography.klayout.ron"),
+        "gallery-modules-telemetry.klayout.ron",
+        include_str!("assets/gallery-modules-telemetry.klayout.ron"),
     ),
     (
-        "gallery-cells.klayout.ron",
-        include_str!("assets/gallery-cells.klayout.ron"),
+        "gallery-modules.klayout.ron",
+        include_str!("assets/gallery-modules.klayout.ron"),
     ),
     (
         "gallery-sizes.klayout.ron",
         include_str!("assets/gallery-sizes.klayout.ron"),
+    ),
+    (
+        "gallery-stress.klayout.ron",
+        include_str!("assets/gallery-stress.klayout.ron"),
+    ),
+    (
+        "gallery-titlebars.klayout.ron",
+        include_str!("assets/gallery-titlebars.klayout.ron"),
     ),
     (
         "gallery-tokens.klayout.ron",
@@ -93,44 +101,56 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-tree.klayout.ron"),
     ),
     (
-        "gallery-library2.klayout.ron",
-        include_str!("assets/gallery-library2.klayout.ron"),
-    ),
-    (
-        "gallery-stress.klayout.ron",
-        include_str!("assets/gallery-stress.klayout.ron"),
-    ),
-    (
-        "modules/nav.kmodule.ron",
-        include_str!("assets/modules/nav.kmodule.ron"),
-    ),
-    (
-        "modules/titlebar.kmodule.ron",
-        include_str!("assets/modules/titlebar.kmodule.ron"),
-    ),
-    (
-        "modules/module-tabs.kmodule.ron",
-        include_str!("assets/modules/module-tabs.kmodule.ron"),
-    ),
-    (
-        "modules/module-deck.kmodule.ron",
-        include_str!("assets/modules/module-deck.kmodule.ron"),
+        "gallery-typography.klayout.ron",
+        include_str!("assets/gallery-typography.klayout.ron"),
     ),
     (
         "modules/module-deck-micro.kmodule.ron",
         include_str!("assets/modules/module-deck-micro.kmodule.ron"),
     ),
     (
+        "modules/module-deck.kmodule.ron",
+        include_str!("assets/modules/module-deck.kmodule.ron"),
+    ),
+    (
         "modules/module-global-bar.kmodule.ron",
         include_str!("assets/modules/module-global-bar.kmodule.ron"),
+    ),
+    (
+        "modules/module-layout.kmodule.ron",
+        include_str!("assets/modules/module-layout.kmodule.ron"),
+    ),
+    (
+        "modules/module-tabs.kmodule.ron",
+        include_str!("assets/modules/module-tabs.kmodule.ron"),
     ),
     (
         "modules/module-telemetry.kmodule.ron",
         include_str!("assets/modules/module-telemetry.kmodule.ron"),
     ),
     (
-        "modules/module-layout.kmodule.ron",
-        include_str!("assets/modules/module-layout.kmodule.ron"),
+        "modules/nav.kmodule.ron",
+        include_str!("assets/modules/nav.kmodule.ron"),
+    ),
+    (
+        "modules/primitives/chips.kmodule.ron",
+        include_str!("assets/modules/primitives/chips.kmodule.ron"),
+    ),
+    (
+        "modules/primitives/knobs.kmodule.ron",
+        include_str!("assets/modules/primitives/knobs.kmodule.ron"),
+    ),
+    (
+        "modules/primitives/meters.kmodule.ron",
+        include_str!("assets/modules/primitives/meters.kmodule.ron"),
+    ),
+    (
+        "modules/primitives/readouts.kmodule.ron",
+        include_str!("assets/modules/primitives/readouts.kmodule.ron"),
+    ),
+    (
+        "modules/primitives/toggles.kmodule.ron",
+        include_str!("assets/modules/primitives/toggles.kmodule.ron"),
     ),
     (
         "modules/stress.kmodule.ron",
@@ -143,6 +163,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/buttons.kmodule.ron",
         include_str!("assets/modules/tabs/buttons.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/cells.kmodule.ron",
+        include_str!("assets/modules/tabs/cells.kmodule.ron"),
     ),
     (
         "modules/tabs/chrome-full-all.kmodule.ron",
@@ -181,16 +205,32 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/faders.kmodule.ron"),
     ),
     (
-        "modules/tabs/typography.kmodule.ron",
-        include_str!("assets/modules/tabs/typography.kmodule.ron"),
+        "modules/tabs/library2.kmodule.ron",
+        include_str!("assets/modules/tabs/library2.kmodule.ron"),
     ),
     (
-        "modules/tabs/cells.kmodule.ron",
-        include_str!("assets/modules/tabs/cells.kmodule.ron"),
+        "modules/tabs/micro-4a.kmodule.ron",
+        include_str!("assets/modules/tabs/micro-4a.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/micro-4b.kmodule.ron",
+        include_str!("assets/modules/tabs/micro-4b.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/micro-4c.kmodule.ron",
+        include_str!("assets/modules/tabs/micro-4c.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/micro-4d.kmodule.ron",
+        include_str!("assets/modules/tabs/micro-4d.kmodule.ron"),
     ),
     (
         "modules/tabs/sizes.kmodule.ron",
         include_str!("assets/modules/tabs/sizes.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/titlebars.kmodule.ron",
+        include_str!("assets/modules/tabs/titlebars.kmodule.ron"),
     ),
     (
         "modules/tabs/tokens-anatomy.kmodule.ron",
@@ -213,32 +253,12 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/tree.kmodule.ron"),
     ),
     (
-        "modules/tabs/titlebars.kmodule.ron",
-        include_str!("assets/modules/tabs/titlebars.kmodule.ron"),
+        "modules/tabs/typography.kmodule.ron",
+        include_str!("assets/modules/tabs/typography.kmodule.ron"),
     ),
     (
-        "modules/tabs/library2.kmodule.ron",
-        include_str!("assets/modules/tabs/library2.kmodule.ron"),
-    ),
-    (
-        "modules/primitives/knobs.kmodule.ron",
-        include_str!("assets/modules/primitives/knobs.kmodule.ron"),
-    ),
-    (
-        "modules/primitives/meters.kmodule.ron",
-        include_str!("assets/modules/primitives/meters.kmodule.ron"),
-    ),
-    (
-        "modules/primitives/toggles.kmodule.ron",
-        include_str!("assets/modules/primitives/toggles.kmodule.ron"),
-    ),
-    (
-        "modules/primitives/readouts.kmodule.ron",
-        include_str!("assets/modules/primitives/readouts.kmodule.ron"),
-    ),
-    (
-        "modules/primitives/chips.kmodule.ron",
-        include_str!("assets/modules/primitives/chips.kmodule.ron"),
+        "modules/titlebar.kmodule.ron",
+        include_str!("assets/modules/titlebar.kmodule.ron"),
     ),
 ];
 

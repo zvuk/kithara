@@ -490,11 +490,13 @@ pub enum IconName {
     Faders,
     FastForward,
     Gear,
+    Menu,
     Play,
     PlayReverse,
     Playlist,
     Rewind,
     SpeakerHigh,
+    X,
     ZoomIn,
     ZoomOut,
 }

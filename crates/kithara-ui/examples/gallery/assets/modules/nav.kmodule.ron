@@ -70,6 +70,12 @@
                 read: Model(id: "gallery.tab.tokens"),
             ),
             NavItem(
+                id: "micro",
+                label: "MICRO",
+                icon: Disc,
+                read: Model(id: "gallery.tab.micro"),
+            ),
+            NavItem(
                 id: "chrome",
                 label: "ХРОМ",
                 icon: Disc,

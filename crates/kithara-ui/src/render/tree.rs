@@ -589,7 +589,9 @@ fn render_tab_large<'a>(
 
 fn resolve<'a>(reads: &'a dyn Reads, binding: &Binding, ui: &CompiledUi) -> Option<ReadValue<'a>> {
     match binding {
-        Binding::Telemetry { id, with } if deck_is_a(with, ui) => reads.get(ui.resolve(*id)),
+        Binding::Telemetry { id, with } if with.is_empty() || deck_is_a(with, ui) => {
+            reads.get(ui.resolve(*id))
+        }
         Binding::Parameter { id, .. } | Binding::Model { id, .. } => reads.get(ui.resolve(*id)),
         _ => None,
     }
@@ -634,11 +636,13 @@ fn render_icon(icon: IconName) -> Icon {
         IconName::Faders => Icon::Faders,
         IconName::FastForward => Icon::FastForward,
         IconName::Gear => Icon::Gear,
+        IconName::Menu => Icon::Menu,
         IconName::Play => Icon::Play,
         IconName::PlayReverse => Icon::PlayReverse,
         IconName::Playlist => Icon::Playlist,
         IconName::Rewind => Icon::Rewind,
         IconName::SpeakerHigh => Icon::SpeakerHigh,
+        IconName::X => Icon::X,
         IconName::ZoomIn => Icon::ZoomIn,
         IconName::ZoomOut => Icon::ZoomOut,
     }

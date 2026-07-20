@@ -80,6 +80,7 @@ impl<'a> Widget<'a> for DeckSummary<'_, '_, '_, '_> {
                 self.skin.deck.summary_padding_x,
             ])
             .align_y(Vertical::Center)
+            .clip(true)
             .style(move |_| {
                 ContainerStyle::default().background(Background::Color(palette.bg_panel))
             })
