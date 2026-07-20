@@ -6,255 +6,114 @@ use iced::{
         button::{Status as ButtonStatus, Style as ButtonStyle},
         column, container,
         container::Style as ContainerStyle,
-        row, scrollable, text_input,
+        row, scrollable,
     },
 };
 
-use super::{Widget, chrome, deck};
-use crate::render::{ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, fonts, shaped_text};
+use super::Widget;
+use crate::{
+    module::TrackColumn,
+    render::{ControlAction, ReadValue, Reads, Skin, TrackRow, UiEvent, fonts, shaped_text},
+};
 
 const fn em_dash() -> &'static str {
     "\u{2014}"
 }
 
-const fn search_placeholder() -> &'static str {
-    "Search title, artist, BPM, key\u{2026}"
-}
-
 #[derive(bon::Builder)]
-pub(crate) struct TrackList<'path, 'value, 'data, 'reads, 'skin> {
+pub(crate) struct TrackList<'path, 'columns, 'state, 'value, 'data, 'reads, 'skin> {
     path: &'path str,
+    columns: &'columns [TrackColumn],
+    columns_state: Option<&'state str>,
     value: Option<&'value ReadValue<'data>>,
     reads: &'reads dyn Reads,
     skin: &'skin Skin,
 }
 
-impl<'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_> {
+impl<'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
         let Some(ReadValue::TrackList(tracks)) = self.value else {
             return Space::new().into();
         };
-        let palette = self.skin.palette;
-        let query = read_text(self.reads, "library.query")
-            .unwrap_or("")
-            .to_owned();
-        let query_normalized = query.trim().to_lowercase();
-        let bpm = current_bpm(self.reads);
-        let filtered: Vec<_> = tracks
+        let columns: Vec<_> = self
+            .columns
             .iter()
-            .enumerate()
-            .filter(|(_, track)| track_matches(track, &query_normalized, bpm))
+            .copied()
+            .filter(|column| column_visible(self.reads, self.columns_state, *column))
             .collect();
-        let count = format!("{} / {}", filtered.len(), tracks.len());
-        let search = text_input(search_placeholder(), &query)
-            .on_input(UiEvent::LibraryQuery)
-            .font(fonts::sans(self.skin.text_input.font.weight))
-            .size(self.skin.text_input.font.size)
-            .padding([
-                self.skin.text_input.padding_y,
-                self.skin.text_input.padding_x,
-            ])
-            .style(chrome::text_input_style(self.skin))
-            .width(Length::Fill);
-        let search_bar = row![
-            container(search)
-                .height(Length::Fixed(self.skin.text_input.height))
-                .width(Length::Fill)
-                .align_y(Vertical::Center),
-            container(
-                shaped_text(count)
-                    .font(fonts::mono(self.skin.track_list.count_text.weight))
-                    .size(self.skin.track_list.count_text.size)
-                    .color(palette.muted),
-            )
-            .padding([
-                self.skin.track_list.count_padding_y,
-                self.skin.track_list.count_padding_x,
-            ])
-            .height(Length::Fixed(self.skin.text_input.height))
-            .center_y(Length::Fill)
-            .style(move |_| {
-                ContainerStyle::default().background(Background::Color(palette.bg_panel))
-            }),
-        ]
-        .spacing(self.skin.track_list.grid_gap)
-        .align_y(Alignment::Center)
-        .height(Length::Fixed(self.skin.text_input.height))
-        .width(Length::Fill);
-
-        let table_header = row![
-            HeaderCell::builder()
-                .skin(self.skin)
-                .label("#")
-                .width(self.skin.track_list.number_width)
-                .build()
-                .view(),
-            container(
-                shaped_text("TITLE")
-                    .font(fonts::mono(self.skin.track_list.header_text.weight))
-                    .size(self.skin.track_list.header_text.size)
-                    .color(palette.muted),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_y(Vertical::Center),
-            HeaderCell::builder()
-                .skin(self.skin)
-                .label("ARTIST")
-                .width(self.skin.track_list.artist_width)
-                .build()
-                .view(),
-            HeaderCell::builder()
-                .skin(self.skin)
-                .label("TIME")
-                .width(self.skin.track_list.time_width)
-                .build()
-                .view(),
-        ]
+        let header = Row::with_children(
+            columns
+                .iter()
+                .copied()
+                .map(|column| header_cell(column, self.skin)),
+        )
         .align_y(Alignment::Center)
         .height(Length::Fixed(self.skin.track_list.header_height))
         .width(Length::Fill);
-        let table_header = container(table_header)
-            .padding([
-                self.skin.track_list.time_padding_y,
-                self.skin.track_list.time_padding_x,
-            ])
-            .align_y(Vertical::Center)
+        let header_background = self.skin.palette.bg_panel;
+        let header = container(header)
+            .height(Length::Fixed(self.skin.track_list.header_height))
+            .width(Length::Fill)
             .style(move |_| {
-                ContainerStyle::default().background(Background::Color(palette.bg_panel))
+                ContainerStyle::default().background(Background::Color(header_background))
             });
-
-        let duration = read_scalar(self.reads, "deck.playback.duration_secs").unwrap_or(0.0);
-        let rows = filtered.into_iter().map(|(index, track)| {
+        let rows = tracks.iter().enumerate().map(|(index, track)| {
             TrackListRow::builder()
                 .skin(self.skin)
                 .path(self.path)
                 .index(index)
                 .track(*track)
-                .duration(duration)
+                .columns(&columns)
                 .build()
                 .view()
         });
+        let line_soft = self.skin.palette.line_soft;
         let rows = container(
             Column::with_children(rows)
                 .spacing(self.skin.track_list.grid_gap)
                 .width(Length::Fill),
         )
-        .style(move |_| ContainerStyle::default().background(Background::Color(palette.line_soft)));
+        .style(move |_| ContainerStyle::default().background(Background::Color(line_soft)));
         let table = scrollable(rows).width(Length::Fill).height(Length::Fill);
+        let footer = footer(tracks.len(), self.skin);
 
+        let line_soft = self.skin.palette.line_soft;
         container(
-            column![search_bar, table_header, table]
+            column![header, table, footer]
                 .spacing(self.skin.track_list.grid_gap)
                 .width(Length::Fill)
                 .height(Length::Fill),
         )
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(move |_| ContainerStyle::default().background(Background::Color(palette.line_soft)))
+        .style(move |_| ContainerStyle::default().background(Background::Color(line_soft)))
         .into()
     }
 }
 
 #[derive(bon::Builder)]
-struct TrackListRow<'path, 'data, 'skin> {
+struct TrackListRow<'path, 'columns, 'data, 'skin> {
     skin: &'skin Skin,
     path: &'path str,
     index: usize,
     track: TrackRow<'data>,
-    duration: f64,
+    columns: &'columns [TrackColumn],
 }
 
-impl<'a> Widget<'a> for TrackListRow<'_, '_, '_> {
+impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
-        let palette = self.skin.palette;
-        let time = if self.track.current && self.duration > 0.0 {
-            deck::format_time(self.duration)
-        } else {
-            self.track.time.unwrap_or(em_dash()).to_owned()
-        };
-        let title = if self.track.title.is_empty() {
-            em_dash()
-        } else {
-            self.track.title
-        };
-        let artist = self.track.artist.unwrap_or(em_dash());
-        let mut title_children: Vec<Element<'a, UiEvent>> = Vec::new();
-        if self.track.current {
-            title_children.push(
-                container(
-                    shaped_text("A")
-                        .font(fonts::display(self.skin.track_list.chip_text.weight))
-                        .size(self.skin.track_list.chip_text.size)
-                        .color(palette.bg),
-                )
-                .center(self.skin.track_list.chip_size)
-                .style({
-                    let border = self.skin.border(self.skin.track_list.chip_frame);
-                    move |_| {
-                        ContainerStyle::default()
-                            .background(Background::Color(palette.accent))
-                            .border(border)
-                    }
-                })
-                .into(),
-            );
-        }
-        title_children.push(
-            container(
-                shaped_text(title.to_owned())
-                    .font(fonts::sans(self.skin.track_list.row_text.weight))
-                    .size(self.skin.track_list.row_text.size)
-                    .color(palette.text),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_y(Vertical::Center)
-            .into(),
-        );
-
+        let cells = self
+            .columns
+            .iter()
+            .copied()
+            .map(|column| row_cell(column, self.index, self.track, self.skin));
         button(
-            row![
-                container(
-                    shaped_text(format!("{:02}", self.index + 1))
-                        .font(fonts::mono(self.skin.track_list.number_text.weight))
-                        .size(self.skin.track_list.number_text.size)
-                        .color(palette.muted),
-                )
-                .width(Length::Fixed(self.skin.track_list.number_width))
+            Row::with_children(cells)
+                .align_y(Alignment::Center)
                 .height(Length::Fill)
-                .align_y(Vertical::Center),
-                Row::with_children(title_children)
-                    .spacing(self.skin.track_list.title_gap)
-                    .align_y(Alignment::Center)
-                    .width(Length::Fill),
-                container(
-                    shaped_text(artist.to_owned())
-                        .font(fonts::sans(self.skin.track_list.time_text.weight))
-                        .size(self.skin.track_list.time_text.size)
-                        .color(palette.text_dim),
-                )
-                .width(Length::Fixed(self.skin.track_list.artist_width))
-                .height(Length::Fill)
-                .align_y(Vertical::Center),
-                container(
-                    shaped_text(time)
-                        .font(fonts::mono(self.skin.track_list.time_text.weight))
-                        .size(self.skin.track_list.time_text.size)
-                        .color(palette.text_dim),
-                )
-                .width(Length::Fixed(self.skin.track_list.time_width))
-                .height(Length::Fill)
-                .align_x(Horizontal::Right)
-                .align_y(Vertical::Center),
-            ]
-            .align_y(Alignment::Center)
-            .width(Length::Fill),
+                .width(Length::Fill),
         )
-        .padding([
-            self.skin.track_list.time_padding_y,
-            self.skin.track_list.time_padding_x,
-        ])
+        .padding(0)
         .height(Length::Fixed(self.skin.track_list.row_height))
         .width(Length::Fill)
         .style(track_button_style(self.skin, self.track.selected))
@@ -266,60 +125,296 @@ impl<'a> Widget<'a> for TrackListRow<'_, '_, '_> {
     }
 }
 
-#[derive(bon::Builder)]
-struct HeaderCell<'skin> {
-    skin: &'skin Skin,
-    label: &'static str,
-    width: f32,
+fn header_cell(column: TrackColumn, skin: &Skin) -> Element<'static, UiEvent> {
+    let label = column_label(column, skin).to_owned();
+    let horizontal = if column == TrackColumn::Index {
+        Horizontal::Right
+    } else {
+        Horizontal::Left
+    };
+    container(
+        shaped_text(label)
+            .font(fonts::mono(skin.track_list.header_text.weight))
+            .size(skin.track_list.header_text.size)
+            .color(skin.palette.muted),
+    )
+    .padding([0.0, skin.track_list.cell_padding_x])
+    .width(column_width(column, skin))
+    .height(Length::Fill)
+    .align_x(horizontal)
+    .align_y(Vertical::Center)
+    .into()
 }
 
-impl<'a> Widget<'a> for HeaderCell<'_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        let palette = self.skin.palette;
-        container(
-            shaped_text(self.label)
-                .font(fonts::mono(self.skin.track_list.header_text.weight))
-                .size(self.skin.track_list.header_text.size)
-                .color(palette.muted),
-        )
-        .width(Length::Fixed(self.width))
+fn row_cell(
+    column: TrackColumn,
+    index: usize,
+    track: TrackRow<'_>,
+    skin: &Skin,
+) -> Element<'static, UiEvent> {
+    match column {
+        TrackColumn::Index => text_cell(
+            format!("{:02}", index + 1),
+            column,
+            skin.track_list.index_text,
+            fonts::mono,
+            skin.palette.muted,
+            Horizontal::Right,
+            skin,
+        ),
+        TrackColumn::Deck => deck_cell(track, skin),
+        TrackColumn::Title => text_cell(
+            value_or_dash(track.title),
+            column,
+            skin.track_list.title_text,
+            fonts::display,
+            skin.palette.text,
+            Horizontal::Left,
+            skin,
+        ),
+        TrackColumn::Artist => text_cell(
+            optional_or_dash(track.artist),
+            column,
+            skin.track_list.artist_text,
+            fonts::sans,
+            skin.palette.text_dim,
+            Horizontal::Left,
+            skin,
+        ),
+        TrackColumn::Bpm => bpm_cell(track.bpm, skin),
+        TrackColumn::Key => text_cell(
+            optional_or_dash(track.key),
+            column,
+            skin.track_list.key_text,
+            fonts::mono,
+            skin.palette.accent,
+            Horizontal::Left,
+            skin,
+        ),
+        TrackColumn::Time => text_cell(
+            optional_or_dash(track.time),
+            column,
+            skin.track_list.time_text,
+            fonts::mono,
+            skin.palette.text_dim,
+            Horizontal::Right,
+            skin,
+        ),
+        TrackColumn::Energy => energy_cell(track.energy, skin),
+        TrackColumn::Transition => text_cell(
+            track
+                .transition
+                .map_or_else(|| em_dash().to_owned(), str::to_uppercase),
+            column,
+            skin.track_list.transition_text,
+            fonts::mono,
+            skin.palette.muted,
+            Horizontal::Left,
+            skin,
+        ),
+    }
+}
+
+fn text_cell(
+    value: String,
+    column: TrackColumn,
+    font: crate::skin::FontSkin,
+    family: fn(crate::skin::FontWeight) -> iced::Font,
+    color: iced::Color,
+    horizontal: Horizontal,
+    skin: &Skin,
+) -> Element<'static, UiEvent> {
+    container(
+        shaped_text(value)
+            .font(family(font.weight))
+            .size(font.size)
+            .color(color),
+    )
+    .padding([0.0, skin.track_list.cell_padding_x])
+    .width(column_width(column, skin))
+    .height(Length::Fill)
+    .align_x(horizontal)
+    .align_y(Vertical::Center)
+    .into()
+}
+
+fn deck_cell(track: TrackRow<'_>, skin: &Skin) -> Element<'static, UiEvent> {
+    let value = optional_or_dash(track.deck);
+    let active = track.current && track.deck.is_some();
+    let chip = container(
+        shaped_text(value)
+            .font(fonts::mono(skin.track_list.deck_text.weight))
+            .size(skin.track_list.deck_text.size)
+            .color(if active {
+                skin.palette.bg_deep
+            } else {
+                skin.palette.text_dim
+            }),
+    )
+    .width(Length::Fixed(skin.track_list.deck_chip_width))
+    .height(Length::Fixed(skin.track_list.deck_chip_height))
+    .align_x(Horizontal::Center)
+    .align_y(Vertical::Center)
+    .style({
+        let border = skin.border(skin.track_list.deck_chip_frame);
+        let background = active.then_some(Background::Color(skin.palette.accent));
+        move |_| ContainerStyle {
+            background,
+            border,
+            ..ContainerStyle::default()
+        }
+    });
+    container(chip)
+        .width(Length::Fixed(skin.track_list.deck_width))
+        .height(Length::Fill)
+        .align_x(Horizontal::Center)
+        .align_y(Vertical::Center)
+        .into()
+}
+
+fn bpm_cell(value: Option<&str>, skin: &Skin) -> Element<'static, UiEvent> {
+    let badge = container(
+        shaped_text(optional_or_dash(value))
+            .font(fonts::mono(skin.track_list.bpm_text.weight))
+            .size(skin.track_list.bpm_text.size)
+            .color(skin.palette.text),
+    )
+    .padding([0.0, skin.track_list.bpm_badge_padding_x])
+    .height(Length::Fixed(skin.track_list.bpm_badge_height))
+    .align_y(Vertical::Center)
+    .style({
+        let border = skin.border(skin.track_list.bpm_badge_frame);
+        let background = skin.color(skin.track_list.bpm_badge_background);
+        move |_| {
+            ContainerStyle::default()
+                .background(Background::Color(background))
+                .border(border)
+        }
+    });
+    container(badge)
+        .padding([0.0, skin.track_list.cell_padding_x])
+        .width(Length::Fixed(skin.track_list.bpm_width))
         .height(Length::Fill)
         .align_y(Vertical::Center)
         .into()
+}
+
+fn energy_cell(value: Option<u8>, skin: &Skin) -> Element<'static, UiEvent> {
+    let value = value.map(|value| value.min(100));
+    let ratio = value.map_or(0.0, |value| f32::from(value) / 100.0);
+    let filled = skin.track_list.energy_bar_width * ratio;
+    let empty = skin.track_list.energy_bar_width - filled;
+    let accent = skin.palette.accent;
+    let fill = container(Space::new())
+        .width(Length::Fixed(filled))
+        .height(Length::Fixed(skin.track_list.energy_bar_height))
+        .style(move |_| ContainerStyle::default().background(Background::Color(accent)));
+    let remainder = container(Space::new())
+        .width(Length::Fixed(empty))
+        .height(Length::Fixed(skin.track_list.energy_bar_height))
+        .style({
+            let background = skin.color(skin.track_list.energy_bar_background);
+            move |_| ContainerStyle::default().background(Background::Color(background))
+        });
+    let bar = row![fill, remainder]
+        .width(Length::Fixed(skin.track_list.energy_bar_width))
+        .height(Length::Fixed(skin.track_list.energy_bar_height));
+    let label = value.map_or_else(|| em_dash().to_owned(), |value| value.to_string());
+    container(
+        row![
+            bar,
+            shaped_text(label)
+                .font(fonts::mono(skin.track_list.energy_text.weight))
+                .size(skin.track_list.energy_text.size)
+                .color(skin.palette.accent),
+        ]
+        .spacing(skin.track_list.energy_bar_gap)
+        .align_y(Alignment::Center),
+    )
+    .padding([0.0, skin.track_list.cell_padding_x])
+    .width(Length::Fixed(skin.track_list.energy_width))
+    .height(Length::Fill)
+    .align_y(Vertical::Center)
+    .into()
+}
+
+fn footer(count: usize, skin: &Skin) -> Element<'static, UiEvent> {
+    let left = format!(
+        "{} \u{00b7} {count} {}",
+        skin.track_list.labels.footer_component, skin.track_list.labels.footer_tracks
+    );
+    let right = skin.track_list.labels.footer_usage.clone();
+    let font = skin.track_list.footer_text;
+    let content = row![
+        shaped_text(left)
+            .font(fonts::mono(font.weight))
+            .size(font.size)
+            .color(skin.palette.muted),
+        Space::new().width(Length::Fill),
+        shaped_text(right)
+            .font(fonts::mono(font.weight))
+            .size(font.size)
+            .color(skin.palette.muted),
+    ]
+    .align_y(Alignment::Center);
+    let background = skin.palette.bg_footer;
+    container(content)
+        .padding([0.0, skin.track_list.footer_padding_x])
+        .width(Length::Fill)
+        .height(Length::Fixed(skin.track_list.footer_height))
+        .align_y(Vertical::Center)
+        .style(move |_| ContainerStyle::default().background(Background::Color(background)))
+        .into()
+}
+
+fn column_visible(reads: &dyn Reads, prefix: Option<&str>, column: TrackColumn) -> bool {
+    let Some(prefix) = prefix else {
+        return true;
+    };
+    let endpoint = format!("{prefix}.{}", column.endpoint_name());
+    !matches!(reads.get(&endpoint), Some(ReadValue::Bool(false)))
+}
+
+fn column_label(column: TrackColumn, skin: &Skin) -> &str {
+    let labels = &skin.track_list.labels;
+    match column {
+        TrackColumn::Index => &labels.index,
+        TrackColumn::Deck => &labels.deck,
+        TrackColumn::Title => &labels.title,
+        TrackColumn::Artist => &labels.artist,
+        TrackColumn::Bpm => &labels.bpm,
+        TrackColumn::Key => &labels.key,
+        TrackColumn::Time => &labels.time,
+        TrackColumn::Energy => &labels.energy,
+        TrackColumn::Transition => &labels.transition,
     }
 }
 
-fn track_matches(track: &TrackRow<'_>, query: &str, bpm: Option<f32>) -> bool {
-    query.is_empty()
-        || track.title.to_lowercase().contains(query)
-        || track
-            .artist
-            .is_some_and(|artist| artist.to_lowercase().contains(query))
-        || track
-            .search
-            .is_some_and(|search| search.to_lowercase().contains(query))
-        || track.current && bpm.is_some_and(|value| format!("{value:.1}").contains(query))
+fn column_width(column: TrackColumn, skin: &Skin) -> Length {
+    let width = match column {
+        TrackColumn::Index => skin.track_list.index_width,
+        TrackColumn::Deck => skin.track_list.deck_width,
+        TrackColumn::Title => return Length::Fill,
+        TrackColumn::Artist => skin.track_list.artist_width,
+        TrackColumn::Bpm => skin.track_list.bpm_width,
+        TrackColumn::Key => skin.track_list.key_width,
+        TrackColumn::Time => skin.track_list.time_width,
+        TrackColumn::Energy => skin.track_list.energy_width,
+        TrackColumn::Transition => skin.track_list.transition_width,
+    };
+    Length::Fixed(width)
 }
 
-fn current_bpm(reads: &dyn Reads) -> Option<f32> {
-    match reads.get("deck.playback.waveform") {
-        Some(ReadValue::Waveform(waveform)) => waveform.bpm,
-        _ => None,
+fn value_or_dash(value: &str) -> String {
+    if value.is_empty() {
+        em_dash().to_owned()
+    } else {
+        value.to_owned()
     }
 }
 
-fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
-    match reads.get(endpoint) {
-        Some(ReadValue::Text(value)) => Some(value),
-        _ => None,
-    }
-}
-
-fn read_scalar(reads: &dyn Reads, endpoint: &str) -> Option<f64> {
-    match reads.get(endpoint) {
-        Some(ReadValue::Scalar(value)) => Some(value),
-        _ => None,
-    }
+fn optional_or_dash(value: Option<&str>) -> String {
+    value.map_or_else(|| em_dash().to_owned(), value_or_dash)
 }
 
 fn track_button_style(
@@ -331,11 +426,9 @@ fn track_button_style(
     move |_theme, status| {
         let background = match status {
             ButtonStatus::Pressed => palette.accent_soft,
-            ButtonStatus::Hovered if !selected => palette.bg_inset,
-            _ if selected => palette.bg_panel_2,
-            ButtonStatus::Active | ButtonStatus::Hovered | ButtonStatus::Disabled => {
-                palette.bg_inset
-            }
+            _ if selected => palette.bg_select,
+            ButtonStatus::Hovered => palette.bg_panel_2,
+            ButtonStatus::Active | ButtonStatus::Disabled => palette.bg_inset,
         };
         ButtonStyle {
             background: Some(Background::Color(background)),
@@ -343,5 +436,41 @@ fn track_button_style(
             border,
             ..ButtonStyle::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    struct ColumnReads(Option<bool>);
+
+    impl Reads for ColumnReads {
+        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+            (endpoint == "columns.title")
+                .then_some(self.0)
+                .flatten()
+                .map(ReadValue::Bool)
+        }
+    }
+
+    #[kithara::test]
+    fn absent_column_endpoint_is_visible() {
+        assert!(column_visible(
+            &ColumnReads(None),
+            Some("columns"),
+            TrackColumn::Title
+        ));
+    }
+
+    #[kithara::test]
+    fn false_column_endpoint_is_hidden() {
+        assert!(!column_visible(
+            &ColumnReads(Some(false)),
+            Some("columns"),
+            TrackColumn::Title
+        ));
     }
 }

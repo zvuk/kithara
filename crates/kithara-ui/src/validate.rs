@@ -5,7 +5,7 @@ use crate::{
     expand::ControlSite,
     ids::{EndpointId, NodeId, SourceUri},
     layout::{LayoutDoc, LayoutNode},
-    module::{BindingRef, ControlNode, ModuleDoc},
+    module::{BindingRef, ControlNode, ModuleDoc, TrackColumn},
     registry::{EndpointCategory, EndpointRegistry, ValueKind},
 };
 
@@ -196,6 +196,9 @@ pub(crate) fn check_controls(
     origin: &SourceUri,
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
+    if let ControlNode::TrackList { columns, .. } = site.control {
+        check_track_list(columns, site.columns_state, site.path, origin, endpoints)?;
+    }
     let (read_kind, write_kind) = value_kinds(site.control);
     if let Some(binding) = site.read {
         check_binding(
@@ -216,6 +219,83 @@ pub(crate) fn check_controls(
             origin,
             endpoints,
         )?;
+    }
+    Ok(())
+}
+
+fn check_track_list(
+    columns: &[TrackColumn],
+    columns_state: Option<&BindingRef>,
+    path: &str,
+    origin: &SourceUri,
+    endpoints: &dyn EndpointRegistry,
+) -> Result<(), UiDocError> {
+    if !columns.contains(&TrackColumn::Title) {
+        return Err(UiDocError::MissingTrackTitleColumn {
+            origin: origin.clone(),
+            path: path.to_owned(),
+        });
+    }
+    let Some(binding) = columns_state else {
+        return Ok(());
+    };
+    let (category, id, with) = binding_parts(binding);
+    if !matches!(
+        category,
+        EndpointCategory::Parameter | EndpointCategory::Telemetry | EndpointCategory::Model
+    ) {
+        return Err(UiDocError::BindingDirection {
+            origin: origin.clone(),
+            id: id.0.clone(),
+            path: path.to_owned(),
+            detail: format!("{category} endpoint is not allowed on this side"),
+        });
+    }
+    for column in columns {
+        let derived = EndpointId(format!("{}.{}", id.0, column.endpoint_name()));
+        let Some(endpoint) = endpoints.endpoint(category, &derived) else {
+            continue;
+        };
+        if endpoint.value != ValueKind::Bool {
+            return Err(UiDocError::BindingType {
+                origin: origin.clone(),
+                id: derived.0,
+                path: path.to_owned(),
+                expected: ValueKind::Bool.to_string(),
+                got: endpoint.value.to_string(),
+            });
+        }
+        check_scopes(&derived, with, endpoint, path, origin)?;
+    }
+    Ok(())
+}
+
+fn check_scopes(
+    id: &EndpointId,
+    with: &BTreeMap<String, String>,
+    endpoint: &crate::registry::EndpointDesc,
+    path: &str,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    for scope in &endpoint.scopes {
+        if !with.contains_key(scope) {
+            return Err(UiDocError::MissingScope {
+                origin: origin.clone(),
+                id: id.0.clone(),
+                scope: scope.clone(),
+                path: path.to_owned(),
+            });
+        }
+    }
+    for scope in with.keys() {
+        if !endpoint.scopes.contains(scope) {
+            return Err(UiDocError::UnknownScope {
+                origin: origin.clone(),
+                id: id.0.clone(),
+                scope: scope.clone(),
+                path: path.to_owned(),
+            });
+        }
     }
     Ok(())
 }
@@ -344,27 +424,7 @@ fn check_binding(
             got: endpoint.value.to_string(),
         });
     }
-    for scope in &endpoint.scopes {
-        if !with.contains_key(scope) {
-            return Err(UiDocError::MissingScope {
-                origin: origin.clone(),
-                id: id.0.clone(),
-                scope: scope.clone(),
-                path: path.to_owned(),
-            });
-        }
-    }
-    for scope in with.keys() {
-        if !endpoint.scopes.contains(scope) {
-            return Err(UiDocError::UnknownScope {
-                origin: origin.clone(),
-                id: id.0.clone(),
-                scope: scope.clone(),
-                path: path.to_owned(),
-            });
-        }
-    }
-    Ok(())
+    check_scopes(id, with, endpoint, path, origin)
 }
 
 #[cfg(test)]
@@ -515,6 +575,7 @@ mod tests {
                 control: &document.root,
                 read: None,
                 write,
+                columns_state: None,
             },
             &origin(),
             &registry(),

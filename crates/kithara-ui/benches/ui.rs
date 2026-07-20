@@ -7,7 +7,7 @@ use kithara_ui::{
     ids::{DocId, EndpointId, NodeId, SourceUri},
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, FaderStyle, ModuleDoc, ScalarFormat,
-        WaveStyle, parse_module,
+        TrackColumn, WaveStyle, parse_module,
     },
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
@@ -30,6 +30,11 @@ const TRACKS: [TrackRow<'static>; 3] = [
         artist: Some("Kithara"),
         time: Some("04:12"),
         search: Some("signal path kithara"),
+        deck: Some("A"),
+        bpm: Some("128.00"),
+        key: Some("7m"),
+        energy: Some(76),
+        transition: Some("FILTER FADE"),
         current: true,
         selected: true,
     },
@@ -38,6 +43,11 @@ const TRACKS: [TrackRow<'static>; 3] = [
         artist: Some("Benchmark"),
         time: Some("05:31"),
         search: Some("four decks benchmark"),
+        deck: Some("B"),
+        bpm: Some("126.00"),
+        key: Some("10m"),
+        energy: Some(68),
+        transition: Some("EQ SWAP"),
         current: false,
         selected: false,
     },
@@ -46,6 +56,11 @@ const TRACKS: [TrackRow<'static>; 3] = [
         artist: Some("Criterion"),
         time: Some("03:47"),
         search: Some("continuous drag criterion"),
+        deck: Some("C"),
+        bpm: Some("124.00"),
+        key: Some("4m"),
+        energy: Some(54),
+        transition: Some("LOOP EXIT"),
         current: false,
         selected: false,
     },
@@ -478,6 +493,8 @@ fn track_list(id: &str, endpoint: &str) -> ControlNode {
         read: Some(model(endpoint)),
         write: None,
         adaptive: AdaptivePolicy::default(),
+        columns: vec![TrackColumn::Title],
+        columns_state: None,
     }
 }
 

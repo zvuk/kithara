@@ -6,6 +6,7 @@ use std::{
 use kithara_platform::time::Instant;
 use kithara_ui::{
     ids::EndpointId,
+    module::TrackColumn,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{ControlAction, ReadValue, Reads, StereoLevels, TrackRow, WaveBucket, WaveformView},
 };
@@ -24,6 +25,22 @@ impl Consts {
     const POSITION_SECS: f64 = 103.0;
     const REMAIN: &str = "−04:17";
     const STRESS_WAVE_BUCKETS: u16 = 8_192;
+    const TRACK_COLUMNS: [TrackColumn; 9] = [
+        TrackColumn::Index,
+        TrackColumn::Deck,
+        TrackColumn::Title,
+        TrackColumn::Artist,
+        TrackColumn::Bpm,
+        TrackColumn::Key,
+        TrackColumn::Time,
+        TrackColumn::Energy,
+        TrackColumn::Transition,
+    ];
+    const TRACKLIST_LIBRARY: [bool; 9] = [true, true, true, true, true, true, true, false, false];
+    const TRACKLIST_QUEUE: [bool; 9] = [true, true, true, false, true, true, false, true, true];
+    const TRACKLIST_MICRO: [bool; 9] =
+        [false, false, true, false, false, false, true, false, false];
+    const TRACKLIST_QUEUE_PRESET: usize = 1;
     const WAVE_BEATS: &[f32] = &[0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
 }
 
@@ -40,6 +57,11 @@ struct MockTrack {
     artist: String,
     time: String,
     search: String,
+    deck: String,
+    bpm: String,
+    key: String,
+    energy: u8,
+    transition: String,
 }
 
 struct Catalog {
@@ -63,6 +85,11 @@ fn load_catalog() -> Catalog {
             artist: Some(&track.artist),
             time: Some(&track.time),
             search: Some(&track.search),
+            deck: Some(&track.deck),
+            bpm: Some(&track.bpm),
+            key: Some(&track.key),
+            energy: Some(track.energy),
+            transition: Some(&track.transition),
             current: index == 0,
             selected: index == 0,
         })
@@ -83,11 +110,12 @@ pub(super) enum Tab {
     Typography,
     Cells,
     Sizes,
+    Tracklist,
     Stress,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 8] = [
+    pub(super) const ALL: [Self; 9] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -95,6 +123,7 @@ impl Tab {
         Self::Typography,
         Self::Cells,
         Self::Sizes,
+        Self::Tracklist,
         Self::Stress,
     ];
 
@@ -107,6 +136,7 @@ impl Tab {
             Self::Typography => "gallery-typography.klayout.ron",
             Self::Cells => "gallery-cells.klayout.ron",
             Self::Sizes => "gallery-sizes.klayout.ron",
+            Self::Tracklist => "gallery-tracklist.klayout.ron",
             Self::Stress => "gallery-stress.klayout.ron",
         }
     }
@@ -120,7 +150,8 @@ impl Tab {
             Self::Typography => 4,
             Self::Cells => 5,
             Self::Sizes => 6,
-            Self::Stress => 7,
+            Self::Tracklist => 7,
+            Self::Stress => 8,
         }
     }
 }
@@ -137,6 +168,7 @@ impl TryFrom<&str> for Tab {
             "gallery/typography" => Ok(Self::Typography),
             "gallery/cells" => Ok(Self::Cells),
             "gallery/sizes" => Ok(Self::Sizes),
+            "gallery/tracklist" => Ok(Self::Tracklist),
             "gallery/stress" => Ok(Self::Stress),
             _ => Err(()),
         }
@@ -213,6 +245,8 @@ pub(super) struct MockReads {
     stress_levels: [StereoLevels; 8],
     stress_phase: f32,
     stress_waveforms: [Vec<WaveBucket>; 4],
+    tracklist_columns: [bool; 9],
+    tracklist_preset: usize,
 }
 
 impl Default for MockReads {
@@ -248,6 +282,8 @@ impl Default for MockReads {
             stress_levels: [StereoLevels::default(); 8],
             stress_phase: 0.0,
             stress_waveforms: std::array::from_fn(stress_waveform),
+            tracklist_columns: Consts::TRACKLIST_QUEUE,
+            tracklist_preset: Consts::TRACKLIST_QUEUE_PRESET,
         }
     }
 }
@@ -301,7 +337,37 @@ impl MockReads {
     fn select_index(&mut self, path: &str, index: usize) {
         if path == "cells/beat" {
             self.segmented_index = index.as_();
+        } else if path == "tracklist/column-preset" {
+            self.set_tracklist_preset(index);
         }
+    }
+
+    fn set_tracklist_preset(&mut self, index: usize) {
+        let Some(columns) = [
+            Consts::TRACKLIST_LIBRARY,
+            Consts::TRACKLIST_QUEUE,
+            Consts::TRACKLIST_MICRO,
+        ]
+        .get(index)
+        .copied() else {
+            return;
+        };
+        self.tracklist_preset = index;
+        self.tracklist_columns = columns;
+    }
+
+    fn reset_tracklist_columns(&mut self) {
+        self.set_tracklist_preset(self.tracklist_preset);
+    }
+
+    fn toggle_tracklist_column(&mut self, name: &str) {
+        let Some(index) = Consts::TRACK_COLUMNS
+            .iter()
+            .position(|column| column.endpoint_name() == name)
+        else {
+            return;
+        };
+        self.tracklist_columns[index] = !self.tracklist_columns[index];
     }
 
     fn set_scalar(&mut self, path: &str, value: f64) {
@@ -345,6 +411,10 @@ impl MockReads {
             "buttons/play" => self.button_play = !self.button_play,
             "buttons/cue" => self.button_cue = !self.button_cue,
             "buttons/sync" => self.button_sync = !self.button_sync,
+            "tracklist/reset-columns" => self.reset_tracklist_columns(),
+            path if path.starts_with("tracklist/column-") => {
+                self.toggle_tracklist_column(&path["tracklist/column-".len()..]);
+            }
             path if path.ends_with("/play") => self.playing = !self.playing,
             _ => {}
         }
@@ -358,6 +428,12 @@ impl Reads for MockReads {
             .and_then(|value| value.strip_suffix(".collapsed"))
         {
             return Some(ReadValue::Bool(self.collapsed.contains(module)));
+        }
+        if let Some(name) = endpoint.strip_prefix("gallery.tracklist.columns.") {
+            let index = Consts::TRACK_COLUMNS
+                .iter()
+                .position(|column| column.endpoint_name() == name)?;
+            return Some(ReadValue::Bool(self.tracklist_columns[index]));
         }
         let value = match endpoint {
             "gallery.label.knobs" => ReadValue::Text("KNOB · 26 / 28 / 34 / 38"),
@@ -377,6 +453,7 @@ impl Reads for MockReads {
             "gallery.tab.typography" => ReadValue::Bool(self.active_tab == Tab::Typography),
             "gallery.tab.cells" => ReadValue::Bool(self.active_tab == Tab::Cells),
             "gallery.tab.sizes" => ReadValue::Bool(self.active_tab == Tab::Sizes),
+            "gallery.tab.tracklist" => ReadValue::Bool(self.active_tab == Tab::Tracklist),
             "gallery.tab.stress" => ReadValue::Bool(self.active_tab == Tab::Stress),
             "gallery.module.deck" => ReadValue::Bool(self.active_module == ModuleDemo::Deck),
             "gallery.module.deck_micro" => {
@@ -453,6 +530,7 @@ impl Reads for MockReads {
             "mock.button.cue" => ReadValue::Bool(self.button_cue),
             "mock.button.sync" => ReadValue::Bool(self.button_sync),
             "mock.cells.segmented" => ReadValue::Scalar(self.segmented_index),
+            "gallery.tracklist.preset" => ReadValue::Scalar(self.tracklist_preset.as_()),
             _ => return None,
         };
         Some(value)
@@ -637,6 +715,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.tab.typography",
         "gallery.tab.cells",
         "gallery.tab.sizes",
+        "gallery.tab.tracklist",
         "gallery.tab.stress",
         "gallery.module.deck",
         "gallery.module.deck_micro",
@@ -673,6 +752,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Scalar),
         );
     }
+    insert_tracklist_endpoints(&mut registry);
     registry.insert(
         EndpointCategory::Model,
         "mock.levels",
@@ -705,6 +785,21 @@ pub(super) fn registry() -> impl EndpointRegistry {
         );
     }
     registry
+}
+
+fn insert_tracklist_endpoints(registry: &mut MockRegistry) {
+    registry.insert(
+        EndpointCategory::Model,
+        "gallery.tracklist.preset",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    for column in Consts::TRACK_COLUMNS {
+        registry.insert(
+            EndpointCategory::Model,
+            &format!("gallery.tracklist.columns.{}", column.endpoint_name()),
+            EndpointDesc::new(ValueKind::Bool),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -767,6 +862,53 @@ mod tests {
         assert_eq!(
             reads.get("mock.cells.segmented"),
             Some(ReadValue::Scalar(3.0))
+        );
+    }
+
+    #[kithara::test]
+    fn tracklist_presets_replace_host_owned_column_visibility() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(
+            reads.get("gallery.tracklist.columns.energy"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("gallery.tracklist.columns.artist"),
+            Some(ReadValue::Bool(false))
+        );
+
+        reads.apply("tracklist/column-preset", &ControlAction::SelectIndex(0));
+
+        assert_eq!(
+            reads.get("gallery.tracklist.columns.energy"),
+            Some(ReadValue::Bool(false))
+        );
+        assert_eq!(
+            reads.get("gallery.tracklist.columns.artist"),
+            Some(ReadValue::Bool(true))
+        );
+    }
+
+    #[kithara::test]
+    fn tracklist_reset_restores_current_preset_defaults() {
+        let mut reads = MockReads::default();
+
+        reads.apply("tracklist/column-energy", &ControlAction::Activate);
+        assert_eq!(
+            reads.get("gallery.tracklist.columns.energy"),
+            Some(ReadValue::Bool(false))
+        );
+
+        reads.apply("tracklist/reset-columns", &ControlAction::Activate);
+
+        assert_eq!(
+            reads.get("gallery.tracklist.columns.energy"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            reads.get("gallery.tracklist.preset"),
+            Some(ReadValue::Scalar(1.0))
         );
     }
 }

@@ -123,6 +123,8 @@ pub enum UiDocError {
         path: String,
         detail: String,
     },
+    #[error("{origin}: track list at {path} must contain the Title column")]
+    MissingTrackTitleColumn { origin: SourceUri, path: String },
     #[error("{origin}: compiled node count {count} exceeds limit {max}")]
     NodesExceeded {
         origin: SourceUri,

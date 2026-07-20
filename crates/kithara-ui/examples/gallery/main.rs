@@ -67,6 +67,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-sizes.klayout.ron"),
     ),
     (
+        "gallery-tracklist.klayout.ron",
+        include_str!("assets/gallery-tracklist.klayout.ron"),
+    ),
+    (
         "gallery-stress.klayout.ron",
         include_str!("assets/gallery-stress.klayout.ron"),
     ),
@@ -125,6 +129,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/sizes.kmodule.ron",
         include_str!("assets/modules/tabs/sizes.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/tracklist.kmodule.ron",
+        include_str!("assets/modules/tabs/tracklist.kmodule.ron"),
     ),
     (
         "modules/primitives/knobs.kmodule.ron",

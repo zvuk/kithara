@@ -6,13 +6,25 @@ use kithara_ui::{
     compile::{CompiledNode, compile},
     error::UiDocError,
     expand::{Binding, ControlSpec, ExpandedNode},
-    module::ChromeStyle,
+    module::{ChromeStyle, TrackColumn},
+    registry::{EndpointCategory, EndpointDesc, ValueKind},
     size::{Dim, SizeSpec},
     source::{Limits, MemResolver, UiConfig},
 };
 
 fn resolver() -> MemResolver {
     builtin::resolver()
+}
+
+fn track_list_resolver(module: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "track-list.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "track-list",
+            root: Module(instance: "track-list", source: "track-list.kmodule.ron"))"#,
+    );
+    resolver.insert("track-list.kmodule.ron", module);
+    resolver
 }
 
 #[kithara::test]
@@ -29,6 +41,116 @@ fn compiles_micro_layout_end_to_end() {
         panic!("expected module root");
     };
     assert_eq!(ui.resolve(*instance), "deck-a");
+}
+
+#[kithara::test]
+fn track_list_requires_title_column_at_compile_time() {
+    let resolver = track_list_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "track-list",
+            root: TrackList(
+                id: "tracks",
+                columns: [Index, Artist],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let error = compile(
+        "track-list.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        UiDocError::MissingTrackTitleColumn { path, .. } if path == "track-list/tracks"
+    ));
+}
+
+#[kithara::test]
+fn track_list_compiles_typed_columns_and_optional_state_prefix() {
+    let resolver = track_list_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "track-list",
+            root: TrackList(
+                id: "tracks",
+                columns: [Index, Title, Bpm],
+                columns_state: Some(Model(id: "ui.tracklist.columns")),
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.tracklist.columns.title",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+
+    let ui = compile(
+        "track-list.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::TrackList {
+            columns,
+            columns_state,
+        },
+        ..
+    } = &**root
+    else {
+        panic!("expected track list control");
+    };
+
+    assert_eq!(
+        columns,
+        &[TrackColumn::Index, TrackColumn::Title, TrackColumn::Bpm]
+    );
+    let Some(Binding::Model { id, .. }) = columns_state else {
+        panic!("expected model state prefix");
+    };
+    assert_eq!(ui.resolve(*id), "ui.tracklist.columns");
+}
+
+#[kithara::test]
+fn present_track_list_column_state_endpoint_must_be_bool() {
+    let resolver = track_list_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "track-list",
+            root: TrackList(
+                id: "tracks",
+                columns: [Title],
+                columns_state: Some(Model(id: "ui.tracklist.columns")),
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.tracklist.columns.title",
+        EndpointDesc::new(ValueKind::Text),
+    );
+
+    let error = compile(
+        "track-list.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        UiDocError::BindingType { id, expected, got, .. }
+            if id == "ui.tracklist.columns.title" && expected == "Bool" && got == "Text"
+    ));
 }
 
 #[kithara::test]

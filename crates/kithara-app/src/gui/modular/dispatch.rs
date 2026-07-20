@@ -36,7 +36,7 @@ pub(super) fn apply(state: &mut Kithara, path: &str, action: &ControlAction) {
         return;
     };
 
-    if matches!(spec, ControlSpec::TrackList) {
+    if matches!(spec, ControlSpec::TrackList { .. }) {
         apply_track_action(state, path, action);
         return;
     }

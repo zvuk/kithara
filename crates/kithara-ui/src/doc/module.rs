@@ -278,6 +278,10 @@ pub enum ControlNode {
         write: Option<BindingRef>,
         #[serde(default)]
         adaptive: AdaptivePolicy,
+        #[serde(default)]
+        columns: Vec<TrackColumn>,
+        #[serde(default)]
+        columns_state: Option<BindingRef>,
     },
     Toggle {
         id: NodeId,
@@ -494,6 +498,37 @@ pub enum WaveStyle {
     Default,
     Hero,
     Micro,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum TrackColumn {
+    Index,
+    Deck,
+    Title,
+    Artist,
+    Bpm,
+    Key,
+    Time,
+    Energy,
+    Transition,
+}
+
+impl TrackColumn {
+    #[must_use]
+    pub const fn endpoint_name(self) -> &'static str {
+        match self {
+            Self::Index => "index",
+            Self::Deck => "deck",
+            Self::Title => "title",
+            Self::Artist => "artist",
+            Self::Bpm => "bpm",
+            Self::Key => "key",
+            Self::Time => "time",
+            Self::Energy => "energy",
+            Self::Transition => "transition",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

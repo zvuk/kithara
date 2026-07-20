@@ -64,6 +64,12 @@
                 read: Model(id: "gallery.tab.sizes"),
             ),
             NavItem(
+                id: "tracklist",
+                label: "ТРЕКЛИСТ",
+                icon: Playlist,
+                read: Model(id: "gallery.tab.tracklist"),
+            ),
+            NavItem(
                 id: "stress",
                 label: "СТРЕСС",
                 icon: SpeakerHigh,

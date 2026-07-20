@@ -100,7 +100,7 @@ impl Skin {
             deck: document.deck,
             global_bar: document.global_bar,
             telemetry: document.telemetry,
-            track_list: document.track_list,
+            track_list: document.track_list.clone(),
             layout_preview: document.layout_preview,
             document,
         })

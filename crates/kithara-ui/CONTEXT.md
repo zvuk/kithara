@@ -68,3 +68,12 @@ Collapse state remains host-owned. A Full module reads `Bool` from
 `ui.module.<module-doc-id>.collapsed`; an absent value means expanded. Header activation emits
 `UiEvent::ToggleModule(<module-doc-id>)`. The renderer does not retain or mutate collapse state,
 and Frame or Plain modules ignore that endpoint.
+
+## Track List Column Ownership
+
+`TrackList` owns an ordered typed `Vec<TrackColumn>` and requires `Title` during compilation. The
+renderer owns table geometry and cell presentation but not column visibility. When a
+`columns_state` binding is present, the host may expose Bool reads at
+`<binding-id>.<column-name>`; a missing derived endpoint means that column is visible. This keeps
+one declarative column inventory while allowing library, playlist, and set-queue hosts to apply
+presets without introducing renderer-owned mutable state.

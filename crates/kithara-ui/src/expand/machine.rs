@@ -1,188 +1,15 @@
 use std::collections::BTreeMap;
 
+use super::{
+    Binding, Budget, ControlSite, ControlSpec, ControlVisitor, ExpandedModule, ExpandedNode,
+};
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{
-        AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, IconName, ScalarFormat, TextStyle, Tone, WaveStyle,
-    },
+    module::{AdaptivePolicy, BindingRef, ControlNode},
     resolve::ModuleSet,
     size::SizeSpec,
 };
-
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum ExpandedNode {
-    Row {
-        id: Option<InternId>,
-        size: Option<SizeSpec>,
-        gap: Option<f32>,
-        pad: Option<f32>,
-        children: Vec<Self>,
-    },
-    Column {
-        id: Option<InternId>,
-        size: Option<SizeSpec>,
-        gap: Option<f32>,
-        pad: Option<f32>,
-        children: Vec<Self>,
-    },
-    Slot {
-        id: InternId,
-        size: Option<SizeSpec>,
-        children: Vec<Self>,
-    },
-    Control {
-        path: InternId,
-        id: InternId,
-        spec: ControlSpec,
-        size: Option<SizeSpec>,
-        read: Option<Binding>,
-        write: Option<Binding>,
-        adaptive: AdaptivePolicy,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum ControlSpec {
-    DeckSummary {
-        style: DeckSummaryStyle,
-    },
-    Brand,
-    Spacer,
-    PresetSelector,
-    SettingsButton,
-    Text {
-        style: TextStyle,
-        label: Option<InternId>,
-    },
-    Glyph {
-        icon: IconName,
-    },
-    NavItem {
-        label: InternId,
-        icon: IconName,
-    },
-    TabLarge {
-        label: InternId,
-    },
-    Button {
-        label: InternId,
-        active_label: Option<InternId>,
-        style: ButtonStyle,
-    },
-    Bpm {
-        placeholder: Option<InternId>,
-    },
-    Time,
-    Scalar {
-        format: ScalarFormat,
-    },
-    Fader {
-        style: FaderStyle,
-    },
-    Wave {
-        style: WaveStyle,
-        badge: Option<InternId>,
-    },
-    TrackList,
-    Toggle,
-    Checkbox,
-    Segmented {
-        items: Vec<InternId>,
-    },
-    Select {
-        label: InternId,
-    },
-    StatusDot {
-        label: InternId,
-        tone: Tone,
-    },
-    Cell {
-        label: Option<InternId>,
-        highlighted: bool,
-    },
-    Readout {
-        label: Option<InternId>,
-        tone: Tone,
-        framed: bool,
-    },
-    Chip {
-        label: InternId,
-        style: ChipStyle,
-    },
-    Knob,
-    VuStereo,
-    VuVertical,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum Binding {
-    Command {
-        id: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Parameter {
-        id: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Telemetry {
-        id: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-    Model {
-        id: InternId,
-        with: BTreeMap<InternId, InternId>,
-    },
-}
-
-#[derive(Debug)]
-pub(crate) struct ExpandedModule {
-    pub(crate) module: InternId,
-    pub(crate) title: Option<InternId>,
-    pub(crate) chip: Option<InternId>,
-    pub(crate) chrome: ChromeStyle,
-    pub(crate) footer: Option<Binding>,
-    pub(crate) collapsed: InternId,
-    pub(crate) root: ExpandedNode,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct ControlSite<'a> {
-    pub(crate) path: &'a str,
-    pub(crate) control: &'a ControlNode,
-    pub(crate) read: Option<&'a BindingRef>,
-    pub(crate) write: Option<&'a BindingRef>,
-}
-
-type ControlVisitor<'v> =
-    dyn for<'a> FnMut(ControlSite<'a>, &SourceUri) -> Result<(), UiDocError> + 'v;
-
-pub(crate) struct Budget {
-    nodes: usize,
-    max: usize,
-}
-
-impl Budget {
-    pub(crate) fn new(max: usize) -> Self {
-        Self { nodes: 0, max }
-    }
-
-    pub(crate) fn charge(&mut self, origin: &SourceUri) -> Result<(), UiDocError> {
-        self.nodes += 1;
-        if self.nodes > self.max {
-            return Err(UiDocError::NodesExceeded {
-                origin: origin.clone(),
-                count: self.nodes,
-                max: self.max,
-            });
-        }
-        Ok(())
-    }
-}
 
 struct Context<'a> {
     set: &'a ModuleSet,
@@ -471,6 +298,7 @@ fn finish_control(
     control: &ControlNode,
     fields: ControlFields<'_>,
     path: &str,
+    columns_state: Option<&BindingRef>,
     spec: ControlSpec,
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
@@ -488,6 +316,7 @@ fn finish_control(
             control,
             read: read.as_ref(),
             write: write.as_ref(),
+            columns_state,
         },
         &context.origin,
     )?;
@@ -516,6 +345,13 @@ fn expand_control(
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     let path = begin_control(context, fields.id, machine)?;
+    let columns_state = match control {
+        ControlNode::TrackList { columns_state, .. } => columns_state
+            .as_ref()
+            .map(|binding| substitute_binding(context, binding, &path))
+            .transpose()?,
+        _ => None,
+    };
     let spec = match control {
         ControlNode::DeckSummary { style, .. } => ControlSpec::DeckSummary { style: *style },
         ControlNode::Brand { .. } => ControlSpec::Brand,
@@ -578,7 +414,13 @@ fn expand_control(
                 &context.origin,
             )?,
         },
-        ControlNode::TrackList { .. } => ControlSpec::TrackList,
+        ControlNode::TrackList { columns, .. } => ControlSpec::TrackList {
+            columns: columns.clone(),
+            columns_state: columns_state
+                .as_ref()
+                .map(|binding| intern_binding(machine.interner, binding, &context.origin))
+                .transpose()?,
+        },
         ControlNode::Toggle { .. } => ControlSpec::Toggle,
         ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
         ControlNode::Segmented { items, .. } => ControlSpec::Segmented {
@@ -634,7 +476,15 @@ fn expand_control(
         | ControlNode::Include { .. }
         | ControlNode::Slot { .. } => return walk(context, control, depth, machine),
     };
-    finish_control(context, control, fields, &path, spec, machine)
+    finish_control(
+        context,
+        control,
+        fields,
+        &path,
+        columns_state.as_ref(),
+        spec,
+        machine,
+    )
 }
 
 fn expand_header_control(
@@ -782,6 +632,7 @@ fn expand_value_control(
             read,
             write,
             adaptive,
+            ..
         }) => expand_control(
             context,
             control,

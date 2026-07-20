@@ -1,0 +1,20 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "gallery-tracklist",
+    root: Split(
+        axis: Horizontal,
+        children: [
+            (weight: 1.0, node: Module(
+                instance: "gallery",
+                source: "modules/nav.kmodule.ron",
+                size: (w: Fixed(198.0), h: Fill),
+            )),
+            (weight: 1.0, node: Module(
+                instance: "tracklist",
+                source: "modules/tabs/tracklist.kmodule.ron",
+                size: (w: Fill, h: Fill),
+            )),
+        ],
+    ),
+)

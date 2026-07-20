@@ -95,7 +95,23 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.telemetry.percent_scale, 100.0);
     assert_eq!(document.telemetry.percent_width, 3);
     assert_eq!(document.telemetry.scalar_precision, 2);
-    assert_eq!(document.track_list.artist_width, 170.0);
+    let track_list = &document.track_list;
+    assert_eq!(track_list.header_height, 22.0);
+    assert_eq!(track_list.row_height, 28.0);
+    assert_eq!(track_list.footer_height, 22.0);
+    assert_eq!(track_list.index_width, 28.0);
+    assert_eq!(track_list.deck_width, 40.0);
+    assert_eq!(track_list.artist_width, 180.0);
+    assert_eq!(track_list.bpm_width, 64.0);
+    assert_eq!(track_list.key_width, 46.0);
+    assert_eq!(track_list.time_width, 60.0);
+    assert_eq!(track_list.energy_width, 110.0);
+    assert_eq!(track_list.transition_width, 130.0);
+    assert_eq!(track_list.deck_text.size, 9.0);
+    assert_eq!(track_list.bpm_badge_background, ColorRole::BgPanel2);
+    assert_eq!(track_list.energy_bar_width, 66.0);
+    assert_eq!(track_list.energy_bar_height, 4.0);
+    assert_eq!(track_list.footer_text.size, 9.0);
     assert_eq!(document.layout_preview.height, 92.0);
     assert_eq!(builtin::skin_doc(), &document);
 }

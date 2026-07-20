@@ -21,8 +21,10 @@ impl Consts {
     const CELLS_SELECT_TICK: u32 = 80;
     const SIZES_CAPTURE_TICK: u32 = 95;
     const SIZES_SELECT_TICK: u32 = 90;
-    const STRESS_CAPTURE_TICK: u32 = 500;
-    const STRESS_SELECT_TICK: u32 = 100;
+    const TRACKLIST_CAPTURE_TICK: u32 = 110;
+    const TRACKLIST_SELECT_TICK: u32 = 105;
+    const STRESS_CAPTURE_TICK: u32 = 515;
+    const STRESS_SELECT_TICK: u32 = 115;
 }
 
 pub(super) struct ShotPlan {
@@ -85,6 +87,11 @@ pub(super) fn drive(state: &mut Gallery) -> Task<Message> {
             Task::none()
         }
         Consts::SIZES_CAPTURE_TICK => capture(state.window_id, "tab-sizes"),
+        Consts::TRACKLIST_SELECT_TICK => {
+            state.select_tab(Tab::Tracklist);
+            Task::none()
+        }
+        Consts::TRACKLIST_CAPTURE_TICK => capture(state.window_id, "tab-tracklist"),
         Consts::STRESS_SELECT_TICK => {
             state.select_tab(Tab::Stress);
             Task::none()

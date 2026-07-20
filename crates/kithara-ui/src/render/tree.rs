@@ -20,7 +20,7 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    module::{ChromeStyle, IconName, Tone},
+    module::{ChromeStyle, IconName, Tone, TrackColumn},
     render::{Icon, ReadValue, Reads, Skin, UiEvent},
     size::{Dim, SizeSpec, control_size},
     widgets::{
@@ -327,14 +327,39 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::TrackList => TrackList::builder()
-            .path(path)
-            .maybe_value(value.as_ref())
-            .reads(reads)
-            .skin(skin)
-            .build()
-            .view(),
+        ControlSpec::TrackList {
+            columns,
+            columns_state,
+        } => render_track_list(
+            path,
+            columns,
+            columns_state.as_ref(),
+            value.as_ref(),
+            ui,
+            reads,
+            skin,
+        ),
     }
+}
+
+fn render_track_list<'a>(
+    path: &'a str,
+    columns: &[TrackColumn],
+    columns_state: Option<&Binding>,
+    value: Option<&ReadValue<'_>>,
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    TrackList::builder()
+        .path(path)
+        .columns(columns)
+        .maybe_columns_state(columns_state.map(|binding| binding_id(binding, ui)))
+        .maybe_value(value)
+        .reads(reads)
+        .skin(skin)
+        .build()
+        .view()
 }
 
 fn render_segmented<'a>(
@@ -435,6 +460,16 @@ fn resolve<'a>(reads: &'a dyn Reads, binding: &Binding, ui: &CompiledUi) -> Opti
         Binding::Parameter { id, .. } | Binding::Model { id, .. } => reads.get(ui.resolve(*id)),
         _ => None,
     }
+}
+
+fn binding_id<'a>(binding: &Binding, ui: &'a CompiledUi) -> &'a str {
+    let id = match binding {
+        Binding::Command { id, .. }
+        | Binding::Parameter { id, .. }
+        | Binding::Telemetry { id, .. }
+        | Binding::Model { id, .. } => *id,
+    };
+    ui.resolve(id)
 }
 
 fn deck_is_a(scope: &BTreeMap<InternId, InternId>, ui: &CompiledUi) -> bool {

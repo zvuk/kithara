@@ -149,7 +149,7 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Scalar { .. } => skin.telemetry.size,
         ControlSpec::Fader { .. } => skin.fader.size,
         ControlSpec::Wave { .. } => skin.wave.size,
-        ControlSpec::TrackList => skin.track_list.size,
+        ControlSpec::TrackList { .. } => skin.track_list.size,
         ControlSpec::Toggle => skin.toggle.size,
         ControlSpec::Checkbox => skin.checkbox.size,
         ControlSpec::Segmented { .. } => skin.segmented.size,

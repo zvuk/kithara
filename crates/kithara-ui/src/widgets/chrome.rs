@@ -7,7 +7,6 @@ use iced::{
         canvas::{self, Frame, Geometry, Path, Stroke},
         column, container,
         container::Style as ContainerStyle,
-        text_input::{Status as TextInputStatus, Style as TextInputStyle},
     },
 };
 
@@ -342,30 +341,6 @@ pub fn secondary_button_style(
             border,
             ..ButtonStyle::default()
         }
-    }
-}
-
-pub(crate) fn text_input_style(
-    skin: &Skin,
-) -> impl Fn(&Theme, TextInputStatus) -> TextInputStyle + 'static {
-    let palette = skin.palette;
-    let metrics = skin.text_input;
-    let border_color = skin.color(metrics.border);
-    move |_theme, status| TextInputStyle {
-        background: Background::Color(palette.bg_inset),
-        border: Border {
-            width: if matches!(status, TextInputStatus::Focused { .. }) {
-                metrics.border_width
-            } else {
-                metrics.idle_border_width
-            },
-            color: border_color,
-            radius: metrics.radius.into(),
-        },
-        icon: palette.muted,
-        placeholder: palette.muted,
-        value: palette.text,
-        selection: palette.accent_soft,
     }
 }
 

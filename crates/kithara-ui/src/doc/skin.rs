@@ -611,31 +611,67 @@ pub struct TelemetrySkin {
     pub text: FontSkin,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TrackListSkin {
     pub size: SizeSpec,
+    pub labels: TrackListLabels,
     pub row_frame: FrameSkin,
-    pub chip_frame: FrameSkin,
-    pub artist_width: f32,
-    pub chip_size: f32,
-    pub chip_text: FontSkin,
-    pub count_padding_x: f32,
-    pub count_padding_y: f32,
-    pub count_text: FontSkin,
+    pub deck_chip_frame: FrameSkin,
+    pub bpm_badge_frame: FrameSkin,
+    pub bpm_badge_background: ColorRole,
+    pub energy_bar_background: ColorRole,
+    pub cell_padding_x: f32,
+    pub footer_padding_x: f32,
     pub grid_gap: f32,
     pub header_height: f32,
-    pub header_text: FontSkin,
-    pub number_text: FontSkin,
-    pub number_width: f32,
     pub row_height: f32,
-    pub row_text: FontSkin,
-    pub time_padding_x: f32,
-    pub time_padding_y: f32,
-    pub time_text: FontSkin,
+    pub footer_height: f32,
+    pub index_width: f32,
+    pub deck_width: f32,
+    pub artist_width: f32,
+    pub bpm_width: f32,
+    pub key_width: f32,
     pub time_width: f32,
-    pub title_gap: f32,
+    pub energy_width: f32,
+    pub transition_width: f32,
+    pub deck_chip_width: f32,
+    pub deck_chip_height: f32,
+    pub bpm_badge_height: f32,
+    pub bpm_badge_padding_x: f32,
+    pub energy_bar_width: f32,
+    pub energy_bar_height: f32,
+    pub energy_bar_gap: f32,
+    pub header_text: FontSkin,
+    pub index_text: FontSkin,
+    pub deck_text: FontSkin,
+    pub title_text: FontSkin,
+    pub artist_text: FontSkin,
+    pub bpm_text: FontSkin,
+    pub key_text: FontSkin,
+    pub time_text: FontSkin,
+    pub energy_text: FontSkin,
+    pub transition_text: FontSkin,
+    pub footer_text: FontSkin,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct TrackListLabels {
+    pub index: String,
+    pub deck: String,
+    pub title: String,
+    pub artist: String,
+    pub bpm: String,
+    pub key: String,
+    pub time: String,
+    pub energy: String,
+    pub transition: String,
+    pub footer_component: String,
+    pub footer_tracks: String,
+    pub footer_usage: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

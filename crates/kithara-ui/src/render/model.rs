@@ -30,6 +30,11 @@ pub struct TrackRow<'a> {
     pub artist: Option<&'a str>,
     pub time: Option<&'a str>,
     pub search: Option<&'a str>,
+    pub deck: Option<&'a str>,
+    pub bpm: Option<&'a str>,
+    pub key: Option<&'a str>,
+    pub energy: Option<u8>,
+    pub transition: Option<&'a str>,
     pub current: bool,
     pub selected: bool,
 }

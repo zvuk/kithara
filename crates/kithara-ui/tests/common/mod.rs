@@ -11,7 +11,12 @@ pub(crate) struct TestRegistry {
 }
 
 impl TestRegistry {
-    fn insert(&mut self, category: EndpointCategory, id: &str, description: EndpointDesc) {
+    pub(crate) fn insert(
+        &mut self,
+        category: EndpointCategory,
+        id: &str,
+        description: EndpointDesc,
+    ) {
         self.endpoints
             .insert((category, EndpointId(id.to_owned())), description);
     }

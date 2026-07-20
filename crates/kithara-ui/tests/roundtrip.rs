@@ -74,6 +74,8 @@ const ROUNDTRIP_MODULE: &str = r#"(
                     TrackList(
                         id: "tracks",
                         read: Model(id: "library.visible_tracks"),
+                        columns: [Index, Deck, Title, Artist, Bpm, Key, Time, Energy, Transition],
+                        columns_state: Some(Model(id: "ui.tracklist.columns")),
                         size: Some((w: Fill, h: Fixed(160.0))),
                         adaptive: (priority: Low),
                     ),

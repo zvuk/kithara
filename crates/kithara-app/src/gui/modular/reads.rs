@@ -54,6 +54,11 @@ impl<'state> UiReads<'state> {
                 artist: None,
                 time: None,
                 search: track.url.as_deref(),
+                deck: None,
+                bpm: None,
+                key: None,
+                energy: None,
+                transition: None,
                 current: state.current_track_index == Some(index),
                 selected: selected == Some(index),
             })
