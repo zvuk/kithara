@@ -11,6 +11,7 @@ use iced::{
 };
 
 use crate::{
+    layout::FrameSides,
     module::ChromeStyle,
     render::{Skin, UiEvent, fonts, shaped_text},
     skin::FontWeight,
@@ -26,6 +27,10 @@ pub struct ModuleChrome<'a, 'skin, Content, Message> {
     chip: Option<&'a str>,
     #[builder(default)]
     style: ChromeStyle,
+    #[builder(default)]
+    frame: FrameSides,
+    #[builder(default = true)]
+    corners: bool,
     footer: Option<String>,
     on_toggle: Option<Message>,
     #[builder(default)]
@@ -67,6 +72,8 @@ where
             chrome.skin,
             chrome.skin.palette.bg_panel,
             Length::Fill,
+            chrome.frame,
+            chrome.corners,
         ),
         ChromeStyle::Plain => chrome.content.into(),
     }
@@ -94,6 +101,8 @@ where
             skin,
             skin.color(metrics.panel_background),
             Length::Fixed(metrics.header_height),
+            chrome.frame,
+            chrome.corners,
         );
     }
 
@@ -131,6 +140,8 @@ where
         skin,
         skin.color(metrics.panel_background),
         Length::Fill,
+        chrome.frame,
+        chrome.corners,
     )
 }
 
@@ -231,25 +242,30 @@ fn framed<'a, Message>(
     skin: &Skin,
     background: Color,
     height: Length,
+    sides: FrameSides,
+    corners: bool,
 ) -> Element<'a, Message>
 where
     Message: 'a,
 {
-    let border = skin.border(skin.chrome.frame);
     let body = container(content)
         .width(Length::Fill)
         .height(height)
-        .style(move |_| panel_frame_style(background, border));
-    let ticks = Canvas::new(CornerTicks {
-        color: skin.color(skin.chrome.corner_color),
-        size: skin.chrome.corner_size,
-        width: skin.chrome.corner_width,
-        offset: skin.chrome.corner_offset,
+        .style(move |_| panel_style(background));
+    let frame = Canvas::new(FrameChrome {
+        sides,
+        frame_color: skin.color(skin.chrome.frame.border),
+        frame_width: skin.chrome.frame.border_width,
+        corners,
+        corner_color: skin.color(skin.chrome.corner_color),
+        corner_size: skin.chrome.corner_size,
+        corner_width: skin.chrome.corner_width,
+        corner_offset: skin.chrome.corner_offset,
     })
     .width(Length::Fill)
     .height(height);
 
-    Stack::with_children([body.into(), ticks.into()])
+    Stack::with_children([body.into(), frame.into()])
         .width(Length::Fill)
         .height(height)
         .into()
@@ -334,14 +350,18 @@ fn panel_style(background: Color) -> ContainerStyle {
     ContainerStyle::default().background(Background::Color(background))
 }
 
-struct CornerTicks {
-    color: Color,
-    size: f32,
-    width: f32,
-    offset: f32,
+struct FrameChrome {
+    sides: FrameSides,
+    frame_color: Color,
+    frame_width: f32,
+    corners: bool,
+    corner_color: Color,
+    corner_size: f32,
+    corner_width: f32,
+    corner_offset: f32,
 }
 
-impl<Message> canvas::Program<Message> for CornerTicks {
+impl<Message> canvas::Program<Message> for FrameChrome {
     type State = ();
 
     fn draw(
@@ -353,32 +373,70 @@ impl<Message> canvas::Program<Message> for CornerTicks {
         _cursor: iced::mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let right = (bounds.width - self.offset - self.width).max(0.0);
-        let bottom = (bounds.height - self.offset - self.width).max(0.0);
-        let right_tick = (bounds.width - self.offset - self.size).max(0.0);
-        let bottom_tick = (bounds.height - self.offset - self.size).max(0.0);
+        let right = (bounds.width - self.frame_width).max(0.0);
+        let bottom = (bounds.height - self.frame_width).max(0.0);
+        if self.sides.top {
+            frame.fill_rectangle(
+                Point::ORIGIN,
+                Size::new(bounds.width, self.frame_width),
+                self.frame_color,
+            );
+        }
+        if self.sides.right {
+            frame.fill_rectangle(
+                Point::new(right, 0.0),
+                Size::new(self.frame_width, bounds.height),
+                self.frame_color,
+            );
+        }
+        if self.sides.bottom {
+            frame.fill_rectangle(
+                Point::new(0.0, bottom),
+                Size::new(bounds.width, self.frame_width),
+                self.frame_color,
+            );
+        }
+        if self.sides.left {
+            frame.fill_rectangle(
+                Point::ORIGIN,
+                Size::new(self.frame_width, bounds.height),
+                self.frame_color,
+            );
+        }
+        if self.corners {
+            self.draw_corners(&mut frame, bounds);
+        }
+
+        vec![frame.into_geometry()]
+    }
+}
+
+impl FrameChrome {
+    fn draw_corners(&self, frame: &mut Frame, bounds: Rectangle) {
+        let right = (bounds.width - self.corner_offset - self.corner_width).max(0.0);
+        let bottom = (bounds.height - self.corner_offset - self.corner_width).max(0.0);
+        let right_tick = (bounds.width - self.corner_offset - self.corner_size).max(0.0);
+        let bottom_tick = (bounds.height - self.corner_offset - self.corner_size).max(0.0);
 
         frame.fill_rectangle(
-            Point::new(self.offset, self.offset),
-            Size::new(self.size, self.width),
-            self.color,
+            Point::new(self.corner_offset, self.corner_offset),
+            Size::new(self.corner_size, self.corner_width),
+            self.corner_color,
         );
         frame.fill_rectangle(
-            Point::new(self.offset, self.offset),
-            Size::new(self.width, self.size),
-            self.color,
+            Point::new(self.corner_offset, self.corner_offset),
+            Size::new(self.corner_width, self.corner_size),
+            self.corner_color,
         );
         frame.fill_rectangle(
             Point::new(right_tick, bottom),
-            Size::new(self.size, self.width),
-            self.color,
+            Size::new(self.corner_size, self.corner_width),
+            self.corner_color,
         );
         frame.fill_rectangle(
             Point::new(right, bottom_tick),
-            Size::new(self.width, self.size),
-            self.color,
+            Size::new(self.corner_width, self.corner_size),
+            self.corner_color,
         );
-
-        vec![frame.into_geometry()]
     }
 }

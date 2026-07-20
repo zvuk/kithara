@@ -35,7 +35,36 @@ pub enum LayoutNode {
         with: BTreeMap<String, String>,
         #[serde(default)]
         size: Option<SizeSpec>,
+        #[serde(default)]
+        frame: FrameSides,
+        #[serde(default = "default_corners")]
+        corners: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct FrameSides {
+    #[serde(default = "default_frame_side")]
+    pub top: bool,
+    #[serde(default = "default_frame_side")]
+    pub right: bool,
+    #[serde(default = "default_frame_side")]
+    pub bottom: bool,
+    #[serde(default = "default_frame_side")]
+    pub left: bool,
+}
+
+impl Default for FrameSides {
+    fn default() -> Self {
+        Self {
+            top: true,
+            right: true,
+            bottom: true,
+            left: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -56,6 +85,14 @@ pub struct SplitChild {
 
 fn default_weight() -> f32 {
     1.0
+}
+
+fn default_frame_side() -> bool {
+    true
+}
+
+fn default_corners() -> bool {
+    true
 }
 
 /// Parses a validated layout document.

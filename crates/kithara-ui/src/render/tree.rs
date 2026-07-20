@@ -95,6 +95,8 @@ fn render_compiled<'a>(
             title,
             chip,
             chrome,
+            frame,
+            corners,
             footer,
             collapsed,
             root,
@@ -122,6 +124,8 @@ fn render_compiled<'a>(
                 .maybe_title(title.map(|id| ui.resolve(id)))
                 .maybe_chip(chip.map(|id| ui.resolve(id)))
                 .style(*chrome)
+                .frame(*frame)
+                .corners(*corners)
                 .maybe_footer(footer)
                 .on_toggle(UiEvent::ToggleModule(ui.resolve(*module).to_owned()))
                 .collapsed(collapsed)

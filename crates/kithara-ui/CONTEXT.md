@@ -64,6 +64,10 @@ are selected exhaustively from `ControlSpec` and the supplied `SkinDoc` by
 the serde default so existing documents retain the original frame and corner ticks; `Plain`
 renders only module content; `Full` adds the skin-owned 12e header, separators, and footer.
 
+Each layout module instance owns which outer frame sides and corner ticks are rendered. These
+per-instance flags let adjacent modules yield their shared edges to the layout grid, while the skin
+remains the owner of frame and corner thickness, size, offset, and color.
+
 Collapse state remains host-owned. A Full module reads `Bool` from
 `ui.module.<module-doc-id>.collapsed`; an absent value means expanded. Header activation emits
 `UiEvent::ToggleModule(<module-doc-id>)`. The renderer does not retain or mutate collapse state,

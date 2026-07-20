@@ -2,7 +2,7 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     error::UiDocError,
     ids::SourceUri,
-    layout::{LayoutNode, parse_layout},
+    layout::{FrameSides, LayoutNode, parse_layout},
     module::{ChipStyle, ControlNode, IconName, Priority, TextStyle, Tone, parse_module},
 };
 use ron::extensions::Extensions;
@@ -124,6 +124,41 @@ fn default_weight_is_one() {
         panic!("expected split root");
     };
     assert_eq!(children[1].weight, 1.0);
+}
+
+#[kithara::test]
+fn module_frame_and_corners_are_typed_and_default_on() {
+    let defaults = parse_layout(
+        r#"(schema: "kithara.layout", version: 1, id: "defaults",
+            root: Module(instance: "a", source: "m.ron"))"#,
+        &origin(),
+    )
+    .unwrap();
+    let LayoutNode::Module { frame, corners, .. } = &defaults.root else {
+        panic!("expected module root");
+    };
+    assert_eq!(*frame, FrameSides::default());
+    assert!(*corners);
+
+    let configured = parse_layout(
+        r#"(schema: "kithara.layout", version: 1, id: "configured",
+            root: Module(
+                instance: "a",
+                source: "m.ron",
+                frame: (right: false),
+                corners: false,
+            ))"#,
+        &origin(),
+    )
+    .unwrap();
+    let LayoutNode::Module { frame, corners, .. } = &configured.root else {
+        panic!("expected module root");
+    };
+    assert!(frame.top);
+    assert!(!frame.right);
+    assert!(frame.bottom);
+    assert!(frame.left);
+    assert!(!corners);
 }
 
 #[kithara::test]

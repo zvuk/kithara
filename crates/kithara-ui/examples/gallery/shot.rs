@@ -11,24 +11,26 @@ impl Consts {
     const ATOMS_SELECT_TICK: u32 = 1;
     const BUTTONS_CAPTURE_TICK: u32 = 40;
     const BUTTONS_SELECT_TICK: u32 = 35;
-    const FADERS_CAPTURE_TICK: u32 = 50;
-    const FADERS_SELECT_TICK: u32 = 45;
-    const MODULES_CAPTURE_TICK: u32 = 60;
-    const MODULES_SELECT_TICK: u32 = 55;
-    const TYPOGRAPHY_CAPTURE_TICK: u32 = 75;
-    const TYPOGRAPHY_SELECT_TICK: u32 = 70;
     const CELLS_CAPTURE_TICK: u32 = 85;
     const CELLS_SELECT_TICK: u32 = 80;
+    const CHROME_CAPTURE_TICK: u32 = 105;
+    const CHROME_SELECT_TICK: u32 = 100;
+    const FADERS_CAPTURE_TICK: u32 = 50;
+    const FADERS_SELECT_TICK: u32 = 45;
+    const LIBRARY2_CAPTURE_TICK: u32 = 145;
+    const LIBRARY2_SELECT_TICK: u32 = 140;
+    const MODULES_CAPTURE_TICK: u32 = 60;
+    const MODULES_SELECT_TICK: u32 = 55;
     const SIZES_CAPTURE_TICK: u32 = 95;
     const SIZES_SELECT_TICK: u32 = 90;
-    const TRACKLIST_CAPTURE_TICK: u32 = 110;
-    const TRACKLIST_SELECT_TICK: u32 = 105;
-    const TREE_CAPTURE_TICK: u32 = 125;
-    const TREE_SELECT_TICK: u32 = 120;
-    const LIBRARY2_CAPTURE_TICK: u32 = 135;
-    const LIBRARY2_SELECT_TICK: u32 = 130;
     const STRESS_CAPTURE_TICK: u32 = 540;
-    const STRESS_SELECT_TICK: u32 = 140;
+    const STRESS_SELECT_TICK: u32 = 150;
+    const TRACKLIST_CAPTURE_TICK: u32 = 120;
+    const TRACKLIST_SELECT_TICK: u32 = 115;
+    const TREE_CAPTURE_TICK: u32 = 135;
+    const TREE_SELECT_TICK: u32 = 130;
+    const TYPOGRAPHY_CAPTURE_TICK: u32 = 75;
+    const TYPOGRAPHY_SELECT_TICK: u32 = 70;
 }
 
 pub(super) struct ShotPlan {
@@ -91,6 +93,11 @@ pub(super) fn drive(state: &mut Gallery) -> Task<Message> {
             Task::none()
         }
         Consts::SIZES_CAPTURE_TICK => capture(state.window_id, "tab-sizes"),
+        Consts::CHROME_SELECT_TICK => {
+            state.select_tab(Tab::Chrome);
+            Task::none()
+        }
+        Consts::CHROME_CAPTURE_TICK => capture(state.window_id, "tab-chrome"),
         Consts::TRACKLIST_SELECT_TICK => {
             state.select_tab(Tab::Tracklist);
             Task::none()

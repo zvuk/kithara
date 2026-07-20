@@ -2,7 +2,7 @@ use crate::{
     error::UiDocError,
     expand::{Binding, Budget, ControlSite, ExpandedNode, Expander},
     ids::{InternId, Interner, SourceUri, StrArena},
-    layout::{Axis, LayoutNode, parse_layout},
+    layout::{Axis, FrameSides, LayoutNode, parse_layout},
     module::ChromeStyle,
     registry::EndpointRegistry,
     resolve::load_module_graph,
@@ -44,6 +44,8 @@ pub enum CompiledNode {
         title: Option<InternId>,
         chip: Option<InternId>,
         chrome: ChromeStyle,
+        frame: FrameSides,
+        corners: bool,
         footer: Option<Binding>,
         collapsed: InternId,
         root: Box<ExpandedNode>,
@@ -127,6 +129,8 @@ impl Compiler<'_> {
                 source,
                 with,
                 size,
+                frame,
+                corners,
             } => {
                 for value in with.values() {
                     if !value.starts_with("$$")
@@ -186,6 +190,8 @@ impl Compiler<'_> {
                     title: expanded.title,
                     chip: expanded.chip,
                     chrome: expanded.chrome,
+                    frame: *frame,
+                    corners: *corners,
                     footer: expanded.footer,
                     collapsed: expanded.collapsed,
                     root: Box::new(expanded.root),

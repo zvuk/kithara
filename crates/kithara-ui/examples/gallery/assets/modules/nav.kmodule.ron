@@ -64,6 +64,12 @@
                 read: Model(id: "gallery.tab.sizes"),
             ),
             NavItem(
+                id: "chrome",
+                label: "ХРОМ",
+                icon: Disc,
+                read: Model(id: "gallery.tab.chrome"),
+            ),
+            NavItem(
                 id: "tracklist",
                 label: "ТРЕКЛИСТ",
                 icon: Playlist,

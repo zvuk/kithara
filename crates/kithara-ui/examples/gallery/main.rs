@@ -31,6 +31,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-buttons.klayout.ron"),
     ),
     (
+        "gallery-chrome.klayout.ron",
+        include_str!("assets/gallery-chrome.klayout.ron"),
+    ),
+    (
         "gallery-faders.klayout.ron",
         include_str!("assets/gallery-faders.klayout.ron"),
     ),
@@ -121,6 +125,38 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/buttons.kmodule.ron",
         include_str!("assets/modules/tabs/buttons.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/chrome-full-all.kmodule.ron",
+        include_str!("assets/modules/tabs/chrome-full-all.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/chrome-join-left.kmodule.ron",
+        include_str!("assets/modules/tabs/chrome-join-left.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/chrome-join-right.kmodule.ron",
+        include_str!("assets/modules/tabs/chrome-join-right.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/chrome-no-corners.kmodule.ron",
+        include_str!("assets/modules/tabs/chrome-no-corners.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/chrome-open-top.kmodule.ron",
+        include_str!("assets/modules/tabs/chrome-open-top.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/chrome-row-a.kmodule.ron",
+        include_str!("assets/modules/tabs/chrome-row-a.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/chrome-row-b.kmodule.ron",
+        include_str!("assets/modules/tabs/chrome-row-b.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/chrome-row-c.kmodule.ron",
+        include_str!("assets/modules/tabs/chrome-row-c.kmodule.ron"),
     ),
     (
         "modules/tabs/faders.kmodule.ron",

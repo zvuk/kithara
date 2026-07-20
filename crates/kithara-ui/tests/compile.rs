@@ -194,9 +194,13 @@ fn module_shell_metadata_compiles_into_the_module_node() {
     resolver.insert(
         "shell.klayout.ron",
         r#"(schema: "kithara.layout", version: 1, id: "shell",
-            root: Module(instance: "deck-a", source: "shell.kmodule.ron", with: {
-                "deck": "a",
-            }))"#,
+            root: Module(
+                instance: "deck-a",
+                source: "shell.kmodule.ron",
+                with: { "deck": "a" },
+                frame: (top: true, right: false, bottom: true, left: false),
+                corners: false,
+            ))"#,
     );
     resolver.insert(
         "shell.kmodule.ron",
@@ -219,6 +223,8 @@ fn module_shell_metadata_compiles_into_the_module_node() {
         title,
         chip,
         chrome,
+        frame,
+        corners,
         footer,
         collapsed,
         ..
@@ -231,6 +237,11 @@ fn module_shell_metadata_compiles_into_the_module_node() {
     assert_eq!(title.map(|id| ui.resolve(id)), Some("Deck"));
     assert_eq!(chip.map(|id| ui.resolve(id)), Some("DECK"));
     assert_eq!(*chrome, ChromeStyle::Full);
+    assert!(frame.top);
+    assert!(!frame.right);
+    assert!(frame.bottom);
+    assert!(!frame.left);
+    assert!(!corners);
     assert_eq!(ui.resolve(*collapsed), "ui.module.deck.collapsed");
     let Some(Binding::Telemetry { id, with }) = footer else {
         panic!("expected telemetry footer");
