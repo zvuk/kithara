@@ -72,6 +72,7 @@ impl ClickActivate {
 pub(crate) enum ScalarDragMode {
     Horizontal,
     HorizontalClick,
+    RelativeHorizontal { value: f32, scale: f32 },
     Vertical,
     RelativeVertical { value: f32, range: f32 },
 }
@@ -109,6 +110,7 @@ impl DoubleClickState {
 pub(crate) struct ScalarDragState {
     active: bool,
     start_position: f32,
+    start_value: f32,
     double_click: DoubleClickState,
 }
 
@@ -122,7 +124,9 @@ impl ScalarDrag {
             ScalarDragMode::Vertical if bounds.height > 0.0 => {
                 1.0 - (position.y - bounds.y) / bounds.height
             }
-            ScalarDragMode::Vertical | ScalarDragMode::RelativeVertical { .. } => return None,
+            ScalarDragMode::Vertical
+            | ScalarDragMode::RelativeHorizontal { .. }
+            | ScalarDragMode::RelativeVertical { .. } => return None,
         };
         Some(self.publish(value.clamp(0.0, 1.0)))
     }
@@ -169,8 +173,15 @@ impl ScalarDrag {
                     return Some(action);
                 }
                 match self.mode {
-                    ScalarDragMode::RelativeVertical { .. } => {
+                    ScalarDragMode::RelativeHorizontal { value, .. } => {
+                        state.start_position = cursor.position()?.x;
+                        state.start_value = value;
+                        state.active = true;
+                        Some(Action::capture())
+                    }
+                    ScalarDragMode::RelativeVertical { value, .. } => {
                         state.start_position = cursor.position()?.y;
+                        state.start_value = value;
                         state.active = true;
                         Some(Action::capture())
                     }
@@ -182,17 +193,27 @@ impl ScalarDrag {
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => match self.mode {
-                ScalarDragMode::RelativeVertical { value, range } => {
+                ScalarDragMode::RelativeHorizontal { scale, .. } if bounds.width > 0.0 => {
                     cursor.position().map(|position| {
                         self.publish(
-                            (value + (state.start_position - position.y) / range).clamp(0.0, 1.0),
+                            (state.start_value
+                                - (position.x - state.start_position) / bounds.width * scale)
+                                .clamp(0.0, 1.0),
+                        )
+                    })
+                }
+                ScalarDragMode::RelativeVertical { range, .. } => {
+                    cursor.position().map(|position| {
+                        self.publish(
+                            (state.start_value + (state.start_position - position.y) / range)
+                                .clamp(0.0, 1.0),
                         )
                     })
                 }
                 ScalarDragMode::Horizontal | ScalarDragMode::Vertical => {
                     self.absolute_action(bounds, cursor)
                 }
-                ScalarDragMode::HorizontalClick => None,
+                ScalarDragMode::HorizontalClick | ScalarDragMode::RelativeHorizontal { .. } => None,
             },
             Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
                 state.active = false;
@@ -286,5 +307,61 @@ mod tests {
                 action: ControlAction::SetScalar(0.5),
             })
         );
+    }
+
+    #[kithara::test]
+    fn relative_horizontal_drag_uses_start_value_without_click_seek() {
+        let drag = ScalarDrag::builder()
+            .path("wave".to_owned())
+            .mode(ScalarDragMode::RelativeHorizontal {
+                value: 0.4,
+                scale: 0.2,
+            })
+            .hover(HoverState::new(mouse::Interaction::Grab))
+            .build();
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(200.0, 40.0));
+        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+        let release = Event::Mouse(mouse::Event::ButtonReleased(Button::Left));
+        let mut state = ScalarDragState::default();
+
+        let pressed = drag
+            .update(
+                &mut state,
+                &press,
+                bounds,
+                Cursor::Available(Point::new(100.0, 20.0)),
+            )
+            .unwrap_or_else(|| panic!("relative drag must capture its press"));
+        assert_eq!(pressed.into_inner().0, None);
+
+        let moved = drag
+            .update(
+                &mut state,
+                &Event::Mouse(mouse::Event::CursorMoved {
+                    position: Point::new(150.0, 20.0),
+                }),
+                bounds,
+                Cursor::Available(Point::new(150.0, 20.0)),
+            )
+            .unwrap_or_else(|| panic!("relative drag must publish movement"));
+        let Some(UiEvent::Control {
+            path,
+            action: ControlAction::SetScalar(value),
+        }) = moved.into_inner().0
+        else {
+            panic!("relative drag must publish a scalar");
+        };
+        assert_eq!(path, "wave");
+        assert!((value - 0.35).abs() < 0.000_1);
+
+        let released = drag
+            .update(
+                &mut state,
+                &release,
+                bounds,
+                Cursor::Available(Point::new(150.0, 20.0)),
+            )
+            .unwrap_or_else(|| panic!("relative drag must capture its release"));
+        assert_eq!(released.into_inner().0, None);
     }
 }

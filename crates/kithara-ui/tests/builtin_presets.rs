@@ -4,7 +4,7 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
     compile::{CompiledNode, compile},
-    expand::{ControlSpec, ExpandedNode},
+    expand::{Binding, ControlSpec, ExpandedNode},
     layout::Axis,
     module::WaveStyle,
     source::UiConfig,
@@ -74,16 +74,19 @@ fn player_deck_starts_with_one_hero_wave() {
     };
 
     assert_eq!(children.len(), 3);
-    assert!(matches!(
-        children.first(),
-        Some(ExpandedNode::Control {
-            spec: ControlSpec::Wave {
+    let Some(ExpandedNode::Control {
+        spec:
+            ControlSpec::Wave {
                 style: WaveStyle::Hero,
+                zoom: Some(Binding::Model { id, .. }),
                 ..
             },
-            ..
-        })
-    ));
+        ..
+    }) = children.first()
+    else {
+        panic!("expected hero wave with model-owned zoom");
+    };
+    assert_eq!(ui.resolve(*id), "deck.view.zoom");
 }
 
 #[kithara::test]

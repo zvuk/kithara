@@ -224,6 +224,16 @@ pub(crate) fn check_controls(
             endpoints,
         )?;
     }
+    if let Some(zoom) = site.zoom {
+        check_binding(
+            zoom,
+            BindingSide::Read,
+            Some(ValueKind::Scalar),
+            site.path,
+            origin,
+            endpoints,
+        )?;
+    }
     let (read_kind, write_kind) = value_kinds(site.control);
     if let Some(binding) = site.read {
         check_binding(
@@ -621,6 +631,10 @@ mod tests {
             ControlNode::ContextBar { scope, .. } => scope.as_ref(),
             _ => None,
         };
+        let zoom = match &document.root {
+            ControlNode::Wave { zoom, .. } => zoom.as_ref(),
+            _ => None,
+        };
         check_controls(
             ControlSite {
                 path,
@@ -630,6 +644,7 @@ mod tests {
                 columns_state: None,
                 query: None,
                 scope,
+                zoom,
             },
             &origin(),
             &registry(),
@@ -698,6 +713,7 @@ mod tests {
                 columns_state: None,
                 query: query.as_ref(),
                 scope: None,
+                zoom: None,
             },
             &origin(),
             &registry(),
@@ -712,6 +728,26 @@ mod tests {
                 path,
                 ..
             } if expected == "Text" && got == "Scalar" && path == "tree/browser"
+        ));
+    }
+
+    #[kithara::test]
+    fn wave_zoom_binding_must_be_scalar() {
+        let error = check_control(
+            r#"Wave(id: "wave", zoom: Model(id: "library.breadcrumb"))"#,
+            "deck/wave",
+            None,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::BindingType {
+                expected,
+                got,
+                path,
+                ..
+            } if expected == "Scalar" && got == "Text" && path == "deck/wave"
         ));
     }
 

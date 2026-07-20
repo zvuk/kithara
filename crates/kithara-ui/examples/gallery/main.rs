@@ -1,4 +1,5 @@
 mod mock;
+mod mock_data;
 mod shot;
 
 use iced::{Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings};

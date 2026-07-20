@@ -190,6 +190,7 @@ struct ExtraBindings {
     columns_state: Option<BindingRef>,
     query: Option<BindingRef>,
     scope: Option<BindingRef>,
+    zoom: Option<BindingRef>,
 }
 
 #[derive(Clone, Copy)]
@@ -197,6 +198,7 @@ struct ExtraBindingRefs<'a> {
     columns_state: Option<&'a BindingRef>,
     query: Option<&'a BindingRef>,
     scope: Option<&'a BindingRef>,
+    zoom: Option<&'a BindingRef>,
 }
 
 impl ExtraBindings {
@@ -226,10 +228,18 @@ impl ExtraBindings {
                 .transpose()?,
             _ => None,
         };
+        let zoom = match control {
+            ControlNode::Wave { zoom, .. } => zoom
+                .as_ref()
+                .map(|binding| substitute_binding(context, binding, path))
+                .transpose()?,
+            _ => None,
+        };
         Ok(Self {
             columns_state,
             query,
             scope,
+            zoom,
         })
     }
 
@@ -238,6 +248,7 @@ impl ExtraBindings {
             columns_state: self.columns_state.as_ref(),
             query: self.query.as_ref(),
             scope: self.scope.as_ref(),
+            zoom: self.zoom.as_ref(),
         }
     }
 }
@@ -286,6 +297,7 @@ fn finish_control(
             columns_state: extra.columns_state,
             query: extra.query,
             scope: extra.scope,
+            zoom: extra.zoom,
         },
         &context.origin,
     )?;
@@ -378,6 +390,7 @@ fn expand_control(
                 &path,
                 &context.origin,
             )?,
+            zoom: intern_optional_binding(machine.interner, extra.zoom.as_ref(), &context.origin)?,
         },
         ControlNode::TrackList { columns, .. } => ControlSpec::TrackList {
             columns: columns.clone(),

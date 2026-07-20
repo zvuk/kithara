@@ -228,6 +228,7 @@ mod tests {
                 (EndpointCategory::Telemetry, "deck.track.title") => Some(&self.scoped_text),
                 (EndpointCategory::Parameter, "player.output.volume") => Some(&self.scalar),
                 (EndpointCategory::Telemetry, "player.output.levels") => Some(&self.stereo),
+                (EndpointCategory::Model, "deck.view.zoom") => Some(&self.scalar),
                 (EndpointCategory::Model, "library.visible_tracks") => Some(&self.track_list),
                 _ => None,
             }

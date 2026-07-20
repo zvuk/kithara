@@ -46,6 +46,13 @@ converts the complete document to iced colors while retaining the document for l
 The platform-specific monospace family remains code-owned because it describes font resource
 availability rather than skin design.
 
+## Wave View Ownership
+
+Hero-wave zoom and playback position are host-owned scalar state. An optional `Wave.zoom` binding
+reads the visible track fraction; wheel interaction emits `SetScalar` at `<wave-path>/zoom`, while
+horizontal drag emits `SetScalar` at the wave path for the host-owned playback position. The
+renderer keeps neither value and derives the centered zoom window from each read snapshot.
+
 ## Typed Control Schema
 
 Each supported control is a structural `ControlNode` enum variant. RON deserialization owns field

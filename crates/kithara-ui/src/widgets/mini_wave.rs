@@ -6,7 +6,7 @@ use std::{
 use iced::{
     Color, Element, Event, Font, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
-    mouse::{self, Cursor},
+    mouse::{self, Cursor, ScrollDelta},
     widget::{
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
         text,
@@ -16,12 +16,18 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     module::WaveStyle,
-    render::{ReadValue, Reads, Skin, UiEvent, WaveBucket, fonts, theme::RenderPalette},
+    render::{
+        ControlAction, ReadValue, Reads, Skin, UiEvent, WaveBucket, fonts, theme::RenderPalette,
+    },
     skin::{FontSkin, FrameSkin, WaveOverlaySkin, WaveSkin},
     widgets::{
         Widget,
         behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
         deck::format_time,
+        wave::{
+            hero::{HeroPalette, HeroWave, draw as draw_hero_wave},
+            zoom_math::{clamp_zoom, zoom_for_wheel},
+        },
     },
 };
 
@@ -33,6 +39,7 @@ pub(crate) struct MiniWave<'path, 'value, 'data, 'reads, 'skin> {
     value: Option<&'value ReadValue<'data>>,
     reads: &'reads dyn Reads,
     skin: &'skin Skin,
+    zoom: f32,
 }
 
 impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_> {
@@ -46,13 +53,16 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_> {
             Some(ReadValue::Scalar(value)) => value.as_(),
             _ => 0.0,
         };
+        let zoom = clamp_zoom(self.zoom);
         let waveform = waveform.map(|view| WaveformData {
             buckets: view.buckets.to_vec().into_boxed_slice(),
             beats: view.beats.to_vec().into_boxed_slice(),
             downbeats: view.downbeats.to_vec().into_boxed_slice(),
+            loop_region: view.r#loop,
+            cues: view.cues.to_vec().into_boxed_slice(),
         });
         let show_beats = self.style == WaveStyle::Hero;
-        let wave_revision = show_beats.then(|| wave_revision(waveform.as_ref()));
+        let wave_revision = show_beats.then(|| wave_revision(waveform.as_ref(), progress, zoom));
         let overlay = show_beats.then(|| OverlayData {
             title: read_text(self.reads, "deck.track.title")
                 .filter(|title| !title.is_empty())
@@ -74,14 +84,23 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_> {
         Canvas::new(MiniWaveCanvas {
             metrics: self.skin.wave,
             border_color: self.skin.color(self.skin.wave.frame.border),
+            cue_badge_background: self.skin.color(self.skin.wave.cue_badge_background),
+            cue_badge_text_color: self.skin.color(self.skin.wave.cue_badge_text_color),
             drag: ScalarDrag::builder()
                 .path(self.path.to_owned())
                 .mode(if show_beats {
-                    ScalarDragMode::Horizontal
+                    ScalarDragMode::RelativeHorizontal {
+                        value: progress,
+                        scale: zoom,
+                    }
                 } else {
                     ScalarDragMode::HorizontalClick
                 })
-                .hover(HoverState::new(mouse::Interaction::Pointer))
+                .hover(HoverState::new(if show_beats {
+                    mouse::Interaction::Grab
+                } else {
+                    mouse::Interaction::Pointer
+                }))
                 .build(),
             overlay,
             overlay_palette: OverlayPalette::new(self.skin),
@@ -90,6 +109,8 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_> {
             progress,
             show_beats,
             wave_revision,
+            zoom,
+            zoom_path: format!("{}/zoom", self.path),
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -100,6 +121,8 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_> {
 struct MiniWaveCanvas {
     metrics: WaveSkin,
     border_color: Color,
+    cue_badge_background: Color,
+    cue_badge_text_color: Color,
     drag: ScalarDrag,
     overlay: Option<OverlayData>,
     overlay_palette: OverlayPalette,
@@ -108,6 +131,8 @@ struct MiniWaveCanvas {
     progress: f32,
     show_beats: bool,
     wave_revision: Option<u64>,
+    zoom: f32,
+    zoom_path: String,
 }
 
 #[derive(Default)]
@@ -121,6 +146,8 @@ struct WaveformData {
     buckets: Box<[WaveBucket]>,
     beats: Box<[f32]>,
     downbeats: Box<[f32]>,
+    loop_region: Option<[f32; 2]>,
+    cues: Box<[f32]>,
 }
 
 struct OverlayData {
@@ -222,15 +249,18 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
             },
         );
 
-        let mut frame = Frame::new(renderer, bounds.size());
-        let head_x = self.progress.clamp(0.0, 1.0) * bounds.width;
-        frame.stroke(
-            &Path::line(Point::new(head_x, 0.0), Point::new(head_x, bounds.height)),
-            Stroke::default()
-                .with_color(self.palette.accent_strong)
-                .with_width(self.metrics.playhead_width),
-        );
-        let mut layers = vec![wave, frame.into_geometry()];
+        let mut layers = vec![wave];
+        if !self.show_beats {
+            let mut frame = Frame::new(renderer, bounds.size());
+            let head_x = self.progress.clamp(0.0, 1.0) * bounds.width;
+            frame.stroke(
+                &Path::line(Point::new(head_x, 0.0), Point::new(head_x, bounds.height)),
+                Stroke::default()
+                    .with_color(self.palette.accent_strong)
+                    .with_width(self.metrics.playhead_width),
+            );
+            layers.push(frame.into_geometry());
+        }
         if let Some(overlay) = self.overlay.as_ref().filter(|_| !cursor.is_over(bounds)) {
             let mut frame = Frame::new(renderer, bounds.size());
             draw_overlay(
@@ -268,6 +298,19 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         if !self.has_waveform() {
             return None;
         }
+        if self.show_beats
+            && let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event
+            && cursor.is_over(bounds)
+        {
+            let zoom = zoom_for_wheel(self.zoom, scroll_y(*delta));
+            return Some(
+                Action::publish(UiEvent::Control {
+                    path: self.zoom_path.clone(),
+                    action: ControlAction::SetScalar(f64::from(zoom)),
+                })
+                .and_capture(),
+            );
+        }
         self.drag.update(&mut state.drag, event, bounds, cursor)
     }
 }
@@ -282,17 +325,42 @@ impl MiniWaveCanvas {
     fn draw_wave(&self, frame: &mut Frame, bounds: Rectangle) {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
         if let Some(waveform) = &self.waveform {
-            draw_bars(frame, bounds, &waveform.buckets, self.metrics, self.palette);
             if self.show_beats {
-                draw_beat_grid(frame, bounds, waveform, self.metrics, self.palette);
+                self.draw_zoom_wave(frame, bounds, waveform);
+            } else {
+                draw_bars(frame, bounds, &waveform.buckets, self.metrics, self.palette);
             }
         }
         draw_border(frame, bounds, self.metrics.frame, self.border_color);
     }
+
+    fn draw_zoom_wave(&self, frame: &mut Frame, bounds: Rectangle, data: &WaveformData) {
+        draw_hero_wave(
+            frame,
+            bounds,
+            HeroWave {
+                beats: &data.beats,
+                buckets: &data.buckets,
+                cues: &data.cues,
+                downbeats: &data.downbeats,
+                loop_region: data.loop_region,
+                position: self.progress,
+                zoom: self.zoom,
+            },
+            self.metrics,
+            HeroPalette {
+                base: self.palette,
+                cue_badge: self.cue_badge_background,
+                cue_text: self.cue_badge_text_color,
+            },
+        );
+    }
 }
 
-fn wave_revision(waveform: Option<&WaveformData>) -> u64 {
+fn wave_revision(waveform: Option<&WaveformData>, progress: f32, zoom: f32) -> u64 {
     let mut hasher = DefaultHasher::new();
+    progress.to_bits().hash(&mut hasher);
+    zoom.to_bits().hash(&mut hasher);
     if let Some(waveform) = waveform {
         waveform.buckets.len().hash(&mut hasher);
         for bucket in &waveform.buckets {
@@ -303,8 +371,21 @@ fn wave_revision(waveform: Option<&WaveformData>) -> u64 {
         for mark in waveform.beats.iter().chain(waveform.downbeats.iter()) {
             mark.to_bits().hash(&mut hasher);
         }
+        for cue in &waveform.cues {
+            cue.to_bits().hash(&mut hasher);
+        }
+        if let Some([start, end]) = waveform.loop_region {
+            start.to_bits().hash(&mut hasher);
+            end.to_bits().hash(&mut hasher);
+        }
     }
     hasher.finish()
+}
+
+fn scroll_y(delta: ScrollDelta) -> f32 {
+    match delta {
+        ScrollDelta::Lines { y, .. } | ScrollDelta::Pixels { y, .. } => y,
+    }
 }
 
 fn draw_overlay(
@@ -694,39 +775,6 @@ fn draw_band(
         Size::new(width, height),
         color,
     );
-}
-
-fn draw_beat_grid(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    data: &WaveformData,
-    metrics: WaveSkin,
-    palette: RenderPalette,
-) {
-    draw_marks(
-        frame,
-        bounds,
-        &data.beats,
-        with_alpha(palette.line, metrics.grid_alpha),
-        metrics.grid_width,
-    );
-    draw_marks(
-        frame,
-        bounds,
-        &data.downbeats,
-        with_alpha(palette.accent, metrics.downbeat_alpha),
-        metrics.grid_width,
-    );
-}
-
-fn draw_marks(frame: &mut Frame, bounds: Rectangle, marks: &[f32], color: Color, width: f32) {
-    for &mark in marks {
-        let x = mark.clamp(0.0, 1.0) * bounds.width;
-        frame.stroke(
-            &Path::line(Point::new(x, 0.0), Point::new(x, bounds.height)),
-            Stroke::default().with_color(color).with_width(width),
-        );
-    }
 }
 
 fn with_alpha(color: Color, alpha: f32) -> Color {

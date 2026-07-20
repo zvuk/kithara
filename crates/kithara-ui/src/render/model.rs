@@ -21,6 +21,8 @@ pub struct WaveformView<'a> {
     pub beats: &'a [f32],
     pub downbeats: &'a [f32],
     pub bpm: Option<f32>,
+    pub r#loop: Option<[f32; 2]>,
+    pub cues: &'a [f32],
 }
 
 /// Icon associated with a renderer-facing tree row.

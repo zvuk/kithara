@@ -92,6 +92,7 @@ pub enum ControlSpec {
     Wave {
         style: WaveStyle,
         badge: Option<InternId>,
+        zoom: Option<Binding>,
     },
     TrackList {
         columns: Vec<TrackColumn>,
@@ -175,6 +176,7 @@ pub(crate) struct ControlSite<'a> {
     pub(crate) columns_state: Option<&'a BindingRef>,
     pub(crate) query: Option<&'a BindingRef>,
     pub(crate) scope: Option<&'a BindingRef>,
+    pub(crate) zoom: Option<&'a BindingRef>,
 }
 
 pub(crate) type ControlVisitor<'v> =

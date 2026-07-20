@@ -284,6 +284,8 @@ pub enum ControlNode {
         style: WaveStyle,
         #[serde(default)]
         badge: Option<String>,
+        #[serde(default)]
+        zoom: Option<BindingRef>,
     },
     TrackList {
         id: NodeId,

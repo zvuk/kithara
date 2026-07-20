@@ -1,30 +1,26 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    sync::LazyLock,
-};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use kithara_platform::time::Instant;
 use kithara_ui::{
     ids::EndpointId,
     module::TrackColumn,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-    render::{
-        ControlAction, ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket,
-        WaveformView,
-    },
+    render::{ControlAction, ReadValue, Reads, StereoLevels, TreeRow, WaveBucket, WaveformView},
 };
 use num_traits::cast::AsPrimitive;
-use serde::Deserialize;
+
+use crate::mock_data::CATALOG;
 
 struct Consts;
 
 impl Consts {
     const BPM: &str = "70.00";
     const BPM_VALUE: f32 = 70.0;
-    const DOWNBEATS: &[f32] = &[0.0, 0.5];
+    const CUES: &[f32] = &[0.27, 0.31];
     const DURATION_SECS: f64 = 360.0;
     const FRAME_WINDOW: usize = 300;
     const KEY: &str = "4m";
+    const LOOP_REGION: [f32; 2] = [0.30, 0.34];
     const POSITION_SECS: f64 = 103.0;
     const REMAIN: &str = "−04:17";
     const STRESS_WAVE_BUCKETS: u16 = 8_192;
@@ -40,140 +36,12 @@ impl Consts {
         TrackColumn::Transition,
     ];
     const TRACKLIST_LIBRARY: [bool; 9] = [true, true, true, true, true, true, true, false, false];
-    const TRACKLIST_QUEUE: [bool; 9] = [true, true, true, false, true, true, false, true, true];
     const TRACKLIST_MICRO: [bool; 9] =
         [false, false, true, false, false, false, true, false, false];
+    const TRACKLIST_QUEUE: [bool; 9] = [true, true, true, false, true, true, false, true, true];
     const TRACKLIST_QUEUE_PRESET: usize = 1;
-    const WAVE_BEATS: &[f32] = &[0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
-}
-
-#[derive(Deserialize)]
-struct MockData {
-    title: String,
-    artist: String,
-    breadcrumb: String,
-    tree: Vec<MockTreeRow>,
-    tracks: Vec<MockTrack>,
-}
-
-#[derive(Deserialize)]
-struct MockTreeRow {
-    #[serde(default)]
-    depth: u8,
-    label: String,
-    icon: MockTreeIcon,
-    #[serde(default)]
-    count: Option<u32>,
-    #[serde(default)]
-    expanded: Option<bool>,
-    #[serde(default)]
-    selected: bool,
-    #[serde(default)]
-    muted: bool,
-}
-
-#[derive(Clone, Copy, Deserialize)]
-enum MockTreeIcon {
-    Collection,
-    Playlist,
-    Folder,
-    Plus,
-    Zvuk,
-    Search,
-    Charts,
-    Monitor,
-    Home,
-    Usb,
-    Instrument,
-    Waveform,
-    Clock,
-}
-
-impl From<MockTreeIcon> for TreeIcon {
-    fn from(value: MockTreeIcon) -> Self {
-        match value {
-            MockTreeIcon::Collection => Self::Collection,
-            MockTreeIcon::Playlist => Self::Playlist,
-            MockTreeIcon::Folder => Self::Folder,
-            MockTreeIcon::Plus => Self::Plus,
-            MockTreeIcon::Zvuk => Self::Zvuk,
-            MockTreeIcon::Search => Self::Search,
-            MockTreeIcon::Charts => Self::Charts,
-            MockTreeIcon::Monitor => Self::Monitor,
-            MockTreeIcon::Home => Self::Home,
-            MockTreeIcon::Usb => Self::Usb,
-            MockTreeIcon::Instrument => Self::Instrument,
-            MockTreeIcon::Waveform => Self::Waveform,
-            MockTreeIcon::Clock => Self::Clock,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct MockTrack {
-    title: String,
-    artist: String,
-    time: String,
-    search: String,
-    deck: String,
-    bpm: String,
-    key: String,
-    energy: u8,
-    transition: String,
-}
-
-struct Catalog {
-    title: &'static str,
-    artist: &'static str,
-    breadcrumb: &'static str,
-    rows: &'static [TrackRow<'static>],
-    tree: &'static [TreeRow<'static>],
-}
-
-static CATALOG: LazyLock<Catalog> = LazyLock::new(load_catalog);
-
-fn load_catalog() -> Catalog {
-    let data: MockData = ron::from_str(include_str!("assets/mock-data.ron"))
-        .expect("embedded gallery mock data must parse");
-    let data: &'static MockData = Box::leak(Box::new(data));
-    let rows: Vec<TrackRow<'static>> = data
-        .tracks
-        .iter()
-        .enumerate()
-        .map(|(index, track)| TrackRow {
-            title: &track.title,
-            artist: Some(&track.artist),
-            time: Some(&track.time),
-            search: Some(&track.search),
-            deck: Some(&track.deck),
-            bpm: Some(&track.bpm),
-            key: Some(&track.key),
-            energy: Some(track.energy),
-            transition: Some(&track.transition),
-            current: index == 0,
-            selected: index == 0,
-        })
-        .collect();
-    let tree: Vec<TreeRow<'static>> = data
-        .tree
-        .iter()
-        .map(|row| TreeRow {
-            depth: row.depth,
-            label: &row.label,
-            icon: row.icon.into(),
-            count: row.count,
-            expanded: row.expanded,
-            selected: row.selected,
-            muted: row.muted,
-        })
-        .collect();
-    Catalog {
-        title: &data.title,
-        artist: &data.artist,
-        breadcrumb: &data.breadcrumb,
-        rows: Box::leak(rows.into_boxed_slice()),
-        tree: Box::leak(tree.into_boxed_slice()),
-    }
+    const WAVE_BUCKETS: u32 = 4_096;
+    const ZOOM: f64 = 0.12;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -336,7 +204,10 @@ pub(super) struct MockReads {
     toggle_off: bool,
     toggle_on: bool,
     volume: f64,
+    wave_beats: Vec<f32>,
+    wave_downbeats: Vec<f32>,
     waveform: Vec<WaveBucket>,
+    zoom: f64,
     stress_fader: f64,
     stress_levels: [StereoLevels; 8],
     stress_phase: f32,
@@ -351,6 +222,7 @@ pub(super) struct MockReads {
 
 impl Default for MockReads {
     fn default() -> Self {
+        let (wave_beats, wave_downbeats) = beat_grid();
         let tree_expanded = CATALOG
             .tree
             .iter()
@@ -388,7 +260,10 @@ impl Default for MockReads {
             toggle_off: false,
             toggle_on: true,
             volume: 0.7,
+            wave_beats,
+            wave_downbeats,
             waveform: waveform(),
+            zoom: Consts::ZOOM,
             stress_fader: 0.7,
             stress_levels: [StereoLevels::default(); 8],
             stress_phase: 0.0,
@@ -531,7 +406,9 @@ impl MockReads {
 
     fn set_scalar(&mut self, path: &str, value: f64) {
         let value = value.clamp(0.0, 1.0);
-        if let Some(index) = match path {
+        if path.ends_with("/zoom") {
+            self.zoom = value.clamp(0.015, 0.5);
+        } else if let Some(index) = match path {
             "atoms/knobs/size-26" => Some(0),
             "atoms/knobs/size-28" => Some(1),
             "atoms/knobs/size-34" => Some(2),
@@ -661,13 +538,16 @@ impl Reads for MockReads {
             "deck.playback.duration_secs" => ReadValue::Scalar(Consts::DURATION_SECS),
             "deck.playback.waveform" => ReadValue::Waveform(WaveformView {
                 buckets: &self.waveform,
-                beats: Consts::WAVE_BEATS,
-                downbeats: Consts::DOWNBEATS,
+                beats: &self.wave_beats,
+                downbeats: &self.wave_downbeats,
                 bpm: Some(Consts::BPM_VALUE),
+                r#loop: Some(Consts::LOOP_REGION),
+                cues: Consts::CUES,
             }),
             "deck.track.title" | "mock.track.title" => ReadValue::Text(CATALOG.title),
             "deck.track.source_kind" | "mock.track.artist" => ReadValue::Text(CATALOG.artist),
             "deck.track.key" | "mock.key" => ReadValue::Text(Consts::KEY),
+            "deck.view.zoom" => ReadValue::Scalar(self.zoom),
             "player.output.levels" => ReadValue::Stereo(StereoLevels {
                 l: 0.66,
                 r: 0.52,
@@ -754,13 +634,33 @@ impl MockReads {
 }
 
 fn waveform() -> Vec<WaveBucket> {
-    (0_u16..160)
-        .map(|index| WaveBucket {
-            low: 0.25 + f32::from((index * 17) % 70) / 100.0,
-            mid: 0.18 + f32::from((index * 29 + 11) % 65) / 100.0,
-            high: 0.12 + f32::from((index * 41 + 23) % 55) / 100.0,
+    (0..Consts::WAVE_BUCKETS)
+        .map(|index| {
+            let high: f32 = ((index * 41 + 23) % 55).as_();
+            let low: f32 = ((index * 17) % 70).as_();
+            let mid: f32 = ((index * 29 + 11) % 65).as_();
+            WaveBucket {
+                low: 0.25 + low / 100.0,
+                mid: 0.18 + mid / 100.0,
+                high: 0.12 + high / 100.0,
+            }
         })
         .collect()
+}
+
+fn beat_grid() -> (Vec<f32>, Vec<f32>) {
+    let beat_count: usize = (Consts::DURATION_SECS * f64::from(Consts::BPM_VALUE) / 60.0)
+        .floor()
+        .as_();
+    let beat_count_f: f32 = beat_count.as_();
+    let beats: Vec<_> = (0..=beat_count)
+        .map(|index| {
+            let index: f32 = index.as_();
+            index / beat_count_f
+        })
+        .collect();
+    let downbeats = beats.iter().step_by(4).copied().collect();
+    (beats, downbeats)
 }
 
 fn stress_waveform(index: usize) -> Vec<WaveBucket> {
@@ -784,6 +684,8 @@ fn stress_waveform_value(waveform: &[WaveBucket]) -> ReadValue<'_> {
         beats: &[],
         downbeats: &[],
         bpm: None,
+        r#loop: None,
+        cues: &[],
     })
 }
 
@@ -917,6 +819,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         );
     }
     for id in [
+        "deck.view.zoom",
         "mock.knob.26",
         "mock.knob.28",
         "mock.knob.34",
@@ -1057,6 +960,20 @@ mod tests {
             reads.get("deck.playback.position_secs"),
             Some(ReadValue::Scalar(Consts::DURATION_SECS * 0.25))
         );
+    }
+
+    #[kithara::test]
+    fn wave_zoom_is_host_owned_and_clamped() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(
+            reads.get("deck.view.zoom"),
+            Some(ReadValue::Scalar(Consts::ZOOM))
+        );
+        reads.apply("modules/deck/wave/zoom", &ControlAction::SetScalar(0.001));
+        assert_eq!(reads.get("deck.view.zoom"), Some(ReadValue::Scalar(0.015)));
+        reads.apply("modules/deck/wave/zoom", &ControlAction::SetScalar(0.9));
+        assert_eq!(reads.get("deck.view.zoom"), Some(ReadValue::Scalar(0.5)));
     }
 
     #[kithara::test]

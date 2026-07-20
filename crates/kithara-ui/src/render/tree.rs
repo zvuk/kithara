@@ -20,7 +20,9 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    module::{ChromeStyle, DeckSummaryStyle, IconName, Tone, TrackColumn, WindowControlsStyle},
+    module::{
+        ChromeStyle, DeckSummaryStyle, IconName, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
+    },
     render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent},
     size::{Dim, SizeSpec, control_size},
     widgets::{
@@ -34,6 +36,7 @@ use crate::{
         telemetry::Telemetry,
         text::Text,
         track_list::TrackList,
+        wave::zoom_math::DEFAULT_ZOOM,
         window::{TitleBar, WindowControls},
     },
 };
@@ -318,15 +321,15 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Wave { style, badge } => MiniWave::builder()
-            .path(path)
-            .style(*style)
-            .maybe_badge(badge.map(|id| ui.resolve(id)))
-            .maybe_value(value)
-            .reads(reads)
-            .skin(skin)
-            .build()
-            .view(),
+        ControlSpec::Wave { style, badge, zoom } => render_wave(
+            path,
+            *style,
+            badge.map(|id| ui.resolve(id)),
+            wave_zoom(zoom.as_ref(), reads, ui),
+            value,
+            reads,
+            skin,
+        ),
         ControlSpec::TrackList {
             columns,
             columns_state,
@@ -420,6 +423,36 @@ fn render_tree<'a>(
         .skin(skin)
         .build()
         .view()
+}
+
+fn render_wave<'a>(
+    path: &'a str,
+    style: WaveStyle,
+    badge: Option<&'a str>,
+    zoom: f32,
+    value: Option<&ReadValue<'_>>,
+    reads: &dyn Reads,
+    skin: &Skin,
+) -> Element<'a, UiEvent> {
+    MiniWave::builder()
+        .path(path)
+        .style(style)
+        .zoom(zoom)
+        .maybe_badge(badge)
+        .maybe_value(value)
+        .reads(reads)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn wave_zoom(zoom: Option<&Binding>, reads: &dyn Reads, ui: &CompiledUi) -> f32 {
+    zoom.and_then(|binding| resolve(reads, binding, ui))
+        .and_then(|value| match value {
+            ReadValue::Scalar(value) => Some(value.as_()),
+            _ => None,
+        })
+        .unwrap_or(DEFAULT_ZOOM)
 }
 
 fn render_context_bar<'a>(

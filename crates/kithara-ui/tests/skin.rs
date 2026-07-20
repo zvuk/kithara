@@ -87,10 +87,15 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.fader.label_width, 28.0);
     assert_eq!(document.vu_vertical.thumb_height, 9.0);
     assert_eq!(document.vu_vertical.thumb_color, ColorRole::Accent);
-    assert_eq!(document.wave.grid_alpha, 0.55);
+    assert_eq!(document.wave.cue_badge_background, ColorRole::WaveHigh);
+    assert_eq!(document.wave.downbeat_alpha, 0.6);
+    assert_eq!(document.wave.grid_alpha, 0.4);
+    assert_eq!(document.wave.loop_fill_alpha, 0.22);
     assert_eq!(document.wave.overlay.background, ColorRole::BgDeep);
     assert_eq!(document.wave.overlay.background_alpha, 0.84);
     assert_eq!(document.wave.overlay.key_color, ColorRole::Success);
+    assert_eq!(document.wave.played_alpha, 0.35);
+    assert_eq!(document.wave.playhead_width, 1.5);
     assert_eq!(document.global_bar.brand_width, 112.0);
     assert_eq!(document.telemetry.percent_scale, 100.0);
     assert_eq!(document.telemetry.percent_width, 3);

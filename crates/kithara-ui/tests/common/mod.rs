@@ -82,6 +82,11 @@ pub(crate) fn player_registry() -> TestRegistry {
     );
     registry.insert(
         EndpointCategory::Model,
+        "deck.view.zoom",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry.insert(
+        EndpointCategory::Model,
         "library.visible_tracks",
         EndpointDesc::new(ValueKind::TrackList),
     );
