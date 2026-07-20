@@ -2,7 +2,7 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 export KITHARA_AGENT_HOOK_ROOT=$repo_root
 dot_git="$repo_root/.git"
 
@@ -28,7 +28,7 @@ else
 fi
 
 cache_dir="$git_dir/kithara-agent-hook"
-binary="$cache_dir/kithara-agent-hook"
+binary="$cache_dir/xtask"
 stamp="$cache_dir/fingerprint"
 lock_file="$cache_dir/build.lock"
 target_dir="$cache_dir/target"
@@ -60,11 +60,11 @@ cache_is_current() {
 }
 
 if cache_is_current; then
-    exec "$binary" "$@"
+    exec "$binary" agent-hook "$@"
 fi
 
 if [ "${1-}" = post-edit ] && [ -x "$binary" ]; then
-    exec "$binary" "$@"
+    exec "$binary" agent-hook "$@"
 fi
 
 mkdir -p "$cache_dir"
@@ -93,7 +93,8 @@ if ! cache_is_current; then
 
     cleanup_bootstrap() {
         if [ -n "$build_pid" ]; then
-            kill -TERM "$build_pid" 2>/dev/null || true
+            kill -TERM "-$build_pid" 2>/dev/null || true
+            kill -KILL "-$build_pid" 2>/dev/null || true
             wait "$build_pid" 2>/dev/null || true
             build_pid=
         fi
@@ -118,12 +119,25 @@ if ! cache_is_current; then
     trap 'exit_on_signal 143' TERM
 
     rm -rf -- "$target_dir"
+    if command -v setsid >/dev/null 2>&1; then
+        group_launcher=setsid
+    else
+        group_launcher=
+        set -m
+    fi
     (
         cd "$repo_root"
+        export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
         export CARGO_TARGET_DIR=$target_dir
-        exec cargo build --locked --manifest-path "$repo_root/Cargo.toml" -p kithara-agent-hook
+        if [ -n "$group_launcher" ]; then
+            exec "$group_launcher" cargo build --locked --manifest-path "$repo_root/Cargo.toml" -p xtask --bin xtask
+        fi
+        exec cargo build --locked --manifest-path "$repo_root/Cargo.toml" -p xtask --bin xtask
     ) </dev/null >&2 &
     build_pid=$!
+    if [ -z "$group_launcher" ]; then
+        set +m
+    fi
     if wait "$build_pid"; then
         build_pid=
     else
@@ -132,13 +146,13 @@ if ! cache_is_current; then
         exit "$build_status"
     fi
 
-    built_binary="$target_dir/debug/kithara-agent-hook"
+    built_binary="$target_dir/debug/xtask"
     if [ ! -x "$built_binary" ]; then
-        printf 'error: agent-hook build did not produce %s\n' "$built_binary" >&2
+        printf 'error: xtask build did not produce %s\n' "$built_binary" >&2
         exit 1
     fi
 
-    temp_binary="$cache_dir/.kithara-agent-hook.$$"
+    temp_binary="$cache_dir/.xtask.$$"
     temp_stamp="$cache_dir/.fingerprint.$$"
     cp "$built_binary" "$temp_binary"
     chmod 755 "$temp_binary"
@@ -153,4 +167,4 @@ if ! cache_is_current; then
 fi
 
 exec 9>&-
-exec "$binary" "$@"
+exec "$binary" agent-hook "$@"

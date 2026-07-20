@@ -15,7 +15,7 @@ use self::{
         strip_timeout_wrapper,
     },
 };
-use crate::input::HookInput;
+use super::input::HookInput;
 
 struct Consts;
 
@@ -40,7 +40,7 @@ struct HookSpecificOutput<'a> {
     permission_decision_reason: &'a str,
 }
 
-pub(crate) fn run(input: &HookInput) -> Result<()> {
+pub(super) fn run(input: &HookInput) -> Result<()> {
     if input.tool_name != "Bash" {
         return Ok(());
     }

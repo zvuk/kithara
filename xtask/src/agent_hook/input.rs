@@ -5,26 +5,26 @@ use serde::Deserialize;
 use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct HookInput {
+pub(super) struct HookInput {
     #[serde(default)]
-    pub(crate) tool_name: String,
+    pub(super) tool_name: String,
     #[serde(default)]
-    pub(crate) cwd: String,
+    pub(super) cwd: String,
     #[serde(default)]
-    pub(crate) tool_input: HookToolInput,
+    pub(super) tool_input: HookToolInput,
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct HookToolInput {
+pub(super) struct HookToolInput {
     #[serde(default)]
-    pub(crate) command: Option<String>,
+    pub(super) command: Option<String>,
     #[serde(default)]
-    pub(crate) timeout: Option<Value>,
+    pub(super) timeout: Option<Value>,
     #[serde(default)]
-    pub(crate) file_path: Option<String>,
+    pub(super) file_path: Option<String>,
 }
 
-pub(crate) fn read() -> Result<HookInput> {
+pub(super) fn read() -> Result<HookInput> {
     let mut body = String::new();
     io::stdin()
         .read_to_string(&mut body)

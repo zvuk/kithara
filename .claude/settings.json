@@ -10,7 +10,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "repo=${CLAUDE_PROJECT_DIR:-$PWD}; until [ -x \"$repo/tools/agent-hook/run\" ]; do [ \"$repo\" != / ] || { printf 'error: cannot find tools/agent-hook/run\\n' >&2; exit 1; }; repo=${repo%/*}; [ -n \"$repo\" ] || repo=/; done; exec \"$repo/tools/agent-hook/run\" pre-bash"
+            "command": "repo=${CLAUDE_PROJECT_DIR:-$PWD}; until [ -x \"$repo/xtask/agent-hook\" ]; do [ \"$repo\" != / ] || { printf 'error: cannot find xtask/agent-hook\\n' >&2; exit 1; }; repo=${repo%/*}; [ -n \"$repo\" ] || repo=/; done; exec \"$repo/xtask/agent-hook\" pre-bash"
           }
         ]
       }
@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "repo=${CLAUDE_PROJECT_DIR:-$PWD}; until [ -x \"$repo/tools/agent-hook/run\" ]; do [ \"$repo\" != / ] || { printf 'error: cannot find tools/agent-hook/run\\n' >&2; exit 1; }; repo=${repo%/*}; [ -n \"$repo\" ] || repo=/; done; exec \"$repo/tools/agent-hook/run\" post-edit"
+            "command": "repo=${CLAUDE_PROJECT_DIR:-$PWD}; until [ -x \"$repo/xtask/agent-hook\" ]; do [ \"$repo\" != / ] || { printf 'error: cannot find xtask/agent-hook\\n' >&2; exit 1; }; repo=${repo%/*}; [ -n \"$repo\" ] || repo=/; done; exec \"$repo/xtask/agent-hook\" post-edit"
           }
         ]
       }

@@ -1,15 +1,18 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use kithara_agent_hook::HookCommand;
+
+mod input;
+mod post_edit;
+mod pre_bash;
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentHookArgs {
     #[command(subcommand)]
-    pub(crate) command: AgentHookCommand,
+    command: AgentHookCommand,
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum AgentHookCommand {
+enum AgentHookCommand {
     /// Claude PreToolUse(Bash) guard for command misuse.
     PreBash,
     /// Claude PostToolUse(Write|Edit|MultiEdit) formatting hook.
@@ -17,9 +20,9 @@ pub(crate) enum AgentHookCommand {
 }
 
 pub(crate) fn run(args: &AgentHookArgs) -> Result<()> {
-    let command = match args.command {
-        AgentHookCommand::PreBash => HookCommand::PreBash,
-        AgentHookCommand::PostEdit => HookCommand::PostEdit,
-    };
-    kithara_agent_hook::run(command)
+    let input = input::read()?;
+    match args.command {
+        AgentHookCommand::PreBash => pre_bash::run(&input),
+        AgentHookCommand::PostEdit => post_edit::run(&input),
+    }
 }

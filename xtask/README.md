@@ -9,8 +9,8 @@ Workspace automation binary for Kithara. Provides repo-local lints and audits th
 - `cargo run -p xtask -- lint idioms` — Rust idiom checks (function branch density, loop allocation, guard cascades, etc.). 18 rules in `.config/idioms/thresholds.toml`.
 - `cargo run -p xtask -- ast-grep` — runs the 55 ast-grep rules from `.config/ast-grep/`.
 - `cargo run -p xtask -- format --check` — formatter harness for Rust, Cargo manifests, non-Cargo TOML, and JSON/JSONC.
-- `tools/agent-hook/run pre-bash|post-edit` - cached repo-owned command guards for tool-specific agent hooks.
-- `cargo run -p xtask -- agent-hook pre-bash|post-edit` - compatibility entry point for the same guard logic.
+- `xtask/agent-hook pre-bash|post-edit` - worktree-cached command guards for tool-specific agent hooks.
+- `cargo run -p xtask -- agent-hook pre-bash|post-edit` - direct Cargo entry point for the same guard logic.
 - `cargo run -p xtask -- manifest dependency-order` — checks that internal `kithara` / `kithara-*` dependencies come before external crates in Cargo manifests.
 - `cargo run -p xtask -- health` — broad local health report, including formatter, dependency, unsafe-inventory, lint, quality, and test stages.
 

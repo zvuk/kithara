@@ -8,7 +8,9 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use crate::input::HookInput;
+use super::input::HookInput;
+
+const PROJECT_MARKER: &str = "xtask/agent-hook";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FormatTarget {
@@ -35,7 +37,7 @@ impl FormatTarget {
     }
 }
 
-pub(crate) fn run(input: &HookInput) -> Result<()> {
+pub(super) fn run(input: &HookInput) -> Result<()> {
     if !matches!(input.tool_name.as_str(), "Write" | "Edit" | "MultiEdit") {
         return Ok(());
     }
@@ -112,7 +114,7 @@ fn hook_project_root(input: &HookInput) -> Result<PathBuf> {
     if let Some(root) = env::var_os("KITHARA_AGENT_HOOK_ROOT").filter(|value| !value.is_empty()) {
         let root = fs::canonicalize(PathBuf::from(root))
             .context("resolve launcher-owned Kithara project root")?;
-        if !root.join("tools/agent-hook/Cargo.toml").is_file() {
+        if !root.join(PROJECT_MARKER).is_file() {
             bail!("launcher-owned project root is not a Kithara checkout");
         }
         return Ok(root);
@@ -144,7 +146,7 @@ fn hook_project_root(input: &HookInput) -> Result<PathBuf> {
 fn find_project_root(start: &Path) -> Option<PathBuf> {
     start
         .ancestors()
-        .find(|path| path.join("tools/agent-hook/Cargo.toml").is_file())
+        .find(|path| path.join(PROJECT_MARKER).is_file())
         .map(Path::to_path_buf)
 }
 

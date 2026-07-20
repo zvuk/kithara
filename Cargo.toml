@@ -30,7 +30,6 @@ members = [
     "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
-    "tools/agent-hook",
     "xtask",
 ]
 default-members = [
@@ -181,7 +180,6 @@ homepage = "https://github.com/zvuk/kithara"
 # opt back into `hang`.
 kithara = { path = "crates/kithara", version = "0.0.1-alpha4", default-features = false }
 kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha4", default-features = false }
-kithara-agent-hook = { path = "tools/agent-hook" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-apple = { path = "crates/kithara-apple", version = "0.0.1-alpha4" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha4", default-features = false }
