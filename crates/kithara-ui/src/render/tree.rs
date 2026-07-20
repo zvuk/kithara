@@ -25,7 +25,7 @@ use crate::{
     widgets::{
         ModuleChrome, Widget,
         button::ControlButton,
-        deck::{Bpm, DeckHeader, DeckSummary, Time},
+        deck::{Bpm, DeckSummary, Time},
         fader::Fader,
         global_bar::{Brand, PresetSelector, SettingsButton, Spacer},
         mini_wave::MiniWave,
@@ -195,13 +195,6 @@ fn render_control<'a>(
     let value = read.and_then(|binding| resolve(reads, binding, ui));
     let path = ui.resolve(path);
     match spec {
-        ControlSpec::DeckHeader { badge } => DeckHeader::builder()
-            .maybe_badge(badge.map(|id| ui.resolve(id)))
-            .maybe_value(value.as_ref())
-            .reads(reads)
-            .skin(skin)
-            .build()
-            .view(),
         ControlSpec::DeckSummary { style } => DeckSummary::builder()
             .style(*style)
             .maybe_value(value.as_ref())
@@ -319,9 +312,10 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Wave { style } => MiniWave::builder()
+        ControlSpec::Wave { style, badge } => MiniWave::builder()
             .path(path)
             .style(*style)
+            .maybe_badge(badge.map(|id| ui.resolve(id)))
             .maybe_value(value.as_ref())
             .reads(reads)
             .skin(skin)

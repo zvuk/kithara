@@ -51,7 +51,9 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.text.track_title.weight, FontWeight::Semibold);
     assert_eq!(document.fader.handle_frame.radius, 0.0);
     assert_eq!(document.wave.grid_alpha, 0.55);
-    assert_eq!(document.deck.header_height, 60.0);
+    assert_eq!(document.wave.overlay.background, ColorRole::BgDeep);
+    assert_eq!(document.wave.overlay.background_alpha, 0.84);
+    assert_eq!(document.wave.overlay.key_color, ColorRole::Success);
     assert_eq!(document.global_bar.brand_width, 112.0);
     assert_eq!(document.telemetry.percent_scale, 100.0);
     assert_eq!(document.telemetry.percent_width, 3);

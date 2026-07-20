@@ -131,7 +131,6 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
 #[must_use]
 pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
     match spec {
-        ControlSpec::DeckHeader { .. } => skin.deck.header_size,
         ControlSpec::DeckSummary { .. } => skin.deck.summary_size,
         ControlSpec::Brand => skin.global_bar.brand_size,
         ControlSpec::Spacer => skin.global_bar.spacer_size,

@@ -96,6 +96,7 @@ impl Reads for UiReads<'_> {
             }
             "deck.track.title" => Some(ReadValue::Text(self.state.track_name.as_str())),
             "deck.track.source_kind" => Some(ReadValue::Text(source_kind(self.state))),
+            "deck.track.key" => Some(ReadValue::Text(Consts::EM_DASH)),
             "player.output.volume" => Some(ReadValue::Scalar(f64::from(self.state.volume))),
             "library.visible_tracks" => Some(ReadValue::TrackList(&self.tracks)),
             "library.query" => Some(ReadValue::Text(self.query)),

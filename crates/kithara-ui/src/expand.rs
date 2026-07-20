@@ -47,9 +47,6 @@ pub enum ExpandedNode {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ControlSpec {
-    DeckHeader {
-        badge: Option<InternId>,
-    },
     DeckSummary {
         style: DeckSummaryStyle,
     },
@@ -88,6 +85,7 @@ pub enum ControlSpec {
     },
     Wave {
         style: WaveStyle,
+        badge: Option<InternId>,
     },
     TrackList,
     Toggle,
@@ -504,15 +502,6 @@ fn expand_control(
 ) -> Result<ExpandedNode, UiDocError> {
     let path = begin_control(context, fields.id, machine)?;
     let spec = match control {
-        ControlNode::DeckHeader { badge, .. } => ControlSpec::DeckHeader {
-            badge: intern_optional_text(
-                context,
-                machine.interner,
-                badge.as_deref(),
-                &path,
-                &context.origin,
-            )?,
-        },
         ControlNode::DeckSummary { style, .. } => ControlSpec::DeckSummary { style: *style },
         ControlNode::Brand { .. } => ControlSpec::Brand,
         ControlNode::Spacer { .. } => ControlSpec::Spacer,
@@ -564,7 +553,16 @@ fn expand_control(
         ControlNode::Time { .. } => ControlSpec::Time,
         ControlNode::Scalar { format, .. } => ControlSpec::Scalar { format: *format },
         ControlNode::Fader { style, .. } => ControlSpec::Fader { style: *style },
-        ControlNode::Wave { style, .. } => ControlSpec::Wave { style: *style },
+        ControlNode::Wave { style, badge, .. } => ControlSpec::Wave {
+            style: *style,
+            badge: intern_optional_text(
+                context,
+                machine.interner,
+                badge.as_deref(),
+                &path,
+                &context.origin,
+            )?,
+        },
         ControlNode::TrackList { .. } => ControlSpec::TrackList,
         ControlNode::Toggle { .. } => ControlSpec::Toggle,
         ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
@@ -605,15 +603,7 @@ fn expand_header_control(
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     match control {
-        control @ (ControlNode::DeckHeader {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::DeckSummary {
+        control @ (ControlNode::DeckSummary {
             id,
             size,
             read,
@@ -904,8 +894,7 @@ fn walk(
                     })?;
             expand_at(context.set, &target, args, path, depth + 1, machine)
         }
-        control @ (ControlNode::DeckHeader { .. }
-        | ControlNode::DeckSummary { .. }
+        control @ (ControlNode::DeckSummary { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
         | ControlNode::PresetSelector { .. }

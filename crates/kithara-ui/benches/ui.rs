@@ -457,6 +457,7 @@ fn wave(id: &str, endpoint: &str) -> ControlNode {
         write: None,
         adaptive: AdaptivePolicy::default(),
         style: WaveStyle::default(),
+        badge: None,
     }
 }
 

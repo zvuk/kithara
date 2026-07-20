@@ -161,8 +161,7 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
         | ControlNode::Slot { .. } => None,
-        ControlNode::DeckHeader { id, .. }
-        | ControlNode::DeckSummary { id, .. }
+        ControlNode::DeckSummary { id, .. }
         | ControlNode::Brand { id, .. }
         | ControlNode::Spacer { id, .. }
         | ControlNode::PresetSelector { id, .. }
@@ -243,9 +242,7 @@ enum BindingSide {
 
 pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<ValueKind>) {
     match control {
-        ControlNode::DeckHeader { .. } | ControlNode::Bpm { .. } => {
-            (Some(ValueKind::Waveform), None)
-        }
+        ControlNode::Bpm { .. } => (Some(ValueKind::Waveform), None),
         ControlNode::DeckSummary { .. }
         | ControlNode::Text { .. }
         | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),

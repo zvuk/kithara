@@ -1,5 +1,5 @@
 use iced::{
-    Event, Rectangle,
+    Event, Point, Rectangle,
     mouse::{self, Button, Cursor},
     widget::canvas::Action,
 };
@@ -27,10 +27,6 @@ impl HoverState {
         } else {
             mouse::Interaction::default()
         }
-    }
-
-    pub(crate) fn mouse_interaction(self, bounds: Rectangle, cursor: Cursor) -> mouse::Interaction {
-        self.interaction(false, bounds, cursor)
     }
 }
 
@@ -74,6 +70,7 @@ impl ClickActivate {
 #[derive(Clone, Copy)]
 pub(crate) enum ScalarDragMode {
     Horizontal,
+    HorizontalClick,
     Vertical,
     RelativeVertical { value: f32, range: f32 },
 }
@@ -93,13 +90,15 @@ pub(crate) struct ScalarDragState {
 
 impl ScalarDrag {
     fn absolute_action(&self, bounds: Rectangle, cursor: Cursor) -> Option<Action<UiEvent>> {
-        let position = cursor.position_from(bounds.position())?;
+        let position = cursor.position()?;
         let value = match self.mode {
-            ScalarDragMode::Horizontal if bounds.width > 0.0 => position.x / bounds.width,
-            ScalarDragMode::Vertical if bounds.height > 0.0 => 1.0 - position.y / bounds.height,
-            ScalarDragMode::Horizontal
-            | ScalarDragMode::Vertical
-            | ScalarDragMode::RelativeVertical { .. } => return None,
+            ScalarDragMode::Horizontal | ScalarDragMode::HorizontalClick => {
+                normalized_horizontal(bounds, position)?
+            }
+            ScalarDragMode::Vertical if bounds.height > 0.0 => {
+                1.0 - (position.y - bounds.y) / bounds.height
+            }
+            ScalarDragMode::Vertical | ScalarDragMode::RelativeVertical { .. } => return None,
         };
         Some(self.publish(value.clamp(0.0, 1.0)))
     }
@@ -140,6 +139,7 @@ impl ScalarDrag {
                         state.active = true;
                         self.absolute_action(bounds, cursor)
                     }
+                    ScalarDragMode::HorizontalClick => self.absolute_action(bounds, cursor),
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => match self.mode {
@@ -153,12 +153,42 @@ impl ScalarDrag {
                 ScalarDragMode::Horizontal | ScalarDragMode::Vertical => {
                     self.absolute_action(bounds, cursor)
                 }
+                ScalarDragMode::HorizontalClick => None,
             },
             Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
                 state.active = false;
                 Some(Action::capture())
             }
             _ => None,
+        }
+    }
+}
+
+fn normalized_horizontal(bounds: Rectangle, position: Point) -> Option<f32> {
+    (bounds.width > 0.0).then(|| ((position.x - bounds.x) / bounds.width).clamp(0.0, 1.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn horizontal_click_maps_to_normalized_position() {
+        let bounds = Rectangle::new(Point::new(20.0, 4.0), iced::Size::new(200.0, 40.0));
+
+        for (x, expected) in [
+            (0.0, 0.0),
+            (20.0, 0.0),
+            (120.0, 0.5),
+            (220.0, 1.0),
+            (260.0, 1.0),
+        ] {
+            assert_eq!(
+                normalized_horizontal(bounds, Point::new(x, 10.0)),
+                Some(expected)
+            );
         }
     }
 }

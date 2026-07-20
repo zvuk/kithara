@@ -78,19 +78,6 @@ pub enum ControlNode {
         #[serde(default)]
         default: Vec<Self>,
     },
-    DeckHeader {
-        id: NodeId,
-        #[serde(default)]
-        size: Option<SizeSpec>,
-        #[serde(default)]
-        read: Option<BindingRef>,
-        #[serde(default)]
-        write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
-        badge: Option<String>,
-    },
     DeckSummary {
         id: NodeId,
         #[serde(default)]
@@ -278,6 +265,8 @@ pub enum ControlNode {
         adaptive: AdaptivePolicy,
         #[serde(default)]
         style: WaveStyle,
+        #[serde(default)]
+        badge: Option<String>,
     },
     TrackList {
         id: NodeId,

@@ -390,12 +390,12 @@ impl Reads for MockReads {
             }),
             "deck.track.title" | "mock.track.title" => ReadValue::Text(CATALOG.title),
             "deck.track.source_kind" | "mock.track.artist" => ReadValue::Text(CATALOG.artist),
+            "deck.track.key" | "mock.key" => ReadValue::Text(Consts::KEY),
             "player.output.volume" | "mock.volume" => ReadValue::Scalar(self.volume),
             "library.visible_tracks" => ReadValue::TrackList(CATALOG.rows),
             "library.query" => ReadValue::Text(&self.library_query),
             "ui.preset" => ReadValue::Text("player"),
             "mock.bpm" => ReadValue::Text(Consts::BPM),
-            "mock.key" => ReadValue::Text(Consts::KEY),
             "mock.remain" => ReadValue::Text(Consts::REMAIN),
             "mock.knob" => ReadValue::Scalar(self.knob),
             "mock.levels" => ReadValue::Stereo(StereoLevels {
@@ -538,6 +538,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         ("deck.playback.waveform", ValueKind::Waveform),
         ("deck.track.title", ValueKind::Text),
         ("deck.track.source_kind", ValueKind::Text),
+        ("deck.track.key", ValueKind::Text),
     ] {
         registry.insert(
             EndpointCategory::Telemetry,
@@ -658,6 +659,22 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[kithara::test]
+    fn wave_scalar_write_updates_normalized_playback_position() {
+        let mut reads = MockReads::default();
+
+        reads.apply("modules/deck/wave", &ControlAction::SetScalar(0.25));
+
+        assert_eq!(
+            reads.get("deck.playback.position_normalized"),
+            Some(ReadValue::Scalar(0.25))
+        );
+        assert_eq!(
+            reads.get("deck.playback.position_secs"),
+            Some(ReadValue::Scalar(Consts::DURATION_SECS * 0.25))
+        );
+    }
 
     #[kithara::test]
     fn toggle_module_owns_the_collapsed_read_endpoint() {

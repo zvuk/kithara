@@ -86,6 +86,11 @@ pub(crate) fn registry() -> AppRegistry {
         EndpointDesc::new(ValueKind::Text).with_scope("deck"),
     );
     registry.insert(
+        EndpointCategory::Telemetry,
+        "deck.track.key",
+        EndpointDesc::new(ValueKind::Text).with_scope("deck"),
+    );
+    registry.insert(
         EndpointCategory::Parameter,
         "player.output.volume",
         EndpointDesc::new(ValueKind::Scalar),
@@ -169,7 +174,6 @@ mod tests {
     #[kithara::test]
     fn visual_controls_declare_intrinsic_sizes() {
         for spec in [
-            ControlSpec::DeckHeader { badge: None },
             ControlSpec::DeckSummary {
                 style: DeckSummaryStyle::Default,
             },
@@ -177,14 +181,18 @@ mod tests {
             ControlSpec::PresetSelector,
             ControlSpec::Time,
         ] {
-            let size = control_size(&spec);
+            let size = control_size(&spec, builtin::skin_doc());
             assert!(size.w.min() > 0.0 || size.w == Dim::Fill);
             assert!(size.h.min() > 0.0, "{spec:?} height");
         }
 
-        let waveform = control_size(&ControlSpec::Wave {
-            style: WaveStyle::Default,
-        });
+        let waveform = control_size(
+            &ControlSpec::Wave {
+                style: WaveStyle::Default,
+                badge: None,
+            },
+            builtin::skin_doc(),
+        );
         assert!(waveform.h.min() >= 120.0);
     }
 }

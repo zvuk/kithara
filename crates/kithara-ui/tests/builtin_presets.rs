@@ -6,6 +6,7 @@ use kithara_ui::{
     compile::{CompiledNode, compile},
     expand::{ControlSpec, ExpandedNode},
     layout::Axis,
+    module::WaveStyle,
     source::UiConfig,
 };
 
@@ -53,6 +54,39 @@ fn player_preset_compiles_against_player_registry() {
 }
 
 #[kithara::test]
+fn player_deck_starts_with_one_hero_wave() {
+    let ui = compile(
+        builtin::PLAYER_PRESET,
+        &builtin::resolver(),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected split root");
+    };
+    let CompiledNode::Module { root, .. } = &children[1].1 else {
+        panic!("expected deck module");
+    };
+    let ExpandedNode::Column { children, .. } = &**root else {
+        panic!("deck must compile to one column");
+    };
+
+    assert_eq!(children.len(), 3);
+    assert!(matches!(
+        children.first(),
+        Some(ExpandedNode::Control {
+            spec: ControlSpec::Wave {
+                style: WaveStyle::Hero,
+                ..
+            },
+            ..
+        })
+    ));
+}
+
+#[kithara::test]
 fn player_preset_size_sums_global_deck_and_library_heights() {
     let ui = compile(
         builtin::PLAYER_PRESET,
@@ -91,7 +125,7 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
     };
 
     assert_eq!(global_size.h.min(), 34.0);
-    assert_eq!(deck_size.h.min(), 208.0);
+    assert_eq!(deck_size.h.min(), 148.0);
     assert_eq!(library_size.h.min(), 210.0);
     assert_eq!(
         ui.size.h.min(),

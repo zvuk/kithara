@@ -102,8 +102,7 @@ fn walk_includes(
             )?;
             Ok(())
         }
-        ControlNode::DeckHeader { .. }
-        | ControlNode::DeckSummary { .. }
+        ControlNode::DeckSummary { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
         | ControlNode::PresetSelector { .. }
