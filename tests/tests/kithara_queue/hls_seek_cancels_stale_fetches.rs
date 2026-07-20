@@ -484,12 +484,10 @@ async fn observe_post_seek(
                     Event::Downloader(DownloaderEvent::RequestStarted {
                         request_id,
                         wait_in_queue,
-                    }) => {
-                        if obs.target_started_wait.is_none()
-                            && new_epoch_enqueued.contains(request_id)
-                        {
-                            obs.target_started_wait = Some(*wait_in_queue);
-                        }
+                    }) if obs.target_started_wait.is_none()
+                        && new_epoch_enqueued.contains(request_id) =>
+                    {
+                        obs.target_started_wait = Some(*wait_in_queue);
                     }
                     _ => {}
                 },
