@@ -217,6 +217,24 @@ backend = "apple"
 flash = false
 backend = "apple"
 
+[ext.xtask.cache]
+extra_inputs = []
+keep_generations = 2
+generation_grace_secs = 3600
+
+[ext.agent_hook]
+destructive_git_override_env = "KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT"
+
+[[ext.agent_hook.routes]]
+event = "pre-tool-use"
+tool_kind = "shell"
+handler = "command-guard"
+
+[[ext.agent_hook.routes]]
+event = "post-tool-use"
+tool_kind = "file-edit"
+handler = "format-edited-paths"
+
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"
 delay_secs = 20

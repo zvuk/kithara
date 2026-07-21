@@ -7,9 +7,6 @@ license = "MIT OR Apache-2.0"
 description = "Reusable, config-driven xtask command core (lint, format, test, health and friends)"
 repository = "https://github.com/zvuk/kithara"
 
-[package.metadata.cargo-machete]
-ignored = ["kithara-workspace-hack"]
-
 [features]
 default = ["lint", "viz"]
 # Enables the arch/style/idioms lint command family.
@@ -18,8 +15,6 @@ lint = ["dep:quote"]
 viz = []
 
 [dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }

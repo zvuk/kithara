@@ -17,8 +17,6 @@ publish = false
 [dependencies]
 arrayvec = { version = "0.7" }
 bitflags = { version = "2", default-features = false, features = ["serde"] }
-clap = { version = "4", features = ["derive", "env"] }
-clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
 crossbeam-utils = { version = "0.8" }
 either = { version = "1", default-features = false, features = ["use_std"] }
@@ -30,7 +28,6 @@ futures-executor = { version = "0.3", default-features = false, features = ["thr
 half = { version = "2" }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
-indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
@@ -38,22 +35,16 @@ num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
 parking_lot = { version = "0.12" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
-proc-macro2 = { version = "1", features = ["span-locations"] }
-quote = { version = "1" }
 rangemap = { version = "1", default-features = false, features = ["serde1"] }
-regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "meta", "std"] }
 regex-syntax = { version = "0.8" }
 ringbuf = { version = "0.4", features = ["portable-atomic"] }
-semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
-serde_core = { version = "1", features = ["alloc"] }
-serde_json = { version = "1", features = ["alloc", "unbounded_depth"] }
+serde_core = { version = "1", default-features = false, features = ["alloc", "result", "std"] }
+serde_json = { version = "1", features = ["alloc"] }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
-syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
-toml_parser = { version = "1" }
 tracing-core = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
@@ -62,8 +53,6 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 arrayvec = { version = "0.7" }
 bitflags = { version = "2", default-features = false, features = ["serde"] }
 cc = { version = "1", default-features = false, features = ["parallel"] }
-clap = { version = "4", features = ["derive", "env"] }
-clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
 crossbeam-utils = { version = "0.8" }
 either = { version = "1", default-features = false, features = ["use_std"] }
@@ -83,22 +72,17 @@ num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
 parking_lot = { version = "0.12" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
-proc-macro2 = { version = "1", features = ["span-locations"] }
-quote = { version = "1" }
 rangemap = { version = "1", default-features = false, features = ["serde1"] }
-regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "meta", "std"] }
 regex-syntax = { version = "0.8" }
 ringbuf = { version = "0.4", features = ["portable-atomic"] }
-semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
-serde_core = { version = "1", features = ["alloc"] }
-serde_json = { version = "1", features = ["alloc", "unbounded_depth"] }
+serde_core = { version = "1", default-features = false, features = ["alloc", "result", "std"] }
+serde_json = { version = "1", features = ["alloc"] }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
-toml_parser = { version = "1" }
 tracing-core = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
@@ -108,6 +92,8 @@ aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 dasp_sample = { version = "0.11" }
 derive_more = { version = "2", features = ["deref", "display", "from", "is_variant"] }
 form_urlencoded = { version = "1" }
@@ -122,21 +108,27 @@ half = { version = "2", default-features = false, features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 idna = { version = "1" }
+indexmap = { version = "2", features = ["serde"] }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = { version = "1" }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "stdio", "system", "termios", "time"] }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
+syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
 winnow = { version = "1" }
@@ -147,6 +139,8 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 dasp_sample = { version = "0.11" }
 derive_more = { version = "2", features = ["deref", "display", "from", "is_variant"] }
 derive_more-impl = { version = "2", features = ["deref", "display", "from", "is_variant"] }
@@ -170,15 +164,19 @@ miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = { version = "1" }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "stdio", "system", "termios", "time"] }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
 winnow = { version = "1" }
@@ -188,6 +186,8 @@ aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 dasp_sample = { version = "0.11" }
 derive_more = { version = "2", features = ["deref", "display", "from", "is_variant"] }
 errno = { version = "0.3" }
@@ -201,6 +201,7 @@ half = { version = "2", default-features = false, features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 idna = { version = "1" }
+indexmap = { version = "2", features = ["serde"] }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -209,8 +210,11 @@ ndk = { version = "0.9", features = ["audio"] }
 ndk-sys = { version = "0.6", default-features = false, features = ["audio"] }
 percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
@@ -218,10 +222,8 @@ slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
-winnow = { version = "1" }
 
 [target.aarch64-linux-android.build-dependencies]
 aho-corasick = { version = "1" }
@@ -229,6 +231,8 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 dasp_sample = { version = "0.11" }
 derive_more = { version = "2", features = ["deref", "display", "from", "is_variant"] }
 derive_more-impl = { version = "2", features = ["deref", "display", "from", "is_variant"] }
@@ -252,9 +256,13 @@ ndk = { version = "0.9", features = ["audio"] }
 ndk-sys = { version = "0.6", default-features = false, features = ["audio"] }
 percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
@@ -262,7 +270,6 @@ slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
 winnow = { version = "1" }
@@ -272,6 +279,8 @@ aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 dasp_sample = { version = "0.11" }
 derive_more = { version = "2", features = ["deref", "display", "from", "is_variant"] }
 errno = { version = "0.3" }
@@ -285,6 +294,7 @@ half = { version = "2", default-features = false, features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 idna = { version = "1" }
+indexmap = { version = "2", features = ["serde"] }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -293,8 +303,11 @@ ndk = { version = "0.9", features = ["audio"] }
 ndk-sys = { version = "0.6", default-features = false, features = ["audio"] }
 percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
@@ -302,10 +315,8 @@ slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
-winnow = { version = "1" }
 
 [target.x86_64-linux-android.build-dependencies]
 aho-corasick = { version = "1" }
@@ -313,6 +324,8 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 dasp_sample = { version = "0.11" }
 derive_more = { version = "2", features = ["deref", "display", "from", "is_variant"] }
 derive_more-impl = { version = "2", features = ["deref", "display", "from", "is_variant"] }
@@ -336,9 +349,13 @@ ndk = { version = "0.9", features = ["audio"] }
 ndk-sys = { version = "0.6", default-features = false, features = ["audio"] }
 percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
@@ -346,7 +363,6 @@ slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
 winnow = { version = "1" }
@@ -357,6 +373,8 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 core-foundation = { version = "0.10" }
 core-foundation-sys = { version = "0.8" }
 dasp_sample = { version = "0.11" }
@@ -372,6 +390,7 @@ half = { version = "2", default-features = false, features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 idna = { version = "1" }
+indexmap = { version = "2", features = ["serde"] }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -379,8 +398,11 @@ mio = { version = "1", features = ["net", "os-ext"] }
 objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
@@ -397,6 +419,8 @@ bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 core-foundation = { version = "0.10" }
 core-foundation-sys = { version = "0.8" }
 dasp_sample = { version = "0.11" }
@@ -422,8 +446,12 @@ objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
@@ -439,6 +467,8 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 core-foundation = { version = "0.10" }
 core-foundation-sys = { version = "0.8" }
 dasp_sample = { version = "0.11" }
@@ -454,6 +484,7 @@ half = { version = "2", default-features = false, features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 idna = { version = "1" }
+indexmap = { version = "2", features = ["serde"] }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -461,8 +492,11 @@ mio = { version = "1", features = ["net", "os-ext"] }
 objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
@@ -479,6 +513,8 @@ bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 core-foundation = { version = "0.10" }
 core-foundation-sys = { version = "0.8" }
 dasp_sample = { version = "0.11" }
@@ -504,8 +540,12 @@ objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
@@ -533,18 +573,21 @@ futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 half = { version = "2", default-features = false, features = ["num-traits"] }
 hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 idna = { version = "1" }
+indexmap = { version = "2", features = ["serde"] }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -576,12 +619,14 @@ objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
+serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "timeout", "util"] }
 tracing = { version = "0.1", features = ["log"] }

@@ -1,33 +1,78 @@
 # xtask
 
-Workspace automation binary for Kithara. Provides repo-local lints and audits that go beyond what `cargo clippy` covers.
+Workspace automation binary for Kithara. It provides repo-local formatting,
+lint, test, audit, release, and agent-hook commands that go beyond raw Cargo
+commands.
 
-## Subcommands
+## Running xtask
 
-- `cargo run -p xtask -- lint arch` — architectural checks (file size, god structs, fan-out, layering direction, etc.). 33 rules in `.config/arch/thresholds.toml`.
-- `cargo run -p xtask -- lint style` — style checks (comment hygiene, struct field/init/trait item ordering, const locality). 5 rules in `.config/style/thresholds.toml`.
-- `cargo run -p xtask -- lint idioms` — Rust idiom checks (function branch density, loop allocation, guard cascades, etc.). 18 rules in `.config/idioms/thresholds.toml`.
-- `cargo run -p xtask -- ast-grep` — runs the 55 ast-grep rules from `.config/ast-grep/`.
-- `cargo run -p xtask -- format --check` — formatter harness for Rust, Cargo manifests, non-Cargo TOML, and JSON/JSONC.
-- `cargo run -p xtask -- agent-hook pre-bash|post-edit` — repo-owned command guards for tool-specific agent hooks.
-- `cargo run -p xtask -- manifest dependency-order` — checks that internal `kithara` / `kithara-*` dependencies come before external crates in Cargo manifests.
-- `cargo run -p xtask -- health` — broad local health report, including formatter, dependency, unsafe-inventory, lint, quality, and test stages.
+Use the generic Just entry point:
+
+```sh
+just xtask <subcommand> [args...]
+```
+
+All higher-level Just recipes that need xtask delegate to this entry point. It
+uses a worktree-local self-cache: a warm invocation runs an immutable cached
+binary directly, a stale invocation refreshes it once, and a missing cache uses
+Cargo for the cold bootstrap. Force a rebuild after an undeclared environment
+change with `just xtask-refresh`.
+
+The ignored `xtask/.xtask-cache` file locates the active generation owned by
+the concrete worktree. Cached commands do not use another worktree's binary or
+the shared `target/debug/xtask`. Cache policy is configured under
+`[ext.xtask.cache]` in `.config/xtask.toml`.
+
+Refresh builds are supervised and fail closed. Cargo returns an artifact but
+does not publish it; the parent verifies that declared inputs stayed unchanged
+throughout the build before atomically activating the new generation.
+
+## Common Commands
+
+- `just lint` runs the architecture, style, and Rust-idiom checks.
+- `just ast-grep` runs the rules under `.config/ast-grep/`.
+- `just fmt` formats Rust, Cargo manifests, non-Cargo TOML, and JSON/JSONC.
+- `just fmt-check` checks those formatters without rewriting files.
+- `just test` runs the repository test harness.
+- `just xtask health` runs the broad local health report.
+
+Use `just xtask --help` and `just xtask <subcommand> --help` for the complete
+CLI. Direct `cargo run -p xtask` is a scoped development probe, not the normal
+repository entry point.
+
+## Agent Hooks
+
+`agent-hook` consumes the tool payload from stdin and derives the event, tool
+kind, and edited paths from that payload. Typed routes and the destructive-Git
+override variable live under `[ext.agent_hook]` in `.config/xtask.toml`; the
+handlers own the guard and formatting policy.
+
+Tool adapters call the `just agent-hook` recipe. That recipe reuses the generic
+cache in optional mode, so hooks never invoke Cargo, refresh the binary, or
+wait for a build. There are no agent-hook
+install/uninstall/status/cache commands and no `pre-bash` or `post-edit` CLI
+subcommands. See `docs/guides/agent-hooks.md` for the routing and failure
+contract.
 
 ## Baselines
 
-Each `lint <namespace>` reads `.config/<namespace>/baseline.toml` and ratchets on regression only. To shrink a baseline:
+Each `lint <namespace>` reads `.config/<namespace>/baseline.toml` and ratchets
+on regression only. To shrink a baseline:
 
 1. Fix the underlying code.
-2. Re-run the linter — it prints the surplus.
-3. Drop the entry from `baseline.toml`.
+1. Re-run the linter; it prints the surplus.
+1. Drop the entry from `baseline.toml`.
 
 Never grow a baseline to make a commit pass. See `AGENTS.md` Non-Negotiables.
 
 ## Layout
 
-- `src/arch/` — architectural checks.
-- `src/style/` — style checks.
-- `src/idioms/` — idiom checks.
-- `src/common/` — shared scope/violation/baseline plumbing.
+- `src/arch/` owns architectural checks.
+- `src/style/` owns style checks.
+- `src/idioms/` owns Rust-idiom checks.
+- `src/common/` owns shared scope, violation, and baseline plumbing.
+- `src/self_cache/` owns freshness, publication, locking, leases, and cleanup.
+- `src/agent_hook/` owns hook payload routing and policy.
 
-Each check is one file under `src/<ns>/checks/<rule>.rs` implementing the `Check` trait.
+Each lint check is one file under `src/<namespace>/checks/` implementing the
+`Check` trait.

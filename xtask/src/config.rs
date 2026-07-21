@@ -1,6 +1,11 @@
-use anyhow::{Context, Result};
-use kithara_devtools::Ctx;
-use serde::Deserialize;
+use std::{
+    collections::BTreeSet,
+    path::{Component, Path, PathBuf},
+};
+
+use anyhow::{Context, Result, bail};
+use kithara_devtools::{Ctx, common::project::ProjectConfig};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -10,14 +15,161 @@ pub(crate) struct KitharaExt {
     pub(crate) apple: AppleConfig,
     pub(crate) release: ReleaseConfig,
     pub(crate) publish: PublishConfig,
+    xtask: Option<XtaskConfig>,
+    agent_hook: Option<AgentHookConfig>,
 }
 
 impl KitharaExt {
     pub(crate) fn from_ctx(ctx: &Ctx) -> Result<Self> {
-        toml::Value::Table(ctx.config.ext.clone())
+        Self::from_project_config(&ctx.config)
+    }
+
+    pub(crate) fn load(root: &Path) -> Result<Self> {
+        let config = ProjectConfig::load(root)?;
+        Self::from_project_config(&config)
+    }
+
+    fn from_project_config(config: &ProjectConfig) -> Result<Self> {
+        toml::Value::Table(config.ext.clone())
             .try_into()
             .context("parse project config [ext]")
     }
+
+    pub(crate) fn xtask_cache(&self) -> Result<&XtaskCacheConfig> {
+        let config = self
+            .xtask
+            .as_ref()
+            .and_then(|xtask| xtask.cache.as_ref())
+            .context("ext.xtask.cache is not set in .config/xtask.toml")?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub(crate) fn agent_hook(&self) -> Result<&AgentHookConfig> {
+        let config = self
+            .agent_hook
+            .as_ref()
+            .context("ext.agent_hook is not set in .config/xtask.toml")?;
+        config.validate()?;
+        Ok(config)
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct XtaskConfig {
+    cache: Option<XtaskCacheConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct XtaskCacheConfig {
+    pub(crate) extra_inputs: Vec<PathBuf>,
+    pub(crate) keep_generations: usize,
+    pub(crate) generation_grace_secs: u64,
+}
+
+impl XtaskCacheConfig {
+    fn validate(&self) -> Result<()> {
+        if self.keep_generations < 2 {
+            bail!("ext.xtask.cache.keep_generations must be at least 2");
+        }
+        if self.generation_grace_secs == 0 {
+            bail!("ext.xtask.cache.generation_grace_secs must be positive");
+        }
+        for path in &self.extra_inputs {
+            if path.as_os_str().is_empty()
+                || path.is_absolute()
+                || path
+                    .components()
+                    .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
+            {
+                bail!(
+                    "ext.xtask.cache.extra_inputs must contain project-relative paths: {}",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentHookConfig {
+    pub(crate) destructive_git_override_env: String,
+    pub(crate) routes: Vec<HookRoute>,
+}
+
+impl AgentHookConfig {
+    fn validate(&self) -> Result<()> {
+        if self.destructive_git_override_env.is_empty() {
+            bail!("ext.agent_hook.destructive_git_override_env must not be empty");
+        }
+        if self.routes.is_empty() {
+            bail!("ext.agent_hook.routes must not be empty");
+        }
+        let mut routes = BTreeSet::new();
+        for route in &self.routes {
+            let compatible = matches!(
+                (route.event, route.tool_kind, route.handler),
+                (
+                    HookEvent::PreToolUse,
+                    HookToolKind::Shell,
+                    HookHandler::CommandGuard
+                ) | (
+                    HookEvent::PostToolUse,
+                    HookToolKind::FileEdit,
+                    HookHandler::FormatEditedPaths
+                )
+            );
+            if !compatible {
+                bail!(
+                    "ext.agent_hook route {:?}/{:?} is incompatible with handler {:?}",
+                    route.event,
+                    route.tool_kind,
+                    route.handler
+                );
+            }
+            if !routes.insert((route.event, route.tool_kind)) {
+                bail!(
+                    "ext.agent_hook.routes contains a duplicate {:?}/{:?} route",
+                    route.event,
+                    route.tool_kind
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum HookEvent {
+    PreToolUse,
+    PostToolUse,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum HookToolKind {
+    Shell,
+    FileEdit,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum HookHandler {
+    CommandGuard,
+    FormatEditedPaths,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HookRoute {
+    pub(crate) event: HookEvent,
+    pub(crate) tool_kind: HookToolKind,
+    pub(crate) handler: HookHandler,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -279,5 +431,82 @@ typo = true
             message.contains("typo"),
             "error did not mention offending token: {message}"
         );
+    }
+
+    #[test]
+    fn self_cache_and_hook_sections_are_required_and_typed() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.xtask.cache]
+extra_inputs = ["justfile"]
+keep_generations = 2
+generation_grace_secs = 3600
+
+[ext.agent_hook]
+destructive_git_override_env = "KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT"
+
+[[ext.agent_hook.routes]]
+event = "pre-tool-use"
+tool_kind = "shell"
+handler = "command-guard"
+"#,
+        );
+
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
+        let cache = ext.xtask_cache().expect("resolve xtask cache config");
+        let hook = ext.agent_hook().expect("resolve agent hook config");
+
+        assert_eq!(cache.keep_generations, 2);
+        assert_eq!(cache.generation_grace_secs, 3600);
+        assert_eq!(cache.extra_inputs, [PathBuf::from("justfile")]);
+        assert_eq!(hook.routes.len(), 1);
+    }
+
+    #[test]
+    fn missing_self_cache_and_hook_sections_fail_resolution() {
+        let ctx = ctx_from_config("");
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse empty extension");
+
+        assert!(ext.xtask_cache().is_err());
+        assert!(ext.agent_hook().is_err());
+    }
+
+    #[test]
+    fn hook_routes_reject_incompatible_handler_types() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.agent_hook]
+destructive_git_override_env = "KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT"
+
+[[ext.agent_hook.routes]]
+event = "pre-tool-use"
+tool_kind = "file-edit"
+handler = "command-guard"
+"#,
+        );
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse hook extension");
+
+        let error = ext
+            .agent_hook()
+            .expect_err("incompatible hook handler must fail");
+
+        assert!(format!("{error:#}").contains("incompatible"));
+    }
+
+    #[test]
+    fn owned_self_cache_section_rejects_unknown_fields() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.xtask.cache]
+extra_inputs = []
+keep_generations = 2
+generation_grace_secs = 3600
+typo = true
+"#,
+        );
+
+        let error = KitharaExt::from_ctx(&ctx).expect_err("cache typo fails");
+
+        assert!(format!("{error:#}").contains("typo"));
     }
 }

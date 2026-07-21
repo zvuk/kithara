@@ -1,5 +1,5 @@
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     fs,
     path::{Component, Path, PathBuf},
     process::Command,
@@ -44,6 +44,19 @@ enum FileKind {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PathFormatTarget {
+    Rust,
+    Toml,
+    Json,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PathFormatCommand {
+    program: &'static str,
+    args: Vec<OsString>,
+}
+
 pub(crate) fn run(args: &FormatArgs, ctx: &Ctx) -> Result<()> {
     if !args.check {
         ensure_clean_tree(args.allow_dirty, "format")?;
@@ -54,6 +67,101 @@ pub(crate) fn run(args: &FormatArgs, ctx: &Ctx) -> Result<()> {
             .with_context(|| format!("format target `{}`", target.name()))?;
     }
     Ok(())
+}
+
+/// Formats one edited Rust, TOML, or JSON path below `root`.
+///
+/// # Errors
+/// Returns an error if path resolution or formatting fails.
+pub fn format_path(root: &Path, path: &Path) -> Result<()> {
+    let root = fs::canonicalize(root)
+        .with_context(|| format!("resolve formatting root {}", root.display()))?;
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let path = fs::canonicalize(&candidate)
+        .with_context(|| format!("resolve formatting path {}", candidate.display()))?;
+    if !path.starts_with(&root) {
+        bail!(
+            "formatting path {} is outside formatting root {}",
+            path.display(),
+            root.display()
+        );
+    }
+    let Some(target) = path_format_target(&path) else {
+        return Ok(());
+    };
+    let command = path_format_command(target, &root, &path);
+    let status = Command::new(command.program)
+        .current_dir(&root)
+        .args(&command.args)
+        .status()
+        .with_context(|| format!("run path formatter for {}", target.name()))?;
+    if !status.success() {
+        bail!(
+            "path formatter for {} failed (exit code {:?})",
+            target.name(),
+            status.code()
+        );
+    }
+    Ok(())
+}
+
+impl PathFormatTarget {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Toml => "toml",
+            Self::Json => "json",
+        }
+    }
+}
+
+fn path_format_target(path: &Path) -> Option<PathFormatTarget> {
+    if path.file_name() == Some(OsStr::new("Cargo.toml")) {
+        return None;
+    }
+    match path.extension().and_then(OsStr::to_str) {
+        Some("rs") => Some(PathFormatTarget::Rust),
+        Some("toml") => Some(PathFormatTarget::Toml),
+        Some("json" | "jsonc") => Some(PathFormatTarget::Json),
+        _ => None,
+    }
+}
+
+fn path_format_command(target: PathFormatTarget, root: &Path, path: &Path) -> PathFormatCommand {
+    match target {
+        PathFormatTarget::Rust => PathFormatCommand {
+            program: "rustup",
+            args: vec![
+                "run".into(),
+                "nightly".into(),
+                "rustfmt".into(),
+                "--edition".into(),
+                "2024".into(),
+                "--config-path".into(),
+                root.join("rustfmt.toml").into_os_string(),
+                "--config".into(),
+                "skip_children=true".into(),
+                path.as_os_str().to_owned(),
+            ],
+        },
+        PathFormatTarget::Toml => PathFormatCommand {
+            program: "taplo",
+            args: vec!["format".into(), path.as_os_str().to_owned()],
+        },
+        PathFormatTarget::Json => PathFormatCommand {
+            program: "tidy-json",
+            args: vec![
+                "--indent".into(),
+                "2".into(),
+                "--write".into(),
+                path.as_os_str().to_owned(),
+            ],
+        },
+    }
 }
 
 fn selected_targets(args: &FormatArgs) -> Vec<FormatTarget> {
@@ -346,9 +454,70 @@ fn is_apple_build_dir(components: &[&OsStr]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{ffi::OsString, fs, path::Path};
 
-    use super::{FileKind, matches_file_kind, should_skip_dir};
+    use anyhow::Result;
+
+    use super::{
+        FileKind, PathFormatTarget, format_path, matches_file_kind, path_format_command,
+        should_skip_dir,
+    };
+
+    #[test]
+    fn path_formatter_skips_cargo_manifest() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let manifest = root.path().join("Cargo.toml");
+        fs::write(&manifest, "[package]\nname='example'\n")?;
+
+        format_path(root.path(), &manifest)?;
+
+        assert_eq!(fs::read_to_string(manifest)?, "[package]\nname='example'\n");
+        Ok(())
+    }
+
+    #[test]
+    fn path_formatter_rejects_paths_outside_root() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let outside = tempfile::tempdir()?;
+        let path = outside.path().join("outside.rs");
+        fs::write(&path, "fn outside() {}\n")?;
+
+        let error = format_path(root.path(), &path).expect_err("outside path must fail");
+
+        assert!(format!("{error:#}").contains("outside formatting root"));
+        Ok(())
+    }
+
+    #[test]
+    fn path_formatter_commands_match_owned_tool_semantics() {
+        let root = Path::new("/repo");
+        let rust = Path::new("/repo/crates/example/src/lib.rs");
+        let toml = Path::new("/repo/.config/example.toml");
+        let json = Path::new("/repo/tests/example.jsonc");
+
+        let rust_command = path_format_command(PathFormatTarget::Rust, root, rust);
+        assert_eq!(rust_command.program, "rustup");
+        assert_eq!(rust_command.args.first(), Some(&OsString::from("run")));
+        assert!(rust_command.args.iter().any(|arg| arg == "nightly"));
+        assert!(rust_command.args.iter().any(|arg| arg == "--edition"));
+        assert!(rust_command.args.iter().any(|arg| arg == "2024"));
+        assert!(
+            rust_command
+                .args
+                .iter()
+                .any(|arg| arg == "skip_children=true")
+        );
+        assert_eq!(rust_command.args.last(), Some(&rust.as_os_str().to_owned()));
+
+        let toml_command = path_format_command(PathFormatTarget::Toml, root, toml);
+        assert_eq!(toml_command.program, "taplo");
+        assert_eq!(toml_command.args, [OsString::from("format"), toml.into()]);
+
+        let json_command = path_format_command(PathFormatTarget::Json, root, json);
+        assert_eq!(json_command.program, "tidy-json");
+        assert_eq!(json_command.args.last(), Some(&json.as_os_str().to_owned()));
+        assert!(json_command.args.iter().any(|arg| arg == "--write"));
+    }
 
     #[test]
     fn file_kind_filters_cargo_and_package_lock() {
