@@ -133,10 +133,12 @@ beyond the shortest member before mutating any component.
 
 `StartAt::Immediate` is the base operation used by `Player::play`.
 `StartAt::SessionBeat` schedules a bound player against the shared render
-context. A routed `Member<PlayerImpl>::join_track_at` requires an empty deck,
-prepares the supplied resource through the existing player/worker/elastic path,
-and starts it at the requested future beat without changing session transport.
-No parallel player, queue, source, worker, or allocation layer is created for
+context. A routed `Member<T>::join_track_at`, where `T: Borrow<PlayerImpl>`,
+requires an empty deck, prepares the supplied resource through the existing
+player/worker/elastic path, and starts it at the requested future beat without
+changing session transport. The standard `Borrow` bound covers the canonical
+`PlayerImpl` and its `Arc` test/probe handle without adding a marker trait. No
+parallel player, queue, source, worker, or allocation layer is created for
 composition or join.
 
 ### Accepted lint residue
