@@ -1,7 +1,9 @@
 use super::{deny_reason_for_bash, shell::shell_tokens};
 
+const OVERRIDE_ENV: &str = "KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT";
+
 fn denied(command: &str) -> bool {
-    deny_reason_for_bash(command, false).is_some()
+    deny_reason_for_bash(command, false, OVERRIDE_ENV).is_some()
 }
 
 #[test]
@@ -74,7 +76,7 @@ fn denies_destructive_git_through_rtk() {
 #[test]
 fn denies_timed_full_harness_through_rtk() {
     assert!(denied("timeout 60s rtk cargo xtask test"));
-    assert!(deny_reason_for_bash("rtk just test", true).is_some());
+    assert!(deny_reason_for_bash("rtk just test", true, OVERRIDE_ENV).is_some());
 }
 
 #[test]
@@ -123,7 +125,7 @@ fn denies_timeout_around_full_harness() {
     assert!(denied(
         "timeout --kill-after=5s 120s cargo xtask test --lane workspace"
     ));
-    assert!(deny_reason_for_bash("just test", true).is_some());
+    assert!(deny_reason_for_bash("just test", true, OVERRIDE_ENV).is_some());
 }
 
 #[test]
@@ -155,6 +157,28 @@ fn allows_only_exact_segment_scoped_destructive_git_override() {
         "echo KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT=1; git reset --hard HEAD"
     ));
     assert!(denied("git clean -fdx # kithara-allow-destructive-git"));
+}
+
+#[test]
+fn destructive_git_override_name_comes_from_config() {
+    let custom = "PROJECT_APPROVED_DESTRUCTIVE_GIT";
+
+    assert!(
+        deny_reason_for_bash(
+            "KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT=1 git reset --hard HEAD",
+            false,
+            custom,
+        )
+        .is_some()
+    );
+    assert!(
+        deny_reason_for_bash(
+            "PROJECT_APPROVED_DESTRUCTIVE_GIT=1 git reset --hard HEAD",
+            false,
+            custom,
+        )
+        .is_none()
+    );
 }
 
 #[test]

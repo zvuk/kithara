@@ -4,74 +4,101 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
-_agent-hook HOOK:
-    #!/bin/sh
-    set -eu
-    repo_root=$PWD
-    pointer="$repo_root/xtask/.agent-hook-cache"
-    warn_install() {
-        printf 'warning: agent hook is not installed for this worktree; run `cargo xtask agent-hook install`\n' >&2
-        exit 0
-    }
-    [ -r "$pointer" ] || warn_install
-    generation_dir= extra=
-    if ! { IFS= read -r generation_dir && ! IFS= read -r extra && [ -z "$extra" ]; } < "$pointer"; then
-        warn_install
-    fi
-    case "$generation_dir" in
-        /*) ;;
-        *) warn_install ;;
-    esac
-    binary="$generation_dir/xtask"
-    [ -x "$binary" ] || warn_install
-    export KITHARA_AGENT_HOOK_ROOT=$repo_root KITHARA_AGENT_HOOK_CACHE=$generation_dir
-    if "$binary" agent-hook {{quote(HOOK)}}; then exit 0; else status=$?; fi
-    case "$status" in
-        126|127) warn_install ;;
-        *) exit "$status" ;;
-    esac
+[no-exit-message, positional-arguments]
+xtask *ARGS: _xtask-ready
+    @exec just _xtask-cached strict "$@"
+
+[no-exit-message]
+xtask-refresh:
+    @if just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-cached strict self-cache refresh --force </dev/null; fi; exec just _xtask-bootstrap --force </dev/null
+
+[private, no-exit-message]
+_xtask-ready:
+    @if ! just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-bootstrap </dev/null >/dev/null; fi; state=$(just _xtask-cached strict self-cache status </dev/null) || exit $?; case "$state" in current) ;; stale) exec just _xtask-cached strict self-cache refresh </dev/null >/dev/null ;; *) printf 'error: invalid xtask cache status: %s\n' "$state" >&2; exit 1 ;; esac
+
+[private, no-exit-message, positional-arguments]
+_xtask-bootstrap *ARGS:
+    @exec env CARGO_TARGET_DIR="$PWD/target/xtask-self-cache" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+
+[private, no-exit-message, positional-arguments]
+_xtask-cached MODE *ARGS:
+    @set -eu; \
+      mode=$1; shift; \
+      case "$mode" in \
+        strict|optional) ;; \
+        *) printf 'error: invalid xtask transport mode: %s\n' "$mode" >&2; exit 2 ;; \
+      esac; \
+      unavailable() { \
+        if [ "$mode" = optional ]; then \
+          printf 'warning: cached xtask transport is unavailable; run just xtask --help to install it\n' >&2; \
+          exit 0; \
+        fi; \
+        printf 'error: cached xtask transport is unavailable\n' >&2; \
+        exit 1; \
+      }; \
+      pointer="$PWD/xtask/.xtask-cache"; \
+      [ -f "$pointer" ] && [ ! -L "$pointer" ] && [ -r "$pointer" ] || unavailable; \
+      size=$(wc -c < "$pointer") || unavailable; \
+      { [ "$size" -ge 1 ] 2>/dev/null && [ "$size" -le 4096 ] 2>/dev/null; } || unavailable; \
+      generation=; extra=; \
+      if ! { IFS= read -r generation && ! IFS= read -r extra && [ -z "$extra" ]; } < "$pointer"; then \
+        unavailable; \
+      fi; \
+      case "$generation" in \
+        /*) ;; \
+        *) unavailable ;; \
+      esac; \
+      binary="$generation/xtask"; \
+      [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || unavailable; \
+      if [ "$mode" = optional ]; then \
+        "$binary" self-cache probe </dev/null >/dev/null 2>&1 || unavailable; \
+      fi; \
+      exec "$binary" "$@"
+
+[no-exit-message]
+agent-hook: (_xtask-cached "optional" "agent-hook")
 
 # --- formatting ---
 
 # Auto-format Rust, Cargo manifests, TOML configs, and JSON files.
 fmt:
-    cargo xtask format --allow-dirty
+    just xtask format --allow-dirty
 
 # Check formatting without modifying files.
 fmt-check:
-    cargo xtask format --check
+    just xtask format --check
 
 # Sort every workspace Cargo.toml and keep kithara crates first.
 sort:
-    cargo xtask format --only manifest --allow-dirty
+    just xtask format --only manifest --allow-dirty
 
 # Check Cargo.toml ordering without modifying files.
 sort-check:
-    cargo xtask format --only manifest --check
+    just xtask format --only manifest --check
 
 # Format non-Cargo TOML through taplo.
 format-toml:
-    cargo xtask format --only toml --allow-dirty
+    just xtask format --only toml --allow-dirty
 
 # Check non-Cargo TOML formatting.
 format-toml-check:
-    cargo xtask format --only toml --check
+    just xtask format --only toml --check
 
 # Sort and format JSON / JSONC through tidy-json.
 format-json:
-    cargo xtask format --only json --allow-dirty
+    just xtask format --only json --allow-dirty
 
 # Check JSON / JSONC formatting.
 format-json-check:
-    cargo xtask format --only json --check
+    just xtask format --only json --check
 
 # Format Markdown through Rust mdfmt.
 format-markdown:
-    cargo xtask format --only markdown --allow-dirty
+    just xtask format --only markdown --allow-dirty
 
 # Check Markdown formatting.
 format-markdown-check:
-    cargo xtask format --only markdown --check
+    just xtask format --only markdown --check
 
 # --- checks ---
 
@@ -82,8 +109,11 @@ clippy:
 # on a dirty working tree by default — pass --allow-dirty to override.
 #   just clippy-fix
 #   just clippy-fix --allow-dirty
+[positional-arguments]
 clippy-fix *ARGS:
-    cargo clippy --fix --workspace --all-targets {{ARGS}} -- -D warnings
+    #!/bin/sh
+    set -eu
+    exec cargo clippy --fix --workspace --all-targets "$@" -- -D warnings
 
 # Type-check the workspace (also used as MSRV gate in CI).
 check:
@@ -107,12 +137,14 @@ shear:
 # Pass `--strict` to promote every warning to an error.
 #   just ast-grep
 #   just ast-grep --strict
+[positional-arguments]
 ast-grep *ARGS:
-    cargo xtask ast-grep {{ARGS}}
+    just xtask ast-grep "$@"
 
 # Opt-in advisory clippy sweep (extended nursery/pedantic perf lints, non-gating)
+[positional-arguments]
 audit-clippy *ARGS:
-    cargo xtask audit-clippy {{ARGS}}
+    just xtask audit-clippy "$@"
 
 # Workspace linters: arch, style, idioms.
 #   just lint                       # all three
@@ -121,8 +153,9 @@ audit-clippy *ARGS:
 #   just lint arch --update-baseline
 #   just lint arch --report path.md
 #   just lint arch --json
+[positional-arguments]
 lint *ARGS:
-    cargo xtask lint {{ARGS}}
+    just xtask lint "$@"
 
 # Workspace quality checks (forwarded to xtask quality).
 #   just quality report
@@ -130,8 +163,9 @@ lint *ARGS:
 #   just quality rstest-audit
 #   just quality trait-mock-audit
 #   just quality trait-mock-exceptions
+[positional-arguments]
 quality *ARGS:
-    cargo xtask quality {{ARGS}}
+    just xtask quality "$@"
 
 # Feature-powerset check (requires cargo-hack).
 hack:
@@ -189,31 +223,48 @@ doc:
 #   just test -p kithara-hls           # one package, flash ON
 #   just test --profile ci             # CI nextest profile
 #   just test EXPR                     # nextest filter expression
+[positional-arguments]
 test *ARGS:
-    cargo xtask test {{ARGS}}
+    just xtask test "$@"
 
 # Save periodic Loom execution checkpoints while reproducing a failure.
+[positional-arguments]
 loom-checkpoint FILE *ARGS:
-    LOOM_CHECKPOINT_FILE="{{FILE}}" just test --loom=on {{ARGS}}
+    #!/bin/sh
+    set -eu
+    file=$1
+    shift
+    LOOM_CHECKPOINT_FILE="$file" exec just test --loom=on "$@"
 
 # Advance an existing checkpoint to the exact failing permutation.
+[positional-arguments]
 loom-isolate FILE *ARGS:
-    LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="{{FILE}}" just test --loom=on {{ARGS}}
+    #!/bin/sh
+    set -eu
+    file=$1
+    shift
+    LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="$file" exec just test --loom=on "$@"
 
 # Replay the isolated permutation with scheduler switches and source locations.
+[positional-arguments]
 loom-debug FILE *ARGS:
-    LOOM_LOG=trace LOOM_LOCATION=1 LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="{{FILE}}" just test --loom=on --no-capture {{ARGS}}
+    #!/bin/sh
+    set -eu
+    file=$1
+    shift
+    LOOM_LOG=trace LOOM_LOCATION=1 LOOM_CHECKPOINT_INTERVAL=1 LOOM_CHECKPOINT_FILE="$file" exec just test --loom=on --no-capture "$@"
 
 # Dual-run wave gate for the platform refactor: flash ON, then flash OFF.
 # OFF lane builds in its own target dir so the feature flip does not
 # invalidate the ON cache (and vice versa).
+[positional-arguments]
 gate *ARGS:
     #!/usr/bin/env bash
     set -eo pipefail
     echo "=== gate: flash ON + no-block ON ==="
-    cargo xtask test --flash=on --no-block=on {{ARGS}}
+    just xtask test --flash=on --no-block=on "$@"
     echo "=== gate: flash OFF ==="
-    CARGO_TARGET_DIR=target-flash-off cargo xtask test --flash=off {{ARGS}}
+    CARGO_TARGET_DIR=target-flash-off just xtask test --flash=off "$@"
 
 # RealtimeSanitizer: compile the player RT path under `-Zsanitizer=realtime`
 # and run the offline-render tests, which enter the
@@ -270,19 +321,23 @@ test-all:
 # fixed-ratio SRC on any 44.1 kHz device; HLS/DRM cover the AAC and AES
 # paths. Narrow with a custom filter:
 #   just e2e-resamplers                                        # silvercomet track set
-#   just e2e-resamplers "-E \"'test(silvercomet_mp3)'\""       # one track, 3 backends
-# (the nextest filter needs the doubled quoting: `just test` re-renders args
-# through a second shell)
-e2e-resamplers ARGS="-E \"'test(track_plays_end_to_end_silvercomet)'\" --test-threads=4":
-    just test --lane=e2e {{ARGS}}
-    just test --lane=e2e-fused {{ARGS}}
-    just test --lane=e2e-glide {{ARGS}}
+#   just e2e-resamplers -E 'test(silvercomet_mp3)'              # one track, 3 backends
+[positional-arguments]
+e2e-resamplers *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if (( $# == 0 )); then
+      set -- -E 'test(track_plays_end_to_end_silvercomet)' --test-threads=4
+    fi
+    just test --lane=e2e "$@"
+    just test --lane=e2e-fused "$@"
+    just test --lane=e2e-glide "$@"
 
 # Run all linters scoped to a crate / path / workspace. With
 # `--autofix`, run each tool's autofix first (where available), then
 # re-validate.
-# Argument parsing is in `cargo xtask scope`; filter list is in
-# `cargo xtask ast-grep`. This recipe is a thin orchestrator.
+# Argument parsing is in `just xtask scope`; filter list is in
+# `just xtask ast-grep`. This recipe is a thin orchestrator.
 #
 #   just audit                              # workspace checks; orphan sweep deferred to health
 #   just audit --autofix                    # apply every available autofix, then re-validate
@@ -307,11 +362,12 @@ e2e-resamplers ARGS="-E \"'test(track_plays_end_to_end_silvercomet)'\" --test-th
 #
 # Autofix implicitly passes `--allow-dirty` to each tool: a single fix
 # step would otherwise dirty the tree and block subsequent steps. Use
-# the per-tool recipes (`just clippy-fix`, `cargo xtask typos --fix`,
-# `cargo xtask ast-grep --fix`, `cargo xtask lint --fix`) when you
+# the per-tool recipes (`just clippy-fix`, `just xtask typos --fix`,
+# `just xtask ast-grep --fix`, `just xtask lint --fix`) when you
 # want the dirty-tree safety net.
+[positional-arguments]
 audit *ARGS:
-    cargo xtask audit {{ARGS}}
+    just xtask audit "$@"
 
 # --- internal: xtask self-tests ---
 
@@ -323,24 +379,24 @@ xtask-test:
 
 [private]
 _quality-unimock:
-    cargo xtask quality unimock-check
+    just xtask quality unimock-check
 
 [private]
 _quality-rstest:
-    cargo xtask quality rstest-audit
+    just xtask quality rstest-audit
 
 [private]
 _quality-trait-mock:
-    cargo xtask quality trait-mock-audit
+    just xtask quality trait-mock-audit
 
 [private]
 _quality-trait-mock-exceptions:
-    cargo xtask quality trait-mock-exceptions
+    just xtask quality trait-mock-exceptions
 
 # CI-tuned quality report; thresholds from QUALITY_* env vars.
 [private]
 quality-report-ci:
-    cargo xtask quality report \
+    just xtask quality report \
         --min-unimock-traits "${QUALITY_MIN_UNIMOCK_TRAITS:-0}" \
         --min-rstest-cases "${QUALITY_MIN_RSTEST_CASES:-0}" \
         --min-perf-test-files "${QUALITY_MIN_PERF_TEST_FILES:-0}" \
@@ -352,12 +408,12 @@ quality-report-ci:
 # Fast lint chain: fmt-check + clippy + ast-grep + typos + arch ratchet.
 # style/idioms ratchets are slower and run in lint-full (CI), not pre-commit.
 lint-fast: fmt-check clippy ast-grep typos
-    cargo xtask lint arch
+    just xtask lint arch
 
 # Full lint: fast chain + style/idioms ratchets + xtask self-tests + quality scans.
 lint-full: lint-fast xtask-test _quality-unimock _quality-rstest _quality-trait-mock _quality-trait-mock-exceptions
-    cargo xtask lint style
-    cargo xtask lint idioms
+    just xtask lint style
+    just xtask lint idioms
 
 # --- CI cycle ---
 
@@ -428,32 +484,37 @@ dead:
 #   just similarity --profile=audit              # blocking, low-noise (0.96)
 #   just similarity --profile=strict             # comprehensive (0.80, includes tests)
 #   just similarity crates/kithara-abr/src       # scoped roots
+[positional-arguments]
 similarity *ARGS:
-    cargo xtask similarity {{ARGS}}
+    just xtask similarity "$@"
 
 # Workspace spell-check via `typos` with the pinned config in `.config/typos.toml`.
 #   just typos                                   # whole workspace
 #   just typos crates/kithara-queue              # scoped
+[positional-arguments]
 typos *ARGS:
-    cargo xtask typos {{ARGS}}
+    just xtask typos "$@"
 
 # Per-package orphan-module detection (`cargo modules orphans` with `--cfg-test`).
 #   just orphans                                 # advisory full sweep (~1.5 min)
 #   just orphans --deny                          # fail on any orphans
 #   just orphans --package kithara-queue         # single crate
+[positional-arguments]
 orphans *ARGS:
-    cargo xtask orphans {{ARGS}}
+    just xtask orphans "$@"
 
 # Cargo manifest hygiene checks (workspace-dep usage, ordering, drift).
 #   just manifest                                # whole workspace
+[positional-arguments]
 manifest *ARGS:
-    cargo xtask manifest {{ARGS}}
+    just xtask manifest "$@"
 
 # Architecture visualization (module hierarchy / dependency arc-map).
 #   just viz hierarchy kithara-stream
 #   just viz arc-map
+[positional-arguments]
 viz *ARGS:
-    cargo xtask viz {{ARGS}}
+    just xtask viz "$@"
 
 # Comprehensive workspace health check (15-30 min).
 # Runs lint + quality + audit tools + heavy stages (lockbud / hack /
@@ -497,12 +558,13 @@ install-tools:
 # `target/health-report.md` and per-stage logs to `target/health-logs/`.
 # Stages requiring tools that are missing or broken are reported as SKIP.
 health:
-    cargo xtask health
+    just xtask health
 
 # Static deadlock detection across the workspace (`cargo lockbud`).
 # Heavy: relies on MIR analysis; first install warms up nightly toolchain.
+[positional-arguments]
 deadlock *ARGS:
-    cargo lockbud -k deadlock --workspace {{ARGS}}
+    exec cargo lockbud -k deadlock --workspace "$@"
 
 # Detect unused public items workspace-wide (`cargo workspace-unused-pub`).
 # Heavy: ~1.5 min — runs rust-analyzer SCIP under the hood.
@@ -510,8 +572,9 @@ unused-pub:
     cargo workspace-unused-pub
 
 # Show top contributors to release binary size (`cargo bloat`).
+[positional-arguments]
 bloat *ARGS:
-    cargo bloat --release --crates -n 50 {{ARGS}}
+    exec cargo bloat --release --crates -n 50 "$@"
 
 # Visualise a crate's internal module structure (`cargo modules structure`).
 #   just modules kithara-stream
@@ -533,10 +596,13 @@ depgraph:
 #   just mutants kithara-audio            # one crate
 #   just mutants kithara-audio --jobs 8   # crate + extra cargo-mutants flags
 #   just mutants ci /tmp/mutants/output   # CI cycle: workspace-wide + flags
+[positional-arguments]
 mutants TARGET="" *ARGS:
     #!/usr/bin/env bash
     set -uo pipefail
-    if [[ "{{TARGET}}" == "ci" ]]; then
+    target=$1
+    shift
+    if [[ "$target" == "ci" ]]; then
       OUTPUT="${1:-target/mutants-ci}"
       DEFAULT_JOBS=$(( $(nproc) - 1 ))
       if [ "$DEFAULT_JOBS" -gt 12 ]; then DEFAULT_JOBS=12; fi
@@ -561,12 +627,12 @@ mutants TARGET="" *ARGS:
         --exclude-re 'src/.*test.*\.rs' \
         -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
         --no-shuffle $RESUME_FLAG --output "$OUTPUT"
-    elif [[ -z "{{TARGET}}" ]]; then
+    elif [[ -z "$target" ]]; then
       cargo mutants --workspace --test-workspace=true --profile test-release \
-        --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
+        --test-tool=nextest --timeout 120 --no-shuffle "$@"
     else
-      cargo mutants -p "{{TARGET}}" --test-workspace=true --profile test-release \
-        --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
+      cargo mutants -p "$target" --test-workspace=true --profile test-release \
+        --test-tool=nextest --timeout 120 --no-shuffle "$@"
     fi
 
 # --- perf & benchmarks ---
@@ -577,16 +643,18 @@ perf:
       -- --ignored --test-threads=1 --nocapture 2>&1 | tee perf-results.txt
 
 # Compare perf results between baseline and candidate.
+[positional-arguments]
 perf-compare *ARGS:
-    cargo xtask perf-compare {{ARGS}}
+    just xtask perf-compare "$@"
 
 # Test-suite performance measurement pipeline (matrix/slow/profile/report/trace).
 # Distinct from `just perf` (which runs the `perf`-feature integration tests):
 # this measures and reports the test-suite's own wall-clock hotspots.
 #   just testperf matrix
 #   just testperf report
+[positional-arguments]
 testperf *ARGS:
-    cargo xtask perf {{ARGS}}
+    just xtask perf "$@"
 
 # Run benchmarks. Default: build only.
 #   just bench                # build benches
@@ -655,8 +723,9 @@ memory-check:
 # --- publish ---
 
 # Publish all public crates to crates.io in dependency order.
+[positional-arguments]
 publish *ARGS:
-    cargo xtask publish {{ARGS}}
+    just xtask publish "$@"
 
 # --- wasm ---
 
@@ -665,10 +734,12 @@ publish *ARGS:
 #   just wasm test             # browser integration tests
 #   just wasm build            # build the wasm demo app
 #   just wasm size-check       # wasm-slim binary-size check
+[positional-arguments]
 wasm MODE="check":
     #!/usr/bin/env bash
-    set -uo pipefail
-    case "{{MODE}}" in
+    set -euo pipefail
+    mode=$1
+    case "$mode" in
       check)
         for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls; do
           cargo check -p "$c" --target wasm32-unknown-unknown
@@ -686,7 +757,7 @@ wasm MODE="check":
         cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
         ;;
       build)
-        cargo xtask wasm build
+        just xtask wasm build
         ;;
       size-check)
         toolchain="${WASM_SLIM_TOOLCHAIN:-nightly}"
@@ -704,7 +775,7 @@ wasm MODE="check":
         echo "wasm-slim report: target/wasm-slim-result.json"
         ;;
       *)
-        echo "unknown wasm mode: {{MODE}} (use check|test|build|size-check)"
+        echo "unknown wasm mode: $mode (use check|test|build|size-check)"
         exit 2
         ;;
     esac
@@ -715,18 +786,21 @@ wasm MODE="check":
 #   just android                    # build (forwards remaining args)
 #   just android build --release
 #   just android aar                # release AAR
+[positional-arguments]
 android MODE="build" *ARGS:
     #!/usr/bin/env bash
-    set -uo pipefail
-    case "{{MODE}}" in
+    set -euo pipefail
+    mode=$1
+    shift
+    case "$mode" in
       build)
-        cargo xtask android build {{ARGS}}
+        just xtask android build "$@"
         ;;
       aar)
-        cargo xtask android aar
+        just xtask android aar
         ;;
       *)
-        cargo xtask android {{MODE}} {{ARGS}}
+        just xtask android "$mode" "$@"
         ;;
     esac
 
@@ -741,18 +815,21 @@ android MODE="build" *ARGS:
 #   just apple ios SCHEME [DESTINATION] # build for iOS Simulator
 #   just apple doc                      # combined Kithara+KitharaRx .doccarchive
 #   just apple release                  # XCFramework + strip + zip + checksum
+[positional-arguments]
 apple MODE="xcframework" *ARGS:
     #!/usr/bin/env bash
-    set -uo pipefail
-    case "{{MODE}}" in
+    set -euo pipefail
+    mode=$1
+    shift
+    case "$mode" in
       xcframework)
-        cargo xtask apple build {{ARGS}}
+        just xtask apple build "$@"
         ;;
       single)
-        cargo xtask apple single {{ARGS}}
+        just xtask apple single "$@"
         ;;
       demo)
-        cargo xtask apple run {{ARGS}}
+        just xtask apple run "$@"
         ;;
       xcode)
         just apple xcframework --profile debug
@@ -768,7 +845,7 @@ apple MODE="xcframework" *ARGS:
             -scheme "$scheme" -destination "$destination" build
         ;;
       doc)
-        cargo xtask apple docgen
+        just xtask apple docgen
         mkdir -p docs-build
         KITHARA_LOCAL_DEV=1 swift package --allow-writing-to-directory ./docs-build \
             generate-documentation \
@@ -777,10 +854,10 @@ apple MODE="xcframework" *ARGS:
             --output-path ./docs-build/Kithara.doccarchive
         ;;
       release)
-        cargo xtask apple release
+        just xtask apple release
         ;;
       *)
-        echo "unknown apple mode: {{MODE}} (use xcframework|single|demo|xcode|ios|doc|release)"
+        echo "unknown apple mode: $mode (use xcframework|single|demo|xcode|ios|doc|release)"
         exit 2
         ;;
     esac
@@ -793,18 +870,24 @@ apple MODE="xcframework" *ARGS:
 #   - framework (fpm + single) built by `release prepare`
 #   - DocC archive built here, zipped + cached as the docs asset
 #   - wasm dist built here, zipped + cached for the Pages deploy
+[positional-arguments]
 release-artifacts VERSION:
+    #!/bin/sh
+    set -eu
+    version=$1
     just apple doc
-    cargo xtask wasm build --profile release
-    cargo xtask release prepare {{VERSION}}
+    just xtask wasm build --profile release
+    exec just xtask release prepare "$version"
 
 # Upload the cached framework + docs assets to GitHub and the GitLab mirror.
+[positional-arguments]
 release-publish REF="HEAD":
-    cargo xtask release publish --ref {{REF}}
+    exec just xtask release publish --ref "$1"
 
 # Deploy the cached wasm bundle to GitHub Pages classic (gh-pages, force-orphan).
+[positional-arguments]
 release-pages REF="HEAD":
-    cargo xtask release pages --ref {{REF}}
+    exec just xtask release pages --ref "$1"
 
 # Temporarily patch project.yml to use local package path for xcodegen.
 [private]

@@ -6,22 +6,22 @@ rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 publish = false
 
-[package.metadata.cargo-machete]
-ignored = ["kithara-workspace-hack"]
-
 [dependencies]
 kithara-devtools = { workspace = true }
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../crates/kithara-workspace-hack" }
 
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
+fs4 = { workspace = true }
 glob = { workspace = true }
+nix = { workspace = true }
 plist = { workspace = true }
 regex = { workspace = true }
 rustdoc-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+signal-hook = { workspace = true }
 syn = { workspace = true, features = ["full", "visit"] }
 toml = { workspace = true }
 

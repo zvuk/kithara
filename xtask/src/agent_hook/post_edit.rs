@@ -1,229 +1,230 @@
 use std::{
-    env,
-    ffi::{OsStr, OsString},
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
+    collections::BTreeSet,
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
 
-use super::{input::HookInput, is_project_root};
+use super::input::HookInput;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FormatTarget {
-    Rust,
-    Toml,
-    Json,
+struct Consts;
+
+impl Consts {
+    const PATCH_BYTES: usize = 16 * 1024 * 1024;
+    const PATCH_OPERATIONS: usize = 4096;
+    const PATH_BYTES: usize = 4096;
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct FormatCommand {
-    program: &'static str,
-    args: Vec<OsString>,
-}
-
-impl FormatTarget {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Rust => "rust",
-            Self::Toml => "toml",
-            Self::Json => "json",
+pub(super) fn run(input: &HookInput, root: &Path) -> Result<()> {
+    let paths = match input.tool_name.as_str() {
+        "Write" | "Edit" | "MultiEdit" => {
+            vec![PathBuf::from(input.string_field("file_path")?)]
         }
-    }
-}
+        "apply_patch" => patch_paths(input.string_field("command")?)?,
+        name => bail!("unsupported file-edit hook tool `{name}`"),
+    };
 
-pub(super) fn run(input: &HookInput) -> Result<()> {
-    if !matches!(input.tool_name.as_str(), "Write" | "Edit" | "MultiEdit") {
-        return Ok(());
-    }
-    let Some(path) = input.tool_input.file_path.as_deref() else {
-        return Ok(());
-    };
-    let root = hook_project_root(input)?;
-    let Some(path) = resolve_edited_path(&root, Path::new(path))? else {
-        return Ok(());
-    };
-    let Some(target) = format_target_for_path(&path) else {
-        return Ok(());
-    };
-    let command = format_command(target, &root, &path);
-    let status = Command::new(command.program)
-        .current_dir(root)
-        .args(command.args)
-        .status()
-        .with_context(|| format!("run post-edit formatter for {}", target.name()))?;
-    if !status.success() {
-        bail!(
-            "post-edit formatter for {} failed (exit code {:?})",
-            target.name(),
-            status.code()
-        );
+    for path in paths {
+        kithara_devtools::format::format_path(root, &path)
+            .with_context(|| format!("format edited path {}", path.display()))?;
     }
     Ok(())
 }
 
-fn format_command(target: FormatTarget, root: &Path, path: &Path) -> FormatCommand {
-    match target {
-        FormatTarget::Rust => FormatCommand {
-            program: "rustup",
-            args: vec![
-                "run".into(),
-                "nightly".into(),
-                "rustfmt".into(),
-                "--edition".into(),
-                "2024".into(),
-                "--config-path".into(),
-                root.join("rustfmt.toml").into_os_string(),
-                "--config".into(),
-                "skip_children=true".into(),
-                path.as_os_str().to_owned(),
-            ],
-        },
-        FormatTarget::Toml => FormatCommand {
-            program: "taplo",
-            args: vec!["format".into(), path.as_os_str().to_owned()],
-        },
-        FormatTarget::Json => FormatCommand {
-            program: "tidy-json",
-            args: vec![
-                "--indent".into(),
-                "2".into(),
-                "--write".into(),
-                path.as_os_str().to_owned(),
-            ],
-        },
-    }
-}
-
-fn hook_project_root(input: &HookInput) -> Result<PathBuf> {
-    if let Some(root) = env::var_os("KITHARA_AGENT_HOOK_ROOT").filter(|value| !value.is_empty()) {
-        let root = fs::canonicalize(PathBuf::from(root))
-            .context("resolve launcher-owned Kithara project root")?;
-        if !is_project_root(&root) {
-            bail!("launcher-owned project root is not a Kithara checkout");
-        }
-        return Ok(root);
+fn patch_paths(patch: &str) -> Result<Vec<PathBuf>> {
+    if patch.len() > Consts::PATCH_BYTES {
+        bail!(
+            "apply_patch input exceeds {} byte hook limit",
+            Consts::PATCH_BYTES
+        );
     }
 
-    let current_dir = env::current_dir().context("resolve current hook directory")?;
-    let project_dir = env::var_os("CLAUDE_PROJECT_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            if input.cwd.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(&input.cwd))
+    let mut lines = patch.lines();
+    if lines.next() != Some("*** Begin Patch") {
+        bail!("apply_patch input must start with `*** Begin Patch`");
+    }
+
+    let mut collector = PathCollector::default();
+    let mut pending_update = None;
+    let mut can_move = false;
+    let mut saw_operation = false;
+    let mut saw_end = false;
+
+    while let Some(line) = lines.next() {
+        if line == "*** End Patch" {
+            collector.record_pending(&mut pending_update);
+            if lines.next().is_some() {
+                bail!("apply_patch input contains content after `*** End Patch`");
             }
-        })
-        .unwrap_or_else(|| current_dir.clone());
-    let project_dir = if project_dir.is_absolute() {
-        project_dir
-    } else {
-        current_dir.join(project_dir)
-    };
-    let project_dir = fs::canonicalize(&project_dir)
-        .with_context(|| format!("resolve hook project directory {}", project_dir.display()))?;
-    find_project_root(&project_dir)
-        .with_context(|| format!("find Kithara project root from {}", project_dir.display()))
-}
+            saw_end = true;
+            break;
+        }
 
-fn find_project_root(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .find(|path| is_project_root(path))
-        .map(Path::to_path_buf)
-}
-
-fn resolve_edited_path(root: &Path, path: &Path) -> Result<Option<PathBuf>> {
-    let root = fs::canonicalize(root)
-        .with_context(|| format!("resolve project root {}", root.display()))?;
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    };
-    let candidate = fs::canonicalize(&candidate)
-        .with_context(|| format!("resolve edited path {}", candidate.display()))?;
-    Ok(candidate.starts_with(&root).then_some(candidate))
-}
-
-fn format_target_for_path(path: &Path) -> Option<FormatTarget> {
-    if path.file_name() == Some(OsStr::new("Cargo.toml")) {
-        return None;
+        if let Some(raw) = line.strip_prefix("*** Add File: ") {
+            collector.record_pending(&mut pending_update);
+            collector.record(raw)?;
+            saw_operation = true;
+            can_move = false;
+            continue;
+        }
+        if let Some(raw) = line.strip_prefix("*** Delete File: ") {
+            collector.record_pending(&mut pending_update);
+            collector.validate(raw)?;
+            saw_operation = true;
+            can_move = false;
+            continue;
+        }
+        if let Some(raw) = line.strip_prefix("*** Update File: ") {
+            collector.record_pending(&mut pending_update);
+            pending_update = Some(collector.validate(raw)?);
+            saw_operation = true;
+            can_move = true;
+            continue;
+        }
+        if let Some(raw) = line.strip_prefix("*** Move to: ") {
+            if !can_move || pending_update.is_none() {
+                bail!("`*** Move to:` must immediately follow `*** Update File:`");
+            }
+            pending_update = None;
+            collector.record(raw)?;
+            can_move = false;
+            continue;
+        }
+        if line.starts_with("*** ") && line != "*** End of File" {
+            bail!("unrecognized apply_patch marker `{line}`");
+        }
+        if !saw_operation {
+            bail!("apply_patch content appears before a file operation");
+        }
+        can_move = false;
     }
-    match path.extension().and_then(OsStr::to_str) {
-        Some("rs") => Some(FormatTarget::Rust),
-        Some("toml") => Some(FormatTarget::Toml),
-        Some("json" | "jsonc") => Some(FormatTarget::Json),
-        _ => None,
+
+    if !saw_end {
+        bail!("apply_patch input must end with `*** End Patch`");
+    }
+    if !saw_operation {
+        bail!("apply_patch input contains no file operations");
+    }
+    Ok(collector.paths)
+}
+
+#[derive(Default)]
+struct PathCollector {
+    operations: usize,
+    paths: Vec<PathBuf>,
+    seen: BTreeSet<PathBuf>,
+}
+
+impl PathCollector {
+    fn validate(&mut self, raw: &str) -> Result<PathBuf> {
+        self.operations += 1;
+        if self.operations > Consts::PATCH_OPERATIONS {
+            bail!(
+                "apply_patch input exceeds {} file operation hook limit",
+                Consts::PATCH_OPERATIONS
+            );
+        }
+        if raw.is_empty() || raw.len() > Consts::PATH_BYTES || raw.contains('\0') {
+            bail!("invalid apply_patch path");
+        }
+        let path = Path::new(raw);
+        if path.is_absolute() {
+            bail!("apply_patch path must stay below the repository root: {raw}");
+        }
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::Normal(value) => normalized.push(value),
+                Component::CurDir => {}
+                _ => bail!("apply_patch path must stay below the repository root: {raw}"),
+            }
+        }
+        if normalized.as_os_str().is_empty() {
+            bail!("invalid apply_patch path");
+        }
+        Ok(normalized)
+    }
+
+    fn record(&mut self, raw: &str) -> Result<()> {
+        let path = self.validate(raw)?;
+        self.record_path(path);
+        Ok(())
+    }
+
+    fn record_pending(&mut self, pending: &mut Option<PathBuf>) {
+        if let Some(path) = pending.take() {
+            self.record_path(path);
+        }
+    }
+
+    fn record_path(&mut self, path: PathBuf) {
+        if self.seen.insert(path.clone()) {
+            self.paths.push(path);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::path::PathBuf;
 
-    use anyhow::Result;
-
-    use super::{FormatTarget, format_command, format_target_for_path, resolve_edited_path};
+    use super::patch_paths;
 
     #[test]
-    fn rejects_post_edit_path_outside_project_root() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let outside = tempfile::tempdir()?;
-        let outside_file = outside.path().join("outside.rs");
-        fs::write(&outside_file, "fn outside() {}")?;
+    fn extracts_format_targets_and_ignores_deletes() {
+        let paths = patch_paths(
+            "*** Begin Patch\n\
+             *** Add File: crates/example/src/new.rs\n\
+             +fn added() {}\n\
+             *** Update File: .config/example.toml\n\
+             @@\n\
+             -old = true\n\
+             +new = true\n\
+             *** Update File: old.json\n\
+             *** Move to: moved.json\n\
+             @@\n\
+             -{}\n\
+             +{\"moved\":true}\n\
+             *** Delete File: deleted.rs\n\
+             *** Update File: .config/example.toml\n\
+             @@\n\
+             -new = true\n\
+             +new = false\n\
+             *** End Patch",
+        )
+        .expect("parse patch paths");
 
-        assert!(resolve_edited_path(root.path(), &outside_file)?.is_none());
-        Ok(())
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("crates/example/src/new.rs"),
+                PathBuf::from(".config/example.toml"),
+                PathBuf::from("moved.json"),
+            ]
+        );
     }
 
     #[test]
-    fn uses_path_scoped_rust_formatter() {
-        let root = Path::new("/repo");
-        let path = Path::new("/repo/crates/foo/src/lib.rs");
-        let command = format_command(FormatTarget::Rust, root, path);
+    fn rejects_patch_path_escape() {
+        let error = patch_paths(
+            "*** Begin Patch\n*** Update File: ../outside.rs\n@@\n-old\n+new\n*** End Patch",
+        )
+        .expect_err("escaping path must fail");
 
-        assert_eq!(command.program, "rustup");
-        assert_eq!(command.args.last(), Some(&path.as_os_str().to_owned()));
-        assert!(command.args.iter().any(|arg| arg == "skip_children=true"));
+        assert!(format!("{error:#}").contains("repository root"));
     }
 
     #[test]
-    fn uses_path_scoped_data_formatters() {
-        let root = Path::new("/repo");
-        let toml = Path::new("/repo/.config/foo.toml");
-        let json = Path::new("/repo/tests/foo.jsonc");
-
-        let toml_command = format_command(FormatTarget::Toml, root, toml);
-        assert_eq!(toml_command.program, "taplo");
-        assert_eq!(toml_command.args.last(), Some(&toml.as_os_str().to_owned()));
-
-        let json_command = format_command(FormatTarget::Json, root, json);
-        assert_eq!(json_command.program, "tidy-json");
-        assert_eq!(json_command.args.last(), Some(&json.as_os_str().to_owned()));
-    }
-
-    #[test]
-    fn maps_post_edit_format_targets() {
-        assert_eq!(
-            format_target_for_path(Path::new("crates/foo/src/lib.rs")),
-            Some(FormatTarget::Rust)
-        );
-        assert_eq!(
-            format_target_for_path(Path::new("crates/foo/Cargo.toml")),
-            None
-        );
-        assert_eq!(
-            format_target_for_path(Path::new(".config/foo.toml")),
-            Some(FormatTarget::Toml)
-        );
-        assert_eq!(
-            format_target_for_path(Path::new("tests/foo.jsonc")),
-            Some(FormatTarget::Json)
-        );
-        assert_eq!(format_target_for_path(Path::new("README.md")), None);
+    fn rejects_unknown_or_incomplete_patch_grammar() {
+        for patch in [
+            "*** Begin Patch\n*** Copy File: source.rs\n*** End Patch",
+            "*** Begin Patch\n*** Move to: moved.rs\n*** End Patch",
+            "*** Begin Patch\n*** Update File: source.rs\n@@\n-old\n+new",
+        ] {
+            assert!(
+                patch_paths(patch).is_err(),
+                "patch unexpectedly parsed: {patch}"
+            );
+        }
     }
 }

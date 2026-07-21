@@ -3,31 +3,31 @@
     "commit": "",
     "pr": ""
   },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "repo=${CLAUDE_PROJECT_DIR:-$PWD}; until [ -f \"$repo/justfile\" ] && [ -f \"$repo/xtask/Cargo.toml\" ]; do [ \"$repo\" != / ] || { printf 'error: cannot find Kithara repository root\\n' >&2; exit 1; }; repo=${repo%/*}; [ -n \"$repo\" ] || repo=/; done; warn_launcher() { printf 'warning: agent hook launcher is unavailable; install just and retry\\n' >&2; exit 0; }; command -v just >/dev/null 2>&1 || warn_launcher; if just --quiet --justfile \"$repo/justfile\" --working-directory \"$repo\" _agent-hook pre-bash; then exit 0; else status=$?; fi; case \"$status\" in 126|127) warn_launcher ;; *) exit \"$status\" ;; esac"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "repo=${CLAUDE_PROJECT_DIR:-$PWD}; until [ -f \"$repo/justfile\" ] && [ -f \"$repo/xtask/Cargo.toml\" ]; do [ \"$repo\" != / ] || { printf 'error: cannot find Kithara repository root\\n' >&2; exit 1; }; repo=${repo%/*}; [ -n \"$repo\" ] || repo=/; done; warn_launcher() { printf 'warning: agent hook launcher is unavailable; install just and retry\\n' >&2; exit 0; }; command -v just >/dev/null 2>&1 || warn_launcher; if just --quiet --justfile \"$repo/justfile\" --working-directory \"$repo\" _agent-hook post-edit; then exit 0; else status=$?; fi; case \"$status\" in 126|127) warn_launcher ;; *) exit \"$status\" ;; esac"
-          }
-        ]
-      }
-    ]
-  },
   "enabledPlugins": {
     "ralph-loop@claude-plugins-official": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v just >/dev/null 2>&1 || { printf 'warning: just is unavailable; skipping Kithara agent hook\\n' >&2; exit 0; }; exec just agent-hook",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit|MultiEdit"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v just >/dev/null 2>&1 || { printf 'warning: just is unavailable; skipping Kithara agent hook\\n' >&2; exit 0; }; exec just agent-hook",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ]
   }
 }

@@ -1,92 +1,139 @@
 # Agent Hooks
 
-Use this only when touching tool adapters, hook behavior, or command routing.
-Hooks are workflow guards, not code-style policy. Architecture and Rust shape are
-still enforced by `ast-grep` and `cargo xtask lint`.
+Use this guide only when touching tool adapters, hook behavior, or command
+routing. Hooks are workflow guards, not code-style policy. Architecture and
+Rust shape are still enforced by the repository lint recipes.
 
-## Install
+## Execution Route
 
-Run `cargo xtask agent-hook install` once for each concrete Git worktree and
-again whenever an installed hook reports that it is stale. The command copies
-the current `xtask` executable and its source fingerprint into a complete
-versioned generation under `<worktree-git-dir>/kithara-agent-hook/`, then
-atomically publishes its absolute path through the ignored
-`xtask/.agent-hook-cache` pointer file. Installation is explicit: tool adapters
-and the hidden `_agent-hook` Just launcher never invoke Cargo or start a build.
+Claude and Codex pass their hook JSON unchanged on stdin to one repo-owned
+entry point:
 
-A missing, malformed, or dangling pointer, or an unlaunchable installed binary,
-prints the install command and skips the guard. A stale installed generation
-prints the same instruction and continues with the last-good policy binary.
-These hooks protect workflow conventions; they are not a security boundary.
+```text
+tool adapter -> just agent-hook
+             -> _xtask-cached optional agent-hook
+             -> cached xtask
+```
 
-## Pre Bash Guard
+The adapters only verify that `just` is available. They do not find the
+repository root, inspect agent-specific project-directory variables, invoke
+Cargo, or select a hook subcommand. Just's parent-directory lookup selects the
+nearest repository `justfile`, and the payload identifies the event and tool.
 
-`just --quiet _agent-hook pre-bash` reads agent hook JSON from stdin and denies
-only common expensive command mistakes:
+`agent-hook` uses the generic cached xtask transport in `optional` mode. A
+missing or unusable transport prints a warning and skips the guard. Once the
+Rust hook starts, a policy denial, malformed payload, invalid configuration, or
+formatter failure is propagated to the calling agent instead of failing open.
 
-- Broad raw test acceptance: `cargo test`, `cargo test --workspace`, or
-  `cargo nextest run --workspace` without a package/filter. Use
-  `cargo xtask test` or `just test`.
-- Formatter bypasses: direct `rustfmt`, `cargo sort --check`, `taplo format`,
-  or `mdfmt` as a gate. Use `cargo xtask format`.
-- Outer timeouts around the full harness: `timeout just test` or
-  `timeout cargo xtask test`.
-- Destructive git commands such as `git reset --hard`, `git clean`, or
-  `git checkout -- ...`. The only override marker is
-  `KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT=1`, and it requires explicit user
-  approval first.
+There is no hook install command. Prime or refresh the shared xtask cache with:
 
-Scoped probes are allowed. Examples: `cargo test -p xtask agent_hook`,
-`cargo nextest run -p kithara-platform -E 'test(foo)'`, or a workspace nextest
-run with a filter expression.
+```sh
+just xtask --help
+just xtask-refresh
+```
 
-## Post Edit Format
+The first command bootstraps only when the cache is absent and refreshes only
+when it is stale. The second forces a refresh.
 
-`just --quiet _agent-hook post-edit` formats only the reported file for known
-edited file classes:
+## Payload Routing
 
-- `.rs` -> nightly `rustfmt` with child-module traversal disabled
-- other `.toml` -> `taplo format`
-- `.json` / `.jsonc` -> `tidy-json --write`
+`agent-hook` has no `pre-bash` or `post-edit` CLI discriminator. It parses
+`hook_event_name`, `tool_name`, and `tool_input` from stdin, maps them to typed
+event and tool kinds, and selects a configured handler. Handler routes and the
+destructive-Git override variable live in `.config/xtask.toml`:
 
-`Cargo.toml` is deliberately skipped because its canonical workspace-wide
-dependency-order rewrite requires `cargo xtask format --only manifest
---allow-dirty`. Run that command explicitly. The hook does not run Cargo, tests,
-lints, markdown formatting, or architecture checks.
+```toml
+[ext.agent_hook]
+destructive_git_override_env = "KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT"
 
-## Runner Cache
+[[ext.agent_hook.routes]]
+event = "pre-tool-use"
+tool_kind = "shell"
+handler = "command-guard"
 
-Rust installation owns concrete Git-directory discovery, cache layout, complete
-generation publication, and pointer activation. The hidden `_agent-hook` recipe
-uses its Just working directory as the checkout root, reads
-`xtask/.agent-hook-cache` once, validates the absolute generation path and
-executable, then directly executes that binary.
-It does not read `.git`, construct a cache path, invoke Git or Cargo, fingerprint
-sources, lock files, create a build target, or manage processes.
+[[ext.agent_hook.routes]]
+event = "post-tool-use"
+tool_kind = "file-edit"
+handler = "format-edited-paths"
+```
 
-The pointer names one immutable generation instead of a second mutable
-`current` link. Its temporary replacement is written beside the pointer and
-atomically renamed only after both the binary and fingerprint are complete.
-Failed activation preserves the previous pointer; concurrent installs expose
-one complete generation or the other. Published generations remain available
-for in-flight launches. Later installs remove only old unpublished temporary
-generations and pointer files; complete generations are not age-pruned without
-a launch-liveness contract.
+Adapter matchers decide which tool events reach the hook. Claude sends
+`PreToolUse` for `Bash` and `PostToolUse` for `Write|Edit|MultiEdit`; Codex sends
+`PreToolUse` for `Bash` and `PostToolUse` for `apply_patch`. Adding another
+supported event or tool requires a typed payload mapping and a route, not a new
+launcher argument.
 
-The fingerprint covers `xtask/src/agent_hook.rs`, the `agent_hook` module tree,
-`xtask/src/main.rs`, the xtask manifest, optional Cargo/toolchain configuration,
-and the host OS and architecture. Unrelated xtask command sources and the root
-workspace manifest or lockfile do not invalidate the policy binary. The root
-`justfile` is also excluded: adapters always execute its current launcher
-recipe, so launcher-only changes do not require reinstalling the Rust policy.
+## Command Guard
 
-`cargo xtask agent-hook pre-bash|post-edit` remains available as an explicit
-diagnostic entry point. Tool adapters ascend to a checkout containing both the
-root `justfile` and `xtask/Cargo.toml`, then invoke `_agent-hook` with explicit
-`--justfile` and `--working-directory` arguments so installed hook invocations
-remain Cargo-free.
+The `command-guard` handler denies common expensive or destructive command
+mistakes:
+
+- broad raw test acceptance, such as unfiltered workspace `cargo test` or
+  `cargo nextest run`; use `just test`;
+- direct formatter gates that bypass the repository harness; use `just fmt` or
+  `just fmt-check`;
+- an outer timeout around the full test harness;
+- destructive Git commands such as `git reset --hard`, `git clean`, or
+  `git checkout -- ...`.
+
+The destructive-Git override variable is configured in `.config/xtask.toml`
+and still requires explicit user approval. Scoped Cargo probes remain allowed.
+
+## Edited-Path Formatting
+
+The `format-edited-paths` handler formats only paths reported by the hook:
+
+- `.rs` uses nightly `rustfmt` with child-module traversal disabled;
+- non-Cargo `.toml` uses Taplo;
+- `.json` and `.jsonc` use `tidy-json`.
+
+`Cargo.toml` is deliberately skipped because its canonical dependency-order
+rewrite is workspace-wide. Run `just sort` explicitly. Unknown file types are
+ignored. Formatter commands and path containment are owned by
+`kithara-devtools`; the hook does not duplicate formatter flags or scan the
+workspace.
+
+## Shared xtask Cache
+
+Agent hooks use the same self-cache as every Just recipe that invokes xtask.
+The generic recipe graph is:
+
+```text
+just xtask <args> -> _xtask-ready -> current: cached run
+                                  -> stale: cached single-flight refresh
+                                  -> missing: Cargo bootstrap
+                    _xtask-cached strict <args>
+```
+
+The ignored `xtask/.xtask-cache` locator contains one absolute path to an
+immutable generation below the concrete worktree Git directory. A warm command
+reads that locator and starts the binary directly; it does not start Cargo or
+Git. Cargo is used only for a cold bootstrap or stale refresh, with its private
+target retained at `target/xtask-self-cache`.
+
+The Just recipes only resolve the locator, ensure a current generation, and
+execute it. Rust owns freshness, single-flight locking, publication, leases,
+and bounded generation cleanup. Cache policy is typed under `[ext.xtask.cache]` in
+`.config/xtask.toml`; it controls declared extra inputs, retained generations,
+and the cleanup grace period. Hook route changes are runtime policy and do not
+by themselves make the binary stale.
+
+Hooks never refresh and never wait for the refresh lock. They run the active
+last-good generation while a normal xtask invocation refreshes in parallel.
+Publication replaces the locator only after the new immutable generation is
+complete, so a failed build leaves the active generation untouched. The
+builder only returns a Cargo artifact; it cannot publish. Its supervisor
+terminates and reaps the Cargo process group if the refresh parent exits. The
+publisher compares source identities from before and after the build and
+refuses activation if an input changed in between.
+
+The former `xtask/.agent-hook-cache` locator stays ignored for a smooth
+checkout transition, but the new transport never reads it. Its
+`<git-dir>/kithara-agent-hook` generations are legacy artifacts and can be
+removed after older agent processes have exited.
 
 ## Tool Adapter Rule
 
-Tool-specific files such as `.claude/settings.json` should only call repo-owned
-commands or route to canonical docs. Do not duplicate policy text there.
+Tool-specific JSON files contain only event matchers and the small command that
+delegates to `agent-hook`. Keep policy, cache ownership, root discovery, and
+formatter behavior out of adapters.
