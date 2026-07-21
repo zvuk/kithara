@@ -1,0 +1,24 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-module-telemetry",
+    title: Some("Телеметрия"),
+    chip: Some("TLM"),
+    chrome: Full,
+    footer: Some(Model(id: "gallery.footer.telemetry")),
+    root: Column(
+        children: [
+            Slot(
+                id: "content",
+                size: (w: Fill, h: Fill),
+                default: [
+                    Include(
+                        id: "telemetry",
+                        source: "deck/transport.kmodule.ron",
+                        with: { "deck": "a" },
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

@@ -1,0 +1,23 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "player",
+    root: Split(
+        axis: Vertical,
+        children: [
+            (weight: 0.3, node: Module(
+                instance: "global-bar",
+                source: "modules/global-bar.kmodule.ron",
+            )),
+            (weight: 2.0, node: Module(
+                instance: "deck-a",
+                source: "modules/deck.kmodule.ron",
+                with: { "deck": "a" },
+            )),
+            (weight: 2.2, node: Module(
+                instance: "library",
+                source: "modules/library.kmodule.ron",
+            )),
+        ],
+    ),
+)

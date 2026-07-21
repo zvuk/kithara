@@ -1,0 +1,29 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-chips",
+    root: Column(
+        gap: Some(8.0),
+        children: [
+            Text(id: "title", style: Section, read: Model(id: "gallery.label.chips")),
+            Row(
+                gap: Some(8.0),
+                children: [
+                    Chip(
+                        id: "active",
+                        size: (w: Fixed(20.0), h: Fixed(16.0)),
+                        label: "A",
+                        read: Model(id: "mock.chip.active"),
+                    ),
+                    Chip(
+                        id: "inactive",
+                        size: (w: Fixed(28.0), h: Fixed(16.0)),
+                        label: "FX1",
+                        style: Routing,
+                        read: Model(id: "mock.chip.inactive"),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

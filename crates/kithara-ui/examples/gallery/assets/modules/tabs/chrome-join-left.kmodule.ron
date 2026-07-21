@@ -1,0 +1,14 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-chrome-join-left",
+    title: Some("LEFT MODULE"),
+    chip: Some("FULL"),
+    chrome: Full,
+    root: Column(
+        pad: Some(14.0),
+        children: [
+            Text(id: "label", style: Body, label: "RIGHT OFF"),
+        ],
+    ),
+)

@@ -1,0 +1,115 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-cells-tab",
+    root: Column(
+        gap: Some(16.0),
+        pad: Some(18.0),
+        children: [
+            Row(
+                size: (w: Fill, h: Fixed(40.0)),
+                gap: Some(24.0),
+                children: [
+                    Row(
+                        size: (w: Fixed(420.0), h: Fixed(28.0)),
+                        gap: Some(1.0),
+                        children: [
+                            Button(id: "cue", label: "CUE", style: Transport, read: Model(id: "mock.button.cue"), size: (w: Fixed(56.0), h: Fixed(28.0))),
+                            Button(id: "play", label: "PLAY", style: TransportPrimary, read: Model(id: "mock.button.sync"), size: (w: Fixed(64.0), h: Fixed(28.0))),
+                        ],
+                    ),
+                    Text(id: "buttons-spec", style: MicroLabel, label: "КНОПКА: 1PX #2A2A4C · АКТИВ = GOLD + #12121F", size: (w: Fill, h: Fill)),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fixed(40.0)),
+                gap: Some(24.0),
+                children: [
+                    Row(
+                        size: (w: Fixed(420.0), h: Fixed(18.0)),
+                        gap: Some(8.0),
+                        children: [
+                            Chip(id: "deck-b", label: "B", read: Model(id: "mock.chip.inactive"), size: (w: Fixed(20.0), h: Fixed(18.0))),
+                            Chip(id: "deck-a", label: "A", read: Model(id: "mock.chip.active"), size: (w: Fixed(20.0), h: Fixed(18.0))),
+                            Chip(id: "fx-1", label: "FX1", style: Routing, read: Model(id: "mock.chip.active"), size: (w: Fixed(30.0), h: Fixed(18.0))),
+                            Chip(id: "fx-2", label: "FX2", style: Routing, read: Model(id: "mock.chip.inactive"), size: (w: Fixed(30.0), h: Fixed(18.0))),
+                        ],
+                    ),
+                    Text(id: "chips-spec", style: MicroLabel, label: "ЧИП: DECK 18PX · ROUTING 16PX · АКТИВ = GOLD", size: (w: Fill, h: Fill)),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fixed(40.0)),
+                gap: Some(24.0),
+                children: [
+                    Row(
+                        size: (w: Fixed(420.0), h: Fixed(26.0)),
+                        children: [
+                            Segmented(
+                                id: "beat",
+                                items: ["MICRO", "1", "2", "4"],
+                                read: Model(id: "mock.cells.segmented"),
+                                write: Parameter(id: "mock.cells.segmented"),
+                                size: (w: Fixed(220.0), h: Fixed(26.0)),
+                            ),
+                        ],
+                    ),
+                    Text(id: "segmented-spec", style: MicroLabel, label: "СЕГМЕНТЫ: ОБЩАЯ РАМКА 1PX · БЕЗ ЗАЗОРОВ", size: (w: Fill, h: Fill)),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fixed(40.0)),
+                gap: Some(24.0),
+                children: [
+                    Row(
+                        size: (w: Fixed(420.0), h: Fixed(18.0)),
+                        gap: Some(16.0),
+                        children: [
+                            Toggle(id: "toggle-off", read: Model(id: "mock.toggle.off")),
+                            Toggle(id: "toggle-on", read: Model(id: "mock.toggle.on")),
+                            Checkbox(id: "checkbox-off", read: Model(id: "mock.checkbox.off")),
+                            Checkbox(id: "checkbox-on", read: Model(id: "mock.checkbox.on")),
+                        ],
+                    ),
+                    Text(id: "binary-spec", style: MicroLabel, label: "ТУМБЛЕР 26×14 · ЧЕКБОКС 10×10", size: (w: Fill, h: Fill)),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fixed(40.0)),
+                gap: Some(24.0),
+                children: [
+                    Row(
+                        size: (w: Fixed(420.0), h: Fixed(26.0)),
+                        gap: Some(18.0),
+                        children: [
+                            Select(id: "device", label: "Scarlett 4i4 USB", size: (w: Fixed(220.0), h: Fixed(26.0))),
+                            StatusDot(id: "ok", label: "OK", tone: Success),
+                            StatusDot(id: "rec", label: "REC", tone: Danger),
+                        ],
+                    ),
+                    Text(id: "status-spec", style: MicroLabel, label: "SELECT: #15152A + 1PX · STATUS: 6PX", size: (w: Fill, h: Fill)),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fixed(58.0)),
+                gap: Some(24.0),
+                children: [
+                    Row(
+                        size: (w: Fixed(420.0), h: Fixed(56.0)),
+                        gap: Some(8.0),
+                        children: [
+                            Cell(id: "cell-22", label: Some("22"), size: (w: Fixed(50.0), h: Fixed(36.0))),
+                            Cell(id: "cell-24", label: Some("24"), size: (w: Fixed(50.0), h: Fixed(38.0))),
+                            Cell(id: "cell-26", label: Some("26"), highlighted: true, size: (w: Fixed(50.0), h: Fixed(40.0))),
+                            Cell(id: "cell-28", label: Some("28"), highlighted: true, size: (w: Fixed(50.0), h: Fixed(42.0))),
+                            Cell(id: "cell-30", label: Some("30"), size: (w: Fixed(50.0), h: Fixed(44.0))),
+                            Cell(id: "cell-36", label: Some("36"), size: (w: Fixed(50.0), h: Fixed(50.0))),
+                            Cell(id: "cell-42", label: Some("42"), size: (w: Fixed(50.0), h: Fixed(56.0))),
+                        ],
+                    ),
+                    Text(id: "cells-spec", style: MicroLabel, label: "ЯЧЕЙКА: 22–42PX · РАДИУС 0PX · GOLD = 26/28", size: (w: Fill, h: Fill)),
+                ],
+            ),
+        ],
+    ),
+)
