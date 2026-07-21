@@ -1,0 +1,15 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "library",
+    root: Column(
+        children: [
+            TrackList(
+                id: "tracks",
+                read: Model(id: "library.visible_tracks"),
+                columns: [Title, Artist, Time],
+                adaptive: (priority: Required),
+            ),
+        ],
+    ),
+)

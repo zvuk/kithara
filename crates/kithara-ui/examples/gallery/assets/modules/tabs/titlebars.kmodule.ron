@@ -1,0 +1,58 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-titlebars-tab",
+    root: Column(
+        gap: Some(14.0),
+        pad: Some(24.0),
+        children: [
+            Text(
+                id: "full-label",
+                style: Section,
+                label: "ПОЛНЫЙ ЗАГОЛОВОК ОКНА",
+            ),
+            Row(
+                gap: Some(0.0),
+                size: (w: Fill, h: Fixed(26.0)),
+                children: [
+                    TitleBar(
+                        id: "full-title",
+                        label: "KITHARA · БИБЛИОТЕКА",
+                        size: (w: Fill, h: Fixed(26.0)),
+                    ),
+                    WindowControls(id: "full-controls", style: Standard),
+                ],
+            ),
+            Text(
+                id: "standard-label",
+                style: Section,
+                label: "ГЛОБАЛЬНАЯ ПАНЕЛЬ · 2 ДЕКИ",
+            ),
+            WindowControls(id: "standard", style: Standard),
+            Text(
+                id: "compact-label",
+                style: Section,
+                label: "ВЕРХНЯЯ ПАНЕЛЬ · 1 / 4 ДЕКИ · ВКЛАДКИ",
+            ),
+            WindowControls(id: "compact", style: Compact),
+            Text(
+                id: "wide-label",
+                style: Section,
+                label: "МОДАЛЬНОЕ ОКНО НАСТРОЕК",
+            ),
+            WindowControls(id: "close-wide", style: CloseWide),
+            Text(
+                id: "micro-label",
+                style: Section,
+                label: "МИКРО",
+            ),
+            WindowControls(id: "close-micro", style: CloseMicro),
+            Text(
+                id: "framed-label",
+                style: Section,
+                label: "НАСТРОЙКИ ВИДА",
+            ),
+            WindowControls(id: "close-framed", style: CloseFramed),
+        ],
+    ),
+)

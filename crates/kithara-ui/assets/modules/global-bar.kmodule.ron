@@ -1,0 +1,19 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "global-bar",
+    root: Row(
+        children: [
+            Brand(id: "brand"),
+            PresetSelector(id: "presets"),
+            Spacer(id: "spacer"),
+            VuStereo(
+                id: "volume",
+                size: (w: Fixed(64.0), h: Fixed(22.0)),
+                read: Telemetry(id: "player.output.levels"),
+                write: Parameter(id: "player.output.volume"),
+            ),
+            SettingsButton(id: "settings"),
+        ],
+    ),
+)

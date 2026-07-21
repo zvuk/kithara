@@ -27,6 +27,7 @@ members = [
     "crates/kithara-stretch",
     "crates/kithara-test-macros",
     "crates/kithara-test-utils",
+    "crates/kithara-ui",
     "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
@@ -36,24 +37,25 @@ default-members = [
     "crates/kithara",
     "crates/kithara-abr",
     "crates/kithara-apple",
+    "crates/kithara-assets",
+    "crates/kithara-audio",
+    "crates/kithara-bufpool",
+    "crates/kithara-decode",
     "crates/kithara-drm",
+    "crates/kithara-encode",
     "crates/kithara-events",
-    "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
-    "crates/kithara-audio",
-    "crates/kithara-encode",
-    "crates/kithara-decode",
-    "crates/kithara-stream",
-    "crates/kithara-storage",
-    "crates/kithara-assets",
-    "crates/kithara-bufpool",
+    "crates/kithara-net",
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-queue",
     "crates/kithara-resampler",
-    "crates/kithara-test-utils",
+    "crates/kithara-storage",
+    "crates/kithara-stream",
     "crates/kithara-test-macros",
+    "crates/kithara-test-utils",
+    "crates/kithara-ui",
     "tests",
 ]
 
@@ -204,6 +206,7 @@ kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha4", def
 kithara-stretch = { path = "crates/kithara-stretch", version = "0.0.1-alpha4", default-features = false }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha4" }
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha4", default-features = false }
+kithara-ui = { path = "crates/kithara-ui", version = "0.0.1-alpha4" }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha4" }
 
 # misc
@@ -294,6 +297,7 @@ js-sys = "0.3"
 libfuzzer-sys = "0.4"
 loom = { version = "0.7.2", features = ["checkpoint"] }
 lru = "0.18"
+lucide-icons = { version = "1.25", default-features = false }
 memory-stats = "1.2"
 mmap-io = { version = "1.0", default-features = false }
 moka = { version = "0.12", features = ["sync"] }
@@ -320,6 +324,7 @@ regex = "1"
 reqwest = { version = "0.13.4", default-features = false }
 ringbuf = "0.5.0"
 rkyv = "0.8.17"
+ron = "0.12"
 roxmltree = "0.20"
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 # Beat detection NN inference (kithara-beat).

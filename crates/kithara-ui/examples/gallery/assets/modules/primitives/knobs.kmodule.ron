@@ -1,0 +1,36 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-knobs",
+    root: Column(
+        gap: Some(8.0),
+        children: [
+            Text(id: "title", style: Section, read: Model(id: "gallery.label.knobs")),
+            Row(
+                gap: Some(24.0),
+                children: [
+                    Knob(
+                        id: "size-26",
+                        size: (w: Fixed(26.0), h: Fixed(26.0)),
+                        read: Model(id: "mock.knob.26"),
+                    ),
+                    Knob(
+                        id: "size-28",
+                        size: (w: Fixed(28.0), h: Fixed(28.0)),
+                        read: Model(id: "mock.knob.28"),
+                    ),
+                    Knob(
+                        id: "size-34",
+                        size: (w: Fixed(34.0), h: Fixed(34.0)),
+                        read: Model(id: "mock.knob.34"),
+                    ),
+                    Knob(
+                        id: "size-38",
+                        size: (w: Fixed(38.0), h: Fixed(38.0)),
+                        read: Model(id: "mock.knob.38"),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)
