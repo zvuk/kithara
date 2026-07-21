@@ -1,32 +1,24 @@
 use num_traits::ToPrimitive;
 
-#[cfg(feature = "stretch-signalsmith")]
-use super::ElasticConfig;
-use super::{ElasticError, ElasticLatency, ElasticRateEnvelope, ElasticRequest};
+use super::{ElasticConfig, ElasticError, ElasticLatency, ElasticRateEnvelope, ElasticRequest};
 
 /// Immutable limits and latency of a prepared elastic engine.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ElasticCapabilities {
+    config: ElasticConfig,
     latency: ElasticLatency,
     rate_envelope: ElasticRateEnvelope,
     supports_reverse: bool,
-    sample_rate: u32,
-    channels: usize,
-    max_output_frames: usize,
-    max_source_frames: usize,
 }
 
 impl ElasticCapabilities {
     #[cfg(feature = "stretch-signalsmith")]
     pub(crate) const fn new(config: ElasticConfig, latency: ElasticLatency) -> Self {
         Self {
+            config,
             latency,
-            sample_rate: config.sample_rate(),
-            channels: config.channels(),
             rate_envelope: ElasticRateEnvelope::signalsmith(),
-            max_source_frames: config.max_source_frames(),
-            max_output_frames: config.max_output_frames(),
             supports_reverse: true,
         }
     }
@@ -34,7 +26,7 @@ impl ElasticCapabilities {
     /// Prepared interleaved channel count.
     #[must_use]
     pub const fn channels(self) -> usize {
-        self.channels
+        self.config.channels()
     }
 
     /// Fixed algorithmic latency in both coordinate spaces.
@@ -46,13 +38,13 @@ impl ElasticCapabilities {
     /// Largest accepted output block in frames.
     #[must_use]
     pub const fn max_output_frames(self) -> usize {
-        self.max_output_frames
+        self.config.max_output_frames()
     }
 
     /// Largest accepted source block in frames.
     #[must_use]
     pub const fn max_source_frames(self) -> usize {
-        self.max_source_frames
+        self.config.max_source_frames()
     }
 
     /// Supported source-frame advance range.
@@ -64,7 +56,7 @@ impl ElasticCapabilities {
     /// Prepared source sample rate in Hz.
     #[must_use]
     pub const fn sample_rate(self) -> u32 {
-        self.sample_rate
+        self.config.sample_rate()
     }
 
     /// Whether the engine accepts source prepared in reverse audible order.
