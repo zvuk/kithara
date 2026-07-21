@@ -1,5 +1,5 @@
 #[cfg(unix)]
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::PermissionsExt;
 use std::{
     env, fs,
     io::ErrorKind,
@@ -11,20 +11,24 @@ use anyhow::{Context, Result, bail};
 
 use super::fingerprint;
 
+mod pointer;
+
 struct Consts;
 
 impl Consts {
     const BINARY: &'static str = "xtask";
     const CACHE_DIRECTORY: &'static str = "kithara-agent-hook";
     const CACHE_ENV: &'static str = "KITHARA_AGENT_HOOK_CACHE";
-    const CURRENT: &'static str = "current";
     const FINGERPRINT: &'static str = "fingerprint";
     const GENERATION_PREFIX: &'static str = "generation-";
-    const INACTIVE_RETENTION: Duration = Duration::from_secs(60 * 60);
     const ROOT_ENV: &'static str = "KITHARA_AGENT_HOOK_ROOT";
+    const TEMPORARY_RETENTION: Duration = Duration::from_secs(60 * 60);
 }
 
 pub(super) fn install() -> Result<()> {
+    if !cfg!(unix) {
+        bail!("agent hook installation requires a Unix host");
+    }
     if env::var_os(Consts::CACHE_ENV).is_some() {
         bail!("run installation through `cargo xtask agent-hook install`");
     }
@@ -32,7 +36,7 @@ pub(super) fn install() -> Result<()> {
     let cache = cache_dir(&root)?;
     let source = env::current_exe().context("resolve current xtask executable")?;
     let fingerprint = fingerprint::compute(&root)?;
-    let binary = publish(&source, &cache, &fingerprint)?;
+    let binary = publish(&source, &root, &cache, &fingerprint)?;
     println!("installed agent hook at {}", binary.display());
     Ok(())
 }
@@ -98,24 +102,26 @@ fn resolve_git_dir(root: &Path) -> Result<PathBuf> {
     fs::canonicalize(&path).with_context(|| format!("resolve Git directory {}", path.display()))
 }
 
-fn publish(source: &Path, cache: &Path, fingerprint: &str) -> Result<PathBuf> {
-    publish_with_activation(source, cache, fingerprint, |temporary, current| {
-        fs::rename(temporary, current).context("activate agent hook generation")
+fn publish(source: &Path, root: &Path, cache: &Path, fingerprint: &str) -> Result<PathBuf> {
+    publish_with_activation(source, root, cache, fingerprint, |generation, suffix| {
+        pointer::activate(root, generation, suffix)
     })
 }
 
 fn publish_with_activation<F>(
     source: &Path,
+    root: &Path,
     cache: &Path,
     fingerprint: &str,
     activate: F,
 ) -> Result<PathBuf>
 where
-    F: FnOnce(&Path, &Path) -> Result<()>,
+    F: FnOnce(&Path, &str) -> Result<()>,
 {
     fs::create_dir_all(cache)
         .with_context(|| format!("create agent hook cache {}", cache.display()))?;
-    cleanup_stale_artifacts(cache, Consts::INACTIVE_RETENTION)?;
+    cleanup_unpublished_artifacts(cache, Consts::TEMPORARY_RETENTION)?;
+    pointer::cleanup_temporaries(root, Consts::TEMPORARY_RETENTION)?;
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("resolve agent hook generation time")?
@@ -141,7 +147,30 @@ where
     let (generation, temp_generation, suffix) =
         reservation.context("reserve agent hook generation")?;
     let generation_path = cache.join(&generation);
-    let temp_current = cache.join(format!(".current-{suffix}"));
+    let binary = publish_generation(
+        source,
+        &temp_generation,
+        &generation_path,
+        fingerprint,
+        &suffix,
+        activate,
+    )?;
+    cleanup_legacy_cache(cache);
+    Ok(binary)
+}
+
+fn publish_generation<F>(
+    source: &Path,
+    temp_generation: &Path,
+    generation_path: &Path,
+    fingerprint: &str,
+    suffix: &str,
+    activate: F,
+) -> Result<PathBuf>
+where
+    F: FnOnce(&Path, &str) -> Result<()>,
+{
+    let mut published = false;
     let result = (|| {
         let temp_binary = temp_generation.join(Consts::BINARY);
         fs::copy(source, &temp_binary).with_context(|| {
@@ -159,22 +188,21 @@ where
                 temp_fingerprint.display()
             )
         })?;
-        fs::rename(&temp_generation, &generation_path).context("publish agent hook generation")?;
-        create_current_link(&generation, &temp_current)?;
-        activate(&temp_current, &cache.join(Consts::CURRENT))?;
-        cleanup_legacy_cache(cache);
+        fs::rename(temp_generation, generation_path).context("publish agent hook generation")?;
+        published = true;
+        activate(generation_path, suffix)?;
         Ok(generation_path.join(Consts::BINARY))
     })();
     if result.is_err() {
-        let _ = fs::remove_dir_all(&temp_generation);
-        let _ = fs::remove_dir_all(&generation_path);
-        let _ = fs::remove_file(&temp_current);
+        let _ = fs::remove_dir_all(temp_generation);
+        if published {
+            let _ = fs::remove_dir_all(generation_path);
+        }
     }
     result
 }
 
-fn cleanup_stale_artifacts(cache: &Path, retention: Duration) -> Result<()> {
-    let current = current_generation(cache).ok().flatten();
+fn cleanup_unpublished_artifacts(cache: &Path, retention: Duration) -> Result<()> {
     for entry in
         fs::read_dir(cache).with_context(|| format!("read agent hook cache {}", cache.display()))?
     {
@@ -186,10 +214,9 @@ fn cleanup_stale_artifacts(cache: &Path, retention: Duration) -> Result<()> {
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => return Err(error).context("read agent hook generation type"),
         };
-        let is_generation = file_type.is_dir() && name.starts_with(Consts::GENERATION_PREFIX);
         let is_temporary = (file_type.is_dir() && name.starts_with(".generation-"))
             || (file_type.is_symlink() && name.starts_with(".current-"));
-        if (!is_generation && !is_temporary) || current.as_deref() == Some(name.as_ref()) {
+        if !is_temporary {
             continue;
         }
         let metadata = match fs::symlink_metadata(entry.path()) {
@@ -224,40 +251,8 @@ fn cleanup_stale_artifacts(cache: &Path, retention: Duration) -> Result<()> {
     Ok(())
 }
 
-fn current_generation(cache: &Path) -> Result<Option<String>> {
-    let current = cache.join(Consts::CURRENT);
-    let generation = match fs::read_link(&current) {
-        Ok(generation) => generation,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("read agent hook pointer {}", current.display()));
-        }
-    };
-    let generation = generation
-        .to_str()
-        .context("agent hook pointer is not valid UTF-8")?;
-    anyhow::ensure!(
-        generation.starts_with(Consts::GENERATION_PREFIX)
-            && Path::new(generation).components().count() == 1,
-        "agent hook pointer is invalid"
-    );
-    Ok(Some(generation.to_owned()))
-}
-
-#[cfg(unix)]
-fn create_current_link(generation: &str, path: &Path) -> Result<()> {
-    symlink(generation, path)
-        .with_context(|| format!("write agent hook pointer {}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn create_current_link(_generation: &str, _path: &Path) -> Result<()> {
-    bail!("agent hook installation requires a Unix host")
-}
-
 fn cleanup_legacy_cache(cache: &Path) {
-    for name in [Consts::BINARY, Consts::FINGERPRINT, "build.lock"] {
+    for name in [Consts::BINARY, Consts::FINGERPRINT, "build.lock", "current"] {
         let _ = fs::remove_file(cache.join(name));
     }
     let _ = fs::remove_dir_all(cache.join("target"));
@@ -306,26 +301,55 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::{
-        Consts, cleanup_stale_artifacts, current_generation, publish, publish_with_activation,
+        Consts, cleanup_unpublished_artifacts, pointer, publish, publish_generation,
+        publish_with_activation,
     };
 
     #[test]
-    fn failed_activation_preserves_current_generation() -> Result<()> {
+    fn rename_collision_preserves_unowned_generation() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let temporary = root.path().join(".generation-collision");
+        let generation = root.path().join("generation-collision");
+        let sentinel = generation.join("sentinel");
+        fs::write(&source, "new binary")?;
+        fs::create_dir(&temporary)?;
+        fs::create_dir(&generation)?;
+        fs::write(&sentinel, "existing generation")?;
+
+        let result = publish_generation(
+            &source,
+            &temporary,
+            &generation,
+            "new",
+            "collision",
+            |_, _| panic!("rename collision reached activation"),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(sentinel)?, "existing generation");
+        assert!(!temporary.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn failed_activation_preserves_active_generation() -> Result<()> {
         let root = tempfile::tempdir()?;
         let cache = root.path().join("cache");
         let old_source = root.path().join("old");
         let new_source = root.path().join("new");
+        fs::create_dir(root.path().join("xtask"))?;
         fs::write(&old_source, "old binary")?;
         fs::write(&new_source, "new binary")?;
-        let old_binary = publish(&old_source, &cache, "old")?;
-        let current = current_generation(&cache)?;
+        let old_binary = publish(&old_source, root.path(), &cache, "old")?;
+        let active = fs::read(pointer::path(root.path()))?;
 
-        let result = publish_with_activation(&new_source, &cache, "new", |_, _| {
+        let result = publish_with_activation(&new_source, root.path(), &cache, "new", |_, _| {
             Err(anyhow!("forced activation failure"))
         });
 
         assert!(result.is_err());
-        assert_eq!(current, current_generation(&cache)?);
+        assert_eq!(active, fs::read(pointer::path(root.path()))?);
         assert_eq!(fs::read_to_string(old_binary)?, "old binary");
         Ok(())
     }
@@ -336,15 +360,17 @@ mod tests {
         let cache = root.path().join("cache");
         let alpha = root.path().join("alpha");
         let beta = root.path().join("beta");
+        fs::create_dir(root.path().join("xtask"))?;
         fs::write(&alpha, "alpha binary")?;
         fs::write(&beta, "beta binary")?;
         let barrier = Arc::new(Barrier::new(3));
         let handles = [(alpha, "alpha"), (beta, "beta")].map(|(source, fingerprint)| {
             let barrier = Arc::clone(&barrier);
             let cache = cache.clone();
+            let root = root.path().to_path_buf();
             thread::spawn(move || {
                 barrier.wait();
-                publish(&source, &cache, fingerprint)
+                publish(&source, &root, &cache, fingerprint)
             })
         });
         barrier.wait();
@@ -352,8 +378,7 @@ mod tests {
             handle.join().map_err(|_| anyhow!("publisher panicked"))??;
         }
 
-        let generation = current_generation(&cache)?.ok_or_else(|| anyhow!("missing current"))?;
-        let active = cache.join(generation);
+        let active = pointer::read(root.path())?;
         let binary = fs::read_to_string(active.join(Consts::BINARY))?;
         let fingerprint = fs::read_to_string(active.join(Consts::FINGERPRINT))?;
         assert!(
@@ -367,25 +392,30 @@ mod tests {
     }
 
     #[test]
-    fn stale_artifact_cleanup_preserves_current_generation() -> Result<()> {
+    fn stale_artifact_cleanup_preserves_published_generations() -> Result<()> {
         let root = tempfile::tempdir()?;
         let cache = root.path().join("cache");
         let source = root.path().join("source");
+        fs::create_dir(root.path().join("xtask"))?;
         fs::write(&source, "current binary")?;
-        let current = publish(&source, &cache, "current")?;
+        let current = publish(&source, root.path(), &cache, "current")?;
         let inactive = cache.join("generation-orphan");
         let temporary = cache.join(".generation-orphan");
         let pointer = cache.join(".current-orphan");
+        let local_temporary = root.path().join("xtask/.agent-hook-cache.orphan");
         fs::create_dir(&inactive)?;
         fs::create_dir(&temporary)?;
         symlink("generation-orphan", &pointer)?;
+        fs::write(&local_temporary, "orphan\n")?;
 
-        cleanup_stale_artifacts(&cache, Duration::ZERO)?;
+        cleanup_unpublished_artifacts(&cache, Duration::ZERO)?;
+        pointer::cleanup_temporaries(root.path(), Duration::ZERO)?;
 
         assert!(current.is_file());
-        assert!(!inactive.exists());
+        assert!(inactive.is_dir());
         assert!(!temporary.exists());
         assert!(fs::symlink_metadata(pointer).is_err());
+        assert!(!local_temporary.exists());
         Ok(())
     }
 }

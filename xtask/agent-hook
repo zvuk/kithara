@@ -1,44 +1,25 @@
 #!/bin/sh
 set -eu
-
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
-dot_git="$repo_root/.git"
-
-if [ -d "$dot_git" ]; then
-    git_dir=$dot_git
-elif [ -f "$dot_git" ]; then
-    IFS= read -r gitdir_line < "$dot_git"
-    case "$gitdir_line" in
-        "gitdir: "*) git_dir=${gitdir_line#gitdir: } ;;
-        *)
-            printf 'error: invalid gitdir file: %s\n' "$dot_git" >&2
-            exit 1
-            ;;
-    esac
-    case "$git_dir" in
-        /*) ;;
-        *) git_dir="$repo_root/$git_dir" ;;
-    esac
-    git_dir=$(CDPATH= cd -- "$git_dir" && pwd)
-else
-    printf 'error: cannot resolve git directory from %s\n' "$dot_git" >&2
-    exit 1
-fi
-
-cache_dir="$git_dir/kithara-agent-hook"
-current="$cache_dir/current"
-if [ -d "$current" ]; then
-    generation_dir=$(CDPATH= cd -- "$current" && pwd -P)
-else
-    generation_dir=$current
-fi
-binary="$generation_dir/xtask"
-if [ ! -x "$binary" ]; then
+pointer="$script_dir/.agent-hook-cache"
+warn_install() {
     printf 'warning: agent hook is not installed for this worktree; run `cargo xtask agent-hook install`\n' >&2
     exit 0
+}
+generation_dir= extra=
+if ! { IFS= read -r generation_dir && ! IFS= read -r extra && [ -z "$extra" ]; } < "$pointer"; then
+    warn_install
 fi
-
-export KITHARA_AGENT_HOOK_ROOT=$repo_root
-export KITHARA_AGENT_HOOK_CACHE=$generation_dir
-exec "$binary" agent-hook "$@"
+case "$generation_dir" in
+    /*) ;;
+    *) warn_install ;;
+esac
+binary="$generation_dir/xtask"
+[ -x "$binary" ] || warn_install
+export KITHARA_AGENT_HOOK_ROOT=$repo_root KITHARA_AGENT_HOOK_CACHE=$generation_dir
+if "$binary" agent-hook "$@"; then exit 0; else status=$?; fi
+case "$status" in
+    126|127) warn_install ;;
+    *) exit "$status" ;;
+esac

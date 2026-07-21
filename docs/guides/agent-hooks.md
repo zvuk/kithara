@@ -10,10 +10,12 @@ Run `cargo xtask agent-hook install` once for each concrete Git worktree and
 again whenever an installed hook reports that it is stale. The command copies
 the current `xtask` executable and its source fingerprint into a complete
 versioned generation under `<worktree-git-dir>/kithara-agent-hook/`, then
-atomically switches the `current` symlink. Installation is explicit: tool
-adapters and the checked-in launcher never invoke Cargo or start a build.
+atomically publishes its absolute path through the ignored
+`xtask/.agent-hook-cache` pointer file. Installation is explicit: tool adapters
+and the checked-in launcher never invoke Cargo or start a build.
 
-An absent cache prints the install command and skips the guard. A stale cache
+A missing, malformed, or dangling pointer, or an unlaunchable installed binary,
+prints the install command and skips the guard. A stale installed generation
 prints the same instruction and continues with the last-good policy binary.
 These hooks protect workflow conventions; they are not a security boundary.
 
@@ -54,19 +56,21 @@ lints, markdown formatting, or architecture checks.
 
 ## Runner Cache
 
-The checked-in runner resolves the current checkout and its concrete worktree
-Git directory, then directly executes the installed binary. It contains no
-fingerprinting, locking, Cargo invocation, build target, or process-management
-logic. The runner exports the resolved checkout and cache paths so Rust owns
-path containment and freshness validation.
+Rust installation owns concrete Git-directory discovery, cache layout, complete
+generation publication, and pointer activation. The checked-in runner derives
+only its checkout root, reads `xtask/.agent-hook-cache` once, validates the
+absolute generation path and executable, then directly executes that binary.
+It does not read `.git`, construct a cache path, invoke Git or Cargo, fingerprint
+sources, lock files, create a build target, or manage processes.
 
-The runner only accepts the versioned `current` generation, so flat caches from
-older launchers are treated as absent. Failed or concurrent installs cannot
-expose a binary from one generation with another generation's fingerprint. On
-later installs, inactive generations older than one hour are pruned; the active
-and recent generations remain available across an in-flight launcher handoff.
-Orphaned temporary generations and pointers from an interrupted install use the
-same age-safe cleanup.
+The pointer names one immutable generation instead of a second mutable
+`current` link. Its temporary replacement is written beside the pointer and
+atomically renamed only after both the binary and fingerprint are complete.
+Failed activation preserves the previous pointer; concurrent installs expose
+one complete generation or the other. Published generations remain available
+for in-flight launches. Later installs remove only old unpublished temporary
+generations and pointer files; complete generations are not age-pruned without
+a launch-liveness contract.
 
 The fingerprint covers `xtask/src/agent_hook.rs`, the `agent_hook` module tree,
 `xtask/src/main.rs`, the xtask manifest, optional Cargo/toolchain configuration,

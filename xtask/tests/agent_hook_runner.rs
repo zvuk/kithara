@@ -116,6 +116,15 @@ exit 91
         self.git_dir.join("kithara-agent-hook")
     }
 
+    fn cache_pointer(&self) -> PathBuf {
+        self.repo.join("xtask/.agent-hook-cache")
+    }
+
+    fn installed_generation(&self) -> Result<PathBuf> {
+        let body = fs::read_to_string(self.cache_pointer())?;
+        Ok(PathBuf::from(body.trim()))
+    }
+
     fn command(&self, hook: &str) -> Command {
         let mut command = Command::new(&self.runner);
         command
@@ -150,7 +159,7 @@ exit 91
         let cache = self.cache_dir();
         let generation = cache.join("generation-test");
         fs::create_dir_all(&generation)?;
-        symlink("generation-test", cache.join("current"))?;
+        let generation = fs::canonicalize(generation)?;
         write_executable(
             &generation.join("xtask"),
             r#"#!/bin/sh
@@ -158,7 +167,9 @@ set -eu
 printf 'args=%s\nroot=%s\ncache=%s\n' "$*" "$KITHARA_AGENT_HOOK_ROOT" "$KITHARA_AGENT_HOOK_CACHE" >> "$FAKE_XTASK_LOG"
 cat >/dev/null
 "#,
-        )
+        )?;
+        fs::write(self.cache_pointer(), format!("{}\n", generation.display()))?;
+        Ok(())
     }
 
     fn install_real_xtask(&self) -> Result<Output> {
@@ -197,7 +208,7 @@ fn write_executable(path: &Path, body: &str) -> Result<()> {
 }
 
 #[test]
-fn missing_cache_skips_hook_without_invoking_cargo() -> Result<()> {
+fn missing_pointer_skips_hook_without_invoking_cargo() -> Result<()> {
     let fixture = Fixture::new()?;
     let output = fixture.run("pre-bash")?;
 
@@ -205,6 +216,84 @@ fn missing_cache_skips_hook_without_invoking_cargo() -> Result<()> {
     assert!(String::from_utf8_lossy(&output.stderr).contains("cargo xtask agent-hook install"));
     fixture.assert_cargo_not_run();
     assert!(!fixture.cache_dir().exists());
+    assert!(!fixture.cache_pointer().exists());
+    Ok(())
+}
+
+#[test]
+fn invalid_pointers_skip_hook_without_invoking_cargo() -> Result<()> {
+    for body in [
+        "\n",
+        "relative-generation\n",
+        "/missing-generation\n",
+        "/first-generation\n/second-generation\n",
+        "/first-generation\n/second-generation",
+        "/missing-newline",
+    ] {
+        let fixture = Fixture::new()?;
+        fs::write(fixture.cache_pointer(), body)?;
+
+        let output = fixture.run("pre-bash")?;
+
+        assert_success(&output);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("cargo xtask agent-hook install"));
+        assert!(!fixture.xtask_log.exists());
+        fixture.assert_cargo_not_run();
+    }
+    Ok(())
+}
+
+#[test]
+fn unlaunchable_binary_skips_hook_without_invoking_cargo() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let generation = fixture.cache_dir().join("generation-unlaunchable");
+    fs::create_dir_all(generation.join("xtask"))?;
+    let generation = fs::canonicalize(generation)?;
+    fs::write(
+        fixture.cache_pointer(),
+        format!("{}\n", generation.display()),
+    )?;
+
+    let output = fixture.run("pre-bash")?;
+
+    assert_success(&output);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cargo xtask agent-hook install"));
+    fixture.assert_cargo_not_run();
+    Ok(())
+}
+
+#[test]
+fn installed_pointer_runs_without_reading_git_metadata() -> Result<()> {
+    let fixture = Fixture::linked_absolute()?;
+    fixture.install_fake_xtask()?;
+    fs::write(fixture.repo.join(".git"), "invalid\n")?;
+
+    let output = fixture.run("pre-bash")?;
+
+    assert_success(&output);
+    assert!(fixture.xtask_log.is_file());
+    fixture.assert_cargo_not_run();
+    Ok(())
+}
+
+#[test]
+fn legacy_git_dir_current_is_ignored_without_local_pointer() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let cache = fixture.cache_dir();
+    let generation = cache.join("generation-legacy");
+    fs::create_dir_all(&generation)?;
+    write_executable(
+        &generation.join("xtask"),
+        "#!/bin/sh\nprintf legacy >\"$FAKE_XTASK_LOG\"\n",
+    )?;
+    symlink("generation-legacy", cache.join("current"))?;
+
+    let output = fixture.run("pre-bash")?;
+
+    assert_success(&output);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cargo xtask agent-hook install"));
+    assert!(!fixture.xtask_log.exists());
+    fixture.assert_cargo_not_run();
     Ok(())
 }
 
@@ -228,7 +317,8 @@ fn legacy_flat_cache_is_ignored() -> Result<()> {
     assert_success(&fixture.install_real_xtask()?);
     assert!(!fixture.cache_dir().join("xtask").exists());
     assert!(!fixture.cache_dir().join("fingerprint").exists());
-    assert!(fixture.cache_dir().join("current/xtask").is_file());
+    assert!(!fixture.cache_dir().join("current").exists());
+    assert!(fixture.cache_pointer().is_file());
     Ok(())
 }
 
@@ -256,15 +346,24 @@ fn installed_cache_executes_directly_without_invoking_cargo() -> Result<()> {
 }
 
 #[test]
-fn explicit_install_publishes_current_xtask_for_the_runner() -> Result<()> {
+fn explicit_install_publishes_generation_pointer_for_runner() -> Result<()> {
     let fixture = Fixture::new()?;
     let install = fixture.install_real_xtask()?;
     assert_success(&install);
 
-    let binary = fixture.cache_dir().join("current/xtask");
+    let generation = fixture.installed_generation()?;
+    let binary = generation.join("xtask");
+    let cache = fs::canonicalize(fixture.cache_dir())?;
+    assert!(generation.is_absolute());
+    assert!(generation.starts_with(cache));
     assert!(binary.is_file());
     assert_ne!(fs::metadata(&binary)?.permissions().mode() & 0o111, 0);
-    assert!(fixture.cache_dir().join("current/fingerprint").is_file());
+    assert!(generation.join("fingerprint").is_file());
+    assert_eq!(
+        fs::read_to_string(fixture.cache_pointer())?,
+        format!("{}\n", generation.display())
+    );
+    assert!(!fixture.cache_dir().join("current").exists());
 
     let output = fixture.run_with_input(
         "pre-bash",
@@ -278,7 +377,7 @@ fn explicit_install_publishes_current_xtask_for_the_runner() -> Result<()> {
 }
 
 #[test]
-fn installed_runner_cannot_mark_itself_current() -> Result<()> {
+fn installed_runner_cannot_install_itself() -> Result<()> {
     let fixture = Fixture::new()?;
     assert_success(&fixture.install_real_xtask()?);
 
@@ -345,12 +444,40 @@ fn linked_worktrees_use_distinct_installed_caches() -> Result<()> {
     assert_success(&relative.run("pre-bash")?);
 
     assert_ne!(absolute.cache_dir(), relative.cache_dir());
-    assert!(absolute.cache_dir().join("current/xtask").is_file());
-    assert!(relative.cache_dir().join("current/xtask").is_file());
-    assert!(absolute.cache_dir().join("current/fingerprint").is_file());
-    assert!(relative.cache_dir().join("current/fingerprint").is_file());
+    let absolute_generation = absolute.installed_generation()?;
+    let relative_generation = relative.installed_generation()?;
+    let absolute_cache = fs::canonicalize(absolute.cache_dir())?;
+    let relative_cache = fs::canonicalize(relative.cache_dir())?;
+    assert_ne!(absolute_generation, relative_generation);
+    assert!(absolute_generation.starts_with(absolute_cache));
+    assert!(relative_generation.starts_with(relative_cache));
+    assert!(absolute_generation.join("xtask").is_file());
+    assert!(relative_generation.join("xtask").is_file());
+    assert!(absolute_generation.join("fingerprint").is_file());
+    assert!(relative_generation.join("fingerprint").is_file());
     absolute.assert_cargo_not_run();
     relative.assert_cargo_not_run();
+    Ok(())
+}
+
+#[test]
+fn reinstall_switches_pointer_between_complete_generations() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.install_real_xtask()?);
+    let previous = fixture.installed_generation()?;
+    fs::write(
+        fixture.repo.join("xtask/src/agent_hook.rs"),
+        "pub fn run() { println!(\"changed\"); }\n",
+    )?;
+
+    assert_success(&fixture.install_real_xtask()?);
+
+    let current = fixture.installed_generation()?;
+    assert_ne!(previous, current);
+    for generation in [previous, current] {
+        assert!(generation.join("xtask").is_file());
+        assert!(generation.join("fingerprint").is_file());
+    }
     Ok(())
 }
 
@@ -359,11 +486,16 @@ fn runner_stays_thin_and_contains_no_bootstrap_build_logic() -> Result<()> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("agent-hook");
     let body = fs::read_to_string(path)?;
 
-    assert!(body.lines().count() <= 50);
+    assert!(body.lines().count() <= 25);
     for forbidden in [
+        ".git",
+        "gitdir:",
+        "kithara-agent-hook",
+        "current",
         "cargo build",
         "lockf",
         "flock",
+        "readlink",
         "setsid",
         "shasum",
         "CARGO_TARGET_DIR",
