@@ -2,14 +2,33 @@ use std::fmt;
 
 use kithara_platform::sync::Arc;
 
-use crate::rt::track::PlayerResource;
+use super::SessionSeekAttempt;
+use crate::{
+    api::{PlaybackDirection, SessionBeat, Tempo, TrackBinding, TransportRevision},
+    error::PlayError,
+    player::track::PlayerResource,
+};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum TrackStart {
+    #[default]
+    Immediate,
+    Session {
+        target: SessionBeat,
+        revision: TransportRevision,
+    },
+}
 
 /// Commands sent from the main thread to the processor.
+#[non_exhaustive]
 pub enum PlayerCmd {
     /// Load a track into the processor arena.
     LoadTrack {
-        resource: Box<PlayerResource>,
+        /// Immutable session-grid binding for synchronized rendering.
+        binding: Option<TrackBinding>,
+        resource: PlayerResource,
         item_id: Option<Arc<str>>,
+        start: TrackStart,
     },
     /// Unload a track by its source identifier.
     UnloadTrack { src: Arc<str> },
@@ -20,6 +39,15 @@ pub enum PlayerCmd {
     Transition(TrackTransition),
     /// Seek active tracks to the given position in seconds.
     Seek { seconds: f64, seek_epoch: u64 },
+    /// Schedule the already-loaded leading track at a transport boundary.
+    StartAt(TrackStart),
+    /// Prepare the active bound track for one session relocation revision.
+    PrepareSessionSeek {
+        attempt: SessionSeekAttempt,
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: TransportRevision,
+    },
     /// Set the paused state.
     SetPaused(bool),
     /// Update the fade duration.
@@ -28,15 +56,29 @@ pub enum PlayerCmd {
     SetPrefetchDuration(f32),
     /// Update the playback rate for all active tracks.
     SetPlaybackRate(f32),
+    /// Update the transport pitch-bend multiplier for all active tracks.
+    SetPitchBend(f32),
+}
+
+pub(crate) struct RejectedPlayerCmd {
+    pub(crate) command: Box<PlayerCmd>,
+    pub(crate) error: PlayError,
 }
 
 impl fmt::Debug for PlayerCmd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::LoadTrack { item_id, resource } => f
+            Self::LoadTrack {
+                binding,
+                item_id,
+                resource,
+                start,
+            } => f
                 .debug_struct("LoadTrack")
+                .field("bound", &binding.is_some())
                 .field("item_id", item_id)
                 .field("src", resource.src())
+                .field("start", start)
                 .finish_non_exhaustive(),
             Self::UnloadTrack { src } => f.debug_struct("UnloadTrack").field("src", src).finish(),
             Self::Clear => f.write_str("Clear"),
@@ -49,10 +91,24 @@ impl fmt::Debug for PlayerCmd {
                 .field("seconds", seconds)
                 .field("seek_epoch", seek_epoch)
                 .finish(),
+            Self::StartAt(start) => f.debug_tuple("StartAt").field(start).finish(),
+            Self::PrepareSessionSeek {
+                attempt,
+                target,
+                tempo,
+                revision,
+            } => f
+                .debug_struct("PrepareSessionSeek")
+                .field("attempt", attempt)
+                .field("target", target)
+                .field("tempo", tempo)
+                .field("revision", revision)
+                .finish(),
             Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
             Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
             Self::SetPlaybackRate(r) => f.debug_tuple("SetPlaybackRate").field(r).finish(),
+            Self::SetPitchBend(b) => f.debug_tuple("SetPitchBend").field(b).finish(),
         }
     }
 }
@@ -112,6 +168,12 @@ pub enum TrackPlaybackStopReason {
 pub enum PlayerNotification {
     /// A track was successfully loaded into the processor arena.
     Loaded { src: Arc<str> },
+    /// A bound track was accepted by the audio node.
+    BindingCommitted {
+        direction: PlaybackDirection,
+        session_anchor_beats: f64,
+        track_anchor_beats: f64,
+    },
     /// A track was removed from the processor arena.
     Unloaded { src: Arc<str> },
     /// A track started audible playback (fade-in completed or `play()`).
@@ -159,7 +221,10 @@ impl PlayerNotification {
             | Self::FadingIn { src }
             | Self::FadingOut { src }
             | Self::PlaybackStopped { src, .. } => Some(src),
-            Self::PlaybackStarted { .. } | Self::Requested | Self::HandoverRequested => None,
+            Self::BindingCommitted { .. }
+            | Self::PlaybackStarted { .. }
+            | Self::Requested
+            | Self::HandoverRequested => None,
         }
     }
 }

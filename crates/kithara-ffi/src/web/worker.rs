@@ -10,6 +10,7 @@ use kithara_platform::{
     thread::{assert_not_main_thread, keep_worker_alive},
     time::{Duration, sleep},
     tokio::task::spawn as task_spawn,
+    traits::FromWithParams,
 };
 use kithara_play::{ResourceConfig, wasm};
 use kithara_queue::{Queue, QueueConfig, TrackId, TrackSource};
@@ -35,10 +36,10 @@ impl Consts {
 /// `RefCell` shared across the worker's command loop: setters mutate it,
 /// and each track build snapshots it into a [`ResourceConfig`].
 struct BuildState {
+    store: AssetStore,
     headers: HashMap<String, String>,
     keys: KeyOptions,
     region: Region,
-    store: AssetStore,
 }
 
 impl Default for BuildState {
@@ -94,12 +95,8 @@ pub(crate) fn worker_main(
                 .session(session.dispatcher())
                 .build(),
         ));
-        let queue = Rc::new(Queue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(state.store.clone())
-                .build(),
-        ));
+        let queue_config = QueueConfig::builder().store(state.store.clone()).build();
+        let queue = Rc::new(Queue::build(player, queue_config));
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
 
         let build_state = Rc::new(RefCell::new(state));

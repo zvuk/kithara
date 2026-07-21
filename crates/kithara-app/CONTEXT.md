@@ -30,6 +30,10 @@ non-exhaustive seam) is in-memory-only by capability, not a fallback.
 
 Invalidation is by `ANALYSIS_BYTES_VERSION` (kithara-app): bump it whenever
 the blob encoding, waveform encoding, or `WAVEFORM_MAX_BUCKETS` change.
+The composite blob includes the optional decoded source sample rate that defines
+the beat-marker and source-frame axis. Worker-produced beat analysis always
+sets it; without it, consumers cannot construct a `TrackBeatMap` and receive a
+typed unavailable result instead of assuming the host rate.
 `AppConfig.beat_analysis` is part of each blob fingerprint through
 `BeatAnalysisConfig::cache_tag`, so runtime beat-analysis tuning re-analyses
 without a version bump. The

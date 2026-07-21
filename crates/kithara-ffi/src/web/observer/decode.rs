@@ -1,15 +1,20 @@
 use wasm_bindgen::JsValue;
 
 use super::marshal::{
-    discriminant, get_bool, get_f64, get_id_req, get_opt_id, get_str, narrow_f32,
+    discriminant, get_bool, get_f64, get_id_req, get_opt_id, get_optional_u64, get_str, get_u64,
+    narrow_f32,
 };
 use crate::types::{
-    FfiAdvanceReason, FfiEvictReason, FfiPlayerEvent, FfiPlayerStatus, FfiRepeatMode,
-    FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus, FfiTrackStatus,
+    FfiAdvanceReason, FfiEvictReason, FfiPlaybackDirection, FfiPlayerEvent, FfiPlayerStatus,
+    FfiRepeatMode, FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus,
+    FfiTrackStatus,
 };
 
 pub(crate) fn decode(data: &JsValue) -> Option<FfiPlayerEvent> {
     let kind = get_str(data, "kind")?;
+    if kind.starts_with("Transport") || kind.starts_with("Sync") {
+        return decode_transport(data, &kind);
+    }
     Some(match kind.as_str() {
         "TimeChanged" => FfiPlayerEvent::TimeChanged {
             seconds: get_f64(data, "seconds")?,
@@ -119,6 +124,34 @@ pub(crate) fn decode(data: &JsValue) -> Option<FfiPlayerEvent> {
     })
 }
 
+fn decode_transport(data: &JsValue, kind: &str) -> Option<FfiPlayerEvent> {
+    Some(match kind {
+        "TransportTempoCommitted" => FfiPlayerEvent::TransportTempoCommitted {
+            beats_per_minute: get_f64(data, "beats_per_minute")?,
+            revision: get_u64(data, "revision")?,
+        },
+        "TransportPlayStateCommitted" => FfiPlayerEvent::TransportPlayStateCommitted {
+            playing: get_bool(data, "playing")?,
+            revision: get_u64(data, "revision")?,
+        },
+        "TransportSeekCommitted" => FfiPlayerEvent::TransportSeekCommitted {
+            position_beats: get_f64(data, "position_beats")?,
+            revision: get_u64(data, "revision")?,
+        },
+        "TransportFailed" => FfiPlayerEvent::TransportFailed {
+            revision: get_optional_u64(data, "revision")?,
+            reason: get_str(data, "reason")?,
+        },
+        "SyncBindingCommitted" => FfiPlayerEvent::SyncBindingCommitted {
+            slot: get_u64(data, "slot")?,
+            session_anchor_beats: get_f64(data, "session_anchor_beats")?,
+            track_anchor_beats: get_f64(data, "track_anchor_beats")?,
+            direction: decode_playback_direction(get_str(data, "direction").as_deref())?,
+        },
+        _ => return None,
+    })
+}
+
 fn decode_player_status(code: f64) -> FfiPlayerStatus {
     match discriminant(code) {
         1 => FfiPlayerStatus::ReadyToPlay,
@@ -191,6 +224,14 @@ fn decode_stretch_backend_kind(value: Option<String>) -> FfiStretchBackendKind {
         Some("Signalsmith") => FfiStretchBackendKind::Signalsmith,
         Some("Bungee") => FfiStretchBackendKind::Bungee,
         _ => FfiStretchBackendKind::Unknown,
+    }
+}
+
+fn decode_playback_direction(value: Option<&str>) -> Option<FfiPlaybackDirection> {
+    match value {
+        Some("Forward") => Some(FfiPlaybackDirection::Forward),
+        Some("Reverse") => Some(FfiPlaybackDirection::Reverse),
+        _ => None,
     }
 }
 

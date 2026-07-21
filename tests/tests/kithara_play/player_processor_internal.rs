@@ -15,13 +15,18 @@ use std::{
 use firewheel::node::ProcBuffers;
 use kithara::{
     self,
+    audio::{BeatGrid, TrackBeat, analysis::TrackAnalysis},
     bufpool::PcmPool,
     decode::PcmSpec,
     platform::{sync::Arc, time::Duration},
     play::{
-        PlayerNotification, Resource, SharedEq, TrackState, TrackTransition,
-        bridge::{PlayerCmd, SlotControl, slot_channels},
-        rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+        PlaybackDirection, PlayerNotification, Resource, SessionBeat, SharedEq, TrackBinding,
+        TrackState, TrackTransition,
+        bridge::{PlayerCmd, SlotControl, TrackStart, slot_channels},
+        player::{
+            node::{PlayerNodeProcessor, StreamShape},
+            track::PlayerResource,
+        },
     },
 };
 use kithara_integration_tests::audio_mock::{
@@ -37,10 +42,7 @@ enum TrackCommandScenario {
 }
 
 fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
-    StreamShape {
-        sample_rate,
-        max_block_frames: NonZeroU32::new(512).expect("BUG: non-zero"),
-    }
+    StreamShape::new(sample_rate, NonZeroU32::new(512).expect("BUG: non-zero"))
 }
 
 fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
@@ -51,44 +53,52 @@ fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
     (processor, control)
 }
 
-fn create_mock_player_resource(src: &str) -> Box<PlayerResource> {
+fn create_mock_player_resource(src: &str) -> PlayerResource {
     create_mock_player_resource_with_duration(src, 60.0)
 }
 
-fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> Box<PlayerResource> {
+fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> PlayerResource {
     let spec = PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
     let reader = TestPcmReader::new(spec, duration_secs);
     let resource = Resource::from_reader(reader, None);
-    Box::new(PlayerResource::new(
-        resource,
-        Arc::from(src),
-        &PcmPool::default(),
-    ))
+    PlayerResource::new(resource, Arc::from(src), &PcmPool::default())
 }
 
-fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerResource> {
+fn create_duration_player_resource(src: &str, duration: Duration) -> PlayerResource {
     let (reader, _recorded) = SampleRateTrackingReader::with_duration(
         PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
         duration,
     );
     let resource = Resource::from_reader(reader, None);
-    Box::new(PlayerResource::new(
-        resource,
-        Arc::from(src),
-        &PcmPool::default(),
-    ))
+    PlayerResource::new(resource, Arc::from(src), &PcmPool::default())
 }
 
-fn create_tracking_player_resource(
-    src: &str,
-    seek_log: Arc<Mutex<Vec<u64>>>,
-) -> Box<PlayerResource> {
+fn create_tracking_player_resource(src: &str, seek_log: Arc<Mutex<Vec<u64>>>) -> PlayerResource {
     let resource = Resource::from_reader(SeekTrackingReader::new(seek_log), None);
-    Box::new(PlayerResource::new(
-        resource,
-        Arc::from(src),
-        &PcmPool::default(),
-    ))
+    PlayerResource::new(resource, Arc::from(src), &PcmPool::default())
+}
+
+fn test_binding() -> TrackBinding {
+    let sample_rate = NonZeroU32::new(44_100).expect("test rate");
+    let analysis = TrackAnalysis::with_source_rate(
+        Some(BeatGrid::new(
+            120.0,
+            vec![0, 22_050, 44_100],
+            vec![0],
+            Vec::new(),
+        )),
+        None,
+        44_100,
+        sample_rate,
+    );
+    TrackBinding::new(
+        &analysis,
+        sample_rate,
+        SessionBeat::new(0.0).expect("finite session beat"),
+        TrackBeat::new(0.0).expect("finite track beat"),
+        PlaybackDirection::Forward,
+    )
+    .expect("valid track binding")
 }
 
 #[kithara::test(tokio)]
@@ -97,11 +107,8 @@ async fn load_track_propagates_host_sample_rate() {
     let (reader, recorded) =
         SampleRateTrackingReader::new(PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")));
     let resource = Resource::from_reader(reader, None);
-    let player_resource = Box::new(PlayerResource::new(
-        resource,
-        Arc::from("track.mp3"),
-        &PcmPool::default(),
-    ));
+    let player_resource =
+        PlayerResource::new(resource, Arc::from("track.mp3"), &PcmPool::default());
 
     let (inputs, mut control) = slot_channels(SharedEq::new(0));
     let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
@@ -111,13 +118,38 @@ async fn load_track_propagates_host_sample_rate() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: player_resource,
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
 
     assert_eq!(recorded.load(AtomicOrdering::Relaxed), host_rate);
+}
+
+#[kithara::test]
+fn load_track_preserves_the_musical_binding() {
+    let (mut processor, mut control) = make_processor();
+    let src: Arc<str> = Arc::from("bound.wav");
+    let binding = test_binding();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            binding: Some(binding.clone()),
+            resource: create_mock_player_resource(&src),
+            item_id: None,
+            start: TrackStart::Immediate,
+        })
+        .expect("load bound track");
+
+    processor.drain_commands();
+
+    assert_eq!(
+        processor.track(&src).and_then(|track| track.binding()),
+        Some(&binding)
+    );
 }
 
 #[kithara::test]
@@ -167,19 +199,18 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
     let (reader, _recorded) =
         SampleRateTrackingReader::new(PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")));
     let resource = Resource::from_reader(reader, None);
-    let player_resource = Box::new(PlayerResource::new(
-        resource,
-        Arc::from("track.mp3"),
-        &PcmPool::default(),
-    ));
+    let player_resource =
+        PlayerResource::new(resource, Arc::from("track.mp3"), &PcmPool::default());
 
     let (mut processor, mut control) = make_processor();
 
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: player_resource,
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -226,8 +257,10 @@ async fn fade_in_switches_public_snapshot_without_render() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_duration_player_resource(&first_src, Duration::from_secs(64)),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     control
@@ -246,8 +279,10 @@ async fn fade_in_switches_public_snapshot_without_render() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_duration_player_resource(&second_src, Duration::from_secs(162)),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -286,8 +321,10 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource,
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -355,8 +392,10 @@ async fn processor_track_command_scenarios(
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_mock_player_resource("track1.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
 
@@ -366,8 +405,10 @@ async fn processor_track_command_scenarios(
             control
                 .cmd_tx
                 .try_push(PlayerCmd::LoadTrack {
+                    binding: None,
                     resource: create_mock_player_resource("track1.mp3"),
                     item_id: None,
+                    start: TrackStart::Immediate,
                 })
                 .ok();
         }
@@ -409,14 +450,16 @@ async fn processor_fade_in_restarts_track_from_zero() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_mock_player_resource("track1.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
 
     if let Some(track) = processor.track_mut(&src) {
-        track.seek(12.0);
+        assert!(track.seek(12.0));
         assert!(track.position() >= 11.9);
     } else {
         panic!("track must be loaded");
@@ -445,8 +488,10 @@ async fn processor_cleanup_finished_tracks() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource,
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -470,15 +515,19 @@ async fn render_audio_handover_fills_tail_from_next_playing_track() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_mock_player_resource("long.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -526,15 +575,19 @@ async fn render_audio_handover_promotes_preloading_track_without_silence() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_mock_player_resource("preload.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -586,22 +639,28 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_mock_player_resource("fading.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
+            binding: None,
             resource: create_mock_player_resource("preload.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();

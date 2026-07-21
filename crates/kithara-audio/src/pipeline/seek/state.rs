@@ -1,11 +1,35 @@
 use kithara_platform::time::Duration;
 use kithara_stream::SourceSeekAnchor;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum SeekEvents {
+    #[default]
+    Publish,
+    Suppress,
+}
+
+impl SeekEvents {
+    pub(crate) const fn should_publish(self) -> bool {
+        matches!(self, Self::Publish)
+    }
+}
+
+impl From<bool> for SeekEvents {
+    fn from(application_visible: bool) -> Self {
+        if application_visible {
+            Self::Publish
+        } else {
+            Self::Suppress
+        }
+    }
+}
+
 /// Context for a pending seek, carried through multiple states.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SeekContext {
     pub(crate) target: Duration,
     pub(crate) epoch: u64,
+    pub(crate) events: SeekEvents,
 }
 
 /// Stateful seek request carried across waits.

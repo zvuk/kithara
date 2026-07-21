@@ -12,6 +12,7 @@ use kithara::{
         time::{self, Duration, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -33,18 +34,13 @@ impl Consts {
     /// below so a hung iteration cannot exceed its share of the
     /// outer test timeout.
     const FRESH_ITERATIONS: u32 = 30;
-    /// HLS fixture shape: 8 segments × 4 s = 32 s total. Big enough
-    /// that "near end" is well past the warmup window and any byte-range
-    /// cache the loader populated for early segments.
-    const SEGMENT_COUNT: usize = 8;
-    const SEGMENT_DURATION_S: f64 = 4.0;
-    /// Distance from the natural end at which the seek targets land.
-    /// Rotated across iterations so we hit boundary-aligned and
-    /// mid-segment ends.
-    const NEAR_END_OFFSETS_S: [f64; 3] = [0.5, 1.5, 3.5];
-    /// Each individual seek must land or fail within this budget.
-    /// A hang is anything > this (the user reports >10 s freezes).
-    const SEEK_BUDGET: Duration = Duration::from_secs(6);
+    /// Hard ceiling per iteration. Anything past this is a hang in
+    /// `run_one_attempt` itself (e.g. the player never produces
+    /// position updates). Bounds the worst-case test runtime to
+    /// `FRESH_ITERATIONS * ITER_DEADLINE` ≈ 5 min.
+    const ITER_DEADLINE: Duration = Duration::from_secs(10);
+    /// Loader settle deadline.
+    const LOAD_DEADLINE: Duration = Duration::from_secs(15);
     /// Minimum post-seek position advance we require to declare a
     /// landed seek as "playing again".
     ///
@@ -57,20 +53,25 @@ impl Consts {
     /// advance for that offset is ~0.45 s. Using 0.4 leaves ~0.05 s of
     /// margin so the iter does not spuriously hang at the EOF.
     const MIN_POST_SEEK_ADVANCE_S: f64 = 0.4;
+    /// Distance from the natural end at which the seek targets land.
+    /// Rotated across iterations so we hit boundary-aligned and
+    /// mid-segment ends.
+    const NEAR_END_OFFSETS_S: [f64; 3] = [0.5, 1.5, 3.5];
     /// Time given to the player to consume some PCM after the seek
     /// before we sample position.
     const POST_SEEK_RENDER_WALL: Duration = Duration::from_millis(1_500);
-    /// Loader settle deadline.
-    const LOAD_DEADLINE: Duration = Duration::from_secs(15);
     /// Pre-seek warmup. Mirrors "just opened, briefly listened, then
     /// dragged the playhead". Short enough that the player is still
     /// inside segment 0 when seek fires — prod scenario from the user.
     const PRE_SEEK_PLAY_S: f64 = 0.5;
-    /// Hard ceiling per iteration. Anything past this is a hang in
-    /// `run_one_attempt` itself (e.g. the player never produces
-    /// position updates). Bounds the worst-case test runtime to
-    /// `FRESH_ITERATIONS * ITER_DEADLINE` ≈ 5 min.
-    const ITER_DEADLINE: Duration = Duration::from_secs(10);
+    /// Each individual seek must land or fail within this budget.
+    /// A hang is anything > this (the user reports >10 s freezes).
+    const SEEK_BUDGET: Duration = Duration::from_secs(6);
+    /// HLS fixture shape: 8 segments × 4 s = 32 s total. Big enough
+    /// that "near end" is well past the warmup window and any byte-range
+    /// cache the loader populated for early segments.
+    const SEGMENT_COUNT: usize = 8;
+    const SEGMENT_DURATION_S: f64 = 4.0;
 }
 
 #[derive(Debug)]
@@ -135,10 +136,9 @@ fn build_queue_with_tick(
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+    let queue = Arc::new(Queue::build(
+        player,
+        QueueConfig::default().with_store(store.clone()),
     ));
     let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(

@@ -10,6 +10,7 @@ use kithara::{
         sync::Arc,
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
+        traits::FromWithParams,
     },
     play::{PlayerImpl, Resource, ResourceConfig, StretchControls},
     queue::{Queue, QueueConfig, Transition},
@@ -62,11 +63,11 @@ type ClassRun = (FrameClass, usize, usize);
 type ToneRun = (ToneClass, usize, usize);
 
 struct ProvenanceDumpContext<'a> {
-    replays: &'a [Replay],
     runs: &'a [ClassRun],
-    onset_window: Option<usize>,
+    replays: &'a [Replay],
     b_onset_window: Option<usize>,
     current_index: Option<usize>,
+    onset_window: Option<usize>,
 }
 
 impl ProvenanceDumpContext<'_> {
@@ -82,12 +83,12 @@ impl ProvenanceDumpContext<'_> {
 }
 
 struct SwitchDumpContext<'a> {
-    replays: &'a [Replay],
     runs: &'a [ClassRun],
-    onset_window: Option<usize>,
+    replays: &'a [Replay],
     b_onset_window: Option<usize>,
-    switch_issue_frame: usize,
     current_index: Option<usize>,
+    onset_window: Option<usize>,
+    switch_issue_frame: usize,
 }
 
 impl SwitchDumpContext<'_> {
@@ -104,12 +105,12 @@ impl SwitchDumpContext<'_> {
 }
 
 struct CrossfadeDumpContext<'a> {
-    raw_runs: &'a [ClassRun],
     collapsed_runs: &'a [ClassRun],
-    onset_window: Option<usize>,
+    raw_runs: &'a [ClassRun],
     b_onset_window: Option<usize>,
-    expected_a_end_frame: usize,
     current_index: Option<usize>,
+    onset_window: Option<usize>,
+    expected_a_end_frame: usize,
 }
 
 impl CrossfadeDumpContext<'_> {
@@ -126,10 +127,10 @@ impl CrossfadeDumpContext<'_> {
 }
 
 struct CrossfadeAnalysis {
-    raw_runs: Vec<ClassRun>,
     collapsed_runs: Vec<ClassRun>,
-    onset_window: usize,
+    raw_runs: Vec<ClassRun>,
     b_onset_window: usize,
+    onset_window: usize,
 }
 
 impl CrossfadeAnalysis {
@@ -938,11 +939,11 @@ struct QueueSetup {
 }
 
 struct RenderProgress {
-    rendered: Vec<f32>,
-    left: Vec<f32>,
-    classes: Vec<FrameClass>,
-    peak: f32,
     descending_seen_at: Option<usize>,
+    classes: Vec<FrameClass>,
+    left: Vec<f32>,
+    rendered: Vec<f32>,
+    peak: f32,
 }
 
 fn with_autoplay(mut config: QueueConfig, should_autoplay: bool) -> QueueConfig {
@@ -1018,10 +1019,10 @@ async fn setup_queue_with_sample_rate(
             .build(),
         render_sample_rate,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        false,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), false),
+    );
 
     let resource_a = hls_resource(
         harness.player(),
@@ -1059,10 +1060,10 @@ async fn setup_multivariant_flac_queue(
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        false,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), false),
+    );
 
     let resource_a = hls_multivariant_flac_resource(
         harness.player(),
@@ -1136,10 +1137,10 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
     should_autoplay: bool,
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate);
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        should_autoplay,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), should_autoplay),
+    );
 
     let resource_a = hls_resource_with_segments_and_duration(
         harness.player(),
@@ -1185,10 +1186,10 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        false,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), false),
+    );
 
     let resource_a = hls_sine_aac_resource(
         harness.player(),
@@ -1655,6 +1656,11 @@ impl RenderProgress {
         }
     }
 
+    fn has_b_postroll(&self) -> bool {
+        self.descending_seen_at
+            .is_some_and(|frame| self.rendered_frames() >= frame.saturating_add(POST_ROLL_FRAMES))
+    }
+
     fn push_block(
         &mut self,
         block: &[f32],
@@ -1686,18 +1692,13 @@ impl RenderProgress {
     fn rendered_frames(&self) -> usize {
         self.left.len()
     }
-
-    fn has_b_postroll(&self) -> bool {
-        self.descending_seen_at
-            .is_some_and(|frame| self.rendered_frames() >= frame.saturating_add(POST_ROLL_FRAMES))
-    }
 }
 
 struct ToneRenderProgress {
-    rendered: Vec<f32>,
-    left: Vec<f32>,
-    classes: Vec<ToneClass>,
     b_seen_at: Option<usize>,
+    classes: Vec<ToneClass>,
+    left: Vec<f32>,
+    rendered: Vec<f32>,
 }
 
 impl ToneRenderProgress {
@@ -1708,6 +1709,11 @@ impl ToneRenderProgress {
             classes: Vec::new(),
             b_seen_at: None,
         }
+    }
+
+    fn has_b_postroll(&self) -> bool {
+        self.b_seen_at
+            .is_some_and(|frame| self.rendered_frames() >= frame.saturating_add(POST_ROLL_FRAMES))
     }
 
     fn push_block(&mut self, block: &[f32], sample_rate: u32) {
@@ -1730,11 +1736,6 @@ impl ToneRenderProgress {
 
     fn rendered_frames(&self) -> usize {
         self.left.len()
-    }
-
-    fn has_b_postroll(&self) -> bool {
-        self.b_seen_at
-            .is_some_and(|frame| self.rendered_frames() >= frame.saturating_add(POST_ROLL_FRAMES))
     }
 }
 

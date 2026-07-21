@@ -5,14 +5,19 @@ use super::{
     graph::{controls, lifecycle, player_index, slots},
     protocol::{Cmd, PlayerId, Reply, SessionError},
     state::{SessionState, register_player},
+    transport,
 };
 
 pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply {
     match cmd {
         Cmd::RegisterPlayer {
+            bus,
             eq_layout,
             pcm_pool,
-        } => Reply::PlayerRegistered(register_player(state, eq_layout, pcm_pool)),
+        } => match register_player(state, bus, eq_layout, pcm_pool) {
+            Ok(player_id) => Reply::PlayerRegistered(player_id),
+            Err(error) => Reply::Err(error),
+        },
         Cmd::UnregisterPlayer { player_id } => match unregister_player(state, player_id) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
@@ -64,6 +69,34 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Reply::Ok
         }
         Cmd::SessionDucking => Reply::SessionDucking(state.session_ducking),
+        Cmd::SetSessionTempo { tempo } => match transport::set_tempo(state, tempo) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
+        Cmd::SetSessionTempoChecked {
+            tempo,
+            expected_context,
+            player_ids,
+        } => match transport::set_tempo_checked(state, tempo, expected_context, &player_ids) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
+        Cmd::SeekSessionChecked {
+            target,
+            expected_context,
+            player_ids,
+        } => match transport::seek_checked(state, target, expected_context, &player_ids) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
+        Cmd::SessionTransport => match transport::snapshot(state) {
+            Ok(snapshot) => Reply::SessionTransport(snapshot),
+            Err(err) => Reply::Err(err),
+        },
+        Cmd::PreparationContext => match transport::preparation_context(state) {
+            Ok(context) => Reply::PreparationContext(context),
+            Err(err) => Reply::Err(err),
+        },
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
         Cmd::QuerySampleRate => {
             let sample_rate = state
@@ -74,6 +107,10 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             trace_stream_info(state, "query-sample-rate");
             Reply::SampleRate(sample_rate)
         }
+        Cmd::QueryStreamShape => match transport::stream_shape(state) {
+            Ok(shape) => Reply::StreamShape(shape),
+            Err(error) => Reply::Err(error),
+        },
         Cmd::Tick => tick_session(state),
     }
 }
@@ -103,14 +140,19 @@ fn unregister_player<B: AudioBackend>(
     state: &mut SessionState<B>,
     player_id: PlayerId,
 ) -> Result<(), SessionError> {
-    debug!(player_id, "[KITHARA-ROUTE] unregistering player");
+    debug!(
+        player_id = player_id.get(),
+        "[KITHARA-ROUTE] unregistering player"
+    );
     let idx = player_index(state, player_id)?;
+    let roster_revision = state.next_roster_revision()?;
     if state.players[idx].started {
         lifecycle::stop_player(state, player_id)?;
     }
     state.players.remove(idx);
+    state.commit_roster_revision(roster_revision);
     debug!(
-        player_id,
+        player_id = player_id.get(),
         players = state.players.len(),
         "[KITHARA-ROUTE] player unregistered"
     );
@@ -226,12 +268,16 @@ mod tests {
 
     use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
     use kithara_bufpool::PcmPool;
+    use kithara_events::EventBus;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::session::{
-        protocol::{Cmd, Reply, SessionError},
-        state::SessionState,
+    use crate::{
+        api::Tempo,
+        session::{
+            protocol::{Cmd, Reply, SessionError, SessionRosterRevision},
+            state::SessionState,
+        },
     };
 
     #[derive(Default)]
@@ -340,10 +386,11 @@ mod tests {
             .map_err(|err| err.to_string())
     }
 
-    fn register_player(state: &mut SessionState<RouteLossBackend>) -> u64 {
+    fn register_player(state: &mut SessionState<RouteLossBackend>) -> PlayerId {
         match run_cmd(
             state,
             Cmd::RegisterPlayer {
+                bus: EventBus::default(),
                 eq_layout: Vec::new(),
                 pcm_pool: PcmPool::default().clone(),
             },
@@ -352,6 +399,70 @@ mod tests {
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }
+    }
+
+    #[kithara::test]
+    fn preparation_context_captures_transport_stream_and_roster_revisions() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let player_id = register_player(&mut state);
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::StartPlayer {
+                    player_id,
+                    sample_rate: 48_000,
+                    master_volume: 1.0,
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetSessionTempo {
+                    tempo: Tempo::new(123.0).expect("valid tempo"),
+                },
+            ),
+            Reply::Ok
+        ));
+
+        let Reply::PreparationContext(initial) = run_cmd(&mut state, Cmd::PreparationContext)
+        else {
+            panic!("preparation context command returned an unexpected reply");
+        };
+
+        assert_eq!(initial.tempo(), Tempo::new(123.0).expect("valid tempo"));
+        assert_eq!(initial.transport_revision().get(), 1);
+        assert_eq!(initial.shape().sample_rate.get(), 48_000);
+        assert_eq!(initial.shape().max_block_frames.get(), 512);
+
+        let _second_player = register_player(&mut state);
+        let Reply::PreparationContext(changed) = run_cmd(&mut state, Cmd::PreparationContext)
+        else {
+            panic!("changed preparation context command returned an unexpected reply");
+        };
+
+        assert_eq!(changed.transport_revision(), initial.transport_revision());
+        assert_eq!(changed.shape(), initial.shape());
+        assert_ne!(changed.roster_revision(), initial.roster_revision());
+    }
+
+    #[kithara::test]
+    fn unregister_is_atomic_when_roster_revision_is_exhausted() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let player_id = register_player(&mut state);
+        state.roster_revision = SessionRosterRevision::new_for_test(u64::MAX);
+
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::UnregisterPlayer { player_id }),
+            Reply::Err(SessionError::SessionRosterRevisionExhausted)
+        ));
+        assert_eq!(state.players.len(), 1);
+        assert_eq!(state.players[0].player_id, player_id);
     }
 
     #[kithara::test]

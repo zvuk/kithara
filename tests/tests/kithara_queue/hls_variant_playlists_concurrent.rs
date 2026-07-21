@@ -14,6 +14,7 @@ use kithara::{
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -27,11 +28,11 @@ use url::Url;
 
 struct Consts;
 impl Consts {
-    const VARIANT_COUNT: usize = 3;
+    const LOAD_DEADLINE: Duration = Duration::from_secs(20);
+    const MAX_CONCURRENT: usize = 3;
     const SEGMENTS_PER_VARIANT: usize = 4;
     const SEGMENT_DURATION_S: f64 = 4.0;
-    const MAX_CONCURRENT: usize = 3;
-    const LOAD_DEADLINE: Duration = Duration::from_secs(20);
+    const VARIANT_COUNT: usize = 3;
 }
 
 /// `BatchGroup::process` probe (the downloader's batch processor). Fires once
@@ -80,10 +81,9 @@ fn build_queue_with_tick(
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(&player))
-            .with_store(store.clone()),
+    let queue = Arc::new(Queue::build(
+        Arc::clone(&player),
+        QueueConfig::default().with_store(store.clone()),
     ));
     let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(

@@ -14,13 +14,16 @@ pub mod analysis;
 mod audio;
 mod blob;
 pub mod effects;
+pub mod elastic;
 mod exports;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
+mod musical;
 mod pipeline;
 mod region;
 pub(crate) mod renderer;
 mod runtime;
+mod source_range;
 mod traits;
 mod waveform;
 
@@ -34,6 +37,7 @@ pub use exports::*;
 pub use kithara_resampler::{
     NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality,
 };
+pub use musical::{BeatMapError, CoordinateError, SourceFrame, TrackBeat, TrackBeatMap};
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, DecoderResamplerSettings},
     fetch::{EpochValidator, Fetch},
@@ -41,6 +45,9 @@ pub use pipeline::{
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
 pub use renderer::{
     AudioWorkerHandle, AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass,
+};
+pub use source_range::{
+    SourceFrameIndex, SourceRange, SourceRangeError, SourceRangeReadOutcome, SourceRangeRequest,
 };
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,

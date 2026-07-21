@@ -13,7 +13,7 @@ use super::{
 };
 use crate::pipeline::{
     fetch::Fetch,
-    seek::{SeekContext, SeekRequest, emit::preempt_target, engine::SeekTransition},
+    seek::{SeekRequest, emit::preempt_target, engine::SeekTransition},
     source::StreamAudioSource,
 };
 
@@ -119,13 +119,15 @@ pub(super) fn apply_seek_transition<T: StreamType>(
             context,
         } => {
             warn!(?error, epoch = request.seek.epoch, ?request.seek.target, "{context}");
-            emit_event(
-                src,
-                AudioEvent::SeekRejected {
-                    epoch: request.seek.epoch,
-                    target: request.seek.target,
-                },
-            );
+            if request.seek.events.should_publish() {
+                emit_event(
+                    src,
+                    AudioEvent::SeekRejected {
+                        epoch: request.seek.epoch,
+                        target: request.seek.target,
+                    },
+                );
+            }
             src.seek_engine
                 .commit_decode_epoch(request.seek.epoch, "seek_rejected");
             src.readiness
@@ -138,13 +140,15 @@ pub(super) fn apply_seek_transition<T: StreamType>(
             context,
         } => {
             warn!(?error, epoch = request.seek.epoch, ?request.seek.target, "{context}");
-            emit_event(
-                src,
-                AudioEvent::SeekRejected {
-                    epoch: request.seek.epoch,
-                    target: request.seek.target,
-                },
-            );
+            if request.seek.events.should_publish() {
+                emit_event(
+                    src,
+                    AudioEvent::SeekRejected {
+                        epoch: request.seek.epoch,
+                        target: request.seek.target,
+                    },
+                );
+            }
             src.readiness
                 .finalize_seek_pending(src.seek.as_ref(), request.seek.epoch);
             src.update_state(Track::<Failed>::new(TrackFailure::Decode(error)).erase());
@@ -167,14 +171,11 @@ fn emit_failure_log(failure: &TrackFailure) {
 
 pub(crate) fn dispatch<T: StreamType>(src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
     if !matches!(src.state, CurrentFsm::RebuildingDecoder(_))
-        && let Some(target) = preempt_target(&src.seek_engine, &src.state, src.seek_obs.as_ref())
+        && let Some(seek) = preempt_target(&src.seek_engine, &src.state, src.seek_obs.as_ref())
     {
         src.update_state(
             Track::<SeekRequested>::new(SeekRequest {
-                seek: SeekContext {
-                    target,
-                    epoch: src.seek_obs.epoch(),
-                },
+                seek,
                 emit_request: false,
             })
             .erase(),
@@ -234,6 +235,7 @@ mod tests {
             seek: SeekContext {
                 epoch: 1,
                 target: Duration::from_secs(secs),
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -279,6 +281,7 @@ mod tests {
                 seek: SeekContext {
                     epoch: 1,
                     target: Duration::from_secs(5),
+                    ..Default::default()
                 },
                 anchor_offset: None,
                 anchor_variant_index: None,
@@ -332,6 +335,7 @@ mod tests {
         let ctx = SeekContext {
             epoch: 42,
             target: Duration::from_millis(500),
+            ..Default::default()
         };
         let copy = ctx;
         assert_eq!(ctx, copy);

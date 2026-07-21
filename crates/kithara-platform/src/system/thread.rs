@@ -29,6 +29,13 @@ pub(crate) enum GateBackend {
 
 impl GateBackend {
     #[inline]
+    pub(crate) fn park(&self) {
+        match self {
+            Self::System => park(),
+        }
+    }
+
+    #[inline]
     pub(crate) fn park_timeout(&self, duration: Duration) {
         match self {
             Self::System => park_timeout(duration),

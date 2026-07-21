@@ -6,8 +6,8 @@ use kithara::{
     platform::sync::Arc,
     play::{
         PlayerNode, Resource, SharedEq, TrackTransition,
-        bridge::{PlaybackShared, PlayerCmd, SlotControl, slot_channels},
-        rt::track::PlayerResource,
+        bridge::{PlaybackShared, PlayerCmd, SlotControl, TrackStart, slot_channels},
+        player::track::PlayerResource,
     },
 };
 use ringbuf::traits::{Consumer, Producer};
@@ -75,8 +75,10 @@ impl OfflinePlayer {
         self.control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: Box::new(pr),
+                binding: None,
+                resource: pr,
                 item_id: None,
+                start: TrackStart::Immediate,
             })
             .expect("BUG: send LoadTrack");
         self.control
@@ -140,6 +142,7 @@ impl OfflinePlayer {
             use kithara::play::PlayerNotification as N;
             out.push(match n {
                 N::Loaded { .. } => NotificationKind::Loaded,
+                N::BindingCommitted { .. } => NotificationKind::BindingCommitted,
                 N::Unloaded { .. } => NotificationKind::Unloaded,
                 N::HandoverRequested => NotificationKind::HandoverRequested,
                 N::PlaybackStarted { .. } => NotificationKind::PlaybackStarted,
@@ -159,6 +162,7 @@ impl OfflinePlayer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationKind {
     Loaded,
+    BindingCommitted,
     Unloaded,
     HandoverRequested,
     PlaybackStarted,

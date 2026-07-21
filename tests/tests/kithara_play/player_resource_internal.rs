@@ -20,7 +20,7 @@ use kithara::{
     platform::{sync::Arc, time::Duration},
     play::{
         Resource,
-        rt::track::{PlayerResource, ReadOutcome as BlockReadOutcome},
+        player::track::{PlayerResource, ReadOutcome as BlockReadOutcome},
     },
 };
 use kithara_integration_tests::audio_mock::TestPcmReader;
@@ -244,7 +244,7 @@ async fn seek_clears_buffered_samples() {
     }
     assert!(left[0] < 1024.0, "pre-seek sample should be near frame 0");
 
-    pr.seek(0.5);
+    assert!(pr.seek(0.5));
 
     let mut left2 = vec![0.0f32; 128];
     let mut right2 = vec![0.0f32; 128];

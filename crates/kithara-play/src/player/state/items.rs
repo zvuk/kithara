@@ -1,30 +1,151 @@
-use std::num::NonZeroU32;
-
-use kithara_bufpool::PcmPool;
+use kithara_abr::AbrHandle;
+use kithara_audio::ServiceClass;
 use kithara_events::EventBus;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::sync::{Arc, Mutex, MutexGuard};
 use tracing::debug;
 
-use super::{QueuedResource, playlist::Playlist};
-use crate::{api::PlayerEvent, resource::Resource, rt::track::PlayerResource};
+use super::{
+    super::platform::{ItemLoadContext, prepare_bound_load, restore_prepared_binding},
+    PreparedBindingResource, QueuedResource,
+    playlist::{Playlist, QueuedLoad},
+};
+use crate::{
+    api::{PlayerEvent, SlotId, TrackBinding},
+    bridge::{PlayerCmd, TrackStart},
+    engine::{DeferredPlayerCmdError, EngineImpl},
+    error::PlayError,
+    player::track::PlayerResource,
+    resource::Resource,
+    session::protocol::PreparationContext,
+};
 
-pub(crate) struct TakenItem {
-    pub(crate) item_id: Option<Arc<str>>,
-    pub(crate) player_resource: PlayerResource,
-    pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
+pub(crate) struct DispatchedLoad {
+    pub(crate) src: Arc<str>,
+    pub(crate) abr_handle: Option<AbrHandle>,
     pub(crate) duration_seconds: f64,
 }
 
+pub(in crate::player) struct BoundLoad {
+    pub(in crate::player) abr_handle: Option<AbrHandle>,
+    pub(in crate::player) preparation: Option<PreparationContext>,
+    pub(in crate::player) player_resource: PlayerResource,
+}
+
+#[must_use = "load transactions must be dispatched"]
+pub(in crate::player) struct LoadTransaction<'a> {
+    playlist: MutexGuard<'a, Playlist>,
+    abr_handle: Option<AbrHandle>,
+    binding: Option<TrackBinding>,
+    item_id: Option<Arc<str>>,
+    preparation: Option<PreparationContext>,
+    player_resource: PlayerResource,
+    duration_seconds: f64,
+    index: usize,
+    rollback_len: usize,
+}
+
+impl LoadTransaction<'_> {
+    pub(in crate::player) fn dispatch(
+        self,
+        engine: &EngineImpl,
+        slot: SlotId,
+        start: TrackStart,
+    ) -> Result<DispatchedLoad, PlayError> {
+        let Self {
+            mut playlist,
+            index,
+            binding,
+            item_id,
+            player_resource,
+            preparation,
+            abr_handle,
+            duration_seconds,
+            rollback_len,
+        } = self;
+        let src = Arc::clone(player_resource.src());
+        let mut player_resource = Some(player_resource);
+        let result = engine.try_send_slot_cmd_deferred(slot, || {
+            let resource = player_resource
+                .take()
+                .ok_or_else(|| PlayError::Internal("load transaction lost its resource".into()))?;
+            Ok(PlayerCmd::LoadTrack {
+                binding: binding.clone(),
+                item_id: item_id.clone(),
+                resource,
+                start,
+            })
+        });
+        match result {
+            Ok(()) => {
+                drop(playlist);
+                Ok(DispatchedLoad {
+                    src,
+                    abr_handle,
+                    duration_seconds,
+                })
+            }
+            Err(DeferredPlayerCmdError::Unsent(error)) => {
+                let resource = player_resource.ok_or_else(|| {
+                    PlayError::Internal("unsent load consumed its queue resource".into())
+                })?;
+                rollback_load(&mut playlist, index, resource, preparation, rollback_len)?;
+                Err(error)
+            }
+            Err(DeferredPlayerCmdError::Rejected(rejected)) => {
+                let error = rejected.error;
+                let PlayerCmd::LoadTrack { resource, .. } = *rejected.command else {
+                    return Err(PlayError::Internal(
+                        "load dispatch rejected a non-load command".into(),
+                    ));
+                };
+                rollback_load(&mut playlist, index, resource, preparation, rollback_len)?;
+                Err(error)
+            }
+        }
+    }
+}
+
+fn rollback_load(
+    playlist: &mut Playlist,
+    index: usize,
+    mut player_resource: PlayerResource,
+    preparation: Option<PreparationContext>,
+    rollback_len: usize,
+) -> Result<(), PlayError> {
+    player_resource.set_service_class(ServiceClass::Idle);
+    if playlist.len() > rollback_len {
+        let _ = playlist.remove_at(index);
+        return Ok(());
+    }
+    let (resource, prepared) = restore_prepared_binding(player_resource.release(), preparation)?;
+    restore_queued_resource(playlist, index, prepared, resource)
+}
+
+pub(in crate::player) fn restore_queued_resource(
+    playlist: &mut Playlist,
+    index: usize,
+    prepared: Option<PreparedBindingResource>,
+    resource: Resource,
+) -> Result<(), PlayError> {
+    if playlist.restore(index, prepared, resource) {
+        Ok(())
+    } else {
+        Err(PlayError::Internal(
+            "load transaction could not restore its queue resource".into(),
+        ))
+    }
+}
+
 pub(crate) struct ItemQueue {
-    playlist: Mutex<Playlist>,
     bus: EventBus,
+    playlist: Mutex<Playlist>,
 }
 
 impl ItemQueue {
     pub(crate) fn new(bus: EventBus) -> Self {
         Self {
-            playlist: Mutex::default(),
             bus,
+            playlist: Mutex::default(),
         }
     }
 
@@ -55,18 +176,129 @@ impl ItemQueue {
         }
     }
 
+    pub(crate) fn current_has_binding(&self) -> bool {
+        let playlist = self.playlist.lock();
+        playlist
+            .get(playlist.current())
+            .is_some_and(|item| item.binding.is_some())
+    }
+
+    pub(crate) fn dispatch_load_at(
+        &self,
+        index: usize,
+        context: ItemLoadContext<'_>,
+        engine: &EngineImpl,
+        slot: SlotId,
+        start: TrackStart,
+    ) -> Result<Option<DispatchedLoad>, PlayError> {
+        self.take_for_load(index, context)?
+            .map(|transaction| transaction.dispatch(engine, slot, start))
+            .transpose()
+    }
+
+    pub(crate) fn has_binding(&self, index: usize) -> bool {
+        self.playlist
+            .lock()
+            .get(index)
+            .is_some_and(|item| item.binding.is_some())
+    }
+
     pub(crate) fn insert(
         &self,
         resource: Resource,
         item_id: Option<Arc<str>>,
         at_position: Option<usize>,
     ) {
+        self.insert_queued(
+            QueuedResource {
+                item_id,
+                binding: None,
+                prepared: None,
+                resource: Some(resource),
+            },
+            at_position,
+        );
+    }
+
+    pub(in crate::player) fn insert_queued(
+        &self,
+        queued: QueuedResource,
+        at_position: Option<usize>,
+    ) {
         let (count, pos) = {
             let mut playlist = self.playlist.lock();
-            let pos = playlist.insert(QueuedResource { item_id, resource }, at_position);
+            let pos = playlist.insert(queued, at_position);
             (playlist.len(), pos)
         };
         debug!(count, pos, "item inserted");
+    }
+
+    pub(crate) fn lock_playlist(&self) -> MutexGuard<'_, Playlist> {
+        self.playlist.lock()
+    }
+
+    pub(in crate::player) fn prepare_load<'a>(
+        mut playlist: MutexGuard<'a, Playlist>,
+        index: usize,
+        context: ItemLoadContext<'_>,
+        rollback_len: usize,
+    ) -> Result<Option<LoadTransaction<'a>>, (MutexGuard<'a, Playlist>, PlayError)> {
+        if index >= playlist.len() {
+            return Ok(None);
+        }
+
+        let Some(queued) = playlist.take(index) else {
+            return Ok(None);
+        };
+        let QueuedLoad {
+            binding,
+            item_id,
+            prepared,
+            resource,
+        } = queued;
+        let duration_seconds = resource
+            .duration()
+            .map_or(0.0, |duration| duration.as_secs_f64());
+        let rate = context.rate();
+        let pitch_bend = context.pitch_bend();
+        let shape = context.shape();
+        let BoundLoad {
+            player_resource,
+            preparation,
+            abr_handle,
+        } = if let Some(binding) = binding.as_ref() {
+            match prepare_bound_load(&mut playlist, index, resource, binding, prepared, context) {
+                Ok(load) => load,
+                Err(error) => return Err((playlist, error)),
+            }
+        } else {
+            let abr_handle = resource.abr_handle();
+            resource.set_playback_rate(rate);
+            resource.set_transport_bend(pitch_bend);
+            resource.set_host_sample_rate(shape.sample_rate);
+            let src = Arc::clone(resource.src());
+            BoundLoad {
+                abr_handle,
+                player_resource: PlayerResource::new(resource, src, context.pool()),
+                preparation: None,
+            }
+        };
+
+        player_resource.set_playback_rate(rate);
+        player_resource.set_transport_bend(pitch_bend);
+        player_resource.set_host_sample_rate(shape.sample_rate);
+
+        Ok(Some(LoadTransaction {
+            playlist,
+            abr_handle,
+            binding,
+            item_id,
+            preparation,
+            player_resource,
+            duration_seconds,
+            index,
+            rollback_len,
+        }))
     }
 
     pub(crate) fn remove_at(&self, index: usize) -> Option<QueuedResource> {
@@ -86,7 +318,15 @@ impl ItemQueue {
     ) {
         let mut playlist = self.playlist.lock();
         if index < playlist.len() {
-            playlist.replace(index, QueuedResource { item_id, resource });
+            playlist.replace(
+                index,
+                QueuedResource {
+                    item_id,
+                    binding: None,
+                    prepared: None,
+                    resource: Some(resource),
+                },
+            );
             drop(playlist);
             debug!(index, "item replaced");
         }
@@ -97,62 +337,28 @@ impl ItemQueue {
         debug!(count, "slots reserved");
     }
 
-    pub(crate) fn take_for_load(
+    fn take_for_load(
         &self,
         index: usize,
-        rate: f32,
-        host_sample_rate: u32,
-        pool: &PcmPool,
-    ) -> Option<TakenItem> {
-        let mut playlist = self.playlist.lock();
-        if index >= playlist.len() {
-            return None;
+        context: ItemLoadContext<'_>,
+    ) -> Result<Option<LoadTransaction<'_>>, PlayError> {
+        let playlist = self.playlist.lock();
+        let rollback_len = playlist.len();
+        Self::prepare_load(playlist, index, context, rollback_len).map_err(|(_, error)| error)
+    }
+
+    delegate::delegate! {
+        to self.playlist.lock() {
+            #[call(clear)]
+            pub(crate) fn clear_all(&self);
+            #[call(current)]
+            pub(crate) fn current_index(&self) -> usize;
+            pub(crate) fn has_resource(&self, index: usize) -> bool;
+            pub(crate) fn is_announced(&self, index: usize) -> bool;
+            #[call(len)]
+            pub(crate) fn item_count(&self) -> usize;
+            pub(crate) fn set_current(&self, index: usize);
         }
-
-        let queued = playlist.take(index)?;
-        let (item_id, resource) = (queued.item_id, queued.resource);
-        let duration_seconds = resource
-            .duration()
-            .map_or(0.0, |duration| duration.as_secs_f64());
-        let abr_handle = resource.abr_handle();
-        resource.set_playback_rate(rate);
-        if let Some(sample_rate) = NonZeroU32::new(host_sample_rate) {
-            resource.set_host_sample_rate(sample_rate);
-        }
-        let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src), pool);
-        drop(playlist);
-
-        Some(TakenItem {
-            item_id,
-            player_resource,
-            abr_handle,
-            duration_seconds,
-        })
-    }
-
-    pub(crate) fn clear_all(&self) {
-        self.playlist.lock().clear();
-    }
-
-    pub(crate) fn current_index(&self) -> usize {
-        self.playlist.lock().current()
-    }
-
-    pub(crate) fn has_resource(&self, index: usize) -> bool {
-        self.playlist.lock().has_resource(index)
-    }
-
-    pub(crate) fn is_announced(&self, index: usize) -> bool {
-        self.playlist.lock().is_announced(index)
-    }
-
-    pub(crate) fn item_count(&self) -> usize {
-        self.playlist.lock().len()
-    }
-
-    pub(crate) fn set_current(&self, index: usize) {
-        self.playlist.lock().set_current(index);
     }
 }
 
@@ -160,12 +366,22 @@ impl ItemQueue {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
+    use kithara_audio::{
+        BeatGrid, PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome, TrackBeat,
+        analysis::TrackAnalysis,
+    };
+    use kithara_bufpool::PcmPool;
     use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
     use kithara_events::{Envelope, Event, PlayerEvent};
-    use kithara_platform::time::Duration;
+    use kithara_platform::{time::Duration, traits::FromWithParams};
+    use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{
+        api::{PlaybackDirection, SessionBeat, SlotId},
+        engine::EngineConfig,
+        player::{node::StreamShape, platform::ItemLoadParams},
+    };
 
     struct EofReader {
         bus: EventBus,
@@ -235,18 +451,146 @@ mod tests {
         Resource::from_reader(EofReader::default(), Some(Arc::from(src)))
     }
 
-    #[test]
+    fn binding() -> TrackBinding {
+        let sample_rate = NonZeroU32::new(44_100).expect("static rate");
+        let analysis = TrackAnalysis::with_source_rate(
+            Some(BeatGrid::new(
+                120.0,
+                vec![0, 22_050, 44_100],
+                vec![0],
+                Vec::new(),
+            )),
+            None,
+            44_100,
+            sample_rate,
+        );
+        TrackBinding::new(
+            &analysis,
+            sample_rate,
+            SessionBeat::new(0.0).expect("finite session beat"),
+            TrackBeat::new(0.0).expect("finite track beat"),
+            PlaybackDirection::Forward,
+        )
+        .expect("valid binding")
+    }
+
+    fn load_context(pool: &PcmPool) -> ItemLoadContext<'_> {
+        let shape = StreamShape {
+            sample_rate: NonZeroU32::new(44_100).expect("static rate"),
+            max_block_frames: NonZeroU32::new(512).expect("static block size"),
+        };
+        ItemLoadContext::build(
+            shape,
+            ItemLoadParams {
+                pool,
+                pitch_bend: 1.0,
+                rate: 1.0,
+            },
+        )
+    }
+
+    #[kithara::test]
     fn insert_and_remove_preserve_resource() {
         let queue = ItemQueue::new(EventBus::default());
         queue.insert(resource("first"), None, None);
 
         let removed = queue.remove_at(0).expect("inserted resource");
 
-        assert_eq!(removed.resource.src().as_ref(), "first");
+        assert_eq!(
+            removed.resource.expect("inserted resource").src().as_ref(),
+            "first"
+        );
         assert_eq!(queue.item_count(), 0);
     }
 
-    #[test]
+    #[kithara::test]
+    fn replacement_and_removal_invalidate_queued_binding_demand() {
+        let queue = ItemQueue::new(EventBus::default());
+        queue.insert_queued(
+            QueuedResource {
+                binding: Some(binding()),
+                item_id: None,
+                prepared: None,
+                resource: Some(resource("bound-successor")),
+            },
+            None,
+        );
+        assert!(queue.has_binding(0));
+
+        queue.replace_item_tagged(0, resource("replacement"), None);
+        assert!(!queue.has_binding(0));
+        let replacement = queue.remove_at(0).expect("replacement remains queued");
+        assert!(replacement.binding.is_none());
+        assert!(replacement.prepared.is_none());
+
+        queue.insert_queued(
+            QueuedResource {
+                binding: Some(binding()),
+                item_id: None,
+                prepared: None,
+                resource: Some(resource("removed-successor")),
+            },
+            None,
+        );
+        let removed = queue.remove_at(0).expect("bound successor is removed");
+        assert!(removed.binding.is_some());
+        assert_eq!(queue.item_count(), 0);
+    }
+
+    #[kithara::test]
+    fn taking_a_bound_resource_retains_its_queue_coordinate_metadata() {
+        let queue = ItemQueue::new(EventBus::default());
+        queue.insert_queued(
+            QueuedResource {
+                binding: Some(binding()),
+                item_id: None,
+                prepared: None,
+                resource: Some(resource("bound")),
+            },
+            None,
+        );
+
+        let taken = queue
+            .playlist
+            .lock()
+            .take(0)
+            .expect("bound resource is available");
+
+        assert_eq!(taken.resource.src().as_ref(), "bound");
+        assert!(!queue.has_resource(0));
+        assert!(queue.current_has_binding());
+    }
+
+    #[kithara::test]
+    fn load_transaction_serializes_queue_mutation_and_restores_rejection() {
+        let queue = ItemQueue::new(EventBus::default());
+        queue.insert(resource("original"), None, None);
+        let pool = PcmPool::default();
+        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
+        let result = {
+            let transaction = queue
+                .take_for_load(0, load_context(&pool))
+                .expect("load preparation succeeds")
+                .expect("original resource is available");
+            assert!(queue.playlist.try_lock().is_err());
+            transaction.dispatch(&engine, SlotId::new(0), TrackStart::Immediate)
+        };
+
+        assert!(matches!(result, Err(PlayError::SlotNotFound(_))));
+        assert!(queue.playlist.try_lock().is_ok());
+        assert_eq!(
+            queue
+                .remove_at(0)
+                .and_then(|item| item.resource)
+                .expect("rejected resource is restored")
+                .src()
+                .as_ref(),
+            "original"
+        );
+        engine.worker().shutdown();
+    }
+
+    #[kithara::test]
     fn announce_deduplicates_current_item_event() {
         let bus = EventBus::default();
         let mut events = bus.subscribe();

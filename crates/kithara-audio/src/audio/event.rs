@@ -404,8 +404,7 @@ mod tests {
         let events = AudioEvents::new(bus.clone());
         let seek = SeekState::new();
         let position = Duration::from_millis(500);
-        let epoch = seek.begin(position);
-        seek.mark_pending(epoch);
+        let epoch = seek.begin(position.into());
 
         events.post_seek_output(&seek, epoch, None, position);
 

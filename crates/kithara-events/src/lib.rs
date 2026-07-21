@@ -70,9 +70,10 @@ pub use ids::{SlotId, TrackId};
 pub use meta::{Envelope, EventMeta, ScopeLabel};
 #[cfg(feature = "player")]
 pub use play::{
-    BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, MediaTime, PlayerEvent,
-    PlayerStatus, PortDescription, PortType, RouteChangeReason, RouteDescription, SessionEvent,
-    StretchBackendKind, TimeControlStatus, TimeRange, WaitingReason,
+    BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, MediaTime,
+    PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
+    RouteDescription, SessionEvent, StretchBackendKind, SyncEvent, TimeControlStatus, TimeRange,
+    TransportEvent, WaitingReason,
 };
 #[cfg(feature = "queue")]
 pub use queue::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackStatus};

@@ -1,10 +1,20 @@
 use kithara_platform::sync::Arc;
 
-use crate::resource::Resource;
+use super::super::platform::PreparedBindingResource;
+use crate::{api::TrackBinding, resource::Resource};
 
-/// A queued resource plus its optional queue-item identity.
+/// A queue entry that retains metadata while its resource is checked out by a load transaction.
 pub(crate) struct QueuedResource {
+    pub(crate) binding: Option<TrackBinding>,
     pub(crate) item_id: Option<Arc<str>>,
+    pub(crate) prepared: Option<PreparedBindingResource>,
+    pub(crate) resource: Option<Resource>,
+}
+
+pub(crate) struct QueuedLoad {
+    pub(crate) binding: Option<TrackBinding>,
+    pub(crate) item_id: Option<Arc<str>>,
+    pub(crate) prepared: Option<PreparedBindingResource>,
     pub(crate) resource: Resource,
 }
 
@@ -42,8 +52,20 @@ impl Playlist {
         self.current
     }
 
+    pub(crate) fn current_binding(&self) -> Option<&TrackBinding> {
+        self.get(self.current)
+            .and_then(|item| item.binding.as_ref())
+    }
+
     pub(crate) fn has_resource(&self, index: usize) -> bool {
-        self.items.get(index).is_some_and(Option::is_some)
+        self.items
+            .get(index)
+            .and_then(Option::as_ref)
+            .is_some_and(|queued| queued.resource.is_some())
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<&QueuedResource> {
+        self.items.get(index).and_then(Option::as_ref)
     }
 
     pub(crate) fn insert(&mut self, q: QueuedResource, at: Option<usize>) -> usize {
@@ -101,16 +123,42 @@ impl Playlist {
         self.current = index;
     }
 
-    pub(crate) fn take(&mut self, index: usize) -> Option<QueuedResource> {
-        self.items.get_mut(index).and_then(Option::take)
+    pub(crate) fn take(&mut self, index: usize) -> Option<QueuedLoad> {
+        let queued = self.items.get_mut(index)?.as_mut()?;
+        let resource = queued.resource.take()?;
+        Some(QueuedLoad {
+            binding: queued.binding.clone(),
+            item_id: queued.item_id.clone(),
+            prepared: queued.prepared.take(),
+            resource,
+        })
+    }
+
+    pub(crate) fn restore(
+        &mut self,
+        index: usize,
+        prepared: Option<PreparedBindingResource>,
+        resource: Resource,
+    ) -> bool {
+        let Some(queued) = self.items.get_mut(index).and_then(Option::as_mut) else {
+            return false;
+        };
+        if queued.resource.is_some() {
+            return false;
+        }
+        queued.prepared = prepared;
+        queued.resource = Some(resource);
+        true
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::Playlist;
 
-    #[test]
+    #[kithara::test]
     fn remove_at_shifts_current_and_reopens_announce() {
         let mut playlist = Playlist::default();
         playlist.reserve(3);
@@ -123,7 +171,7 @@ mod tests {
         assert!(playlist.mark_announced(1));
     }
 
-    #[test]
+    #[kithara::test]
     fn clear_resets_cursor_and_announce() {
         let mut playlist = Playlist::default();
         playlist.reserve(2);
@@ -137,7 +185,7 @@ mod tests {
         assert!(playlist.mark_announced(0));
     }
 
-    #[test]
+    #[kithara::test]
     fn advance_stops_at_end() {
         let mut playlist = Playlist::default();
         playlist.reserve(2);
@@ -147,7 +195,7 @@ mod tests {
         assert_eq!(playlist.current(), 1);
     }
 
-    #[test]
+    #[kithara::test]
     fn mark_announced_uses_swap_semantics() {
         let mut playlist = Playlist::default();
 

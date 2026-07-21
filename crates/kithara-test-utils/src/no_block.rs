@@ -14,6 +14,7 @@ mod rtsan_gate {
 
     use pin_project_lite::pin_project;
 
+    #[cfg(feature = "no-block")]
     pin_project! {
         pub struct RtsanChecked<F> {
             #[pin]
@@ -28,6 +29,7 @@ mod rtsan_gate {
         }
     }
 
+    #[cfg(feature = "no-block")]
     impl<F: Future> Future for RtsanChecked<F> {
         type Output = F::Output;
 
@@ -75,14 +77,14 @@ pub fn permit_poll<F: Future>(fut: F) -> PermitPoll<F> {
 
 #[doc(hidden)]
 #[track_caller]
-#[cfg(not(rtsan))]
+#[cfg(not(all(rtsan, feature = "no-block")))]
 pub fn watch<F: Future>(name: &'static str, budget_ms: u64, fut: F) -> Watched<F> {
     kithara_platform::no_block::watch_budget(name, budget_ms, fut)
 }
 
 #[doc(hidden)]
 #[track_caller]
-#[cfg(rtsan)]
+#[cfg(all(rtsan, feature = "no-block"))]
 pub fn watch<F: Future>(
     name: &'static str,
     budget_ms: u64,
@@ -93,14 +95,14 @@ pub fn watch<F: Future>(
 
 #[doc(hidden)]
 #[track_caller]
-#[cfg(not(rtsan))]
+#[cfg(not(all(rtsan, feature = "no-block")))]
 pub fn watch_root<F: Future>(name: &'static str, fut: F) -> Watched<F> {
     kithara_platform::no_block::watch_blanket(name, fut)
 }
 
 #[doc(hidden)]
 #[track_caller]
-#[cfg(rtsan)]
+#[cfg(all(rtsan, feature = "no-block"))]
 pub fn watch_root<F: Future>(name: &'static str, fut: F) -> Watched<rtsan_gate::RtsanChecked<F>> {
     kithara_platform::no_block::watch_blanket(name, rtsan_gate::RtsanChecked { fut })
 }
@@ -177,7 +179,7 @@ mod tests {
         async_allowed_sleep().await;
     }
 
-    #[test]
+    #[kithara::test]
     fn no_block_attr_panics_with_fn_path() {
         force_panic_mode();
 
@@ -191,7 +193,7 @@ mod tests {
         assert!(msg.contains(&format!("budget {BUDGET_MS}ms")), "got: {msg}");
     }
 
-    #[test]
+    #[kithara::test]
     fn allow_block_sync_fn_suppresses_forbid() {
         force_panic_mode();
 
@@ -199,7 +201,7 @@ mod tests {
         assert!(caught.is_ok());
     }
 
-    #[test]
+    #[kithara::test]
     fn allow_block_async_fn_suppresses_forbid() {
         force_panic_mode();
 

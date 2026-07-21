@@ -370,32 +370,38 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.QueueEnded ->
                 eventsFlow.tryEmit(KitharaPlayerEvent.QueueEnded)
 
-            // Per-track failure is surfaced via TrackStatusChanged(Failed) and item-side DidFail.
+            is FfiPlayerEvent.TrackRemoved ->
+                eventsFlow.tryEmit(KitharaPlayerEvent.QueueItemRemoved(event.itemId.toString()))
+
+            is FfiPlayerEvent.AssetCommitted,
+            is FfiPlayerEvent.AssetEvicted,
+            is FfiPlayerEvent.AssetFailed,
+            is FfiPlayerEvent.AudioRouteChanged,
+            is FfiPlayerEvent.CrossfadeCancelled,
+            is FfiPlayerEvent.CrossfadeCompleted,
+            is FfiPlayerEvent.CurrentItemAdvanced,
+            is FfiPlayerEvent.DjBpmDetected,
+            is FfiPlayerEvent.DjKeylockChanged,
+            is FfiPlayerEvent.DjStretchBackendChanged,
+            is FfiPlayerEvent.TransportTempoCommitted,
+            is FfiPlayerEvent.TransportPlayStateCommitted,
+            is FfiPlayerEvent.TransportSeekCommitted,
+            is FfiPlayerEvent.TransportFailed,
+            is FfiPlayerEvent.SyncBindingCommitted,
+            is FfiPlayerEvent.EngineStarted,
+            is FfiPlayerEvent.EngineStopped,
             is FfiPlayerEvent.ItemDidFail,
+            is FfiPlayerEvent.MasterVolumeChanged,
+            is FfiPlayerEvent.NextTrackReady,
+            is FfiPlayerEvent.RepeatModeChanged,
             is FfiPlayerEvent.TimeControlStatusChanged,
+            is FfiPlayerEvent.TrackAdded,
+            is FfiPlayerEvent.TrackLoadFailed,
             is FfiPlayerEvent.VolumeChanged,
             is FfiPlayerEvent.MuteChanged,
             is FfiPlayerEvent.ItemDidPlayToEnd,
             is FfiPlayerEvent.CrossfadeStarted,
-            is FfiPlayerEvent.CrossfadeDurationChanged,
-            is FfiPlayerEvent.TrackAdded,
-            is FfiPlayerEvent.TrackRemoved,
-            is FfiPlayerEvent.TrackLoadFailed,
-            is FfiPlayerEvent.RepeatModeChanged,
-            is FfiPlayerEvent.NextTrackReady,
-            is FfiPlayerEvent.CurrentItemAdvanced,
-            is FfiPlayerEvent.EngineStarted,
-            is FfiPlayerEvent.EngineStopped,
-            is FfiPlayerEvent.CrossfadeCompleted,
-            is FfiPlayerEvent.CrossfadeCancelled,
-            is FfiPlayerEvent.MasterVolumeChanged,
-            is FfiPlayerEvent.AudioRouteChanged,
-            is FfiPlayerEvent.DjBpmDetected,
-            is FfiPlayerEvent.DjKeylockChanged,
-            is FfiPlayerEvent.DjStretchBackendChanged,
-            is FfiPlayerEvent.AssetCommitted,
-            is FfiPlayerEvent.AssetFailed,
-            is FfiPlayerEvent.AssetEvicted -> Unit
+            is FfiPlayerEvent.CrossfadeDurationChanged -> Unit
         }
     }
 

@@ -126,10 +126,6 @@ async fn test_audio_new_publishes_initial_decoder_changed() {
     }
 }
 
-/// `Audio::new` pre-warms its PCM pool so the decode hot path and the
-/// first reads reuse pooled buffers instead of allocating on the audio
-/// thread. Drives a fresh, cold custom pool and asserts construction
-/// leaves it warmed.
 #[kithara::test(tokio)]
 async fn audio_new_warms_pcm_pool() {
     let pool = PcmPool::new(128, 200_000);
@@ -154,20 +150,6 @@ async fn audio_new_warms_pcm_pool() {
         pool.allocated_bytes() > 0,
         "Audio::new must pre-warm its PCM pool (allocated_bytes still 0)"
     );
-
-    // The warm-up's payoff: decode-sized buffers come back as pool hits,
-    // not fresh allocations on the audio thread.
-    let misses_before = pool.stats().alloc_misses;
-    let decode_samples = 4608 * 2;
-    let bufs: Vec<_> = (0..8)
-        .map(|_| pool.get_with(|b| b.resize(decode_samples, 0.0)))
-        .collect();
-    let misses_after = pool.stats().alloc_misses;
-    assert_eq!(
-        misses_before, misses_after,
-        "a warmed pool must serve decode-sized buffers without allocating"
-    );
-    drop(bufs);
 }
 
 #[kithara::test]

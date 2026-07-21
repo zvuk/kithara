@@ -5576,7 +5576,7 @@ public enum FfiItemEvent: Equatable, Hashable {
     )
     /**
      * Buffered byte ranges, expressed as `[start, start + duration)` in
-     * seconds. Replaces the older scalar `BufferedDurationChanged` —
+     * seconds. Replaces the older scalar `BufferedDurationChanged` -
      * the total buffered time is the sum of `range.duration_seconds`.
      * Mirrors the iOS `AudioPlayerItemProtocol.rxLoadedRanges` shape.
      */
@@ -6408,6 +6408,73 @@ public func FfiConverterTypeFfiKeySource_lower(_ value: FfiKeySource) -> RustBuf
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum FfiPlaybackDirection: Equatable, Hashable {
+
+    case forward
+    case reverse
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiPlaybackDirection: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPlaybackDirection: FfiConverterRustBuffer {
+    typealias SwiftType = FfiPlaybackDirection
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlaybackDirection {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .forward
+
+        case 2: return .reverse
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiPlaybackDirection, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .forward:
+            writeInt(&buf, Int32(1))
+
+
+        case .reverse:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlaybackDirection_lift(_ buf: RustBuffer) throws -> FfiPlaybackDirection {
+    return try FfiConverterTypeFfiPlaybackDirection.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPlaybackDirection_lower(_ value: FfiPlaybackDirection) -> RustBuffer {
+    return FfiConverterTypeFfiPlaybackDirection.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum FfiPlaybackResamplerKind: Equatable, Hashable {
 
     case rubato
@@ -6544,7 +6611,7 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     case queueEnded
     /**
      * A crossfade between tracks just started. `duration_seconds` is
-     * the configured crossfade window — UIs can drive progress from it.
+     * the configured crossfade window - UIs can drive progress from it.
      */
     case crossfadeStarted(durationSeconds: Float
     )
@@ -6584,6 +6651,16 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     case assetFailed(assetRoot: String, relPath: String, reason: String
     )
     case assetEvicted(assetRoot: String, reason: FfiEvictReason
+    )
+    case transportTempoCommitted(beatsPerMinute: Double, revision: UInt64
+    )
+    case transportPlayStateCommitted(playing: Bool, revision: UInt64
+    )
+    case transportSeekCommitted(positionBeats: Double, revision: UInt64
+    )
+    case transportFailed(revision: UInt64?, reason: String
+    )
+    case syncBindingCommitted(slot: UInt64, sessionAnchorBeats: Double, trackAnchorBeats: Double, direction: FfiPlaybackDirection
     )
 
 
@@ -6700,6 +6777,21 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         )
 
         case 34: return .assetEvicted(assetRoot: try FfiConverterString.read(from: &buf), reason: try FfiConverterTypeFfiEvictReason.read(from: &buf)
+        )
+
+        case 35: return .transportTempoCommitted(beatsPerMinute: try FfiConverterDouble.read(from: &buf), revision: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 36: return .transportPlayStateCommitted(playing: try FfiConverterBool.read(from: &buf), revision: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 37: return .transportSeekCommitted(positionBeats: try FfiConverterDouble.read(from: &buf), revision: try FfiConverterUInt64.read(from: &buf)
+        )
+
+        case 38: return .transportFailed(revision: try FfiConverterOptionUInt64.read(from: &buf), reason: try FfiConverterString.read(from: &buf)
+        )
+
+        case 39: return .syncBindingCommitted(slot: try FfiConverterUInt64.read(from: &buf), sessionAnchorBeats: try FfiConverterDouble.read(from: &buf), trackAnchorBeats: try FfiConverterDouble.read(from: &buf), direction: try FfiConverterTypeFfiPlaybackDirection.read(from: &buf)
         )
 
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -6886,6 +6978,38 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
             writeInt(&buf, Int32(34))
             FfiConverterString.write(assetRoot, into: &buf)
             FfiConverterTypeFfiEvictReason.write(reason, into: &buf)
+
+
+        case let .transportTempoCommitted(beatsPerMinute,revision):
+            writeInt(&buf, Int32(35))
+            FfiConverterDouble.write(beatsPerMinute, into: &buf)
+            FfiConverterUInt64.write(revision, into: &buf)
+
+
+        case let .transportPlayStateCommitted(playing,revision):
+            writeInt(&buf, Int32(36))
+            FfiConverterBool.write(playing, into: &buf)
+            FfiConverterUInt64.write(revision, into: &buf)
+
+
+        case let .transportSeekCommitted(positionBeats,revision):
+            writeInt(&buf, Int32(37))
+            FfiConverterDouble.write(positionBeats, into: &buf)
+            FfiConverterUInt64.write(revision, into: &buf)
+
+
+        case let .transportFailed(revision,reason):
+            writeInt(&buf, Int32(38))
+            FfiConverterOptionUInt64.write(revision, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
+
+
+        case let .syncBindingCommitted(slot,sessionAnchorBeats,trackAnchorBeats,direction):
+            writeInt(&buf, Int32(39))
+            FfiConverterUInt64.write(slot, into: &buf)
+            FfiConverterDouble.write(sessionAnchorBeats, into: &buf)
+            FfiConverterDouble.write(trackAnchorBeats, into: &buf)
+            FfiConverterTypeFfiPlaybackDirection.write(direction, into: &buf)
 
         }
     }

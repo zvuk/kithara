@@ -33,6 +33,7 @@ use super::{
     },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
 };
+use crate::effects::transport::PitchBend;
 
 const WARM_DECODE_FRAMES: usize = 4608;
 
@@ -129,6 +130,7 @@ struct RegisteredStreamSource {
     is_standalone_worker: bool,
     preload_gate: Arc<super::PreloadGate>,
     reader_wake: Arc<ThreadWake>,
+    read_mode: Arc<crate::source_range::AtomicAudioReadMode>,
     service_class: Arc<AtomicServiceClass>,
     track_id: super::TrackId,
     trash_tx: super::Outlet<PcmChunk>,
@@ -218,6 +220,7 @@ where
         let metadata = decoder.metadata();
         let epoch = Arc::new(AtomicU64::new(0));
         let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
+        let pitch_bend = PitchBend::default();
         let effects = create_effects(initial_spec, stretch.as_ref(), &pcm_pool, custom_effects);
         log_pipeline_ready(initial_spec, &host_sample_rate);
 
@@ -281,7 +284,9 @@ where
             controls: Controls {
                 host_sample_rate: registered.host_sample_rate,
                 playback_rate,
+                pitch_bend,
                 stretch,
+                read_mode: registered.read_mode,
                 service_class: registered.service_class,
             },
             pcm_pool,
@@ -394,6 +399,7 @@ where
         registration.effects,
         registration.shared_stream.seek_observe().epoch(),
     );
+    let read_mode = Arc::clone(decode.core.read_mode());
     let parts = SourceParts::new(
         &registration.shared_stream,
         decode,
@@ -427,6 +433,7 @@ where
         is_standalone_worker,
         preload_gate,
         reader_wake,
+        read_mode,
         service_class,
         track_id,
         trash_tx,
@@ -565,11 +572,13 @@ fn warm_channels(info: Option<&MediaInfo>) -> usize {
 }
 
 fn warm_pcm_pool(pool: &PcmPool, channels: usize, chunks: usize) {
-    if pool.allocated_bytes() != 0 {
-        return;
-    }
     let capacity = WARM_DECODE_FRAMES * channels.max(1);
-    pool.pre_warm(chunks.saturating_mul(2).max(1), |buffer| {
+    let buffer_count = if pool.allocated_bytes() == 0 {
+        chunks.saturating_mul(2)
+    } else {
+        0
+    };
+    pool.pre_warm(buffer_count.max(1), |buffer| {
         buffer.clear();
         buffer.resize(capacity, 0.0);
     });

@@ -24,6 +24,17 @@ impl Default for GateBackend {
 
 impl GateBackend {
     #[inline]
+    pub(crate) fn park(&self) {
+        match self {
+            Self::Engine => {
+                let key = ThreadKey::of(current().id());
+                crate::flash::system::park_unparkable(key);
+            }
+            Self::Native => park(),
+        }
+    }
+
+    #[inline]
     pub(crate) fn park_timeout(&self, duration: Duration) {
         match self {
             Self::Engine => {

@@ -6,32 +6,21 @@ use tracing::{debug, warn};
 
 use super::super::core::PlayerImpl;
 use crate::{
-    api::{PlayerEvent, PlayerStatus},
-    bridge::{PlayerCmd, TrackTransition},
+    api::{PlayerEvent, PlayerStatus, StartAt},
+    bridge::{PlayerCmd, TrackStart, TrackTransition},
     error::PlayError,
 };
 
 /// How a [`PlayerImpl::select_item_with_crossfade`] transition behaves:
-/// whether to `autoplay` the selected item and the `crossfade_seconds`
+/// whether to autoplay the selected item and the `crossfade_seconds`
 /// fade applied for this one transition.
 #[derive(Debug, Clone, Copy)]
 pub struct SelectTransition {
-    pub autoplay: bool,
+    pub should_autoplay: bool,
     pub crossfade_seconds: f32,
 }
 
 impl PlayerImpl {
-    /// Ensure the audio engine is started.
-    pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
-        if self.core.engine.is_running() {
-            return Ok(());
-        }
-        match self.core.engine.start() {
-            Ok(()) | Err(PlayError::EngineAlreadyRunning) => Ok(()),
-            Err(e) => Err(e),
-        }
-    }
-
     /// Apply autoplay: resume at the default rate (and move to `Playing`) or
     /// hold at rate 0 (and move to `Paused`).
     fn apply_autoplay(&self, autoplay: bool) {
@@ -56,16 +45,31 @@ impl PlayerImpl {
         }
     }
 
+    /// Ensure the audio engine is started.
+    pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
+        if self.core.engine.is_running() {
+            return Ok(());
+        }
+        match self.core.engine.start() {
+            Ok(()) | Err(PlayError::EngineAlreadyRunning) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Load the current queue item into the active slot.
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
     /// in `PlayerResource`, and sends `LoadTrack` + `FadeIn` to the processor.
-    fn load_current_item(&self) {
+    fn load_current_item(&self, start: TrackStart) -> Result<bool, PlayError> {
         let index = self.current_index();
-        if let Some((src, duration_seconds)) = self.enqueue_to_processor(index) {
-            self.publish_current_track_snapshot(duration_seconds);
-            self.start_playback(src);
+        if let Some(item) = self.enqueue_to_processor_at(index, start)? {
+            self.publish_current_track_snapshot(item.duration_seconds);
+            if matches!(start, TrackStart::Immediate) {
+                self.start_playback(item.src);
+            }
+            return Ok(true);
         }
+        Ok(false)
     }
 
     /// Pause playback (sets rate to 0.0).
@@ -82,34 +86,35 @@ impl PlayerImpl {
 
     /// Start playback at the configured default rate.
     pub fn play(&self) {
-        let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
-        self.core.params.set_rate_value(rate);
-        self.core.timestretch.set_speed(rate);
-
-        if let Err(e) = self.ensure_engine_started() {
-            warn!(?e, "failed to start engine");
-            return;
+        if let Err(error) = self.start_at(StartAt::Immediate) {
+            warn!(%error, "failed to start playback");
         }
-        if let Err(e) = self.ensure_slot() {
-            warn!(?e, "failed to allocate slot");
-            return;
+    }
+
+    fn prepare_start(&self, start: StartAt) -> Result<TrackStart, PlayError> {
+        let StartAt::SessionBeat(target) = start else {
+            return Ok(TrackStart::Immediate);
+        };
+        if !self.core.items.current_has_binding() {
+            return Err(PlayError::SessionStartRequiresBoundTrack);
         }
-
-        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
-        let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
-        self.load_current_item();
-        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
-
-        self.enter_playing();
-        self.set_status(PlayerStatus::ReadyToPlay);
-        // Resuming the same item is not a track change; announce gates on it.
-        self.announce_current_item(self.current_index());
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::RateChanged { rate });
-        debug!(rate, phase = ?self.phase_kind(), "play");
+        let snapshot = self.core.engine.session_transport()?;
+        let context = self.core.engine.preparation_context()?;
+        if context.transport_revision() != snapshot.revision()
+            || context.tempo() != snapshot.tempo()
+        {
+            return Err(PlayError::BindingPreparationContextChanged);
+        }
+        if target <= snapshot.position() {
+            return Err(PlayError::SessionStartTargetElapsed {
+                target: target.get(),
+                position: snapshot.position().get(),
+            });
+        }
+        Ok(TrackStart::Session {
+            target,
+            revision: snapshot.revision(),
+        })
     }
 
     /// Seek active tracks to position in seconds.
@@ -126,6 +131,10 @@ impl PlayerImpl {
         let Some(playback) = self.core.engine.slot_playback(slot_id) else {
             return Err(PlayError::SlotNotFound(slot_id));
         };
+
+        if self.core.items.current_has_binding() {
+            return Err(PlayError::BoundTrackSeekRequiresSessionTransport);
+        }
 
         let seek_epoch = playback.next_seek_epoch();
         playback.seek_epoch.store(seek_epoch, Ordering::SeqCst);
@@ -157,11 +166,11 @@ impl PlayerImpl {
 
     /// Select and load a queue item by index, using the configured
     /// crossfade duration for the transition.
-    pub fn select_item(&self, index: usize, autoplay: bool) -> Result<(), PlayError> {
+    pub fn select_item(&self, index: usize, should_autoplay: bool) -> Result<(), PlayError> {
         self.select_item_with_crossfade(
             index,
             SelectTransition {
-                autoplay,
+                should_autoplay,
                 crossfade_seconds: self.crossfade_duration(),
             },
         )
@@ -181,8 +190,8 @@ impl PlayerImpl {
         transition: SelectTransition,
     ) -> Result<(), PlayError> {
         let SelectTransition {
-            autoplay,
             crossfade_seconds,
+            should_autoplay,
         } = transition;
         let items_len = self.item_count();
         if index >= items_len {
@@ -227,13 +236,50 @@ impl PlayerImpl {
         if armed_for_index {
             self.commit_next(index)?;
         } else if !reselecting_current {
+            let item = self.enqueue_to_processor(index)?;
             self.unarm_next_internal(Some(index));
             self.core.items.set_current(index);
-            self.load_current_item();
+            if let Some(item) = item {
+                self.publish_current_track_snapshot(item.duration_seconds);
+                self.start_playback(item.src);
+            }
             self.announce_current_item(index);
         }
 
-        self.apply_autoplay(autoplay);
+        self.apply_autoplay(should_autoplay);
+        Ok(())
+    }
+
+    /// Start playback at a typed session boundary.
+    pub fn start_at(&self, start: StartAt) -> Result<(), PlayError> {
+        let start = self.prepare_start(start)?;
+        self.ensure_engine_started()?;
+        self.ensure_slot()?;
+
+        let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
+        self.core.params.set_rate_value(rate);
+        self.core.timestretch.set_speed(rate);
+
+        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
+        let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
+        let loaded = self.load_current_item(start)?;
+        if !loaded && matches!(start, TrackStart::Session { .. }) {
+            self.send_to_slot(PlayerCmd::StartAt(start))?;
+        }
+        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
+        let bend = self.core.params.pitch_bend();
+        self.set_pitch_bend(bend);
+        let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+
+        self.enter_playing();
+        self.set_status(PlayerStatus::ReadyToPlay);
+        // Resuming the same item is not a track change; announce gates on it.
+        self.announce_current_item(self.current_index());
+        self.core
+            .engine
+            .bus()
+            .publish(PlayerEvent::RateChanged { rate });
+        debug!(rate, ?start, phase = ?self.phase_kind(), "play");
         Ok(())
     }
 
@@ -257,14 +303,32 @@ mod tests {
     }
 
     #[kithara::test]
+    fn rejected_session_start_does_not_mutate_player_state() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        player.set_rate(0.5);
+        let before_rate = player.rate();
+        let before_speed = player.core.timestretch.speed();
+        let target = crate::api::SessionBeat::new(4.0).expect("finite test beat");
+
+        let error = player
+            .start_at(StartAt::SessionBeat(target))
+            .expect_err("an unbound player cannot schedule a session start");
+
+        assert!(matches!(error, PlayError::SessionStartRequiresBoundTrack));
+        assert_eq!(player.rate(), before_rate);
+        assert_eq!(player.core.timestretch.speed(), before_speed);
+        assert!(player.slot().is_none());
+    }
+
+    #[kithara::test]
     fn select_item_out_of_range_returns_typed_error() {
         let player = PlayerImpl::new(PlayerConfig::default());
         let err = player
             .select_item_with_crossfade(
                 5,
                 SelectTransition {
-                    autoplay: false,
                     crossfade_seconds: 0.0,
+                    should_autoplay: false,
                 },
             )
             .expect_err("must error");
@@ -285,8 +349,8 @@ mod tests {
         let result = player.select_item_with_crossfade(
             1,
             SelectTransition {
-                autoplay: false,
                 crossfade_seconds: 0.0,
+                should_autoplay: false,
             },
         );
         assert!(result.is_err(), "selecting an emptied slot must fail");

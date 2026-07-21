@@ -836,7 +836,7 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
         drops, mut source, ..
     } = test_source(1).await;
     enter_rebuilding(&mut source, 7, recreate_state(1));
-    let epoch = source.seek.begin(Duration::from_secs(3));
+    let epoch = source.seek.begin(Duration::from_secs(3).into());
     push_completion_with_drops(&source, 7, 2, drops.clone());
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
@@ -905,8 +905,9 @@ async fn rebuilding_decoder_variant_fence_preserves_inflight_seek() {
     let target = Duration::from_secs(3);
     let request = SeekRequest {
         seek: SeekContext {
-            epoch: source.seek.begin(target),
+            epoch: source.seek.begin(target.into()),
             target,
+            ..Default::default()
         },
         emit_request: false,
     };

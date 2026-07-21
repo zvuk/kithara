@@ -1050,7 +1050,7 @@ mod tests {
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
-        let _epoch = seek.begin(Duration::from_secs(5));
+        let _epoch = seek.begin(Duration::from_secs(5).into());
 
         assert_eq!(
             variant_switch_target_time(&seek, &playhead),
@@ -1064,7 +1064,7 @@ mod tests {
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
-        let epoch = seek.begin(Duration::from_secs(5));
+        let epoch = seek.begin(Duration::from_secs(5).into());
         seek.clear_pending(epoch);
 
         assert_eq!(
@@ -1078,7 +1078,7 @@ mod tests {
         let seek = SeekState::new();
         let playhead = PlayheadState::new();
 
-        let epoch = seek.begin(Duration::from_secs(5));
+        let epoch = seek.begin(Duration::from_secs(5).into());
         seek.clear_pending(epoch);
         seek.complete(epoch);
         playhead.set_position(Duration::from_secs(9));

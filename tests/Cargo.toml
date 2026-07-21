@@ -52,7 +52,7 @@ apple-fused-src = ["kithara/apple-fused-src"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia", "stretch-signalsmith", "stretch-bungee"] }
+kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 # Crypto (for HLS encryption tests)
@@ -68,6 +68,8 @@ bon = { workspace = true }
 # Channels/buffers
 bytes = { workspace = true }
 cbc = { workspace = true }
+delegate = { workspace = true }
+fieldwork = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 rkyv = { workspace = true }
@@ -103,7 +105,7 @@ kithara = { workspace = true, features = ["apple", "client-wreq"] }
 
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = ["backend-cpal", "fdk-aac", "tokio-net", "tokio-rt-multi-thread"] }
+kithara = { workspace = true, features = ["backend-cpal", "fdk-aac", "stretch-bungee", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
 # fdk-aac came from kithara-decode defaults before Phase 2 (workspace
 # default-features=false). HE-AAC v2 fMP4 fixtures in rapid-scrub /
@@ -146,7 +148,7 @@ unimock = { workspace = true }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-kithara = { workspace = true, features = ["backend-web-audio", "client-reqwest"] }
+kithara = { workspace = true, features = ["backend-web-audio", "client-reqwest", "webcodecs"] }
 
 console_error_panic_hook = { workspace = true }
 gloo-timers = { workspace = true }
@@ -181,6 +183,10 @@ path = "tests/loom.rs"
 [[test]]
 name = "suite_light"
 path = "tests/suite_light.rs"
+
+[[test]]
+name = "suite_wasm"
+path = "tests/suite_wasm.rs"
 
 [[test]]
 name = "suite_heavy"

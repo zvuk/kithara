@@ -2,8 +2,9 @@ use std::num::NonZeroU32;
 
 use delegate::delegate;
 use kithara_audio::{
-    Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
-    ServiceClass,
+    Audio, AudioConfig, ChunkOutcome, PcmControl, PcmRead, PcmReader, PcmSession, PreloadGate,
+    ReadOutcome, ResamplerBackend, SeekOutcome, ServiceClass, SourceRange, SourceRangeError,
+    SourceRangeReadOutcome, SourceRangeRequest,
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
@@ -44,6 +45,7 @@ use super::{ResourceConfig, SourceType};
 #[fieldwork(opt_in, get)]
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
+    pub(super) supports_reverse_source: bool,
     #[field(get, deref = false)]
     src: Arc<str>,
     /// Drop guard for the per-track cancel — the token passed as
@@ -103,19 +105,14 @@ impl Resource {
             /// Get current playback position.
             #[must_use]
             pub fn position(&self) -> Duration;
-            /// Read interleaved PCM samples.
-            pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
-            /// Read deinterleaved (planar) PCM samples.
-            pub fn read_planar<'a>(
-                &mut self,
-                output: &'a mut [&'a mut [f32]],
-            ) -> Result<ReadOutcome, DecodeError>;
             /// Seek to position.
             pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
             /// Set the target sample rate of the audio host.
             pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
             /// Set the playback rate for the active stretch controls.
             pub fn set_playback_rate(&self, rate: f32);
+            /// Set the transport pitch-bend multiplier.
+            pub(crate) fn set_transport_bend(&self, bend: f32);
             /// Update the scheduling priority hint for the shared worker.
             pub fn set_service_class(&self, class: ServiceClass);
             /// Get current PCM specification.
@@ -138,11 +135,23 @@ impl Resource {
     where
         B: Default + ResamplerBackend,
     {
+        Self::open_config(config).await
+    }
+
+    async fn open_config<B>(config: ResourceConfig<B>) -> DecodeResult<Self>
+    where
+        B: Default + ResamplerBackend,
+    {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
         // Capture the per-track cancel before `build_*_config` consumes `config`
         // (it is cloned by identity into both the inner stream and the Audio).
         let cancel = config.cancel.clone();
+        let supports_reverse_source = matches!(
+            &source_type,
+            SourceType::RemoteFile(_) | SourceType::LocalFile(_)
+        );
+        let hls_source = matches!(&source_type, SourceType::HlsStream(_));
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio_config = config.build_file_config();
@@ -154,6 +163,11 @@ impl Resource {
             }
         };
         resource.cancel = CancelGuard(cancel);
+        resource.supports_reverse_source = supports_reverse_source
+            || hls_source
+                && resource
+                    .abr_handle()
+                    .is_some_and(|handle| handle.variants().len() == 1);
         Ok(resource)
     }
 
@@ -172,6 +186,10 @@ impl Resource {
     /// `"unknown"`.
     #[must_use]
     pub fn from_reader<R: PcmReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
+        Self::from_reader_parts(reader, src)
+    }
+
+    fn from_reader_parts<R: PcmReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
         let bus = reader.event_bus().clone();
         let mut inner: Box<dyn PcmReader> = Box::new(reader);
         let src = src.unwrap_or_else(|| Arc::from("unknown"));
@@ -180,6 +198,7 @@ impl Resource {
         }
         Self {
             inner,
+            supports_reverse_source: false,
             bus,
             src,
             cancel: CancelGuard(None),
@@ -201,7 +220,20 @@ impl Resource {
         Audio<Stream<T>>: PcmReader + 'static,
     {
         let audio = Audio::<Stream<T>>::new(config).await?;
-        Ok(Self::from_reader(audio, Some(src)))
+        Ok(Self::from_reader_parts(audio, Some(src)))
+    }
+
+    /// Read interleaved audio.
+    pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        self.inner.read(buf)
+    }
+
+    /// Read deinterleaved audio.
+    pub fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        self.inner.read_planar(output)
     }
 
     /// Wait for first decoded chunk to be available, then move it to internal buffer.
@@ -230,6 +262,60 @@ impl Resource {
     }
 }
 
+impl PcmRead for Resource {
+    delegate! {
+        to self.inner {
+            fn decoded_frontier(&self) -> Duration;
+            fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
+            fn position(&self) -> Duration;
+            fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
+            fn read_planar<'a>(
+                &mut self,
+                output: &'a mut [&'a mut [f32]],
+            ) -> Result<ReadOutcome, DecodeError>;
+            fn read_source_range(
+                &mut self,
+                request: SourceRangeRequest,
+                output: &mut [f32],
+            ) -> Result<SourceRangeReadOutcome, SourceRangeError>;
+            fn spec(&self) -> PcmSpec;
+        }
+    }
+}
+
+impl PcmSession for Resource {
+    delegate! {
+        to self.inner {
+            fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            fn duration(&self) -> Option<Duration>;
+            fn metadata(&self) -> &TrackMetadata;
+            fn preload_epoch(&self) -> u64;
+            fn preload_gate(&self) -> Option<Arc<PreloadGate>>;
+        }
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+}
+
+impl PcmControl for Resource {
+    delegate! {
+        to self.inner {
+            fn preload(&mut self) -> Result<(), DecodeError>;
+            fn request_source_range(
+                &mut self,
+                range: SourceRange,
+            ) -> Result<SourceRangeRequest, SourceRangeError>;
+            fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+            fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
+            fn set_playback_rate(&self, rate: f32);
+            fn set_service_class(&self, class: ServiceClass);
+            fn set_transport_bend(&self, bend: f32);
+        }
+    }
+}
+
 /// Unwrap a `Resource` into its underlying reader, e.g. to hand the opened
 /// source to the shared analysis worker (`kithara_audio::analysis`).
 ///
@@ -248,11 +334,14 @@ impl From<Resource> for Box<dyn PcmReader> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{num::NonZeroU32, path::Path};
 
+    use kithara_assets::AssetStoreBuilder;
     use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_platform::CancelToken;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -269,7 +358,7 @@ mod tests {
             Self {
                 bus: EventBus::default(),
                 meta: TrackMetadata::default(),
-                spec: PcmSpec::new(2, NonZeroU32::new(44_100).expect("static rate")),
+                spec: PcmSpec::new(2, NonZeroU32::new(44_100).expect("invariant: static rate")),
             }
         }
     }
@@ -325,7 +414,7 @@ mod tests {
     /// `T.child()`, so `Audio::Drop` alone would only reach its own child and
     /// leave the stream-side fetch loops running. `Resource::Drop` must cancel
     /// `T` so the stream subtree (modelled here by `stream_sub`) is torn down.
-    #[test]
+    #[kithara::test]
     fn drop_cancels_whole_per_track_subtree_not_just_audio() {
         let track = CancelToken::never();
         let stream_sub = track.child(); // File/Hls subtree F = T.child()
@@ -346,9 +435,46 @@ mod tests {
 
     /// A resource with no per-track cancel wired in (custom reader) drops
     /// without panicking and cancels nothing.
-    #[test]
+    #[kithara::test]
     fn drop_without_cancel_is_passive() {
         let resource = Resource::from_reader(EofReader::default(), None);
         drop(resource);
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn into_reader_does_not_cancel_the_opened_resource_subtree() {
+        let owner = CancelToken::never();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/silence_1s.wav")
+            .to_string_lossy()
+            .into_owned();
+        let mut config = ResourceConfig::new(
+            fixture,
+            AssetStoreBuilder::default().build(),
+            BytePool::new(usize::MAX, usize::MIN),
+            PcmPool::new(usize::MAX, usize::MIN),
+        )
+        .expect("invariant: fixture path must be a valid local resource");
+        config.cancel = Some(owner.clone());
+
+        let resource = Resource::new(config)
+            .await
+            .expect("invariant: fixture resource must open");
+        let reader_cancel = resource
+            .cancel
+            .0
+            .as_ref()
+            .expect("invariant: opened resource must own its cancel token")
+            .clone();
+
+        let reader: Box<dyn PcmReader> = resource.into();
+
+        assert!(
+            !reader_cancel.is_cancelled(),
+            "consuming the Resource must not cancel the live reader"
+        );
+        owner.cancel();
+        assert!(reader_cancel.is_cancelled());
+        drop(reader);
     }
 }

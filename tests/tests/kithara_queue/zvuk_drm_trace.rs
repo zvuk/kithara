@@ -11,6 +11,7 @@ use kithara::{
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::OnceCell,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig},
@@ -80,7 +81,7 @@ async fn shared_ctx() -> &'static Ctx {
                 .pcm_pool(PcmPool::default())
                 .build(),
         ));
-        let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+        let queue = Arc::new(Queue::build(player, QueueConfig::default()));
 
         let q = Arc::clone(&queue);
         tokio::task::spawn(async move {

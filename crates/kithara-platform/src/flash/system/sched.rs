@@ -23,8 +23,8 @@ pub(super) enum WaitKind {
     /// crossing its deadline. Used by the test harness `park_for` and by the
     /// async `sleep` future (`register_sleep_async`).
     Timed,
-    /// An unparkable thread park (`park_timeout`): woken by the deadline OR by
-    /// [`FlashInner::unpark`] targeting this thread id.
+    /// A thread park: woken by [`FlashInner::unpark`] or, when timed, by its
+    /// deadline.
     Thread(ThreadKey),
     /// A condvar waiter: woken by the deadline (when timed) OR by
     /// [`FlashInner::signal_condvar`] for this condvar id.
@@ -264,7 +264,32 @@ impl FlashInner {
         wait.mark_running();
     }
 
-    /// Unparkable thread park: block until the virtual clock reaches `now + d` OR
+    /// Park until [`FlashInner::unpark`] targets `thread_id`.
+    /// Registration and accounting share one `core` hold; a pending unpark
+    /// returns without touching the caller's credit.
+    pub(in crate::flash) fn park_unparkable(&self, thread_id: ThreadKey) {
+        let token = Token::new();
+        let mut s = self.core.lock();
+        if s.sched.unpark_pending.remove(&thread_id) {
+            return;
+        }
+        let id = s.registry.fresh_id();
+        s.sched.indef.insert(
+            id,
+            Entry {
+                wake: Wake::Sync(Arc::clone(&token)),
+                kind: WaitKind::Thread(thread_id),
+            },
+        );
+        let wait = self.enter_wait_locked(&mut s);
+        let adv = s.try_advance(&self.clock);
+        drop(s);
+        adv.fire();
+        token.wait();
+        wait.resume();
+    }
+
+    /// Unparkable timed thread park: block until the virtual clock reaches `now + d` OR
     /// [`FlashInner::unpark`] targets `thread_id`. Computes the deadline and
     /// registers the entry + `active -= 1` in ONE `core` hold, so no advance can
     /// slip between reading the clock and inserting. A pending `unpark` (one that
@@ -329,23 +354,30 @@ impl FlashInner {
         wait.resume();
     }
 
-    /// Wake a thread parked in [`FlashInner::park_timed_unparkable`]. If it is
-    /// currently parked, remove its timed entry, `active += 1`, and fire its
+    /// Wake a thread parked in [`FlashInner::park_unparkable`] or
+    /// [`FlashInner::park_timed_unparkable`]. If it is currently parked,
+    /// remove its entry, `active += 1`, and fire its
     /// token after releasing the `core` lock. If it is not parked, set
     /// `unpark_pending` so its next park returns at once (mirrors std `unpark`'s
     /// one-token semantics).
     pub(in crate::flash) fn unpark(&self, thread_id: ThreadKey) {
         let mut s = self.core.lock();
-        let key = s
+        let timed_key = s
             .sched
             .timed
             .iter()
             .find(|(_, e)| e.kind == WaitKind::Thread(thread_id))
             .map(|(&k, _)| k);
-        if let Some(key) = key
-            && let Some(entry) = s.sched.timed.remove(&key)
-        {
-            // A Thread-park entry is always `Sync` (see `park_timed_unparkable`),
+        let timed_entry = timed_key.and_then(|key| s.sched.timed.remove(&key));
+        let indef_key = s
+            .sched
+            .indef
+            .iter()
+            .find(|(_, entry)| entry.kind == WaitKind::Thread(thread_id))
+            .map(|(&key, _)| key);
+        let entry = timed_entry.or_else(|| indef_key.and_then(|key| s.sched.indef.remove(&key)));
+        if let Some(entry) = entry {
+            // A Thread-park entry is always `Sync` (see the two park methods),
             // so this bumps `active` by exactly one; `mark_granted` is a Task-only
             // no-op. Fired directly — an unpark never runs the advance rule.
             s.registry.account_woken(std::slice::from_ref(&entry.wake));
@@ -872,6 +904,11 @@ pub(crate) fn park_for(d: crate::flash::Duration) {
 /// Process-engine forward of [`FlashInner::park_timed_unparkable`].
 pub(crate) fn park_timed_unparkable(d: crate::flash::Duration, thread_id: ThreadKey) {
     FLASH.park_timed_unparkable(d, thread_id);
+}
+
+/// Process-engine forward of [`FlashInner::park_unparkable`].
+pub(crate) fn park_unparkable(thread_id: ThreadKey) {
+    FLASH.park_unparkable(thread_id);
 }
 
 /// Process-engine forward of [`FlashInner::sleep_timed`].

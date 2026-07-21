@@ -38,8 +38,16 @@ to the single `decoder` field.
   and the shared decode worker.
 - `PlayerImpl` owns playlist and parameter state, transport flow, status, and
   item handover.
+- `Tempo` and `SessionTransportSnapshot` expose the render-driven musical
+  transport shared by every engine in one session.
+- `TrackBinding` anchors one active track's analysed beat map to that session
+  transport with an immutable direction.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
-- `PlayerNode` is the public real-time audio graph node.
+- `PlayerResource` owns exactly one linear or prepared-bound playback resource;
+  bound preparation transfers the original `Resource` without reopening it and
+  drives `kithara-audio::elastic::ElasticReader` through `PcmReader`.
+- `PlayerNode` is the public standalone real-time audio graph node. Nodes owned
+  by a `SessionState` additionally consume its shared render context.
 - `Equalizer` is the remaining mockable trait surface.
 
 ## Orientation
@@ -53,7 +61,7 @@ to the single `decoder` field.
   live, mid-track.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
   `engine.subscribe()` (`PlayerEvent`, `ItemEvent`, `EngineEvent`,
-  `SessionEvent`, `DjEvent`).
+  `SessionEvent`, `TransportEvent`, `SyncEvent`, `DjEvent`).
 - **Queue auto-advance:** `PlayerImpl` publishes `PrefetchRequested` /
   `HandoverRequested`; `kithara-queue::Queue` disables the built-in linear policy
   and selects the loaded successor itself.
@@ -64,7 +72,8 @@ File and HLS pipelines are unconditional; cpal output is the default backend.
 Enable `mock` for `EqualizerMock`.
 
 The role-first source tree is organized as `api/`, `bridge/`, `engine/`,
-`player/{state,flow}/`, `resource/`, `rt/{track}/`, `session/{web}/`, plus the
-target-gated `wasm` surface.
+`player/{state,flow,node,track}/`, `resource/`, `session/{render,web}/`, plus the
+target-gated `wasm` surface. Audio-callback code stays with its player or session
+owner instead of forming a separate real-time subsystem.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

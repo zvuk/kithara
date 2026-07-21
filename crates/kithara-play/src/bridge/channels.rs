@@ -4,10 +4,10 @@ use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
 use super::PlaybackShared;
 use crate::{
     bridge::{PlayerCmd, PlayerNotification, SharedEq},
-    rt::track::PlayerTrack,
+    player::track::PlayerTrack,
 };
 
-/// RT-owned channel halves and playback atomics for one player node.
+/// Callback-side channel halves and playback atomics for one player node.
 #[non_exhaustive]
 pub struct NodeInputs {
     pub(crate) cmd_rx: HeapCons<PlayerCmd>,

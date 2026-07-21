@@ -1,3 +1,4 @@
+use delegate::delegate;
 use kithara_events::RouteDescription;
 
 use super::super::core::PlayerImpl;
@@ -7,6 +8,15 @@ use crate::{
 };
 
 impl PlayerImpl {
+    delegate! {
+        to self.core.params {
+            /// Enable or disable the built-in linear auto-advance handler.
+            pub fn set_auto_advance_enabled(&self, enabled: bool);
+            /// Set the default playback rate used by `play()` and `select_item()`.
+            pub fn set_default_rate(&self, rate: f32);
+        }
+    }
+
     /// Ensure we have an active slot, allocating one if needed.
     pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
         if let Some(id) = self.slot() {
@@ -45,21 +55,11 @@ impl PlayerImpl {
         Ok(())
     }
 
-    /// Enable or disable the built-in linear auto-advance handler.
-    pub fn set_auto_advance_enabled(&self, enabled: bool) {
-        self.core.params.set_auto_advance_enabled(enabled);
-    }
-
     /// Set crossfade duration in seconds.
     pub fn set_crossfade_duration(&self, seconds: f32) {
         self.core
             .params
             .set_crossfade_duration(seconds, |cmd| self.send_to_slot(cmd));
-    }
-
-    /// Set the default playback rate used by `play()` and `select_item()`.
-    pub fn set_default_rate(&self, rate: f32) {
-        self.core.params.set_default_rate(rate);
     }
 
     /// Set EQ gain for a band in dB.
@@ -95,6 +95,13 @@ impl PlayerImpl {
         self.core
             .params
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
+    }
+
+    /// Set the transport pitch-bend multiplier.
+    pub fn set_pitch_bend(&self, bend: f32) {
+        self.core
+            .params
+            .set_pitch_bend(bend, |cmd| self.send_to_slot(cmd));
     }
 
     /// Pump audio backend/runtime state.

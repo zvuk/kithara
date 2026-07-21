@@ -618,6 +618,7 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric() {
                                 seek: SeekContext {
                                     epoch,
                                     target: chunk.meta.end_timestamp,
+                                    ..Default::default()
                                 },
                                 emit_request: false,
                             }),

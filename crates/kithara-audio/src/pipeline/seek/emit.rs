@@ -6,7 +6,7 @@ use kithara_stream::{PlayheadWrite, SeekObserve, StreamType};
 use crate::pipeline::{
     decode::{DecoderSession, core::DecodeCore},
     rebuild::{RecreateNext, RecreateState},
-    seek::SeekEngine,
+    seek::{SeekContext, SeekEngine},
     stream::shared::SharedStream,
     track::{CurrentFsm, WaitContext},
 };
@@ -74,7 +74,7 @@ pub(crate) fn preempt_target(
     engine: &SeekEngine,
     state: &CurrentFsm,
     observe: &dyn SeekObserve,
-) -> Option<Duration> {
+) -> Option<SeekContext> {
     if !observe.take_preempt() {
         return None;
     }
@@ -86,7 +86,11 @@ pub(crate) fn preempt_target(
     if active_epoch(state).is_some_and(|active| active >= epoch) {
         return None;
     }
-    Some(target)
+    Some(SeekContext {
+        target,
+        epoch,
+        events: (observe.pending_epoch() == Some(epoch)).into(),
+    })
 }
 
 pub(crate) fn update_len<T: StreamType>(decode: &DecodeCore, stream: &SharedStream<T>) {

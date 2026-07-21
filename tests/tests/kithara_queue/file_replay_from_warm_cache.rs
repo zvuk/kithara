@@ -13,6 +13,7 @@ use kithara::{
         sync::Arc,
         time::{Duration, sleep},
         tokio,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -27,10 +28,10 @@ use kithara_integration_tests::{
 use url::Url;
 
 struct Session {
-    queue: Arc<Queue>,
-    downloader: Downloader,
-    store: AssetStore,
     flush_hub: Arc<FlushHub>,
+    queue: Arc<Queue>,
+    store: AssetStore,
+    downloader: Downloader,
     tick: tokio::task::JoinHandle<()>,
 }
 
@@ -52,10 +53,9 @@ fn build_session(cache_path: &Path) -> Session {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+    let queue = Arc::new(Queue::build(
+        player,
+        QueueConfig::default().with_store(store.clone()),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
@@ -114,7 +114,6 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
     // Durable checkpoint: returns only once the on-disk indexes
     // (availability / lru / pins) are committed, so the next warm-cache
     // session observes a fully-written cache. This is a state-completion
-    // wait, not a timer.
     session
         .flush_hub
         .flush_now()

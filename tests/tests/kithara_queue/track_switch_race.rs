@@ -31,6 +31,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio,
         tokio::sync::broadcast::error::RecvError,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -44,22 +45,12 @@ use url::Url;
 
 struct Consts;
 impl Consts {
-    /// Number of repetitions inside the concurrent-completion stress case.
-    /// Pre-`select_apply`-lock this barged in; kept high for catch rate.
-    const STRESS_ITERATIONS: u32 = 30;
     /// `fast` fixture: 1 segment × 2 s = 2 s. Short enough that it plays to
     /// its natural end inside the observation window, opening the
     /// auto-advance gate so the test exercises the "after fast plays out"
     /// branch.
     const FAST_SEGMENT_COUNT: usize = 1;
     const FAST_SEGMENT_DURATION_S: f64 = 2.0;
-    /// `slow` fixture: several segments so it cannot finish during the
-    /// observation window once released.
-    const SLOW_SEGMENT_COUNT: usize = 4;
-    const SLOW_SEGMENT_DURATION_S: f64 = 4.0;
-    /// The single variant of each fixture; its init segment is what the gate
-    /// withholds.
-    const VARIANT: usize = 0;
     /// Loader settle deadline.
     const LOAD_DEADLINE: Duration = Duration::from_secs(30);
     /// Deadline for an observable to reach an expected value (init GET
@@ -72,9 +63,6 @@ impl Consts {
     /// `FAST_SEGMENT_DURATION_S` so `fast`'s natural end (and the auto-advance
     /// that must skip the cancelled `slow`) fires inside it.
     const POST_FAST_OBSERVE: Duration = Duration::from_secs(5);
-    /// Polling interval for the init-gate counter observable
-    /// (`wait_for_init_requested`).
-    const STATUS_POLL: Duration = Duration::from_millis(5);
     /// Gap between `select(slow)` and `select(fast)` in the completion-race
     /// test: long enough for slow's loader completion to fire around the
     /// superseding select (the contended window), short relative to
@@ -86,6 +74,19 @@ impl Consts {
     /// for a barge-in (slow stomping current fast). Ample for the racing
     /// completion's `select_item` to land (~tens of ms when it does).
     const RACE_OBSERVE: Duration = Duration::from_secs(1);
+    /// `slow` fixture: several segments so it cannot finish during the
+    /// observation window once released.
+    const SLOW_SEGMENT_COUNT: usize = 4;
+    const SLOW_SEGMENT_DURATION_S: f64 = 4.0;
+    /// Polling interval for the init-gate counter observable
+    /// (`wait_for_init_requested`).
+    const STATUS_POLL: Duration = Duration::from_millis(5);
+    /// Number of repetitions inside the concurrent-completion stress case.
+    /// Pre-`select_apply`-lock this barged in; kept high for catch rate.
+    const STRESS_ITERATIONS: u32 = 30;
+    /// The single variant of each fixture; its init segment is what the gate
+    /// withholds.
+    const VARIANT: usize = 0;
 }
 
 /// Build a single-variant HLS fixture and return its [`CreatedHls`] handle so
@@ -124,10 +125,9 @@ fn build_queue_with_tick(
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+    let queue = Arc::new(Queue::build(
+        player,
+        QueueConfig::default().with_store(store.clone()),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(run_tick_driver(queue_for_tick));
@@ -164,10 +164,9 @@ fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, Asset
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+    let queue = Arc::new(Queue::build(
+        player,
+        QueueConfig::default().with_store(store.clone()),
     ));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
@@ -518,7 +517,6 @@ fn drain_event_backlog(rx: &mut EventReceiver) {
 // a wait for a settled state — synchronising on slow reaching `Loaded` would
 // order the completion before the select and dissolve the contended window this
 // gate exists to probe. It therefore has no state-wait equivalent and is left
-// as a timer on purpose.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn concurrent_completion_race_does_not_barge_in() {
     let helper = TestServerHelper::new().await;

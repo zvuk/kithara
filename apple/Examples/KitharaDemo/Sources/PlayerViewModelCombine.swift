@@ -78,7 +78,7 @@ final class PlayerViewModelCombine: PlayerViewModelBase {
             // Queue drives auto-advance + crossfade timing; UI
             // updates on the subsequent `.currentItemChanged`.
             break
-        case .timeControlStatusChanged:
+        case .timeControlStatusChanged, .bufferedDurationChanged:
             break
         case .itemDidPlayToEnd:
             // Engine does not auto-advance between queue items; drive
@@ -141,7 +141,43 @@ final class PlayerViewModelCombine: PlayerViewModelBase {
             if entryId == currentTrackId, errorMessage == nil {
                 errorMessage = message
             }
-        case .statusChanged, .loadedRangesChanged, .didReachEnd, .didStall:
+        case .statusChanged,
+             .loadedRangesChanged,
+             .didReachEnd,
+             .didStall,
+             .decoderChanged,
+             .decodeError,
+             .gaplessResolved,
+             .resamplerConfigured,
+             .audioFormatDetected,
+             .audioFormatChanged,
+             .seekComplete,
+             .seekRejected,
+             .decoderReady,
+             .trackFailed,
+             .underrunStarted,
+             .underrunEnded,
+             .bufferHealth,
+             .engineLoad,
+             .playbackResamplerConfigured,
+             .hlsVariantSwitchFenced,
+             .hlsVariantSwitchAcked,
+             .hlsCacheComplete,
+             .downloadStarted,
+             .downloadSlow,
+             .downloadCompleted,
+             .downloadRetrying,
+             .downloadBodyStalled,
+             .downloadBodyResumed,
+             .downloadRetryExhausted,
+             .downloadFirstByte,
+             .downloadCancelled,
+             .fileOpened,
+             .fileTotalBytesResolved,
+             .fileCacheComplete,
+             .drmKeyFetchFailed,
+             .drmKeyAcquired,
+             .drmSegmentDecryptFailed:
             break
         case .didFail:
             print("[KitharaDemo] \(trackLabel(entryId)) aborted mid-stream")

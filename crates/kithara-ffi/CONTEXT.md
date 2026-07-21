@@ -98,6 +98,16 @@ Wasm builds use the web-audio backend and no native stretch backend. The shared
 `StretchControls` rate is retained as control state, but PCM speed is pinned to
 1.0 until a wasm-capable stretch backend exists.
 
+## Transport event migration
+
+`TransportEvent` owns committed transport facts, and `SyncEvent` owns the
+committed track-binding fact currently published by the player. Their FFI
+variants use `Transport*` and `Sync*` names on UniFFI and WASM surfaces. Do not
+add a platform variant until the Rust owner publishes the corresponding event.
+The existing `DjBpmDetected`, `DjKeylockChanged`, and
+`DjStretchBackendChanged` wire tags remain stable only for their existing
+legacy events; new transport or sync facts must not use `Dj*` identifiers.
+
 ## Build flow internals
 
 - `cargo xtask wasm postbuild` — post-build patches for COEP/COOP, polyfills, and the `checkRuntime()` helper appended to `kithara-ffi.js`.

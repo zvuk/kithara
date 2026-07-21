@@ -977,7 +977,7 @@ mod tests {
             _range: Range<u64>,
             _timeout: Option<Duration>,
         ) -> StreamResult<WaitOutcome> {
-            let _ = SeekControl::begin(&*self.seek, Duration::from_millis(10));
+            let _ = SeekControl::begin(&*self.seek, Duration::from_millis(10).into());
             Ok(WaitOutcome::Ready)
         }
     }
@@ -1100,7 +1100,7 @@ mod tests {
     #[kithara::test]
     fn try_read_returns_seek_pending_when_flushing() {
         let seek = Arc::new(SeekState::new());
-        let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
+        let _ = SeekControl::begin(&*seek, Duration::from_millis(10).into());
         let source = ScriptSource::new(Arc::clone(&seek), [WaitOutcome::Interrupted], [], vec![]);
         let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];

@@ -4,7 +4,7 @@ use kithara_platform::sync::Arc;
 
 use super::super::core::PlayerImpl;
 use crate::{
-    api::{EngineEvent, PlayerEvent},
+    api::{EngineEvent, PlayerEvent, SlotId, SyncEvent},
     bridge::{PlayerNotification, TrackPlaybackStopReason},
 };
 
@@ -27,8 +27,8 @@ impl Deref for Notifier<'_> {
 }
 
 impl Notifier<'_> {
-    fn dispatch_notification(&self, notification: PlayerNotification) {
-        let emitted = player_events_from_notification(self, &notification);
+    fn dispatch_notification(&self, slot: SlotId, notification: PlayerNotification) {
+        let emitted = player_events_from_notification(self, slot, &notification);
         let emitted_any = !emitted.is_empty();
         for event in emitted {
             self.core.engine.bus().publish(event);
@@ -124,7 +124,7 @@ impl Notifier<'_> {
             while let Some(notification) = self.core.engine.pop_slot_notification(slot_id) {
                 saw_slot = true;
                 tracing::debug!(?notification, "process_notifications: handle");
-                self.dispatch_notification(notification);
+                self.dispatch_notification(slot_id, notification);
             }
             if !self.core.engine.drain_slot_trash(slot_id) && !saw_slot {
                 tracing::warn!(?slot_id, "process_notifications: slot has no control state");
@@ -176,9 +176,13 @@ pub(crate) fn player_event_from_notification(
 
 fn player_events_from_notification(
     player: &PlayerImpl,
+    slot: SlotId,
     notification: &PlayerNotification,
 ) -> Vec<kithara_events::Event> {
     let mut events = Vec::new();
+    if let Some(event) = sync_event_from_notification(slot, notification) {
+        events.push(event.into());
+    }
     match notification {
         PlayerNotification::PlaybackStarted { src, item_id } => {
             events.push(
@@ -213,12 +217,32 @@ fn player_events_from_notification(
     events
 }
 
+fn sync_event_from_notification(
+    slot: SlotId,
+    notification: &PlayerNotification,
+) -> Option<SyncEvent> {
+    match notification {
+        PlayerNotification::BindingCommitted {
+            direction,
+            session_anchor_beats,
+            track_anchor_beats,
+        } => Some(SyncEvent::BindingCommitted {
+            slot,
+            direction: *direction,
+            session_anchor_beats: *session_anchor_beats,
+            track_anchor_beats: *track_anchor_beats,
+        }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::api::{PlaybackDirection, SlotId, SyncEvent};
 
     #[kithara::test]
     fn eof_playback_stopped_notification_maps_to_item_end_event() {
@@ -238,5 +262,27 @@ mod tests {
             reason: TrackPlaybackStopReason::Stop,
         });
         assert!(event.is_none());
+    }
+
+    #[kithara::test]
+    fn bound_track_notification_maps_to_sync_binding_event() {
+        let event = sync_event_from_notification(
+            SlotId::new(4),
+            &PlayerNotification::BindingCommitted {
+                direction: PlaybackDirection::Reverse,
+                session_anchor_beats: 8.0,
+                track_anchor_beats: 16.0,
+            },
+        );
+
+        assert!(matches!(
+            event,
+            Some(SyncEvent::BindingCommitted {
+                slot,
+                direction: PlaybackDirection::Reverse,
+                session_anchor_beats: 8.0,
+                track_anchor_beats: 16.0,
+            }) if slot == SlotId::new(4)
+        ));
     }
 }

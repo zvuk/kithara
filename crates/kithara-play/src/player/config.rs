@@ -2,7 +2,9 @@ use std::fmt;
 
 use bon::Builder;
 use kithara_abr::AbrController;
-use kithara_audio::{EqBandConfig, StretchControls, generate_log_spaced_bands};
+use kithara_audio::{
+    EqBandConfig, StretchControls, elastic::ElasticReaderConfig, generate_log_spaced_bands,
+};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
@@ -32,6 +34,9 @@ pub struct PlayerConfig {
     pub(crate) byte_pool: BytePool,
     /// PCM buffer pool for audio-thread scratch buffers.
     pub(crate) pcm_pool: PcmPool,
+    /// Exact-span source-window policy used by session-bound playback.
+    #[builder(default)]
+    pub(crate) elastic: ElasticReaderConfig,
     /// Pre-built audio session dispatcher.
     pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout. Default: 10-band log-spaced.
@@ -68,6 +73,7 @@ impl fmt::Debug for PlayerConfig {
             .field("crossfade_duration", &self.crossfade_duration)
             .field("default_rate", &self.default_rate)
             .field("prefetch_duration", &self.prefetch_duration)
+            .field("elastic", &self.elastic)
             .field("max_slots", &self.max_slots)
             .field("pcm_pool", &self.pcm_pool)
             .finish_non_exhaustive()

@@ -1,4 +1,4 @@
-#![cfg_attr(rtsan, feature(sanitize))]
+#![cfg_attr(all(rtsan, feature = "no-block"), feature(sanitize))]
 
 #[cfg(test)]
 extern crate self as kithara_test_utils;

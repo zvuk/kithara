@@ -8,6 +8,7 @@ use kithara::{
         sync::Arc,
         time::{self, Duration, Instant, timeout},
         tokio,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -105,7 +106,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::build(player, QueueConfig::default()));
     let tick_handle = spawn_ticker(Arc::clone(&queue));
 
     let cfg = ResourceConfig::for_src(url.as_str())

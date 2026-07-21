@@ -15,12 +15,14 @@ use std::{
 use firewheel::dsp::fade::FadeCurve;
 use kithara::{
     self,
+    audio::{BeatGrid, TrackBeat, analysis::TrackAnalysis},
     bufpool::PcmPool,
     decode::PcmSpec,
     platform::{sync::Arc, time::Duration},
     play::{
-        PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
-        rt::track::{PlayerResource, PlayerTrack, TrackParams, TrackReadOutcome},
+        PlaybackDirection, PlayerNotification, Resource, SessionBeat, TrackBinding,
+        TrackPlaybackStopReason, TrackState,
+        player::track::{PlayerResource, PlayerTrack, TrackAxis, TrackParams, TrackReadOutcome},
     },
 };
 use kithara_integration_tests::audio_mock::{
@@ -47,24 +49,49 @@ fn mock_spec() -> PcmSpec {
 fn make_track_with(duration_secs: f64, item_id: Option<Arc<str>>) -> PlayerTrack {
     let src: Arc<str> = Arc::from("test.mp3");
     let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs), None);
-    make_track_from_resource(resource, src, item_id)
+    make_track_from_resource(resource, src, item_id, None)
 }
 
 fn make_track_from_resource(
     resource: Resource,
     src: Arc<str>,
     item_id: Option<Arc<str>>,
+    binding: Option<TrackBinding>,
 ) -> PlayerTrack {
     let player_resource = PlayerResource::new(resource, Arc::clone(&src), &PcmPool::default());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
+    let axis = binding.map_or_else(|| TrackAxis::from(sample_rate), TrackAxis::from);
     let params = TrackParams::builder()
+        .axis(axis)
         .src(src)
-        .sample_rate(sample_rate)
         .maybe_item_id(item_id)
         .fade_duration(1.0)
         .fade_curve(FadeCurve::SquareRoot)
         .build();
-    PlayerTrack::new(Box::new(player_resource), params)
+    PlayerTrack::new(player_resource, params)
+}
+
+fn track_binding() -> TrackBinding {
+    let sample_rate = NonZeroU32::new(44_100).expect("test rate");
+    let analysis = TrackAnalysis::with_source_rate(
+        Some(BeatGrid::new(
+            120.0,
+            vec![0, 22_050, 44_100],
+            vec![0],
+            Vec::new(),
+        )),
+        None,
+        66_150,
+        sample_rate,
+    );
+    TrackBinding::new(
+        &analysis,
+        sample_rate,
+        SessionBeat::new(8.0).expect("finite session beat"),
+        TrackBeat::new(2.0).expect("finite track beat"),
+        PlaybackDirection::Forward,
+    )
+    .expect("valid binding")
 }
 
 fn make_track() -> PlayerTrack {
@@ -137,6 +164,32 @@ async fn track_src_returns_identifier() {
 }
 
 #[kithara::test(tokio)]
+async fn active_track_owns_its_binding() {
+    let binding = track_binding();
+    let expected = binding.clone();
+    let src: Arc<str> = Arc::from("bound.mp3");
+    let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), 60.0), None);
+    let track = make_track_from_resource(resource, src, None, Some(binding));
+
+    assert_eq!(track.binding(), Some(&expected));
+}
+
+#[kithara::test(tokio)]
+async fn host_rate_change_does_not_fall_back_to_an_unbound_axis() {
+    let binding = track_binding();
+    let src: Arc<str> = Arc::from("bound.mp3");
+    let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), 60.0), None);
+    let mut track = make_track_from_resource(resource, src, None, Some(binding));
+
+    track.update_fade_duration(
+        1.0,
+        NonZeroU32::new(48_000).expect("changed host sample rate"),
+    );
+
+    assert!(track.binding().is_some());
+}
+
+#[kithara::test(tokio)]
 async fn track_initial_position_and_duration() {
     let track = make_track();
     assert_eq!(track.position(), 0.0);
@@ -147,7 +200,7 @@ async fn track_initial_position_and_duration() {
 async fn track_seek_position_is_derived_from_served_frames() {
     let mut track = make_track();
     let seconds = 9.791_337;
-    track.seek(seconds);
+    assert!(track.seek(seconds));
 
     let sample_rate = 44_100.0;
     let expected = (seconds * sample_rate).floor() / sample_rate;
@@ -234,7 +287,7 @@ fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     let reader = LiveFrontierReader::new(mock_spec(), Arc::clone(&frontier_ns));
     let src: Arc<str> = Arc::from("frontier.flac");
     let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
-    let track = make_track_from_resource(resource, src, None);
+    let track = make_track_from_resource(resource, src, None, None);
 
     assert_eq!(track.decoded_frontier(), 0.0);
 
@@ -320,7 +373,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(9.79);
+    assert!(track.seek(9.79));
 
     let mut handover_count = 0;
     let mut saw_eof_stop = false;
@@ -381,7 +434,7 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
         MisreportedDurationReader::new(mock_spec(), 900),
         Some(Arc::clone(&src)),
     );
-    let mut track = make_track_from_resource(resource, src, None);
+    let mut track = make_track_from_resource(resource, src, None, None);
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.0, sample_rate);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
@@ -550,7 +603,7 @@ async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(8.5);
+    assert!(track.seek(8.5));
 
     let _ = track.read(
         &mut scratch_bufs,
@@ -592,7 +645,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(8.5);
+    assert!(track.seek(8.5));
 
     let _ = track.read(
         &mut scratch_bufs,
@@ -612,7 +665,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
             .all(|notification| !matches!(notification, PlayerNotification::HandoverRequested))
     );
 
-    track.seek(9.79);
+    assert!(track.seek(9.79));
 
     let mut saw_handover = false;
     for _ in 0..4 {
@@ -684,7 +737,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(5.0);
+    assert!(track.seek(5.0));
     let _ = track.read(
         &mut scratch_bufs,
         &mut mix_bufs,
@@ -697,7 +750,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
         PlayerNotification::Requested | PlayerNotification::HandoverRequested
     )));
 
-    track.seek(9.79);
+    assert!(track.seek(9.79));
     let mut prefetch_count = 0;
     let mut handover_count = 0;
     for _ in 0..4 {

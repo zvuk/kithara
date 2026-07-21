@@ -20,6 +20,7 @@ use kithara::{
         sync::Arc,
         time::{Duration, sleep},
         tokio,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -35,18 +36,18 @@ struct Consts;
 impl Consts {
     /// Loader permits; equals `HUNG_TRACKS` so hung loads take them all.
     const CAP: usize = 2;
-    const HUNG_TRACKS: usize = 2;
+    /// Short enough that a miss means starvation, not a slow load.
+    const FAST_DEADLINE: Duration = Duration::from_secs(8);
+    const FAST_SEGMENT_COUNT: usize = 1;
+    const FAST_SEGMENT_DURATION_S: f64 = 2.0;
+    const GATE_DEADLINE: Duration = Duration::from_secs(15);
     /// Above the probe buffer (1 `KiB`) so the probe waits for bytes, not EOF.
     const HUNG_BODY_LEN: usize = 64 * 1024;
     const HUNG_THROTTLE_CHUNK: usize = 1;
     /// Past the test window and the 30s net `inactivity_timeout`, so the
     /// load stays parked instead of failing.
     const HUNG_THROTTLE_DELAY_MS: u64 = 600_000;
-    const FAST_SEGMENT_COUNT: usize = 1;
-    const FAST_SEGMENT_DURATION_S: f64 = 2.0;
-    const GATE_DEADLINE: Duration = Duration::from_secs(15);
-    /// Short enough that a miss means starvation, not a slow load.
-    const FAST_DEADLINE: Duration = Duration::from_secs(8);
+    const HUNG_TRACKS: usize = 2;
     const POLL_INTERVAL: Duration = Duration::from_millis(50);
 }
 
@@ -100,12 +101,12 @@ fn build_queue_with_tick(
             .build(),
     ));
     let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
-    let queue = Arc::new(Queue::new(
+    let queue = Arc::new(Queue::build(
+        player,
         QueueConfig::builder()
             .max_concurrent_loads(cap)
             .store(store.clone())
-            .build()
-            .with_player(player),
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {

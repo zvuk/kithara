@@ -28,7 +28,7 @@ pub use hooks::{BoxedEventSink, ReaderChunkSignal, ReaderEventSink, ReaderSeekSi
 pub use media::{AudioCodec, ContainerFormat, MediaInfo, needs_exact_byte_sizes};
 pub use playhead::{ChunkPosition, PlayheadRead, PlayheadState, PlayheadWrite};
 pub use preroll::PrerollHint;
-pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
+pub use seek_state::{Activity, SeekControl, SeekIntent, SeekObserve, SeekState};
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,
     SourceSeekAnchor, VariantControl,

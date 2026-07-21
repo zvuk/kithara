@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use kithara_platform::{CancelToken, sync::Arc};
 
 use super::{DecoderNode, HangWatchdogObserver, TrackRegistration};
-use crate::runtime::{Node, Scheduler, SchedulerHandle};
+use crate::runtime::{Node, Scheduler, SchedulerHandle, WakeSignal};
 
 /// Unique identifier for a track registered with a shared worker.
 pub(crate) type TrackId = u64;
@@ -86,6 +86,12 @@ impl AudioWorkerHandle {
         );
 
         Self { id_gen, inner }
+    }
+}
+
+impl WakeSignal for AudioWorkerHandle {
+    fn wake(&self) {
+        Self::wake(self);
     }
 }
 
@@ -326,7 +332,7 @@ mod tests {
         let got = wait_for_chunks(&mut rx, 2, Duration::from_secs(5));
         assert!(got >= 2);
 
-        let _ = seek.begin(Duration::from_secs(10));
+        let _ = seek.begin(Duration::from_secs(10).into());
         handle.wake();
 
         thread_sleep(Duration::from_millis(100));
@@ -399,7 +405,7 @@ mod tests {
             .expect("initial preload gate must open");
         assert!(preload_gate.is_ready());
 
-        let epoch = seek.begin(Duration::from_secs(1));
+        let epoch = seek.begin(Duration::from_secs(1).into());
         handle.wake();
 
         platform_timeout(Duration::from_secs(1), preload_gate.wait_for_epoch(epoch))

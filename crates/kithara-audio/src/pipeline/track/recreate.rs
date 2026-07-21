@@ -344,7 +344,9 @@ fn finish_apply_seek_after_recreate<T: StreamType>(
             src.decode.reset();
             src.seek_engine
                 .record_resume_target(request.seek.epoch, request.seek.target);
-            if let Some(ref emit) = src.emit {
+            if request.seek.events.should_publish()
+                && let Some(ref emit) = src.emit
+            {
                 emit.enqueue(
                     AudioEvent::SeekLifecycle {
                         stage: kithara_events::SeekLifecycleStage::SeekApplied,

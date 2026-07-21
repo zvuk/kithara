@@ -18,6 +18,7 @@ pub(crate) struct PlayerParams {
     crossfade_duration: AtomicF32,
     default_rate: AtomicF32,
     muted: AtomicBool,
+    pitch_bend: AtomicF32,
     prefetch_duration: AtomicF32,
     rate: AtomicF32,
     volume: AtomicF32,
@@ -44,6 +45,10 @@ impl PlayerParams {
 
     pub(crate) fn prefetch_duration(&self) -> f32 {
         self.prefetch_duration.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn pitch_bend(&self) -> f32 {
+        self.pitch_bend.load(Ordering::Relaxed)
     }
 
     pub(crate) fn rate(&self) -> f32 {
@@ -93,6 +98,15 @@ impl PlayerParams {
         let clamped = seconds.max(0.0);
         self.prefetch_duration.store(clamped, Ordering::Relaxed);
         let _ = send(PlayerCmd::SetPrefetchDuration(clamped));
+    }
+
+    pub(crate) fn set_pitch_bend(
+        &self,
+        bend: f32,
+        send: impl FnOnce(PlayerCmd) -> Result<(), PlayError>,
+    ) {
+        self.pitch_bend.store(bend, Ordering::Relaxed);
+        let _ = send(PlayerCmd::SetPitchBend(bend));
     }
 
     pub(crate) fn set_rate_value(&self, rate: f32) -> f32 {
@@ -156,6 +170,7 @@ impl From<&PlayerConfig> for PlayerParams {
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
             default_rate: AtomicF32::new(config.default_rate),
             muted: AtomicBool::new(false),
+            pitch_bend: AtomicF32::new(1.0),
             prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
             rate: AtomicF32::new(0.0),
             volume: AtomicF32::new(1.0),

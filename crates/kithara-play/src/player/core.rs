@@ -1,21 +1,23 @@
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
-use kithara_audio::{EngineLoad, StretchControls};
+use kithara_audio::{EngineLoad, StretchControls, elastic::ElasticReaderConfig};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
+    traits::FromWithParams,
 };
 use tracing::debug;
 
 use super::{
     config::PlayerConfig,
+    platform::{ItemLoadContext, ItemLoadParams},
     state::{ItemQueue, PlayerParams, PlayerPhase},
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus},
-    bridge::PlayerCmd,
+    bridge::{PlayerCmd, TrackStart},
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
     resource::Resource,
@@ -31,19 +33,28 @@ pub(crate) struct PlayerCore {
     /// Constructed once and kept address-stable for the player's lifetime.
     pub(crate) engine_load: Arc<EngineLoad>,
 
-    pub(crate) params: PlayerParams,
     pub(crate) timestretch: Arc<StretchControls>,
-    pub(crate) gapless_mode: GaplessMode,
     pub(crate) byte_pool: BytePool,
-    /// Engine drops last — worker shutdown happens after all tracks
-    /// unregister and after `items` releases their resources.
+    /// Engine drops last; its `Drop` shuts the audio worker down.
     pub(crate) engine: EngineImpl,
-    /// Items drop before engine — Audio tracks unregister from worker
-    /// while it is still alive.
+    pub(crate) gapless_mode: GaplessMode,
+    pub(crate) elastic: ElasticReaderConfig,
+    /// Items drop before engine, while the audio worker is still alive.
     pub(crate) items: ItemQueue,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
+    pub(crate) params: PlayerParams,
+}
+
+impl PlayerCore {
+    pub(crate) fn item_load_params(&self) -> ItemLoadParams<'_> {
+        ItemLoadParams {
+            pool: self.engine.pcm_pool(),
+            pitch_bend: self.params.pitch_bend(),
+            rate: self.timestretch.speed(),
+        }
+    }
 }
 
 /// Concrete Player implementation managing items queue.
@@ -51,7 +62,7 @@ pub(crate) struct PlayerCore {
 /// Owns an [`EngineImpl`] and sends commands to the active slot's processor.
 /// When `play()` is called, the engine is lazily started and a slot is
 /// allocated. The current queue item is taken out of the queue, wrapped in
-/// [`PlayerResource`](crate::rt::track::PlayerResource), and sent
+/// [`PlayerResource`](crate::player::track::PlayerResource), and sent
 /// to the processor via `PlayerCmd::LoadTrack`.
 ///
 /// Internally the player is a phase-split typestate: `phase` is a typed
@@ -61,6 +72,11 @@ pub(crate) struct PlayerCore {
 pub struct PlayerImpl {
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore,
+}
+
+pub(crate) struct EnqueuedTrack {
+    pub(crate) src: Arc<str>,
+    pub(crate) duration_seconds: f64,
 }
 
 impl PlayerImpl {
@@ -99,6 +115,7 @@ impl PlayerImpl {
             engine_load: Arc::new(EngineLoad::default()),
             params: PlayerParams::from(&config),
             timestretch: config.timestretch,
+            elastic: config.elastic,
             gapless_mode: config.gapless_mode,
             byte_pool: config.byte_pool,
             status: Mutex::default(),
@@ -117,74 +134,45 @@ impl PlayerImpl {
         &self.core.byte_pool
     }
 
+    pub(crate) fn enqueue_to_processor(
+        &self,
+        index: usize,
+    ) -> Result<Option<EnqueuedTrack>, PlayError> {
+        self.enqueue_to_processor_at(index, TrackStart::Immediate)
+    }
+
+    pub(crate) fn enqueue_to_processor_at(
+        &self,
+        index: usize,
+        start: TrackStart,
+    ) -> Result<Option<EnqueuedTrack>, PlayError> {
+        let slot_id = self
+            .require_active_slot()
+            .map_err(|_| PlayError::NoActiveSlot)?;
+        let params = self.core.item_load_params();
+        let context = if self.core.items.has_binding(index) {
+            ItemLoadContext::build(self.core.engine.preparation_context()?, params)
+        } else {
+            ItemLoadContext::build(self.core.engine.stream_shape()?, params)
+        };
+        let dispatched =
+            self.core
+                .items
+                .dispatch_load_at(index, context, &self.core.engine, slot_id, start)?;
+        let Some(dispatched) = dispatched else {
+            return Ok(None);
+        };
+        self.phase.lock().set_abr_handle(dispatched.abr_handle);
+        Ok(Some(EnqueuedTrack {
+            duration_seconds: dispatched.duration_seconds,
+            src: dispatched.src,
+        }))
+    }
+
     /// PCM pool used by this player's audio engine.
     #[must_use]
     pub fn pcm_pool(&self) -> &PcmPool {
         self.core.engine.pcm_pool()
-    }
-
-    /// Advance to the next item in the queue.
-    ///
-    /// Does nothing if the current item is already the last one.
-    pub fn advance_to_next_item(&self) {
-        self.core.items.advance_to_next_item();
-    }
-
-    /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
-    /// from the last announced item, so a `play()` resume of the same item
-    /// stays quiet.
-    pub(crate) fn announce_current_item(&self, index: usize) {
-        self.core.items.announce_current_item(index);
-    }
-
-    /// Drop the resource at `index` so the auto-advance prefetch path
-    /// (`arm_next`) cannot plant it into the audio thread.
-    ///
-    /// Used by the queue when a previously-loaded track is cancelled by
-    /// a later `select` — without this, a slow track whose loader
-    /// raced ahead of the override stays in `items` and the next
-    /// `TrackRequested` notification near EOF would arm it for
-    /// handover, surfacing as a barge-in.
-    pub fn clear_item(&self, index: usize) {
-        self.core.items.clear_item(index);
-    }
-
-    /// Insert a resource with optional queue-item identity metadata at a
-    /// specific position, or append to the end.
-    pub fn insert(
-        &self,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-        at_position: Option<usize>,
-    ) {
-        self.core.items.insert(resource, item_id, at_position);
-    }
-
-    pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(Arc<str>, f64)> {
-        let item = self.core.items.take_for_load(
-            index,
-            self.core.timestretch.speed(),
-            self.core.engine.master_sample_rate(),
-            self.core.engine.pcm_pool(),
-        )?;
-        self.phase.lock().set_abr_handle(item.abr_handle);
-        let src = Arc::clone(item.player_resource.src());
-        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
-            item_id: item.item_id,
-            resource: Box::new(item.player_resource),
-        });
-        Some((src, item.duration_seconds))
-    }
-
-    /// Remove item at index. Returns the removed resource, or `None` if out of
-    /// bounds or already consumed.
-    pub fn remove_at(&self, index: usize) -> Option<Resource> {
-        self.unarm_next();
-
-        self.core
-            .items
-            .remove_at(index)
-            .map(|queued| queued.resource)
     }
 
     /// Remove all items from the queue.
@@ -197,25 +185,23 @@ impl PlayerImpl {
         debug!("all items removed");
     }
 
+    /// Remove item at index. Returns the removed resource, or `None` if out of
+    /// bounds or already consumed.
+    pub fn remove_at(&self, index: usize) -> Option<Resource> {
+        self.unarm_next();
+
+        self.core
+            .items
+            .remove_at(index)
+            .and_then(|queued| queued.resource)
+    }
+
     /// Replace a consumed (or existing) resource at the given index.
     ///
     /// Use this to re-load a track that was previously played and consumed
     /// by `load_current_item`. Does nothing if `index` is out of bounds.
     pub fn replace_item(&self, index: usize, resource: Resource) {
         self.replace_item_tagged(index, resource, None);
-    }
-
-    /// Replace a consumed (or existing) resource at the given index with item
-    /// identity metadata.
-    pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>) {
-        self.core
-            .items
-            .replace_item_tagged(index, resource, item_id);
-    }
-
-    /// Pre-allocate empty slots so `replace_item` can fill them by index.
-    pub fn reserve_slots(&self, count: usize) {
-        self.core.items.reserve_slots(count);
     }
 
     /// Internal: set status and emit event if changed.
@@ -228,6 +214,39 @@ impl PlayerImpl {
                 .engine
                 .bus()
                 .publish(PlayerEvent::StatusChanged { status: new_status });
+        }
+    }
+
+    delegate! {
+        to self.core.items {
+            /// Advance to the next item in the queue.
+            ///
+            /// Does nothing if the current item is already the last one.
+            pub fn advance_to_next_item(&self);
+            /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
+            /// from the last announced item, so a `play()` resume of the same item
+            /// stays quiet.
+            pub(crate) fn announce_current_item(&self, index: usize);
+            /// Prevent a cleared resource from being armed for automatic handover.
+            pub fn clear_item(&self, index: usize);
+            /// Insert a resource with optional queue-item identity metadata at a
+            /// specific position, or append to the end.
+            pub fn insert(
+                &self,
+                resource: Resource,
+                item_id: Option<Arc<str>>,
+                at_position: Option<usize>,
+            );
+            /// Replace a consumed (or existing) resource at the given index with item
+            /// identity metadata.
+            pub fn replace_item_tagged(
+                &self,
+                index: usize,
+                resource: Resource,
+                item_id: Option<Arc<str>>,
+            );
+            /// Pre-allocate empty slots so `replace_item` can fill them by index.
+            pub fn reserve_slots(&self, count: usize);
         }
     }
 }
@@ -253,6 +272,25 @@ impl crate::api::Equalizer for PlayerImpl {
     }
 }
 
+impl crate::api::Player for PlayerImpl {
+    fn duration_seconds(&self) -> Option<f64> {
+        Self::duration_seconds(self)
+    }
+
+    fn pause(&self) -> Result<(), PlayError> {
+        Self::pause(self);
+        Ok(())
+    }
+
+    fn seek_seconds(&self, seconds: f64) -> Result<kithara_audio::SeekOutcome, PlayError> {
+        Self::seek_seconds(self, seconds)
+    }
+
+    fn start_at(&self, start: crate::api::StartAt) -> Result<(), PlayError> {
+        Self::start_at(self, start)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_assets::AssetStoreBuilder;
@@ -264,7 +302,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{api::SlotId, bridge::PlayerCmd, session::testing};
+    use crate::{bridge::PlayerCmd, session::testing, test_support::empty_resource};
 
     #[derive(Clone, Copy)]
     enum PlayerBasicScenario {
@@ -381,6 +419,53 @@ mod tests {
                 assert!(result.is_err());
             }
         }
+    }
+
+    #[kithara::test]
+    fn rejected_load_restores_the_queue_resource() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .session(testing::test_session())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .build(),
+        );
+        player
+            .ensure_engine_started()
+            .expect("engine start must succeed");
+        player.ensure_slot().expect("slot allocation must succeed");
+        player.insert(empty_resource("restore.wav"), None, None);
+
+        let mut channel_filled = false;
+        for _ in 0..64 {
+            match player.send_to_slot(PlayerCmd::SetPaused(true)) {
+                Ok(()) => {}
+                Err(PlayError::SlotChannelFull { .. }) => {
+                    channel_filled = true;
+                    break;
+                }
+                Err(error) => panic!("unexpected slot failure: {error}"),
+            }
+        }
+        assert!(
+            channel_filled,
+            "test must saturate the load command channel"
+        );
+
+        assert!(matches!(
+            player.enqueue_to_processor(0),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+        assert!(player.core.items.has_resource(0));
+        assert_eq!(
+            player
+                .remove_at(0)
+                .expect("rejected load restores its resource")
+                .src()
+                .as_ref(),
+            "restore.wav"
+        );
+        player.worker().shutdown();
     }
 
     #[kithara::test]
@@ -583,23 +668,6 @@ mod tests {
         assert!(!player.is_playing());
         assert!(player.current_abr_handle().is_none());
         assert!(player.armed_next().is_none());
-    }
-
-    #[kithara::test]
-    fn drop_player_releases_tracks_before_engine() {
-        // Worker-registered tracks live in `engine`; undelivered resources in
-        // `playlist` carry worker references. The phase (slot/abr/pending) holds
-        // no worker-registered track directly. This pins that constructing,
-        // arming a phase, and dropping does not panic / UAF: `phase` and
-        // `core.items` must drop before `core.engine`.
-        let player = PlayerImpl::new(PlayerConfig::default());
-        *player.phase.lock() = PlayerPhase::Playing {
-            slot: SlotId::new(0),
-            abr_handle: None,
-            pending: None,
-        };
-        player.worker().shutdown();
-        drop(player);
     }
 
     #[kithara::test]

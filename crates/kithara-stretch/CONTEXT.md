@@ -24,6 +24,40 @@ in `kithara-audio`. The audio graph passes its existing `PcmPool` through
 `kithara-stretch` depends downward on `kithara-bufpool` for backend scratch
 storage and on `kithara-workspace-hack` for native workspace unification.
 
+The crate also owns the transport-facing numeric elastic DSP contract. The
+existing `SignalsmithBackend` family processes both streaming chunks and exact
+source/output spans. `ElasticConfig` is the type parameter that selects the
+validated exact-span mode; the private streaming mode implements
+`StretchBackend`. `ElasticCapabilities` declares the supported rate envelope,
+algorithmic latency, channel/sample-rate identity, prepared block limits, and
+whether caller-ordered reverse input is supported.
+`ElasticRequest` contains only the integer frame counts consumed by the backend.
+`ElasticSpan` describes a transport-neutral continuous source path and exact
+output length. `ElasticSpanPlan` validates at most four adjacent spans against
+one capability snapshot, quantizes them without leaving inline storage, and
+returns both backend requests and the staged `ElasticCursor`. It also owns the
+bounded inter-block phase correction because that correction is constrained by
+the backend rate envelope and exact source/output frame arithmetic.
+`ElasticSpanConfig` carries the continuity tolerance, maximum accepted phase
+error, and per-block correction budget; these values are supplied by the
+reader's configuration rather than hidden in the planner.
+
+Session beats, track bindings, request/revision identity, relocation commit
+boundaries, and graph scheduling remain in `kithara-play`. Source-window policy,
+bounded PCM polling, DSP readiness, and the numeric cursor belong to
+`kithara-audio::elastic::ElasticReader`. A `PhaseDiscontinuity` is numeric
+evidence that continuous correction is impossible; the player may map that
+evidence to a session relocation, while the audio reader owns its prepared PCM
+and cursor. The cursor returned by `ElasticSpanPlan` is staged and must not be
+committed until every backend request in the plan succeeds.
+
+The exact-span path currently has one adapter, so callers use the concrete
+`SignalsmithBackend<ElasticConfig>` instead of a single-implementation trait
+object. Both modes own the same concrete engine family; there is no second
+Signalsmith wrapper or runtime unsupported branch. Backend capability selection
+remains above this implementation; introduce an interface at this seam only
+when a second exact-span adapter exists.
+
 ## Backend Contract
 
 Backends process interleaved `f32` PCM. `set_ratio` and `set_pitch` are
@@ -48,6 +82,20 @@ cannot expose a true tail drain must document that behavior in its adapter.
 swap. A spec change is handled by the caller rebuilding the backend with the
 new scalar sample rate and channel count; the backend trait intentionally does
 not depend on `kithara-decode::PcmSpec`.
+
+`SignalsmithBackend<ElasticConfig>` is prepared for fixed maximum source and
+output blocks.
+Every numeric request is checked against those limits and the declared rate
+envelope before processing. `prime` resets the algorithm, consumes the required
+warm-up span, and discards the reported output latency so the caller can align
+the first audible frame to its presentation boundary. The backend never chooses
+a transport rate, direction, or phase on its own. It declares reverse support
+because the caller may supply history, warmup, and steady source spans already
+ordered in reverse audible time without changing the numeric request shape.
+Envelope comparisons admit one
+floating-point rounding step at a declared boundary, but reject the next
+representable value; coordinate interpolation therefore cannot reject an exact
+2/3 or 4/3 contract edge as a real rate violation.
 
 ## Adding A Backend
 

@@ -4,13 +4,14 @@
 
 mod error;
 mod guard;
+#[cfg(test)]
+mod test_support;
 
 pub mod api;
 pub mod bridge;
 pub mod engine;
 pub mod player;
 pub mod resource;
-pub mod rt;
 pub mod session;
 
 #[cfg(target_arch = "wasm32")]
@@ -20,9 +21,11 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlayerEvent,
-    PlayerStatus, RouteChangeReason, SessionDuckingMode, SessionEvent, SlotId, TimeControlStatus,
-    TimeRange, WaitingReason,
+    DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection,
+    Player, PlayerCollector, PlayerComponent, PlayerEvent, PlayerStatus, RouteChangeReason,
+    SessionBeat, SessionBeatError, SessionDuckingMode, SessionEvent, SessionSeek,
+    SessionTransportSnapshot, SlotId, StartAt, SyncEvent, SyncUnavailable, Tempo, TempoError,
+    TimeControlStatus, TimeRange, TrackBinding, TransportEvent, TransportRevision, WaitingReason,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
@@ -37,9 +40,11 @@ pub use kithara_audio::{
     AudioWorkerHandle, EngineLoadSnapshot, SeekOutcome, ServiceClass, StretchControls,
 };
 pub use kithara_net::Headers;
-pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
+pub use player::{
+    Member, MemberId, MultiPlayer, PlayerComponentBox, PlayerConfig, PlayerImpl, PlayerNode,
+    PlayerNodeProcessor, SelectTransition, StreamShape, TopologyRevision,
+};
 pub use resource::{
     PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
     default_resource_decoder_config,
 };
-pub use rt::PlayerNode;

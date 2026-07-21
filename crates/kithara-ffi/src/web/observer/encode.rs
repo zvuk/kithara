@@ -1,10 +1,13 @@
 use js_sys::Object;
 use wasm_bindgen::JsValue;
 
-use super::marshal::{KIND, set_bool, set_f64, set_opt_f64, set_opt_id, set_str};
+use super::marshal::{
+    KIND, set_bool, set_f64, set_opt_f64, set_opt_id, set_opt_u64, set_str, set_u64,
+};
 use crate::types::{
-    FfiAdvanceReason, FfiEvictReason, FfiPlayerEvent, FfiPlayerStatus, FfiRepeatMode,
-    FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus, FfiTrackStatus,
+    FfiAdvanceReason, FfiEvictReason, FfiPlaybackDirection, FfiPlayerEvent, FfiPlayerStatus,
+    FfiRepeatMode, FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus,
+    FfiTrackStatus,
 };
 
 pub(crate) fn encode(event: &FfiPlayerEvent) -> JsValue {
@@ -158,6 +161,44 @@ pub(crate) fn encode(event: &FfiPlayerEvent) -> JsValue {
             set_str(&obj, KIND, "DjStretchBackendChanged");
             set_str(&obj, "kind", stretch_backend_kind_str(*kind));
         }
+        FfiPlayerEvent::TransportTempoCommitted {
+            beats_per_minute,
+            revision,
+        } => {
+            set_str(&obj, KIND, "TransportTempoCommitted");
+            set_f64(&obj, "beats_per_minute", *beats_per_minute);
+            set_u64(&obj, "revision", *revision);
+        }
+        FfiPlayerEvent::TransportPlayStateCommitted { playing, revision } => {
+            set_str(&obj, KIND, "TransportPlayStateCommitted");
+            set_bool(&obj, "playing", *playing);
+            set_u64(&obj, "revision", *revision);
+        }
+        FfiPlayerEvent::TransportSeekCommitted {
+            position_beats,
+            revision,
+        } => {
+            set_str(&obj, KIND, "TransportSeekCommitted");
+            set_f64(&obj, "position_beats", *position_beats);
+            set_u64(&obj, "revision", *revision);
+        }
+        FfiPlayerEvent::TransportFailed { revision, reason } => {
+            set_str(&obj, KIND, "TransportFailed");
+            set_opt_u64(&obj, "revision", *revision);
+            set_str(&obj, "reason", reason);
+        }
+        FfiPlayerEvent::SyncBindingCommitted {
+            slot,
+            session_anchor_beats,
+            track_anchor_beats,
+            direction,
+        } => {
+            set_str(&obj, KIND, "SyncBindingCommitted");
+            set_f64(&obj, "slot", num_traits::cast(*slot).unwrap_or(0.0));
+            set_f64(&obj, "session_anchor_beats", *session_anchor_beats);
+            set_f64(&obj, "track_anchor_beats", *track_anchor_beats);
+            set_str(&obj, "direction", playback_direction_str(*direction));
+        }
         FfiPlayerEvent::AssetCommitted {
             asset_root,
             rel_path,
@@ -264,6 +305,13 @@ fn stretch_backend_kind_str(kind: FfiStretchBackendKind) -> &'static str {
         FfiStretchBackendKind::Signalsmith => "Signalsmith",
         FfiStretchBackendKind::Bungee => "Bungee",
         FfiStretchBackendKind::Unknown => "Unknown",
+    }
+}
+
+fn playback_direction_str(direction: FfiPlaybackDirection) -> &'static str {
+    match direction {
+        FfiPlaybackDirection::Forward => "Forward",
+        FfiPlaybackDirection::Reverse => "Reverse",
     }
 }
 

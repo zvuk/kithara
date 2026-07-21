@@ -175,7 +175,7 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         let frames_wanted = (target_frames - rendered_frames).min(Consts::BLOCK_FRAMES);
         let tick = Instant::now();
         let outcome = audio.read(&mut samples[..frames_wanted * channels]);
-        let frames_written = match outcome {
+        let samples_written = match outcome {
             Ok(ReadOutcome::Frames { count, .. }) => count.get(),
             Ok(ReadOutcome::Pending { .. }) => {
                 sleep(Duration::from_millis(5)).await;
@@ -187,10 +187,17 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
                 return Consts::RC_AUDIO_BUILD;
             }
         };
+        if !samples_written.is_multiple_of(channels) {
+            error!(
+                samples_written,
+                channels, "audio read returned partial frame"
+            );
+            return Consts::RC_AUDIO_BUILD;
+        }
+        let frames_written = samples_written / channels;
 
-        let written_samples = frames_written * channels;
         byte_buf.clear();
-        for sample in &samples[..written_samples] {
+        for sample in &samples[..samples_written] {
             byte_buf.extend_from_slice(&sample.to_le_bytes());
         }
         if let Err(err) = file.write_all(&byte_buf) {

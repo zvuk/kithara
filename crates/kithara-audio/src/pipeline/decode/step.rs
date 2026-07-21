@@ -9,7 +9,7 @@ use crate::{
     },
     pipeline::{
         decode::{
-            core::{DecodeAction, DecodeCore, DecodeCtx},
+            core::{DecodeAction, DecodeCore, DecodeCtx, GaplessStep},
             format::{FormatDecision, detect, handle_variant_change},
         },
         fetch::Fetch,
@@ -40,8 +40,10 @@ pub(crate) fn tick<T: StreamType>(
         if ctx.seek_observe.is_flushing() || ctx.seek_observe.is_pending() {
             return DecodeAction::SeekInterrupted;
         }
-        if let Some(chunk) = core.next_gapless() {
-            return produced(chunk, epoch, &mut ctx);
+        match core.next_gapless(epoch) {
+            GaplessStep::Output(chunk) => return produced(chunk, epoch, &mut ctx),
+            GaplessStep::SourceProgress => return DecodeAction::SourceProgress,
+            GaplessStep::Empty => {}
         }
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
@@ -78,8 +80,10 @@ pub(crate) fn tick<T: StreamType>(
             }
             Ok(DecoderChunkOutcome::Eof) => {
                 core.set_tail_compensation();
-                if let Some(chunk) = core.next_gapless() {
-                    return produced(chunk, epoch, &mut ctx);
+                match core.next_gapless(epoch) {
+                    GaplessStep::Output(chunk) => return produced(chunk, epoch, &mut ctx),
+                    GaplessStep::SourceProgress => return DecodeAction::SourceProgress,
+                    GaplessStep::Empty => {}
                 }
                 if let FormatDecision::Recreate(recreate) =
                     detect(ctx.stream, core.session(), ctx.seek_observe)
@@ -98,27 +102,33 @@ pub(crate) fn tick<T: StreamType>(
                 return variant_change(core, &ctx, &error);
             }
             Err(error) if error.classify() == ErrorClass::Interrupted => {}
-            Err(error) => {
-                if let Some(emit) = ctx.emit {
-                    emit.enqueue(
-                        DecoderEvent::DecodeError {
-                            class: map_decode_error_class(error.classify()),
-                            kind: map_decode_error_kind(&error),
-                            codec: core
-                                .session()
-                                .media_info
-                                .as_ref()
-                                .and_then(|info| info.codec)
-                                .map(map_audio_codec_kind),
-                            detail: decode_error_detail(&error),
-                        }
-                        .into(),
-                    );
-                }
-                return DecodeAction::Failed(TrackFailure::Decode(error));
-            }
+            Err(error) => return failed(core, &ctx, error),
         }
     }
+}
+
+fn failed<T: StreamType>(
+    core: &DecodeCore,
+    ctx: &DecodeCtx<'_, T>,
+    error: DecodeError,
+) -> DecodeAction {
+    if let Some(emit) = ctx.emit {
+        emit.enqueue(
+            DecoderEvent::DecodeError {
+                class: map_decode_error_class(error.classify()),
+                kind: map_decode_error_kind(&error),
+                codec: core
+                    .session()
+                    .media_info
+                    .as_ref()
+                    .and_then(|info| info.codec)
+                    .map(map_audio_codec_kind),
+                detail: decode_error_detail(&error),
+            }
+            .into(),
+        );
+    }
+    DecodeAction::Failed(TrackFailure::Decode(error))
 }
 
 pub(crate) fn produced<T: StreamType>(
@@ -129,7 +139,7 @@ pub(crate) fn produced<T: StreamType>(
     if ctx
         .resume
         .as_deref()
-        .is_some_and(|resume| resume.seek.epoch == epoch)
+        .is_some_and(|resume| resume.seek.epoch == epoch && resume.seek.events.should_publish())
         && let Some(emit) = ctx.emit
     {
         emit.enqueue(

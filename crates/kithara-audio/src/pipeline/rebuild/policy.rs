@@ -34,6 +34,7 @@ pub(crate) fn observed_seek(seek: &dyn SeekObserve, min_epoch: u64) -> Option<Se
         seek: SeekContext {
             target: seek.target()?,
             epoch,
+            events: (seek.pending_epoch() == Some(epoch)).into(),
         },
         emit_request: false,
     })

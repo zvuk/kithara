@@ -23,13 +23,12 @@ const SNAPSHOT_MAX_AGE: Duration = Duration::from_millis(1);
 
 pub(super) fn snapshot(now: Instant) -> Option<ThreadTime> {
     SNAPSHOT.with(|snapshot| {
-        if let Some((cpu, sampled_at)) = snapshot.get() {
-            if now
+        if let Some((cpu, sampled_at)) = snapshot.get()
+            && now
                 .checked_duration_since(sampled_at)
                 .is_some_and(|age| age < SNAPSHOT_MAX_AGE)
-            {
-                return Some(cpu);
-            }
+        {
+            return Some(cpu);
         }
 
         if let Ok(cpu) = ThreadTime::try_now() {

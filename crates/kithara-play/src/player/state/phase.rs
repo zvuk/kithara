@@ -3,7 +3,7 @@ use kithara_platform::sync::Arc;
 use super::super::core::PlayerImpl;
 use crate::{
     api::{PlayerEvent, SlotId, TimeControlStatus, WaitingReason},
-    bridge::PlayerCmd,
+    bridge::{PlayerCmd, protocol::RejectedPlayerCmd},
     error::PlayError,
 };
 
@@ -335,10 +335,21 @@ impl PlayerImpl {
 
     /// Send a command to the current slot's processor.
     pub(crate) fn send_to_slot(&self, cmd: PlayerCmd) -> Result<(), PlayError> {
-        let slot_id = self
-            .require_active_slot()
-            .map_err(|TransitionError::WrongPhase| PlayError::NoActiveSlot)?;
-        self.core.engine.send_slot_cmd(slot_id, cmd)
+        self.try_send_to_slot(cmd)
+            .map_err(|rejected| rejected.error)
+    }
+
+    pub(crate) fn try_send_to_slot(&self, cmd: PlayerCmd) -> Result<(), RejectedPlayerCmd> {
+        let slot_id = match self.require_active_slot() {
+            Ok(slot_id) => slot_id,
+            Err(TransitionError::WrongPhase) => {
+                return Err(RejectedPlayerCmd {
+                    command: Box::new(cmd),
+                    error: PlayError::NoActiveSlot,
+                });
+            }
+        };
+        self.core.engine.try_send_slot_cmd(slot_id, cmd)
     }
 
     /// Snapshot of the active slot under a short phase lock.

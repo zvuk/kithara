@@ -157,13 +157,15 @@ impl ActiveRegion {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::{GridSegment, RegionPlan, RegionPlanError};
 
     fn seg(start: u64, end: u64, ratio: f64) -> GridSegment {
         GridSegment::new(start, end, ratio)
     }
 
-    #[test]
+    #[kithara::test]
     fn plan_rejects_invalid_segments() {
         assert!(matches!(
             RegionPlan::new(vec![seg(10, 10, 1.0)]),
@@ -179,7 +181,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test]
     fn lookup_covers_segments_and_gaps() {
         let plan =
             RegionPlan::new(vec![seg(100, 200, 1.1), seg(300, 400, 0.9)]).expect("valid plan");

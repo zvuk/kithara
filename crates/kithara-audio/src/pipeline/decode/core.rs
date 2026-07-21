@@ -26,6 +26,7 @@ use crate::{
         track::{TrackFailure, WaitingReason},
     },
     renderer::{apply_effects, reset_effects},
+    source_range::{AtomicAudioReadMode, AudioReadMode},
     traits::AudioEffect,
 };
 
@@ -88,6 +89,7 @@ impl<T: StreamType> DecodeInit<T> {
     ) -> DecodeParts<T> {
         let gapless = self.build_gapless();
         let decoder_host_sample_rate = self.decoder_host_sample_rate();
+        let read_mode = Arc::new(AtomicAudioReadMode::default());
         let Self {
             decoder,
             decoder_factory,
@@ -109,6 +111,7 @@ impl<T: StreamType> DecodeInit<T> {
                 gapless_mode,
                 gapless,
                 effects,
+                read_mode,
             ),
             factory: decoder_factory,
             host_sample_rate,
@@ -126,6 +129,9 @@ pub(crate) struct DecodeCore {
     gapless: GaplessStage,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EofDrain,
+    pending_gapless: Option<(u64, PcmChunk)>,
+    retired_chunk: Option<PcmChunk>,
+    read_mode: Arc<AtomicAudioReadMode>,
 }
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
@@ -140,11 +146,18 @@ pub(crate) struct DecodeCtx<'a, T: StreamType> {
 
 pub(crate) enum DecodeAction {
     Produced(Fetch<PcmChunk>),
+    SourceProgress,
     Pending(WaitingReason),
     StartRecreate(RecreateState),
     SeekInterrupted,
     Eof,
     Failed(TrackFailure),
+}
+
+pub(crate) enum GaplessStep {
+    Output(PcmChunk),
+    SourceProgress,
+    Empty,
 }
 
 impl DecodeCore {
@@ -153,6 +166,7 @@ impl DecodeCore {
         gapless_mode: GaplessMode,
         gapless: GaplessStage,
         effects: Vec<Box<dyn AudioEffect>>,
+        read_mode: Arc<AtomicAudioReadMode>,
     ) -> Self {
         let drain = EofDrain::new(effects.len());
         Self {
@@ -161,6 +175,9 @@ impl DecodeCore {
             gapless,
             effects,
             drain,
+            pending_gapless: None,
+            retired_chunk: None,
+            read_mode,
         }
     }
 
@@ -172,9 +189,16 @@ impl DecodeCore {
         self.gapless_mode
     }
 
+    pub(crate) fn read_mode(&self) -> &Arc<AtomicAudioReadMode> {
+        &self.read_mode
+    }
+
     pub(crate) fn reset(&mut self) {
         reset_effects(&mut self.effects);
         self.drain.reset();
+        if let Some((_, chunk)) = self.pending_gapless.take() {
+            self.retire_chunk(chunk);
+        }
     }
 
     pub(crate) fn notify_seek(&mut self) {
@@ -200,13 +224,27 @@ impl DecodeCore {
         self.drain.track(chunk, playhead, emit);
     }
 
-    pub(crate) fn next_gapless(&mut self) -> Option<PcmChunk> {
-        while let Some(chunk) = self.gapless.next() {
+    pub(crate) fn next_gapless(&mut self, decode_seek_epoch: u64) -> GaplessStep {
+        loop {
+            let pending = match self.pending_gapless.take() {
+                Some((epoch, chunk)) if epoch == decode_seek_epoch => Some(chunk),
+                Some((_, chunk)) => {
+                    self.retire_chunk(chunk);
+                    return GaplessStep::SourceProgress;
+                }
+                None => None,
+            };
+            let Some(chunk) = pending.or_else(|| self.gapless.next()) else {
+                break;
+            };
+            if self.read_mode.load() == AudioReadMode::Bounded {
+                return GaplessStep::Output(chunk);
+            }
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
-                return Some(output);
+                return GaplessStep::Output(output);
             }
         }
-        None
+        GaplessStep::Empty
     }
 
     pub(crate) fn next_drain(&mut self) -> Option<PcmChunk> {
@@ -298,7 +336,13 @@ impl DecodeCore {
     }
 
     pub(crate) fn flush_reader_signals(&mut self) {
+        drop(self.retired_chunk.take());
         self.session.decoder.flush_reader_signals();
+    }
+
+    fn retire_chunk(&mut self, chunk: PcmChunk) {
+        debug_assert!(self.retired_chunk.is_none());
+        self.retired_chunk = Some(chunk);
     }
 }
 

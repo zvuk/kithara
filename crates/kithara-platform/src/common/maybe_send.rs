@@ -33,4 +33,9 @@ impl<T> WasmSend<T> {
     pub fn new(value: T) -> Self {
         Self(value)
     }
+
+    /// Unwrap the owned value.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
 }

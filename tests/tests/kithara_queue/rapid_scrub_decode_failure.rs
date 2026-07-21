@@ -11,6 +11,7 @@ use kithara::{
         sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -174,16 +175,51 @@ async fn wait_for_playback_progress(
 struct Harness {
     queue: Arc<Queue>,
     rx: EventReceiver,
-    master_url: String,
     tick: tokio::task::JoinHandle<()>,
+    master_url: String,
 }
 
 impl Harness {
+    /// Simulate a real slider drag: emit a burst of intermediate
+    /// seeks racing toward `final_target` over `drag_duration`. Each
+    /// intermediate seek lands in a cold range and starts a new
+    /// epoch before the previous one's `decoder.seek` could possibly
+    /// have completed — this is what causes the prod cascade where
+    /// a stale `decoder.seek` partially read an atom header, the
+    /// new epoch arrived mid-atom, and `next_chunk` then saw the
+    /// torn cursor as "isomp4: no atom pending read".
+    async fn drag(&mut self, final_target: f64, drag_duration: Duration, steps: usize, tag: &str) {
+        let start_pos = self.queue.position_seconds().unwrap_or(0.0);
+        let steps_u32 = u32::try_from(steps).unwrap_or(u32::MAX);
+        let step_delay = drag_duration / steps_u32;
+        for step in 1..=steps_u32 {
+            let frac = f64::from(step) / f64::from(steps_u32);
+            let target = start_pos + (final_target - start_pos) * frac;
+            self.queue.seek(target).expect("drag seek accepted");
+            eprintln!("[{tag}] drag step {step}/{steps_u32} → {target:.2}s");
+            sleep(step_delay).await;
+        }
+    }
+
+    /// Issue a seek and observe outcome — returns the outcome so
+    /// each scenario can pattern-match its own acceptance criteria.
+    async fn scrub(&mut self, target: f64, tag: &str) -> ScrubOutcome {
+        self.queue.seek(target).expect("seek accepted");
+        eprintln!("[{tag}] seek issued target={target:.2}s");
+        observe_scrub_outcome(
+            &self.queue,
+            &mut self.rx,
+            &self.master_url,
+            target,
+            SEEK_OBSERVE_BUDGET,
+        )
+        .await
+    }
+
     async fn setup(temp_dir: &TestTempDir) -> Self {
         // AES-128 key + IV matching `packaged_encrypted_builder` in
         // `tests/src/hls_server.rs` — every kithara fixture uses these
         // same constants so the integration helpers can verify
-        // decryption end-to-end.
         const AES128_KEY: [u8; 16] = *b"0123456789abcdef";
         const AES128_IV: [u8; 16] = [0u8; 16];
         let key_hex: String = AES128_KEY.iter().map(|b| format!("{b:02x}")).collect();
@@ -196,7 +232,6 @@ impl Harness {
         // has higher delay so the ABR controller is tempted to
         // upgrade — same as the prod trace where `commit_variant_switch
         // reason=UpSwitch from_variant=0 to_variant=3` fires
-        // repeatedly mid-track.
         let builder = HlsFixtureBuilder::new()
             .variant_count(4)
             .segments_per_variant(SEGMENT_COUNT)
@@ -209,7 +244,6 @@ impl Harness {
             // mis-handles the moof layout that the HE-AAC v2
             // fixtures (and prod zvuk DRM streams) generate, so
             // the reproducer must use the same codec the bug
-            // surfaces on in production.
             .packaged_audio_aac_he_v2(44_100, 2)
             .encryption(EncryptionRequest {
                 key_hex,
@@ -246,7 +280,7 @@ impl Harness {
                 .session(OfflineSession::arc_auto())
                 .build(),
         ));
-        let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+        let queue = Arc::new(Queue::build(player, QueueConfig::default()));
 
         let queue_for_tick = Arc::clone(&queue);
         let tick = tokio::task::spawn(async move {
@@ -280,42 +314,6 @@ impl Harness {
             rx,
             master_url,
             tick,
-        }
-    }
-
-    /// Issue a seek and observe outcome — returns the outcome so
-    /// each scenario can pattern-match its own acceptance criteria.
-    async fn scrub(&mut self, target: f64, tag: &str) -> ScrubOutcome {
-        self.queue.seek(target).expect("seek accepted");
-        eprintln!("[{tag}] seek issued target={target:.2}s");
-        observe_scrub_outcome(
-            &self.queue,
-            &mut self.rx,
-            &self.master_url,
-            target,
-            SEEK_OBSERVE_BUDGET,
-        )
-        .await
-    }
-
-    /// Simulate a real slider drag: emit a burst of intermediate
-    /// seeks racing toward `final_target` over `drag_duration`. Each
-    /// intermediate seek lands in a cold range and starts a new
-    /// epoch before the previous one's `decoder.seek` could possibly
-    /// have completed — this is what causes the prod cascade where
-    /// a stale `decoder.seek` partially read an atom header, the
-    /// new epoch arrived mid-atom, and `next_chunk` then saw the
-    /// torn cursor as "isomp4: no atom pending read".
-    async fn drag(&mut self, final_target: f64, drag_duration: Duration, steps: usize, tag: &str) {
-        let start_pos = self.queue.position_seconds().unwrap_or(0.0);
-        let steps_u32 = u32::try_from(steps).unwrap_or(u32::MAX);
-        let step_delay = drag_duration / steps_u32;
-        for step in 1..=steps_u32 {
-            let frac = f64::from(step) / f64::from(steps_u32);
-            let target = start_pos + (final_target - start_pos) * frac;
-            self.queue.seek(target).expect("drag seek accepted");
-            eprintln!("[{tag}] drag step {step}/{steps_u32} → {target:.2}s");
-            sleep(step_delay).await;
         }
     }
 

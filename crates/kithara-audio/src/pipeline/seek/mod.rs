@@ -6,4 +6,6 @@ pub(crate) mod skip;
 pub(crate) mod state;
 
 pub(crate) use engine::SeekEngine;
-pub(crate) use state::{ApplySeekState, ResumeState, SeekContext, SeekMode, SeekRequest};
+pub(crate) use state::{
+    ApplySeekState, ResumeState, SeekContext, SeekEvents, SeekMode, SeekRequest,
+};

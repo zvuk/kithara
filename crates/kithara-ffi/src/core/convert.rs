@@ -35,6 +35,8 @@ impl TryFrom<&Event> for FfiPlayerEvent {
         match event {
             Event::Engine(e) => Self::try_from(e),
             Event::Session(e) => Self::try_from(e),
+            Event::Transport(e) => Self::try_from(e),
+            Event::Sync(e) => Self::try_from(e),
             Event::Dj(e) => Self::try_from(e),
             Event::Asset(e) => Self::try_from(e),
             _ => Err(NotForwarded),
@@ -599,23 +601,21 @@ mod tests {
 
     use kithara_events::{
         AssetEvent, CancelReason, DownloaderEvent, DrmEvent, EngineEvent, Event, EvictReason,
-        FileEvent, KeyFailureStage, KeySource, QueueEvent, RequestId, RouteChangeReason,
-        SessionEvent, StretchBackendKind, TotalBytesSource, TrackId,
+        FileEvent, KeyFailureStage, KeySource, MediaTime, PlaybackDirection, QueueEvent, RequestId,
+        RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind, SyncEvent,
+        TotalBytesSource, TrackId, TransportEvent,
     };
     use kithara_platform::time::Duration;
     use kithara_play::PlayerEvent;
 
     use super::{FfiError, FfiItemEvent, FfiPlayerEvent, NotForwarded};
     use crate::types::{
-        FfiCancelReason, FfiEvictReason, FfiKeyFailureStage, FfiKeySource, FfiRouteChangeReason,
-        FfiStretchBackendKind, FfiTotalBytesSource,
+        FfiCancelReason, FfiEvictReason, FfiKeyFailureStage, FfiKeySource, FfiPlaybackDirection,
+        FfiRouteChangeReason, FfiStretchBackendKind, FfiTotalBytesSource,
     };
 
     fn request_id(value: u64) -> RequestId {
-        match NonZeroU64::new(value) {
-            Some(id) => RequestId::new(id),
-            None => panic!("request id must be non-zero"),
-        }
+        NonZeroU64::new(value).map_or_else(|| panic!("request id must be non-zero"), RequestId::new)
     }
 
     #[kithara::test]
@@ -768,10 +768,62 @@ mod tests {
         assert!(matches!(
             FfiPlayerEvent::try_from(&SessionEvent::RouteChanged {
                 reason: RouteChangeReason::CategoryChange,
-                previous_route: Default::default(),
+                previous_route: RouteDescription::default(),
             }),
             Ok(FfiPlayerEvent::AudioRouteChanged {
                 reason: FfiRouteChangeReason::CategoryChange,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn transport_event_to_ffi_uses_transport_vocabulary() {
+        let event = Event::Transport(TransportEvent::TempoCommitted {
+            beats_per_minute: 128.0,
+            revision: 7,
+        });
+
+        assert!(matches!(
+            FfiPlayerEvent::try_from(&event),
+            Ok(FfiPlayerEvent::TransportTempoCommitted {
+                beats_per_minute: 128.0,
+                revision: 7,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn transport_seek_event_to_ffi_preserves_target_and_revision() {
+        let event = Event::Transport(TransportEvent::SeekCommitted {
+            position_beats: 12.5,
+            revision: 8,
+        });
+
+        assert!(matches!(
+            FfiPlayerEvent::try_from(&event),
+            Ok(FfiPlayerEvent::TransportSeekCommitted {
+                position_beats: 12.5,
+                revision: 8,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn sync_event_to_ffi_uses_sync_vocabulary() {
+        let event = Event::Sync(SyncEvent::BindingCommitted {
+            slot: kithara_events::SlotId::new(4),
+            session_anchor_beats: 8.0,
+            track_anchor_beats: 16.0,
+            direction: PlaybackDirection::Reverse,
+        });
+
+        assert!(matches!(
+            FfiPlayerEvent::try_from(&event),
+            Ok(FfiPlayerEvent::SyncBindingCommitted {
+                slot: 4,
+                session_anchor_beats: 8.0,
+                track_anchor_beats: 16.0,
+                direction: FfiPlaybackDirection::Reverse,
             })
         ));
     }
@@ -790,7 +842,7 @@ mod tests {
             FfiPlayerEvent::try_from(&kithara_events::DjEvent::BeatTick {
                 slot: kithara_events::SlotId::new(9),
                 beat_number: 4,
-                timestamp: Default::default(),
+                timestamp: MediaTime::default(),
             }),
             Err(NotForwarded)
         ));

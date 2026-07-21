@@ -6,7 +6,7 @@ use kithara::{
     self,
     decode::PcmSpec,
     events::TrackStatus,
-    platform::sync::Arc,
+    platform::{sync::Arc, traits::FromWithParams},
     play::Resource,
     queue::{Queue, QueueConfig, Transition},
 };
@@ -63,9 +63,9 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
             .build(),
         SAMPLE_RATE,
     );
-    let mut config = QueueConfig::default().with_player(Arc::clone(harness.player()));
+    let mut config = QueueConfig::default();
     config.should_autoplay = false;
-    let queue = Queue::new(config);
+    let queue = Queue::build(Arc::clone(harness.player()), config);
     (harness, queue)
 }
 

@@ -14,6 +14,8 @@ resolver = "2"
 # dependencies are target-gated instead of landing in base dependencies.
 platforms = [
   "x86_64-unknown-linux-gnu",
+  "aarch64-linux-android",
+  "x86_64-linux-android",
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
   "aarch64-apple-ios",
@@ -41,6 +43,9 @@ workspace-members = [
 ]
 third-party = [
   { name = "realfft" },
+  # HTTP and TLS backends are target-specific; unifying reqwest would pull
+  # native-tls and openssl-sys into Android builds that use wreq.
+  { name = "reqwest" },
   { name = "rubato" },
   { name = "rustfft" },
   { name = "symphonia-core" },

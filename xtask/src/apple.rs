@@ -441,6 +441,7 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
     ]);
     cmd.current_dir(&crate_dir);
     cmd.env("IPHONEOS_DEPLOYMENT_TARGET", "16.0");
+    cmd.env("MACOSX_DEPLOYMENT_TARGET", "13.0");
     set_simulator_bindgen_args(&mut cmd)?;
 
     let status = cmd.status().context("failed to run cargo swift package")?;

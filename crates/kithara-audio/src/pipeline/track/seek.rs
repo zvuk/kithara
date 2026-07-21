@@ -184,7 +184,7 @@ impl Track<AwaitingResume> {
         src.update_state(Self::new(resume).erase());
         match decode_step(src) {
             DecodeStep::Produced(fetch) => TrackStep::Produced(fetch),
-            DecodeStep::Interrupted => TrackStep::StateChanged,
+            DecodeStep::SourceProgress | DecodeStep::Interrupted => TrackStep::StateChanged,
             DecodeStep::NotReady(reason) => TrackStep::Blocked(reason),
             DecodeStep::Eof => TrackStep::Eof,
             DecodeStep::Failed => TrackStep::Failed,

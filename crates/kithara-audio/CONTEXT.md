@@ -41,7 +41,7 @@ flowchart TB
 - **Downloader (tokio)**: lives in `kithara-stream::dl`. It owns the HTTP pool and writes bytes directly into the `StorageResource` the `DecoderNode` reads from. The downloader is not spawned by `kithara-audio`.
 - **Ring**: a lock-free `ringbuf::HeapRb<PcmChunk>` carries processed PCM from the worker to the consumer; backpressure is enforced by the ring's capacity and an `Outlet` overflow slot.
 - **Ring wake**: the producer push and the consumer park form a lock-free wait protocol guarded by a `SeqCst` fence pair (a Dekker StoreLoad barrier) so a just-parked consumer is never missed.
-- **Trash ring (spent-chunk return)**: the consumer (`Audio`) runs on the caller's real-time audio thread, so it must never `free`. Returning a `PcmChunk`'s pooled buffer to `kithara-bufpool` can deallocate (shard full, or trim), so the consumer never drops a consumed chunk: it pushes every spent chunk back through a second lock-free ring, and `Node::recycle` drops them on the worker thread on its next tick. The ring is sized `pcm_buffer_chunks + 2` — enough to absorb a seek that drains the whole forward ring at once — so the real-time push is infallible and no buffer is ever freed on the audio thread.
+- **Trash ring (spent-chunk return)**: the consumer (`Audio`) runs on the caller's real-time audio thread, so it must never `free`. Returning a `PcmChunk`'s pooled buffer to `kithara-bufpool` can deallocate (shard full, or trim), so the consumer never drops a consumed chunk: it pushes every spent chunk back through a second lock-free ring, and `Node::recycle` drops them on the worker thread on its next tick. The checked worker produce core follows the same rule: `DecoderNode` retains seek-invalidated overflow until `Node::recycle`, while `DecodeCore` retains seek-invalidated gapless chunks until `flush_reader_signals`. The ring is sized `pcm_buffer_chunks + 2` — enough to absorb a seek that drains the whole forward ring at once — so the real-time push is infallible and no buffer is ever freed on the audio thread.
 - **Preload gate (`PreloadGate`)**: the one-time startup signal that releases the async consumer's `Resource::preload().await`. The worker is a plain OS thread, not a tokio runtime worker, so it must never run a cross-thread tokio-task `wake()` (that schedules through tokio's inject queue — a lock + futex, real-time-unsafe). The gate is decoupled: the worker only does a lock-free `ready_epoch.store(epoch, Release)` plus `ready.store(true, Release)` via `signal_epoch(epoch)`; the async awaiter (`PreloadGate::wait_for_epoch`) polls with `Acquire` and re-arms its own runtime timer (`POLL_INTERVAL`) while the gate is closed, so the worker never drives the wakeup. `DecoderNode` opens the gate at every preload terminal site — the preload-chunk threshold, EOF, `Failed`, and `on_cancel` — using its producer runtime epoch, and `rearm()`s (re-closes) it in `sync_seek_epoch` so a post-seek wait blocks again until that epoch refills. A stale pre-seek signal must not release a post-seek waiter; a missed signal would stall the consumer before first audio, so all terminal arms must fire it with the epoch they actually produced.
 - **Events**: every layer publishes into a unified `EventBus` (`AudioEvent`, `HlsEvent`, `FileEvent`, ABR events).
 - **Epoch-based seek invalidation**: each seek bumps an `AtomicU64` epoch; stale chunks tagged with an older epoch are dropped before reaching the ring.
@@ -117,7 +117,11 @@ today and by mobile surfaces (kithara-ffi) next:
 
 - **`Analyzer` / `TrackAnalyzers`** — crate-private streaming analyzer pieces.
   Each analyzer is fed every decoded chunk once; `TrackAnalyzers` stages
-  completion into the public `TrackAnalysis { waveform, beat, source_frames }`.
+  completion into the public `TrackAnalysis`. Alongside waveform, beat grid,
+  and source-frame count, worker-produced snapshots retain the decoded source
+  sample rate that defines the frame axis. One pass accepts one stable decoded
+  source format; a mid-pass channel or sample-rate change aborts that analysis
+  instead of combining incompatible frame axes.
 - **`AnalyzerBuilder`** — the public builder for selecting analysis passes.
   `with_waveform(buckets)` enables waveform extraction, `with_beat()` enables
   the NN beat slot when `beat-nn` is compiled and the model loads, and
@@ -172,6 +176,70 @@ today and by mobile surfaces (kithara-ffi) next:
   `AnalyzerBuilder::with_beat()` is a compile-time no-op. Apple FFI device
   builds intentionally omit `analysis-beat`; NN-only beat fallback for that set
   is future work, not a hidden runtime fallback.
+
+`TrackBeatMap` is the immutable musical-coordinate view derived from a
+`TrackAnalysis`. It converts analysed source-rate markers onto an explicit
+host-rate `SourceFrame` axis and maps them piecewise-linearly to `TrackBeat`.
+Actual beat markers define phase; the grid's aggregate BPM estimate is never
+used to fabricate marker positions. The first analysed downbeat is beat zero,
+so pickup beats remain representable as negative coordinates. Repeated,
+unordered, insufficient, or off-grid markers fail with `BeatMapError` instead
+of producing a guessed map. Markers beyond the decoded source extent are also
+invalid, and mapping is available only between the first and last analysed
+markers; neither boundary is extrapolated. Meter is exposed only when
+consecutive downbeat spans agree.
+
+## Bounded Source Ranges
+
+`SourceRange` indexes the transport-neutral signal after gapless normalization
+and fixed host-rate conversion, but before time stretch and custom playback
+effects. Session beats, tempo, direction, bindings, and render context never
+cross this boundary.
+
+`Audio` is the only owner of bounded decoded reads. It starts each range through
+the canonical `SeekState` transaction with `SeekIntent::Reposition`; a
+`SourceRangeRequest` carries that exact epoch, and a newer playback seek or
+range invalidates it. The reposition uses the normal seek, decoder, and worker
+path but owns no application-visible seek lifecycle. Its HLS peer wake is armed
+lock-free and flushed by the already-woken worker shell; it never calls the
+runtime notifier from the render callback. The decoder switches one
+resource between exclusive linear and bounded read modes, and both modes use
+the same decoder, worker, PCM ring, gapless metadata, trash ring, and `PcmPool`.
+There is no source sidecar worker, cache, port protocol, event bus, or second
+seek generation.
+
+The caller supplies a fixed interleaved destination and polls
+`read_source_range` without blocking. `Audio` copies exact chunk intersections,
+rejects format changes, gaps, malformed chunk shapes, request mismatches, and
+stale epochs with typed errors, and returns every consumed chunk through the
+existing trash ring before propagating an error. Natural EOF remains distinct
+from decoder failure. Readers without canonical decoded coordinates report the
+typed unsupported capability instead of fabricating a second signal path.
+
+## Elastic Reader
+
+With `stretch-signalsmith`, `elastic::ElasticReader<State>` is the canonical
+integration between bounded decoded PCM and exact-span time stretching. It is
+generic over the existing `PcmReader` contract: `Resource`, `Audio`, and test
+readers are not wrapped in a second source abstraction. The caller retains the
+reader owner and lends `&mut impl PcmReader` to preparation, relocation polling,
+and rendering.
+
+The typestates `Unprepared`, `Preparing`, `Ready`, and `Active` make buffer and
+DSP readiness a construction property. The reader owns the directional source
+cursor, the prepared Signalsmith backend, bounded range requests, relocation
+PCM, and a fixed-capacity bank of `PcmBuf` values acquired from the existing
+`PcmPool` before callback use. Steady-state render and relocation polling do not
+allocate, block, lock, or return buffers to the pool. `ElasticReaderConfig`
+owns source-window depth and span continuity policy; allocation derives source
+capacity from the backend rate envelope and the host's maximum output block.
+
+Session beats, `TrackBinding`, transport revisions, request identity, queue
+selection, and relocation commit boundaries stay above this crate in
+`kithara-play`. The reader accepts only transport-neutral `ElasticAnchor` and
+`ElasticSpan` values. It stages the numeric cursor and publishes it only after
+all exact backend requests succeed; a failed render leaves the previous cursor
+authoritative.
 
 ## Waveform
 

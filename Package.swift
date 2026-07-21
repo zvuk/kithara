@@ -91,6 +91,7 @@ let package = Package(
             path: "apple/Sources/KitharaFFI",
             linkerSettings: [
                 .linkedFramework("Accelerate"),
+                .linkedFramework("AVFoundation"),
                 .linkedFramework("AudioToolbox"),
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("Security"),

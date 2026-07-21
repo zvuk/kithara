@@ -49,7 +49,11 @@ impl RebuildState {
             return;
         };
         self.superseded_seek = Some(SeekRequest {
-            seek: SeekContext { target, epoch },
+            seek: SeekContext {
+                target,
+                epoch,
+                events: (seek.pending_epoch() == Some(epoch)).into(),
+            },
             emit_request: false,
         });
     }

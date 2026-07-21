@@ -12,12 +12,28 @@ pub(crate) fn set_f64(obj: &Object, key: &str, val: f64) {
     let _ = Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_f64(val));
 }
 
+pub(crate) fn set_u64(obj: &Object, key: &str, val: u64) {
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+    assert!(
+        val <= MAX_SAFE_INTEGER,
+        "web observer integer exceeds the JavaScript safe range"
+    );
+    let Some(val) = num_traits::cast(val) else {
+        unreachable!("every JavaScript-safe u64 is representable as f64");
+    };
+    set_f64(obj, key, val);
+}
+
 pub(crate) fn set_bool(obj: &Object, key: &str, val: bool) {
     let _ = Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_bool(val));
 }
 
 #[rustfmt::skip]
 pub(crate) fn set_opt_f64(obj: &Object, key: &str, val: Option<f64>) { if let Some(val) = val { set_f64(obj, key, val); } }
+
+#[rustfmt::skip]
+pub(crate) fn set_opt_u64(obj: &Object, key: &str, val: Option<u64>) { if let Some(val) = val { set_u64(obj, key, val); } }
 
 #[rustfmt::skip]
 pub(crate) fn set_opt_str(obj: &Object, key: &str, val: Option<&str>) { if let Some(val) = val { set_str(obj, key, val); } }
@@ -35,6 +51,36 @@ pub(crate) fn get_f64(val: &JsValue, key: &str) -> Option<f64> {
     Reflect::get(val, &JsValue::from_str(key))
         .ok()
         .and_then(|v| v.as_f64())
+}
+
+fn get_optional_f64(val: &JsValue, key: &str) -> Option<Option<f64>> {
+    let value = Reflect::get(val, &JsValue::from_str(key)).ok()?;
+    if value.is_undefined() {
+        Some(None)
+    } else {
+        value.as_f64().map(Some)
+    }
+}
+
+pub(crate) fn get_u64(val: &JsValue, key: &str) -> Option<u64> {
+    parse_u64(get_f64(val, key)?)
+}
+
+pub(crate) fn get_optional_u64(val: &JsValue, key: &str) -> Option<Option<u64>> {
+    match get_optional_f64(val, key)? {
+        Some(value) => Some(Some(parse_u64(value)?)),
+        None => Some(None),
+    }
+}
+
+fn parse_u64(value: f64) -> Option<u64> {
+    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+    if value.is_finite() && value.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(&value) {
+        num_traits::cast(value)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn get_bool(val: &JsValue, key: &str) -> Option<bool> {

@@ -11,6 +11,7 @@ use kithara::{
         sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, Transition},
@@ -154,7 +155,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::build(player, QueueConfig::default()));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
         loop {
