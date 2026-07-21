@@ -1,14 +1,25 @@
 {
   "hooks": {
-    "PreToolUse": [
+    "PostToolUse": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
-            "type": "command",
-            "command": "cargo xtask agent-hook pre-bash"
+            "command": "command -v just >/dev/null 2>&1 || { printf 'warning: just is unavailable; skipping Kithara agent hook\\n' >&2; exit 0; }; exec just agent-hook",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "apply_patch"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v just >/dev/null 2>&1 || { printf 'warning: just is unavailable; skipping Kithara agent hook\\n' >&2; exit 0; }; exec just agent-hook",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
       }
     ]
   }

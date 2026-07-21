@@ -20,9 +20,11 @@ platforms = [
   "wasm32-unknown-unknown",
 ]
 
-# Exclude test-only and non-publishable crates from traversal.
+# Exclude test-only and development-tooling crates from traversal.
 # kithara-test-utils is test-only tooling; excluding it keeps its probe-feature
 # env-filter (and its regex/regex-automata/aho-corasick) out of the shared hack.
+# xtask and kithara-devtools are host-side tooling and should not inherit the
+# application dependency union through the generated workspace hack.
 # kithara-app's desktop deps (incl env-filter) are gated to non-iOS in its own
 # manifest, and aarch64-apple-ios is a hakari platform, so env-filter resolves
 # only for the desktop platforms — the iOS device closure (which never requests
@@ -31,9 +33,11 @@ platforms = [
 # boring-sys2's cert-compression features and breaks the boring2 build).
 [traversal-excludes]
 workspace-members = [
+  "kithara-devtools",
   "kithara-integration-tests",
   "kithara-ffi",
   "kithara-test-utils",
+  "xtask",
 ]
 third-party = [
   { name = "realfft" },
