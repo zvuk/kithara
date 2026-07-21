@@ -6,24 +6,18 @@ use kithara_platform::{
     tokio::select,
 };
 
-use super::super::{
-    core::PlayerImpl,
-    state::{PreparedBindingResource, PreparedBindingStamp},
-};
+use super::super::{core::PlayerImpl, state::PreparedBindingResource};
 use crate::{
-    api::{PlaybackDirection, SessionBeat, Tempo, TrackBinding},
+    api::{PlaybackDirection, SessionBeat, TrackBinding},
     error::PlayError,
     player::track::{ElasticPreparationPoll, PreparingElasticRenderer},
     resource::Resource,
+    session::protocol::PreparationContext,
 };
 
 impl PlayerImpl {
-    fn current_binding_preparation(&self) -> Result<(Tempo, PreparedBindingStamp), PlayError> {
-        let preparation = self.core.engine.binding_preparation()?;
-        Ok((
-            preparation.tempo,
-            PreparedBindingStamp::new(preparation.shape, preparation.revision),
-        ))
+    fn current_preparation_context(&self) -> Result<PreparationContext, PlayError> {
+        self.core.engine.preparation_context()
     }
 
     pub(in crate::player) async fn prepare_bound_resource(
@@ -48,12 +42,12 @@ impl PlayerImpl {
             .cancel_token()
             .ok_or_else(|| PlayError::Internal("player preparation has no cancel owner".into()))?
             .child();
-        let (tempo, stamp) = self.current_binding_preparation()?;
+        let context = self.current_preparation_context()?;
         let binding_sample_rate = binding.map().host_sample_rate();
-        if binding_sample_rate != stamp.shape.sample_rate {
+        if binding_sample_rate != context.shape().sample_rate {
             return Err(PlayError::BindingSampleRateMismatch {
                 binding_sample_rate: binding_sample_rate.get(),
-                stream_sample_rate: stamp.shape.sample_rate.get(),
+                stream_sample_rate: context.shape().sample_rate.get(),
             });
         }
         ensure_preparation_active(&cancel)?;
@@ -71,14 +65,14 @@ impl PlayerImpl {
         ensure_preparation_active(&cancel)?;
         resource.set_playback_rate(self.core.timestretch.speed());
         resource.set_transport_bend(self.core.params.pitch_bend());
-        resource.set_host_sample_rate(stamp.shape.sample_rate);
+        resource.set_host_sample_rate(context.shape().sample_rate);
         let mut preparation = PreparingElasticRenderer::begin(
             &mut resource,
             binding,
             anchor,
-            tempo,
-            stamp.transport_revision,
-            stamp.shape,
+            context.tempo(),
+            context.transport_revision(),
+            context.shape(),
             self.core.engine.pcm_pool(),
         )
         .map_err(|error| PlayError::ElasticPreparation {
@@ -99,12 +93,11 @@ impl PlayerImpl {
             }
         };
 
-        let (_, current_stamp) = self.current_binding_preparation()?;
-        if stamp != current_stamp {
+        if context != self.current_preparation_context()? {
             return Err(PlayError::BindingPreparationContextChanged);
         }
 
-        Ok((resource, PreparedBindingResource { stamp, renderer }))
+        Ok((resource, PreparedBindingResource { context, renderer }))
     }
 }
 

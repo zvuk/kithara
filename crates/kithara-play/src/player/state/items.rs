@@ -6,7 +6,7 @@ use tracing::debug;
 
 use super::{
     super::platform::{ItemLoadContext, prepare_bound_load, restore_prepared_binding},
-    PreparedBindingResource, PreparedBindingStamp, QueuedResource,
+    PreparedBindingResource, QueuedResource,
     playlist::{Playlist, QueuedLoad},
 };
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
     error::PlayError,
     player::track::PlayerResource,
     resource::Resource,
+    session::protocol::PreparationContext,
 };
 
 pub(crate) struct DispatchedLoad {
@@ -26,7 +27,7 @@ pub(crate) struct DispatchedLoad {
 
 pub(in crate::player) struct BoundLoad {
     pub(in crate::player) abr_handle: Option<AbrHandle>,
-    pub(in crate::player) prepared_stamp: Option<PreparedBindingStamp>,
+    pub(in crate::player) preparation: Option<PreparationContext>,
     pub(in crate::player) player_resource: PlayerResource,
 }
 
@@ -36,7 +37,7 @@ pub(in crate::player) struct LoadTransaction<'a> {
     abr_handle: Option<AbrHandle>,
     binding: Option<TrackBinding>,
     item_id: Option<Arc<str>>,
-    prepared_stamp: Option<PreparedBindingStamp>,
+    preparation: Option<PreparationContext>,
     player_resource: PlayerResource,
     duration_seconds: f64,
     index: usize,
@@ -54,7 +55,7 @@ impl LoadTransaction<'_> {
             binding,
             item_id,
             player_resource,
-            prepared_stamp,
+            preparation,
             abr_handle,
             duration_seconds,
         } = self;
@@ -83,7 +84,7 @@ impl LoadTransaction<'_> {
                 let resource = player_resource.ok_or_else(|| {
                     PlayError::Internal("unsent load consumed its queue resource".into())
                 })?;
-                restore_queue_resource(&mut playlist, index, resource, prepared_stamp)?;
+                restore_queue_resource(&mut playlist, index, resource, preparation)?;
                 Err(error)
             }
             Err(DeferredPlayerCmdError::Rejected(rejected)) => {
@@ -93,7 +94,7 @@ impl LoadTransaction<'_> {
                         "load dispatch rejected a non-load command".into(),
                     ));
                 };
-                restore_queue_resource(&mut playlist, index, resource, prepared_stamp)?;
+                restore_queue_resource(&mut playlist, index, resource, preparation)?;
                 Err(error)
             }
         }
@@ -104,10 +105,10 @@ fn restore_queue_resource(
     playlist: &mut Playlist,
     index: usize,
     mut player_resource: PlayerResource,
-    prepared_stamp: Option<PreparedBindingStamp>,
+    preparation: Option<PreparationContext>,
 ) -> Result<(), PlayError> {
     player_resource.set_service_class(ServiceClass::Idle);
-    let (resource, prepared) = restore_prepared_binding(player_resource.release(), prepared_stamp)?;
+    let (resource, prepared) = restore_prepared_binding(player_resource.release(), preparation)?;
     restore_queued_resource(playlist, index, prepared, resource)
 }
 
@@ -247,12 +248,12 @@ impl ItemQueue {
         let duration_seconds = resource
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64());
-        let rate = context.rate;
-        let pitch_bend = context.pitch_bend;
-        let shape = context.stamp.shape;
+        let rate = context.rate();
+        let pitch_bend = context.pitch_bend();
+        let shape = context.shape();
         let BoundLoad {
             player_resource,
-            prepared_stamp,
+            preparation,
             abr_handle,
         } = if let Some(binding) = binding.as_ref() {
             match prepare_bound_load(&mut playlist, index, resource, binding, prepared, context) {
@@ -267,8 +268,8 @@ impl ItemQueue {
             let src = Arc::clone(resource.src());
             BoundLoad {
                 abr_handle,
-                player_resource: PlayerResource::new(resource, src, context.pool),
-                prepared_stamp: None,
+                player_resource: PlayerResource::new(resource, src, context.pool()),
+                preparation: None,
             }
         };
 
@@ -281,7 +282,7 @@ impl ItemQueue {
             abr_handle,
             binding,
             item_id,
-            prepared_stamp,
+            preparation,
             player_resource,
             duration_seconds,
             index,
@@ -364,7 +365,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        api::{PlaybackDirection, SessionBeat, SlotId, Tempo},
+        api::{PlaybackDirection, SessionBeat, SlotId},
         engine::EngineConfig,
         player::node::StreamShape,
     };
@@ -465,13 +466,7 @@ mod tests {
             sample_rate: NonZeroU32::new(44_100).expect("static rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
-        ItemLoadContext::new(
-            1.0,
-            1.0,
-            Some(Tempo::new(120.0).expect("valid tempo")),
-            pool,
-            PreparedBindingStamp::new(shape, 0),
-        )
+        ItemLoadContext::linear(1.0, 1.0, pool, shape)
     }
 
     #[kithara::test]

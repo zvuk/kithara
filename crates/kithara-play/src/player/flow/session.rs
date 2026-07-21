@@ -36,11 +36,13 @@ impl PlayerImpl {
             .map(|(_, player)| player.core.items.lock_playlist())
             .collect();
         let snapshot = self.core.engine.session_transport()?;
-        let preparation = self.core.engine.binding_preparation()?;
-        if preparation.revision != snapshot.revision() || preparation.tempo != snapshot.tempo() {
+        let context = self.core.engine.preparation_context()?;
+        if context.transport_revision() != snapshot.revision()
+            || context.tempo() != snapshot.tempo()
+        {
             return Err(PlayError::BindingPreparationContextChanged);
         }
-        let shape = preparation.shape;
+        let shape = context.shape();
         for ((_, player), playlist) in participants.iter().zip(&playlists) {
             player.validate_session_tempo(snapshot, tempo, shape, playlist.current_binding())?;
             Self::validate_successor_tempo(playlist, tempo, shape)?;
@@ -51,6 +53,6 @@ impl PlayerImpl {
             .collect();
         self.core
             .engine
-            .set_session_tempo_checked(tempo, snapshot.revision(), shape, player_ids)
+            .set_session_tempo_checked(tempo, context, player_ids)
     }
 }

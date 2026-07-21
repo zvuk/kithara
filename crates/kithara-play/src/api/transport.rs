@@ -1,3 +1,5 @@
+use std::{fmt, num::NonZeroU64};
+
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// A finite, positive musical tempo in beats per minute.
@@ -78,6 +80,43 @@ pub struct SessionBeatError {
     value: f64,
 }
 
+/// Monotonic generation of a committed session transport configuration.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(transparent)]
+pub struct TransportRevision(NonZeroU64);
+
+impl TransportRevision {
+    pub(crate) const FIRST: Self = Self(NonZeroU64::MIN);
+
+    pub(crate) fn checked_next(self) -> Option<Self> {
+        self.0
+            .get()
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .map(Self)
+    }
+
+    #[must_use]
+    /// Returns the serialized revision value.
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn new_for_test(value: u64) -> Self {
+        match NonZeroU64::new(value) {
+            Some(value) => Self(value),
+            None => panic!("transport test revision must be non-zero"),
+        }
+    }
+}
+
+impl fmt::Display for TransportRevision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.get().fmt(formatter)
+    }
+}
+
 /// The last session transport position processed by the audio graph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -85,11 +124,16 @@ pub struct SessionTransportSnapshot {
     position: SessionBeat,
     playing: bool,
     tempo: Tempo,
-    revision: u64,
+    revision: TransportRevision,
 }
 
 impl SessionTransportSnapshot {
-    pub(crate) fn new(position: SessionBeat, playing: bool, tempo: Tempo, revision: u64) -> Self {
+    pub(crate) fn new(
+        position: SessionBeat,
+        playing: bool,
+        tempo: Tempo,
+        revision: TransportRevision,
+    ) -> Self {
         Self {
             position,
             playing,
@@ -99,26 +143,26 @@ impl SessionTransportSnapshot {
     }
 
     #[must_use]
-    /// Returns the processed position on the session beat grid.
-    pub fn position(self) -> SessionBeat {
-        self.position
-    }
-
-    #[must_use]
     /// Returns whether the processed session transport is playing.
     pub fn is_playing(self) -> bool {
         self.playing
     }
 
     #[must_use]
-    /// Returns the tempo that produced this processed position.
-    pub fn tempo(self) -> Tempo {
-        self.tempo
+    /// Returns the processed position on the session beat grid.
+    pub fn position(self) -> SessionBeat {
+        self.position
     }
 
     #[must_use]
     /// Returns the monotonic revision of the committed transport configuration.
-    pub fn revision(self) -> u64 {
+    pub fn revision(self) -> TransportRevision {
         self.revision
+    }
+
+    #[must_use]
+    /// Returns the tempo that produced this processed position.
+    pub fn tempo(self) -> Tempo {
+        self.tempo
     }
 }

@@ -235,7 +235,8 @@ impl Drop for EngineImpl {
         {
             warn!(
                 ?err,
-                player_id, "failed to unregister player from shared session"
+                player_id = player_id.get(),
+                "failed to unregister player from shared session"
             );
         }
 
@@ -266,7 +267,7 @@ impl EngineImpl {
 
         self.slots.lock().insert(slot_id, allocated.control);
 
-        debug!(?slot_id, player_id, "slot allocated");
+        debug!(?slot_id, player_id = player_id.get(), "slot allocated");
         self.emit(EngineEvent::SlotAllocated { slot: slot_id });
         Ok(slot_id)
     }
@@ -311,7 +312,7 @@ impl EngineImpl {
 
         let _ = self.slots.lock().remove(slot);
 
-        debug!(?slot, player_id, "slot released");
+        debug!(?slot, player_id = player_id.get(), "slot released");
         self.emit(EngineEvent::SlotReleased { slot });
         Ok(())
     }
@@ -333,7 +334,7 @@ impl EngineImpl {
             sample_rate = self.config.sample_rate,
             channels = self.config.channels,
             max_slots = self.config.max_slots,
-            player_id,
+            player_id = player_id.get(),
             "engine started"
         );
         self.emit(EngineEvent::Started);
@@ -351,7 +352,7 @@ impl EngineImpl {
         self.slots.lock().clear();
 
         self.running.store(false, Ordering::Release);
-        info!(player_id, "engine stopped");
+        info!(player_id = player_id.get(), "engine stopped");
         self.emit(EngineEvent::Stopped);
         Ok(())
     }

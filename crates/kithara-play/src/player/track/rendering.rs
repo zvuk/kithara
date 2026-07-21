@@ -6,8 +6,8 @@ use smallvec::SmallVec;
 use super::{
     Active, ElasticCopyError, ElasticPlanError, ElasticRenderError, ElasticRenderOutcome,
     ElasticRenderSegment, ElasticRenderer, ElasticRequest, IntegerSegment, PlaybackDirection,
-    RenderContext, SourceCursor, SourceRange, TrackBinding, plan_elastic_segments, quantize_source,
-    sample_count,
+    RenderContext, SourceCursor, SourceRange, TrackBinding, TransportRevision,
+    plan_elastic_segments, quantize_source, sample_count,
 };
 use crate::resource::Resource;
 
@@ -63,7 +63,7 @@ impl ElasticRenderer<Active> {
     fn integer_segments(
         &self,
         planned: &[ElasticRenderSegment],
-        revision: u64,
+        revision: TransportRevision,
         direction: PlaybackDirection,
     ) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
         let mut continuous = SmallVec::<[ContinuousSegment; 4]>::new();

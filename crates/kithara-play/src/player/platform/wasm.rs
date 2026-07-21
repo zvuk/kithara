@@ -7,7 +7,7 @@ use super::{
         core::PlayerImpl,
         state::{
             items::{BoundLoad, restore_queued_resource},
-            playlist::{Playlist, PreparedBindingStamp},
+            playlist::Playlist,
         },
     },
     ItemLoadContext,
@@ -20,7 +20,7 @@ use crate::{
         track::{PlayerResource, ReadOutcome, ReleasedPlayerResource},
     },
     resource::Resource,
-    session::render::RenderContext,
+    session::{protocol::PreparationContext, render::RenderContext},
 };
 
 pub(crate) enum ElasticRendererUnavailable {}
@@ -99,12 +99,11 @@ pub(crate) fn prepare_bound_load(
     prepared: Option<PreparedBindingResource>,
     context: ItemLoadContext<'_>,
 ) -> Result<BoundLoad, PlayError> {
-    let ItemLoadContext {
-        tempo: _binding_tempo,
-        ..
-    } = context;
     drop(prepared);
     restore_queued_resource(playlist, index, None, resource)?;
+    if context.preparation().is_none() {
+        return Err(PlayError::BindingPreparationContextChanged);
+    }
     Err(PlayError::Internal(
         "browser queue unexpectedly contained a bound resource".into(),
     ))
@@ -112,9 +111,9 @@ pub(crate) fn prepare_bound_load(
 
 pub(crate) fn restore_prepared_binding(
     released: ReleasedPlayerResource,
-    stamp: Option<PreparedBindingStamp>,
+    context: Option<PreparationContext>,
 ) -> Result<(Resource, Option<PreparedBindingResource>), PlayError> {
-    match (released, stamp) {
+    match (released, context) {
         (ReleasedPlayerResource::Linear(resource), None) => Ok((resource, None)),
         _ => Err(PlayError::Internal(
             "browser load returned inconsistent binding state".into(),

@@ -55,8 +55,9 @@ pub(super) mod lifecycle {
         sample_rate: u32,
         master_volume: f32,
     ) -> Result<(), SessionError> {
+        let roster_revision = state.next_roster_revision()?;
         debug!(
-            player_id,
+            player_id = player_id.get(),
             sample_rate, master_volume, "[KITHARA-ROUTE] starting player"
         );
         ensure_ctx(state, sample_rate)?;
@@ -84,15 +85,19 @@ pub(super) mod lifecycle {
         let volume_to_output = "connect player master_vol->session_output";
         connect_stereo(fw_ctx, master_vol_id, session_output_id, volume_to_output)?;
         if let Err(err) = fw_ctx.update() {
-            warn!(player_id, "graph update after player start failed: {err:?}");
+            warn!(
+                player_id = player_id.get(),
+                "graph update after player start failed: {err:?}"
+            );
         }
         player.master_eq_node_id = Some(master_eq_id);
         player.master_eq_memo = Some(master_eq_memo);
         player.master_vol_pan_node_id = Some(master_vol_id);
         player.master_vol_pan_memo = Some(master_vol_memo);
         player.started = true;
+        state.commit_roster_revision(roster_revision);
         debug!(
-            player_id,
+            player_id = player_id.get(),
             ?master_eq_id,
             ?master_vol_id,
             "[KITHARA-ROUTE] player graph started"
@@ -103,7 +108,10 @@ pub(super) mod lifecycle {
         state: &mut SessionState<B>,
         player_id: PlayerId,
     ) -> Result<(), SessionError> {
-        debug!(player_id, "[KITHARA-ROUTE] stopping player");
+        debug!(
+            player_id = player_id.get(),
+            "[KITHARA-ROUTE] stopping player"
+        );
         let idx = player_index(state, player_id)?;
         stop_player_idx(state, idx)
     }
@@ -111,6 +119,7 @@ pub(super) mod lifecycle {
         state: &mut SessionState<B>,
         idx: usize,
     ) -> Result<(), SessionError> {
+        let roster_revision = state.next_roster_revision()?;
         if idx >= state.players.len() {
             return Err(graph_state("player index out of range"));
         }
@@ -123,7 +132,7 @@ pub(super) mod lifecycle {
                 remove_player_graph(fw_ctx, player);
                 if let Err(err) = fw_ctx.update() {
                     warn!(
-                        player_id = player.player_id,
+                        player_id = player.player_id.get(),
                         "graph update after player stop failed: {err:?}"
                     );
                 }
@@ -132,6 +141,7 @@ pub(super) mod lifecycle {
             }
             player.started = false;
         }
+        state.commit_roster_revision(roster_revision);
         shutdown_if_idle(state);
         debug!("[KITHARA-ROUTE] player stopped");
         Ok(())
@@ -143,21 +153,37 @@ pub(super) mod lifecycle {
         let player_id = player.player_id;
         for slot in player.slots.drain(..) {
             if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
-                warn!(player_id, ?err, "failed to remove slot vol_pan node");
+                warn!(
+                    player_id = player_id.get(),
+                    ?err,
+                    "failed to remove slot vol_pan node"
+                );
             }
             if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
-                warn!(player_id, ?err, "failed to remove slot player node");
+                warn!(
+                    player_id = player_id.get(),
+                    ?err,
+                    "failed to remove slot player node"
+                );
             }
         }
         if let Some(master_id) = player.master_vol_pan_node_id.take()
             && let Err(err) = fw_ctx.remove_node(master_id)
         {
-            warn!(player_id, ?err, "failed to remove player master vol node");
+            warn!(
+                player_id = player_id.get(),
+                ?err,
+                "failed to remove player master vol node"
+            );
         }
         if let Some(master_eq_id) = player.master_eq_node_id.take()
             && let Err(err) = fw_ctx.remove_node(master_eq_id)
         {
-            warn!(player_id, ?err, "failed to remove player master eq node");
+            warn!(
+                player_id = player_id.get(),
+                ?err,
+                "failed to remove player master eq node"
+            );
         }
         clear_player_graph_state(player);
     }
@@ -187,7 +213,11 @@ pub(super) mod slots {
         state: &mut SessionState<B>,
         player_id: PlayerId,
     ) -> Result<Reply, SessionError> {
-        debug!(player_id, "[KITHARA-ROUTE] allocating player slot");
+        let roster_revision = state.next_roster_revision()?;
+        debug!(
+            player_id = player_id.get(),
+            "[KITHARA-ROUTE] allocating player slot"
+        );
         let idx = player_index(state, player_id)?;
         if !state.players[idx].started {
             return Err(SessionError::NotRunning(player_id));
@@ -213,7 +243,7 @@ pub(super) mod slots {
         connect_stereo(fw_ctx, slot_vol_pan_id, master_eq_id, slot_to_master)?;
         if let Err(err) = fw_ctx.update() {
             warn!(
-                player_id,
+                player_id = player_id.get(),
                 ?slot_id,
                 "graph update after slot allocate failed: {err:?}"
             );
@@ -224,8 +254,9 @@ pub(super) mod slots {
             vol_pan_memo: slot_vol_pan_memo,
             vol_pan_node_id: slot_vol_pan_id,
         });
+        state.commit_roster_revision(roster_revision);
         debug!(
-            player_id,
+            player_id = player_id.get(),
             ?slot_id,
             ?player_node_id,
             ?slot_vol_pan_id,
@@ -243,7 +274,12 @@ pub(super) mod slots {
         player_id: PlayerId,
         slot: SlotId,
     ) -> Result<(), SessionError> {
-        debug!(player_id, ?slot, "[KITHARA-ROUTE] releasing player slot");
+        let roster_revision = state.next_roster_revision()?;
+        debug!(
+            player_id = player_id.get(),
+            ?slot,
+            "[KITHARA-ROUTE] releasing player slot"
+        );
         let idx = player_index(state, player_id)?;
         let slot_nodes = {
             let player = &mut state.players[idx];
@@ -254,8 +290,9 @@ pub(super) mod slots {
         };
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
         remove_slot_graph(fw_ctx, player_id, &slot_nodes);
+        state.commit_roster_revision(roster_revision);
         debug!(
-            player_id,
+            player_id = player_id.get(),
             ?slot_nodes,
             "[KITHARA-ROUTE] player slot released"
         );
@@ -276,13 +313,24 @@ pub(super) mod slots {
         slot: &SlotNodes,
     ) {
         if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
-            warn!(player_id, ?err, "failed to remove slot vol_pan node");
+            warn!(
+                player_id = player_id.get(),
+                ?err,
+                "failed to remove slot vol_pan node"
+            );
         }
         if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
-            warn!(player_id, ?err, "failed to remove slot player node");
+            warn!(
+                player_id = player_id.get(),
+                ?err,
+                "failed to remove slot player node"
+            );
         }
         if let Err(err) = fw_ctx.update() {
-            warn!(player_id, "graph update after slot release failed: {err:?}");
+            warn!(
+                player_id = player_id.get(),
+                "graph update after slot release failed: {err:?}"
+            );
         }
     }
 }

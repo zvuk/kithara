@@ -5,15 +5,15 @@ use kithara_events::TransportEvent;
 
 use super::{
     PlayerId,
-    protocol::{BindingPreparation, SessionError},
+    protocol::{PreparationContext, SessionError},
     render::{
         RenderFrame, SessionTransportCommit, TransportCommitResult, TransportCommitStamp,
         TransportObservation,
     },
-    state::{PendingTransportCommit, SessionState, SessionTransportState, TransportCommitPhase},
+    state::{AbortDelivery, SessionState, SessionTransportState},
 };
 use crate::{
-    api::{SessionTransportSnapshot, Tempo},
+    api::{SessionTransportSnapshot, Tempo, TransportRevision},
     player::node::StreamShape,
 };
 
@@ -28,18 +28,16 @@ pub(super) fn set_tempo<B: AudioBackend>(
 pub(super) fn set_tempo_checked<B: AudioBackend>(
     state: &mut SessionState<B>,
     tempo: Tempo,
-    expected_revision: u64,
-    expected_shape: StreamShape,
+    expected_context: PreparationContext,
     player_ids: &[PlayerId],
 ) -> Result<(), SessionError> {
-    let _ = validate_checked_transport(state, expected_revision, expected_shape, player_ids)?;
+    let _ = validate_checked_transport(state, expected_context, player_ids)?;
     set_tempo_after_refresh(state, tempo)
 }
 
 fn validate_checked_transport<B: AudioBackend>(
     state: &mut SessionState<B>,
-    expected_revision: u64,
-    expected_shape: StreamShape,
+    expected_context: PreparationContext,
     player_ids: &[PlayerId],
 ) -> Result<SessionTransportSnapshot, SessionError> {
     let observation = refresh_observation(state)?;
@@ -47,14 +45,17 @@ fn validate_checked_transport<B: AudioBackend>(
         .snapshot()
         .ok_or(SessionError::TransportNotProcessed)?;
     let actual_revision = snapshot.revision();
-    if actual_revision != expected_revision {
+    if actual_revision != expected_context.transport_revision() {
         return Err(SessionError::TransportRevisionChanged {
-            expected: expected_revision,
+            expected: expected_context.transport_revision(),
             actual: actual_revision,
         });
     }
-    if stream_shape(state)? != expected_shape {
+    if stream_shape(state)? != expected_context.shape() {
         return Err(SessionError::TransportStreamShapeChanged);
+    }
+    if state.roster_revision != expected_context.roster_revision() {
+        return Err(SessionError::TransportRosterChanged);
     }
     let mut active: Vec<_> = state
         .players
@@ -76,7 +77,12 @@ fn set_tempo_after_refresh<B: AudioBackend>(
     state: &mut SessionState<B>,
     tempo: Tempo,
 ) -> Result<(), SessionError> {
-    if state.transport.accepted.map(SessionTransportCommit::tempo) == Some(tempo) {
+    if state
+        .transport
+        .accepted()
+        .map(SessionTransportCommit::tempo)
+        == Some(tempo)
+    {
         return Ok(());
     }
     ensure_no_pending_commit(state)?;
@@ -84,26 +90,30 @@ fn set_tempo_after_refresh<B: AudioBackend>(
     let (target_frame, sample_rate) = commit_boundary(state)?;
     let next = SessionTransportCommit::new(tempo, true, revision);
     let stamp =
-        TransportCommitStamp::new(state.transport.observed, next, target_frame, sample_rate);
+        TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
 
     schedule_commit(state, next, stamp)
 }
 
 fn ensure_no_pending_commit<B: AudioBackend>(state: &SessionState<B>) -> Result<(), SessionError> {
-    if let Some(pending) = state.transport.pending {
-        return Err(SessionError::TransportCommitPending {
-            revision: pending.revision,
-        });
+    if let Some(revision) = state.transport.pending_revision() {
+        return Err(SessionError::TransportCommitPending { revision });
     }
     Ok(())
 }
 
-fn next_revision<B: AudioBackend>(state: &SessionState<B>) -> Result<u64, SessionError> {
+fn next_revision<B: AudioBackend>(
+    state: &SessionState<B>,
+) -> Result<TransportRevision, SessionError> {
     state
         .transport
-        .last_revision
-        .checked_add(1)
-        .ok_or(SessionError::TransportRevisionExhausted)
+        .ledger()
+        .last
+        .map_or(Ok(TransportRevision::FIRST), |revision| {
+            revision
+                .checked_next()
+                .ok_or(SessionError::TransportRevisionExhausted)
+        })
 }
 
 fn schedule_commit<B: AudioBackend>(
@@ -114,12 +124,12 @@ fn schedule_commit<B: AudioBackend>(
     let revision = next.revision();
 
     queue_stamp(state, stamp)?;
-    state.transport.last_revision = revision;
+    state.transport.ledger_mut().last = Some(revision);
     if let Err(error) = update_context(state) {
         publish_transport_event(
             state,
             &TransportEvent::Failed {
-                revision: Some(revision),
+                revision: Some(revision.get()),
                 reason: error.to_string(),
             },
         );
@@ -127,11 +137,13 @@ fn schedule_commit<B: AudioBackend>(
         return Err(error);
     }
 
-    state.transport.accepted = Some(next);
-    state.transport.pending = Some(PendingTransportCommit {
-        revision,
-        phase: TransportCommitPhase::Applying,
-    });
+    let previous = state.transport.observed();
+    let ledger = *state.transport.ledger();
+    state.transport = SessionTransportState::Applying {
+        ledger,
+        next,
+        previous,
+    };
     Ok(())
 }
 
@@ -142,7 +154,7 @@ fn commit_boundary<B: AudioBackend>(
     let stream_info = ctx.stream_info().ok_or(SessionError::NoContext)?;
     let lead_frames = state
         .transport
-        .observed
+        .observed()
         .map_or(0, |_| i64::from(stream_info.max_block_frames.get()));
     let target_frame = ctx
         .audio_clock()
@@ -177,7 +189,7 @@ fn update_context<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), Se
 
 fn abort_commit<B: AudioBackend>(
     state: &mut SessionState<B>,
-    revision: u64,
+    revision: TransportRevision,
 ) -> Result<(), SessionError> {
     let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
     let control = state
@@ -185,19 +197,23 @@ fn abort_commit<B: AudioBackend>(
         .as_ref()
         .ok_or_else(|| SessionError::Graph("render context control is missing".into()))?;
     control.queue_abort(ctx, revision);
-    state.transport.pending = Some(PendingTransportCommit {
+    let previous = state.transport.observed();
+    let ledger = *state.transport.ledger();
+    state.transport = SessionTransportState::Aborting {
+        ledger,
+        previous,
         revision,
-        phase: TransportCommitPhase::AbortPending,
-    });
+        delivery: AbortDelivery::Pending,
+    };
     deliver_abort(state)
 }
 
 fn deliver_abort<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), SessionError> {
     update_context(state)?;
-    if let Some(pending) = state.transport.pending.as_mut()
-        && pending.phase == TransportCommitPhase::AbortPending
+    if let SessionTransportState::Aborting { delivery, .. } = &mut state.transport
+        && *delivery == AbortDelivery::Pending
     {
-        pending.phase = TransportCommitPhase::Aborting;
+        *delivery = AbortDelivery::Sent;
     }
     Ok(())
 }
@@ -228,9 +244,9 @@ pub(super) fn snapshot<B: AudioBackend>(
         .ok_or(SessionError::TransportNotProcessed)
 }
 
-pub(super) fn binding_preparation<B: AudioBackend>(
+pub(super) fn preparation_context<B: AudioBackend>(
     state: &mut SessionState<B>,
-) -> Result<BindingPreparation, SessionError> {
+) -> Result<PreparationContext, SessionError> {
     let _ = refresh_observation(state)?;
     let commit = preparation_commit(&state.transport)?;
     let stream_info = state
@@ -238,14 +254,15 @@ pub(super) fn binding_preparation<B: AudioBackend>(
         .as_ref()
         .and_then(FirewheelCtx::stream_info)
         .ok_or(SessionError::NoContext)?;
-    Ok(BindingPreparation {
-        revision: commit.revision(),
-        shape: StreamShape {
+    Ok(PreparationContext::new(
+        StreamShape {
             sample_rate: stream_info.sample_rate,
             max_block_frames: stream_info.max_block_frames,
         },
-        tempo: commit.tempo(),
-    })
+        commit.tempo(),
+        commit.revision(),
+        state.roster_revision,
+    ))
 }
 
 pub(super) fn stream_shape<B: AudioBackend>(
@@ -265,17 +282,31 @@ pub(super) fn stream_shape<B: AudioBackend>(
 fn preparation_commit(
     transport: &SessionTransportState,
 ) -> Result<SessionTransportCommit, SessionError> {
-    if let Some(pending) = transport.pending
-        && transport.observed.is_some()
-    {
-        return Err(SessionError::TransportCommitPending {
-            revision: pending.revision,
-        });
-    }
-    match (transport.observed, transport.accepted) {
-        (Some(commit), _) => Ok(commit),
-        (None, Some(initial)) => Ok(initial),
-        (None, None) => Err(SessionError::TransportNotConfigured),
+    match transport {
+        SessionTransportState::Stable { active, .. } => Ok(*active),
+        SessionTransportState::Applying {
+            next,
+            previous: None,
+            ..
+        } => Ok(*next),
+        SessionTransportState::Applying {
+            next,
+            previous: Some(_),
+            ..
+        } => Err(SessionError::TransportCommitPending {
+            revision: next.revision(),
+        }),
+        SessionTransportState::Aborting {
+            previous: Some(_),
+            revision,
+            ..
+        } => Err(SessionError::TransportCommitPending {
+            revision: *revision,
+        }),
+        SessionTransportState::Unconfigured { .. }
+        | SessionTransportState::Aborting { previous: None, .. } => {
+            Err(SessionError::TransportNotConfigured)
+        }
     }
 }
 
@@ -290,14 +321,16 @@ fn refresh_observation<B: AudioBackend>(
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);
     }
-    if state
-        .transport
-        .pending
-        .is_some_and(|pending| pending.phase == TransportCommitPhase::AbortPending)
-    {
+    if matches!(
+        state.transport,
+        SessionTransportState::Aborting {
+            delivery: AbortDelivery::Pending,
+            ..
+        }
+    ) {
         deliver_abort(state)?;
     }
-    if let Some(revision) = state.transport.rejected.take() {
+    if let Some(revision) = state.transport.ledger_mut().rejected.take() {
         return Err(SessionError::TransportCommitRejected { revision });
     }
     Ok(observation)
@@ -308,54 +341,50 @@ fn apply_completion<B: AudioBackend>(
     completion: TransportCommitResult,
 ) {
     let revision = completion.revision();
-    if revision <= state.transport.completed_revision {
+    if state
+        .transport
+        .ledger()
+        .completed
+        .is_some_and(|completed| revision <= completed)
+    {
         return;
     }
-    let previous = state.transport.observed;
-    let mut committed = None;
-    let accepted = match (completion, state.transport.pending) {
+    let previous = state.transport.observed();
+    let current = std::mem::take(&mut state.transport);
+    let (mut ledger, active, committed, rejected) = match (completion, current) {
         (
             TransportCommitResult::Applied(_),
-            Some(PendingTransportCommit {
-                phase: TransportCommitPhase::Applying,
-                revision: pending_revision,
-            }),
-        ) if pending_revision == revision => {
-            if let Some(accepted) = state
-                .transport
-                .accepted
-                .filter(|commit| commit.revision() == revision)
-            {
-                state.transport.observed = Some(accepted);
-                committed = Some(accepted);
-                Some(accepted)
-            } else {
-                state.transport.rejected = Some(revision);
-                state.transport.observed
-            }
-        }
+            SessionTransportState::Applying {
+                ledger,
+                next,
+                previous: _,
+            },
+        ) if next.revision() == revision => (ledger, Some(next), Some(next), false),
         (
             TransportCommitResult::Aborted(_),
-            Some(PendingTransportCommit {
-                phase: TransportCommitPhase::Aborting,
+            SessionTransportState::Aborting {
+                delivery: AbortDelivery::Sent,
+                ledger,
+                previous,
                 revision: pending_revision,
-            }),
-        ) if pending_revision == revision => state.transport.observed,
-        _ => {
-            state.transport.rejected = Some(revision);
-            state.transport.observed
-        }
+            },
+        ) if pending_revision == revision => (ledger, previous, None, false),
+        (_, current) => (*current.ledger(), current.observed(), None, true),
     };
-    state.transport.accepted = accepted;
-    state.transport.completed_revision = revision;
-    state.transport.pending = None;
+    ledger.completed = Some(revision);
+    if rejected {
+        ledger.rejected = Some(revision);
+    }
+    state.transport = active.map_or(SessionTransportState::Unconfigured { ledger }, |active| {
+        SessionTransportState::Stable { active, ledger }
+    });
     if let Some(next) = committed {
         publish_transport_commit(state, previous, next);
-    } else if state.transport.rejected == Some(revision) {
+    } else if rejected {
         publish_transport_event(
             state,
             &TransportEvent::Failed {
-                revision: Some(revision),
+                revision: Some(revision.get()),
                 reason: "render graph rejected transport commit".to_owned(),
             },
         );
@@ -376,7 +405,7 @@ fn transport_events(
     previous: Option<SessionTransportCommit>,
     next: SessionTransportCommit,
 ) -> [Option<TransportEvent>; 2] {
-    let revision = next.revision();
+    let revision = next.revision().get();
     let tempo = previous
         .is_none_or(|commit| commit.tempo() != next.tempo())
         .then(|| TransportEvent::TempoCommitted {
@@ -403,16 +432,26 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::session::state::TransportLedger;
+
+    const fn revision(value: u64) -> TransportRevision {
+        TransportRevision::new_for_test(value)
+    }
 
     fn commit(tempo: f64, revision: u64) -> SessionTransportCommit {
-        SessionTransportCommit::new(Tempo::new(tempo).expect("valid tempo"), true, revision)
+        SessionTransportCommit::new(
+            Tempo::new(tempo).expect("invariant: test tempo is valid"),
+            true,
+            self::revision(revision),
+        )
     }
 
     #[kithara::test]
     fn preparation_uses_initial_accepted_commit_before_first_render() {
-        let transport = SessionTransportState {
-            accepted: Some(commit(120.0, 1)),
-            ..SessionTransportState::default()
+        let transport = SessionTransportState::Applying {
+            ledger: TransportLedger::default(),
+            next: commit(120.0, 1),
+            previous: None,
         };
 
         assert_eq!(
@@ -424,10 +463,9 @@ mod tests {
     #[kithara::test]
     fn preparation_uses_observed_active_commit() {
         let active = commit(120.0, 1);
-        let transport = SessionTransportState {
-            accepted: Some(active),
-            observed: Some(active),
-            ..SessionTransportState::default()
+        let transport = SessionTransportState::Stable {
+            active,
+            ledger: TransportLedger::default(),
         };
 
         assert_eq!(
@@ -438,19 +476,16 @@ mod tests {
 
     #[kithara::test]
     fn preparation_rejects_while_a_future_revision_is_pending() {
-        let transport = SessionTransportState {
-            accepted: Some(commit(90.0, 2)),
-            observed: Some(commit(120.0, 1)),
-            pending: Some(PendingTransportCommit {
-                phase: TransportCommitPhase::Applying,
-                revision: 2,
-            }),
-            ..SessionTransportState::default()
+        let transport = SessionTransportState::Applying {
+            ledger: TransportLedger::default(),
+            next: commit(90.0, 2),
+            previous: Some(commit(120.0, 1)),
         };
 
         assert!(matches!(
             preparation_commit(&transport),
-            Err(SessionError::TransportCommitPending { revision: 2 })
+            Err(SessionError::TransportCommitPending { revision: pending })
+                if pending == revision(2)
         ));
     }
 

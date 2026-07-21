@@ -13,11 +13,11 @@ use super::{
     dispatch::{restart_stream, trace_stream_info},
     eq::MasterEqNode,
     graph::ducking_gain,
-    protocol::{PlayerId, SessionError, StartStreamFn},
+    protocol::{PlayerId, SessionError, SessionRosterRevision, StartStreamFn},
     render::{RenderContextControl, SessionTransportCommit, install_render_context},
 };
 use crate::{
-    api::{SessionDuckingMode, SlotId},
+    api::{SessionDuckingMode, SlotId, TransportRevision},
     bridge::SharedEq,
 };
 
@@ -72,26 +72,91 @@ impl PlayerState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TransportCommitPhase {
-    AbortPending,
-    Aborting,
-    Applying,
+pub(super) enum AbortDelivery {
+    Pending,
+    Sent,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct PendingTransportCommit {
-    pub(super) phase: TransportCommitPhase,
-    pub(super) revision: u64,
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct TransportLedger {
+    pub(super) completed: Option<TransportRevision>,
+    pub(super) last: Option<TransportRevision>,
+    pub(super) rejected: Option<TransportRevision>,
 }
 
-#[derive(Debug, Default)]
-pub(super) struct SessionTransportState {
-    pub(super) accepted: Option<SessionTransportCommit>,
-    pub(super) completed_revision: u64,
-    pub(super) last_revision: u64,
-    pub(super) observed: Option<SessionTransportCommit>,
-    pub(super) pending: Option<PendingTransportCommit>,
-    pub(super) rejected: Option<u64>,
+#[derive(Debug)]
+pub(super) enum SessionTransportState {
+    Unconfigured {
+        ledger: TransportLedger,
+    },
+    Stable {
+        active: SessionTransportCommit,
+        ledger: TransportLedger,
+    },
+    Applying {
+        ledger: TransportLedger,
+        next: SessionTransportCommit,
+        previous: Option<SessionTransportCommit>,
+    },
+    Aborting {
+        delivery: AbortDelivery,
+        ledger: TransportLedger,
+        previous: Option<SessionTransportCommit>,
+        revision: TransportRevision,
+    },
+}
+
+impl Default for SessionTransportState {
+    fn default() -> Self {
+        Self::Unconfigured {
+            ledger: TransportLedger::default(),
+        }
+    }
+}
+
+impl SessionTransportState {
+    pub(super) const fn accepted(&self) -> Option<SessionTransportCommit> {
+        match self {
+            Self::Unconfigured { .. } => None,
+            Self::Stable { active, .. } => Some(*active),
+            Self::Applying { next, .. } => Some(*next),
+            Self::Aborting { previous, .. } => *previous,
+        }
+    }
+
+    pub(super) const fn ledger(&self) -> &TransportLedger {
+        match self {
+            Self::Unconfigured { ledger }
+            | Self::Stable { ledger, .. }
+            | Self::Applying { ledger, .. }
+            | Self::Aborting { ledger, .. } => ledger,
+        }
+    }
+
+    pub(super) const fn ledger_mut(&mut self) -> &mut TransportLedger {
+        match self {
+            Self::Unconfigured { ledger }
+            | Self::Stable { ledger, .. }
+            | Self::Applying { ledger, .. }
+            | Self::Aborting { ledger, .. } => ledger,
+        }
+    }
+
+    pub(super) const fn observed(&self) -> Option<SessionTransportCommit> {
+        match self {
+            Self::Unconfigured { .. } => None,
+            Self::Stable { active, .. } => Some(*active),
+            Self::Applying { previous, .. } | Self::Aborting { previous, .. } => *previous,
+        }
+    }
+
+    pub(super) const fn pending_revision(&self) -> Option<TransportRevision> {
+        match self {
+            Self::Applying { next, .. } => Some(next.revision()),
+            Self::Aborting { revision, .. } => Some(*revision),
+            Self::Unconfigured { .. } | Self::Stable { .. } => None,
+        }
+    }
 }
 
 pub struct SessionState<B: AudioBackend> {
@@ -99,7 +164,8 @@ pub struct SessionState<B: AudioBackend> {
     pub(super) render_context_control: Option<RenderContextControl>,
     pub(super) session_output_memo: Option<Memo<VolumePanNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
-    pub(super) next_player_id: PlayerId,
+    pub(super) next_player_id: Option<PlayerId>,
+    pub(super) roster_revision: SessionRosterRevision,
     pub(super) session_ducking: SessionDuckingMode,
     pub(super) start_stream_fn: StartStreamFn<B>,
     pub(super) players: Vec<PlayerState>,
@@ -117,8 +183,9 @@ impl<B: AudioBackend> SessionState<B> {
             start_stream_fn,
             ctx: None,
             render_context_control: None,
-            next_player_id: 1,
+            next_player_id: Some(PlayerId::FIRST),
             players: Vec::new(),
+            roster_revision: SessionRosterRevision::default(),
             sample_rate_hint: Self::DEFAULT_SAMPLE_RATE,
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
@@ -128,8 +195,18 @@ impl<B: AudioBackend> SessionState<B> {
         }
     }
 
+    pub(super) fn commit_roster_revision(&mut self, revision: SessionRosterRevision) {
+        self.roster_revision = revision;
+    }
+
     pub fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
         self.ctx.as_mut()
+    }
+
+    pub(super) fn next_roster_revision(&self) -> Result<SessionRosterRevision, SessionError> {
+        self.roster_revision
+            .checked_next()
+            .ok_or(SessionError::SessionRosterRevisionExhausted)
     }
 }
 
@@ -138,18 +215,22 @@ pub(super) fn register_player<B: AudioBackend>(
     bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
     pcm_pool: PcmPool,
-) -> PlayerId {
-    let player_id = state.next_player_id;
-    state.next_player_id += 1;
+) -> Result<PlayerId, SessionError> {
+    let player_id = state
+        .next_player_id
+        .ok_or(SessionError::PlayerIdExhausted)?;
+    let roster_revision = state.next_roster_revision()?;
+    state.next_player_id = player_id.checked_next();
+    state.roster_revision = roster_revision;
     state
         .players
         .push(PlayerState::new(player_id, bus, eq_layout, pcm_pool));
     debug!(
-        player_id,
+        player_id = player_id.get(),
         players = state.players.len(),
         "[KITHARA-ROUTE] session player registered"
     );
-    player_id
+    Ok(player_id)
 }
 
 pub(super) fn ensure_ctx<B: AudioBackend>(

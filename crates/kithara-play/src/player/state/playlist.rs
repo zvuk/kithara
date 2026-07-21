@@ -1,22 +1,7 @@
 use kithara_platform::sync::Arc;
 
 use super::super::platform::PreparedBindingResource;
-use crate::{api::TrackBinding, player::node::StreamShape, resource::Resource};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PreparedBindingStamp {
-    pub(crate) shape: StreamShape,
-    pub(crate) transport_revision: u64,
-}
-
-impl PreparedBindingStamp {
-    pub(crate) const fn new(shape: StreamShape, transport_revision: u64) -> Self {
-        Self {
-            shape,
-            transport_revision,
-        }
-    }
-}
+use crate::{api::TrackBinding, resource::Resource};
 
 /// A queue entry that retains metadata while its resource is checked out by a load transaction.
 pub(crate) struct QueuedResource {
@@ -169,36 +154,9 @@ impl Playlist {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
     use kithara_test_utils::kithara;
 
     use super::Playlist;
-    use crate::player::{node::StreamShape, state::PreparedBindingStamp};
-
-    fn stamp(
-        sample_rate: u32,
-        max_block_frames: u32,
-        transport_revision: u64,
-    ) -> PreparedBindingStamp {
-        PreparedBindingStamp::new(
-            StreamShape {
-                sample_rate: NonZeroU32::new(sample_rate).expect("static sample rate"),
-                max_block_frames: NonZeroU32::new(max_block_frames).expect("static block size"),
-            },
-            transport_revision,
-        )
-    }
-
-    #[kithara::test]
-    fn prepared_binding_stamp_requires_revision_and_full_stream_shape() {
-        let prepared = stamp(44_100, 512, 7);
-
-        assert_eq!(prepared, stamp(44_100, 512, 7));
-        assert_ne!(prepared, stamp(44_100, 512, 8));
-        assert_ne!(prepared, stamp(48_000, 512, 7));
-        assert_ne!(prepared, stamp(44_100, 1_024, 7));
-    }
 
     #[kithara::test]
     fn remove_at_shifts_current_and_reopens_announce() {

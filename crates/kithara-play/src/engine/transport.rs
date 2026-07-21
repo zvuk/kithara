@@ -3,7 +3,7 @@ use crate::{
     api::{SessionTransportSnapshot, Tempo},
     error::PlayError,
     player::node::StreamShape,
-    session::{PlayerId, protocol::BindingPreparation},
+    session::{PlayerId, protocol::PreparationContext},
 };
 
 impl EngineImpl {
@@ -15,14 +15,13 @@ impl EngineImpl {
             pub(crate) fn set_session_tempo_checked(
                 &self,
                 tempo: Tempo,
-                expected_revision: u64,
-                expected_shape: StreamShape,
+                expected_context: PreparationContext,
                 player_ids: Vec<PlayerId>,
             ) -> Result<(), PlayError>;
             /// Returns the last transport state processed by the audio graph.
             /// Returns an error before the active graph has processed a render block.
             pub fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError>;
-            pub(crate) fn binding_preparation(&self) -> Result<BindingPreparation, PlayError>;
+            pub(crate) fn preparation_context(&self) -> Result<PreparationContext, PlayError>;
             #[call(query_stream_shape)]
             pub(crate) fn stream_shape(&self) -> Result<StreamShape, PlayError>;
         }

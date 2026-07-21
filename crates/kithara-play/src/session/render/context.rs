@@ -2,17 +2,17 @@ use std::{num::NonZeroU32, ops::Range};
 
 use num_traits::ToPrimitive;
 
-use crate::api::{SessionBeat, Tempo};
+use crate::api::{SessionBeat, Tempo, TransportRevision};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SessionTransportCommit {
     tempo: Tempo,
     playing: bool,
-    revision: u64,
+    revision: TransportRevision,
 }
 
 impl SessionTransportCommit {
-    pub(crate) const fn new(tempo: Tempo, playing: bool, revision: u64) -> Self {
+    pub(crate) const fn new(tempo: Tempo, playing: bool, revision: TransportRevision) -> Self {
         Self {
             tempo,
             playing,
@@ -24,7 +24,7 @@ impl SessionTransportCommit {
         self.playing
     }
 
-    pub(crate) const fn revision(self) -> u64 {
+    pub(crate) const fn revision(self) -> TransportRevision {
         self.revision
     }
 

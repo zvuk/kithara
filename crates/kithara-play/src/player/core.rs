@@ -12,7 +12,7 @@ use tracing::debug;
 use super::{
     config::PlayerConfig,
     platform::ItemLoadContext,
-    state::{ItemQueue, PlayerParams, PlayerPhase, PreparedBindingStamp},
+    state::{ItemQueue, PlayerParams, PlayerPhase},
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus},
@@ -167,29 +167,25 @@ impl PlayerImpl {
         let slot_id = self
             .require_active_slot()
             .map_err(|_| PlayError::NoActiveSlot)?;
-        let (shape, transport_revision, tempo) = if self.core.items.has_binding(index) {
-            let preparation = self.core.engine.binding_preparation()?;
-            (
-                preparation.shape,
-                preparation.revision,
-                Some(preparation.tempo),
-            )
-        } else {
-            (self.core.engine.stream_shape()?, 0, None)
-        };
-        let stamp = PreparedBindingStamp::new(shape, transport_revision);
-        let dispatched = self.core.items.dispatch_load(
-            index,
-            ItemLoadContext::new(
+        let context = if self.core.items.has_binding(index) {
+            ItemLoadContext::bound(
                 self.core.timestretch.speed(),
                 self.core.params.pitch_bend(),
-                tempo,
                 self.core.engine.pcm_pool(),
-                stamp,
-            ),
-            &self.core.engine,
-            slot_id,
-        )?;
+                self.core.engine.preparation_context()?,
+            )
+        } else {
+            ItemLoadContext::linear(
+                self.core.timestretch.speed(),
+                self.core.params.pitch_bend(),
+                self.core.engine.pcm_pool(),
+                self.core.engine.stream_shape()?,
+            )
+        };
+        let dispatched =
+            self.core
+                .items
+                .dispatch_load(index, context, &self.core.engine, slot_id)?;
         let Some(dispatched) = dispatched else {
             return Ok(None);
         };

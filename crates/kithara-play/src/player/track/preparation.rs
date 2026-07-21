@@ -4,7 +4,8 @@ use super::{
     Active, BufferedSourceWindow, ElasticPreparation, ElasticPreparationPoll, ElasticPrepareError,
     ElasticRenderer, PcmPool, PlaybackDirection, PreparationPhase, PreparedRuntime, Preparing,
     READY_WINDOW_COUNT, Ready, RenderRuntime, SessionBeat, SourceCopy, SourceCursor, SourceRange,
-    SourceRangeReadOutcome, SourceRangeRequest, StreamShape, Tempo, TrackBinding, sample_count,
+    SourceRangeReadOutcome, SourceRangeRequest, StreamShape, Tempo, TrackBinding,
+    TransportRevision, sample_count,
 };
 use crate::resource::Resource;
 
@@ -49,7 +50,7 @@ impl ElasticRenderer<Preparing> {
         binding: &TrackBinding,
         anchor: SessionBeat,
         tempo: Tempo,
-        revision: u64,
+        revision: TransportRevision,
         shape: StreamShape,
         pool: &PcmPool,
     ) -> Result<Self, ElasticPrepareError> {
@@ -395,7 +396,7 @@ impl ElasticRenderer<Ready> {
         binding: &TrackBinding,
         anchor: SessionBeat,
         tempo: Tempo,
-        revision: u64,
+        revision: TransportRevision,
     ) -> Result<(), ElasticPrepareError> {
         let preparation = self.retarget_preparation(binding, anchor, tempo)?;
         let fetch_frames = usize::try_from(preparation.fetch_range.len())
@@ -494,7 +495,7 @@ mod tests {
                     direction,
                     source_window,
                     request_id: 1,
-                    revision: 0,
+                    revision: TransportRevision::FIRST,
                 },
                 pending_source_read: None,
             },

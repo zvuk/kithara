@@ -1,4 +1,6 @@
 mod wire {
+    use std::{fmt, num::NonZeroU64};
+
     use firewheel::FirewheelCtx;
     use kithara_audio::EqBandConfig;
     use kithara_bufpool::PcmPool;
@@ -6,25 +8,95 @@ mod wire {
     use kithara_platform::sync::mpsc;
 
     use crate::{
-        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo, TransportRevision},
         bridge::SlotControl,
         player::node::StreamShape,
     };
 
-    pub type PlayerId = u64;
+    /// Physical player registration identity owned by one session.
+    #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    #[repr(transparent)]
+    pub struct PlayerId(NonZeroU64);
+
+    impl PlayerId {
+        pub(crate) const FIRST: Self = Self(NonZeroU64::MIN);
+
+        pub(crate) fn checked_next(self) -> Option<Self> {
+            self.0
+                .get()
+                .checked_add(1)
+                .and_then(NonZeroU64::new)
+                .map(Self)
+        }
+
+        #[must_use]
+        pub const fn get(self) -> u64 {
+            self.0.get()
+        }
+    }
+
+    impl fmt::Display for PlayerId {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.get().fmt(formatter)
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub(crate) struct SessionRosterRevision(u64);
+
+    impl SessionRosterRevision {
+        pub(crate) fn checked_next(self) -> Option<Self> {
+            self.0.checked_add(1).map(Self)
+        }
+
+        #[cfg(test)]
+        pub(crate) const fn new_for_test(value: u64) -> Self {
+            Self(value)
+        }
+    }
 
     pub type StartStreamFn<B> = fn(&mut FirewheelCtx<B>, u32) -> Result<(), String>;
 
-    /// Transport commit and stream dimensions captured by one session command.
-    #[derive(Clone, Copy)]
+    /// One atomic validation context for bound-track preparation and activation.
+    #[derive(Clone, Copy, Debug, PartialEq)]
     #[non_exhaustive]
-    pub struct BindingPreparation {
-        /// Stream dimensions paired with the observed revision.
-        pub shape: StreamShape,
-        /// Session tempo paired with the observed revision.
-        pub tempo: Tempo,
-        /// Render-observed session transport revision.
-        pub revision: u64,
+    pub struct PreparationContext {
+        shape: StreamShape,
+        tempo: Tempo,
+        transport_revision: TransportRevision,
+        roster_revision: SessionRosterRevision,
+    }
+
+    impl PreparationContext {
+        pub(crate) const fn new(
+            shape: StreamShape,
+            tempo: Tempo,
+            transport_revision: TransportRevision,
+            roster_revision: SessionRosterRevision,
+        ) -> Self {
+            Self {
+                shape,
+                tempo,
+                transport_revision,
+                roster_revision,
+            }
+        }
+
+        pub(crate) const fn roster_revision(self) -> SessionRosterRevision {
+            self.roster_revision
+        }
+
+        pub(crate) const fn shape(self) -> StreamShape {
+            self.shape
+        }
+
+        pub(crate) const fn tempo(self) -> Tempo {
+            self.tempo
+        }
+
+        pub(crate) const fn transport_revision(self) -> TransportRevision {
+            self.transport_revision
+        }
     }
 
     #[derive(Debug, Clone, thiserror::Error)]
@@ -36,6 +108,8 @@ mod wire {
         AlreadyStarted(PlayerId),
         #[error("player not running: {0}")]
         NotRunning(PlayerId),
+        #[error("session player identity is exhausted")]
+        PlayerIdExhausted,
         #[error("slot not found: {0:?}")]
         SlotNotFound(SlotId),
         #[error("session context not initialised")]
@@ -51,22 +125,31 @@ mod wire {
         TransportNotConfigured,
         /// A different session transport commit is awaiting a render result.
         #[error("session transport commit {revision} is still pending")]
-        TransportCommitPending { revision: u64 },
+        TransportCommitPending { revision: TransportRevision },
         /// The render graph rejected a session transport commit.
         #[error("session transport commit {revision} was rejected at the render boundary")]
-        TransportCommitRejected { revision: u64 },
+        TransportCommitRejected { revision: TransportRevision },
         /// The monotonic session transport revision cannot advance further.
         #[error("session transport revision is exhausted")]
         TransportRevisionExhausted,
+        /// The monotonic physical-roster revision cannot advance further.
+        #[error("session physical roster revision is exhausted")]
+        SessionRosterRevisionExhausted,
         /// The graph frame used to schedule a transport commit cannot advance further.
         #[error("session transport frame is exhausted")]
         TransportFrameExhausted,
         /// The active graph roster changed after tempo preparation.
+        #[error("session physical roster changed after transport preparation")]
+        TransportRosterChanged,
+        /// The prepared participant set does not match the active graph roster.
         #[error("session tempo player roster changed: expected {expected} players, found {actual}")]
         TransportPlayersChanged { expected: usize, actual: usize },
         /// The observed transport changed after tempo preparation.
         #[error("session tempo revision changed: expected revision {expected}, found {actual}")]
-        TransportRevisionChanged { expected: u64, actual: u64 },
+        TransportRevisionChanged {
+            expected: TransportRevision,
+            actual: TransportRevision,
+        },
         /// The active stream dimensions changed after tempo preparation.
         #[error("session stream shape changed after tempo preparation")]
         TransportStreamShapeChanged,
@@ -127,17 +210,16 @@ mod wire {
         SetSessionTempo {
             tempo: Tempo,
         },
-        /// Commit a prepared tempo only while its transport revision and player roster remain current.
+        /// Commit a prepared tempo only while its session context and player roster remain current.
         SetSessionTempoChecked {
             tempo: Tempo,
-            expected_revision: u64,
-            expected_shape: StreamShape,
+            expected_context: PreparationContext,
             player_ids: Vec<PlayerId>,
         },
         /// Query the transport state last processed by the audio graph.
         SessionTransport,
-        /// Query one canonical transport and stream-shape preparation snapshot.
-        BindingPreparation,
+        /// Query one canonical transport, stream, and physical-roster context.
+        PreparationContext,
         InvalidateAudioRoute {
             reason: String,
         },
@@ -160,7 +242,7 @@ mod wire {
         /// The transport state last processed by the audio graph.
         SessionTransport(SessionTransportSnapshot),
         /// Canonical preparation values captured by one session command.
-        BindingPreparation(BindingPreparation),
+        PreparationContext(PreparationContext),
         SlotAllocated(AllocatedSlot),
         SampleRate(u32),
         /// Active stream dimensions.
@@ -181,7 +263,7 @@ mod handle {
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
 
-    use super::wire::{AllocatedSlot, BindingPreparation, Cmd, PlayerId, Reply};
+    use super::wire::{AllocatedSlot, Cmd, PlayerId, PreparationContext, Reply};
     use crate::{
         api::{SessionTransportSnapshot, SlotId, Tempo},
         error::PlayError,
@@ -217,15 +299,6 @@ mod handle {
             }
         }
 
-        pub(crate) fn binding_preparation(&self) -> Result<BindingPreparation, PlayError> {
-            match self.exec_ok(Cmd::BindingPreparation)? {
-                Reply::BindingPreparation(preparation) => Ok(preparation),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for binding preparation query".into(),
-                )),
-            }
-        }
-
         #[must_use]
         pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
             Arc::clone(&self.0)
@@ -252,6 +325,15 @@ mod handle {
             self.exec_unit(Cmd::InvalidateAudioRoute {
                 reason: reason.to_owned(),
             })
+        }
+
+        pub(crate) fn preparation_context(&self) -> Result<PreparationContext, PlayError> {
+            match self.exec_ok(Cmd::PreparationContext)? {
+                Reply::PreparationContext(context) => Ok(context),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for preparation context query".into(),
+                )),
+            }
         }
 
         #[must_use]
@@ -343,14 +425,12 @@ mod handle {
         pub(crate) fn set_session_tempo_checked(
             &self,
             tempo: Tempo,
-            expected_revision: u64,
-            expected_shape: StreamShape,
+            expected_context: PreparationContext,
             player_ids: Vec<PlayerId>,
         ) -> Result<(), PlayError> {
             self.exec_unit(Cmd::SetSessionTempoChecked {
                 tempo,
-                expected_revision,
-                expected_shape,
+                expected_context,
                 player_ids,
             })
         }
@@ -404,7 +484,7 @@ mod handle {
             let handle = SessionHandle::new(Arc::new(WrongReplyDispatcher));
 
             assert!(matches!(
-                handle.stop_player(7),
+                handle.stop_player(PlayerId::FIRST),
                 Err(PlayError::Internal(message))
                     if message == "unexpected reply for unit session command"
             ));
@@ -413,6 +493,7 @@ mod handle {
 }
 
 pub use handle::{SessionDispatcher, SessionHandle};
+pub(crate) use wire::SessionRosterRevision;
 pub use wire::{
-    AllocatedSlot, BindingPreparation, Cmd, CmdMsg, PlayerId, Reply, SessionError, StartStreamFn,
+    AllocatedSlot, Cmd, CmdMsg, PlayerId, PreparationContext, Reply, SessionError, StartStreamFn,
 };

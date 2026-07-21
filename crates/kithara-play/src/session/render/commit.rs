@@ -11,7 +11,7 @@ use num_traits::ToPrimitive;
 use triple_buffer::{Input, Output};
 
 use super::context::{RenderFrame, SessionTransportCommit};
-use crate::api::{SessionBeat, SessionTransportSnapshot};
+use crate::api::{SessionBeat, SessionTransportSnapshot, TransportRevision};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TransportCommitStamp {
@@ -36,7 +36,7 @@ impl TransportCommitStamp {
         }
     }
 
-    pub(crate) const fn revision(self) -> u64 {
+    pub(crate) const fn revision(self) -> TransportRevision {
         self.next.revision()
     }
 
@@ -47,13 +47,13 @@ impl TransportCommitStamp {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TransportCommitResult {
-    Aborted(u64),
-    Applied(u64),
-    Rejected(u64),
+    Aborted(TransportRevision),
+    Applied(TransportRevision),
+    Rejected(TransportRevision),
 }
 
 impl TransportCommitResult {
-    pub(crate) const fn revision(self) -> u64 {
+    pub(crate) const fn revision(self) -> TransportRevision {
         match self {
             Self::Aborted(revision) | Self::Applied(revision) | Self::Rejected(revision) => {
                 revision
@@ -96,7 +96,11 @@ impl RenderContextControl {
         *self.observation.read()
     }
 
-    pub(crate) fn queue_abort<B: AudioBackend>(&self, ctx: &mut FirewheelCtx<B>, revision: u64) {
+    pub(crate) fn queue_abort<B: AudioBackend>(
+        &self,
+        ctx: &mut FirewheelCtx<B>,
+        revision: TransportRevision,
+    ) {
         ctx.queue_event_for(
             self.node_id,
             NodeEventType::custom(TransportCommitEvent::Abort(revision)),
@@ -124,8 +128,8 @@ impl RenderContextControl {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum TransportCommitEvent {
-    Abort(u64),
-    Apply(u64),
+    Abort(TransportRevision),
+    Apply(TransportRevision),
     Stage(TransportCommitStamp),
 }
 
@@ -164,7 +168,7 @@ pub(super) struct TransportCommitState {
     pending: Option<TransportCommitStamp>,
     reanchor_beat: Option<SessionBeat>,
     snapshot: Option<SessionTransportSnapshot>,
-    ignored_through_revision: u64,
+    ignored_through_revision: Option<TransportRevision>,
 }
 
 #[derive(Debug)]
@@ -258,8 +262,10 @@ fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessErro
 }
 
 impl TransportCommitState {
-    fn apply_abort(&mut self, revision: u64) -> Result<(), TransportProcessError> {
-        if self.ignored_through_revision >= revision
+    fn apply_abort(&mut self, revision: TransportRevision) -> Result<(), TransportProcessError> {
+        if self
+            .ignored_through_revision
+            .is_some_and(|ignored| ignored >= revision)
             || self.completion == Some(TransportCommitResult::Aborted(revision))
         {
             self.completion = Some(TransportCommitResult::Aborted(revision));
@@ -277,7 +283,7 @@ impl TransportCommitState {
         {
             self.pending = None;
         }
-        self.ignored_through_revision = revision;
+        self.ignored_through_revision = Some(revision);
         self.completion = Some(TransportCommitResult::Aborted(revision));
         Ok(())
     }
@@ -285,9 +291,11 @@ impl TransportCommitState {
     fn apply_commit(
         &mut self,
         info: &ProcInfo,
-        revision: u64,
+        revision: TransportRevision,
     ) -> Result<(), TransportProcessError> {
-        if revision <= self.ignored_through_revision
+        if self
+            .ignored_through_revision
+            .is_some_and(|ignored| revision <= ignored)
             || self
                 .active
                 .is_some_and(|active| active.revision() >= revision)
@@ -363,7 +371,10 @@ impl TransportCommitState {
 
     fn apply_stage(&mut self, info: &ProcInfo, stamp: TransportCommitStamp) {
         let revision = stamp.revision();
-        if revision <= self.ignored_through_revision {
+        if self
+            .ignored_through_revision
+            .is_some_and(|ignored| revision <= ignored)
+        {
             return;
         }
         if self.pending.is_some()
@@ -463,14 +474,17 @@ impl TransportCommitState {
         }
     }
 
-    fn reject_revision(&mut self, revision: u64) {
+    fn reject_revision(&mut self, revision: TransportRevision) {
         if self
             .pending
             .is_some_and(|stamp| stamp.revision() == revision)
         {
             self.pending = None;
         }
-        self.ignored_through_revision = self.ignored_through_revision.max(revision);
+        self.ignored_through_revision = Some(
+            self.ignored_through_revision
+                .map_or(revision, |ignored| ignored.max(revision)),
+        );
         self.completion = Some(TransportCommitResult::Rejected(revision));
     }
 

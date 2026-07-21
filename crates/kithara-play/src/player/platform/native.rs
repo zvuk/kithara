@@ -9,13 +9,13 @@ use super::{
         core::PlayerImpl,
         state::{
             items::{BoundLoad, ItemQueue, restore_queued_resource},
-            playlist::{Playlist, PreparedBindingStamp, QueuedResource},
+            playlist::{Playlist, QueuedResource},
         },
     },
     ItemLoadContext,
 };
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding},
+    api::{SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding, TransportRevision},
     error::PlayError,
     player::{
         node::StreamShape,
@@ -26,14 +26,17 @@ use crate::{
         },
     },
     resource::Resource,
-    session::render::{RenderContext, RenderFrame, SessionTransportCommit},
+    session::{
+        protocol::PreparationContext,
+        render::{RenderContext, RenderFrame, SessionTransportCommit},
+    },
 };
 
 pub(crate) type PreparedElasticRenderer = ElasticRenderer<Ready>;
 pub(crate) type ActiveElasticRenderer = ElasticRenderer<Active>;
 
 pub(crate) struct PreparedBindingResource {
-    pub(crate) stamp: PreparedBindingStamp,
+    pub(crate) context: PreparationContext,
     pub(crate) renderer: PreparedElasticRenderer,
 }
 
@@ -128,7 +131,7 @@ impl PlayerImpl {
                 .prepared
                 .as_ref()
                 .ok_or(PlayError::BindingPreparationRequired { index })?;
-            if prepared.stamp.shape != shape {
+            if prepared.context.shape() != shape {
                 return Err(PlayError::BindingPreparationStale { index });
             }
             prepared
@@ -163,7 +166,7 @@ fn validate_tempo_change(
     let next_revision =
         snapshot
             .revision()
-            .checked_add(1)
+            .checked_next()
             .ok_or_else(|| PlayError::ElasticPreparation {
                 reason: "tempo preparation revision is exhausted".into(),
             })?;
@@ -183,7 +186,7 @@ fn validate_tempo_change(
 fn tempo_context(
     start: SessionBeat,
     tempo: Tempo,
-    revision: u64,
+    revision: TransportRevision,
     shape: StreamShape,
 ) -> Result<RenderContext, PlayError> {
     let output_frames = i64::from(shape.max_block_frames.get());
@@ -284,39 +287,37 @@ pub(crate) fn prepare_bound_load(
         restore_queued_resource(playlist, index, None, resource)?;
         return Err(PlayError::BindingPreparationRequired { index });
     };
-    if prepared.stamp.shape != context.stamp.shape {
+    let Some(load_context) = context.preparation() else {
+        restore_queued_resource(playlist, index, Some(prepared), resource)?;
+        return Err(PlayError::BindingPreparationContextChanged);
+    };
+    if prepared.context.shape() != load_context.shape() {
         restore_queued_resource(playlist, index, Some(prepared), resource)?;
         return Err(PlayError::BindingPreparationStale { index });
     }
-    if prepared.stamp.transport_revision != context.stamp.transport_revision {
-        let Some(tempo) = context.tempo else {
-            restore_queued_resource(playlist, index, Some(prepared), resource)?;
-            return Err(PlayError::Internal(
-                "bound load has no session tempo".into(),
-            ));
-        };
-        if let Err(error) = prepared.renderer.retarget(
+    if prepared.context.transport_revision() != load_context.transport_revision()
+        && let Err(error) = prepared.renderer.retarget(
             binding,
             binding.session_anchor(),
-            tempo,
-            context.stamp.transport_revision,
-        ) {
-            restore_queued_resource(playlist, index, Some(prepared), resource)?;
-            return Err(map_successor_retarget_error(error));
-        }
-        prepared.stamp = context.stamp;
+            load_context.tempo(),
+            load_context.transport_revision(),
+        )
+    {
+        restore_queued_resource(playlist, index, Some(prepared), resource)?;
+        return Err(map_successor_retarget_error(error));
     }
+    prepared.context = load_context;
 
     let PreparedBindingResource {
         renderer,
-        stamp: prepared_stamp,
+        context: prepared_context,
     } = prepared;
     let abr_handle = resource.abr_handle();
     prepare_resource(
         &resource,
-        context.rate,
-        context.pitch_bend,
-        context.stamp.shape,
+        context.rate(),
+        context.pitch_bend(),
+        context.shape(),
     );
     resource.set_service_class(ServiceClass::Idle);
     let src = Arc::clone(resource.src());
@@ -324,7 +325,7 @@ pub(crate) fn prepare_bound_load(
     Ok(BoundLoad {
         player_resource,
         abr_handle,
-        prepared_stamp: Some(prepared_stamp),
+        preparation: Some(prepared_context),
     })
 }
 
@@ -346,12 +347,15 @@ fn map_successor_retarget_error(error: ElasticPrepareError) -> PlayError {
 
 pub(crate) fn restore_prepared_binding(
     released: ReleasedPlayerResource,
-    stamp: Option<PreparedBindingStamp>,
+    context: Option<PreparationContext>,
 ) -> Result<(Resource, Option<PreparedBindingResource>), PlayError> {
-    match (released, stamp) {
-        (ReleasedPlayerResource::Bound(bound), Some(stamp)) => {
+    match (released, context) {
+        (ReleasedPlayerResource::Bound(bound), Some(context)) => {
             let (resource, renderer) = bound.into_parts();
-            Ok((resource, Some(PreparedBindingResource { stamp, renderer })))
+            Ok((
+                resource,
+                Some(PreparedBindingResource { context, renderer }),
+            ))
         }
         (ReleasedPlayerResource::Linear(resource), None) => Ok((resource, None)),
         _ => Err(PlayError::Internal(
@@ -443,7 +447,7 @@ mod tests {
             SessionBeat::new(0.0).expect("finite position"),
             true,
             Tempo::new(120.0).expect("valid tempo"),
-            1,
+            TransportRevision::FIRST,
         );
 
         let error = validate_tempo_change(
@@ -473,7 +477,7 @@ mod tests {
             SessionBeat::new(0.98 - block_beats).expect("finite position"),
             true,
             Tempo::new(120.0).expect("valid tempo"),
-            1,
+            TransportRevision::FIRST,
         );
 
         let error = validate_tempo_change(

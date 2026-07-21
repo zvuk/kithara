@@ -263,7 +263,7 @@ fn commit_tempo_change(
         })
         .expect("tempo change commits within the render budget");
 
-    assert_eq!(after.revision(), before.revision() + 1);
+    assert_eq!(after.revision().get(), before.revision().get() + 1);
     assert_eq!(after.tempo(), tempo);
     for harness in harnesses {
         assert_eq!(harness.session_transport().expect("shared snapshot"), after);

@@ -160,7 +160,7 @@ fn commit_tempo(harnesses: &[OfflinePlayerHarness], tempo: Tempo) {
             (snapshot.revision() != before.revision()).then_some(snapshot)
         })
         .expect("tempo commits within the render budget");
-    assert_eq!(committed.revision(), before.revision() + 1);
+    assert_eq!(committed.revision().get(), before.revision().get() + 1);
     assert_eq!(committed.tempo(), tempo);
 }
 

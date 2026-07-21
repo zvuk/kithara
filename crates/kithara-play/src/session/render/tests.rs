@@ -30,7 +30,7 @@ use super::{
     read_render_context,
 };
 use crate::{
-    Resource, SessionBeat, Tempo,
+    Resource, SessionBeat, Tempo, TransportRevision,
     bridge::{PlayerCmd, SharedEq, SlotControl, slot_channels},
     player::{
         node::{ContextRequirement, PlayerNodeProcessor, StreamShape},
@@ -40,6 +40,10 @@ use crate::{
 
 const BLOCK_FRAMES: usize = 480;
 const SAMPLE_RATE: u32 = 48_000;
+
+const fn revision(value: u64) -> TransportRevision {
+    TransportRevision::new_for_test(value)
+}
 
 struct EofReader {
     bus: EventBus,
@@ -145,7 +149,7 @@ fn proc_extra_with_observation(
         SessionTransportCommit::new(
             Tempo::new(beats_per_minute).expect("valid test tempo"),
             true,
-            1,
+            revision(1),
         )
     });
     let transport_state = active.map_or_else(TransportCommitState::default, |active| {
@@ -304,7 +308,7 @@ fn two_player_nodes_receive_the_same_render_context() {
     assert_eq!(context.sample_rate(), sample_rate());
     let commit = context.transport_commit().expect("active transport commit");
     assert_eq!(commit.tempo(), Tempo::new(120.0).expect("valid tempo"));
-    assert_eq!(commit.revision(), 1);
+    assert_eq!(commit.revision(), revision(1));
     let beats = context.session_beats().expect("active transport");
     assert!(beats.start.get().abs() <= f64::EPSILON);
     assert!((beats.end.get() - 0.02).abs() <= f64::EPSILON);
@@ -312,8 +316,16 @@ fn two_player_nodes_receive_the_same_render_context() {
 
 #[kithara::test]
 fn two_player_nodes_receive_the_same_committed_revision() {
-    let old = SessionTransportCommit::new(Tempo::new(120.0).expect("valid old tempo"), true, 1);
-    let next = SessionTransportCommit::new(Tempo::new(60.0).expect("valid next tempo"), true, 2);
+    let old = SessionTransportCommit::new(
+        Tempo::new(120.0).expect("valid old tempo"),
+        true,
+        revision(1),
+    );
+    let next = SessionTransportCommit::new(
+        Tempo::new(60.0).expect("valid next tempo"),
+        true,
+        revision(2),
+    );
     let mut extra = proc_extra(Some(120.0));
     let mut context_processor = RenderContextProcessor;
     process_context(&mut context_processor, &proc_info_at(0), &mut extra);
@@ -335,7 +347,9 @@ fn two_player_nodes_receive_the_same_committed_revision() {
         &mut context_processor,
         &matching,
         &mut extra,
-        Some(NodeEventType::custom(TransportCommitEvent::Apply(2))),
+        Some(NodeEventType::custom(TransportCommitEvent::Apply(
+            revision(2),
+        ))),
     );
 
     let (mut left, mut left_control) = player_processor();
@@ -365,8 +379,16 @@ fn two_player_nodes_receive_the_same_committed_revision() {
 
 #[kithara::test]
 fn tempo_commit_waits_for_the_matching_render_boundary() {
-    let old = SessionTransportCommit::new(Tempo::new(120.0).expect("valid old tempo"), true, 1);
-    let next = SessionTransportCommit::new(Tempo::new(60.0).expect("valid next tempo"), true, 2);
+    let old = SessionTransportCommit::new(
+        Tempo::new(120.0).expect("valid old tempo"),
+        true,
+        revision(1),
+    );
+    let next = SessionTransportCommit::new(
+        Tempo::new(60.0).expect("valid next tempo"),
+        true,
+        revision(2),
+    );
     let mut extra = proc_extra(Some(120.0));
     let mut processor = RenderContextProcessor;
 
@@ -395,7 +417,9 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
         &mut processor,
         &matching,
         &mut extra,
-        Some(NodeEventType::custom(TransportCommitEvent::Apply(2))),
+        Some(NodeEventType::custom(TransportCommitEvent::Apply(
+            revision(2),
+        ))),
     );
     let context =
         read_render_context(&extra.store, &matching).expect("matching commit becomes valid");
@@ -416,8 +440,10 @@ fn inactive_transport_is_a_valid_render_context() {
 
 #[kithara::test]
 fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
-    let old = SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, 1);
-    let next = SessionTransportCommit::new(Tempo::new(60.0).expect("valid tempo"), true, 2);
+    let old =
+        SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, revision(1));
+    let next =
+        SessionTransportCommit::new(Tempo::new(60.0).expect("valid tempo"), true, revision(2));
     let (mut extra, mut observation) = proc_extra_with_observation(Some(120.0));
     let mut processor = RenderContextProcessor;
     process_context(&mut processor, &proc_info(), &mut extra);
@@ -446,11 +472,13 @@ fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
         &mut processor,
         &late,
         &mut extra,
-        Some(NodeEventType::custom(TransportCommitEvent::Apply(2))),
+        Some(NodeEventType::custom(TransportCommitEvent::Apply(
+            revision(2),
+        ))),
     );
     assert_eq!(
         observation.read().completion(),
-        Some(super::commit::TransportCommitResult::Rejected(2))
+        Some(super::commit::TransportCommitResult::Rejected(revision(2)))
     );
     let context = read_render_context(&extra.store, &late)
         .expect("late commit must leave the previous context valid");
@@ -459,9 +487,12 @@ fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
 
 #[kithara::test]
 fn stale_transport_commit_is_rejected_without_invalidating_the_context() {
-    let old = SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, 1);
-    let stale = SessionTransportCommit::new(Tempo::new(100.0).expect("valid tempo"), true, 0);
-    let next = SessionTransportCommit::new(Tempo::new(60.0).expect("valid tempo"), true, 2);
+    let old =
+        SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, revision(1));
+    let stale =
+        SessionTransportCommit::new(Tempo::new(100.0).expect("valid tempo"), true, revision(1));
+    let next =
+        SessionTransportCommit::new(Tempo::new(60.0).expect("valid tempo"), true, revision(2));
     let (mut extra, mut observation) = proc_extra_with_observation(Some(120.0));
     let mut processor = RenderContextProcessor;
     process_context(&mut processor, &proc_info(), &mut extra);
@@ -482,7 +513,7 @@ fn stale_transport_commit_is_rejected_without_invalidating_the_context() {
     );
     assert_eq!(
         observation.read().completion(),
-        Some(super::commit::TransportCommitResult::Rejected(2))
+        Some(super::commit::TransportCommitResult::Rejected(revision(2)))
     );
     assert_eq!(
         read_render_context(&extra.store, &boundary)
@@ -494,8 +525,10 @@ fn stale_transport_commit_is_rejected_without_invalidating_the_context() {
 
 #[kithara::test]
 fn transport_abort_is_idempotent() {
-    let old = SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, 1);
-    let next = SessionTransportCommit::new(Tempo::new(60.0).expect("valid tempo"), true, 2);
+    let old =
+        SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, revision(1));
+    let next =
+        SessionTransportCommit::new(Tempo::new(60.0).expect("valid tempo"), true, revision(2));
     let (mut extra, mut observation) = proc_extra_with_observation(Some(120.0));
     let mut processor = RenderContextProcessor;
     process_context(&mut processor, &proc_info(), &mut extra);
@@ -518,19 +551,23 @@ fn transport_abort_is_idempotent() {
             &mut processor,
             &proc_info_at(clock_samples),
             &mut extra,
-            Some(NodeEventType::custom(TransportCommitEvent::Abort(2))),
+            Some(NodeEventType::custom(TransportCommitEvent::Abort(
+                revision(2),
+            ))),
         );
         assert_eq!(
             observation.read().completion(),
-            Some(super::commit::TransportCommitResult::Aborted(2))
+            Some(super::commit::TransportCommitResult::Aborted(revision(2)))
         );
     }
 }
 
 #[kithara::test]
 fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
-    let old = SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, 1);
-    let next = SessionTransportCommit::new(Tempo::new(60.0).expect("valid tempo"), true, 2);
+    let old =
+        SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, revision(1));
+    let next =
+        SessionTransportCommit::new(Tempo::new(60.0).expect("valid tempo"), true, revision(2));
     let (mut extra, mut observation) = proc_extra_with_observation(Some(120.0));
     let mut processor = RenderContextProcessor;
     process_context(&mut processor, &proc_info(), &mut extra);
@@ -555,7 +592,7 @@ fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
     });
     assert_eq!(
         observation.read().completion(),
-        Some(super::commit::TransportCommitResult::Rejected(2))
+        Some(super::commit::TransportCommitResult::Rejected(revision(2)))
     );
 
     let restarted = proc_info();

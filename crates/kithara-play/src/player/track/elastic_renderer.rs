@@ -16,7 +16,9 @@ use smallvec::SmallVec;
 
 use super::elastic::{ElasticPlanError, ElasticRenderSegment, plan_elastic_segments};
 use crate::{
-    api::{PlaybackDirection, SessionBeat, SyncUnavailable, Tempo, TrackBinding},
+    api::{
+        PlaybackDirection, SessionBeat, SyncUnavailable, Tempo, TrackBinding, TransportRevision,
+    },
     player::node::StreamShape,
     resource::Resource,
     session::render::RenderContext,
@@ -146,7 +148,7 @@ struct PreparedRuntime {
     direction: PlaybackDirection,
     source_window: SourceRange,
     request_id: u64,
-    revision: u64,
+    revision: TransportRevision,
 }
 
 struct RenderRuntime {
@@ -171,7 +173,7 @@ enum PreparationPhase {
 pub(crate) struct Preparing {
     preparation: ElasticPreparation,
     phase: PreparationPhase,
-    revision: u64,
+    revision: TransportRevision,
 }
 
 pub(crate) struct Ready {

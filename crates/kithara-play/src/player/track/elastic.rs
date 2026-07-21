@@ -5,7 +5,7 @@ use num_traits::ToPrimitive;
 use smallvec::SmallVec;
 
 use crate::{
-    api::{SyncUnavailable, TrackBinding},
+    api::{SyncUnavailable, TrackBinding, TransportRevision},
     session::render::RenderContext,
 };
 
@@ -14,7 +14,7 @@ pub(crate) struct ElasticRenderRequest {
     source_end: f64,
     source_start: f64,
     request_id: u64,
-    revision: u64,
+    revision: TransportRevision,
     output_frames: usize,
 }
 
@@ -27,7 +27,7 @@ impl ElasticRenderRequest {
         self.request_id
     }
 
-    pub(crate) const fn revision(self) -> u64 {
+    pub(crate) const fn revision(self) -> TransportRevision {
         self.revision
     }
 
@@ -79,7 +79,7 @@ pub(crate) fn plan_elastic_segments(
     context: &RenderContext,
     output_range: Range<usize>,
     first_request_id: u64,
-    revision: u64,
+    revision: TransportRevision,
     supported_rates: ElasticRateEnvelope,
 ) -> Result<SmallVec<[ElasticRenderSegment; 4]>, ElasticPlanError> {
     const MAX_SEGMENTS: usize = 4;
@@ -133,7 +133,7 @@ pub(crate) fn plan_elastic_render(
     context: &RenderContext,
     output_range: Range<usize>,
     request_id: u64,
-    revision: u64,
+    revision: TransportRevision,
     supported_rates: ElasticRateEnvelope,
 ) -> Result<ElasticRenderRequest, ElasticPlanError> {
     let output_frames = output_range
@@ -278,7 +278,7 @@ mod tests {
         const MINIMUM_RATE: f64 = 2.0 / 3.0;
         const OUTPUT_FRAMES: usize = 480;
         const REQUEST_ID: u64 = 17;
-        const REVISION: u64 = 23;
+        const REVISION: TransportRevision = TransportRevision::new_for_test(23);
         const SAMPLE_RATE: u32 = 48_000;
 
         fn supported_rates() -> ElasticRateEnvelope {

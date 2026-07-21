@@ -88,7 +88,7 @@ fn manual_session_transport_is_shared_and_render_driven() {
     assert_eq!(left_snapshot, right_snapshot);
     assert!(left_snapshot.is_playing());
     assert_eq!(left_snapshot.tempo(), Tempo::new(120.0).unwrap());
-    assert_eq!(left_snapshot.revision(), 1);
+    assert_eq!(left_snapshot.revision().get(), 1);
 
     let one_sample = 120.0 / (f64::from(SAMPLE_RATE) * 60.0);
     assert!((position(left_snapshot) - 1.0).abs() <= one_sample);
@@ -112,11 +112,11 @@ fn transport_commit_is_published_to_every_registered_player_bus() {
     let expected = vec![
         TransportEvent::TempoCommitted {
             beats_per_minute: 120.0,
-            revision: snapshot.revision(),
+            revision: snapshot.revision().get(),
         },
         TransportEvent::PlayStateCommitted {
             playing: true,
-            revision: snapshot.revision(),
+            revision: snapshot.revision().get(),
         },
     ];
     assert_eq!(drain_transport_events(&mut left_events), expected);
@@ -175,7 +175,7 @@ fn tempo_change_preserves_beat_and_changes_slope_at_scheduled_boundary() {
     let after_one = position(engine.session_transport().expect("changed snapshot"));
     let changed = engine.session_transport().expect("changed revision");
     assert_eq!(changed.tempo(), Tempo::new(60.0).unwrap());
-    assert_eq!(changed.revision(), initial_revision + 1);
+    assert_eq!(changed.revision().get(), initial_revision.get() + 1);
     let old_slope = 120.0 / (f64::from(SAMPLE_RATE) * 60.0);
     let new_slope = 60.0 / (f64::from(SAMPLE_RATE) * 60.0);
     let tolerance = old_slope.max(new_slope);
@@ -226,7 +226,10 @@ fn scheduled_tempo_change_is_exact_and_offline_partition_independent() {
 
     let after_boundary = partitioned[1];
     assert_eq!(after_boundary.tempo(), Tempo::new(60.0).unwrap());
-    assert_eq!(after_boundary.revision(), initial.revision() + 1);
+    assert_eq!(
+        after_boundary.revision().get(),
+        initial.revision().get() + 1
+    );
 
     let (_, one_shot) = render_scheduled_tempo_change(&[1_024]);
     let one_shot = one_shot[0];
@@ -272,6 +275,54 @@ fn tempo_rejects_non_finite_and_non_positive_values() {
     for value in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         assert!(Tempo::new(value).is_err(), "tempo {value:?} must fail");
     }
+}
+
+#[kithara::test]
+fn checked_tempo_rejects_a_stale_physical_roster_context() {
+    let session = Arc::new(OfflineSession::new_manual());
+    let dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
+    let handle = SessionHandle::new(dispatcher);
+    let player_id = handle
+        .register_player(EventBus::default(), Vec::new(), PcmPool::default())
+        .expect("player registers");
+    handle
+        .exec_ok(Cmd::StartPlayer {
+            master_volume: 1.0,
+            player_id,
+            sample_rate: SAMPLE_RATE,
+        })
+        .expect("player starts");
+    handle
+        .allocate_slot(player_id)
+        .expect("player slot allocates");
+    handle
+        .exec_ok(Cmd::SetSessionTempo {
+            tempo: Tempo::new(120.0).expect("valid initial tempo"),
+        })
+        .expect("initial tempo stages");
+    render_frames(&session, 1, 1);
+
+    let context = match handle
+        .exec(Cmd::PreparationContext)
+        .expect("preparation context dispatches")
+    {
+        Reply::PreparationContext(context) => context,
+        _ => panic!("preparation context returned an unexpected reply"),
+    };
+    handle
+        .register_player(EventBus::default(), Vec::new(), PcmPool::default())
+        .expect("second physical player registers");
+
+    assert!(matches!(
+        handle
+            .exec(Cmd::SetSessionTempoChecked {
+                tempo: Tempo::new(90.0).expect("valid changed tempo"),
+                expected_context: context,
+                player_ids: vec![player_id],
+            })
+            .expect("checked tempo dispatches"),
+        Reply::Err(SessionError::TransportRosterChanged)
+    ));
 }
 
 #[kithara::test]
@@ -341,5 +392,5 @@ fn failed_abort_delivery_is_retried_before_the_next_transport_commit() {
         _ => panic!("retry transport did not commit"),
     };
     assert_eq!(snapshot.tempo(), retry_tempo);
-    assert_eq!(snapshot.revision(), 2);
+    assert_eq!(snapshot.revision().get(), 2);
 }
