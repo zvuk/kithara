@@ -24,6 +24,6 @@ mod resource_regressions;
 mod seamless_queue_advance;
 mod session_transport;
 mod silvercomet_seek_hang;
-mod source_audio_sidecar;
+mod source_range;
 mod track_binding;
 mod transport_artifact;

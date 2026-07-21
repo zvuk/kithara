@@ -19,7 +19,7 @@ use crate::{
         node::StreamShape,
         track::{
             ElasticPlanError, ElasticPrepareError, PlayerResource, PreparedElasticRenderer,
-            plan_elastic_segments,
+            ReleasedPlayerResource, plan_elastic_segments,
         },
     },
     resource::Resource,
@@ -41,7 +41,7 @@ impl PlayerImpl {
         binding: TrackBinding,
         at_position: Option<usize>,
     ) -> Result<(), PlayError> {
-        let prepared = self.prepare_bound_resource(&resource, &binding).await?;
+        let (resource, prepared) = self.prepare_bound_resource(resource, &binding).await?;
         self.core
             .items
             .insert_with_binding(resource, item_id, binding, prepared, at_position);
@@ -265,7 +265,7 @@ pub(crate) fn prepare_bound_load(
         renderer,
         stamp: prepared_stamp,
     } = prepared;
-    let abr_handle = renderer.abr_handle();
+    let abr_handle = resource.abr_handle();
     prepare_resource(
         &resource,
         context.rate,
@@ -274,8 +274,7 @@ pub(crate) fn prepare_bound_load(
     );
     resource.set_service_class(ServiceClass::Idle);
     let src = Arc::clone(resource.src());
-    let mut player_resource = PlayerResource::new_elastic(resource, src);
-    player_resource.install_prepared_elastic(renderer);
+    let player_resource = PlayerResource::new_bound(resource, src, renderer);
     Ok(BoundLoad {
         player_resource,
         abr_handle,
@@ -300,15 +299,15 @@ fn map_successor_retarget_error(error: ElasticPrepareError) -> PlayError {
 }
 
 pub(crate) fn restore_prepared_binding(
-    bound: bool,
-    renderer: Option<PreparedElasticRenderer>,
+    released: ReleasedPlayerResource,
     stamp: Option<PreparedBindingStamp>,
-) -> Result<Option<PreparedBindingResource>, PlayError> {
-    match (bound, renderer, stamp) {
-        (true, Some(renderer), Some(stamp)) => {
-            Ok(Some(PreparedBindingResource { stamp, renderer }))
+) -> Result<(Resource, Option<PreparedBindingResource>), PlayError> {
+    match (released, stamp) {
+        (ReleasedPlayerResource::Bound(bound), Some(stamp)) => {
+            let (resource, renderer) = bound.into_parts();
+            Ok((resource, Some(PreparedBindingResource { stamp, renderer })))
         }
-        (false, None, None) => Ok(None),
+        (ReleasedPlayerResource::Linear(resource), None) => Ok((resource, None)),
         _ => Err(PlayError::Internal(
             "rejected load returned inconsistent binding state".into(),
         )),

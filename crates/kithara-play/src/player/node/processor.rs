@@ -471,7 +471,7 @@ mod tests {
             PlayerResource::new(empty_resource(src), Arc::clone(src), &PcmPool::default());
         PlayerCmd::LoadTrack {
             binding: None,
-            resource: Box::new(resource),
+            resource,
             item_id: None,
         }
     }

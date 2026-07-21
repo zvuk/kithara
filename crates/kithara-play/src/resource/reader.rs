@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use delegate::delegate;
 use kithara_audio::{
     Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
-    ServiceClass, SourceAudioReader,
+    ServiceClass,
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
@@ -11,7 +11,7 @@ use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_stream::{Stream, StreamType};
 use tracing::warn;
 
-use super::{ResourceBlueprint, ResourceConfig, SourceType};
+use super::{ResourceConfig, SourceType};
 
 /// Type-erased audio resource wrapping any `PcmReader`.
 ///
@@ -44,8 +44,6 @@ use super::{ResourceBlueprint, ResourceConfig, SourceType};
 #[fieldwork(opt_in, get)]
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
-    pub(super) source_audio: Option<SourceAudioReader>,
-    blueprint: Option<ResourceBlueprint>,
     pub(super) supports_reverse_source: bool,
     #[field(get, deref = false)]
     src: Arc<str>,
@@ -136,13 +134,10 @@ impl Resource {
     where
         B: Default + ResamplerBackend,
     {
-        ResourceBlueprint::new(config).open().await
+        Self::open_config(config).await
     }
 
-    pub(crate) async fn open_config<B>(
-        config: ResourceConfig<B>,
-        blueprint: ResourceBlueprint,
-    ) -> DecodeResult<Self>
+    async fn open_config<B>(config: ResourceConfig<B>) -> DecodeResult<Self>
     where
         B: Default + ResamplerBackend,
     {
@@ -167,7 +162,6 @@ impl Resource {
             }
         };
         resource.cancel = CancelGuard(cancel);
-        resource.blueprint = Some(blueprint);
         resource.supports_reverse_source = supports_reverse_source
             || hls_source
                 && resource
@@ -191,14 +185,10 @@ impl Resource {
     /// `"unknown"`.
     #[must_use]
     pub fn from_reader<R: PcmReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
-        Self::from_reader_parts(reader, src, None)
+        Self::from_reader_parts(reader, src)
     }
 
-    fn from_reader_parts<R: PcmReader + 'static>(
-        reader: R,
-        src: Option<Arc<str>>,
-        source_audio: Option<SourceAudioReader>,
-    ) -> Self {
+    fn from_reader_parts<R: PcmReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
         let bus = reader.event_bus().clone();
         let mut inner: Box<dyn PcmReader> = Box::new(reader);
         let src = src.unwrap_or_else(|| Arc::from("unknown"));
@@ -207,8 +197,6 @@ impl Resource {
         }
         Self {
             inner,
-            source_audio,
-            blueprint: None,
             supports_reverse_source: false,
             bus,
             src,
@@ -230,32 +218,21 @@ impl Resource {
         B: ResamplerBackend,
         Audio<Stream<T>>: PcmReader + 'static,
     {
-        let mut audio = Audio::<Stream<T>>::new(config).await?;
-        let source_audio = audio.take_source_audio();
-        Ok(Self::from_reader_parts(audio, Some(src), source_audio))
+        let audio = Audio::<Stream<T>>::new(config).await?;
+        Ok(Self::from_reader_parts(audio, Some(src)))
     }
 
-    /// Read interleaved audio while servicing the optional decoded source sidecar.
+    /// Read interleaved audio.
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        let outcome = self.inner.read(buf);
-        self.poll_source_audio();
-        outcome
+        self.inner.read(buf)
     }
 
-    /// Read deinterleaved audio while servicing the optional decoded source sidecar.
+    /// Read deinterleaved audio.
     pub fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
     ) -> Result<ReadOutcome, DecodeError> {
-        let outcome = self.inner.read_planar(output);
-        self.poll_source_audio();
-        outcome
-    }
-
-    fn poll_source_audio(&mut self) {
-        if let Some(source_audio) = self.source_audio.as_mut() {
-            source_audio.poll();
-        }
+        self.inner.read_planar(output)
     }
 
     /// Wait for first decoded chunk to be available, then move it to internal buffer.
@@ -281,13 +258,6 @@ impl Resource {
     #[must_use]
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
-    }
-
-    /// Returns the reusable recipe for this stream-backed resource.
-    /// Custom-reader resources have no implicit reconstruction contract.
-    #[must_use]
-    pub fn blueprint(&self) -> Option<ResourceBlueprint> {
-        self.blueprint.clone()
     }
 }
 

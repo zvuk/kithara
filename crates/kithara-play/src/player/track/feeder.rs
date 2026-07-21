@@ -13,19 +13,38 @@ mod platform;
 use crate::resource::Resource;
 
 pub(crate) use platform::PreparedElasticRenderer;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use platform::{ElasticPreparationPoll, PreparingElasticRenderer};
 
-/// RT-safe wrapper for standalone and bound elastic playback.
-/// Standalone resources own pooled scratch buffers; elastic resources use prepared renderer
-/// storage.
+/// RT-safe resource whose storage is fixed by its playback capability.
+#[non_exhaustive]
 pub struct PlayerResource {
     src: Arc<str>,
+    kind: PlayerResourceKind,
+}
+
+enum PlayerResourceKind {
+    Linear(Box<LinearResource>),
+    Bound(Box<BoundResource>),
+}
+
+struct LinearResource {
     resource: WasmSend<Resource>,
-    channel_buffers: Option<[PcmBuf; Self::STEREO_CHANNELS]>,
+    channel_buffers: [PcmBuf; PlayerResource::STEREO_CHANNELS],
     eof_seen: bool,
     failed: bool,
     write_len: usize,
     write_pos: usize,
-    elastic_renderer: Option<PreparedElasticRenderer>,
+}
+
+pub(in crate::player) struct BoundResource {
+    resource: WasmSend<Resource>,
+    renderer: PreparedElasticRenderer,
+}
+
+pub(in crate::player) enum ReleasedPlayerResource {
+    Linear(Resource),
+    Bound(Box<BoundResource>),
 }
 
 /// Result of a bounded audio-thread read from [`PlayerResource`].
@@ -54,21 +73,6 @@ pub enum ReadOutcome {
 }
 
 impl PlayerResource {
-    delegate::delegate! {
-        to self.resource.get() {
-            /// Total duration in seconds. Returns 0.0 if unknown.
-            #[must_use]
-            #[expr($.map_or(0.0, |d| d.as_secs_f64()))]
-            pub fn duration(&self) -> f64;
-            /// Set the target sample rate of the audio host.
-            pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Set the playback rate for the active stretch controls.
-            pub(crate) fn set_playback_rate(&self, rate: f32);
-            /// Set the transport pitch-bend multiplier.
-            pub(crate) fn set_transport_bend(&self, bend: f32);
-        }
-    }
-
     /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
     const BUFFER_DURATION_DIVISOR: usize = 5;
 
@@ -97,32 +101,57 @@ impl PlayerResource {
         });
 
         Self {
-            resource: WasmSend::new(resource),
-            channel_buffers: Some(channel_buffers),
             src,
-            write_len: 0,
-            write_pos: 0,
-            eof_seen: false,
-            failed: false,
-            elastic_renderer: None,
+            kind: PlayerResourceKind::Linear(Box::new(LinearResource {
+                resource: WasmSend::new(resource),
+                channel_buffers,
+                write_len: 0,
+                write_pos: 0,
+                eof_seen: false,
+                failed: false,
+            })),
         }
     }
 
-    pub(crate) fn release(self) -> (Resource, Option<PreparedElasticRenderer>) {
-        let Self {
-            resource,
-            elastic_renderer,
-            ..
-        } = self;
-        (resource.into_inner(), elastic_renderer)
+    pub(in crate::player) fn release(self) -> ReleasedPlayerResource {
+        match self.kind {
+            PlayerResourceKind::Linear(linear) => {
+                ReleasedPlayerResource::Linear(linear.resource.into_inner())
+            }
+            PlayerResourceKind::Bound(bound) => ReleasedPlayerResource::Bound(bound),
+        }
+    }
+
+    fn resource(&self) -> &Resource {
+        match &self.kind {
+            PlayerResourceKind::Linear(linear) => linear.resource.get(),
+            PlayerResourceKind::Bound(bound) => bound.resource.get(),
+        }
+    }
+
+    /// Total duration in seconds. Returns 0.0 if unknown.
+    #[must_use]
+    pub fn duration(&self) -> f64 {
+        self.resource().duration().map_or(0.0, |d| d.as_secs_f64())
+    }
+
+    /// Set the target sample rate of the audio host.
+    pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
+        self.resource().set_host_sample_rate(sample_rate);
+    }
+
+    /// Set the playback rate for the active stretch controls.
+    pub(crate) fn set_playback_rate(&self, rate: f32) {
+        self.resource().set_playback_rate(rate);
+    }
+
+    /// Set the transport pitch-bend multiplier.
+    pub(crate) fn set_transport_bend(&self, bend: f32) {
+        self.resource().set_transport_bend(bend);
     }
 
     pub(crate) fn set_service_class(&mut self, class: ServiceClass) {
-        if let Some(renderer) = self.elastic_renderer.as_mut() {
-            renderer.set_service_class(class);
-            return;
-        }
-        self.resource.get().set_service_class(class);
+        self.resource().set_service_class(class);
     }
 
     /// Source identifier attached to this resource.
@@ -135,52 +164,12 @@ impl PlayerResource {
     /// and is ready to play (always `>=` the served playback position).
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
-        if let Some(renderer) = self.elastic_renderer.as_ref() {
-            return renderer.decoded_frontier();
-        }
-        self.resource.get().decoded_frontier().as_secs_f64()
-    }
-
-    fn fill_scratch(&mut self, target_frames: usize) -> bool {
-        let Some(channel_buffers) = self.channel_buffers.as_mut() else {
-            self.failed = true;
-            return false;
-        };
-        let mut eof_reached = self.eof_seen;
-
-        while target_frames > self.write_len && !eof_reached {
-            let avail = channel_buffers[0].len() - self.write_pos;
-            if avail == 0 {
-                break;
+        match &self.kind {
+            PlayerResourceKind::Linear(linear) => {
+                linear.resource.get().decoded_frontier().as_secs_f64()
             }
-
-            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
-            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
-            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
-
-            let n = match self.resource.get_mut().read_planar(&mut planar) {
-                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
-                Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
-                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
-                    self.eof_seen = true;
-                    eof_reached = true;
-                    0
-                }
-                Err(err) => {
-                    warn!(src = %self.src, error = %err, "PlayerResource: decode error");
-                    self.failed = true;
-                    0
-                }
-            };
-            if n == 0 {
-                break;
-            }
-            self.write_len += n;
-            self.write_pos += n;
+            PlayerResourceKind::Bound(bound) => bound.renderer.decoded_frontier(),
         }
-
-        eof_reached
     }
 
     /// Remaining buffered frames when the wrapped reader has reached EOF.
@@ -189,7 +178,10 @@ impl PlayerResource {
     /// the next read will return [`ReadOutcome::Eof`].
     #[must_use]
     pub fn frames_until_eof(&self) -> Option<usize> {
-        self.eof_seen.then_some(self.write_len)
+        match &self.kind {
+            PlayerResourceKind::Linear(linear) => linear.eof_seen.then_some(linear.write_len),
+            PlayerResourceKind::Bound(_) => None,
+        }
     }
 
     /// Read PCM frames into the output buffers for the given range.
@@ -204,50 +196,105 @@ impl PlayerResource {
     /// That silence is not a terminal condition and must not trigger track
     /// advancement.
     pub fn read(&mut self, output: &mut [&mut [f32]], range: Range<usize>) -> ReadOutcome {
-        if self.channel_buffers.is_none() {
-            for channel in output.iter_mut() {
-                channel[..range.len()].fill(0.0);
+        let src = self.src.as_ref();
+        match &mut self.kind {
+            PlayerResourceKind::Linear(linear) => linear.read(src, output, range),
+            PlayerResourceKind::Bound(_) => {
+                fill_silence(output, range.len());
+                ReadOutcome::Failed
             }
-            return ReadOutcome::Failed;
         }
-        let frames_to_read = range.end - range.start;
-        let mut eof_reached = self.fill_scratch(frames_to_read);
+    }
+
+    /// Seeks standalone playback and clears its scratch state.
+    /// Returns `false` for bound elastic playback or source seek failure.
+    #[must_use]
+    pub fn seek(&mut self, seconds: f64) -> bool {
+        match &mut self.kind {
+            PlayerResourceKind::Linear(linear) => linear.seek(seconds),
+            PlayerResourceKind::Bound(_) => false,
+        }
+    }
+}
+
+impl BoundResource {
+    pub(in crate::player) fn into_parts(self: Box<Self>) -> (Resource, PreparedElasticRenderer) {
+        let Self { resource, renderer } = *self;
+        (resource.into_inner(), renderer)
+    }
+}
+
+impl LinearResource {
+    fn fill_scratch(&mut self, src: &str, target_frames: usize) -> bool {
+        let mut eof_reached = self.eof_seen;
+
+        while target_frames > self.write_len && !eof_reached {
+            let avail = self.channel_buffers[0].len() - self.write_pos;
+            if avail == 0 {
+                break;
+            }
+
+            let (left_buf, right_buf) = self.channel_buffers.split_at_mut(1);
+            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
+            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
+            let mut planar: [&mut [f32]; PlayerResource::STEREO_CHANNELS] = [left, right];
+
+            let n = match self.resource.get_mut().read_planar(&mut planar) {
+                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
+                Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
+                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
+                    self.eof_seen = true;
+                    eof_reached = true;
+                    0
+                }
+                Err(err) => {
+                    warn!(src, error = %err, "PlayerResource: decode error");
+                    self.failed = true;
+                    0
+                }
+            };
+            if n == 0 {
+                break;
+            }
+            self.write_len += n;
+            self.write_pos += n;
+        }
+
+        eof_reached
+    }
+
+    fn read(&mut self, src: &str, output: &mut [&mut [f32]], range: Range<usize>) -> ReadOutcome {
+        let frames_to_read = range.len();
+        let mut eof_reached = self.fill_scratch(src, frames_to_read);
 
         if self.write_len == 0 && self.failed && !self.eof_seen {
-            let range_len = range.len();
-            for ch in output.iter_mut() {
-                ch[..range_len].fill(0.0);
-            }
+            fill_silence(output, frames_to_read);
             return ReadOutcome::Failed;
         }
 
         if self.write_len > 0 {
             let frames_to_write = frames_to_read.min(self.write_len);
             let tail_size = self.write_len - frames_to_write;
-            let Some(channel_buffers) = self.channel_buffers.as_mut() else {
-                for channel in output.iter_mut() {
-                    channel[..range.len()].fill(0.0);
-                }
-                return ReadOutcome::Failed;
-            };
 
-            if output.len() >= Self::STEREO_CHANNELS {
+            if output.len() >= PlayerResource::STEREO_CHANNELS {
                 output[0][..frames_to_write]
-                    .copy_from_slice(&channel_buffers[0][..frames_to_write]);
+                    .copy_from_slice(&self.channel_buffers[0][..frames_to_write]);
                 output[1][..frames_to_write]
-                    .copy_from_slice(&channel_buffers[1][..frames_to_write]);
+                    .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
             }
 
             if tail_size > 0 {
-                channel_buffers[0].copy_within(frames_to_write..frames_to_write + tail_size, 0);
-                channel_buffers[1].copy_within(frames_to_write..frames_to_write + tail_size, 0);
+                self.channel_buffers[0]
+                    .copy_within(frames_to_write..frames_to_write + tail_size, 0);
+                self.channel_buffers[1]
+                    .copy_within(frames_to_write..frames_to_write + tail_size, 0);
             }
 
             self.write_len -= frames_to_write;
             self.write_pos = tail_size;
 
             if frames_to_write == frames_to_read {
-                eof_reached |= self.fill_scratch(frames_to_read);
+                eof_reached |= self.fill_scratch(src, frames_to_read);
             }
 
             if frames_to_write == frames_to_read {
@@ -259,8 +306,8 @@ impl PlayerResource {
                     frames: frames_to_write,
                 }
             } else {
-                for ch in output.iter_mut() {
-                    ch[frames_to_write..frames_to_read].fill(0.0);
+                for channel in output.iter_mut() {
+                    channel[frames_to_write..frames_to_read].fill(0.0);
                 }
                 ReadOutcome::Full {
                     frames: frames_to_write,
@@ -269,21 +316,12 @@ impl PlayerResource {
         } else if eof_reached {
             ReadOutcome::Eof
         } else {
-            let range_len = range.len();
-            for ch in output.iter_mut() {
-                ch[..range_len].fill(0.0);
-            }
+            fill_silence(output, frames_to_read);
             ReadOutcome::Full { frames: 0 }
         }
     }
 
-    /// Seeks standalone playback and clears its scratch state.
-    /// Returns `false` for bound elastic playback or source seek failure.
-    #[must_use]
-    pub fn seek(&mut self, seconds: f64) -> bool {
-        if self.elastic_renderer.is_some() {
-            return false;
-        }
+    fn seek(&mut self, seconds: f64) -> bool {
         let position = Duration::from_secs_f64(seconds);
         match self.resource.get_mut().seek(position) {
             Ok(_) => {
@@ -302,5 +340,11 @@ impl PlayerResource {
         self.write_pos = 0;
         self.eof_seen = false;
         self.failed = false;
+    }
+}
+
+fn fill_silence(output: &mut [&mut [f32]], frames: usize) {
+    for channel in output.iter_mut() {
+        channel[..frames].fill(0.0);
     }
 }

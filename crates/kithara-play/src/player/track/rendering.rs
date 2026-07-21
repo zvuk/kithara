@@ -6,8 +6,8 @@ use smallvec::SmallVec;
 use super::{
     ElasticCopyError, ElasticPlanError, ElasticRenderError, ElasticRenderOutcome,
     ElasticRenderSegment, ElasticRenderer, ElasticRequest, IntegerSegment, PlaybackDirection,
-    RenderContext, SourceCursor, SourceFrameRange, TrackBinding, plan_elastic_segments,
-    quantize_source, sample_count,
+    RenderContext, SourceCursor, SourceRange, TrackBinding, plan_elastic_segments, quantize_source,
+    sample_count,
 };
 use crate::resource::Resource;
 
@@ -15,7 +15,7 @@ pub(super) struct SourceCopy<'a> {
     pub(super) fetch: &'a [f32],
     pub(super) target: &'a mut [f32],
     pub(super) direction: PlaybackDirection,
-    pub(super) fetch_range: SourceFrameRange,
+    pub(super) fetch_range: SourceRange,
     pub(super) start: i64,
     pub(super) source_frame_count: u64,
     pub(super) channels: usize,
@@ -76,11 +76,12 @@ impl ElasticRenderer {
                 source_end: segment.request.source_end(),
             });
         }
-        let envelope = self.capabilities.rate_envelope();
+        let capabilities = self.backend.capabilities();
+        let envelope = capabilities.rate_envelope();
         quantize_segments(
             &continuous,
             self.cursor,
-            self.capabilities.max_output_frames(),
+            capabilities.max_output_frames(),
             envelope.min_source_frames_per_output(),
             envelope.max_source_frames_per_output(),
             direction,
@@ -111,7 +112,7 @@ impl ElasticRenderer {
         if revision < self.revision {
             return Err(ElasticRenderError::RevisionMismatch);
         }
-        let envelope = self.capabilities.rate_envelope();
+        let envelope = self.backend.capabilities().rate_envelope();
         let requested_frames = output_range.len();
         let requested_end = output_range.end;
         let planned = match plan_elastic_segments(
@@ -165,7 +166,7 @@ impl ElasticRenderer {
         if source_start >= source_end {
             return Ok(ElasticRenderOutcome::Eof);
         }
-        let fetch_range = SourceFrameRange::new(source_start, source_end)?;
+        let fetch_range = SourceRange::try_from(source_start..source_end)?;
         self.ensure_window(source, fetch_range, direction)?;
         let source_window = self
             .source_window
@@ -175,7 +176,7 @@ impl ElasticRenderer {
         if fetch_frames > self.max_fetch_frames {
             return Err(ElasticRenderError::FetchWindowMismatch);
         }
-        let fetch_samples = sample_count(fetch_frames, self.capabilities.channels())
+        let fetch_samples = sample_count(fetch_frames, self.backend.capabilities().channels())
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
         for segment in &segments {
             self.render_segment(*segment, direction, source_window, fetch_samples, output)?;
@@ -199,11 +200,11 @@ impl ElasticRenderer {
         &mut self,
         segment: IntegerSegment,
         direction: PlaybackDirection,
-        fetch_range: SourceFrameRange,
+        fetch_range: SourceRange,
         fetch_samples: usize,
         output: &mut [&mut [f32]],
     ) -> Result<(), ElasticRenderError> {
-        let channels = self.capabilities.channels();
+        let channels = self.backend.capabilities().channels();
         let source_frames = usize::try_from(segment.source_start.abs_diff(segment.source_end))
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
         if source_frames > self.max_source_frames {
@@ -490,10 +491,10 @@ impl SourceCopy<'_> {
                 target[target_start..target_end].fill(0.0);
                 continue;
             }
-            if coordinate < fetch_range.start() || coordinate >= fetch_range.end() {
+            if coordinate < fetch_range.start().get() || coordinate >= fetch_range.end().get() {
                 return Err(ElasticCopyError::FetchWindowMismatch);
             }
-            let source_frame = usize::try_from(coordinate - fetch_range.start())
+            let source_frame = usize::try_from(coordinate - fetch_range.start().get())
                 .map_err(|_| ElasticCopyError::FrameOverflow)?;
             let source_start = source_frame
                 .checked_mul(channels)
@@ -561,7 +562,7 @@ mod tests {
 
     #[kithara::test]
     fn forward_copy_indexes_from_the_actual_window_start() {
-        let range = SourceFrameRange::new(2, 6).expect("valid source range");
+        let range = SourceRange::try_from(2..6).expect("valid source range");
         let source = [20.0, 30.0, 40.0, 50.0];
         let mut output = [0.0; 2];
 
@@ -583,7 +584,7 @@ mod tests {
 
     #[kithara::test]
     fn reverse_copy_consumes_an_ascending_window_in_descending_order() {
-        let range = SourceFrameRange::new(2, 6).expect("valid source range");
+        let range = SourceRange::try_from(2..6).expect("valid source range");
         let source = [20.0, 30.0, 40.0, 50.0];
         let mut output = [0.0; 3];
 
@@ -605,7 +606,7 @@ mod tests {
 
     #[kithara::test]
     fn reverse_copy_reaches_source_start_without_wrapping() {
-        let range = SourceFrameRange::new(0, 2).expect("valid source range");
+        let range = SourceRange::try_from(0..2).expect("valid source range");
         let source = [10.0, 20.0];
         let mut output = [f32::NAN; 4];
 

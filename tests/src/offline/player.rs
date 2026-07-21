@@ -76,7 +76,7 @@ impl OfflinePlayer {
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
                 binding: None,
-                resource: Box::new(pr),
+                resource: pr,
                 item_id: None,
             })
             .expect("BUG: send LoadTrack");

@@ -19,6 +19,7 @@ fn seek_ctx() -> SeekContext {
     SeekContext {
         epoch: 1,
         target: Duration::from_secs(5),
+        ..Default::default()
     }
 }
 

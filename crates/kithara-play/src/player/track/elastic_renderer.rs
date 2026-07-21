@@ -6,20 +6,15 @@ mod rendering;
 use std::{mem::replace, num::NonZeroU32};
 
 use kithara_audio::{
-    SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome, SourceFrameRange,
+    SourceFrameIndex, SourceRange, SourceRangeError, SourceRangeReadOutcome, SourceRangeRequest,
 };
 use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
-use kithara_stretch::{
-    ElasticCapabilities, ElasticConfig, ElasticError, ElasticRequest, SignalsmithElastic,
-};
+use kithara_stretch::{ElasticConfig, ElasticError, ElasticRequest, SignalsmithElastic};
 use num_traits::ToPrimitive;
 use rendering::SourceCopy;
 use smallvec::SmallVec;
 
-use super::{
-    PlayerResource,
-    elastic::{ElasticPlanError, ElasticRenderSegment, plan_elastic_segments},
-};
+use super::elastic::{ElasticPlanError, ElasticRenderSegment, plan_elastic_segments};
 use crate::{
     api::{PlaybackDirection, SessionBeat, SyncUnavailable, Tempo, TrackBinding},
     player::node::StreamShape,
@@ -31,7 +26,7 @@ const READY_WINDOW_COUNT: usize = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ElasticPrepareError {
-    #[error("bound playback requires a decoded source-audio lane")]
+    #[error("bound playback requires canonical decoded source ranges")]
     SourceUnavailable,
     #[error("track binding could not resolve its source anchor: {0}")]
     Binding(#[from] SyncUnavailable),
@@ -46,17 +41,13 @@ pub(crate) enum ElasticPrepareError {
     #[error("elastic renderer buffer budget is exhausted")]
     BufferBudget(#[from] BudgetExhausted),
     #[error(transparent)]
-    Source(#[from] SourceAudioError),
+    Source(#[from] SourceRangeError),
     #[error(transparent)]
     Backend(#[from] ElasticError),
-    #[error("source seek failed while preparing elastic playback")]
-    SourceSeek,
     #[error("decoded source ended before elastic preparation completed")]
     SourceEnded,
     #[error("the elastic backend does not support reverse input")]
     ReverseUnsupported,
-    #[error("source-audio reader returned an unsupported preparation outcome")]
-    UnsupportedSourceOutcome,
     #[error("elastic preparation source range is outside the prepared fetch window")]
     FetchWindowMismatch,
 }
@@ -66,7 +57,7 @@ pub(crate) enum ElasticRenderError {
     #[error(transparent)]
     Plan(#[from] ElasticPlanError),
     #[error(transparent)]
-    Source(#[from] SourceAudioError),
+    Source(#[from] SourceRangeError),
     #[error(transparent)]
     Backend(#[from] ElasticError),
     #[error("elastic source frame arithmetic overflowed")]
@@ -154,32 +145,30 @@ struct ElasticPreparation {
     warmup: ElasticRequest,
     direction: PlaybackDirection,
     anchor: SourceCursor,
-    fetch_range: SourceFrameRange,
+    fetch_range: SourceRange,
 }
 
 struct BufferedSourceWindow {
     samples: PcmBuf,
-    range: SourceFrameRange,
+    range: SourceRange,
 }
 
 struct PendingSourceRead {
     samples: PcmBuf,
-    demand: SourceAudioDemand,
-    range: SourceFrameRange,
+    request: SourceRangeRequest,
 }
 
 pub(crate) struct ElasticRenderer {
-    capabilities: ElasticCapabilities,
     sample_rate: NonZeroU32,
     cursor: Option<SourceCursor>,
-    demand: Option<SourceAudioDemand>,
+    request: Option<SourceRangeRequest>,
     direction: Option<PlaybackDirection>,
     pending_source_read: Option<PendingSourceRead>,
     preparation: Option<ElasticPreparation>,
-    preparation_extension: Option<SourceFrameRange>,
-    preparation_request: Option<SourceFrameRange>,
-    preparation_window: Option<SourceFrameRange>,
-    source_window: Option<SourceFrameRange>,
+    preparation_extension: Option<SourceRange>,
+    preparation_request: Option<SourceRange>,
+    preparation_window: Option<SourceRange>,
+    source_window: Option<SourceRange>,
     discarded: PcmBuf,
     fetch: PcmBuf,
     history: PcmBuf,
@@ -205,8 +194,12 @@ impl ElasticRenderer {
     pub(super) fn decoded_frontier(&self) -> f64 {
         self.source_window
             .iter()
-            .map(|window| window.end())
-            .chain(self.ready_windows.iter().map(|window| window.range.end()))
+            .map(|window| window.end().get())
+            .chain(
+                self.ready_windows
+                    .iter()
+                    .map(|window| window.range.end().get()),
+            )
             .max()
             .and_then(|frame| frame.to_f64())
             .map_or(0.0, |frame| frame / f64::from(self.sample_rate.get()))
@@ -215,7 +208,7 @@ impl ElasticRenderer {
     pub(super) fn ensure_window(
         &mut self,
         source: &mut Resource,
-        range: SourceFrameRange,
+        range: SourceRange,
         direction: PlaybackDirection,
     ) -> Result<(), ElasticRenderError> {
         self.poll_source_read(source, direction)?;
@@ -245,14 +238,13 @@ impl ElasticRenderer {
 
     pub(super) fn next_source_window(
         &self,
-        current: SourceFrameRange,
+        current: SourceRange,
         direction: PlaybackDirection,
-    ) -> Result<Option<SourceFrameRange>, SourceAudioError> {
-        let overlap =
-            u64::try_from(self.max_source_frames).map_err(|_| SourceAudioError::FrameOverflow)?;
+    ) -> Result<Option<SourceRange>, SourceRangeError> {
+        let overlap = SourceFrameIndex::try_from(self.max_source_frames)?.get();
         let (start, end) = match direction {
             PlaybackDirection::Forward => {
-                let start = current.end().saturating_sub(overlap);
+                let start = current.end().get().saturating_sub(overlap);
                 let end = start
                     .saturating_add(self.source_window_frames)
                     .min(self.source_frame_count);
@@ -261,6 +253,7 @@ impl ElasticRenderer {
             PlaybackDirection::Reverse => {
                 let end = current
                     .start()
+                    .get()
                     .saturating_add(overlap)
                     .min(self.source_frame_count);
                 let start = end.saturating_sub(self.source_window_frames);
@@ -268,13 +261,13 @@ impl ElasticRenderer {
             }
         };
         let advances = match direction {
-            PlaybackDirection::Forward => end > current.end(),
-            PlaybackDirection::Reverse => start < current.start(),
+            PlaybackDirection::Forward => end > current.end().get(),
+            PlaybackDirection::Reverse => start < current.start().get(),
         };
         if !advances || start >= end {
             return Ok(None);
         }
-        SourceFrameRange::new(start, end).map(Some)
+        SourceRange::try_from(start..end).map(Some)
     }
 
     pub(super) fn poll_source_read(
@@ -285,26 +278,22 @@ impl ElasticRenderer {
         let Some(pending) = self.pending_source_read.as_mut() else {
             return Ok(());
         };
-        let frames =
-            usize::try_from(pending.range.len()).map_err(|_| ElasticRenderError::FrameOverflow)?;
+        let range = pending.request.range();
+        let frames = usize::try_from(range.len()).map_err(|_| ElasticRenderError::FrameOverflow)?;
         let sample_len = frames
-            .checked_mul(self.capabilities.channels())
+            .checked_mul(self.backend.capabilities().channels())
             .ok_or(ElasticRenderError::FrameOverflow)?;
-        let outcome = source.read_source_audio(
-            &pending.demand,
-            pending.range,
-            &mut pending.samples[..sample_len],
-        );
+        let outcome = source.read_source_range(pending.request, &mut pending.samples[..sample_len]);
         match outcome {
-            Ok(Some(SourceAudioReadOutcome::Pending)) => Ok(()),
-            Ok(Some(SourceAudioReadOutcome::Ready { .. })) => {
+            Ok(SourceRangeReadOutcome::Pending) => Ok(()),
+            Ok(SourceRangeReadOutcome::Ready { .. }) => {
                 let pending = self
                     .pending_source_read
                     .take()
                     .ok_or(ElasticRenderError::SourceUnavailable)?;
-                self.stage_ready_window(pending.range, pending.samples, direction)
+                self.stage_ready_window(pending.request.range(), pending.samples, direction)
             }
-            Ok(Some(SourceAudioReadOutcome::Eof)) | Ok(None) | Ok(Some(_)) => {
+            Ok(SourceRangeReadOutcome::Eof) => {
                 self.release_pending_source_read();
                 Err(ElasticRenderError::SourceReadFailed)
             }
@@ -369,7 +358,6 @@ impl ElasticRenderer {
 
         Ok(Self {
             backend,
-            capabilities,
             max_warm_frames,
             max_source_frames,
             max_fetch_frames,
@@ -379,7 +367,7 @@ impl ElasticRenderer {
             sample_rate: shape.sample_rate,
             request_id: 1,
             revision: 0,
-            demand: None,
+            request: None,
             cursor: None,
             direction: None,
             pending_source_read: None,
@@ -424,27 +412,18 @@ impl ElasticRenderer {
         let Some(request_range) = self.next_source_window(current, direction)? else {
             return Ok(());
         };
-        source
-            .seek_source_frame(request_range.start())
-            .map_err(|_| ElasticRenderError::SourceReadFailed)?;
-        let demand = source
-            .request_source_audio(request_range, 0)?
-            .ok_or(ElasticRenderError::SourceUnavailable)?;
+        let request = source.request_source_range(request_range)?;
         let samples = self
             .window_buffers
             .pop()
             .ok_or(ElasticRenderError::SourceUnavailable)?;
-        self.pending_source_read = Some(PendingSourceRead {
-            demand,
-            samples,
-            range: request_range,
-        });
+        self.pending_source_read = Some(PendingSourceRead { samples, request });
         Ok(())
     }
 
     fn stage_ready_window(
         &mut self,
-        range: SourceFrameRange,
+        range: SourceRange,
         samples: PcmBuf,
         direction: PlaybackDirection,
     ) -> Result<(), ElasticRenderError> {

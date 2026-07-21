@@ -68,7 +68,7 @@ fn make_track_from_resource(
         .fade_duration(1.0)
         .fade_curve(FadeCurve::SquareRoot)
         .build();
-    PlayerTrack::new(Box::new(player_resource), params)
+    PlayerTrack::new(player_resource, params)
 }
 
 fn track_binding() -> TrackBinding {

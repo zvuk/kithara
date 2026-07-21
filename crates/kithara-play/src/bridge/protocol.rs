@@ -15,7 +15,7 @@ pub enum PlayerCmd {
     LoadTrack {
         /// Immutable session-grid binding for synchronized rendering.
         binding: Option<TrackBinding>,
-        resource: Box<PlayerResource>,
+        resource: PlayerResource,
         item_id: Option<Arc<str>>,
     },
     /// Unload a track by its source identifier.

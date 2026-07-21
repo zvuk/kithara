@@ -1,5 +1,4 @@
 mod access;
-mod blueprint;
 mod build;
 mod config;
 #[cfg(not(target_arch = "wasm32"))]
@@ -8,7 +7,6 @@ mod reader;
 mod resampler;
 mod source;
 
-pub use blueprint::ResourceBlueprint;
 pub use config::{ResourceConfig, default_resource_decoder_config};
 pub use reader::Resource;
 pub use resampler::PlaybackResamplerBackend;

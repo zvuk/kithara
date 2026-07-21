@@ -264,7 +264,7 @@ fn file_source_phase_during_seek(
     let seek = coord.seek_control();
     let source = make_source(res, coord, bus);
 
-    let _ = seek.begin(Duration::from_secs(0));
+    let _ = seek.begin(Duration::from_secs(0).into());
 
     assert_eq!(source.phase_at(range), expected);
 }
@@ -297,7 +297,7 @@ fn file_source_wait_range_returns_interrupted_while_flushing() {
     let seek = coord.seek_control();
     let mut source = make_source(res, coord, bus);
 
-    let _ = seek.begin(Duration::from_secs(0));
+    let _ = seek.begin(Duration::from_secs(0).into());
 
     let result = Source::wait_range(&mut source, 50..60, Some(Duration::from_secs(1)));
     assert_eq!(result.unwrap(), WaitOutcome::Interrupted);

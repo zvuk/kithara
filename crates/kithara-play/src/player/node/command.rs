@@ -193,7 +193,7 @@ impl PlayerNodeProcessor {
 
     fn load_track(
         &mut self,
-        resource: Box<PlayerResource>,
+        resource: PlayerResource,
         item_id: Option<Arc<str>>,
         binding: Option<TrackBinding>,
     ) {

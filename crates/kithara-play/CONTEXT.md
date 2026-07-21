@@ -278,15 +278,14 @@ prepared rate and fails closed against the new session context until it is
 re-prepared. Unbound tracks update through the ordinary route-change path.
 
 The playlist carries an optional immutable `TrackBinding` beside its resource.
-For a bound stream-backed item, `ResourceBlueprint` opens an independent reader
-and prepares its source-audio lane and elastic renderer off the audio callback.
-The prepared renderer is transferred to the active `PlayerTrack`. A blueprint is
-a passive recipe: every opened `Resource` owns a separate cancellation child,
-and dropping the recipe cannot cancel an opened reader. Internal preparation
-also opens with an isolated event bus, so its decoder seeks and lifecycle events
-cannot enter the application-facing resource event scope. Custom readers have
-no reconstruction contract: unbound custom readers retain the compatibility
-path, while bound insertion returns `BindingSourceNotReopenable`.
+For a bound item, `PlayerImpl` transfers the original `Resource` into off-callback
+elastic preparation. `PreparingElasticRenderer` polls bounded ranges directly
+from that resource and can become `PreparedElasticRenderer` only through the
+ready outcome. The same resource and prepared renderer then move together into
+the queued entry and, on activation, the `PlayerResource::Bound` variant. No
+reopen recipe, second decoder, or isolated event scope exists. Custom readers
+either implement the canonical bounded-read capability or fail with its typed
+unsupported error.
 
 `PlayerImpl::insert_with_binding` owns this asynchronous preparation. Success
 means the queued item already has a fully primed renderer stamped with one
@@ -315,24 +314,25 @@ either mutation.
 For each render range it derives the desired source path from `TrackBinding` and
 the shared `RenderContext`, then submits an integer source/output span to a
 pitch-preserving backend. The backend declares its rate envelope and
-deterministic latency, is primed before activation, and reads immutable bounded
-source windows from `kithara-audio`'s existing `SourceAudioReader`. Decoder position, legacy
-pitch bend, and the processed-audio compatibility ring are not parallel phase
-authorities for a bound item.
+deterministic latency, is primed before activation, and reads typed bounded
+source windows from the canonical `Resource`/`Audio` seek epoch. Decoder
+position and legacy pitch bend are not parallel phase authorities for a bound
+item.
 
-The prepared renderer retains one independently seekable `Resource` lane for
-continuous source windows. It uses the shared `AudioWorker` and bounded
-`SourceAudioReader` contract owned by `kithara-audio`; `kithara-play` adds no
-source thread, port protocol, allocator, or player infrastructure. The renderer
-advances that lane through nonblocking seek, demand, and cache-read steps and
-rotates a fixed preallocated `PcmBuf` bank. Polling and deadline failure never
-allocate, block, or return a buffer to the pool on the audio callback.
+The bound `PlayerResource` owns one `Resource` and one prepared renderer, while
+the linear variant owns one `Resource` and its pooled planar scratch. These
+storage modes cannot coexist. Bound reads use the shared `AudioWorker`, PCM ring,
+seek epoch, trash ring, and existing `PcmPool` owned by `kithara-audio`;
+`kithara-play` adds no source thread, cache, port protocol, allocator, or player
+infrastructure. The renderer rotates a fixed preallocated `PcmBuf` bank.
+Polling and deadline failure never allocate, block, or return a buffer to the
+pool on the audio callback.
 
 Bound elastic rendering supports native forward playback and reverse playback
 for files and single-variant HLS. Activation requires a session-created node
 and its shared `RenderContext`; browser WASM returns a typed backend capability
-error. Every source-audio request remains one bounded ascending
-`SourceFrameRange`. A reverse renderer primes history and two successor windows
+error. Every source request remains one bounded ascending `SourceRange`. A
+reverse renderer primes history and two successor windows
 before publication, consumes each window toward lower frames, and replenishes
 the same fixed-depth inline FIFO with earlier ascending ranges. A ready
 successor never replaces the active PCM window before the render cursor crosses

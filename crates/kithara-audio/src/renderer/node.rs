@@ -247,12 +247,7 @@ impl Node for DecoderNode {
     fn tick(&mut self) -> TickResult {
         self.sync_seek_epoch();
 
-        if !self.source.source_audio_ready() {
-            return TickResult::Backpressured;
-        }
-
-        let processed_output_required = self.source.processed_output_required();
-        if processed_output_required && !self.outlet.flush() {
+        if !self.outlet.flush() {
             return TickResult::Backpressured;
         }
 
@@ -265,12 +260,8 @@ impl Node for DecoderNode {
             TrackStep::Produced(fetch) => {
                 self.record_load(start.elapsed(), &fetch);
                 self.runtime.eof_sent = false;
-                if processed_output_required {
-                    let _ = self.outlet.try_push(fetch);
-                    self.mark_preload_progress();
-                } else {
-                    self.retire_fetch(fetch);
-                }
+                let _ = self.outlet.try_push(fetch);
+                self.mark_preload_progress();
                 TickResult::Progress
             }
 
@@ -285,15 +276,6 @@ impl Node for DecoderNode {
             },
 
             TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
-
-            TrackStep::Eof if !processed_output_required => {
-                let epoch = self.source.decode_epoch();
-                if self.source.finish_source_audio_eof(epoch) {
-                    self.complete_preload();
-                    self.runtime.eof_sent = true;
-                }
-                TickResult::Progress
-            }
 
             TrackStep::Eof => {
                 let epoch = self.source.decode_epoch();
@@ -310,29 +292,20 @@ impl Node for DecoderNode {
 
             TrackStep::Failed => {
                 let epoch = self.source.decode_epoch();
-                if !processed_output_required {
-                    if self.source.finish_source_audio_failed(epoch) {
-                        self.complete_preload();
-                        TickResult::Done
-                    } else {
+                let marker = Fetch::failure(epoch);
+                if let Ok(()) = self.outlet.try_push(marker) {
+                    self.complete_preload();
+                    if self.outlet.has_pending() {
                         TickResult::Progress
+                    } else {
+                        TickResult::Done
                     }
                 } else {
-                    let marker = Fetch::failure(epoch);
-                    if let Ok(()) = self.outlet.try_push(marker) {
-                        self.complete_preload();
-                        if self.outlet.has_pending() {
-                            TickResult::Progress
-                        } else {
-                            TickResult::Done
-                        }
-                    } else {
-                        debug_assert!(
-                            false,
-                            "Failed marker rejected - overflow invariant violated"
-                        );
-                        TickResult::Waiting
-                    }
+                    debug_assert!(
+                        false,
+                        "Failed marker rejected - overflow invariant violated"
+                    );
+                    TickResult::Waiting
                 }
             }
         };
@@ -601,7 +574,7 @@ mod tests {
         // Consumer already requested the next seek: the seek epoch is now 1,
         // ahead of the decode epoch (0) the pending EOF belongs to.
         let seek_state = SeekState::new();
-        let live_epoch = seek_state.begin(Duration::from_secs(1));
+        let live_epoch = seek_state.begin(Duration::from_secs(1).into());
         assert_eq!(live_epoch, 1, "begin bumps the seek epoch to 1");
         let seek_obs = Arc::new(seek_state) as Arc<dyn SeekObserve>;
 
@@ -719,7 +692,7 @@ mod tests {
         assert!(node.runtime.preloaded);
         assert!(gate.is_ready(), "first chunk opens the gate");
 
-        let epoch = SeekControl::begin(&*seek_state, Duration::from_secs(1));
+        let epoch = SeekControl::begin(&*seek_state, Duration::from_secs(1).into());
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(!node.runtime.preloaded, "seek resets the preload runtime");
@@ -764,7 +737,7 @@ mod tests {
             Arc::new(PreloadGate::default()),
             Arc::clone(&seek_state) as Arc<dyn SeekObserve>,
         );
-        SeekControl::begin(&*seek_state, Duration::from_secs(1));
+        SeekControl::begin(&*seek_state, Duration::from_secs(1).into());
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(

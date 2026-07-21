@@ -5,7 +5,10 @@ use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
 
 use super::{ChunkOutcome, ReadOutcome, SeekOutcome};
-use crate::{ServiceClass, renderer::PreloadGate};
+use crate::{
+    ServiceClass, SourceRange, SourceRangeError, SourceRangeReadOutcome, SourceRangeRequest,
+    renderer::PreloadGate,
+};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -77,6 +80,25 @@ pub trait PcmRead {
     /// or chunk-less readers may report `0`.
     fn decoded_frontier(&self) -> Duration {
         Duration::from_secs(0)
+    }
+
+    /// Poll a previously requested bounded range from the canonical PCM ring.
+    ///
+    /// The destination is interleaved and must hold exactly
+    /// `request.range().len() * spec().channels` samples. Implementations that
+    /// do not expose decoded source coordinates return
+    /// [`SourceRangeError::Unsupported`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed range error for stale requests, shape mismatches,
+    /// discontinuities, or terminal decode failure.
+    fn read_source_range(
+        &mut self,
+        _request: SourceRangeRequest,
+        _output: &mut [f32],
+    ) -> Result<SourceRangeReadOutcome, SourceRangeError> {
+        Err(SourceRangeError::Unsupported)
     }
 }
 
@@ -177,6 +199,22 @@ pub trait PcmControl {
     /// Maps track playback state to worker priority: `Audible` tracks
     /// are decoded first, then `Warm`, then `Idle`.
     fn set_service_class(&self, _class: ServiceClass) {}
+
+    /// Starts a bounded read on the canonical decoded source axis.
+    ///
+    /// The request owns the seek epoch created for the range. Starting another
+    /// seek or range invalidates it. Readers without this capability return
+    /// [`SourceRangeError::Unsupported`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed range or decode error when the range cannot be started.
+    fn request_source_range(
+        &mut self,
+        _range: SourceRange,
+    ) -> Result<SourceRangeRequest, SourceRangeError> {
+        Err(SourceRangeError::Unsupported)
+    }
 }
 
 /// Primary PCM interface for reading and controlling decoded audio.
@@ -190,3 +228,108 @@ pub trait PcmControl {
 pub trait PcmReader: PcmRead + PcmSession + PcmControl + MaybeSend {}
 
 impl<T> PcmReader for T where T: PcmRead + PcmSession + PcmControl + MaybeSend {}
+
+impl<T> PcmRead for Box<T>
+where
+    T: PcmReader + ?Sized,
+{
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        (**self).read(buf)
+    }
+
+    fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        (**self).read_planar(output)
+    }
+
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        (**self).next_chunk()
+    }
+
+    fn spec(&self) -> PcmSpec {
+        (**self).spec()
+    }
+
+    fn position(&self) -> Duration {
+        (**self).position()
+    }
+
+    fn decoded_frontier(&self) -> Duration {
+        (**self).decoded_frontier()
+    }
+
+    fn read_source_range(
+        &mut self,
+        request: SourceRangeRequest,
+        output: &mut [f32],
+    ) -> Result<SourceRangeReadOutcome, SourceRangeError> {
+        (**self).read_source_range(request, output)
+    }
+}
+
+impl<T> PcmSession for Box<T>
+where
+    T: PcmReader + ?Sized,
+{
+    fn metadata(&self) -> &TrackMetadata {
+        (**self).metadata()
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        (**self).duration()
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        (**self).event_bus()
+    }
+
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        (**self).abr_handle()
+    }
+
+    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
+        (**self).preload_gate()
+    }
+
+    fn preload_epoch(&self) -> u64 {
+        (**self).preload_epoch()
+    }
+}
+
+impl<T> PcmControl for Box<T>
+where
+    T: PcmReader + ?Sized,
+{
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        (**self).seek(position)
+    }
+
+    fn preload(&mut self) -> Result<(), DecodeError> {
+        (**self).preload()
+    }
+
+    fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
+        (**self).set_host_sample_rate(sample_rate);
+    }
+
+    fn set_playback_rate(&self, rate: f32) {
+        (**self).set_playback_rate(rate);
+    }
+
+    fn set_transport_bend(&self, bend: f32) {
+        (**self).set_transport_bend(bend);
+    }
+
+    fn set_service_class(&self, class: ServiceClass) {
+        (**self).set_service_class(class);
+    }
+
+    fn request_source_range(
+        &mut self,
+        range: SourceRange,
+    ) -> Result<SourceRangeRequest, SourceRangeError> {
+        (**self).request_source_range(range)
+    }
+}

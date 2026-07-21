@@ -1,14 +1,9 @@
 use std::ops::Range;
 
-use kithara_abr::AbrHandle;
-use kithara_audio::{
-    ServiceClass, SourceAudioDemand, SourceAudioError, SourceAudioReadOutcome, SourceFrameRange,
-};
 use kithara_bufpool::PcmPool;
-use kithara_decode::DecodeError;
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 
-use super::{PlayerResource, ReadOutcome};
+use super::{BoundResource, PlayerResource, PlayerResourceKind, ReadOutcome};
 use crate::{
     api::{SessionBeat, Tempo, TrackBinding},
     player::{
@@ -24,63 +19,65 @@ use crate::{
 
 pub(crate) struct PreparedElasticRenderer {
     renderer: ElasticRenderer,
-    source: Option<WasmSend<Resource>>,
+}
+
+pub(crate) struct PreparingElasticRenderer {
+    renderer: ElasticRenderer,
+}
+
+pub(crate) enum ElasticPreparationPoll {
+    Pending(PreparingElasticRenderer),
+    Ready(PreparedElasticRenderer),
+}
+
+impl PreparingElasticRenderer {
+    pub(crate) fn begin(
+        resource: &mut Resource,
+        binding: &TrackBinding,
+        anchor: SessionBeat,
+        tempo: Tempo,
+        revision: u64,
+        shape: StreamShape,
+        pool: &PcmPool,
+    ) -> Result<Self, ElasticPrepareError> {
+        let spec = resource.spec();
+        let mut renderer = ElasticRenderer::prepare(
+            spec.sample_rate,
+            usize::from(spec.channels),
+            binding.map().source_frame_count(),
+            shape,
+            pool,
+        )?;
+        renderer.begin_prefetch(resource, binding, anchor, tempo, revision)?;
+        Ok(Self { renderer })
+    }
+
+    pub(crate) fn poll(
+        mut self,
+        resource: &mut Resource,
+    ) -> Result<ElasticPreparationPoll, ElasticPrepareError> {
+        match self.renderer.poll_preparation(resource)? {
+            ElasticPreparationOutcome::Pending => Ok(ElasticPreparationPoll::Pending(self)),
+            ElasticPreparationOutcome::Ready => {
+                Ok(ElasticPreparationPoll::Ready(PreparedElasticRenderer {
+                    renderer: self.renderer,
+                }))
+            }
+        }
+    }
 }
 
 impl PreparedElasticRenderer {
-    pub(crate) fn abr_handle(&self) -> Option<AbrHandle> {
-        self.source
-            .as_ref()
-            .and_then(|source| source.get().abr_handle())
-    }
-
-    fn is_ready(&self) -> bool {
-        self.source.is_some()
-    }
-
-    fn preparing(renderer: ElasticRenderer) -> Self {
-        Self {
-            renderer,
-            source: None,
-        }
-    }
-
-    fn render(
-        &mut self,
-        binding: &TrackBinding,
-        context: &RenderContext,
-        range: Range<usize>,
-        output: &mut [&mut [f32]],
-    ) -> Result<ElasticRenderOutcome, ElasticRenderError> {
-        let Self { renderer, source } = self;
-        let source = source
-            .as_mut()
-            .ok_or(ElasticRenderError::SourceUnavailable)?;
-        renderer.render(source.get_mut(), binding, context, range, output)
-    }
-
-    fn renderer_mut(&mut self) -> &mut ElasticRenderer {
-        &mut self.renderer
-    }
-
-    pub(super) fn set_service_class(&mut self, class: ServiceClass) {
-        if let Some(source) = self.source.as_ref() {
-            source.get().set_service_class(class);
-        }
-    }
-
-    fn with_source(self, source: WasmSend<Resource>) -> Result<Self, ElasticPrepareError> {
-        if self.source.is_some() {
-            return Err(ElasticPrepareError::SourceUnavailable);
-        }
-        Ok(Self {
-            renderer: self.renderer,
-            source: Some(source),
-        })
-    }
-
     delegate::delegate! {
         to self.renderer {
+            fn render(
+                &mut self,
+                source: &mut Resource,
+                binding: &TrackBinding,
+                context: &RenderContext,
+                range: Range<usize>,
+                output: &mut [&mut [f32]],
+            ) -> Result<ElasticRenderOutcome, ElasticRenderError>;
             pub(super) fn decoded_frontier(&self) -> f64;
             pub(crate) fn validate_retarget(
                 &self,
@@ -100,73 +97,18 @@ impl PreparedElasticRenderer {
 }
 
 impl PlayerResource {
-    pub(crate) fn finish_elastic_preparation(
-        self,
-    ) -> Result<PreparedElasticRenderer, ElasticPrepareError> {
-        let Self {
-            resource,
-            elastic_renderer,
-            ..
-        } = self;
-        elastic_renderer
-            .ok_or(ElasticPrepareError::SourceUnavailable)?
-            .with_source(resource)
-    }
-
-    pub(crate) fn install_prepared_elastic(&mut self, prepared: PreparedElasticRenderer) {
-        self.elastic_renderer = Some(prepared);
-    }
-
-    pub(crate) fn new_elastic(resource: Resource, src: Arc<str>) -> Self {
+    pub(crate) fn new_bound(
+        resource: Resource,
+        src: Arc<str>,
+        renderer: PreparedElasticRenderer,
+    ) -> Self {
         Self {
             src,
-            resource: WasmSend::new(resource),
-            channel_buffers: None,
-            eof_seen: false,
-            failed: false,
-            write_len: 0,
-            write_pos: 0,
-            elastic_renderer: None,
+            kind: PlayerResourceKind::Bound(Box::new(BoundResource {
+                resource: WasmSend::new(resource),
+                renderer,
+            })),
         }
-    }
-
-    pub(crate) fn poll_elastic_preparation(
-        &mut self,
-    ) -> Result<ElasticPreparationOutcome, ElasticPrepareError> {
-        let Some(mut renderer) = self.elastic_renderer.take() else {
-            return Err(ElasticPrepareError::SourceUnavailable);
-        };
-        let outcome = renderer.renderer_mut().poll_preparation(self);
-        self.elastic_renderer = Some(renderer);
-        outcome
-    }
-
-    pub(crate) fn prepare_elastic(
-        &mut self,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
-        revision: u64,
-        shape: StreamShape,
-        pool: &PcmPool,
-    ) -> Result<(), ElasticPrepareError> {
-        let spec = self.resource.get().spec();
-        let mut renderer = ElasticRenderer::prepare(
-            spec.sample_rate,
-            usize::from(spec.channels),
-            binding.map().source_frame_count(),
-            shape,
-            pool,
-        )?;
-        if !self.activate_source_audio_authoritative()? {
-            return Err(ElasticPrepareError::SourceUnavailable);
-        }
-        if let Err(error) = renderer.begin_prefetch(self, binding, anchor, tempo, revision) {
-            let _ = self.deactivate_source_audio();
-            return Err(error);
-        }
-        self.elastic_renderer = Some(PreparedElasticRenderer::preparing(renderer));
-        Ok(())
     }
 
     pub(crate) fn read_elastic(
@@ -177,15 +119,13 @@ impl PlayerResource {
         output: &mut [&mut [f32]],
     ) -> ReadOutcome {
         let requested_frames = range.len();
-        let Some(mut renderer) = self.elastic_renderer.take() else {
+        let PlayerResourceKind::Bound(bound) = &mut self.kind else {
             return ReadOutcome::Failed;
         };
-        if !renderer.is_ready() {
-            self.elastic_renderer = Some(renderer);
-            return ReadOutcome::Failed;
-        }
-        let outcome = renderer.render(binding, context, range, output);
-        self.elastic_renderer = Some(renderer);
+        let outcome =
+            bound
+                .renderer
+                .render(bound.resource.get_mut(), binding, context, range, output);
         match outcome {
             Ok(ElasticRenderOutcome::Ready { frames }) if frames == requested_frames => {
                 ReadOutcome::Full { frames }
@@ -194,41 +134,39 @@ impl PlayerResource {
             Ok(ElasticRenderOutcome::Ready { .. }) | Err(_) => ReadOutcome::Failed,
         }
     }
-
-    delegate::delegate! {
-        to self.resource.get_mut() {
-            pub(crate) fn activate_source_audio_authoritative(
-                &mut self,
-            ) -> Result<bool, SourceAudioError>;
-            pub(crate) fn deactivate_source_audio(&mut self) -> Result<(), SourceAudioError>;
-            pub(crate) fn request_source_audio(
-                &mut self,
-                range: SourceFrameRange,
-                look_ahead_frames: u64,
-            ) -> Result<Option<SourceAudioDemand>, SourceAudioError>;
-            pub(crate) fn read_source_audio(
-                &mut self,
-                demand: &SourceAudioDemand,
-                range: SourceFrameRange,
-                output: &mut [f32],
-            ) -> Result<Option<SourceAudioReadOutcome>, SourceAudioError>;
-            pub(crate) fn seek_source_frame(&mut self, frame: u64) -> Result<(), DecodeError>;
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_bufpool::PcmPool;
     use kithara_platform::sync::Arc;
 
-    use super::PlayerResource;
-    use crate::test_support::empty_resource;
+    use super::{ElasticRenderer, PlayerResource, PlayerResourceKind, PreparedElasticRenderer};
+    use crate::{player::node::StreamShape, test_support::empty_resource};
 
     #[kithara_test_utils::kithara::test]
-    fn elastic_resource_does_not_allocate_standalone_scratch() {
-        let resource =
-            PlayerResource::new_elastic(empty_resource("elastic.wav"), Arc::from("elastic.wav"));
+    fn bound_resource_has_no_linear_scratch_state() {
+        let resource = empty_resource("elastic.wav");
+        let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
+        let renderer = ElasticRenderer::prepare(
+            sample_rate,
+            2,
+            44_100,
+            StreamShape {
+                sample_rate,
+                max_block_frames: NonZeroU32::new(512).expect("static block size"),
+            },
+            &PcmPool::default(),
+        )
+        .expect("elastic renderer");
+        let resource = PlayerResource::new_bound(
+            resource,
+            Arc::from("elastic.wav"),
+            PreparedElasticRenderer { renderer },
+        );
 
-        assert!(resource.channel_buffers.is_none());
+        assert!(matches!(resource.kind, PlayerResourceKind::Bound(_)));
     }
 }

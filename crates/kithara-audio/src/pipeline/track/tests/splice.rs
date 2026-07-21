@@ -447,7 +447,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         playback_resampler_backend: "none",
         recreate_on_host_rate_change: false,
     }
-    .into_parts(effects, shared_stream.seek_observe().epoch(), None);
+    .into_parts(effects, shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,
@@ -618,6 +618,7 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric() {
                                 seek: SeekContext {
                                     epoch,
                                     target: chunk.meta.end_timestamp,
+                                    ..Default::default()
                                 },
                                 emit_request: false,
                             }),

@@ -40,6 +40,7 @@ flowchart LR
 <tr><td><code>dl::DownloaderConfig</code></td><td>struct (bon-builder)</td><td>Pool sizing, retry, timeouts, cancel-token wiring</td></tr>
 <tr><td><code>ReaderEventSink</code> / <code>BoxedEventSink</code></td><td>trait / alias</td><td>Single-owner reader-side event sink (<code>ReaderChunkSignal</code>, <code>ReaderSeekSignal</code>); the decoder owns the <code>Box&lt;dyn ReaderEventSink&gt;</code> and invokes it lock-free via <code>&amp;mut</code></td></tr>
 <tr><td><code>ChunkPosition</code> / <code>PlayheadState</code></td><td>structs</td><td>Position bookkeeping exposed through the <code>PlayheadRead</code> / <code>PlayheadWrite</code> traits</td></tr>
+<tr><td><code>SeekState</code> / <code>SeekIntent</code></td><td>struct / enum</td><td>Canonical seek epoch, target, flush latches, and application-event ownership shared by protocol and audio layers. <code>Playback</code> owns a user-visible lifecycle; <code>Reposition</code> moves the same decoder without publishing one</td></tr>
 </table>
 
 ## Canonical Media Types
@@ -57,6 +58,21 @@ Defined here as the single source of truth and re-exported by other crates:
 3. The sync reader inside `Stream<T>` calls `Source::wait_range(range)` as a single non-blocking readiness probe on the worker path: it returns `Ready`/`Eof`/`Interrupted` immediately, and on a not-yet-available range returns `WaitBudgetExceeded`, which `try_read` maps to `Pending(NotReady)` without sleeping. The backoff between probes lives in the audio scheduler's `Waiting` park (10ms), so the worker decode path never blocks on a syscall. The consumer-thread `Seek` path primes metadata through `Stream::prime_seek_range`, which calls `wait_range(_, None)` and parks event-driven until the range resolves, a segment fails, or cancellation fires.
 4. `Source::read_at(offset, buf)` performs the actual sync copy once the range is present.
 5. Cancellation flows top-down through the cancel-token hierarchy described in `crates/kithara-play/CONTEXT.md`.
+
+## Seek Coordination
+
+`SeekState` is the single owner of seek epochs, target position, flush state,
+decoder and worker preemption latches, and the pending application-event epoch.
+`SeekControl::begin` commits those fields before releasing either latch, so a
+consumer that observes preemption also observes one canonical operation.
+
+`SeekIntent::Playback` is the public playback operation and owns the
+application-visible `SeekRequest` through completion or rejection.
+`SeekIntent::Reposition` is used by internal consumers such as bounded source
+reads and route recovery. It advances the same epoch, wakes the same worker,
+flushes the same decoder, and supersedes any older request, but it does not mint
+a playback seek lifecycle. The pending event epoch is therefore event-delivery
+authority, not a second seek generation or position source.
 
 ### End-of-stream contract
 

@@ -5,6 +5,40 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use bitflags::bitflags;
 use kithara_platform::{sync::Arc, time::Duration};
 
+/// Semantic intent for a timeline reposition.
+///
+/// Playback seeks are visible on the application event bus. Pipeline
+/// repositions use the same canonical seek state without publishing a user
+/// seek lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SeekIntent {
+    /// User-visible playback seek with a complete application event lifecycle.
+    Playback(Duration),
+    /// Internal pipeline reposition that does not publish playback seek events.
+    Reposition(Duration),
+}
+
+impl SeekIntent {
+    #[must_use]
+    pub const fn target(self) -> Duration {
+        match self {
+            Self::Playback(target) | Self::Reposition(target) => target,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_application_visible(self) -> bool {
+        matches!(self, Self::Playback(_))
+    }
+}
+
+impl From<Duration> for SeekIntent {
+    fn from(target: Duration) -> Self {
+        Self::Playback(target)
+    }
+}
+
 bitflags! {
     /// Boolean playback-state flags stored in a single `AtomicU8` on [`SeekState`].
     ///
@@ -36,10 +70,9 @@ pub trait SeekObserve: Send + Sync {
 
 /// Mutating seek coordination — `FLUSH_START` / `FLUSH_STOP` protocol.
 pub trait SeekControl: Send + Sync {
-    fn begin(&self, target: Duration) -> u64;
+    fn begin(&self, intent: SeekIntent) -> u64;
     fn clear_pending(&self, epoch: u64);
     fn complete(&self, epoch: u64);
-    fn mark_pending(&self, epoch: u64);
 }
 
 /// Activity flag — whether the audio FSM has this timeline as active decode target.
@@ -179,11 +212,19 @@ impl SeekControl for SeekState {
     /// # Panics
     /// Panics if `target` overflows `u64::MAX` nanoseconds (≈584 years —
     /// not reachable for any realistic seek target).
-    fn begin(&self, target: Duration) -> u64 {
+    fn begin(&self, intent: SeekIntent) -> u64 {
+        let target = intent.target();
         let nanos = u64::try_from(target.as_nanos())
             .expect("BUG: initiate_seek target.as_nanos() fits in u64 for any realistic Duration");
         let epoch = self.seek_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         self.seek_target_ns.store(nanos, Ordering::Release);
+        let pending_epoch = if intent.is_application_visible() {
+            epoch
+        } else {
+            Self::NO_PENDING_SEEK
+        };
+        self.pending_seek_epoch
+            .store(pending_epoch, Ordering::Release);
         // NOTE: do NOT pre-set `committed_position` to `target` here.
         self.flags
             .fetch_or(TimelineFlags::SEEK_PENDING.bits(), Ordering::Release);
@@ -224,10 +265,6 @@ impl SeekControl for SeekState {
             self.flags
                 .fetch_or(TimelineFlags::FLUSHING.bits(), Ordering::SeqCst);
         }
-    }
-
-    fn mark_pending(&self, epoch: u64) {
-        self.pending_seek_epoch.store(epoch, Ordering::Release);
     }
 }
 
@@ -273,9 +310,9 @@ mod tests {
     #[kithara::test]
     fn epoch_monotonicity() {
         let s = state();
-        let e1 = s.begin(Duration::from_secs(1));
-        let e2 = s.begin(Duration::from_secs(2));
-        let e3 = s.begin(Duration::from_secs(3));
+        let e1 = s.begin(Duration::from_secs(1).into());
+        let e2 = s.begin(Duration::from_secs(2).into());
+        let e3 = s.begin(Duration::from_secs(3).into());
         assert_eq!(e1, 1);
         assert_eq!(e2, 2);
         assert_eq!(e3, 3);
@@ -286,8 +323,8 @@ mod tests {
     #[kithara::test]
     fn stale_complete_leaves_newer_seek_intact() {
         let s = state();
-        let e1 = s.begin(Duration::from_secs(5));
-        let _e2 = s.begin(Duration::from_secs(10));
+        let e1 = s.begin(Duration::from_secs(5).into());
+        let _e2 = s.begin(Duration::from_secs(10).into());
         s.complete(e1);
         assert!(
             s.is_flushing(),
@@ -300,7 +337,7 @@ mod tests {
     #[kithara::test]
     fn latch_one_shot() {
         let s = state();
-        s.begin(Duration::from_secs(3));
+        s.begin(Duration::from_secs(3).into());
         assert!(s.take_preempt(), "first take must be true");
         assert!(!s.take_preempt(), "second take must be false");
         assert!(!s.take_preempt(), "subsequent takes must be false");
@@ -312,7 +349,7 @@ mod tests {
         assert!(!s.is_flushing());
         assert!(s.target().is_none());
 
-        let epoch = s.begin(Duration::from_secs(10));
+        let epoch = s.begin(Duration::from_secs(10).into());
         assert_eq!(epoch, 1);
         assert!(s.is_flushing());
         assert_eq!(s.target(), Some(Duration::from_secs(10)));
@@ -322,7 +359,7 @@ mod tests {
     #[kithara::test]
     fn complete_seek_clears_flushing() {
         let s = state();
-        let epoch = s.begin(Duration::from_secs(5));
+        let epoch = s.begin(Duration::from_secs(5).into());
         s.complete(epoch);
         assert!(!s.is_flushing());
         assert_eq!(s.target(), Some(Duration::from_secs(5)));
@@ -331,8 +368,8 @@ mod tests {
     #[kithara::test]
     fn complete_seek_ignores_stale_epoch() {
         let s = state();
-        let epoch1 = s.begin(Duration::from_secs(5));
-        let epoch2 = s.begin(Duration::from_secs(10));
+        let epoch1 = s.begin(Duration::from_secs(5).into());
+        let epoch2 = s.begin(Duration::from_secs(10).into());
         s.complete(epoch1);
         assert!(s.is_flushing());
         assert_eq!(s.target(), Some(Duration::from_secs(10)));
@@ -343,9 +380,9 @@ mod tests {
     #[kithara::test]
     fn seek_epoch_monotonically_increases() {
         let s = state();
-        let e1 = s.begin(Duration::from_secs(1));
-        let e2 = s.begin(Duration::from_secs(2));
-        let e3 = s.begin(Duration::from_secs(3));
+        let e1 = s.begin(Duration::from_secs(1).into());
+        let e2 = s.begin(Duration::from_secs(2).into());
+        let e3 = s.begin(Duration::from_secs(3).into());
         assert_eq!(e1, 1);
         assert_eq!(e2, 2);
         assert_eq!(e3, 3);
@@ -355,8 +392,8 @@ mod tests {
     #[kithara::test]
     fn complete_seek_does_not_clobber_concurrent_target() {
         let s = state();
-        let epoch1 = s.begin(Duration::from_secs(5));
-        let _epoch2 = s.begin(Duration::from_secs(15));
+        let epoch1 = s.begin(Duration::from_secs(5).into());
+        let _epoch2 = s.begin(Duration::from_secs(15).into());
         s.complete(epoch1);
         assert!(s.is_flushing());
         assert_eq!(s.target(), Some(Duration::from_secs(15)));
@@ -366,7 +403,7 @@ mod tests {
     fn initiate_seek_is_visible_across_arc_clones() {
         let s = Arc::new(state());
         let clone = Arc::clone(&s);
-        let _ = s.begin(Duration::from_secs(7));
+        let _ = s.begin(Duration::from_secs(7).into());
         assert!(clone.is_flushing());
         assert_eq!(clone.target(), Some(Duration::from_secs(7)));
     }
@@ -375,15 +412,30 @@ mod tests {
     fn initiate_seek_sets_seek_pending() {
         let s = state();
         assert!(!s.is_pending());
-        let _epoch = s.begin(Duration::from_secs(5));
+        let epoch = s.begin(Duration::from_secs(5).into());
+        assert!(s.is_pending());
+        assert_eq!(s.pending_epoch(), Some(epoch));
+    }
+
+    #[kithara::test]
+    fn reposition_supersedes_application_event_delivery() {
+        let s = state();
+        let playback_epoch = s.begin(Duration::from_secs(5).into());
+        assert_eq!(s.pending_epoch(), Some(playback_epoch));
+
+        let reposition_epoch = s.begin(SeekIntent::Reposition(Duration::from_secs(7)));
+
+        assert_eq!(reposition_epoch, playback_epoch + 1);
+        assert_eq!(s.pending_epoch(), None);
+        assert_eq!(s.target(), Some(Duration::from_secs(7)));
         assert!(s.is_pending());
     }
 
     #[kithara::test]
     fn clear_seek_pending_only_clears_matching_epoch() {
         let s = state();
-        let epoch1 = s.begin(Duration::from_secs(5));
-        let epoch2 = s.begin(Duration::from_secs(10));
+        let epoch1 = s.begin(Duration::from_secs(5).into());
+        let epoch2 = s.begin(Duration::from_secs(10).into());
         s.clear_pending(epoch1);
         assert!(s.is_pending());
         s.clear_pending(epoch2);
@@ -393,17 +445,17 @@ mod tests {
     #[kithara::test]
     fn new_initiate_seek_resets_seek_pending() {
         let s = state();
-        let epoch = s.begin(Duration::from_secs(5));
+        let epoch = s.begin(Duration::from_secs(5).into());
         s.clear_pending(epoch);
         assert!(!s.is_pending());
-        let _epoch2 = s.begin(Duration::from_secs(10));
+        let _epoch2 = s.begin(Duration::from_secs(10).into());
         assert!(s.is_pending());
     }
 
     #[kithara::test]
     fn complete_seek_does_not_clear_seek_pending() {
         let s = state();
-        let epoch = s.begin(Duration::from_secs(5));
+        let epoch = s.begin(Duration::from_secs(5).into());
         s.complete(epoch);
         assert!(!s.is_flushing());
         assert!(s.is_pending());
@@ -413,7 +465,7 @@ mod tests {
     fn is_seek_pending_visible_across_arc_clones() {
         let s = Arc::new(state());
         let clone = Arc::clone(&s);
-        let _epoch = s.begin(Duration::from_secs(5));
+        let _epoch = s.begin(Duration::from_secs(5).into());
         assert!(clone.is_pending());
     }
 
@@ -425,7 +477,7 @@ mod tests {
             let want_seek_pending = mask & 2 != 0;
 
             if want_flushing || want_seek_pending {
-                let _ = s.begin(Duration::from_secs(1));
+                let _ = s.begin(Duration::from_secs(1).into());
                 if !want_flushing {
                     s.complete(s.epoch());
                 }
@@ -458,10 +510,10 @@ mod tests {
     #[kithara::test]
     fn complete_seek_double_check_re_raises_flushing_when_newer_seek_interleaves() {
         let s = state();
-        let epoch1 = s.begin(Duration::from_secs(1));
+        let epoch1 = s.begin(Duration::from_secs(1).into());
 
         s.remove_flags_raw(TimelineFlags::FLUSHING, Ordering::SeqCst);
-        let _epoch2 = s.begin(Duration::from_secs(2));
+        let _epoch2 = s.begin(Duration::from_secs(2).into());
         s.complete(epoch1);
 
         assert!(
@@ -491,7 +543,7 @@ mod tests {
         let b = thread::spawn(move || {
             barrier_b.wait();
             for _ in 0..ITER {
-                let epoch = s_b.begin(Duration::from_millis(1));
+                let epoch = s_b.begin(Duration::from_millis(1).into());
                 s_b.clear_pending(epoch);
                 s_b.complete(epoch);
             }
@@ -564,7 +616,7 @@ mod tests {
                 let want_seek_pending = mask & 2 != 0;
 
                 if want_flushing || want_seek_pending {
-                    let _ = s.begin(Duration::from_secs(1));
+                    let _ = s.begin(Duration::from_secs(1).into());
                     if !want_flushing {
                         s.complete(s.epoch());
                     }
@@ -598,7 +650,7 @@ mod tests {
     fn initiate_seek_does_not_touch_playing() {
         let s = state();
         s.set_playing(true);
-        let epoch = s.begin(Duration::from_secs(5));
+        let epoch = s.begin(Duration::from_secs(5).into());
         assert!(s.is_playing(), "PLAYING must not be affected by seek");
         s.complete(epoch);
         assert!(s.is_playing(), "PLAYING must survive complete_seek");

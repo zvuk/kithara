@@ -41,7 +41,7 @@ flowchart TB
 - **Downloader (tokio)**: lives in `kithara-stream::dl`. It owns the HTTP pool and writes bytes directly into the `StorageResource` the `DecoderNode` reads from. The downloader is not spawned by `kithara-audio`.
 - **Ring**: a lock-free `ringbuf::HeapRb<PcmChunk>` carries processed PCM from the worker to the consumer; backpressure is enforced by the ring's capacity and an `Outlet` overflow slot.
 - **Ring wake**: the producer push and the consumer park form a lock-free wait protocol guarded by a `SeqCst` fence pair (a Dekker StoreLoad barrier) so a just-parked consumer is never missed.
-- **Trash ring (spent-chunk return)**: the consumer (`Audio`) runs on the caller's real-time audio thread, so it must never `free`. Returning a `PcmChunk`'s pooled buffer to `kithara-bufpool` can deallocate (shard full, or trim), so the consumer never drops a consumed chunk: it pushes every spent chunk back through a second lock-free ring, and `Node::recycle` drops them on the worker thread on its next tick. The checked worker produce core follows the same rule: `DecoderNode` retains seek-invalidated overflow until `Node::recycle`, while `DecodeCore` retains discarded source-audio input until `flush_deferred`. The ring is sized `pcm_buffer_chunks + 2` — enough to absorb a seek that drains the whole forward ring at once — so the real-time push is infallible and no buffer is ever freed on the audio thread.
+- **Trash ring (spent-chunk return)**: the consumer (`Audio`) runs on the caller's real-time audio thread, so it must never `free`. Returning a `PcmChunk`'s pooled buffer to `kithara-bufpool` can deallocate (shard full, or trim), so the consumer never drops a consumed chunk: it pushes every spent chunk back through a second lock-free ring, and `Node::recycle` drops them on the worker thread on its next tick. The checked worker produce core follows the same rule: `DecoderNode` retains seek-invalidated overflow until `Node::recycle`, while `DecodeCore` retains seek-invalidated gapless chunks until `flush_reader_signals`. The ring is sized `pcm_buffer_chunks + 2` — enough to absorb a seek that drains the whole forward ring at once — so the real-time push is infallible and no buffer is ever freed on the audio thread.
 - **Preload gate (`PreloadGate`)**: the one-time startup signal that releases the async consumer's `Resource::preload().await`. The worker is a plain OS thread, not a tokio runtime worker, so it must never run a cross-thread tokio-task `wake()` (that schedules through tokio's inject queue — a lock + futex, real-time-unsafe). The gate is decoupled: the worker only does a lock-free `ready_epoch.store(epoch, Release)` plus `ready.store(true, Release)` via `signal_epoch(epoch)`; the async awaiter (`PreloadGate::wait_for_epoch`) polls with `Acquire` and re-arms its own runtime timer (`POLL_INTERVAL`) while the gate is closed, so the worker never drives the wakeup. `DecoderNode` opens the gate at every preload terminal site — the preload-chunk threshold, EOF, `Failed`, and `on_cancel` — using its producer runtime epoch, and `rearm()`s (re-closes) it in `sync_seek_epoch` so a post-seek wait blocks again until that epoch refills. A stale pre-seek signal must not release a post-seek waiter; a missed signal would stall the consumer before first audio, so all terminal arms must fire it with the epoch they actually produced.
 - **Events**: every layer publishes into a unified `EventBus` (`AudioEvent`, `HlsEvent`, `FileEvent`, ABR events).
 - **Epoch-based seek invalidation**: each seek bumps an `AtomicU64` epoch; stale chunks tagged with an older epoch are dropped before reaching the ring.
@@ -189,45 +189,30 @@ invalid, and mapping is available only between the first and last analysed
 markers; neither boundary is extrapolated. Meter is exposed only when
 consecutive downbeat spans agree.
 
-## Source Audio
+## Bounded Source Ranges
 
-`SourceAudio` is the transport-neutral signal after gapless normalization and
-fixed host-rate conversion, but before time stretch and custom playback
-effects. It is indexed by checked, half-open `SourceFrameRange` values derived
-from the post-normalization chunk metadata. Session beats, tempo, direction,
-bindings, and render context never cross this boundary.
+`SourceRange` indexes the transport-neutral signal after gapless normalization
+and fixed host-rate conversion, but before time stretch and custom playback
+effects. Session beats, tempo, direction, bindings, and render context never
+cross this boundary.
 
-Stream-backed readers may expose an opt-in `SourceAudioReader` sidecar. The
-decoder worker owns the source tap and a fixed bank of copy buffers; the
-resource side owns the bounded immutable cache and non-blocking range reader.
-The ordinary processed-audio ring remains unchanged. Custom readers do not
-fabricate source audio from their already-rendered output.
+`Audio` is the only owner of bounded decoded reads. It starts each range through
+the canonical `SeekState` transaction with `SeekIntent::Reposition`; a
+`SourceRangeRequest` carries that exact epoch, and a newer playback seek or
+range invalidates it. The reposition uses the normal seek, decoder, and worker
+path but owns no application-visible seek lifecycle. The decoder switches one
+resource between exclusive linear and bounded read modes, and both modes use
+the same decoder, worker, PCM ring, gapless metadata, trash ring, and `PcmPool`.
+There is no source sidecar worker, cache, port protocol, event bus, or second
+seek generation.
 
-Demand identity is separate from the normal seek and codec epochs. A demand
-token contains its lane, generation, and the decoder seek epoch it expects.
-Stale packets cannot complete a newer demand, while compatible ranges already
-in the cache remain reusable across demand changes and seeks. The tap copies a
-complete normalized decoder window whenever it intersects demand coverage;
-window identity therefore does not depend on request rounding. When windows
-overlap, reads retain the first cached samples for the common interval and use
-the newer window only for uncovered range. A reader activation owns one output
-format. A bound session track retains its prepared axis and fails closed after
-a host-format change until the track is re-prepared; it never guesses a
-conversion.
-
-Source buffer owners are allocated at connection time. If a real decoder emits
-a larger window than the warm size, the checked path parks that epoch-tagged
-chunk and the worker shell grows the fixed buffer bank before retrying it.
-Activation/demand, data, and retirement use separate bounded SPSC ports; cache
-polling and reads copy no ownership. In authoritative mode, demand gates decode
-and the ordinary processed-audio ring is no longer an output requirement.
-
-The reader owner polls its bounded data and terminal-status inputs before each
-nonblocking cache read. A demand carries a private connection identity so a
-reader rejects tokens from another lane without exposing a readiness primitive
-or another mutable state owner. Producer close is observed through the existing
-port lifecycle. Source-audio readiness therefore adds no blocking waiter,
-thread gate, timer, or runtime notification to the audio callback.
+The caller supplies a fixed interleaved destination and polls
+`read_source_range` without blocking. `Audio` copies exact chunk intersections,
+rejects format changes, gaps, malformed chunk shapes, request mismatches, and
+stale epochs with typed errors, and returns every consumed chunk through the
+existing trash ring before propagating an error. Natural EOF remains distinct
+from decoder failure. Readers without canonical decoded coordinates report the
+typed unsupported capability instead of fabricating a second signal path.
 
 ## Waveform
 

@@ -118,7 +118,7 @@ impl SeekEngine {
             ctx.seek.complete(epoch);
             return SeekTransition::AtEof { epoch };
         }
-        if request.emit_request {
+        if request.emit_request && request.seek.events.should_publish() {
             emit(
                 ctx.emit,
                 SeekLifecycleStage::SeekRequest,
@@ -255,12 +255,14 @@ impl SeekEngine {
     ) -> SeekTransition {
         ctx.decode.reset();
         self.record_resume_target(request.seek.epoch, request.seek.target);
-        emit(
-            ctx.emit,
-            SeekLifecycleStage::SeekApplied,
-            request.seek.epoch,
-            location(ctx.stream),
-        );
+        if request.seek.events.should_publish() {
+            emit(
+                ctx.emit,
+                SeekLifecycleStage::SeekApplied,
+                request.seek.epoch,
+                location(ctx.stream),
+            );
+        }
         SeekTransition::Applied {
             epoch: request.seek.epoch,
             resume: ResumeState {

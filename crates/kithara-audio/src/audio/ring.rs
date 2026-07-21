@@ -77,7 +77,7 @@ impl RingConsumer {
     }
 
     pub(super) fn fill(&mut self, cursor: &mut ChunkCursor, ctx: RecvCtx<'_>) -> bool {
-        let Some(chunk) = self.take_buffered().or_else(|| self.recv_valid_chunk(ctx)) else {
+        let Some(chunk) = self.take_available(ctx) else {
             return false;
         };
         cursor.begin_chunk(&chunk);
@@ -99,6 +99,11 @@ impl RingConsumer {
             None if self.phase == ConsumerPhase::AtEof => Lookahead::Eof,
             None => Lookahead::Pending,
         }
+    }
+
+    pub(super) fn take_available(&mut self, ctx: RecvCtx<'_>) -> Option<PcmChunk> {
+        self.take_buffered()
+            .map_or_else(|| self.recv_valid_chunk(ctx), Some)
     }
 
     pub(super) fn take_buffered(&mut self) -> Option<PcmChunk> {

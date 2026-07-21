@@ -43,6 +43,6 @@ pub use player::{
     PlayerConfig, PlayerImpl, PlayerNode, PlayerNodeProcessor, SelectTransition, StreamShape,
 };
 pub use resource::{
-    PlaybackResamplerBackend, Resource, ResourceBlueprint, ResourceConfig, ResourceSrc, SourceType,
+    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
     default_resource_decoder_config,
 };

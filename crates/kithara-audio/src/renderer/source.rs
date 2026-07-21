@@ -38,27 +38,6 @@ pub trait AudioWorkerSource: Send + 'static {
     /// Narrow seek-observe handle — epoch queries and decoder-node seek latch.
     fn seek_observe(&self) -> Arc<dyn SeekObserve>;
 
-    /// Flush a pending source-audio sidecar packet before another decode step.
-    /// Sources without the optional sidecar are always ready.
-    fn source_audio_ready(&mut self) -> bool {
-        true
-    }
-
-    /// Whether decoded output must also be forwarded to the processed-audio ring.
-    fn processed_output_required(&self) -> bool {
-        true
-    }
-
-    /// Publish natural end-of-source to an authoritative source-audio reader.
-    fn finish_source_audio_eof(&mut self, _decode_seek_epoch: u64) -> bool {
-        true
-    }
-
-    /// Publish terminal decode failure to an authoritative source-audio reader.
-    fn finish_source_audio_failed(&mut self, _decode_seek_epoch: u64) -> bool {
-        true
-    }
-
     /// Advance the track FSM by one step.
     ///
     /// Handles seek preemption, source readiness, decoding, and all

@@ -1581,7 +1581,7 @@ fn wait_range_flush_short_circuits_without_sleeping() {
         Arc::clone(&seek) as Arc<dyn SeekObserve>,
     );
 
-    let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
+    let _ = SeekControl::begin(&*seek, Duration::from_millis(10).into());
     let started = Instant::now();
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
     assert!(

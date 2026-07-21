@@ -60,7 +60,7 @@ pub struct TrackParams {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct PlayerTrack {
-    pub(super) resource: Box<PlayerResource>,
+    pub(super) resource: PlayerResource,
     pub(super) binding: Option<TrackBinding>,
     pub(super) fade: TrackFade,
     pub(super) item_id: Option<Arc<str>>,
@@ -105,7 +105,7 @@ impl PlayerTrack {
     /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
     /// `fade_in()` or `play()` is required to produce audio.
     #[must_use]
-    pub fn new(resource: Box<PlayerResource>, params: TrackParams) -> Self {
+    pub fn new(resource: PlayerResource, params: TrackParams) -> Self {
         let TrackParams {
             axis,
             item_id,
@@ -343,7 +343,7 @@ mod tests {
             .axis(NonZeroU32::new(44_100).expect("static sample rate"))
             .src(src)
             .build();
-        let mut track = PlayerTrack::new(Box::new(resource), params);
+        let mut track = PlayerTrack::new(resource, params);
         track.ended_at_eof = true;
 
         track.stop();

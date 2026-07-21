@@ -3,7 +3,7 @@
 use std::{fs, iter::from_fn, mem::size_of, num::NonZeroU32, path::Path};
 
 use kithara::{
-    audio::{BeatGrid, ReadOutcome, TrackBeat, analysis::TrackAnalysis},
+    audio::{BeatGrid, PcmReader, TrackBeat, analysis::TrackAnalysis},
     decode::PcmSpec,
     events::{AudioEvent, Event, EventBus, PlayerEvent},
     platform::{
@@ -11,8 +11,8 @@ use kithara::{
         time::{Duration, sleep},
     },
     play::{
-        PlayError, PlaybackDirection, Resource, ResourceBlueprint, ResourceConfig,
-        SelectTransition, SessionBeat, SessionError, SessionTransportSnapshot, Tempo, TrackBinding,
+        PlayError, PlaybackDirection, Resource, ResourceConfig, SelectTransition, SessionBeat,
+        SessionError, SessionTransportSnapshot, Tempo, TrackBinding,
     },
 };
 use kithara_integration_tests::{
@@ -1208,38 +1208,41 @@ async fn reverse_binding_rejects_a_source_without_range_capability() {
 }
 
 #[kithara::test(tokio, flash(false))]
-async fn resource_blueprint_opens_independent_preparation_readers(temp_dir: TestTempDir) {
+async fn bound_insert_reuses_an_already_opened_audio_reader(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder().build(),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
-    let spec = SignalSpec {
-        format: SignalFormat::Wav,
-        length: SignalSpecLength::Frames(BLOCK_FRAMES * 8),
-        channels: CHANNELS,
-        sample_rate: SAMPLE_RATE,
-        bit_rate: None,
-    };
-    let url = server.sine(&spec, 220.0).await;
-    let config = ResourceConfig::for_src(url.as_str())
-        .expect("valid fixture URL")
-        .store(disk_asset_store(temp_dir.path()))
-        .byte_pool(harness.player().byte_pool().clone())
-        .pcm_pool(harness.player().pcm_pool().clone())
-        .build();
-    let blueprint = ResourceBlueprint::new(harness.player().prepare_config(config));
-    let mut active = blueprint.open().await.expect("open active reader");
-    let mut prepared = blueprint.open().await.expect("open preparation reader");
-    active.preload().await.expect("preload active reader");
-    prepared
-        .preload()
-        .await
-        .expect("preload preparation reader");
+    harness
+        .player()
+        .ensure_engine_started()
+        .expect("offline engine starts");
+    harness
+        .player()
+        .ensure_slot()
+        .expect("offline player slot is allocated");
+    harness
+        .set_session_tempo(Tempo::new(120.0).expect("valid session tempo"))
+        .expect("session tempo accepted");
+    let _ = harness.render(1);
+    let anchor = harness
+        .session_transport()
+        .expect("initial transport commit")
+        .position();
 
-    drop(active);
-    let mut output = [0.0; BLOCK_FRAMES * CHANNELS as usize];
-    let read = prepared.read(&mut output).expect("read preparation reader");
-    assert!(matches!(read, ReadOutcome::Frames { .. }));
-    assert!(output.iter().any(|sample| sample.abs() > 1.0e-4));
+    let opened = bound_sine_resource(&harness, &server, &temp_dir, 220.0).await;
+    let src = Arc::clone(opened.src());
+    let reader: Box<dyn PcmReader> = opened.into();
+    let resource = Resource::from_reader(reader, Some(src));
+
+    harness
+        .player()
+        .insert_with_binding(resource, None, exact_binding(anchor, 120), None)
+        .await
+        .expect("bound preparation reuses the already opened audio reader");
+
+    assert_eq!(harness.player().item_count(), 1);
 }

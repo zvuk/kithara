@@ -229,11 +229,7 @@ fn load_playing_track(
 ) -> Arc<str> {
     let src = Arc::from(src);
     let resource = Resource::from_reader(EofReader::default(), None);
-    let resource = Box::new(PlayerResource::new(
-        resource,
-        Arc::clone(&src),
-        &PcmPool::default(),
-    ));
+    let resource = PlayerResource::new(resource, Arc::clone(&src), &PcmPool::default());
     assert!(
         control
             .cmd_tx

@@ -13,7 +13,7 @@ use super::{
 use crate::{
     api::{SessionTransportSnapshot, Tempo, TrackBinding},
     error::PlayError,
-    player::{node::StreamShape, track::PreparedElasticRenderer},
+    player::{node::StreamShape, track::ReleasedPlayerResource},
     resource::Resource,
 };
 
@@ -83,12 +83,11 @@ pub(crate) fn prepare_bound_load(
 }
 
 pub(crate) fn restore_prepared_binding(
-    bound: bool,
-    renderer: Option<PreparedElasticRenderer>,
+    released: ReleasedPlayerResource,
     stamp: Option<PreparedBindingStamp>,
-) -> Result<Option<PreparedBindingResource>, PlayError> {
-    match (bound, renderer, stamp) {
-        (false, None, None) => Ok(None),
+) -> Result<(Resource, Option<PreparedBindingResource>), PlayError> {
+    match (released, stamp) {
+        (ReleasedPlayerResource::Linear(resource), None) => Ok((resource, None)),
         _ => Err(PlayError::Internal(
             "browser load returned inconsistent binding state".into(),
         )),

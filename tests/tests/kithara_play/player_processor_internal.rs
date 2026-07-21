@@ -53,44 +53,29 @@ fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
     (processor, control)
 }
 
-fn create_mock_player_resource(src: &str) -> Box<PlayerResource> {
+fn create_mock_player_resource(src: &str) -> PlayerResource {
     create_mock_player_resource_with_duration(src, 60.0)
 }
 
-fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> Box<PlayerResource> {
+fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> PlayerResource {
     let spec = PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
     let reader = TestPcmReader::new(spec, duration_secs);
     let resource = Resource::from_reader(reader, None);
-    Box::new(PlayerResource::new(
-        resource,
-        Arc::from(src),
-        &PcmPool::default(),
-    ))
+    PlayerResource::new(resource, Arc::from(src), &PcmPool::default())
 }
 
-fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerResource> {
+fn create_duration_player_resource(src: &str, duration: Duration) -> PlayerResource {
     let (reader, _recorded) = SampleRateTrackingReader::with_duration(
         PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
         duration,
     );
     let resource = Resource::from_reader(reader, None);
-    Box::new(PlayerResource::new(
-        resource,
-        Arc::from(src),
-        &PcmPool::default(),
-    ))
+    PlayerResource::new(resource, Arc::from(src), &PcmPool::default())
 }
 
-fn create_tracking_player_resource(
-    src: &str,
-    seek_log: Arc<Mutex<Vec<u64>>>,
-) -> Box<PlayerResource> {
+fn create_tracking_player_resource(src: &str, seek_log: Arc<Mutex<Vec<u64>>>) -> PlayerResource {
     let resource = Resource::from_reader(SeekTrackingReader::new(seek_log), None);
-    Box::new(PlayerResource::new(
-        resource,
-        Arc::from(src),
-        &PcmPool::default(),
-    ))
+    PlayerResource::new(resource, Arc::from(src), &PcmPool::default())
 }
 
 fn test_binding() -> TrackBinding {
@@ -122,11 +107,8 @@ async fn load_track_propagates_host_sample_rate() {
     let (reader, recorded) =
         SampleRateTrackingReader::new(PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")));
     let resource = Resource::from_reader(reader, None);
-    let player_resource = Box::new(PlayerResource::new(
-        resource,
-        Arc::from("track.mp3"),
-        &PcmPool::default(),
-    ));
+    let player_resource =
+        PlayerResource::new(resource, Arc::from("track.mp3"), &PcmPool::default());
 
     let (inputs, mut control) = slot_channels(SharedEq::new(0));
     let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
@@ -215,11 +197,8 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
     let (reader, _recorded) =
         SampleRateTrackingReader::new(PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")));
     let resource = Resource::from_reader(reader, None);
-    let player_resource = Box::new(PlayerResource::new(
-        resource,
-        Arc::from("track.mp3"),
-        &PcmPool::default(),
-    ));
+    let player_resource =
+        PlayerResource::new(resource, Arc::from("track.mp3"), &PcmPool::default());
 
     let (mut processor, mut control) = make_processor();
 

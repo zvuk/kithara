@@ -26,9 +26,7 @@ use crate::{
         track::{TrackFailure, WaitingReason},
     },
     renderer::{apply_effects, reset_effects},
-    source_audio::{
-        SourceAudioCaptureOutcome, SourceAudioError, SourceAudioTap, SourceAudioTerminal,
-    },
+    source_range::{AtomicAudioReadMode, AudioReadMode},
     traits::AudioEffect,
 };
 
@@ -88,10 +86,10 @@ impl<T: StreamType> DecodeInit<T> {
         self,
         effects: Vec<Box<dyn AudioEffect>>,
         installed_at_seek_epoch: u64,
-        source_audio: Option<SourceAudioTap>,
     ) -> DecodeParts<T> {
         let gapless = self.build_gapless();
         let decoder_host_sample_rate = self.decoder_host_sample_rate();
+        let read_mode = Arc::new(AtomicAudioReadMode::default());
         let Self {
             decoder,
             decoder_factory,
@@ -113,7 +111,7 @@ impl<T: StreamType> DecodeInit<T> {
                 gapless_mode,
                 gapless,
                 effects,
-                source_audio,
+                read_mode,
             ),
             factory: decoder_factory,
             host_sample_rate,
@@ -131,10 +129,9 @@ pub(crate) struct DecodeCore {
     gapless: GaplessStage,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EofDrain,
-    source_audio: Option<SourceAudioTap>,
-    source_audio_error: Option<SourceAudioError>,
     pending_gapless: Option<(u64, PcmChunk)>,
     retired_chunk: Option<PcmChunk>,
+    read_mode: Arc<AtomicAudioReadMode>,
 }
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
@@ -169,7 +166,7 @@ impl DecodeCore {
         gapless_mode: GaplessMode,
         gapless: GaplessStage,
         effects: Vec<Box<dyn AudioEffect>>,
-        source_audio: Option<SourceAudioTap>,
+        read_mode: Arc<AtomicAudioReadMode>,
     ) -> Self {
         let drain = EofDrain::new(effects.len());
         Self {
@@ -178,10 +175,9 @@ impl DecodeCore {
             gapless,
             effects,
             drain,
-            source_audio,
-            source_audio_error: None,
             pending_gapless: None,
             retired_chunk: None,
+            read_mode,
         }
     }
 
@@ -191,6 +187,10 @@ impl DecodeCore {
 
     pub(crate) fn gapless_mode(&self) -> GaplessMode {
         self.gapless_mode
+    }
+
+    pub(crate) fn read_mode(&self) -> &Arc<AtomicAudioReadMode> {
+        &self.read_mode
     }
 
     pub(crate) fn reset(&mut self) {
@@ -224,61 +224,27 @@ impl DecodeCore {
         self.drain.track(chunk, playhead, emit);
     }
 
-    pub(crate) fn next_gapless(&mut self, decode_seek_epoch: u64) -> DecodeResult<GaplessStep> {
-        if let Some(error) = self.source_audio_error.take() {
-            return Err(source_audio_decode_error(&error));
-        }
+    pub(crate) fn next_gapless(&mut self, decode_seek_epoch: u64) -> GaplessStep {
         loop {
             let pending = match self.pending_gapless.take() {
                 Some((epoch, chunk)) if epoch == decode_seek_epoch => Some(chunk),
                 Some((_, chunk)) => {
                     self.retire_chunk(chunk);
-                    return Ok(GaplessStep::SourceProgress);
+                    return GaplessStep::SourceProgress;
                 }
                 None => None,
             };
             let Some(chunk) = pending.or_else(|| self.gapless.next()) else {
                 break;
             };
-            let source_audio_authoritative = self
-                .source_audio
-                .as_ref()
-                .is_some_and(SourceAudioTap::is_authoritative);
-            let capture = self.source_audio.as_mut().map_or_else(
-                || Ok(SourceAudioCaptureOutcome::Ignored),
-                |source_audio| {
-                    source_audio
-                        .capture(&chunk, decode_seek_epoch)
-                        .map_err(|error| source_audio_decode_error(&error))
-                },
-            );
-            let capture = match capture {
-                Ok(capture) => capture,
-                Err(error) => {
-                    self.retire_chunk(chunk);
-                    return Err(error);
-                }
-            };
-            if matches!(
-                capture,
-                SourceAudioCaptureOutcome::DemandComplete
-                    | SourceAudioCaptureOutcome::PreparationPending
-            ) {
-                self.pending_gapless = Some((decode_seek_epoch, chunk));
-                return Ok(GaplessStep::SourceProgress);
-            }
-            if source_audio_authoritative {
-                self.retire_chunk(chunk);
-                return Ok(GaplessStep::SourceProgress);
+            if self.read_mode.load() == AudioReadMode::Bounded {
+                return GaplessStep::Output(chunk);
             }
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
-                return Ok(GaplessStep::Output(output));
-            }
-            if capture == SourceAudioCaptureOutcome::Captured {
-                return Ok(GaplessStep::SourceProgress);
+                return GaplessStep::Output(output);
             }
         }
-        Ok(GaplessStep::Empty)
+        GaplessStep::Empty
     }
 
     pub(crate) fn next_drain(&mut self) -> Option<PcmChunk> {
@@ -371,48 +337,12 @@ impl DecodeCore {
 
     pub(crate) fn flush_reader_signals(&mut self) {
         drop(self.retired_chunk.take());
-        if self.source_audio_error.is_none()
-            && let Some(source_audio) = self.source_audio.as_mut()
-            && let Err(error) = source_audio.service()
-        {
-            self.source_audio_error = Some(error);
-        }
         self.session.decoder.flush_reader_signals();
     }
 
     fn retire_chunk(&mut self, chunk: PcmChunk) {
         debug_assert!(self.retired_chunk.is_none());
         self.retired_chunk = Some(chunk);
-    }
-
-    pub(crate) fn source_audio_ready(&mut self) -> bool {
-        self.source_audio_error.is_some()
-            || self
-                .source_audio
-                .as_mut()
-                .is_none_or(SourceAudioTap::can_step)
-    }
-
-    pub(crate) fn source_audio_authoritative(&self) -> bool {
-        self.source_audio
-            .as_ref()
-            .is_some_and(SourceAudioTap::is_authoritative)
-    }
-
-    pub(crate) fn finish_source_audio(
-        &mut self,
-        decode_seek_epoch: u64,
-        terminal: SourceAudioTerminal,
-    ) -> bool {
-        self.source_audio
-            .as_mut()
-            .is_none_or(|source_audio| source_audio.finish(decode_seek_epoch, terminal))
-    }
-}
-
-fn source_audio_decode_error(error: &SourceAudioError) -> DecodeError {
-    DecodeError::InvalidData {
-        detail: error.decode_detail(),
     }
 }
 
@@ -425,6 +355,3 @@ fn panic_message(payload: Box<dyn Any + Send>) -> String {
         ),
     }
 }
-
-#[cfg(test)]
-mod tests;

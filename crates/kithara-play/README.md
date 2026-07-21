@@ -43,8 +43,8 @@ to the single `decoder` field.
 - `TrackBinding` anchors one active track's analysed beat map to that session
   transport with an immutable direction.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
-- `ResourceBlueprint` is a passive stream-backed recipe for opening independent
-  readers with separate cancellation children.
+- `PlayerResource` owns exactly one linear or prepared-bound playback resource;
+  bound preparation transfers the original `Resource` without reopening it.
 - `PlayerNode` is the public standalone real-time audio graph node. Nodes owned
   by a `SessionState` additionally consume its shared render context.
 - `Equalizer` is the remaining mockable trait surface.

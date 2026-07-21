@@ -2,7 +2,7 @@
 
 use kithara::{
     audio::{
-        Audio, AudioConfig, PcmSession, ReadOutcome, SourceAudioReadOutcome, SourceFrameRange,
+        Audio, AudioConfig, PcmControl, PcmRead, ReadOutcome, SourceRange, SourceRangeReadOutcome,
     },
     bufpool::{BytePool, PcmPool},
     platform::time::{self, Duration},
@@ -30,39 +30,40 @@ fn audio_config() -> AudioConfig<MemStream> {
 }
 
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(20)))]
-async fn source_sidecar_matches_the_unity_audible_path_after_seek() {
-    let mut audio = Audio::<Stream<MemStream>>::new(audio_config())
+async fn canonical_source_range_matches_the_unity_linear_path() {
+    let mut linear = Audio::<Stream<MemStream>>::new(audio_config())
         .await
-        .expect("audio construction");
-    let mut source_audio = audio.take_source_audio().expect("stream source sidecar");
-    source_audio
-        .activate(audio.spec())
-        .expect("activate source capture");
-    audio.seek(Duration::ZERO).expect("restart decoder");
-    let range = SourceFrameRange::new(0, BLOCK_FRAMES as u64).expect("valid source range");
-    let demand = source_audio
-        .request(range, BLOCK_FRAMES as u64, audio.preload_epoch())
-        .expect("source demand");
+        .expect("linear audio construction");
+    let mut bounded = Audio::<Stream<MemStream>>::new(audio_config())
+        .await
+        .expect("bounded audio construction");
+    linear.preload().expect("linear preload");
+    bounded.preload().expect("bounded preload");
 
+    let end = u64::try_from(BLOCK_FRAMES).expect("block size fits source axis");
+    let range = SourceRange::try_from(0..end).expect("valid source range");
+    let request = bounded
+        .request_source_range(range)
+        .expect("canonical range request");
     let sample_count = BLOCK_FRAMES * usize::from(CHANNELS);
     let mut audible = vec![0.0; sample_count];
     let mut captured = vec![0.0; sample_count];
     let mut audible_ready = false;
     let mut source_ready = false;
+
     for _ in 0..1_000 {
-        source_audio.poll();
         if !audible_ready
             && let ReadOutcome::Frames { count, .. } =
-                audio.read(&mut audible).expect("read audible output")
+                linear.read(&mut audible).expect("read linear output")
         {
             audible_ready = count.get() == sample_count;
         }
         if !source_ready {
             source_ready = matches!(
-                source_audio
-                    .read_into(&demand, &mut captured)
-                    .expect("read captured source"),
-                SourceAudioReadOutcome::Ready {
+                bounded
+                    .read_source_range(request, &mut captured)
+                    .expect("read canonical source range"),
+                SourceRangeReadOutcome::Ready {
                     frames: BLOCK_FRAMES
                 }
             );
@@ -73,10 +74,7 @@ async fn source_sidecar_matches_the_unity_audible_path_after_seek() {
         time::sleep(Duration::from_millis(1)).await;
     }
 
-    assert!(audible_ready, "audible path did not produce a full block");
-    assert!(
-        source_ready,
-        "source sidecar did not produce the requested range"
-    );
+    assert!(audible_ready, "linear path did not produce a full block");
+    assert!(source_ready, "canonical range did not produce a full block");
     assert_eq!(captured, audible);
 }

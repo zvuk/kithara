@@ -2,7 +2,6 @@
 
 use kithara_platform::{
     CancelToken,
-    sync::Arc,
     time::{Duration, sleep},
     tokio::select,
 };
@@ -14,7 +13,7 @@ use super::super::{
 use crate::{
     api::{PlaybackDirection, SessionBeat, Tempo, TrackBinding},
     error::PlayError,
-    player::track::{ElasticPreparationOutcome, PlayerResource},
+    player::track::{ElasticPreparationPoll, PreparingElasticRenderer},
     resource::Resource,
 };
 
@@ -29,19 +28,19 @@ impl PlayerImpl {
 
     pub(in crate::player) async fn prepare_bound_resource(
         &self,
-        resource: &Resource,
+        resource: Resource,
         binding: &TrackBinding,
-    ) -> Result<PreparedBindingResource, PlayError> {
+    ) -> Result<(Resource, PreparedBindingResource), PlayError> {
         self.prepare_bound_resource_at(resource, binding, binding.session_anchor())
             .await
     }
 
     pub(in crate::player) async fn prepare_bound_resource_at(
         &self,
-        resource: &Resource,
+        mut resource: Resource,
         binding: &TrackBinding,
         anchor: SessionBeat,
-    ) -> Result<PreparedBindingResource, PlayError> {
+    ) -> Result<(Resource, PreparedBindingResource), PlayError> {
         self.ensure_engine_started()?;
         let cancel = self
             .core
@@ -62,66 +61,50 @@ impl PlayerImpl {
         {
             return Err(PlayError::ReverseSourceUnavailable);
         }
-        let blueprint = resource
-            .blueprint()
-            .ok_or(PlayError::BindingSourceNotReopenable)?;
-        let src = Arc::clone(resource.src());
-        let mut prepared_resource = select! {
-            biased;
-            () = cancel.cancelled() => Err(PlayError::BindingPreparationCancelled),
-            result = blueprint.open_isolated() => result.map_err(|error| PlayError::ItemFailed {
-                reason: error.to_string(),
-            }),
-        }?;
         select! {
             biased;
             () = cancel.cancelled() => Err(PlayError::BindingPreparationCancelled),
-            result = prepared_resource.preload() => result.map_err(|error| PlayError::ItemFailed {
+            result = resource.preload() => result.map_err(|error| PlayError::ItemFailed {
                 reason: error.to_string(),
             }),
         }?;
         ensure_preparation_active(&cancel)?;
-        prepared_resource.set_playback_rate(self.core.timestretch.speed());
-        prepared_resource.set_transport_bend(self.core.params.pitch_bend());
-        prepared_resource.set_host_sample_rate(stamp.shape.sample_rate);
-        let mut prepared = PlayerResource::new_elastic(prepared_resource, src);
-        prepared
-            .prepare_elastic(
-                binding,
-                anchor,
-                tempo,
-                stamp.transport_revision,
-                stamp.shape,
-                self.core.engine.pcm_pool(),
-            )
-            .map_err(|error| PlayError::ElasticPreparation {
-                reason: error.to_string(),
-            })?;
+        resource.set_playback_rate(self.core.timestretch.speed());
+        resource.set_transport_bend(self.core.params.pitch_bend());
+        resource.set_host_sample_rate(stamp.shape.sample_rate);
+        let mut preparation = PreparingElasticRenderer::begin(
+            &mut resource,
+            binding,
+            anchor,
+            tempo,
+            stamp.transport_revision,
+            stamp.shape,
+            self.core.engine.pcm_pool(),
+        )
+        .map_err(|error| PlayError::ElasticPreparation {
+            reason: error.to_string(),
+        })?;
 
-        loop {
-            match prepared.poll_elastic_preparation().map_err(|error| {
+        let renderer = loop {
+            match preparation.poll(&mut resource).map_err(|error| {
                 PlayError::ElasticPreparation {
                     reason: error.to_string(),
                 }
             })? {
-                ElasticPreparationOutcome::Ready => break,
-                ElasticPreparationOutcome::Pending => {
+                ElasticPreparationPoll::Ready(renderer) => break renderer,
+                ElasticPreparationPoll::Pending(next) => {
+                    preparation = next;
                     wait_for_preparation_poll(&cancel).await?;
                 }
             }
-        }
+        };
 
         let (_, current_stamp) = self.current_binding_preparation()?;
         if stamp != current_stamp {
             return Err(PlayError::BindingPreparationContextChanged);
         }
-        let renderer = prepared.finish_elastic_preparation().map_err(|error| {
-            PlayError::ElasticPreparation {
-                reason: error.to_string(),
-            }
-        })?;
 
-        Ok(PreparedBindingResource { stamp, renderer })
+        Ok((resource, PreparedBindingResource { stamp, renderer }))
     }
 }
 

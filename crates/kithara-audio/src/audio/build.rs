@@ -115,7 +115,6 @@ struct StreamSourceRegistration<'a, T: StreamType> {
     host_sample_rate: Arc<AtomicU32>,
     initial_media_info: Option<MediaInfo>,
     playback_resampler_backend: &'static str,
-    pcm_pool: PcmPool,
     pcm_buffer_chunks: usize,
     preload_chunks: NonZeroUsize,
     recreate_on_host_rate_change: bool,
@@ -131,8 +130,8 @@ struct RegisteredStreamSource {
     is_standalone_worker: bool,
     preload_gate: Arc<super::PreloadGate>,
     reader_wake: Arc<ThreadWake>,
+    read_mode: Arc<crate::source_range::AtomicAudioReadMode>,
     service_class: Arc<AtomicServiceClass>,
-    source_audio: crate::SourceAudioReader,
     track_id: super::TrackId,
     trash_tx: super::Outlet<PcmChunk>,
     worker: AudioWorkerHandle,
@@ -241,14 +240,13 @@ where
             host_sample_rate: Arc::clone(&host_sample_rate),
             initial_media_info: initial_media_info.clone(),
             playback_resampler_backend: deps.playback_resampler_backend(),
-            pcm_pool: pcm_pool.clone(),
             pcm_buffer_chunks,
             preload_chunks,
             recreate_on_host_rate_change: deps.recreates_on_host_rate_change(),
             runtime_handle,
             shared_stream,
             worker: config_worker,
-        })?;
+        });
         publish_initial_decoder_events(
             &bus,
             &deps,
@@ -288,9 +286,9 @@ where
                 playback_rate,
                 pitch_bend,
                 stretch,
+                read_mode: registered.read_mode,
                 service_class: registered.service_class,
             },
-            source_audio: Some(registered.source_audio),
             pcm_pool,
             spec: initial_spec,
             emit,
@@ -363,7 +361,7 @@ where
 
 fn register_stream_audio_source<T>(
     registration: StreamSourceRegistration<'_, T>,
-) -> Result<RegisteredStreamSource, DecodeError>
+) -> RegisteredStreamSource
 where
     T: StreamType,
 {
@@ -386,17 +384,6 @@ where
         },
         |worker| (worker, false),
     );
-    let source_capacity =
-        NonZeroUsize::new(registration.pcm_buffer_chunks).unwrap_or(NonZeroUsize::MIN);
-    let (source_audio, source_audio_tap) = crate::source_audio::connect_source_audio(
-        &registration.pcm_pool,
-        source_capacity,
-        NonZeroUsize::new(WARM_DECODE_FRAMES).unwrap_or(NonZeroUsize::MIN),
-        worker.clone(),
-    )
-    .map_err(|error| DecodeError::InvalidData {
-        detail: error.decode_detail(),
-    })?;
     let worker_wake: Arc<dyn WorkerWake> = Arc::new(WorkerWakeBridge(worker.clone()));
     let decode = DecodeInit {
         decoder: registration.decoder,
@@ -411,8 +398,8 @@ where
     .into_parts(
         registration.effects,
         registration.shared_stream.seek_observe().epoch(),
-        Some(source_audio_tap),
     );
+    let read_mode = Arc::clone(decode.core.read_mode());
     let parts = SourceParts::new(
         &registration.shared_stream,
         decode,
@@ -439,19 +426,19 @@ where
     });
     wake_stream.set_worker_wake(worker_wake);
 
-    Ok(RegisteredStreamSource {
+    RegisteredStreamSource {
         data_rx,
         epoch: registration.epoch,
         host_sample_rate: registration.host_sample_rate,
         is_standalone_worker,
         preload_gate,
         reader_wake,
+        read_mode,
         service_class,
-        source_audio,
         track_id,
         trash_tx,
         worker,
-    })
+    }
 }
 
 fn create_decoder_factory<T, B>(

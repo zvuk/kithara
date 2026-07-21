@@ -8,7 +8,7 @@ use tracing::warn;
 use crate::pipeline::{
     decode::DecoderSession,
     rebuild::{RecreateCause, RecreateNext, RecreateState},
-    seek::{SeekContext, SeekEngine, SeekRequest},
+    seek::{SeekContext, SeekEngine, SeekEvents, SeekRequest},
     stream::shared::SharedStream,
 };
 
@@ -132,7 +132,11 @@ impl ResumeCursor {
             cause: RecreateCause::RouteChange,
             media_info,
             next: RecreateNext::ApplySeek(SeekRequest {
-                seek: SeekContext { target, epoch },
+                seek: SeekContext {
+                    target,
+                    epoch,
+                    events: SeekEvents::Suppress,
+                },
                 emit_request: false,
             }),
             offset,

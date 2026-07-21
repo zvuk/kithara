@@ -41,10 +41,9 @@ pub(crate) fn tick<T: StreamType>(
             return DecodeAction::SeekInterrupted;
         }
         match core.next_gapless(epoch) {
-            Ok(GaplessStep::Output(chunk)) => return produced(chunk, epoch, &mut ctx),
-            Ok(GaplessStep::SourceProgress) => return DecodeAction::SourceProgress,
-            Ok(GaplessStep::Empty) => {}
-            Err(error) => return failed(core, &ctx, error),
+            GaplessStep::Output(chunk) => return produced(chunk, epoch, &mut ctx),
+            GaplessStep::SourceProgress => return DecodeAction::SourceProgress,
+            GaplessStep::Empty => {}
         }
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
@@ -82,10 +81,9 @@ pub(crate) fn tick<T: StreamType>(
             Ok(DecoderChunkOutcome::Eof) => {
                 core.set_tail_compensation();
                 match core.next_gapless(epoch) {
-                    Ok(GaplessStep::Output(chunk)) => return produced(chunk, epoch, &mut ctx),
-                    Ok(GaplessStep::SourceProgress) => return DecodeAction::SourceProgress,
-                    Ok(GaplessStep::Empty) => {}
-                    Err(error) => return failed(core, &ctx, error),
+                    GaplessStep::Output(chunk) => return produced(chunk, epoch, &mut ctx),
+                    GaplessStep::SourceProgress => return DecodeAction::SourceProgress,
+                    GaplessStep::Empty => {}
                 }
                 if let FormatDecision::Recreate(recreate) =
                     detect(ctx.stream, core.session(), ctx.seek_observe)
@@ -141,7 +139,7 @@ pub(crate) fn produced<T: StreamType>(
     if ctx
         .resume
         .as_deref()
-        .is_some_and(|resume| resume.seek.epoch == epoch)
+        .is_some_and(|resume| resume.seek.epoch == epoch && resume.seek.events.should_publish())
         && let Some(emit) = ctx.emit
     {
         emit.enqueue(

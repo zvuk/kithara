@@ -200,28 +200,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         Arc::clone(&self.seek_obs)
     }
 
-    fn source_audio_ready(&mut self) -> bool {
-        self.decode.source_audio_ready()
-    }
-
-    fn processed_output_required(&self) -> bool {
-        !self.decode.source_audio_authoritative()
-    }
-
-    fn finish_source_audio_eof(&mut self, decode_seek_epoch: u64) -> bool {
-        self.decode.finish_source_audio(
-            decode_seek_epoch,
-            crate::source_audio::SourceAudioTerminal::Eof,
-        )
-    }
-
-    fn finish_source_audio_failed(&mut self, decode_seek_epoch: u64) -> bool {
-        self.decode.finish_source_audio(
-            decode_seek_epoch,
-            crate::source_audio::SourceAudioTerminal::Failed,
-        )
-    }
-
     fn step_track(&mut self) -> TrackStep<PcmChunk> {
         track::dispatch(self)
     }

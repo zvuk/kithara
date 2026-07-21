@@ -67,7 +67,7 @@ impl LoadTransaction<'_> {
             Ok(PlayerCmd::LoadTrack {
                 binding: binding.clone(),
                 item_id: item_id.clone(),
-                resource: Box::new(resource),
+                resource,
             })
         });
         match result {
@@ -83,32 +83,17 @@ impl LoadTransaction<'_> {
                 let resource = player_resource.ok_or_else(|| {
                     PlayError::Internal("unsent load consumed its queue resource".into())
                 })?;
-                restore_queue_resource(
-                    &mut playlist,
-                    index,
-                    binding.is_some(),
-                    resource,
-                    prepared_stamp,
-                )?;
+                restore_queue_resource(&mut playlist, index, resource, prepared_stamp)?;
                 Err(error)
             }
             Err(DeferredPlayerCmdError::Rejected(rejected)) => {
                 let error = rejected.error;
-                let PlayerCmd::LoadTrack {
-                    binding, resource, ..
-                } = *rejected.command
-                else {
+                let PlayerCmd::LoadTrack { resource, .. } = *rejected.command else {
                     return Err(PlayError::Internal(
                         "load dispatch rejected a non-load command".into(),
                     ));
                 };
-                restore_queue_resource(
-                    &mut playlist,
-                    index,
-                    binding.is_some(),
-                    *resource,
-                    prepared_stamp,
-                )?;
+                restore_queue_resource(&mut playlist, index, resource, prepared_stamp)?;
                 Err(error)
             }
         }
@@ -118,13 +103,11 @@ impl LoadTransaction<'_> {
 fn restore_queue_resource(
     playlist: &mut Playlist,
     index: usize,
-    bound: bool,
     mut player_resource: PlayerResource,
     prepared_stamp: Option<PreparedBindingStamp>,
 ) -> Result<(), PlayError> {
     player_resource.set_service_class(ServiceClass::Idle);
-    let (resource, renderer) = player_resource.release();
-    let prepared = restore_prepared_binding(bound, renderer, prepared_stamp)?;
+    let (resource, prepared) = restore_prepared_binding(player_resource.release(), prepared_stamp)?;
     restore_queued_resource(playlist, index, prepared, resource)
 }
 

@@ -595,7 +595,7 @@ mod tests {
         assert!(src.seek_observe().target().is_none());
 
         // seek_control.begin bumps the epoch; seek_observe sees it
-        let epoch = src.seek_control().begin(Duration::from_secs(5));
+        let epoch = src.seek_control().begin(Duration::from_secs(5).into());
         assert_eq!(epoch, 1);
         assert_eq!(src.seek_observe().epoch(), 1);
         assert_eq!(src.seek_observe().target(), Some(Duration::from_secs(5)));
