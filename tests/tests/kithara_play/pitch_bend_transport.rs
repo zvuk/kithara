@@ -42,7 +42,12 @@ async fn audio_resource(src: &'static str) -> Resource {
     let audio = Audio::<Stream<MemStream>>::new(wav_config())
         .await
         .expect("audio construction");
-    Resource::from_reader(audio, Some(Arc::from(src)))
+    let mut resource = Resource::from_reader(audio, Some(Arc::from(src)));
+    resource
+        .preload()
+        .await
+        .expect("preload pitch-bend fixture");
+    resource
 }
 
 /// Count left-channel zero crossings over `blocks` rendered output blocks,
