@@ -377,12 +377,13 @@ either mutation.
 
 `ElasticRenderer` is the sole owner of the audible directional source cursor.
 For each render range it derives the desired source path from `TrackBinding` and
-the shared `RenderContext`, then submits an integer source/output span to a
+the shared `RenderContext`, attaches the player-owned request/revision identity,
+and delegates only transport-neutral continuous-to-integer span planning to
+`kithara-stretch`. It then reads the resulting typed bounded source windows from
+the canonical `Resource`/`Audio` seek epoch and submits exact requests to the
 pitch-preserving backend. The backend declares its rate envelope and
-deterministic latency, is primed before activation, and reads typed bounded
-source windows from the canonical `Resource`/`Audio` seek epoch. Decoder
-position and legacy pitch bend are not parallel phase authorities for a bound
-item.
+deterministic latency and is primed before activation. Decoder position and
+legacy pitch bend are not parallel phase authorities for a bound item.
 
 The bound `PlayerResource` owns one `Resource` and one prepared renderer, while
 the linear variant owns one `Resource` and its pooled planar scratch. These
@@ -421,7 +422,12 @@ at most one source frame is corrected continuously at no more than one frame per
 maximum render block, scaled for sub-blocks and constrained by the backend rate
 envelope. The integer span always begins at the previous cursor, so correction
 cannot jump over source. A larger error requires prepared relocation; absence of
-rate-envelope headroom is a typed failure rather than silent drift.
+rate-envelope headroom is a typed failure rather than silent drift. The numeric
+quantization and correction algorithm belongs to `kithara-stretch`; the player
+remains the canonical owner of the audible cursor and commits the staged cursor
+only after all planned segments render. It also remains the sole owner of the
+prepared relocation transaction when the numeric planner reports a phase
+discontinuity.
 
 Ordinary bound preparation uses the transport commit already observed by the
 render graph. Before the session has any active commit, it may use the first

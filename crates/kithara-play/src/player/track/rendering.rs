@@ -1,13 +1,11 @@
 use std::ops::Range;
 
-use num_traits::ToPrimitive;
-use smallvec::SmallVec;
+use kithara_stretch::{ElasticSpanPlan, ElasticSpanRequest};
 
 use super::{
     Active, ElasticCopyError, ElasticPlanError, ElasticRenderError, ElasticRenderOutcome,
-    ElasticRenderSegment, ElasticRenderer, ElasticRequest, IntegerSegment, PlaybackDirection,
-    RenderContext, SourceCursor, SourceRange, TrackBinding, TransportBoundary, TransportRevision,
-    plan_elastic_segments, quantize_source, sample_count,
+    ElasticRenderSegment, ElasticRenderer, PlaybackDirection, RenderContext, SourceRange,
+    TrackBinding, TransportBoundary, TransportRevision, plan_elastic_segments, sample_count,
 };
 use crate::resource::Resource;
 
@@ -22,70 +20,23 @@ pub(super) struct SourceCopy<'a> {
     pub(super) frames: usize,
 }
 
-#[derive(Clone, Copy)]
-struct ContinuousSegment {
-    source_end: f64,
-    source_start: f64,
-    output_frames: usize,
-    output_start: usize,
-}
-
-#[derive(Clone, Copy)]
-struct PhasePlan {
-    correction: f64,
-    cursor_origin: f64,
-    source_origin: f64,
-    output_frames: usize,
-}
-
-impl PhasePlan {
-    const CONTINUITY_EPSILON: f64 = 1.0e-6;
-    const MAX_CONTINUOUS_PHASE_ERROR: f64 = 1.0;
-    const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
-
-    fn corrected_end(
-        self,
-        source_end: f64,
-        cumulative_output_frames: usize,
-    ) -> Result<f64, ElasticRenderError> {
-        let progress = cumulative_output_frames
-            .to_f64()
-            .zip(self.output_frames.to_f64())
-            .map(|(cumulative, total)| cumulative / total)
-            .ok_or(ElasticRenderError::FrameOverflow)?;
-        Ok(self.cursor_origin + (source_end - self.source_origin) + self.correction * progress)
-    }
-}
-
 impl ElasticRenderer<Active> {
     fn integer_segments(
         &self,
         planned: &[ElasticRenderSegment],
         revision: TransportRevision,
-        direction: PlaybackDirection,
-    ) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
-        let mut continuous = SmallVec::<[ContinuousSegment; 4]>::new();
-        for segment in planned {
-            if segment.request.revision() != revision {
-                return Err(ElasticRenderError::RevisionMismatch);
-            }
-            continuous.push(ContinuousSegment {
-                output_start: segment.output_start,
-                output_frames: segment.request.output_frames(),
-                source_start: segment.request.source_start(),
-                source_end: segment.request.source_end(),
-            });
+    ) -> Result<ElasticSpanPlan, ElasticRenderError> {
+        if planned
+            .iter()
+            .any(|segment| segment.request.revision() != revision)
+        {
+            return Err(ElasticRenderError::RevisionMismatch);
         }
-        let capabilities = self.backend.capabilities();
-        let envelope = capabilities.rate_envelope();
-        quantize_segments(
-            &continuous,
+        Ok(ElasticSpanPlan::new(
+            planned.iter().map(|segment| segment.request.span()),
             Some(self.state.runtime.prepared.cursor),
-            capabilities.max_output_frames(),
-            envelope.min_source_frames_per_output(),
-            envelope.max_source_frames_per_output(),
-            direction,
-        )
+            self.backend.capabilities(),
+        )?)
     }
 
     pub(crate) fn render(
@@ -147,7 +98,7 @@ impl ElasticRenderer<Active> {
             .and_then(|segment| {
                 segment
                     .output_start
-                    .checked_add(segment.request.output_frames())
+                    .checked_add(segment.request.span().output_frames())
             })
             .ok_or(ElasticRenderError::FrameOverflow)?;
         if rendered_end < requested_end {
@@ -156,15 +107,16 @@ impl ElasticRenderer<Active> {
             }
         }
         let direction = binding.direction();
-        let (segments, staged_cursor) = self.integer_segments(&planned, revision, direction)?;
+        let plan = self.integer_segments(&planned, revision)?;
+        let segments = plan.segments();
         let source_start = segments
             .iter()
-            .flat_map(|segment| [segment.source_start, segment.source_end])
+            .flat_map(|segment| [segment.source_start(), segment.source_end()])
             .min()
             .ok_or(ElasticRenderError::FrameOverflow)?;
         let source_end = segments
             .iter()
-            .flat_map(|segment| [segment.source_start, segment.source_end])
+            .flat_map(|segment| [segment.source_start(), segment.source_end()])
             .max()
             .ok_or(ElasticRenderError::FrameOverflow)?;
         let source_extent = i64::try_from(self.source_frame_count)
@@ -189,11 +141,18 @@ impl ElasticRenderer<Active> {
         }
         let fetch_samples = sample_count(fetch_frames, self.backend.capabilities().channels())
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
-        for segment in &segments {
-            self.render_segment(*segment, direction, source_window, fetch_samples, output)?;
+        for (planned, segment) in planned.iter().zip(segments) {
+            self.render_segment(
+                *segment,
+                planned.output_start,
+                direction,
+                source_window,
+                fetch_samples,
+                output,
+            )?;
         }
 
-        self.state.runtime.prepared.cursor = staged_cursor;
+        self.state.runtime.prepared.cursor = plan.cursor();
         self.state.runtime.prepared.revision = revision;
         self.state.runtime.prepared.request_id = planned
             .last()
@@ -209,15 +168,16 @@ impl ElasticRenderer<Active> {
 
     fn render_segment(
         &mut self,
-        segment: IntegerSegment,
+        segment: ElasticSpanRequest,
+        output_start: usize,
         direction: PlaybackDirection,
         fetch_range: SourceRange,
         fetch_samples: usize,
         output: &mut [&mut [f32]],
     ) -> Result<(), ElasticRenderError> {
         let channels = self.backend.capabilities().channels();
-        let source_frames = usize::try_from(segment.source_start.abs_diff(segment.source_end))
-            .map_err(|_| ElasticRenderError::FrameOverflow)?;
+        let request = segment.request();
+        let source_frames = request.source_frames();
         if source_frames > self.max_source_frames {
             return Err(ElasticRenderError::FrameOverflow);
         }
@@ -225,7 +185,7 @@ impl ElasticRenderer<Active> {
             direction,
             fetch_range,
             channels,
-            start: segment.source_start,
+            start: segment.source_start(),
             frames: source_frames,
             fetch: &self.fetch[..fetch_samples],
             target: &mut self.source,
@@ -233,231 +193,25 @@ impl ElasticRenderer<Active> {
         }
         .copy()
         .map_err(ElasticRenderError::from)?;
-        let request = ElasticRequest::new(source_frames, segment.output_frames)?;
         let source_samples =
             sample_count(source_frames, channels).map_err(|_| ElasticRenderError::FrameOverflow)?;
-        let output_samples = sample_count(segment.output_frames, channels)
+        let output_samples = sample_count(request.output_frames(), channels)
             .map_err(|_| ElasticRenderError::FrameOverflow)?;
         self.backend.process(
             request,
             &self.source[..source_samples],
             &mut self.output[..output_samples],
         )?;
-        let output_end = segment
-            .output_start
-            .checked_add(segment.output_frames)
+        let output_end = output_start
+            .checked_add(request.output_frames())
             .ok_or(ElasticRenderError::FrameOverflow)?;
         for (channel, target) in output.iter_mut().enumerate() {
             let source_channel = channel.min(channels - 1);
-            for (frame, sample) in target[segment.output_start..output_end]
-                .iter_mut()
-                .enumerate()
-            {
+            for (frame, sample) in target[output_start..output_end].iter_mut().enumerate() {
                 *sample = self.output[frame * channels + source_channel];
             }
         }
         Ok(())
-    }
-}
-
-fn quantize_segments(
-    segments: &[ContinuousSegment],
-    cursor: Option<SourceCursor>,
-    max_output_frames: usize,
-    minimum_rate: f64,
-    maximum_rate: f64,
-    direction: PlaybackDirection,
-) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
-    let first = segments.first().ok_or(ElasticRenderError::FrameOverflow)?;
-    validate_continuity(segments)?;
-    let phase = plan_phase(
-        segments,
-        cursor,
-        max_output_frames,
-        minimum_rate,
-        maximum_rate,
-        direction,
-    )?;
-    let mut boundary = cursor.map_or_else(
-        || quantize_source(first.source_start),
-        |cursor| Ok(cursor.integer),
-    )?;
-    let mut cumulative_output_frames = 0usize;
-    let mut result = SmallVec::<[IntegerSegment; 4]>::new();
-    for segment in segments {
-        cumulative_output_frames = cumulative_output_frames
-            .checked_add(segment.output_frames)
-            .ok_or(ElasticRenderError::FrameOverflow)?;
-        let corrected_end = phase.corrected_end(segment.source_end, cumulative_output_frames)?;
-        let end = quantize_endpoint(
-            boundary,
-            corrected_end,
-            segment.output_frames,
-            minimum_rate,
-            maximum_rate,
-            direction,
-        )?;
-        result.push(IntegerSegment {
-            output_start: segment.output_start,
-            output_frames: segment.output_frames,
-            source_start: boundary,
-            source_end: end,
-        });
-        boundary = end;
-    }
-    let last = segments.last().ok_or(ElasticRenderError::FrameOverflow)?;
-    Ok((
-        result,
-        SourceCursor {
-            continuous: phase.corrected_end(last.source_end, phase.output_frames)?,
-            integer: boundary,
-        },
-    ))
-}
-
-fn validate_continuity(segments: &[ContinuousSegment]) -> Result<(), ElasticRenderError> {
-    const CONTINUITY_PAIR_SIZE: usize = 2;
-
-    if let Some(pair) = segments.windows(CONTINUITY_PAIR_SIZE).find(|pair| {
-        (pair[0].source_end - pair[1].source_start).abs() > PhasePlan::CONTINUITY_EPSILON
-    }) {
-        return Err(ElasticRenderError::DiscontinuousSource {
-            expected: pair[0].source_end,
-            actual: pair[1].source_start,
-        });
-    }
-    Ok(())
-}
-
-fn plan_phase(
-    segments: &[ContinuousSegment],
-    cursor: Option<SourceCursor>,
-    max_output_frames: usize,
-    minimum_rate: f64,
-    maximum_rate: f64,
-    direction: PlaybackDirection,
-) -> Result<PhasePlan, ElasticRenderError> {
-    let first = segments.first().ok_or(ElasticRenderError::FrameOverflow)?;
-    let output_frames = segments.iter().try_fold(0usize, |total, segment| {
-        total
-            .checked_add(segment.output_frames)
-            .ok_or(ElasticRenderError::FrameOverflow)
-    })?;
-    let cursor_origin = cursor.map_or(first.source_start, |cursor| cursor.continuous);
-    let error = first.source_start - cursor_origin;
-    if error.abs() > PhasePlan::MAX_CONTINUOUS_PHASE_ERROR {
-        return Err(ElasticRenderError::RelocationRequired {
-            error,
-            limit: PhasePlan::MAX_CONTINUOUS_PHASE_ERROR,
-        });
-    }
-    let correction_budget = output_frames
-        .to_f64()
-        .zip(max_output_frames.to_f64())
-        .map(|(output, maximum)| (output / maximum).min(PhasePlan::MAX_CORRECTION_PER_BLOCK))
-        .filter(|budget| budget.is_finite() && *budget > 0.0)
-        .ok_or(ElasticRenderError::FrameOverflow)?;
-    let desired = error.clamp(-correction_budget, correction_budget);
-    let correction =
-        constrain_correction(segments, desired, minimum_rate, maximum_rate, direction)?;
-    if error.abs() > PhasePlan::CONTINUITY_EPSILON
-        && correction.abs() <= PhasePlan::CONTINUITY_EPSILON
-    {
-        return Err(ElasticRenderError::PhaseCorrectionUnavailable { error });
-    }
-    Ok(PhasePlan {
-        cursor_origin,
-        correction,
-        output_frames,
-        source_origin: first.source_start,
-    })
-}
-
-fn constrain_correction(
-    segments: &[ContinuousSegment],
-    desired: f64,
-    minimum_rate: f64,
-    maximum_rate: f64,
-    direction: PlaybackDirection,
-) -> Result<f64, ElasticRenderError> {
-    let total_frames = segments
-        .iter()
-        .map(|segment| segment.output_frames)
-        .sum::<usize>()
-        .to_f64()
-        .ok_or(ElasticRenderError::FrameOverflow)?;
-    let mut positive_headroom = f64::INFINITY;
-    let mut negative_headroom = f64::INFINITY;
-    let sign = direction_sign(direction);
-    for segment in segments {
-        let frames = segment
-            .output_frames
-            .to_f64()
-            .ok_or(ElasticRenderError::FrameOverflow)?;
-        let nominal = (segment.source_end - segment.source_start) * sign;
-        if !nominal.is_finite() || nominal <= 0.0 {
-            return Err(ElasticRenderError::FrameOverflow);
-        }
-        let scale = total_frames / frames;
-        positive_headroom = positive_headroom.min((maximum_rate * frames - nominal) * scale);
-        negative_headroom = negative_headroom.min((nominal - minimum_rate * frames) * scale);
-    }
-    let desired = desired * sign;
-    let correction = if desired > 0.0 {
-        desired.min(positive_headroom.max(0.0))
-    } else {
-        desired.max(-negative_headroom.max(0.0))
-    };
-    Ok(correction * sign)
-}
-
-fn quantize_endpoint(
-    boundary: i64,
-    continuous_end: f64,
-    output_frames: usize,
-    minimum_rate: f64,
-    maximum_rate: f64,
-    direction: PlaybackDirection,
-) -> Result<i64, ElasticRenderError> {
-    let output_frames = output_frames
-        .to_f64()
-        .ok_or(ElasticRenderError::FrameOverflow)?;
-    let minimum_span = (minimum_rate * output_frames)
-        .ceil()
-        .to_i64()
-        .ok_or(ElasticRenderError::FrameOverflow)?;
-    let maximum_span = (maximum_rate * output_frames)
-        .floor()
-        .to_i64()
-        .ok_or(ElasticRenderError::FrameOverflow)?;
-    if minimum_span <= 0 || minimum_span > maximum_span {
-        return Err(ElasticRenderError::FrameOverflow);
-    }
-    let (minimum_end, maximum_end) = match direction {
-        PlaybackDirection::Forward => (
-            boundary
-                .checked_add(minimum_span)
-                .ok_or(ElasticRenderError::FrameOverflow)?,
-            boundary
-                .checked_add(maximum_span)
-                .ok_or(ElasticRenderError::FrameOverflow)?,
-        ),
-        PlaybackDirection::Reverse => (
-            boundary
-                .checked_sub(maximum_span)
-                .ok_or(ElasticRenderError::FrameOverflow)?,
-            boundary
-                .checked_sub(minimum_span)
-                .ok_or(ElasticRenderError::FrameOverflow)?,
-        ),
-    };
-    Ok(quantize_source(continuous_end)?.clamp(minimum_end, maximum_end))
-}
-
-const fn direction_sign(direction: PlaybackDirection) -> f64 {
-    match direction {
-        PlaybackDirection::Forward => 1.0,
-        PlaybackDirection::Reverse => -1.0,
     }
 }
 
@@ -527,52 +281,6 @@ mod tests {
 
     use super::*;
 
-    struct Consts;
-
-    impl Consts {
-        const MAXIMUM_RATE: f64 = 4.0 / 3.0;
-        const MAX_OUTPUT_FRAMES: usize = 480;
-        const MINIMUM_RATE: f64 = 2.0 / 3.0;
-    }
-
-    fn segment(source_start: f64, source_end: f64, output_frames: usize) -> ContinuousSegment {
-        ContinuousSegment {
-            output_frames,
-            source_start,
-            source_end,
-            output_start: 0,
-        }
-    }
-
-    fn quantize(
-        segments: &[ContinuousSegment],
-        cursor: Option<SourceCursor>,
-    ) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
-        quantize_direction(segments, cursor, PlaybackDirection::Forward)
-    }
-
-    fn quantize_direction(
-        segments: &[ContinuousSegment],
-        cursor: Option<SourceCursor>,
-        direction: PlaybackDirection,
-    ) -> Result<(SmallVec<[IntegerSegment; 4]>, SourceCursor), ElasticRenderError> {
-        quantize_segments(
-            segments,
-            cursor,
-            Consts::MAX_OUTPUT_FRAMES,
-            Consts::MINIMUM_RATE,
-            Consts::MAXIMUM_RATE,
-            direction,
-        )
-    }
-
-    fn assert_close(actual: f64, expected: f64) {
-        assert!(
-            (actual - expected).abs() <= PhasePlan::CONTINUITY_EPSILON,
-            "expected {expected}, received {actual}"
-        );
-    }
-
     #[kithara::test]
     fn forward_copy_indexes_from_the_actual_window_start() {
         let range = SourceRange::try_from(2..6).expect("valid source range");
@@ -637,150 +345,5 @@ mod tests {
         .expect("reverse copy reaches source start");
 
         assert_eq!(output, [20.0, 10.0, 0.0, 0.0]);
-    }
-
-    #[kithara::test]
-    fn reverse_quantization_keeps_a_descending_cursor_inside_the_rate_envelope() {
-        let (integer, cursor) = quantize_direction(
-            &[segment(360.0, 240.0, 120), segment(240.0, 120.0, 120)],
-            None,
-            PlaybackDirection::Reverse,
-        )
-        .expect("reverse source path is quantized");
-
-        assert_eq!(integer[0].source_start, 360);
-        assert_eq!(integer[0].source_end, 240);
-        assert_eq!(integer[1].source_start, 240);
-        assert_eq!(integer[1].source_end, 120);
-        assert_eq!(cursor.integer, 120);
-        assert_close(cursor.continuous, 120.0);
-    }
-
-    #[kithara::test]
-    fn reverse_phase_error_converges_without_a_source_jump() {
-        let mut cursor = SourceCursor {
-            continuous: 360.0,
-            integer: 360,
-        };
-        let mut residuals = vec![-0.75];
-        for start in [359.25, 239.25, 119.25] {
-            let desired_end = start - 120.0;
-            let (integer, next) = quantize_direction(
-                &[segment(start, desired_end, 120)],
-                Some(cursor),
-                PlaybackDirection::Reverse,
-            )
-            .expect("reverse phase error is correctable");
-            assert_eq!(integer[0].source_start, cursor.integer);
-            residuals.push(desired_end - next.continuous);
-            cursor = next;
-        }
-
-        assert_eq!(residuals, vec![-0.75, -0.5, -0.25, 0.0]);
-    }
-
-    #[kithara::test]
-    fn small_phase_error_converges_without_a_source_jump_and_is_partition_independent() {
-        let mut cursor = SourceCursor {
-            continuous: 0.0,
-            integer: 0,
-        };
-        let mut residuals = vec![0.75];
-        for start in [0.75, 120.75, 240.75] {
-            let desired_end = start + 120.0;
-            let (integer, next) = quantize(&[segment(start, desired_end, 120)], Some(cursor))
-                .expect("small phase error is correctable");
-            assert_eq!(integer[0].source_start, cursor.integer);
-            residuals.push(desired_end - next.continuous);
-            cursor = next;
-        }
-
-        assert_eq!(residuals, vec![0.75, 0.5, 0.25, 0.0]);
-
-        let (integer, whole) = quantize(
-            &[segment(0.75, 360.75, 360)],
-            Some(SourceCursor {
-                continuous: 0.0,
-                integer: 0,
-            }),
-        )
-        .expect("combined subrange is correctable");
-        assert_eq!(integer[0].source_start, 0);
-        assert_close(whole.continuous, cursor.continuous);
-        assert_eq!(whole.integer, cursor.integer);
-    }
-
-    #[kithara::test]
-    fn negative_phase_error_converges_without_overshoot() {
-        let mut cursor = SourceCursor {
-            continuous: 0.75,
-            integer: 1,
-        };
-        let mut residuals = vec![-0.75];
-        for start in [0.0, 120.0, 240.0] {
-            let desired_end = start + 120.0;
-            let (_, next) = quantize(&[segment(start, desired_end, 120)], Some(cursor))
-                .expect("negative phase error is correctable");
-            residuals.push(desired_end - next.continuous);
-            cursor = next;
-        }
-
-        assert_eq!(residuals, vec![-0.75, -0.5, -0.25, 0.0]);
-    }
-
-    #[kithara::test]
-    fn one_frame_error_is_continuous_but_larger_error_requires_relocation() {
-        let cursor = Some(SourceCursor {
-            continuous: 0.0,
-            integer: 0,
-        });
-        quantize(&[segment(1.0, 121.0, 120)], cursor)
-            .expect("one source frame is inside the continuous envelope");
-
-        let above_one = f64::from_bits(1.0_f64.to_bits() + 1);
-        let error = quantize(&[segment(above_one, 120.0 + above_one, 120)], cursor)
-            .expect_err("larger error requires prepared relocation");
-        assert!(matches!(
-            error,
-            ElasticRenderError::RelocationRequired { error, limit }
-                if error > limit && limit == PhasePlan::MAX_CONTINUOUS_PHASE_ERROR
-        ));
-    }
-
-    #[kithara::test]
-    fn correction_respects_backend_rate_headroom() {
-        let cursor = Some(SourceCursor {
-            continuous: 0.0,
-            integer: 0,
-        });
-        let error = quantize(&[segment(0.75, 160.75, 120)], cursor)
-            .expect_err("maximum nominal rate has no positive headroom");
-        assert!(matches!(
-            error,
-            ElasticRenderError::PhaseCorrectionUnavailable { error }
-                if (error - 0.75).abs() <= PhasePlan::CONTINUITY_EPSILON
-        ));
-
-        let (integer, corrected) = quantize(&[segment(0.75, 160.65, 120)], cursor)
-            .expect("partial headroom permits partial correction");
-        assert_eq!(integer[0].source_end - integer[0].source_start, 160);
-        assert_close(corrected.continuous, 160.0);
-        assert_close(160.65 - corrected.continuous, 0.65);
-    }
-
-    #[kithara::test]
-    fn planned_segment_gap_is_not_treated_as_phase_error() {
-        let error = quantize(
-            &[segment(0.0, 120.0, 120), segment(120.5, 240.5, 120)],
-            None,
-        )
-        .expect_err("planner segments must remain strictly adjacent");
-        assert!(matches!(
-            error,
-            ElasticRenderError::DiscontinuousSource {
-                expected: 120.0,
-                actual: 120.5
-            }
-        ));
     }
 }

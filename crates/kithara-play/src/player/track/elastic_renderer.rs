@@ -11,7 +11,9 @@ use kithara_audio::{
     SourceFrameIndex, SourceRange, SourceRangeError, SourceRangeReadOutcome, SourceRangeRequest,
 };
 use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
-use kithara_stretch::{ElasticConfig, ElasticError, ElasticRequest, SignalsmithBackend};
+use kithara_stretch::{
+    ElasticConfig, ElasticCursor, ElasticError, ElasticRequest, SignalsmithBackend,
+};
 use num_traits::ToPrimitive;
 use rendering::SourceCopy;
 use smallvec::SmallVec;
@@ -47,7 +49,7 @@ pub(crate) enum ElasticPrepareError {
     #[error(transparent)]
     Source(#[from] SourceRangeError),
     #[error(transparent)]
-    Backend(#[from] ElasticError),
+    Elastic(#[from] ElasticError),
     #[error("decoded source ended before elastic preparation completed")]
     SourceEnded,
     #[error("the elastic backend does not support reverse input")]
@@ -65,17 +67,9 @@ pub(crate) enum ElasticRenderError {
     #[error(transparent)]
     Source(#[from] SourceRangeError),
     #[error(transparent)]
-    Backend(#[from] ElasticError),
+    Elastic(#[from] ElasticError),
     #[error("elastic source frame arithmetic overflowed")]
     FrameOverflow,
-    #[error("elastic source cursor is discontinuous: expected {expected}, received {actual}")]
-    DiscontinuousSource { expected: f64, actual: f64 },
-    #[error(
-        "elastic phase error {error} exceeds the continuous correction limit {limit}; prepared relocation is required"
-    )]
-    RelocationRequired { error: f64, limit: f64 },
-    #[error("elastic phase error {error} cannot be corrected inside the backend rate envelope")]
-    PhaseCorrectionUnavailable { error: f64 },
     #[error("elastic render request revision does not match the prepared stream")]
     RevisionMismatch,
     #[error("elastic render context has no committed session transport")]
@@ -128,32 +122,18 @@ pub(crate) enum ElasticRenderOutcome {
     Eof,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct IntegerSegment {
-    source_end: i64,
-    source_start: i64,
-    output_frames: usize,
-    output_start: usize,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct SourceCursor {
-    continuous: f64,
-    integer: i64,
-}
-
 #[derive(Clone, Copy)]
 struct ElasticPreparation {
+    anchor: ElasticCursor,
     warmup: ElasticRequest,
     direction: PlaybackDirection,
-    anchor: SourceCursor,
     fetch_range: SourceRange,
 }
 
 #[derive(Clone, Copy)]
 struct PreparedRuntime {
+    cursor: ElasticCursor,
     direction: PlaybackDirection,
-    cursor: SourceCursor,
     source_window: SourceRange,
     revision: TransportRevision,
     request_id: u64,
@@ -556,11 +536,4 @@ fn scaled_frames(frames: usize, rate: f64) -> Result<usize, ElasticPrepareError>
         .ceil()
         .to_usize()
         .ok_or(ElasticPrepareError::FrameOverflow)
-}
-
-fn quantize_source(source: f64) -> Result<i64, ElasticRenderError> {
-    source
-        .round()
-        .to_i64()
-        .ok_or(ElasticRenderError::FrameOverflow)
 }

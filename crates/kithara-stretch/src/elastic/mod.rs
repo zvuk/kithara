@@ -16,5 +16,11 @@ pub use rate::ElasticRateEnvelope;
 mod request;
 pub use request::ElasticRequest;
 
+mod span;
+pub use span::{ElasticCursor, ElasticSpan, ElasticSpanPlan, ElasticSpanRequest};
+
 #[cfg(all(test, feature = "stretch-signalsmith"))]
 mod tests;
+
+#[cfg(all(test, feature = "stretch-signalsmith"))]
+mod span_tests;

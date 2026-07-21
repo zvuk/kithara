@@ -23,6 +23,6 @@ pub use backends::SignalsmithBackend;
 
 mod elastic;
 pub use elastic::{
-    ElasticCapabilities, ElasticConfig, ElasticError, ElasticLatency, ElasticRateEnvelope,
-    ElasticRequest,
+    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticError, ElasticLatency,
+    ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanPlan, ElasticSpanRequest,
 };

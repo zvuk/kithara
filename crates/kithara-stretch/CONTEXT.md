@@ -31,9 +31,20 @@ validated exact-span mode; the private streaming mode implements
 `StretchBackend`. `ElasticCapabilities` declares the supported rate envelope,
 algorithmic latency, channel/sample-rate identity, prepared block limits, and
 whether caller-ordered reverse input is supported.
-`ElasticRequest` contains only frame counts; session beats, track bindings,
-phase correction, source-window policy, and graph scheduling remain in
-`kithara-play`.
+`ElasticRequest` contains only the integer frame counts consumed by the backend.
+`ElasticSpan` describes a transport-neutral continuous source path and exact
+output length. `ElasticSpanPlan` validates at most four adjacent spans against
+one capability snapshot, quantizes them without leaving inline storage, and
+returns both backend requests and the staged `ElasticCursor`. It also owns the
+bounded inter-block phase correction because that correction is constrained by
+the backend rate envelope and exact source/output frame arithmetic.
+
+Session beats, track bindings, request/revision identity, source-window policy,
+relocation transactions, and graph scheduling remain in `kithara-play`. A
+`PhaseDiscontinuity` is numeric evidence that continuous correction is
+impossible; only the player may turn that evidence into a prepared relocation
+and publish a new cursor. The cursor returned by `ElasticSpanPlan` is staged and
+must not be committed until every backend request in the plan succeeds.
 
 The exact-span path currently has one adapter, so callers use the concrete
 `SignalsmithBackend<ElasticConfig>` instead of a single-implementation trait

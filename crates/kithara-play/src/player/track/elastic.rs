@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use kithara_stretch::ElasticRateEnvelope;
+use kithara_stretch::{ElasticError, ElasticRateEnvelope, ElasticSpan, ElasticSpanPlan};
 use num_traits::ToPrimitive;
 use smallvec::SmallVec;
 
@@ -11,18 +11,12 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ElasticRenderRequest {
+    span: ElasticSpan,
     revision: TransportRevision,
-    source_end: f64,
-    source_start: f64,
     request_id: u64,
-    output_frames: usize,
 }
 
 impl ElasticRenderRequest {
-    pub(crate) const fn output_frames(self) -> usize {
-        self.output_frames
-    }
-
     pub(crate) const fn request_id(self) -> u64 {
         self.request_id
     }
@@ -31,21 +25,19 @@ impl ElasticRenderRequest {
         self.revision
     }
 
-    pub(crate) const fn source_end(self) -> f64 {
-        self.source_end
-    }
-
-    pub(crate) const fn source_start(self) -> f64 {
-        self.source_start
+    pub(crate) const fn span(self) -> ElasticSpan {
+        self.span
     }
 }
 
-#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub(crate) enum ElasticPlanError {
     #[error("render output range is invalid for its context")]
     InvalidOutputRange,
     #[error("elastic render request must contain at least one output frame")]
     EmptyOutput,
+    #[error(transparent)]
+    Elastic(#[from] ElasticError),
     #[error("render context has no active session beat range")]
     SessionBeatsUnavailable,
     #[error("render context sample rate {context} does not match binding sample rate {binding}")]
@@ -68,6 +60,8 @@ pub(crate) enum ElasticPlanError {
     InvalidBoundarySplit,
 }
 
+const MAX_SEGMENTS: usize = ElasticSpanPlan::MAX_SPANS;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ElasticRenderSegment {
     pub(crate) request: ElasticRenderRequest,
@@ -81,13 +75,12 @@ pub(crate) fn plan_elastic_segments(
     first_request_id: u64,
     revision: TransportRevision,
     supported_rates: ElasticRateEnvelope,
-) -> Result<SmallVec<[ElasticRenderSegment; 4]>, ElasticPlanError> {
-    const MAX_SEGMENTS: usize = 4;
+) -> Result<SmallVec<[ElasticRenderSegment; MAX_SEGMENTS]>, ElasticPlanError> {
     const SPLIT_PARTS: usize = 2;
 
-    let mut pending = SmallVec::<[Range<usize>; 4]>::new();
+    let mut pending = SmallVec::<[Range<usize>; MAX_SEGMENTS]>::new();
     pending.push(output_range);
-    let mut segments = SmallVec::<[ElasticRenderSegment; 4]>::new();
+    let mut segments = SmallVec::<[ElasticRenderSegment; MAX_SEGMENTS]>::new();
 
     while let Some(range) = pending.pop() {
         let request_id = first_request_id
@@ -194,10 +187,8 @@ pub(crate) fn plan_elastic_render(
 
     Ok(ElasticRenderRequest {
         revision,
-        source_end,
-        source_start,
         request_id,
-        output_frames,
+        span: ElasticSpan::try_from((source_start..source_end, output_frames))?,
     })
 }
 
@@ -364,9 +355,9 @@ mod tests {
 
         assert_eq!(request.request_id(), TestSpec::REQUEST_ID);
         assert_eq!(request.revision(), TestSpec::REVISION);
-        assert_eq!(request.source_start(), 0.0);
-        assert_eq!(request.source_end(), 576.0);
-        assert_eq!(request.output_frames(), TestSpec::OUTPUT_FRAMES);
+        assert_eq!(request.span().source_start(), 0.0);
+        assert_eq!(request.span().source_end(), 576.0);
+        assert_eq!(request.span().output_frames(), TestSpec::OUTPUT_FRAMES);
     }
 
     #[kithara::test]
@@ -381,9 +372,9 @@ mod tests {
         )
         .expect("supported elastic request");
 
-        assert_eq!(request.source_start(), 288.0);
-        assert_eq!(request.source_end(), 576.0);
-        assert_eq!(request.output_frames(), 240);
+        assert_eq!(request.span().source_start(), 288.0);
+        assert_eq!(request.span().source_end(), 576.0);
+        assert_eq!(request.span().output_frames(), 240);
     }
 
     #[kithara::test]
@@ -440,13 +431,13 @@ mod tests {
         assert_eq!(
             segments
                 .iter()
-                .map(|segment| segment.request.output_frames())
+                .map(|segment| segment.request.span().output_frames())
                 .sum::<usize>(),
             TestSpec::OUTPUT_FRAMES
         );
         assert_eq!(
-            segments[0].request.source_end(),
-            segments[1].request.source_start()
+            segments[0].request.span().source_end(),
+            segments[1].request.span().source_start()
         );
         assert_eq!(segments[0].request.request_id(), TestSpec::REQUEST_ID);
         assert_eq!(segments[1].request.request_id(), TestSpec::REQUEST_ID + 1);
@@ -466,9 +457,9 @@ mod tests {
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].output_start, 0);
-        assert_eq!(segments[0].request.output_frames(), 240);
-        assert_eq!(segments[0].request.source_start(), 288.0);
-        assert_eq!(segments[0].request.source_end(), 0.0);
+        assert_eq!(segments[0].request.span().output_frames(), 240);
+        assert_eq!(segments[0].request.span().source_start(), 288.0);
+        assert_eq!(segments[0].request.span().source_end(), 0.0);
     }
 
     #[kithara::test]
@@ -490,12 +481,12 @@ mod tests {
         .expect("sub-frame marker boundary uses the nearest render-frame split");
 
         assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0].request.output_frames(), 389);
+        assert_eq!(segments[0].request.span().output_frames(), 389);
         assert_eq!(segments[1].output_start, 389);
-        assert_eq!(segments[1].request.output_frames(), 91);
+        assert_eq!(segments[1].request.span().output_frames(), 91);
         assert_eq!(
-            segments[0].request.source_end(),
-            segments[1].request.source_start()
+            segments[0].request.span().source_end(),
+            segments[1].request.span().source_start()
         );
     }
 
@@ -517,13 +508,13 @@ mod tests {
         assert_eq!(
             segments
                 .iter()
-                .map(|segment| segment.request.output_frames())
+                .map(|segment| segment.request.span().output_frames())
                 .sum::<usize>(),
             FRAMES
         );
         assert!(segments.windows(2).all(|pair| {
-            pair[0].output_start + pair[0].request.output_frames() == pair[1].output_start
-                && pair[0].request.source_end() == pair[1].request.source_start()
+            pair[0].output_start + pair[0].request.span().output_frames() == pair[1].output_start
+                && pair[0].request.span().source_end() == pair[1].request.span().source_start()
         }));
     }
 
@@ -539,7 +530,7 @@ mod tests {
         )
         .expect("endpoint marker belongs to the current segment");
 
-        assert_eq!(request.source_end(), 28_800.0);
+        assert_eq!(request.span().source_end(), 28_800.0);
     }
 
     #[kithara::test]
@@ -557,7 +548,7 @@ mod tests {
         let output_frames = TestSpec::OUTPUT_FRAMES
             .to_f64()
             .expect("output frame count fits f64");
-        assert!((request.source_end() / output_frames - 4.0 / 3.0).abs() <= f64::EPSILON);
+        assert!((request.span().source_end() / output_frames - 4.0 / 3.0).abs() <= f64::EPSILON);
     }
 
     #[kithara::test]

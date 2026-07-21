@@ -1,4 +1,4 @@
-/// Error from elastic engine preparation or processing.
+/// Error from elastic planning, engine preparation, or processing.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ElasticError {
@@ -61,4 +61,31 @@ pub enum ElasticError {
     /// A block sample count overflowed the platform index type.
     #[error("elastic block sample count overflow")]
     SampleCountOverflow,
+    /// A continuous source coordinate was not finite or representable.
+    #[error("elastic source coordinate {0} is not finite or representable")]
+    InvalidSourceCoordinate(f64),
+    /// A continuous span did not advance through the source.
+    #[error("elastic source span must advance")]
+    StationarySourceSpan,
+    /// Exact-span planning received no source spans.
+    #[error("elastic span plan must contain at least one span")]
+    EmptySpanPlan,
+    /// Exact-span planning exceeded its fixed real-time span capacity.
+    #[error("elastic span plan exceeds its fixed capacity of {limit} spans")]
+    SpanLimit { limit: usize },
+    /// Consecutive continuous source spans did not share one boundary.
+    #[error("elastic source path is discontinuous: expected {expected}, received {actual}")]
+    DiscontinuousSource { expected: f64, actual: f64 },
+    /// Consecutive source spans changed playback direction inside one block.
+    #[error("elastic source path changes direction inside one render block")]
+    SourceDirectionChange,
+    /// Exact-span frame or cursor arithmetic overflowed.
+    #[error("elastic span arithmetic overflowed")]
+    SpanArithmeticOverflow,
+    /// A source cursor was too far from the requested continuous source path.
+    #[error("elastic phase error {error} exceeds the continuous correction limit {limit}")]
+    PhaseDiscontinuity { error: f64, limit: f64 },
+    /// The backend rate envelope had no headroom for continuous correction.
+    #[error("elastic phase error {error} cannot be corrected inside the backend rate envelope")]
+    PhaseCorrectionUnavailable { error: f64 },
 }

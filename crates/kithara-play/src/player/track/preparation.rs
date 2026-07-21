@@ -1,10 +1,10 @@
 use num_traits::ToPrimitive;
 
 use super::{
-    Active, BufferedSourceWindow, ElasticPreparation, ElasticPreparationPoll, ElasticPrepareError,
-    ElasticRenderer, PcmPool, PlaybackDirection, PreparationPhase, PreparedRuntime, Preparing,
-    READY_WINDOW_COUNT, Ready, RenderRuntime, SessionBeat, SourceCopy, SourceCursor, SourceRange,
-    SourceRangeReadOutcome, SourceRangeRequest, StreamShape, Tempo, TrackBinding,
+    Active, BufferedSourceWindow, ElasticCursor, ElasticPreparation, ElasticPreparationPoll,
+    ElasticPrepareError, ElasticRenderer, PcmPool, PlaybackDirection, PreparationPhase,
+    PreparedRuntime, Preparing, READY_WINDOW_COUNT, Ready, RenderRuntime, SessionBeat, SourceCopy,
+    SourceRange, SourceRangeReadOutcome, SourceRangeRequest, StreamShape, Tempo, TrackBinding,
     TransportRevision, sample_count,
 };
 use crate::resource::Resource;
@@ -123,10 +123,8 @@ impl<State> ElasticRenderer<State> {
             .source_frame_at(anchor)?
             .ok_or(ElasticPrepareError::AnchorOutsideMarkerDomain)?
             .get();
-        let anchor_integer = anchor_continuous
-            .round()
-            .to_i64()
-            .ok_or(ElasticPrepareError::FrameOverflow)?;
+        let source_cursor = ElasticCursor::try_from(anchor_continuous)?;
+        let anchor_integer = source_cursor.integer();
         let output_frames = capabilities.latency().output_frames();
         let output_frames_f64 = output_frames
             .to_f64()
@@ -178,10 +176,7 @@ impl<State> ElasticRenderer<State> {
         let range = SourceRange::try_from(start..end)?;
         Ok(ElasticPreparation {
             warmup,
-            anchor: SourceCursor {
-                continuous: anchor_continuous,
-                integer: anchor_integer,
-            },
+            anchor: source_cursor,
             direction: binding.direction(),
             fetch_range: range,
         })
@@ -336,12 +331,12 @@ impl<State> ElasticRenderer<State> {
         let history_start = match preparation.direction {
             PlaybackDirection::Forward => preparation
                 .anchor
-                .integer
+                .integer()
                 .checked_sub(warm_source_frames)
                 .and_then(|start| start.checked_sub(history_frames_i64)),
             PlaybackDirection::Reverse => preparation
                 .anchor
-                .integer
+                .integer()
                 .checked_add(warm_source_frames)
                 .and_then(|start| start.checked_add(history_frames_i64)),
         }
@@ -360,10 +355,10 @@ impl<State> ElasticRenderer<State> {
         .map_err(ElasticPrepareError::from)?;
         let warmup_start = match preparation.direction {
             PlaybackDirection::Forward => {
-                preparation.anchor.integer.checked_sub(warm_source_frames)
+                preparation.anchor.integer().checked_sub(warm_source_frames)
             }
             PlaybackDirection::Reverse => {
-                preparation.anchor.integer.checked_add(warm_source_frames)
+                preparation.anchor.integer().checked_add(warm_source_frames)
             }
         }
         .ok_or(ElasticPrepareError::FrameOverflow)?;
@@ -492,10 +487,10 @@ mod tests {
                 relocation: None,
                 prepared: PreparedRuntime {
                     direction,
-                    cursor: SourceCursor {
-                        continuous: integer.to_f64().expect("test range converts to f64"),
-                        integer,
-                    },
+                    cursor: ElasticCursor::try_from(
+                        integer.to_f64().expect("test range converts to f64"),
+                    )
+                    .expect("test cursor is representable"),
                     source_window,
                     revision: TransportRevision::FIRST,
                     request_id: 1,
@@ -637,7 +632,7 @@ mod tests {
                 ElasticRenderer::<()>::PREFETCH_BLOCKS,
             )
             .expect("reverse preparation plan");
-        let anchor = u64::try_from(preparation.anchor.integer).expect("positive source anchor");
+        let anchor = u64::try_from(preparation.anchor.integer()).expect("positive source anchor");
         let prefetch =
             u64::try_from(renderer.max_source_frames * ElasticRenderer::<()>::PREFETCH_BLOCKS)
                 .expect("prefetch span fits u64");

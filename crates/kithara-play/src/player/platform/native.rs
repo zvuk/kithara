@@ -422,10 +422,8 @@ fn required_source_frame(
     segments
         .iter()
         .map(|segment| {
-            segment
-                .request
-                .source_start()
-                .max(segment.request.source_end())
+            let span = segment.request.span();
+            span.source_start().max(span.source_end())
         })
         .reduce(f64::max)
         .ok_or_else(|| PlayError::ElasticPreparation {
@@ -510,7 +508,7 @@ pub(crate) fn prepare_bound_load(
 
 fn map_successor_retarget_error(error: ElasticPrepareError) -> PlayError {
     match error {
-        ElasticPrepareError::Backend(ElasticError::InvalidRate(rate)) => {
+        ElasticPrepareError::Elastic(ElasticError::InvalidRate(rate)) => {
             let envelope = SignalsmithBackend::<ElasticConfig>::rate_envelope();
             PlayError::SessionTempoUnsupported {
                 rate,

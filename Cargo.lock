@@ -5123,6 +5123,7 @@ dependencies = [
  "kithara-workspace-hack",
  "num-traits",
  "signalsmith-stretch",
+ "smallvec",
  "thiserror 2.0.18",
  "tracing",
 ]
