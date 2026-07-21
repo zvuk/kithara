@@ -1,0 +1,70 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "gallery-vis",
+    root: Split(
+        axis: Vertical,
+        children: [
+            (weight: 1.0, node: Module(
+                instance: "titlebar",
+                source: "modules/titlebar.kmodule.ron",
+                size: (w: Fill, h: Fixed(26.0)),
+            )),
+            (weight: 1.0, node: Split(
+                axis: Horizontal,
+                children: [
+                    (weight: 1.0, node: Module(
+                        instance: "gallery",
+                        source: "modules/nav.kmodule.ron",
+                        frame: (right: false),
+                        corners: false,
+                        size: (w: Fixed(198.0), h: Fill),
+                    )),
+                    (weight: 1.0, node: Split(
+                        axis: Vertical,
+                        children: [
+                            (weight: 1.0, node: Module(
+                                instance: "vis-top",
+                                source: "modules/tabs/vis-spacer.kmodule.ron",
+                                frame: (top: false, right: false, bottom: false, left: false),
+                                corners: false,
+                                size: (w: Fill, h: Fill),
+                            )),
+                            (weight: 1.0, node: Split(
+                                axis: Horizontal,
+                                children: [
+                                    (weight: 1.0, node: Module(
+                                        instance: "vis-left",
+                                        source: "modules/tabs/vis-spacer.kmodule.ron",
+                                        frame: (top: false, right: false, bottom: false, left: false),
+                                        corners: false,
+                                        size: (w: Fill, h: Fixed(350.0)),
+                                    )),
+                                    (weight: 1.0, node: Module(
+                                        instance: "vis",
+                                        source: "modules/tabs/vis.kmodule.ron",
+                                        size: (w: Fixed(560.0), h: Fixed(350.0)),
+                                    )),
+                                    (weight: 1.0, node: Module(
+                                        instance: "vis-right",
+                                        source: "modules/tabs/vis-spacer.kmodule.ron",
+                                        frame: (top: false, right: false, bottom: false, left: false),
+                                        corners: false,
+                                        size: (w: Fill, h: Fixed(350.0)),
+                                    )),
+                                ],
+                            )),
+                            (weight: 1.0, node: Module(
+                                instance: "vis-bottom",
+                                source: "modules/tabs/vis-spacer.kmodule.ron",
+                                frame: (top: false, right: false, bottom: false, left: false),
+                                corners: false,
+                                size: (w: Fill, h: Fill),
+                            )),
+                        ],
+                    )),
+                ],
+            )),
+        ],
+    ),
+)

@@ -179,6 +179,7 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Crossfader { id, .. }
         | ControlNode::Fader { id, .. }
         | ControlNode::Wave { id, .. }
+        | ControlNode::Vis { id, .. }
         | ControlNode::TrackList { id, .. }
         | ControlNode::Tree { id, .. }
         | ControlNode::ContextBar { id, .. }
@@ -387,11 +388,12 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
-        ControlNode::Segmented { .. } => (Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
         ControlNode::Time { .. } | ControlNode::Scalar { .. } => (Some(ValueKind::Scalar), None),
-        ControlNode::Crossfader { .. } | ControlNode::Fader { .. } | ControlNode::Knob { .. } => {
-            (Some(ValueKind::Scalar), Some(ValueKind::Scalar))
-        }
+        ControlNode::Crossfader { .. }
+        | ControlNode::Fader { .. }
+        | ControlNode::Knob { .. }
+        | ControlNode::Segmented { .. }
+        | ControlNode::Vis { .. } => (Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
         ControlNode::Wave { .. } => (Some(ValueKind::Waveform), Some(ValueKind::Scalar)),
         ControlNode::TrackList { .. } => (Some(ValueKind::TrackList), None),
         ControlNode::Tree { .. } => (Some(ValueKind::Tree), None),

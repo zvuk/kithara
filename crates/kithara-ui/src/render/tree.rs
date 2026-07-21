@@ -24,7 +24,8 @@ use crate::{
     ids::InternId,
     layout::Axis,
     module::{
-        ChromeStyle, DeckSummaryStyle, IconName, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
+        ChromeStyle, DeckSummaryStyle, GlyphStyle, IconName, Tone, TrackColumn, WaveStyle,
+        WindowControlsStyle,
     },
     render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent},
     size::{Dim, SizeSpec, control_size},
@@ -40,6 +41,7 @@ use crate::{
         telemetry::Telemetry,
         text::Text,
         track_list::TrackList,
+        vis::Vis,
         wave::zoom_math::DEFAULT_ZOOM,
         window::{TitleBar, WindowControls},
     },
@@ -227,12 +229,7 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Time => Time::builder()
-            .maybe_value(value)
-            .reads(reads)
-            .skin(skin)
-            .build()
-            .view(),
+        ControlSpec::Time => render_time(value, reads, skin),
         ControlSpec::Text { style, label } => Text::builder()
             .style(*style)
             .maybe_value(value)
@@ -240,7 +237,7 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Glyph { icon } => render_glyph(*icon, skin),
+        ControlSpec::Glyph { icon, style } => render_glyph(*icon, *style, skin),
         ControlSpec::NavItem { label, icon } => {
             render_nav_item(path, ui.resolve(*label), *icon, value, skin)
         }
@@ -329,6 +326,7 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
+        ControlSpec::Vis => render_vis(value, reads),
         ControlSpec::Wave { style, badge, zoom } => render_wave(
             path,
             *style,
@@ -366,6 +364,27 @@ fn render_crossfader<'a>(
         .path(path)
         .maybe_value(value)
         .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_time<'a>(
+    value: Option<&ReadValue<'_>>,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    Time::builder()
+        .maybe_value(value)
+        .reads(reads)
+        .skin(skin)
+        .build()
+        .view()
+}
+
+fn render_vis<'a>(value: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Element<'a, UiEvent> {
+    Vis::builder()
+        .maybe_preset(value)
+        .reads(reads)
         .build()
         .view()
 }
@@ -562,10 +581,20 @@ fn render_cell<'a>(
         .view()
 }
 
-fn render_glyph(icon: IconName, skin: &Skin) -> Element<'static, UiEvent> {
+fn render_glyph(icon: IconName, style: GlyphStyle, skin: &Skin) -> Element<'static, UiEvent> {
+    let vis = style == GlyphStyle::Vis;
     Glyph::builder()
         .icon(render_icon(icon))
-        .skin(skin)
+        .size(if vis {
+            skin.vis.icon_size
+        } else {
+            skin.nav.header_icon_size
+        })
+        .color(if vis {
+            skin.color(skin.vis.icon_color)
+        } else {
+            skin.palette.text
+        })
         .build()
         .view()
 }
@@ -647,17 +676,20 @@ fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {
 
 fn render_icon(icon: IconName) -> Icon {
     match icon {
+        IconName::ChevronUp => Icon::ChevronUp,
         IconName::Disc => Icon::Disc,
         IconName::Faders => Icon::Faders,
         IconName::FastForward => Icon::FastForward,
         IconName::Gear => Icon::Gear,
         IconName::Headphones => Icon::Headphones,
+        IconName::Maximize => Icon::Maximize,
         IconName::Menu => Icon::Menu,
         IconName::Play => Icon::Play,
         IconName::PlayReverse => Icon::PlayReverse,
         IconName::Playlist => Icon::Playlist,
         IconName::Rewind => Icon::Rewind,
         IconName::SpeakerHigh => Icon::SpeakerHigh,
+        IconName::Waveform => Icon::Waveform,
         IconName::X => Icon::X,
         IconName::ZoomIn => Icon::ZoomIn,
         IconName::ZoomOut => Icon::ZoomOut,

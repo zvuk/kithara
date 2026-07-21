@@ -82,6 +82,12 @@
                 read: Model(id: "gallery.tab.mixer"),
             ),
             NavItem(
+                id: "vis",
+                label: "VIS",
+                icon: Waveform,
+                read: Model(id: "gallery.tab.vis"),
+            ),
+            NavItem(
                 id: "chrome",
                 label: "ХРОМ",
                 icon: Disc,

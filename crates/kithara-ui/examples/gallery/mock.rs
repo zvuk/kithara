@@ -44,6 +44,7 @@ impl Consts {
         [false, false, true, false, false, false, true, false, false];
     const TRACKLIST_QUEUE: [bool; 9] = [true, true, true, false, true, true, false, true, true];
     const TRACKLIST_QUEUE_PRESET: usize = 1;
+    const VIS_TICK_SECS: f64 = 0.016;
     const WAVE_BUCKETS: u32 = 4_096;
     const ZOOM: f64 = 0.12;
 }
@@ -80,6 +81,11 @@ pub(super) struct MockReads {
     tree_rows: Vec<TreeRow<'static>>,
     tree_selected: usize,
     tree_visible_indices: Vec<usize>,
+    vis_levels: [f32; 2],
+    vis_phase: f32,
+    vis_preset: usize,
+    vis_time_secs: f64,
+    vis_rng: u32,
 }
 
 impl Default for MockReads {
@@ -134,6 +140,11 @@ impl Default for MockReads {
             tree_rows: Vec::with_capacity(CATALOG.tree.len()),
             tree_selected,
             tree_visible_indices: Vec::with_capacity(CATALOG.tree.len()),
+            vis_levels: [0.66, 0.52],
+            vis_phase: 0.0,
+            vis_preset: 0,
+            vis_time_secs: 0.0,
+            vis_rng: 0x8a17_4c3d,
         };
         reads.rebuild_tree();
         reads
@@ -157,10 +168,11 @@ impl MockReads {
     }
 
     pub(super) fn tick(&mut self) {
-        if self.active_tab != Tab::Stress {
-            return;
+        match self.active_tab {
+            Tab::Stress => self.stress.tick(),
+            Tab::Vis => self.tick_vis(),
+            _ => {}
         }
-        self.stress.tick();
     }
 
     pub(super) fn set_library_query(&mut self, query: String) {
@@ -191,6 +203,8 @@ impl MockReads {
             self.library_scope = index;
         } else if matches!(path, "tree/browser" | "library2/browser") {
             self.select_tree_row(index);
+        } else if path == "vis/shader" && index < CATALOG.vis_presets.len() {
+            self.vis_preset = index;
         }
     }
 
@@ -332,6 +346,11 @@ impl MockReads {
             "buttons/cue" => self.button_cue = !self.button_cue,
             "buttons/sync" => self.button_sync = !self.button_sync,
             "tracklist/reset-columns" => self.reset_tracklist_columns(),
+            "vis/next" => self.vis_preset = (self.vis_preset + 1) % CATALOG.vis_presets.len(),
+            "vis/previous" => {
+                self.vis_preset =
+                    (self.vis_preset + CATALOG.vis_presets.len() - 1) % CATALOG.vis_presets.len();
+            }
             path if path.starts_with("tracklist/column-") => {
                 self.toggle_tracklist_column(&path["tracklist/column-".len()..]);
             }
@@ -341,6 +360,23 @@ impl MockReads {
             path if path.ends_with("/play") => self.transport.toggle_play(),
             _ => {}
         }
+    }
+
+    fn tick_vis(&mut self) {
+        self.vis_time_secs += Consts::VIS_TICK_SECS;
+        self.vis_phase += 0.17;
+        self.vis_rng = self
+            .vis_rng
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
+        let left_noise: f32 = (self.vis_rng >> 16).as_();
+        let right_noise: f32 = (self.vis_rng & 0xffff).as_();
+        let scale = f32::from(u16::MAX);
+        self.vis_levels = [
+            (0.42 + self.vis_phase.sin().abs() * 0.32 + left_noise / scale * 0.14).clamp(0.0, 1.0),
+            (0.38 + (self.vis_phase * 1.31).sin().abs() * 0.29 + right_noise / scale * 0.12)
+                .clamp(0.0, 1.0),
+        ];
     }
 }
 
@@ -385,7 +421,7 @@ impl Reads for MockReads {
             "gallery.label.text" => ReadValue::Text("TEXT STYLES"),
             "gallery.label.faders" => ReadValue::Text("HORIZONTAL FADERS"),
             "gallery.label.scalar" => ReadValue::Text("SCALAR TELEMETRY"),
-            "gallery.anatomy.assign" => ReadValue::Bool(true),
+            "gallery.anatomy.assign" | "vis.badge" => ReadValue::Bool(true),
             "gallery.tab.atoms" => ReadValue::Bool(self.active_tab == Tab::Atoms),
             "gallery.tab.buttons" => ReadValue::Bool(self.active_tab == Tab::Buttons),
             "gallery.tab.faders" => ReadValue::Bool(self.active_tab == Tab::Faders),
@@ -396,6 +432,7 @@ impl Reads for MockReads {
             "gallery.tab.tokens" => ReadValue::Bool(self.active_tab == Tab::Tokens),
             "gallery.tab.micro" => ReadValue::Bool(self.active_tab == Tab::Micro),
             "gallery.tab.mixer" => ReadValue::Bool(self.active_tab == Tab::Mixer),
+            "gallery.tab.vis" => ReadValue::Bool(self.active_tab == Tab::Vis),
             "gallery.tab.chrome" => ReadValue::Bool(self.active_tab == Tab::Chrome),
             "gallery.tab.titlebars" => ReadValue::Bool(self.active_tab == Tab::Titlebars),
             "gallery.tab.tracklist" => ReadValue::Bool(self.active_tab == Tab::Tracklist),
@@ -413,6 +450,10 @@ impl Reads for MockReads {
                 ReadValue::Bool(self.active_module == ModuleDemo::Telemetry)
             }
             "gallery.module.layout" => ReadValue::Bool(self.active_module == ModuleDemo::Layout),
+            "vis.preset" => ReadValue::Scalar(self.vis_preset.as_()),
+            "vis.time" => ReadValue::Scalar(self.vis_time_secs),
+            "vis.preset_index" => ReadValue::Text(CATALOG.vis_indices[self.vis_preset]),
+            "vis.preset_name" => ReadValue::Text(CATALOG.vis_presets[self.vis_preset]),
             "gallery.footer.deck" => ReadValue::Text("48kHz / 24bit"),
             "gallery.footer.deck_micro" => ReadValue::Text("READY"),
             "gallery.footer.global_bar" => ReadValue::Text("MASTER READY"),
@@ -445,8 +486,16 @@ impl Reads for MockReads {
             "deck.track.key" | "mock.key" => ReadValue::Text(Consts::KEY),
             "deck.view.zoom" => ReadValue::Scalar(self.transport.zoom()),
             "player.output.levels" => ReadValue::Stereo(StereoLevels {
-                l: 0.66,
-                r: 0.52,
+                l: if self.active_tab == Tab::Vis {
+                    self.vis_levels[0]
+                } else {
+                    0.66
+                },
+                r: if self.active_tab == Tab::Vis {
+                    self.vis_levels[1]
+                } else {
+                    0.52
+                },
                 volume: self.volume.as_(),
             }),
             "player.output.volume" | "mock.volume" => ReadValue::Scalar(self.volume),
@@ -597,11 +646,18 @@ pub(super) fn registry() -> impl EndpointRegistry {
     mock_mixer::insert_endpoints(&mut registry);
     mock_stress::insert_endpoints(&mut registry);
     insert_output_levels(&mut registry);
-    for id in ["player.output.volume", "mock.cells.segmented"] {
+    for id in ["player.output.volume", "mock.cells.segmented", "vis.preset"] {
         registry.insert(
             EndpointCategory::Parameter,
             id,
             EndpointDesc::new(ValueKind::Scalar),
+        );
+    }
+    for id in ["vis.next", "vis.previous"] {
+        registry.insert(
+            EndpointCategory::Command,
+            id,
+            EndpointDesc::new(ValueKind::Trigger),
         );
     }
     insert_library_endpoints(&mut registry);
@@ -627,6 +683,8 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.footer.telemetry",
         "gallery.footer.layout",
         "gallery.footer.tokens_anatomy",
+        "vis.preset_index",
+        "vis.preset_name",
     ] {
         registry.insert(
             EndpointCategory::Model,
@@ -645,6 +703,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.tab.tokens",
         "gallery.tab.micro",
         "gallery.tab.mixer",
+        "gallery.tab.vis",
         "gallery.tab.chrome",
         "gallery.tab.titlebars",
         "gallery.tab.tracklist",
@@ -666,6 +725,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "mock.button.play",
         "mock.button.cue",
         "mock.button.sync",
+        "vis.badge",
     ] {
         registry.insert(
             EndpointCategory::Model,
@@ -681,6 +741,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "mock.knob.38",
         "mock.volume",
         "mock.cells.segmented",
+        "vis.preset",
     ] {
         registry.insert(
             EndpointCategory::Model,
@@ -873,6 +934,29 @@ mod tests {
             reads.get("mock.cells.segmented"),
             Some(ReadValue::Scalar(3.0))
         );
+    }
+
+    #[kithara::test]
+    fn vis_previous_and_next_cycle_the_preset() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(reads.get("vis.preset"), Some(ReadValue::Scalar(0.0)));
+        assert_eq!(
+            reads.get("vis.preset_index"),
+            Some(ReadValue::Text("1 / 3"))
+        );
+
+        reads.apply("vis/previous", &ControlAction::Activate);
+        assert_eq!(reads.get("vis.preset"), Some(ReadValue::Scalar(2.0)));
+        assert_eq!(
+            reads.get("vis.preset_index"),
+            Some(ReadValue::Text("3 / 3"))
+        );
+
+        reads.apply("vis/next", &ControlAction::Activate);
+        assert_eq!(reads.get("vis.preset"), Some(ReadValue::Scalar(0.0)));
+        reads.apply("vis/shader", &ControlAction::SelectIndex(1));
+        assert_eq!(reads.get("vis.preset"), Some(ReadValue::Scalar(1.0)));
     }
 
     #[kithara::test]

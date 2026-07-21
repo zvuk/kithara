@@ -31,13 +31,22 @@ impl<'a> Widget<'a> for Text<'_, '_, '_> {
             TextStyle::Telemetry => self.skin.text.telemetry,
             TextStyle::MicroLabel => self.skin.text.micro_label,
             TextStyle::Section => self.skin.text.section,
+            TextStyle::VisFooter | TextStyle::VisMeta => self.skin.vis.meta,
+            TextStyle::VisTitle => self.skin.vis.title,
         };
         let content = if self.style == TextStyle::MicroLabel {
             value.to_uppercase()
         } else {
             value.to_owned()
         };
+        let padding_x = match self.style {
+            TextStyle::VisFooter => self.skin.vis.footer_padding_x,
+            TextStyle::VisMeta => self.skin.vis.index_padding_x,
+            TextStyle::VisTitle => self.skin.vis.name_padding_x,
+            _ => 0.0,
+        };
         container(styled_text(content, role, self.skin))
+            .padding([0.0, padding_x])
             .width(Length::Fill)
             .height(Length::Fill)
             .align_y(Vertical::Center)

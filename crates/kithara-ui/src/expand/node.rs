@@ -5,8 +5,8 @@ use crate::{
     ids::{InternId, SourceUri},
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, IconName, ScalarFormat, TextStyle, Tone, TrackColumn,
-        WaveStyle, WindowControlsStyle,
+        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, ScalarFormat, TextStyle, Tone,
+        TrackColumn, WaveStyle, WindowControlsStyle,
     },
     size::SizeSpec,
     skin::ColorRole,
@@ -67,6 +67,7 @@ pub enum ControlSpec {
     },
     Glyph {
         icon: IconName,
+        style: GlyphStyle,
     },
     NavItem {
         label: InternId,
@@ -97,6 +98,7 @@ pub enum ControlSpec {
         badge: Option<InternId>,
         zoom: Option<Binding>,
     },
+    Vis,
     TrackList {
         columns: Vec<TrackColumn>,
         columns_state: Option<Binding>,

@@ -90,6 +90,120 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
 }
 
 #[kithara::test]
+fn vis_compiles_with_scalar_read_and_select_index_write() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "vis.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "vis",
+            root: Module(instance: "vis", source: "vis.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "vis.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "vis",
+            root: Vis(
+                id: "shader",
+                read: Model(id: "vis.preset"),
+                write: Parameter(id: "vis.preset"),
+            ))"#,
+    );
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+
+    let ui = compile(
+        "vis.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Vis,
+        read: Some(Binding::Model { .. }),
+        write: Some(Binding::Parameter { .. }),
+        ..
+    } = &**root
+    else {
+        panic!("expected compiled VIS control");
+    };
+}
+
+#[kithara::test]
+fn vis_rejects_non_scalar_read_and_write_bindings() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "vis.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "vis",
+            root: Module(instance: "vis", source: "vis.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "vis.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "vis",
+            root: Vis(
+                id: "shader",
+                read: Model(id: "vis.preset"),
+                write: Parameter(id: "vis.preset"),
+            ))"#,
+    );
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Text),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+
+    let read_error = compile(
+        "vis.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        read_error,
+        UiDocError::BindingType { id, expected, got, .. }
+            if id == "vis.preset" && expected == "Scalar" && got == "Text"
+    ));
+
+    registry.insert(
+        EndpointCategory::Model,
+        "vis.preset",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    let write_error = compile(
+        "vis.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        write_error,
+        UiDocError::BindingType { id, expected, got, .. }
+            if id == "vis.preset" && expected == "Scalar" && got == "Bool"
+    ));
+}
+
+#[kithara::test]
 fn track_list_requires_title_column_at_compile_time() {
     let resolver = track_list_resolver(
         r#"(schema: "kithara.module", version: 1, id: "track-list",

@@ -99,6 +99,9 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.fader.label_width, 28.0);
     assert_eq!(document.vu_vertical.thumb_height, 9.0);
     assert_eq!(document.vu_vertical.thumb_color, ColorRole::Accent);
+    assert_eq!(document.vis.header_height, 26.0);
+    assert_eq!(document.vis.size.h, Dim::Fixed(300.0));
+    assert_eq!(document.vis.footer_height, 22.0);
     assert_eq!(document.wave.cue_badge_background, ColorRole::WaveHigh);
     assert_eq!(document.wave.downbeat_alpha, 0.6);
     assert_eq!(document.wave.grid_alpha, 0.4);
@@ -166,6 +169,14 @@ fn required_control_skin_field_is_rejected_when_missing() {
 #[kithara::test]
 fn required_crossfader_skin_field_is_rejected_when_missing() {
     let text = builtin::DARK_SKIN.replacen("        rail_height: 6.0,\n", "", 1);
+    let error = parse_skin(&text, &origin()).unwrap_err();
+
+    assert!(matches!(error, UiDocError::Syntax { .. }));
+}
+
+#[kithara::test]
+fn required_vis_skin_field_is_rejected_when_missing() {
+    let text = builtin::DARK_SKIN.replacen("        header_height: 26.0,\n", "", 1);
     let error = parse_skin(&text, &origin()).unwrap_err();
 
     assert!(matches!(error, UiDocError::Syntax { .. }));

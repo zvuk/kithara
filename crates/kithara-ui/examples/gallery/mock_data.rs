@@ -9,6 +9,8 @@ struct MockData {
     artist: String,
     breadcrumb: String,
     footer_tokens_anatomy: String,
+    vis_indices: (String, String, String),
+    vis_presets: (String, String, String),
     tree: Vec<MockTreeRow>,
     tracks: Vec<MockTrack>,
 }
@@ -84,6 +86,8 @@ pub(crate) struct Catalog {
     pub(crate) artist: &'static str,
     pub(crate) breadcrumb: &'static str,
     pub(crate) footer_tokens_anatomy: &'static str,
+    pub(crate) vis_indices: [&'static str; 3],
+    pub(crate) vis_presets: [&'static str; 3],
     pub(crate) rows: &'static [TrackRow<'static>],
     pub(crate) tree: &'static [TreeRow<'static>],
 }
@@ -130,6 +134,16 @@ fn load_catalog() -> Catalog {
         artist: &data.artist,
         breadcrumb: &data.breadcrumb,
         footer_tokens_anatomy: &data.footer_tokens_anatomy,
+        vis_indices: [
+            data.vis_indices.0.as_str(),
+            data.vis_indices.1.as_str(),
+            data.vis_indices.2.as_str(),
+        ],
+        vis_presets: [
+            data.vis_presets.0.as_str(),
+            data.vis_presets.1.as_str(),
+            data.vis_presets.2.as_str(),
+        ],
         rows: Box::leak(rows.into_boxed_slice()),
         tree: Box::leak(tree.into_boxed_slice()),
     }

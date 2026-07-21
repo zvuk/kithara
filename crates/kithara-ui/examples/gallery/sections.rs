@@ -10,6 +10,7 @@ pub(super) enum Tab {
     Tokens,
     Micro,
     Mixer,
+    Vis,
     Chrome,
     Titlebars,
     Tracklist,
@@ -19,7 +20,7 @@ pub(super) enum Tab {
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 16] = [
+    pub(super) const ALL: [Self; 17] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -30,6 +31,7 @@ impl Tab {
         Self::Tokens,
         Self::Micro,
         Self::Mixer,
+        Self::Vis,
         Self::Chrome,
         Self::Titlebars,
         Self::Tracklist,
@@ -50,6 +52,7 @@ impl Tab {
             Self::Tokens => "gallery-tokens.klayout.ron",
             Self::Micro => "gallery-micro.klayout.ron",
             Self::Mixer => "gallery-mixer.klayout.ron",
+            Self::Vis => "gallery-vis.klayout.ron",
             Self::Chrome => "gallery-chrome.klayout.ron",
             Self::Titlebars => "gallery-titlebars.klayout.ron",
             Self::Tracklist => "gallery-tracklist.klayout.ron",
@@ -71,12 +74,13 @@ impl Tab {
             Self::Tokens => 7,
             Self::Micro => 8,
             Self::Mixer => 9,
-            Self::Chrome => 10,
-            Self::Titlebars => 11,
-            Self::Tracklist => 12,
-            Self::Tree => 13,
-            Self::Library2 => 14,
-            Self::Stress => 15,
+            Self::Vis => 10,
+            Self::Chrome => 11,
+            Self::Titlebars => 12,
+            Self::Tracklist => 13,
+            Self::Tree => 14,
+            Self::Library2 => 15,
+            Self::Stress => 16,
         }
     }
 }
@@ -96,6 +100,7 @@ impl TryFrom<&str> for Tab {
             "gallery/tokens" => Ok(Self::Tokens),
             "gallery/micro" => Ok(Self::Micro),
             "gallery/mixer" => Ok(Self::Mixer),
+            "gallery/vis" => Ok(Self::Vis),
             "gallery/chrome" => Ok(Self::Chrome),
             "gallery/titlebars" => Ok(Self::Titlebars),
             "gallery/tracklist" => Ok(Self::Tracklist),

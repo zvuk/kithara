@@ -28,7 +28,7 @@ impl Consts {
     const SIZES_CAPTURE_TICK: u32 = 95;
     const SIZES_SELECT_TICK: u32 = 90;
     const STRESS_CAPTURE_TICK: u32 = 590;
-    const STRESS_SELECT_TICK: u32 = 195;
+    const STRESS_SELECT_TICK: u32 = 225;
     const TITLEBARS_CAPTURE_TICK: u32 = 145;
     const TITLEBARS_SELECT_TICK: u32 = 140;
     const TOKENS_CAPTURE_TICK: u32 = 105;
@@ -39,6 +39,8 @@ impl Consts {
     const TREE_SELECT_TICK: u32 = 170;
     const TYPOGRAPHY_CAPTURE_TICK: u32 = 75;
     const TYPOGRAPHY_SELECT_TICK: u32 = 70;
+    const VIS_CAPTURE_TICK: u32 = 220;
+    const VIS_SELECT_TICK: u32 = 195;
 }
 
 pub(super) struct ShotPlan {
@@ -141,6 +143,11 @@ pub(super) fn drive(state: &mut Gallery) -> Task<Message> {
             Task::none()
         }
         Consts::LIBRARY2_CAPTURE_TICK => capture(state.window_id, "tab-library2"),
+        Consts::VIS_SELECT_TICK => {
+            state.select_tab(Tab::Vis);
+            Task::none()
+        }
+        Consts::VIS_CAPTURE_TICK => capture(state.window_id, "tab-vis"),
         Consts::STRESS_SELECT_TICK => {
             state.select_tab(Tab::Stress);
             Task::none()

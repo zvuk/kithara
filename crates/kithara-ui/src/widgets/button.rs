@@ -36,6 +36,8 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
         let highlighted = is_primary(self.style) || active;
         let font = if highlighted {
             self.skin.button.primary_text
+        } else if self.style == ButtonStyle::VisNav {
+            self.skin.vis.nav_text
         } else {
             self.skin.button.text
         };
@@ -48,7 +50,7 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
             ButtonStyle::Transport | ButtonStyle::TransportPrimary => {
                 transport_content(self.icon, label, font, highlighted, self.skin)
             }
-            ButtonStyle::Default => self.icon.map_or_else(
+            ButtonStyle::Default | ButtonStyle::VisNav => self.icon.map_or_else(
                 || text_content(label, font),
                 |icon| {
                     let color = if highlighted {
@@ -62,6 +64,8 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
         };
         let height = if self.style == ButtonStyle::MicroPrimary {
             self.skin.button.micro_size
+        } else if self.style == ButtonStyle::VisNav {
+            self.skin.vis.nav_cell_size
         } else {
             self.skin.button.height
         };
@@ -70,9 +74,14 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
             .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill);
+        let padding = if self.style == ButtonStyle::VisNav {
+            [self.skin.vis.nav_padding_y, self.skin.vis.nav_padding_x]
+        } else {
+            [self.skin.button.padding_y, self.skin.button.padding_x]
+        };
         let control = button(centered)
             .height(Length::Fixed(height))
-            .padding([self.skin.button.padding_y, self.skin.button.padding_x])
+            .padding(padding)
             .style(control_button_style(self.skin, self.style, active))
             .on_press(UiEvent::Control {
                 path: self.path.to_owned(),
@@ -87,6 +96,9 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
                 .into(),
             ButtonStyle::MicroPrimary => control
                 .width(Length::Fixed(self.skin.button.micro_size))
+                .into(),
+            ButtonStyle::VisNav => control
+                .width(Length::Fixed(self.skin.vis.nav_cell_size))
                 .into(),
             ButtonStyle::Default => control.width(Length::Shrink).into(),
         }
@@ -158,7 +170,9 @@ fn control_button_style(
 ) -> impl Fn(&Theme, ButtonStatus) -> IcedButtonStyle + 'static {
     let palette = skin.palette;
     let highlighted = is_primary(style) || active;
-    let mut border = skin.border(if is_primary(style) {
+    let mut border = skin.border(if style == ButtonStyle::VisNav {
+        skin.vis.nav_frame
+    } else if is_primary(style) {
         skin.button.primary_frame
     } else {
         skin.button.frame
@@ -166,8 +180,16 @@ fn control_button_style(
     if style == ButtonStyle::Transport {
         border.color = palette.line_inner;
     }
+    let vis_background = skin.color(skin.vis.nav_background);
+    let vis_text = skin.color(skin.vis.nav_text_color);
     move |_theme, status| {
-        let background = if highlighted {
+        let background = if style == ButtonStyle::VisNav {
+            match status {
+                ButtonStatus::Hovered => palette.bg_select,
+                ButtonStatus::Pressed => palette.accent_soft,
+                ButtonStatus::Active | ButtonStatus::Disabled => vis_background,
+            }
+        } else if highlighted {
             match status {
                 ButtonStatus::Hovered => palette.accent_strong,
                 ButtonStatus::Pressed => palette.accent_soft,
@@ -182,7 +204,9 @@ fn control_button_style(
         };
         IcedButtonStyle {
             background: Some(Background::Color(background)),
-            text_color: if highlighted {
+            text_color: if style == ButtonStyle::VisNav {
+                vis_text
+            } else if highlighted {
                 palette.bg
             } else {
                 palette.text

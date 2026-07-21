@@ -25,6 +25,7 @@ pub struct SkinDoc {
     pub crossfader: CrossfaderSkin,
     pub vu_stereo: VuStereoSkin,
     pub vu_vertical: VuVerticalSkin,
+    pub vis: VisSkin,
     pub toggle: ToggleSkin,
     pub checkbox: CheckboxSkin,
     pub readout: ReadoutSkin,
@@ -404,6 +405,29 @@ pub struct VuVerticalSkin {
     pub thumb_color: ColorRole,
     pub warning_threshold: f32,
     pub danger_threshold: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct VisSkin {
+    pub size: SizeSpec,
+    pub header_height: f32,
+    pub footer_height: f32,
+    pub nav_cell_size: f32,
+    pub nav_padding_x: f32,
+    pub nav_padding_y: f32,
+    pub name_padding_x: f32,
+    pub index_padding_x: f32,
+    pub footer_padding_x: f32,
+    pub title: TextRoleSkin,
+    pub meta: TextRoleSkin,
+    pub nav_text: FontSkin,
+    pub nav_frame: FrameSkin,
+    pub nav_background: ColorRole,
+    pub nav_text_color: ColorRole,
+    pub icon_size: f32,
+    pub icon_color: ColorRole,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

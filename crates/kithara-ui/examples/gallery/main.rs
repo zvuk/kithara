@@ -111,6 +111,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-typography.klayout.ron"),
     ),
     (
+        "gallery-vis.klayout.ron",
+        include_str!("assets/gallery-vis.klayout.ron"),
+    ),
+    (
         "modules/module-deck-micro.kmodule.ron",
         include_str!("assets/modules/module-deck-micro.kmodule.ron"),
     ),
@@ -275,6 +279,14 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/typography.kmodule.ron"),
     ),
     (
+        "modules/tabs/vis-spacer.kmodule.ron",
+        include_str!("assets/modules/tabs/vis-spacer.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/vis.kmodule.ron",
+        include_str!("assets/modules/tabs/vis.kmodule.ron"),
+    ),
+    (
         "modules/titlebar.kmodule.ron",
         include_str!("assets/modules/titlebar.kmodule.ron"),
     ),
@@ -425,9 +437,9 @@ fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
 
 fn subscription(state: &Gallery) -> Subscription<Message> {
     let close = window::close_requests().map(Message::Close);
-    let stress = state.reads.active_tab() == Tab::Stress;
-    if state.shot.is_some() || stress {
-        let period = if stress {
+    let animated = matches!(state.reads.active_tab(), Tab::Stress | Tab::Vis);
+    if state.shot.is_some() || animated {
+        let period = if animated {
             Consts::STRESS_TICK_MS
         } else {
             Consts::CAPTURE_TICK_MS

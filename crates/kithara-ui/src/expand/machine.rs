@@ -10,7 +10,9 @@ use super::{
 use crate::{
     error::UiDocError,
     ids::{Interner, NodeId, SourceUri},
-    module::{AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, IconName, TextStyle},
+    module::{
+        AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, GlyphStyle, IconName, TextStyle,
+    },
     resolve::ModuleSet,
     size::SizeSpec,
 };
@@ -351,7 +353,7 @@ fn expand_control(
         ControlNode::Text { style, label, .. } => {
             text_spec(context, machine.interner, *style, label.as_deref(), &path)?
         }
-        ControlNode::Glyph { icon, .. } => ControlSpec::Glyph { icon: *icon },
+        ControlNode::Glyph { icon, style, .. } => glyph_spec(*icon, *style),
         ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
             label: intern_text(context, machine.interner, label, &path, &context.origin)?,
             icon: *icon,
@@ -398,6 +400,7 @@ fn expand_control(
             )?,
             zoom: intern_optional_binding(machine.interner, extra.zoom.as_ref(), &context.origin)?,
         },
+        ControlNode::Vis { .. } => ControlSpec::Vis,
         ControlNode::TrackList { columns, .. } => ControlSpec::TrackList {
             columns: columns.clone(),
             columns_state: intern_optional_binding(
@@ -485,6 +488,10 @@ fn expand_control(
         spec,
         machine,
     )
+}
+
+const fn glyph_spec(icon: IconName, style: GlyphStyle) -> ControlSpec {
+    ControlSpec::Glyph { icon, style }
 }
 
 fn button_spec(
@@ -649,6 +656,13 @@ fn expand_value_control(
             write,
             adaptive,
             ..
+        }
+        | ControlNode::Vis {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
         }
         | ControlNode::TrackList {
             id,
@@ -909,6 +923,7 @@ fn walk(
         | ControlNode::Crossfader { .. }
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
+        | ControlNode::Vis { .. }
         | ControlNode::TrackList { .. }
         | ControlNode::Tree { .. }
         | ControlNode::ContextBar { .. }) => expand_value_control(context, control, depth, machine),

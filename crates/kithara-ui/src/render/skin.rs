@@ -9,7 +9,7 @@ use crate::{
         DeckSkin, FaderSkin, FrameSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin, LayoutSkin,
         NavSkin, ReadoutSkin, SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin,
         TabLargeSkin, TelemetrySkin, TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin,
-        VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
+        VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
     },
 };
 
@@ -27,6 +27,7 @@ pub struct Skin {
     pub crossfader: CrossfaderSkin,
     pub vu_stereo: VuStereoSkin,
     pub vu_vertical: VuVerticalSkin,
+    pub vis: VisSkin,
     pub toggle: ToggleSkin,
     pub checkbox: CheckboxSkin,
     pub readout: ReadoutSkin,
@@ -90,6 +91,7 @@ impl Skin {
             crossfader: document.crossfader.clone(),
             vu_stereo: document.vu_stereo,
             vu_vertical: document.vu_vertical,
+            vis: document.vis,
             toggle: document.toggle,
             checkbox: document.checkbox,
             readout: document.readout,

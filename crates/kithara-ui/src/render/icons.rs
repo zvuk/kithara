@@ -12,6 +12,7 @@ use crate::render::fonts;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Icon {
+    ChevronUp,
     Disc,
     Collection,
     Folder,
@@ -22,6 +23,7 @@ pub enum Icon {
     Headphones,
     Instrument,
     Lock,
+    Maximize,
     Menu,
     MusicNote,
     Pause,
@@ -78,6 +80,7 @@ impl Icon {
 fn source(icon: Icon) -> IconSource {
     match icon {
         Icon::Charts => IconSource::Lucide(lucide_icons::Icon::TrendingUp),
+        Icon::ChevronUp => IconSource::Lucide(lucide_icons::Icon::ChevronUp),
         Icon::Clock => IconSource::Lucide(lucide_icons::Icon::Clock),
         Icon::Collection => IconSource::Lucide(lucide_icons::Icon::CircleDot),
         Icon::Disc => IconSource::Lucide(lucide_icons::Icon::Disc),
@@ -89,6 +92,7 @@ fn source(icon: Icon) -> IconSource {
         Icon::Home => IconSource::Lucide(lucide_icons::Icon::Home),
         Icon::Instrument => IconSource::Lucide(lucide_icons::Icon::KeyboardMusic),
         Icon::Lock => IconSource::Lucide(lucide_icons::Icon::Lock),
+        Icon::Maximize => IconSource::Lucide(lucide_icons::Icon::Maximize),
         Icon::Menu => IconSource::Lucide(lucide_icons::Icon::Menu),
         Icon::Monitor => IconSource::Lucide(lucide_icons::Icon::Monitor),
         Icon::MusicNote => IconSource::Lucide(lucide_icons::Icon::Music),

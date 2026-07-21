@@ -179,6 +179,8 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
         icon: IconName,
+        #[serde(default)]
+        style: GlyphStyle,
     },
     NavItem {
         id: NodeId,
@@ -300,6 +302,17 @@ pub enum ControlNode {
         badge: Option<String>,
         #[serde(default)]
         zoom: Option<BindingRef>,
+    },
+    Vis {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
     },
     TrackList {
         id: NodeId,
@@ -497,20 +510,31 @@ pub enum ControlNode {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum IconName {
+    ChevronUp,
     Disc,
     Faders,
     FastForward,
     Gear,
     Headphones,
+    Maximize,
     Menu,
     Play,
     PlayReverse,
     Playlist,
     Rewind,
     SpeakerHigh,
+    Waveform,
     X,
     ZoomIn,
     ZoomOut,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum GlyphStyle {
+    #[default]
+    Default,
+    Vis,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -543,6 +567,9 @@ pub enum TextStyle {
     Telemetry,
     MicroLabel,
     Section,
+    VisFooter,
+    VisMeta,
+    VisTitle,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -553,6 +580,7 @@ pub enum ButtonStyle {
     Transport,
     TransportPrimary,
     MicroPrimary,
+    VisNav,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

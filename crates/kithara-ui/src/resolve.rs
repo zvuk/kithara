@@ -120,6 +120,7 @@ fn walk_includes(
         | ControlNode::Crossfader { .. }
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
+        | ControlNode::Vis { .. }
         | ControlNode::TrackList { .. }
         | ControlNode::Tree { .. }
         | ControlNode::ContextBar { .. }

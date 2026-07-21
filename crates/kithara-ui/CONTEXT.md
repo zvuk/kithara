@@ -53,6 +53,18 @@ reads the visible track fraction; wheel interaction emits `SetScalar` at `<wave-
 horizontal drag emits `SetScalar` at the wave path for the host-owned playback position. The
 renderer keeps neither value and derives the centered zoom window from each read snapshot.
 
+## Visualizer Ownership
+
+`Vis` reads the host-owned preset as a Scalar and emits `SelectIndex` for preset changes. Its
+master reaction level is derived from the `player.output.levels` Stereo snapshot as
+`max(left, right) * volume`; the shader does not retain audio state. `SkinDoc.vis` owns the module
+chrome and canvas metrics, while the embedded WGSL asset owns the three fixed render presets.
+
+The render-only shader program stores an `Instant` per widget to derive animation time. A host
+must keep requesting frames while the visualizer is visible; the gallery does so with its active
+VIS-tab subscription. The shader implementation remains behind the `render` feature, so the
+non-render wasm schema lane does not depend on wgpu or wall-clock state.
+
 ## Typed Control Schema
 
 Each supported control is a structural `ControlNode` enum variant. RON deserialization owns field

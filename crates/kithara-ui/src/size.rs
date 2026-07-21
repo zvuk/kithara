@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     expand::{ControlSpec, ExpandedNode},
-    module::ChromeStyle,
+    module::{ButtonStyle, ChromeStyle, TextStyle},
     skin::{SkinDoc, WindowControlSkin},
 };
 
@@ -160,20 +160,33 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
                 SizeSpec::new(Dim::Fixed(cell_size), Dim::Fixed(cell_size))
             }
         },
-        ControlSpec::Text { .. } => skin.text.size,
+        ControlSpec::Text { style, .. } => match style {
+            TextStyle::VisFooter => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.footer_height)),
+            TextStyle::VisMeta | TextStyle::VisTitle => {
+                SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.header_height))
+            }
+            _ => skin.text.size,
+        },
         ControlSpec::Glyph { .. } => SizeSpec::new(
             Dim::Fixed(skin.nav.header_icon_size),
             Dim::Fixed(skin.nav.header_height),
         ),
         ControlSpec::NavItem { .. } => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.nav.item_height)),
         ControlSpec::TabLarge { .. } => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tab_large.height)),
-        ControlSpec::Button { .. } => skin.button.size,
+        ControlSpec::Button { style, .. } => match style {
+            ButtonStyle::VisNav => SizeSpec::new(
+                Dim::Fixed(skin.vis.nav_cell_size),
+                Dim::Fixed(skin.vis.nav_cell_size),
+            ),
+            _ => skin.button.size,
+        },
         ControlSpec::Bpm { .. } => skin.deck.bpm_size,
         ControlSpec::Time => skin.deck.time_size,
         ControlSpec::Scalar { .. } => skin.telemetry.size,
         ControlSpec::Crossfader => skin.crossfader.size,
         ControlSpec::Fader { .. } => skin.fader.size,
         ControlSpec::Wave { .. } => skin.wave.size,
+        ControlSpec::Vis => skin.vis.size,
         ControlSpec::TrackList { .. } => skin.track_list.size,
         ControlSpec::Tree { .. } => skin.tree.size,
         ControlSpec::ContextBar { .. } => {
