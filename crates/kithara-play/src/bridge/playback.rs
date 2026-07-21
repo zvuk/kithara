@@ -1,6 +1,33 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::{
+    num::NonZeroU64,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use portable_atomic::{AtomicF64, AtomicU32};
+
+/// Monotonic identity of one cross-plane session-seek preparation attempt.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(transparent)]
+#[doc(hidden)]
+pub struct SessionSeekAttempt(NonZeroU64);
+
+impl SessionSeekAttempt {
+    pub(crate) fn new(value: u64) -> Option<Self> {
+        NonZeroU64::new(value).map(Self)
+    }
+
+    pub(crate) const fn get(self) -> u64 {
+        self.0.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn new_for_test(value: u64) -> Self {
+        match NonZeroU64::new(value) {
+            Some(value) => Self(value),
+            None => panic!("session seek test attempt must be non-zero"),
+        }
+    }
+}
 
 /// Coherent snapshot of the live playback scalars.
 #[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
@@ -47,13 +74,72 @@ pub struct PlaybackShared {
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
+    session_seek_attempt: AtomicU64,
+    session_seek_cancelled: AtomicU64,
+    session_seek_failed: AtomicU64,
+    session_seek_prepared: AtomicU64,
 }
 
 impl PlaybackShared {
+    pub(crate) fn acknowledge_session_seek_cancel(&self, attempt: SessionSeekAttempt) {
+        let _ = self.session_seek_cancelled.compare_exchange(
+            attempt.get(),
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
+    pub(crate) fn cancel_session_seek(&self, attempt: SessionSeekAttempt) {
+        self.session_seek_cancelled
+            .store(attempt.get(), Ordering::SeqCst);
+    }
+
+    pub(crate) fn clear_prepared_session_seek(&self, attempt: SessionSeekAttempt) {
+        let _ = self.session_seek_prepared.compare_exchange(
+            attempt.get(),
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
+    pub(crate) fn fail_session_seek(&self, attempt: SessionSeekAttempt) {
+        self.session_seek_failed
+            .store(attempt.get(), Ordering::SeqCst);
+    }
+
     pub fn next_seek_epoch(&self) -> u64 {
         self.seek_epoch
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)
+    }
+
+    pub(crate) fn next_session_seek_attempt(&self) -> Option<SessionSeekAttempt> {
+        let previous = self
+            .session_seek_attempt
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                current.checked_add(1)
+            })
+            .ok()?;
+        SessionSeekAttempt::new(previous.checked_add(1)?)
+    }
+
+    pub(crate) fn prepare_session_seek(&self, attempt: SessionSeekAttempt) {
+        self.session_seek_prepared
+            .store(attempt.get(), Ordering::SeqCst);
+    }
+
+    pub(crate) fn session_seek_cancelled(&self, attempt: SessionSeekAttempt) -> bool {
+        self.session_seek_cancelled.load(Ordering::SeqCst) == attempt.get()
+    }
+
+    pub(crate) fn session_seek_failed(&self, attempt: SessionSeekAttempt) -> bool {
+        self.session_seek_failed.load(Ordering::SeqCst) == attempt.get()
+    }
+
+    pub(crate) fn session_seek_prepared(&self, attempt: SessionSeekAttempt) -> bool {
+        self.session_seek_prepared.load(Ordering::SeqCst) == attempt.get()
     }
 
     /// Single coherent read of the live playback scalars.
@@ -89,6 +175,10 @@ mod tests {
         assert_eq!(playback.duration.load(Ordering::Relaxed), 0.0);
         assert_eq!(playback.sample_rate.load(Ordering::Relaxed), 0);
         assert!(!playback.multiple_tracks.load(Ordering::Relaxed));
+        let attempt = SessionSeekAttempt::new_for_test(1);
+        assert!(!playback.session_seek_failed(attempt));
+        assert!(!playback.session_seek_prepared(attempt));
+        assert!(!playback.session_seek_cancelled(attempt));
     }
 
     #[kithara::test]
@@ -97,6 +187,23 @@ mod tests {
         assert_eq!(playback.next_seek_epoch(), 1);
         assert_eq!(playback.next_seek_epoch(), 2);
         assert_eq!(playback.next_seek_epoch(), 3);
+    }
+
+    #[kithara::test]
+    fn session_seek_status_is_scoped_to_attempt_identity() {
+        let playback = PlaybackShared::default();
+        let old = playback
+            .next_session_seek_attempt()
+            .expect("first attempt allocates");
+        playback.prepare_session_seek(old);
+        playback.fail_session_seek(old);
+
+        let current = playback
+            .next_session_seek_attempt()
+            .expect("second attempt allocates");
+
+        assert!(!playback.session_seek_prepared(current));
+        assert!(!playback.session_seek_failed(current));
     }
 
     #[kithara::test]

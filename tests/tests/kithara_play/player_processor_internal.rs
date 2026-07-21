@@ -22,7 +22,7 @@ use kithara::{
     play::{
         PlaybackDirection, PlayerNotification, Resource, SessionBeat, SharedEq, TrackBinding,
         TrackState, TrackTransition,
-        bridge::{PlayerCmd, SlotControl, slot_channels},
+        bridge::{PlayerCmd, SlotControl, TrackStart, slot_channels},
         player::{
             node::{PlayerNodeProcessor, StreamShape},
             track::PlayerResource,
@@ -121,6 +121,7 @@ async fn load_track_propagates_host_sample_rate() {
             binding: None,
             resource: player_resource,
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -139,6 +140,7 @@ fn load_track_preserves_the_musical_binding() {
             binding: Some(binding.clone()),
             resource: create_mock_player_resource(&src),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .expect("load bound track");
 
@@ -208,6 +210,7 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
             binding: None,
             resource: player_resource,
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -257,6 +260,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
             binding: None,
             resource: create_duration_player_resource(&first_src, Duration::from_secs(64)),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     control
@@ -278,6 +282,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
             binding: None,
             resource: create_duration_player_resource(&second_src, Duration::from_secs(162)),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -319,6 +324,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
             binding: None,
             resource,
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -389,6 +395,7 @@ async fn processor_track_command_scenarios(
             binding: None,
             resource: create_mock_player_resource("track1.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
 
@@ -401,6 +408,7 @@ async fn processor_track_command_scenarios(
                     binding: None,
                     resource: create_mock_player_resource("track1.mp3"),
                     item_id: None,
+                    start: TrackStart::Immediate,
                 })
                 .ok();
         }
@@ -445,6 +453,7 @@ async fn processor_fade_in_restarts_track_from_zero() {
             binding: None,
             resource: create_mock_player_resource("track1.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -482,6 +491,7 @@ async fn processor_cleanup_finished_tracks() {
             binding: None,
             resource,
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -508,6 +518,7 @@ async fn render_audio_handover_fills_tail_from_next_playing_track() {
             binding: None,
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     control
@@ -516,6 +527,7 @@ async fn render_audio_handover_fills_tail_from_next_playing_track() {
             binding: None,
             resource: create_mock_player_resource("long.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -566,6 +578,7 @@ async fn render_audio_handover_promotes_preloading_track_without_silence() {
             binding: None,
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     control
@@ -574,6 +587,7 @@ async fn render_audio_handover_promotes_preloading_track_without_silence() {
             binding: None,
             resource: create_mock_player_resource("preload.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();
@@ -628,6 +642,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
             binding: None,
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     control
@@ -636,6 +651,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
             binding: None,
             resource: create_mock_player_resource("fading.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     control
@@ -644,6 +660,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
             binding: None,
             resource: create_mock_player_resource("preload.mp3"),
             item_id: None,
+            start: TrackStart::Immediate,
         })
         .ok();
     processor.drain_commands();

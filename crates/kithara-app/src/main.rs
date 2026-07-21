@@ -22,7 +22,7 @@ use kithara_app::gui::GuiFrontend;
 #[cfg(feature = "tui")]
 use kithara_app::tui::TuiFrontend;
 use kithara_app::{baked, config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{CancelToken, sync::Arc, traits::FromWithParams};
 use kithara_queue::{Queue, QueueConfig};
 
 /// Kithara — audio player application.
@@ -149,11 +149,10 @@ fn main() -> AppResult {
         .build();
     let player = Arc::new(PlayerImpl::new(player_config));
     let queue_config = QueueConfig::default()
-        .with_player(player)
         .with_store(config.store.clone())
         .with_cancel(shutdown.child());
 
-    let queue = Arc::new(Queue::new(queue_config));
+    let queue = Arc::new(Queue::build(player, queue_config));
 
     match mode {
         #[cfg(feature = "tui")]

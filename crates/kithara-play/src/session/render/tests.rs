@@ -241,6 +241,7 @@ fn load_playing_track(
                 binding: None,
                 resource,
                 item_id: None,
+                start: crate::bridge::TrackStart::Immediate,
             })
             .is_ok()
     );
@@ -426,6 +427,51 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
     assert_eq!(context.transport_commit(), Some(next));
     let beats = context.session_beats().expect("matching beat range");
     assert!((beats.start.get() - 0.04).abs() <= f64::EPSILON);
+}
+
+#[kithara::test]
+fn relocation_commit_reanchors_the_exact_target_beat() {
+    let old =
+        SessionTransportCommit::new(Tempo::new(120.0).expect("valid tempo"), true, revision(1));
+    let target = SessionBeat::new(3.25).expect("finite relocation target");
+    let next = SessionTransportCommit::relocate(
+        Tempo::new(120.0).expect("valid tempo"),
+        true,
+        revision(2),
+        target,
+    );
+    let mut extra = proc_extra(Some(120.0));
+    let mut processor = RenderContextProcessor;
+    process_context(&mut processor, &proc_info_at(0), &mut extra);
+    process_context_event(
+        &mut processor,
+        &proc_info_at(BLOCK_FRAMES as i64),
+        &mut extra,
+        Some(NodeEventType::custom(TransportCommitEvent::Stage(
+            TransportCommitStamp::new(
+                Some(old),
+                next,
+                RenderFrame::new((BLOCK_FRAMES * 2) as i64),
+                sample_rate(),
+            ),
+        ))),
+    );
+    let boundary = proc_info_at((BLOCK_FRAMES * 2) as i64);
+    process_context_event(
+        &mut processor,
+        &boundary,
+        &mut extra,
+        Some(NodeEventType::custom(TransportCommitEvent::Apply(
+            revision(2),
+        ))),
+    );
+
+    let context = read_render_context(&extra.store, &boundary).expect("relocated context");
+    assert_eq!(context.transport_commit(), Some(next));
+    let beats = context
+        .session_beats()
+        .expect("relocated transport is playing");
+    assert!((beats.start.get() - target.get()).abs() <= f64::EPSILON);
 }
 
 #[kithara::test]

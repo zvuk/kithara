@@ -11,6 +11,7 @@ use kithara::{
         sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -73,7 +74,7 @@ async fn build_ctx() -> Ctx {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::build(player, QueueConfig::default()));
 
     let q = Arc::clone(&queue);
     tokio::task::spawn(async move {
@@ -220,8 +221,8 @@ enum AdvanceTrigger {
 }
 
 struct ScrubObservation<'a> {
-    queue: &'a Queue,
     rx: &'a mut EventReceiver,
+    queue: &'a Queue,
     recorder: &'a Recorder,
     event_log: &'a mut Vec<TimedEvent>,
     started_at: Instant,
@@ -231,12 +232,12 @@ struct ScrubObservation<'a> {
 #[derive(Clone, Copy)]
 struct ScrubParams<'a> {
     target_src: &'a str,
+    budget: Duration,
+    initial_index: Option<usize>,
+    min_growth_secs: f64,
+    seek_target_secs: f64,
     chunks_at_seek: usize,
     min_new_chunks: usize,
-    initial_index: Option<usize>,
-    seek_target_secs: f64,
-    min_growth_secs: f64,
-    budget: Duration,
 }
 
 async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
@@ -372,7 +373,6 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
     // sentinel tracks bracket the target so any single-step queue
     // advance (forward or backward) shows up as a `current_index`
     // delta — without them, the queue cannot move and the bug
-    // silently disappears.
     const SENTINEL_BEFORE: &str =
         "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8";
     const SENTINEL_AFTER: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/59232754_2/master.m3u8";
@@ -399,7 +399,6 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
 
     // Production-truth warmup signal: the first PCM chunk has been
     // built. Anything earlier and the seek lands in a state the
-    // production code never sees.
     wait_for_warmup(&recorder, WARMUP_PROBE_BUDGET)
         .await
         .unwrap_or_else(|e| panic!("warmup probe never fired for {TARGET_TRACK}: {e}"));

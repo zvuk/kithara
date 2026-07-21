@@ -12,6 +12,7 @@ use kithara::{
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -190,10 +191,9 @@ fn build_queue_with_tick(
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+    let queue = Arc::new(Queue::build(
+        player,
+        QueueConfig::default().with_store(store.clone()),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
@@ -349,7 +349,6 @@ async fn local_track_plays_end_to_end(
 
     // Flush any progress buffered while the anchor seek settled so the
     // start anchor is a genuinely FRESH post-seek event, not a stale frame
-    // from before the seek landed.
     let _ = drain_latest_position(&mut rx);
 
     // The `time::sleep` is in the BODY, so the macro virtualizes it; over 2

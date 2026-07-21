@@ -8,7 +8,10 @@ mod wire {
     use kithara_platform::sync::mpsc;
 
     use crate::{
-        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo, TransportRevision},
+        api::{
+            SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo,
+            TransportRevision,
+        },
         bridge::SlotControl,
         player::node::StreamShape,
     };
@@ -61,10 +64,10 @@ mod wire {
     #[derive(Clone, Copy, Debug, PartialEq)]
     #[non_exhaustive]
     pub struct PreparationContext {
+        roster_revision: SessionRosterRevision,
         shape: StreamShape,
         tempo: Tempo,
         transport_revision: TransportRevision,
-        roster_revision: SessionRosterRevision,
     }
 
     impl PreparationContext {
@@ -75,10 +78,10 @@ mod wire {
             roster_revision: SessionRosterRevision,
         ) -> Self {
             Self {
+                roster_revision,
                 shape,
                 tempo,
                 transport_revision,
-                roster_revision,
             }
         }
 
@@ -216,6 +219,12 @@ mod wire {
             expected_context: PreparationContext,
             player_ids: Vec<PlayerId>,
         },
+        /// Commit a prepared relocation while its session context and player roster remain current.
+        SeekSessionChecked {
+            target: SessionBeat,
+            expected_context: PreparationContext,
+            player_ids: Vec<PlayerId>,
+        },
         /// Query the transport state last processed by the audio graph.
         SessionTransport,
         /// Query one canonical transport, stream, and physical-roster context.
@@ -265,7 +274,7 @@ mod handle {
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, PreparationContext, Reply};
     use crate::{
-        api::{SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionBeat, SessionTransportSnapshot, SlotId, Tempo},
         error::PlayError,
         player::node::StreamShape,
     };
@@ -304,12 +313,11 @@ mod handle {
             Arc::clone(&self.0)
         }
 
-        pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            self.0.exec(cmd)
-        }
-
-        pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            self.0.exec_ok(cmd)
+        delegate::delegate! {
+            to self.0 {
+                pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+                pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+            }
         }
 
         fn exec_unit(&self, cmd: Cmd) -> Result<(), PlayError> {
@@ -373,6 +381,19 @@ mod handle {
 
         pub fn release_slot(&self, player_id: PlayerId, slot: SlotId) -> Result<(), PlayError> {
             self.exec_unit(Cmd::ReleaseSlot { player_id, slot })
+        }
+
+        pub(crate) fn seek_session_checked(
+            &self,
+            target: SessionBeat,
+            expected_context: PreparationContext,
+            player_ids: Vec<PlayerId>,
+        ) -> Result<(), PlayError> {
+            self.exec_unit(Cmd::SeekSessionChecked {
+                target,
+                expected_context,
+                player_ids,
+            })
         }
 
         pub(crate) fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {

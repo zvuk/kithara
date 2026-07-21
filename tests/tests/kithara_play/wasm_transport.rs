@@ -10,16 +10,16 @@ use kithara::{
     events::EventBus,
     platform::{sync::Arc, time::Duration},
     play::{
-        PlayError, PlaybackDirection, PlayerConfig, PlayerImpl, Resource, SessionBeat, Tempo,
-        TrackBinding,
+        MultiPlayer, PlayError, PlaybackDirection, PlayerConfig, PlayerImpl, Resource, SessionBeat,
+        Tempo, TrackBinding,
     },
 };
 use kithara_integration_tests::kithara;
 
 struct EmptyReader {
     bus: EventBus,
-    metadata: TrackMetadata,
     spec: PcmSpec,
+    metadata: TrackMetadata,
 }
 
 impl Default for EmptyReader {
@@ -33,6 +33,10 @@ impl Default for EmptyReader {
 }
 
 impl PcmRead for EmptyReader {
+    fn position(&self) -> Duration {
+        Duration::ZERO
+    }
+
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Ok(ReadOutcome::Eof {
             position: Duration::ZERO,
@@ -51,23 +55,19 @@ impl PcmRead for EmptyReader {
     fn spec(&self) -> PcmSpec {
         self.spec
     }
-
-    fn position(&self) -> Duration {
-        Duration::ZERO
-    }
 }
 
 impl PcmSession for EmptyReader {
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-
     fn duration(&self) -> Option<Duration> {
         None
     }
 
     fn event_bus(&self) -> &EventBus {
         &self.bus
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
     }
 }
 
@@ -117,12 +117,16 @@ fn player() -> PlayerImpl {
 
 #[kithara::test(browser, timeout(Duration::from_secs(10)))]
 async fn browser_player_uses_shared_transport_contract() {
-    let player = player();
-    let error = player
-        .set_session_tempo(&[], Tempo::new(128.0).expect("valid tempo"))
+    let players = MultiPlayer::default();
+    players
+        .register(player())
+        .expect("browser player registers");
+    let error = players
+        .set_session_tempo(Tempo::new(128.0).expect("valid tempo"))
         .expect_err("an unbound player has no registered session participant");
     assert!(matches!(error, PlayError::NotReady));
 
+    let player = player();
     let resource = Resource::from_reader(EmptyReader::default(), Some(Arc::from("memory://wasm")));
     let error = player
         .insert_with_binding(resource, None, binding(), None)

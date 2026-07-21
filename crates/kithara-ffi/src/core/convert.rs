@@ -793,6 +793,22 @@ mod tests {
     }
 
     #[kithara::test]
+    fn transport_seek_event_to_ffi_preserves_target_and_revision() {
+        let event = Event::Transport(TransportEvent::SeekCommitted {
+            position_beats: 12.5,
+            revision: 8,
+        });
+
+        assert!(matches!(
+            FfiPlayerEvent::try_from(&event),
+            Ok(FfiPlayerEvent::TransportSeekCommitted {
+                position_beats: 12.5,
+                revision: 8,
+            })
+        ));
+    }
+
+    #[kithara::test]
     fn sync_event_to_ffi_uses_sync_vocabulary() {
         let event = Event::Sync(SyncEvent::BindingCommitted {
             slot: kithara_events::SlotId::new(4),

@@ -4,24 +4,51 @@ use num_traits::ToPrimitive;
 
 use crate::api::{SessionBeat, Tempo, TransportRevision};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum TransportBoundary {
+    #[default]
+    Continuous,
+    Relocate(SessionBeat),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SessionTransportCommit {
     tempo: Tempo,
-    playing: bool,
+    boundary: TransportBoundary,
     revision: TransportRevision,
+    playing: bool,
 }
 
 impl SessionTransportCommit {
     pub(crate) const fn new(tempo: Tempo, playing: bool, revision: TransportRevision) -> Self {
         Self {
+            boundary: TransportBoundary::Continuous,
             tempo,
             playing,
             revision,
         }
     }
 
+    pub(crate) const fn boundary(self) -> TransportBoundary {
+        self.boundary
+    }
+
     pub(crate) const fn is_playing(self) -> bool {
         self.playing
+    }
+
+    pub(crate) const fn relocate(
+        tempo: Tempo,
+        playing: bool,
+        revision: TransportRevision,
+        target: SessionBeat,
+    ) -> Self {
+        Self {
+            boundary: TransportBoundary::Relocate(target),
+            tempo,
+            playing,
+            revision,
+        }
     }
 
     pub(crate) const fn revision(self) -> TransportRevision {
@@ -46,11 +73,13 @@ impl RenderFrame {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct RenderContext {
     sample_rate: NonZeroU32,
     session_beats: Option<Range<SessionBeat>>,
     transport_commit: Option<SessionTransportCommit>,
+    #[field(get, vis = "pub(crate)")]
     render_frames: Range<RenderFrame>,
 }
 
@@ -73,6 +102,12 @@ impl RenderContext {
             transport_commit,
             render_frames,
         })
+    }
+
+    pub(crate) fn beat_is_before_output(&self, target: SessionBeat) -> bool {
+        self.session_beats
+            .as_ref()
+            .is_some_and(|beats| target < beats.start)
     }
 
     pub(crate) fn for_output_range(&self, range: Range<usize>) -> Option<Self> {
@@ -101,8 +136,33 @@ impl RenderContext {
         )
     }
 
-    pub(crate) fn render_frames(&self) -> &Range<RenderFrame> {
-        &self.render_frames
+    pub(crate) fn output_offset_for_beat(&self, target: SessionBeat) -> Option<usize> {
+        let beats = self.session_beats.as_ref()?;
+        let frames = self
+            .render_frames
+            .end
+            .get()
+            .checked_sub(self.render_frames.start.get())
+            .and_then(|frames| usize::try_from(frames).ok())?;
+        if target == beats.start {
+            return Some(0);
+        }
+        if target < beats.start || target >= beats.end || frames == 0 {
+            return None;
+        }
+        let span = beats.end.get() - beats.start.get();
+        if span <= 0.0 {
+            return None;
+        }
+        let exact = (target.get() - beats.start.get()) * frames.to_f64()? / span;
+        let nearest = exact.round();
+        let offset = if (exact - nearest).abs() <= 1.0e-6 {
+            nearest
+        } else {
+            exact.ceil()
+        }
+        .to_usize()?;
+        (offset < frames).then_some(offset)
     }
 
     pub(crate) const fn sample_rate(&self) -> NonZeroU32 {
@@ -114,9 +174,23 @@ impl RenderContext {
         self.session_beats.as_ref()
     }
 
+    pub(crate) const fn transport_boundary(&self) -> Option<TransportBoundary> {
+        match self.transport_commit {
+            Some(commit) => Some(commit.boundary()),
+            None => None,
+        }
+    }
+
     #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) const fn transport_commit(&self) -> Option<SessionTransportCommit> {
         self.transport_commit
+    }
+
+    pub(crate) const fn transport_revision(&self) -> Option<TransportRevision> {
+        match self.transport_commit {
+            Some(commit) => Some(commit.revision()),
+            None => None,
+        }
     }
 }
 

@@ -10,7 +10,7 @@ use firewheel::{
 use num_traits::ToPrimitive;
 use triple_buffer::{Input, Output};
 
-use super::context::{RenderFrame, SessionTransportCommit};
+use super::context::{RenderFrame, SessionTransportCommit, TransportBoundary};
 use crate::api::{SessionBeat, SessionTransportSnapshot, TransportRevision};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -165,10 +165,10 @@ pub(super) struct TransportCommitState {
     anchor: Option<TransportAnchor>,
     boundary: Option<RenderBoundary>,
     completion: Option<TransportCommitResult>,
+    ignored_through_revision: Option<TransportRevision>,
     pending: Option<TransportCommitStamp>,
     reanchor_beat: Option<SessionBeat>,
     snapshot: Option<SessionTransportSnapshot>,
-    ignored_through_revision: Option<TransportRevision>,
 }
 
 #[derive(Debug)]
@@ -313,12 +313,15 @@ impl TransportCommitState {
             self.reject_revision(revision);
             return Ok(());
         }
-        let beat = match stamp.previous {
-            Some(_) => self
+        let beat = match (stamp.next.boundary(), stamp.previous) {
+            (TransportBoundary::Relocate(target), _) => target,
+            (TransportBoundary::Continuous, Some(_)) => self
                 .anchor
                 .ok_or(TransportProcessError::InvalidBeatRange)?
                 .beat_at(stamp.target_frame)?,
-            None => SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?,
+            (TransportBoundary::Continuous, None) => {
+                SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?
+            }
         };
         self.active = Some(stamp.next);
         self.anchor = Some(TransportAnchor {

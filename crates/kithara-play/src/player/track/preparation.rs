@@ -207,6 +207,44 @@ impl ElasticRenderer<Preparing> {
         }
     }
 
+    fn poll_preparation_window(
+        mut self,
+        resource: &mut Resource,
+        request: SourceRangeRequest,
+        range: SourceRange,
+        runtime: PreparedRuntime,
+    ) -> Result<ElasticPreparationPoll, ElasticPrepareError> {
+        let frames =
+            usize::try_from(range.len()).map_err(|_| ElasticPrepareError::FrameOverflow)?;
+        if frames > self.max_fetch_frames {
+            return Err(ElasticPrepareError::FetchWindowMismatch);
+        }
+        let samples = sample_count(frames, self.backend.capabilities().channels())?;
+        let buffer = self
+            .window_buffers
+            .last_mut()
+            .ok_or(ElasticPrepareError::SourceUnavailable)?;
+        match resource.read_source_range(request, &mut buffer[..samples])? {
+            SourceRangeReadOutcome::Ready { .. } => {}
+            SourceRangeReadOutcome::Pending => {
+                return Ok(ElasticPreparationPoll::Pending(self));
+            }
+            SourceRangeReadOutcome::Eof => return Err(ElasticPrepareError::SourceEnded),
+        }
+        let samples = self
+            .window_buffers
+            .pop()
+            .ok_or(ElasticPrepareError::SourceUnavailable)?;
+        self.ready_windows
+            .push(BufferedSourceWindow { samples, range });
+        if self.ready_windows.len() < READY_WINDOW_COUNT
+            && self.begin_preparation_window(resource, range, runtime)?
+        {
+            return Ok(ElasticPreparationPoll::Pending(self));
+        }
+        Ok(self.ready(runtime))
+    }
+
     fn poll_priming(
         mut self,
         resource: &mut Resource,
@@ -256,52 +294,14 @@ impl ElasticRenderer<Preparing> {
         }
         self.prime(preparation, fetch_samples)?;
         let runtime = PreparedRuntime {
-            cursor: preparation.anchor,
             direction: preparation.direction,
+            cursor: preparation.anchor,
             source_window: preparation.fetch_range,
-            request_id: 1,
             revision: self.state.revision,
+            request_id: 1,
         };
         if preparation.direction == PlaybackDirection::Reverse
             && self.begin_preparation_window(resource, preparation.fetch_range, runtime)?
-        {
-            return Ok(ElasticPreparationPoll::Pending(self));
-        }
-        Ok(self.ready(runtime))
-    }
-
-    fn poll_preparation_window(
-        mut self,
-        resource: &mut Resource,
-        request: SourceRangeRequest,
-        range: SourceRange,
-        runtime: PreparedRuntime,
-    ) -> Result<ElasticPreparationPoll, ElasticPrepareError> {
-        let frames =
-            usize::try_from(range.len()).map_err(|_| ElasticPrepareError::FrameOverflow)?;
-        if frames > self.max_fetch_frames {
-            return Err(ElasticPrepareError::FetchWindowMismatch);
-        }
-        let samples = sample_count(frames, self.backend.capabilities().channels())?;
-        let buffer = self
-            .window_buffers
-            .last_mut()
-            .ok_or(ElasticPrepareError::SourceUnavailable)?;
-        match resource.read_source_range(request, &mut buffer[..samples])? {
-            SourceRangeReadOutcome::Ready { .. } => {}
-            SourceRangeReadOutcome::Pending => {
-                return Ok(ElasticPreparationPoll::Pending(self));
-            }
-            SourceRangeReadOutcome::Eof => return Err(ElasticPrepareError::SourceEnded),
-        }
-        let samples = self
-            .window_buffers
-            .pop()
-            .ok_or(ElasticPrepareError::SourceUnavailable)?;
-        self.ready_windows
-            .push(BufferedSourceWindow { samples, range });
-        if self.ready_windows.len() < READY_WINDOW_COUNT
-            && self.begin_preparation_window(resource, range, runtime)?
         {
             return Ok(ElasticPreparationPoll::Pending(self));
         }
@@ -313,6 +313,7 @@ impl ElasticRenderer<Preparing> {
             runtime: RenderRuntime {
                 prepared,
                 pending_source_read: None,
+                relocation: None,
             },
         }))
     }
@@ -391,6 +392,10 @@ impl<State> ElasticRenderer<State> {
 }
 
 impl ElasticRenderer<Ready> {
+    pub(crate) fn activate(self) -> ElasticRenderer<Active> {
+        self.map_state(|Ready { runtime }| Active { runtime })
+    }
+
     pub(crate) fn retarget(
         &mut self,
         binding: &TrackBinding,
@@ -434,10 +439,6 @@ impl ElasticRenderer<Ready> {
         tempo: Tempo,
     ) -> Result<(), ElasticPrepareError> {
         self.retarget_preparation(binding, anchor, tempo).map(drop)
-    }
-
-    pub(crate) fn activate(self) -> ElasticRenderer<Active> {
-        self.map_state(|Ready { runtime }| Active { runtime })
     }
 }
 
@@ -487,17 +488,18 @@ mod tests {
         let integer = i64::try_from(source_window.start().get()).expect("test range fits i64");
         renderer(pool).map_state(|()| Active {
             runtime: RenderRuntime {
+                pending_source_read: None,
+                relocation: None,
                 prepared: PreparedRuntime {
+                    direction,
                     cursor: SourceCursor {
                         continuous: integer.to_f64().expect("test range converts to f64"),
                         integer,
                     },
-                    direction,
                     source_window,
-                    request_id: 1,
                     revision: TransportRevision::FIRST,
+                    request_id: 1,
                 },
-                pending_source_read: None,
             },
         })
     }

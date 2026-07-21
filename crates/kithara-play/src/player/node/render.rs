@@ -11,7 +11,7 @@ use crate::{
     player::track::{PlayerTrack, TrackReadOutcome, TrackRenderMode},
 };
 
-type ActiveTrackEntry = (usize, Index, bool);
+type ActiveTrackEntry = (usize, Index, bool, usize);
 
 #[derive(Clone, Copy)]
 struct Handover {
@@ -38,7 +38,7 @@ impl RenderPass {
         let scratch_bufs = std::array::from_fn(|_| {
             let mut buf = pool.get();
             buf.ensure_len(max_frames)
-                .expect("scratch buffer exceeds PCM pool budget");
+                .expect("BUG: scratch buffer exceeds PCM pool budget");
             buf.clear();
             buf
         });
@@ -68,14 +68,8 @@ impl RenderPass {
             return (false, None, multiple_tracks);
         }
 
-        for ch_buffer in buffers.outputs.iter_mut() {
-            ch_buffer[..frames].fill(0.0);
-        }
-
-        for buf in &mut self.scratch_bufs {
-            buf.ensure_len(frames)
-                .expect("scratch buffer exceeds PCM pool budget");
-        }
+        clear_outputs(buffers, frames);
+        ensure_scratch_len(&mut self.scratch_bufs, frames);
 
         let (left, right) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
         let (read_buf0, read_buf1) = left.split_at_mut(1);
@@ -84,6 +78,7 @@ impl RenderPass {
         let mut mix_bufs = [&mut mix_buf0[0][..frames], &mut mix_buf1[0][..frames]];
         let tracks = targets.tracks;
         let notification_tx = targets.notification_tx;
+        let start_offsets = activate_pending_starts(mode, tracks, notification_tx, is_playing);
         let arena_tracks: SmallVec<[(Index, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
             if is_playing {
                 tracks
@@ -98,15 +93,22 @@ impl RenderPass {
                 .iter()
                 .enumerate()
                 .filter(|(_, (_, state))| state.is_playing())
-                .map(|(arena_idx, (idx, state))| (arena_idx, *idx, state.is_leading()))
+                .map(|(arena_idx, (idx, state))| {
+                    (
+                        arena_idx,
+                        *idx,
+                        state.is_leading(),
+                        start_offsets[arena_idx],
+                    )
+                })
                 .collect();
         let mut active_arena_slots = [false; PlayerNodeProcessor::MAX_TRACKS];
-        for (arena_idx, _, _) in &active_tracks {
+        for (arena_idx, _, _, _) in &active_tracks {
             active_arena_slots[*arena_idx] = true;
         }
         let mut skip_tracks = [false; PlayerNodeProcessor::MAX_TRACKS];
 
-        for (track_idx, (_arena_slot, track_handle, was_leading)) in
+        for (track_idx, (_arena_slot, track_handle, was_leading, start_offset)) in
             active_tracks.iter().enumerate()
         {
             if skip_tracks[track_idx] {
@@ -117,7 +119,7 @@ impl RenderPass {
                 ch_buffer.fill(0.0);
             }
 
-            let start_offset = 0;
+            let start_offset = *start_offset;
             let mut read_outcome = {
                 let Some(outcome) = tracks.get_by_index_mut(*track_handle).map(|track| {
                     track.render(
@@ -141,13 +143,13 @@ impl RenderPass {
 
                 let mut handover = handover_after(&read_outcome, start_offset);
 
-                for (next_idx, (_, next_handle, next_is_leading)) in
+                for (next_idx, (_, next_handle, next_is_leading, next_start)) in
                     active_tracks.iter().enumerate()
                 {
                     let Some(handoff) = handover else {
                         break;
                     };
-                    let offset = handoff.offset;
+                    let offset = handoff.offset.max(*next_start);
                     if next_idx == track_idx || skip_tracks[next_idx] || !*next_is_leading {
                         continue;
                     }
@@ -220,10 +222,46 @@ impl RenderPass {
     pub(crate) fn resize(&mut self, max_frames: usize) {
         for buf in &mut self.scratch_bufs {
             buf.ensure_len(max_frames)
-                .expect("scratch buffer exceeds PCM pool budget");
+                .expect("BUG: scratch buffer exceeds PCM pool budget");
             buf.clear();
         }
     }
+}
+
+fn clear_outputs(buffers: &mut ProcBuffers, frames: usize) {
+    for ch_buffer in buffers.outputs.iter_mut() {
+        ch_buffer[..frames].fill(0.0);
+    }
+}
+
+fn ensure_scratch_len(scratch_bufs: &mut [PcmBuf], frames: usize) {
+    for buf in scratch_bufs {
+        buf.ensure_len(frames)
+            .expect("BUG: scratch buffer exceeds PCM pool budget");
+    }
+}
+
+fn activate_pending_starts(
+    mode: TrackRenderMode<'_>,
+    tracks: &mut ArenaRegistry<Arc<str>, PlayerTrack>,
+    notification_tx: &mut HeapProd<PlayerNotification>,
+    is_playing: bool,
+) -> [usize; PlayerNodeProcessor::MAX_TRACKS] {
+    let mut offsets = [0; PlayerNodeProcessor::MAX_TRACKS];
+    if !is_playing {
+        return offsets;
+    }
+    let TrackRenderMode::Session(context) = mode else {
+        return offsets;
+    };
+    for (arena_slot, (_, track)) in tracks.iter_mut().enumerate() {
+        match track.activate_pending_start(context) {
+            Ok(Some(offset)) => offsets[arena_slot] = offset,
+            Ok(None) => {}
+            Err(()) => track.handle_failed_end(notification_tx),
+        }
+    }
+    offsets
 }
 
 fn handover_after(read_outcome: &TrackReadOutcome, offset: usize) -> Option<Handover> {

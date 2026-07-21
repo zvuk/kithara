@@ -2,8 +2,7 @@ use std::{fmt, num::NonZeroUsize};
 
 use bon::Builder;
 use kithara_assets::AssetStore;
-use kithara_platform::{CancelToken, sync::Arc};
-use kithara_play::PlayerImpl;
+use kithara_platform::CancelToken;
 
 /// Default parallelism cap for async track loads.
 pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
@@ -18,13 +17,9 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 
 /// Configuration for a [`Queue`](crate::Queue).
 ///
-/// Holds queue-level defaults plus an optional externally-owned
-/// [`PlayerImpl`] instance. Matches the project-wide pattern where
-/// config structs accept optional built instances (see
-/// [`ResourceConfig::worker`](kithara_play::ResourceConfig::worker) /
-/// [`runtime`](kithara_play::ResourceConfig::runtime) /
-/// [`bus`](kithara_play::ResourceConfig::bus)) rather than re-taking
-/// their own construction parameters.
+/// Holds queue-level defaults. A queue that decorates an existing player is
+/// constructed through [`FromWithParams`](kithara_platform::traits::FromWithParams)
+/// instead of storing a component inside configuration.
 ///
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
@@ -38,10 +33,6 @@ pub struct QueueConfig {
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
 
-    /// Shared store used for bare URI track sources.
-    #[field(with, option_set_some)]
-    pub store: Option<AssetStore>,
-
     /// Master cancel for the queue. `Some` threads the app master so the
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
@@ -49,9 +40,9 @@ pub struct QueueConfig {
     #[field(with, option_set_some)]
     pub cancel: Option<CancelToken>,
 
-    /// Externally-owned player. `None` means Queue builds a default.
+    /// Shared store used for bare URI track sources.
     #[field(with, option_set_some)]
-    pub player: Option<Arc<PlayerImpl>>,
+    pub store: Option<AssetStore>,
 
     /// Whether the queue auto-advances to the next track at EOF.
     #[builder(default = true)]
@@ -98,7 +89,6 @@ mod tests {
     fn default_config_has_reasonable_loader_cap() {
         let cfg = QueueConfig::default();
         assert_eq!(cfg.max_concurrent_loads.get(), 3);
-        assert!(cfg.player.is_none());
         assert!(cfg.store.is_none());
         assert!((cfg.prefetch_duration - 3.5).abs() < f32::EPSILON);
     }

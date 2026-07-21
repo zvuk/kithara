@@ -22,10 +22,10 @@ pub mod mock;
 
 pub use api::{
     DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection,
-    PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionBeatError,
-    SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncEvent, SyncUnavailable,
-    Tempo, TempoError, TimeControlStatus, TimeRange, TrackBinding, TransportEvent,
-    TransportRevision, WaitingReason,
+    Player, PlayerCollector, PlayerComponent, PlayerEvent, PlayerStatus, RouteChangeReason,
+    SessionBeat, SessionBeatError, SessionDuckingMode, SessionEvent, SessionSeek,
+    SessionTransportSnapshot, SlotId, StartAt, SyncEvent, SyncUnavailable, Tempo, TempoError,
+    TimeControlStatus, TimeRange, TrackBinding, TransportEvent, TransportRevision, WaitingReason,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, CmdMsg, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
@@ -41,7 +41,8 @@ pub use kithara_audio::{
 };
 pub use kithara_net::Headers;
 pub use player::{
-    PlayerConfig, PlayerImpl, PlayerNode, PlayerNodeProcessor, SelectTransition, StreamShape,
+    Member, MemberId, MultiPlayer, PlayerComponentBox, PlayerConfig, PlayerImpl, PlayerNode,
+    PlayerNodeProcessor, SelectTransition, StreamShape, TopologyRevision,
 };
 pub use resource::{
     PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,

@@ -12,12 +12,28 @@ pub(crate) fn set_f64(obj: &Object, key: &str, val: f64) {
     let _ = Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_f64(val));
 }
 
+pub(crate) fn set_u64(obj: &Object, key: &str, val: u64) {
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+    assert!(
+        val <= MAX_SAFE_INTEGER,
+        "web observer integer exceeds the JavaScript safe range"
+    );
+    let Some(val) = num_traits::cast(val) else {
+        unreachable!("every JavaScript-safe u64 is representable as f64");
+    };
+    set_f64(obj, key, val);
+}
+
 pub(crate) fn set_bool(obj: &Object, key: &str, val: bool) {
     let _ = Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_bool(val));
 }
 
 #[rustfmt::skip]
 pub(crate) fn set_opt_f64(obj: &Object, key: &str, val: Option<f64>) { if let Some(val) = val { set_f64(obj, key, val); } }
+
+#[rustfmt::skip]
+pub(crate) fn set_opt_u64(obj: &Object, key: &str, val: Option<u64>) { if let Some(val) = val { set_u64(obj, key, val); } }
 
 #[rustfmt::skip]
 pub(crate) fn set_opt_str(obj: &Object, key: &str, val: Option<&str>) { if let Some(val) = val { set_str(obj, key, val); } }

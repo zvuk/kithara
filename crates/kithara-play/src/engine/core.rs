@@ -46,8 +46,6 @@ pub struct EngineImpl {
     slots: Mutex<SlotTable>,
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
-    #[field(get, vis = "pub(crate)")]
-    pcm_pool: PcmPool,
 }
 
 impl EngineImpl {
@@ -59,7 +57,6 @@ impl EngineImpl {
             .take()
             .map_or_else(default_session_handle, SessionHandle::new);
         let max_slots = config.max_slots;
-        let resolved_pool = config.pcm_pool.clone();
         let worker_cancel = CancelScope::new(config.cancel.clone()).token();
 
         Self {
@@ -67,7 +64,6 @@ impl EngineImpl {
             bus,
             session,
             master_volume: AtomicF32::new(1.0),
-            pcm_pool: resolved_pool,
             player_id: Mutex::default(),
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
@@ -91,6 +87,10 @@ impl EngineImpl {
         self.config.sample_rate
     }
 
+    pub(crate) fn pcm_pool(&self) -> &PcmPool {
+        &self.config.pcm_pool
+    }
+
     pub(crate) fn eq_band_count(&self) -> usize {
         self.config.eq_layout.len()
     }
@@ -108,7 +108,7 @@ impl EngineImpl {
         let id = self.session.register_player(
             self.bus.clone(),
             self.config.eq_layout.clone(),
-            self.pcm_pool.clone(),
+            self.config.pcm_pool.clone(),
         )?;
         *player_id = Some(id);
         drop(player_id);

@@ -4,7 +4,9 @@ Detailed contracts and invariants for the kithara-queue crate; the README is the
 
 ## Public API
 
-- [`Queue::new(QueueConfig)`]
+- [`Queue::new(QueueConfig)`] constructs a queue-owned `PlayerImpl`.
+- `Queue::build(Arc<PlayerImpl>, QueueConfig)` through
+  `FromWithParams` decorates the supplied canonical player.
 - CRUD: `append`, `insert(source, after)`, `remove`, `clear`,
   `set_tracks`
 - Query: `tracks`, `track(id)`, `current`, `current_index`, `len`,
@@ -33,6 +35,27 @@ has two shapes:
 `From<&str>`, `From<String>`, `From<ResourceConfig>`, and
 `From<Box<ResourceConfig>>` are implemented.
 
+## Ownership And Player Composition
+
+`QueueConfig` contains queue policy and dependencies only; it never stores a
+player component. Construction is type-driven: `Queue::new` creates one player,
+while `FromWithParams<Arc<PlayerImpl>, QueueConfig>` consumes the explicit
+player argument. Both paths converge on the same private constructor and the
+same queue state. There is no optional-player fallback or second player path.
+
+`Queue` owns playlist identity, loading, navigation, pending selection,
+auto-advance, and crossfade policy. Its `player` field is the canonical deck
+handle. `Loader` holds clones of that same `Arc<PlayerImpl>`, `Arc<Tracks>`, and
+`EventBus` only so asynchronous load completion can commit through the queue's
+existing owners; those handles do not contain mirrored player, track, or event
+state.
+
+`Queue` implements the `kithara-play` `Player` and `PlayerComponent` contracts.
+Registering it in a `MultiPlayer` consumes the queue, and the returned
+`Member<Queue>` is the only caller control path. `PlayerComponent` contributes
+the queue's one canonical `PlayerImpl` leaf to group tempo/seek validation;
+`MultiPlayer` never reaches into queue navigation or loader state.
+
 ## Event Flow
 
 [`Queue::subscribe`] returns an `EventReceiver` that sees everything
@@ -57,7 +80,7 @@ plus `Event::Player(..)`, `Event::Audio(..)`, `Event::Hls(..)`, and
 
 ## Auto-Advance Contract
 
-`Queue` is the sole auto-advance orchestrator: `Queue::new` calls
+`Queue` is the sole auto-advance orchestrator: both construction paths call
 `PlayerImpl::set_auto_advance_enabled(false)` to disable the player's built-in
 linear handler, then drives transitions from player events and the host `tick()`
 loop.

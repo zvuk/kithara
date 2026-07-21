@@ -11,8 +11,8 @@ use kithara::{
         time::{Duration, sleep},
     },
     play::{
-        PlayError, PlaybackDirection, Resource, ResourceConfig, SelectTransition, SessionBeat,
-        SessionError, SessionTransportSnapshot, Tempo, TrackBinding,
+        MultiPlayer, PlayError, PlaybackDirection, Resource, ResourceConfig, SelectTransition,
+        SessionBeat, SessionError, SessionSeek, SessionTransportSnapshot, Tempo, TrackBinding,
     },
 };
 use kithara_integration_tests::{
@@ -221,6 +221,16 @@ async fn prepare_bound_players(
     harnesses
 }
 
+fn multi_player(harnesses: &[OfflinePlayerHarness]) -> MultiPlayer {
+    let players = MultiPlayer::default();
+    for harness in harnesses {
+        players
+            .register(Arc::clone(harness.player()))
+            .expect("shared-session player registers");
+    }
+    players
+}
+
 fn commit_tempo_change(
     harnesses: &[OfflinePlayerHarness],
     tempo: Tempo,
@@ -228,13 +238,9 @@ fn commit_tempo_change(
     let before = harnesses[0]
         .session_transport()
         .expect("transport before tempo change");
-    let peers: Vec<_> = harnesses[1..]
-        .iter()
-        .map(|harness| harness.player().as_ref())
-        .collect();
-    harnesses[0]
-        .player()
-        .set_session_tempo(&peers, tempo)
+    let players = multi_player(harnesses);
+    players
+        .set_session_tempo(tempo)
         .expect("multi-player tempo change accepted");
 
     let old_slope = before.tempo().beats_per_minute() / (f64::from(SAMPLE_RATE) * 60.0);
@@ -394,6 +400,274 @@ async fn two_bound_players_commit_one_tempo_revision(temp_dir: TestTempDir) {
 }
 
 #[kithara::test(tokio, flash(false))]
+async fn two_bound_players_commit_one_session_seek_revision(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 120]).await;
+    let before = harnesses[0]
+        .session_transport()
+        .expect("transport before session seek");
+    let target = SessionBeat::new(2.0).expect("finite seek target");
+    let players = multi_player(&harnesses);
+    let seek =
+        kithara::platform::tokio::task::spawn(async move { players.seek_session(target).await });
+
+    for _ in 0..512 {
+        if seek.is_finished() {
+            break;
+        }
+        let _ = harnesses[0].render(1);
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert!(seek.is_finished(), "session seek preparation stays bounded");
+    seek.await
+        .expect("session seek task joins")
+        .expect("session seek preparation commits");
+
+    let after = (0..BLOCK_FRAMES * 8)
+        .find_map(|_| {
+            let _ = harnesses[0].render(1);
+            harnesses[0]
+                .tick_session()
+                .expect("session seek transaction progresses");
+            let snapshot = harnesses[0]
+                .session_transport()
+                .expect("transport after session seek render");
+            (snapshot.revision() != before.revision()).then_some(snapshot)
+        })
+        .expect("session seek commits within the render budget");
+
+    let one_frame = after.tempo().beats_per_minute() / (f64::from(SAMPLE_RATE) * 60.0);
+    assert_eq!(after.revision().get(), before.revision().get() + 1);
+    assert!((after.position().get() - target.get() - one_frame).abs() <= one_frame);
+    for harness in &harnesses {
+        assert_eq!(harness.session_transport().expect("shared snapshot"), after);
+    }
+    assert_player_phase_aligned(&harnesses);
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn failed_session_seek_leaves_the_transport_unchanged(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 120]).await;
+    let before = harnesses[0]
+        .session_transport()
+        .expect("transport before rejected session seek");
+    let target = SessionBeat::new(7.0).expect("finite out-of-domain target");
+
+    let error = multi_player(&harnesses)
+        .seek_session(target)
+        .await
+        .expect_err("out-of-domain seek is rejected");
+
+    assert!(matches!(error, PlayError::ElasticPreparation { .. }));
+    for harness in &harnesses {
+        assert_eq!(
+            harness
+                .session_transport()
+                .expect("transport after rejected session seek"),
+            before
+        );
+        assert!(harness.player().is_playing());
+    }
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn stale_session_seek_is_cancelled_before_a_retry(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let harnesses = prepare_bound_players(&server, &temp_dir, &[100, 120]).await;
+    let target = SessionBeat::new(2.1).expect("finite seek target");
+    let players = multi_player(&harnesses);
+    let stale_seek =
+        kithara::platform::tokio::task::spawn(async move { players.seek_session(target).await });
+    sleep(Duration::from_millis(10)).await;
+
+    let (_, tempo_after) =
+        commit_tempo_change(&harnesses, Tempo::new(100.0).expect("valid changed tempo"));
+    let error = stale_seek
+        .await
+        .expect("stale seek task joins")
+        .expect_err("tempo commit invalidates the staged seek");
+    assert!(
+        matches!(error, PlayError::SessionSeekPreparationFailed),
+        "stale seek returned {error:?}"
+    );
+    for harness in &harnesses {
+        let position = harness
+            .player()
+            .playback_snapshot()
+            .expect("position after stale seek")
+            .position();
+        assert!(
+            position < 0.5,
+            "stale seek moved source position to {position}"
+        );
+    }
+
+    let _ = harnesses[0].render(1);
+    for harness in &harnesses {
+        harness.tick_and_drain();
+    }
+
+    let players = multi_player(&harnesses);
+    let retry =
+        kithara::platform::tokio::task::spawn(async move { players.seek_session(target).await });
+    for _ in 0..512 {
+        if retry.is_finished() {
+            break;
+        }
+        let _ = harnesses[0].render(1);
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    retry
+        .await
+        .expect("retry task joins")
+        .expect("retry commits after cancellation");
+
+    let after = (0..BLOCK_FRAMES * 8)
+        .find_map(|_| {
+            let _ = harnesses[0].render(1);
+            harnesses[0]
+                .tick_session()
+                .expect("retry transaction progresses");
+            let snapshot = harnesses[0]
+                .session_transport()
+                .expect("transport after retry");
+            (snapshot.revision() != tempo_after.revision()).then_some(snapshot)
+        })
+        .expect("retry commits within the render budget");
+    assert_eq!(after.revision().get(), tempo_after.revision().get() + 1);
+    assert!((after.position().get() - target.get()).abs() < 0.01);
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn routed_join_is_silent_before_its_exact_session_beat(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let session = Arc::new(OfflineSession::new_manual());
+    let harnesses: Vec<_> = (0..2)
+        .map(|_| {
+            OfflinePlayerHarness::in_session(
+                OfflinePlayerOptions::builder()
+                    .crossfade_duration(0.0)
+                    .build(),
+                SAMPLE_RATE,
+                Arc::clone(&session),
+            )
+        })
+        .collect();
+    for harness in &harnesses {
+        harness
+            .player()
+            .ensure_engine_started()
+            .expect("offline engine starts");
+        harness
+            .player()
+            .ensure_slot()
+            .expect("offline player slot is allocated");
+    }
+    harnesses[0]
+        .set_session_tempo(Tempo::new(SESSION_TEMPO).expect("valid initial tempo"))
+        .expect("initial tempo accepted");
+    let _ = harnesses[0].render(1);
+    let initial = harnesses[0]
+        .session_transport()
+        .expect("initial tempo committed");
+    let active = insert_bound_sine(
+        &harnesses[0],
+        &server,
+        &temp_dir,
+        100,
+        220.0,
+        initial.position(),
+    )
+    .await;
+    harnesses[0]
+        .player()
+        .select_item(active, true)
+        .expect("active bound fixture selected");
+    harnesses[0].player().set_volume(0.0);
+    harnesses[1].player().set_volume(1.0);
+    for _ in 0..8 {
+        let _ = harnesses[0].render(BLOCK_FRAMES);
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+        sleep(Duration::from_millis(1)).await;
+    }
+
+    let before = harnesses[0]
+        .session_transport()
+        .expect("transport before routed join");
+    let boundary_offset = 37usize;
+    let lead_frames = BLOCK_FRAMES * 2 + boundary_offset;
+    let slope = before.tempo().beats_per_minute() / (f64::from(SAMPLE_RATE) * 60.0);
+    let target = SessionBeat::new(
+        before.position().get() + lead_frames.to_f64().expect("lead frame count fits f64") * slope,
+    )
+    .expect("future join beat is finite");
+    let joining_binding = exact_binding(initial.position(), 120);
+    let resource = bound_sine_resource(&harnesses[1], &server, &temp_dir, 440.0).await;
+    let players = MultiPlayer::default();
+    let _active_member = players
+        .register(Arc::clone(harnesses[0].player()))
+        .expect("active player registers");
+    let joining_member = players
+        .register(Arc::clone(harnesses[1].player()))
+        .expect("joining player registers");
+
+    joining_member
+        .join_track_at(resource, None, joining_binding, target)
+        .await
+        .expect("routed join is prepared and scheduled");
+    assert_eq!(
+        harnesses[0]
+            .session_transport()
+            .expect("transport remains observable")
+            .revision(),
+        before.revision()
+    );
+
+    for _ in 0..2 {
+        let rendered = harnesses[0].render(BLOCK_FRAMES);
+        assert!(rendered.iter().all(|sample| sample.abs() <= 1.0e-4));
+        for harness in &harnesses {
+            harness.tick_and_drain();
+        }
+    }
+    let boundary = harnesses[0].render(BLOCK_FRAMES);
+    let silent_samples = boundary_offset * usize::from(CHANNELS);
+    assert!(
+        boundary[..silent_samples]
+            .iter()
+            .all(|sample| sample.abs() <= 1.0e-4)
+    );
+    assert!(
+        boundary[silent_samples..]
+            .iter()
+            .any(|sample| sample.abs() > 0.05)
+    );
+    for harness in &harnesses {
+        harness.tick_and_drain();
+    }
+    let after = harnesses[0]
+        .session_transport()
+        .expect("transport after routed join");
+    assert_eq!(after.revision(), before.revision());
+    assert_eq!(after.tempo(), before.tempo());
+    let frequency = positive_crossing_frequency(&boundary[silent_samples..])
+        .expect("joined output contains a measurable waveform");
+    assert!(
+        (frequency - 440.0).abs() < 10.0,
+        "frequency was {frequency}"
+    );
+}
+
+#[kithara::test(tokio, flash(false))]
 async fn queued_bound_successor_retargets_after_tempo_commit_without_reload(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -548,9 +822,9 @@ async fn queued_bound_successor_rejects_unsupported_tempo_before_commit(temp_dir
         .session_transport()
         .expect("transport before rejected successor tempo");
 
-    let error = harness
-        .player()
-        .set_session_tempo(&[], Tempo::new(70.0).expect("finite rejected tempo"))
+    let players = multi_player(std::slice::from_ref(&harness));
+    let error = players
+        .set_session_tempo(Tempo::new(70.0).expect("finite rejected tempo"))
         .expect_err("unsupported successor must reject the tempo transaction");
 
     assert!(matches!(error, PlayError::SessionTempoUnsupported { .. }));
@@ -604,12 +878,8 @@ async fn unsupported_peer_rejects_tempo_before_session_mutation(temp_dir: TestTe
         .session_transport()
         .expect("transport before rejected tempo");
 
-    let error = harnesses[0]
-        .player()
-        .set_session_tempo(
-            &[harnesses[1].player().as_ref()],
-            Tempo::new(70.0).expect("valid rejected tempo"),
-        )
+    let error = multi_player(&harnesses)
+        .set_session_tempo(Tempo::new(70.0).expect("valid rejected tempo"))
         .expect_err("unsupported peer rejects the whole tempo change");
 
     assert!(matches!(error, PlayError::SessionTempoUnsupported { .. }));
@@ -649,12 +919,8 @@ async fn paused_unsupported_peer_rejects_tempo_before_session_mutation(temp_dir:
         .session_transport()
         .expect("transport before rejected paused peer");
 
-    let error = harnesses[0]
-        .player()
-        .set_session_tempo(
-            &[harnesses[1].player().as_ref()],
-            Tempo::new(70.0).expect("valid rejected tempo"),
-        )
+    let error = multi_player(&harnesses)
+        .set_session_tempo(Tempo::new(70.0).expect("valid rejected tempo"))
         .expect_err("unsupported paused peer rejects the whole tempo change");
 
     assert!(matches!(error, PlayError::SessionTempoUnsupported { .. }));
@@ -698,9 +964,9 @@ async fn local_handover_rejects_tempo_before_session_mutation(temp_dir: TestTemp
         .session_transport()
         .expect("transport during local handover");
 
-    let error = harness
-        .player()
-        .set_session_tempo(&[], Tempo::new(100.0).expect("valid changed tempo"))
+    let players = multi_player(std::slice::from_ref(&harness));
+    let error = players
+        .set_session_tempo(Tempo::new(100.0).expect("valid changed tempo"))
         .expect_err("local handover rejects a session tempo change");
 
     assert!(matches!(error, PlayError::SessionTempoHandoverActive));
@@ -720,9 +986,9 @@ async fn omitted_peer_rejects_tempo_before_session_mutation(temp_dir: TestTempDi
         .session_transport()
         .expect("transport before incomplete tempo request");
 
-    let error = harnesses[0]
-        .player()
-        .set_session_tempo(&[], Tempo::new(100.0).expect("valid changed tempo"))
+    let players = multi_player(&harnesses[..1]);
+    let error = players
+        .set_session_tempo(Tempo::new(100.0).expect("valid changed tempo"))
         .expect_err("omitting an active peer rejects the tempo change");
 
     assert!(matches!(

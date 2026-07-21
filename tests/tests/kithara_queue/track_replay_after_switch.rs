@@ -12,6 +12,7 @@ use kithara::{
         sync::Arc,
         time::{self, Duration, sleep},
         tokio,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -43,23 +44,23 @@ use url::Url;
 
 struct Consts;
 impl Consts {
-    /// Per-segment delay applied to every fixture. Small enough that the
-    /// first two loads complete promptly, but non-zero so the test exercises
-    /// real loader timing.
-    const SEGMENT_DELAY_MS: u64 = 20;
-    /// Each fixture: 4 segments × 2 s = 8 s of media. Enough that the
-    /// loader has to drive multiple fetches per session.
-    const SEGMENT_COUNT: usize = 4;
-    const SEGMENT_DURATION_S: f64 = 2.0;
-    /// Per-load deadline. Generous to keep the test stable on slow CI;
-    /// the bug is observed as a budget-exhaustion failure inside the
-    /// loader long before this fires.
-    const LOAD_DEADLINE: Duration = Duration::from_secs(20);
+    const AES_IV: [u8; 16] = [0u8; 16];
     /// AES-128 key/IV used by the encrypted variant. Matches the
     /// "0123456789abcdef" + zero-IV pair already used elsewhere in the
     /// integration suite (see `local_track_plays.rs`).
     const AES_KEY: &'static [u8] = b"0123456789abcdef";
-    const AES_IV: [u8; 16] = [0u8; 16];
+    /// Per-load deadline. Generous to keep the test stable on slow CI;
+    /// the bug is observed as a budget-exhaustion failure inside the
+    /// loader long before this fires.
+    const LOAD_DEADLINE: Duration = Duration::from_secs(20);
+    /// Each fixture: 4 segments × 2 s = 8 s of media. Enough that the
+    /// loader has to drive multiple fetches per session.
+    const SEGMENT_COUNT: usize = 4;
+    /// Per-segment delay applied to every fixture. Small enough that the
+    /// first two loads complete promptly, but non-zero so the test exercises
+    /// real loader timing.
+    const SEGMENT_DELAY_MS: u64 = 20;
+    const SEGMENT_DURATION_S: f64 = 2.0;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -130,10 +131,9 @@ fn build_queue_with_tick_cf(
             .crossfade_duration(crossfade_seconds)
             .build(),
     ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(player)
-            .with_store(store.clone()),
+    let queue = Arc::new(Queue::build(
+        player,
+        QueueConfig::default().with_store(store.clone()),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {

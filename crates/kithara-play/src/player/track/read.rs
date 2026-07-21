@@ -20,8 +20,8 @@ struct TrackReadContext<'a> {
 
 #[derive(Clone, Copy)]
 struct PartialRead {
-    frames: usize,
     duration: f64,
+    frames: usize,
 }
 
 /// Result of a single track render attempt.
@@ -58,32 +58,6 @@ pub(crate) enum TrackRenderMode<'a> {
 }
 
 impl PlayerTrack {
-    pub(crate) fn render(
-        &mut self,
-        mode: TrackRenderMode<'_>,
-        scratch_bufs: &mut [&mut [f32]],
-        mix_bufs: &mut [&mut [f32]],
-        range: Range<usize>,
-        notification_tx: &mut HeapProd<PlayerNotification>,
-    ) -> TrackReadOutcome {
-        if let TrackRenderMode::Session(context) = mode
-            && (context.sample_rate().get() != self.sample_rate
-                || context.for_output_range(range.clone()).is_none())
-        {
-            self.handle_failed_end(notification_tx);
-            return TrackReadOutcome::Failed;
-        }
-        #[cfg(test)]
-        if let TrackRenderMode::Session(context) = mode {
-            self.last_render_context = Some((std::ptr::from_ref(context).addr(), context.clone()));
-        }
-        if self.binding().is_some() && matches!(mode, TrackRenderMode::Standalone) {
-            self.handle_failed_end(notification_tx);
-            return TrackReadOutcome::Failed;
-        }
-        self.read_with_mode(mode, scratch_bufs, mix_bufs, range, notification_tx)
-    }
-
     fn advance_served_frames(&mut self, frames: u64) {
         self.served_frames = self.served_frames.saturating_add(frames);
     }
@@ -94,6 +68,44 @@ impl PlayerTrack {
         input: TriggerInput,
     ) {
         triggers.check(notification_tx, input);
+    }
+
+    fn finish_read(
+        &mut self,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        notification_tx: &mut HeapProd<PlayerNotification>,
+        read_outcome: TrackReadOutcome,
+    ) -> TrackReadOutcome {
+        match read_outcome {
+            TrackReadOutcome::Full { .. } => self.handle_full_read(
+                scratch_bufs,
+                mix_bufs,
+                TrackReadContext {
+                    notification_tx,
+                    range,
+                },
+                read_outcome,
+            ),
+            TrackReadOutcome::Partial { frames, duration } => self.handle_partial_read(
+                scratch_bufs,
+                mix_bufs,
+                TrackReadContext {
+                    notification_tx,
+                    range,
+                },
+                PartialRead { duration, frames },
+            ),
+            TrackReadOutcome::Eof => {
+                self.handle_natural_end(notification_tx);
+                TrackReadOutcome::Eof
+            }
+            TrackReadOutcome::Failed => {
+                self.handle_failed_end(notification_tx);
+                TrackReadOutcome::Failed
+            }
+        }
     }
 
     pub(crate) fn handle_failed_end(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
@@ -142,11 +154,11 @@ impl PlayerTrack {
             &mut self.triggers,
             ctx.notification_tx,
             TriggerInput {
-                block_frames: range_len,
                 duration,
-                fade_duration: self.fade.duration(),
                 frames_until_eof,
                 position,
+                block_frames: range_len,
+                fade_duration: self.fade.duration(),
                 prefetch_duration: self.prefetch_duration,
                 sample_rate: self.sample_rate,
             },
@@ -154,10 +166,10 @@ impl PlayerTrack {
         self.update_after_mix(ctx.notification_tx);
 
         TrackReadOutcome::Full {
-            position,
-            duration,
             frames,
+            duration,
             frames_until_eof,
+            position,
         }
     }
 
@@ -190,7 +202,7 @@ impl PlayerTrack {
             notification_tx,
             range,
         } = ctx;
-        let PartialRead { frames, duration } = partial;
+        let PartialRead { duration, frames } = partial;
         self.advance_served_frames(frames.to_u64().unwrap_or(0));
         let position = self.position();
         self.observed_duration = if position > 0.0 { position } else { duration };
@@ -206,9 +218,9 @@ impl PlayerTrack {
             TriggerInput {
                 block_frames,
                 duration,
+                position,
                 fade_duration: self.fade.duration(),
                 frames_until_eof: Some(0),
-                position,
                 prefetch_duration: self.prefetch_duration,
                 sample_rate: self.sample_rate,
             },
@@ -265,59 +277,6 @@ impl PlayerTrack {
         )
     }
 
-    fn read_with_mode(
-        &mut self,
-        mode: TrackRenderMode<'_>,
-        scratch_bufs: &mut [&mut [f32]],
-        mix_bufs: &mut [&mut [f32]],
-        range: Range<usize>,
-        notification_tx: &mut HeapProd<PlayerNotification>,
-    ) -> TrackReadOutcome {
-        if self.state == TrackState::Finished {
-            return TrackReadOutcome::Eof;
-        }
-        let read_outcome = self.read_resource(mode, scratch_bufs, range.clone());
-        self.finish_read(scratch_bufs, mix_bufs, range, notification_tx, read_outcome)
-    }
-
-    fn finish_read(
-        &mut self,
-        scratch_bufs: &mut [&mut [f32]],
-        mix_bufs: &mut [&mut [f32]],
-        range: Range<usize>,
-        notification_tx: &mut HeapProd<PlayerNotification>,
-        read_outcome: TrackReadOutcome,
-    ) -> TrackReadOutcome {
-        match read_outcome {
-            TrackReadOutcome::Full { .. } => self.handle_full_read(
-                scratch_bufs,
-                mix_bufs,
-                TrackReadContext {
-                    notification_tx,
-                    range,
-                },
-                read_outcome,
-            ),
-            TrackReadOutcome::Partial { frames, duration } => self.handle_partial_read(
-                scratch_bufs,
-                mix_bufs,
-                TrackReadContext {
-                    notification_tx,
-                    range,
-                },
-                PartialRead { frames, duration },
-            ),
-            TrackReadOutcome::Eof => {
-                self.handle_natural_end(notification_tx);
-                TrackReadOutcome::Eof
-            }
-            TrackReadOutcome::Failed => {
-                self.handle_failed_end(notification_tx);
-                TrackReadOutcome::Failed
-            }
-        }
-    }
-
     fn read_resource(
         &mut self,
         mode: TrackRenderMode<'_>,
@@ -361,8 +320,8 @@ impl PlayerTrack {
 
                 match resource.read(&mut scratch_window, 0..range.len()) {
                     ReadOutcome::Full { frames } => TrackReadOutcome::Full {
-                        duration: resource.duration(),
                         frames,
+                        duration: resource.duration(),
                         frames_until_eof: resource.frames_until_eof(),
                         position: 0.0,
                     },
@@ -375,6 +334,47 @@ impl PlayerTrack {
                 }
             }
         }
+    }
+
+    fn read_with_mode(
+        &mut self,
+        mode: TrackRenderMode<'_>,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        notification_tx: &mut HeapProd<PlayerNotification>,
+    ) -> TrackReadOutcome {
+        if self.state == TrackState::Finished {
+            return TrackReadOutcome::Eof;
+        }
+        let read_outcome = self.read_resource(mode, scratch_bufs, range.clone());
+        self.finish_read(scratch_bufs, mix_bufs, range, notification_tx, read_outcome)
+    }
+
+    pub(crate) fn render(
+        &mut self,
+        mode: TrackRenderMode<'_>,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        notification_tx: &mut HeapProd<PlayerNotification>,
+    ) -> TrackReadOutcome {
+        if let TrackRenderMode::Session(context) = mode
+            && (context.sample_rate().get() != self.sample_rate
+                || context.for_output_range(range.clone()).is_none())
+        {
+            self.handle_failed_end(notification_tx);
+            return TrackReadOutcome::Failed;
+        }
+        #[cfg(test)]
+        if let TrackRenderMode::Session(context) = mode {
+            self.last_render_context = Some((std::ptr::from_ref(context).addr(), context.clone()));
+        }
+        if self.binding().is_some() && matches!(mode, TrackRenderMode::Standalone) {
+            self.handle_failed_end(notification_tx);
+            return TrackReadOutcome::Failed;
+        }
+        self.read_with_mode(mode, scratch_bufs, mix_bufs, range, notification_tx)
     }
 
     fn update_after_mix(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {

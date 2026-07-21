@@ -14,6 +14,7 @@ use kithara::{
         sync::Arc,
         time::{Duration, sleep},
         tokio,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -429,7 +430,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::build(player, QueueConfig::default()));
     let q_for_tick = Arc::clone(&queue);
     // Platform spawn chokepoint, NOT raw `tokio::spawn`: under flash
     // this makes the tick driver a quiescence participant with a
@@ -702,7 +703,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::build(player, QueueConfig::default()));
     let q_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
         loop {
@@ -976,7 +977,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::build(player, QueueConfig::default()));
     let q_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
         loop {
@@ -1040,7 +1041,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::build(player, QueueConfig::default()));
     let q_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
         loop {
@@ -1290,7 +1291,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::build(player, QueueConfig::default()));
 
     let mut track_ids = Vec::with_capacity(urls.len());
     for url in urls {

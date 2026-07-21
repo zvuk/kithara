@@ -6,12 +6,10 @@ use smallvec::SmallVec;
 use super::{
     Active, ElasticCopyError, ElasticPlanError, ElasticRenderError, ElasticRenderOutcome,
     ElasticRenderSegment, ElasticRenderer, ElasticRequest, IntegerSegment, PlaybackDirection,
-    RenderContext, SourceCursor, SourceRange, TrackBinding, TransportRevision,
+    RenderContext, SourceCursor, SourceRange, TrackBinding, TransportBoundary, TransportRevision,
     plan_elastic_segments, quantize_source, sample_count,
 };
 use crate::resource::Resource;
-
-const CONTINUITY_PAIR_SIZE: usize = 2;
 
 pub(super) struct SourceCopy<'a> {
     pub(super) fetch: &'a [f32],
@@ -108,6 +106,22 @@ impl ElasticRenderer<Active> {
             .transport_commit()
             .ok_or(ElasticRenderError::TransportCommitUnavailable)?;
         let revision = commit.revision();
+        self.poll_relocation_read(source)?;
+        if let Some((prepared_revision, target)) = self
+            .state
+            .runtime
+            .relocation
+            .as_ref()
+            .map(|relocation| (relocation.revision, relocation.target))
+        {
+            if prepared_revision == revision
+                && commit.boundary() == TransportBoundary::Relocate(target)
+            {
+                self.commit_relocation(revision)?;
+            } else if revision >= prepared_revision {
+                self.discard_relocation(prepared_revision);
+            }
+        }
         if revision < self.state.runtime.prepared.revision {
             return Err(ElasticRenderError::RevisionMismatch);
         }
@@ -302,6 +316,8 @@ fn quantize_segments(
 }
 
 fn validate_continuity(segments: &[ContinuousSegment]) -> Result<(), ElasticRenderError> {
+    const CONTINUITY_PAIR_SIZE: usize = 2;
+
     if let Some(pair) = segments.windows(CONTINUITY_PAIR_SIZE).find(|pair| {
         (pair[0].source_end - pair[1].source_start).abs() > PhasePlan::CONTINUITY_EPSILON
     }) {

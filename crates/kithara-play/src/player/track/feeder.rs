@@ -8,11 +8,15 @@ use tracing::warn;
 #[rustfmt::skip]
 use crate::resource::Resource;
 
-use crate::player::platform::{ActiveElasticRenderer, PreparedElasticRenderer};
+use crate::player::platform::ActiveElasticRenderer;
 
 /// RT-safe resource whose storage is fixed by its playback capability.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PlayerResource {
+    /// Source identifier attached to this resource.
+    #[field(get, deref = false, vis = "pub(crate)")]
     pub(in crate::player) src: Arc<str>,
     pub(in crate::player) kind: PlayerResourceKind,
 }
@@ -32,8 +36,14 @@ pub(in crate::player) struct LinearResource {
 }
 
 pub(in crate::player) struct BoundResource {
-    pub(in crate::player) resource: WasmSend<Resource>,
     pub(in crate::player) renderer: ActiveElasticRenderer,
+    pub(in crate::player) resource: WasmSend<Resource>,
+}
+
+impl From<BoundResource> for PlayerResourceKind {
+    fn from(bound: BoundResource) -> Self {
+        Self::Bound(Box::new(bound))
+    }
 }
 
 pub(in crate::player) enum ReleasedPlayerResource {
@@ -97,61 +107,14 @@ impl PlayerResource {
         Self {
             src,
             kind: PlayerResourceKind::Linear(Box::new(LinearResource {
-                resource: WasmSend::new(resource),
                 channel_buffers,
+                resource: WasmSend::new(resource),
                 write_len: 0,
                 write_pos: 0,
                 eof_seen: false,
                 failed: false,
             })),
         }
-    }
-
-    pub(in crate::player) fn release(self) -> ReleasedPlayerResource {
-        match self.kind {
-            PlayerResourceKind::Linear(linear) => {
-                ReleasedPlayerResource::Linear(linear.resource.into_inner())
-            }
-            PlayerResourceKind::Bound(bound) => ReleasedPlayerResource::Bound(bound),
-        }
-    }
-
-    fn resource(&self) -> &Resource {
-        match &self.kind {
-            PlayerResourceKind::Linear(linear) => linear.resource.get(),
-            PlayerResourceKind::Bound(bound) => bound.resource.get(),
-        }
-    }
-
-    /// Total duration in seconds. Returns 0.0 if unknown.
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        self.resource().duration().map_or(0.0, |d| d.as_secs_f64())
-    }
-
-    /// Set the target sample rate of the audio host.
-    pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
-        self.resource().set_host_sample_rate(sample_rate);
-    }
-
-    /// Set the playback rate for the active stretch controls.
-    pub(crate) fn set_playback_rate(&self, rate: f32) {
-        self.resource().set_playback_rate(rate);
-    }
-
-    /// Set the transport pitch-bend multiplier.
-    pub(crate) fn set_transport_bend(&self, bend: f32) {
-        self.resource().set_transport_bend(bend);
-    }
-
-    pub(crate) fn set_service_class(&mut self, class: ServiceClass) {
-        self.resource().set_service_class(class);
-    }
-
-    /// Source identifier attached to this resource.
-    #[must_use]
-    pub fn src(&self) -> &Arc<str> {
-        &self.src
     }
 
     /// Decoded-ahead frontier in seconds: how much content has been decoded
@@ -164,6 +127,12 @@ impl PlayerResource {
             }
             PlayerResourceKind::Bound(bound) => bound.renderer.decoded_frontier(),
         }
+    }
+
+    /// Total duration in seconds. Returns 0.0 if unknown.
+    #[must_use]
+    pub fn duration(&self) -> f64 {
+        self.resource().duration().map_or(0.0, |d| d.as_secs_f64())
     }
 
     /// Remaining buffered frames when the wrapped reader has reached EOF.
@@ -200,6 +169,22 @@ impl PlayerResource {
         }
     }
 
+    pub(in crate::player) fn release(self) -> ReleasedPlayerResource {
+        match self.kind {
+            PlayerResourceKind::Linear(linear) => {
+                ReleasedPlayerResource::Linear(linear.resource.into_inner())
+            }
+            PlayerResourceKind::Bound(bound) => ReleasedPlayerResource::Bound(bound),
+        }
+    }
+
+    fn resource(&self) -> &Resource {
+        match &self.kind {
+            PlayerResourceKind::Linear(linear) => linear.resource.get(),
+            PlayerResourceKind::Bound(bound) => bound.resource.get(),
+        }
+    }
+
     /// Seeks standalone playback and clears its scratch state.
     /// Returns `false` for bound elastic playback or source seek failure.
     #[must_use]
@@ -209,12 +194,24 @@ impl PlayerResource {
             PlayerResourceKind::Bound(_) => false,
         }
     }
-}
 
-impl BoundResource {
-    pub(in crate::player) fn into_parts(self: Box<Self>) -> (Resource, PreparedElasticRenderer) {
-        let Self { resource, renderer } = *self;
-        (resource.into_inner(), renderer.into())
+    /// Set the target sample rate of the audio host.
+    pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
+        self.resource().set_host_sample_rate(sample_rate);
+    }
+
+    /// Set the playback rate for the active stretch controls.
+    pub(crate) fn set_playback_rate(&self, rate: f32) {
+        self.resource().set_playback_rate(rate);
+    }
+
+    pub(crate) fn set_service_class(&mut self, class: ServiceClass) {
+        self.resource().set_service_class(class);
+    }
+
+    /// Set the transport pitch-bend multiplier.
+    pub(crate) fn set_transport_bend(&self, bend: f32) {
+        self.resource().set_transport_bend(bend);
     }
 }
 
@@ -315,6 +312,13 @@ impl LinearResource {
         }
     }
 
+    fn reset_read_state(&mut self) {
+        self.write_len = 0;
+        self.write_pos = 0;
+        self.eof_seen = false;
+        self.failed = false;
+    }
+
     fn seek(&mut self, seconds: f64) -> bool {
         let position = Duration::from_secs_f64(seconds);
         match self.resource.get_mut().seek(position) {
@@ -327,13 +331,6 @@ impl LinearResource {
                 false
             }
         }
-    }
-
-    fn reset_read_state(&mut self) {
-        self.write_len = 0;
-        self.write_pos = 0;
-        self.eof_seen = false;
-        self.failed = false;
     }
 }
 

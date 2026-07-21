@@ -15,6 +15,7 @@ use kithara::{
         CancelToken,
         time::{Duration, Instant, sleep},
         tokio,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -35,19 +36,19 @@ impl Consts {
     /// Background lane width. One permit, so a single hung prefetch
     /// saturates it.
     const BG_CAP: usize = 1;
+    /// Short enough that a miss means starvation, not a slow load.
+    const FAST_DEADLINE: Duration = Duration::from_secs(8);
+    const GATE_DEADLINE: Duration = Duration::from_secs(15);
     /// Above the probe buffer (1 `KiB`) so the probe waits for bytes, not EOF.
     const HUNG_BODY_LEN: usize = 64 * 1024;
     const HUNG_THROTTLE_CHUNK: usize = 1;
     /// Past the test window and the 30s net `inactivity_timeout`, so the
     /// load stays parked instead of failing.
     const HUNG_THROTTLE_DELAY_MS: u64 = 600_000;
-    const GATE_DEADLINE: Duration = Duration::from_secs(15);
-    /// Short enough that a miss means starvation, not a slow load.
-    const FAST_DEADLINE: Duration = Duration::from_secs(8);
     const PLAY_DEADLINE: Duration = Duration::from_secs(10);
-    const POLL_INTERVAL: Duration = Duration::from_millis(50);
     /// Audible-progress threshold proving the selection actually plays.
     const PLAY_POSITION_SECS: f64 = 0.3;
+    const POLL_INTERVAL: Duration = Duration::from_millis(50);
 }
 
 /// A throttled body that never delivers a byte in the test window, so the
@@ -98,12 +99,12 @@ fn build_queue_with_tick(
             .build(),
     ));
     let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
-    let queue = Arc::new(Queue::new(
+    let queue = Arc::new(Queue::build(
+        player,
         QueueConfig::builder()
             .max_concurrent_loads(cap)
             .store(store.clone())
-            .build()
-            .with_player(player),
+            .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {

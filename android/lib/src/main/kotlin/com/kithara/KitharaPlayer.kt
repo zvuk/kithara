@@ -385,6 +385,7 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.DjStretchBackendChanged,
             is FfiPlayerEvent.TransportTempoCommitted,
             is FfiPlayerEvent.TransportPlayStateCommitted,
+            is FfiPlayerEvent.TransportSeekCommitted,
             is FfiPlayerEvent.TransportFailed,
             is FfiPlayerEvent.SyncBindingCommitted,
             is FfiPlayerEvent.EngineStarted,

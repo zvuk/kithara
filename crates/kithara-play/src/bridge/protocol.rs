@@ -2,11 +2,22 @@ use std::fmt;
 
 use kithara_platform::sync::Arc;
 
+use super::SessionSeekAttempt;
 use crate::{
-    api::{PlaybackDirection, TrackBinding},
+    api::{PlaybackDirection, SessionBeat, Tempo, TrackBinding, TransportRevision},
     error::PlayError,
     player::track::PlayerResource,
 };
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum TrackStart {
+    #[default]
+    Immediate,
+    Session {
+        target: SessionBeat,
+        revision: TransportRevision,
+    },
+}
 
 /// Commands sent from the main thread to the processor.
 #[non_exhaustive]
@@ -17,6 +28,7 @@ pub enum PlayerCmd {
         binding: Option<TrackBinding>,
         resource: PlayerResource,
         item_id: Option<Arc<str>>,
+        start: TrackStart,
     },
     /// Unload a track by its source identifier.
     UnloadTrack { src: Arc<str> },
@@ -27,6 +39,15 @@ pub enum PlayerCmd {
     Transition(TrackTransition),
     /// Seek active tracks to the given position in seconds.
     Seek { seconds: f64, seek_epoch: u64 },
+    /// Schedule the already-loaded leading track at a transport boundary.
+    StartAt(TrackStart),
+    /// Prepare the active bound track for one session relocation revision.
+    PrepareSessionSeek {
+        attempt: SessionSeekAttempt,
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: TransportRevision,
+    },
     /// Set the paused state.
     SetPaused(bool),
     /// Update the fade duration.
@@ -51,11 +72,13 @@ impl fmt::Debug for PlayerCmd {
                 binding,
                 item_id,
                 resource,
+                start,
             } => f
                 .debug_struct("LoadTrack")
                 .field("bound", &binding.is_some())
                 .field("item_id", item_id)
                 .field("src", resource.src())
+                .field("start", start)
                 .finish_non_exhaustive(),
             Self::UnloadTrack { src } => f.debug_struct("UnloadTrack").field("src", src).finish(),
             Self::Clear => f.write_str("Clear"),
@@ -67,6 +90,19 @@ impl fmt::Debug for PlayerCmd {
                 .debug_struct("Seek")
                 .field("seconds", seconds)
                 .field("seek_epoch", seek_epoch)
+                .finish(),
+            Self::StartAt(start) => f.debug_tuple("StartAt").field(start).finish(),
+            Self::PrepareSessionSeek {
+                attempt,
+                target,
+                tempo,
+                revision,
+            } => f
+                .debug_struct("PrepareSessionSeek")
+                .field("attempt", attempt)
+                .field("target", target)
+                .field("tempo", tempo)
+                .field("revision", revision)
                 .finish(),
             Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),

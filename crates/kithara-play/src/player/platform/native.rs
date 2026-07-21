@@ -1,21 +1,24 @@
 use std::ops::Range;
 
 use kithara_audio::ServiceClass;
-use kithara_platform::{maybe_send::WasmSend, sync::Arc};
+use kithara_platform::{maybe_send::WasmSend, sync::Arc, traits::FromWithParams};
 use kithara_stretch::{ElasticConfig, ElasticError, ElasticRateEnvelope, SignalsmithBackend};
 
 use super::{
     super::{
         core::PlayerImpl,
         state::{
-            items::{BoundLoad, ItemQueue, restore_queued_resource},
+            items::{BoundLoad, ItemQueue, LoadTransaction, restore_queued_resource},
             playlist::{Playlist, QueuedResource},
         },
     },
     ItemLoadContext,
 };
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding, TransportRevision},
+    api::{
+        PlayerStatus, SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding, TransportRevision,
+    },
+    bridge::TrackStart,
     error::PlayError,
     player::{
         node::StreamShape,
@@ -41,6 +44,30 @@ pub(crate) struct PreparedBindingResource {
 }
 
 impl PlayerResource {
+    pub(crate) fn begin_session_seek(
+        &mut self,
+        binding: &TrackBinding,
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: TransportRevision,
+    ) -> Result<(), PlayError> {
+        let PlayerResourceKind::Bound(bound) = &mut self.kind else {
+            return Err(PlayError::SessionSeekRequiresBoundTrack);
+        };
+        bound
+            .renderer
+            .begin_relocation(binding, target, tempo, revision)
+            .map_err(|error| PlayError::ElasticPreparation {
+                reason: error.to_string(),
+            })
+    }
+
+    pub(crate) fn cancel_session_seek(&mut self, revision: TransportRevision) {
+        if let PlayerResourceKind::Bound(bound) = &mut self.kind {
+            bound.renderer.discard_relocation(revision);
+        }
+    }
+
     pub(crate) fn new_bound(
         resource: Resource,
         src: Arc<str>,
@@ -48,11 +75,27 @@ impl PlayerResource {
     ) -> Self {
         Self {
             src,
-            kind: PlayerResourceKind::Bound(Box::new(BoundResource {
-                resource: WasmSend::new(resource),
+            kind: BoundResource {
                 renderer: renderer.activate(),
-            })),
+                resource: WasmSend::new(resource),
+            }
+            .into(),
         }
+    }
+
+    pub(crate) fn poll_session_seek(
+        &mut self,
+        revision: TransportRevision,
+    ) -> Result<bool, PlayError> {
+        let PlayerResourceKind::Bound(bound) = &mut self.kind else {
+            return Err(PlayError::SessionSeekRequiresBoundTrack);
+        };
+        bound
+            .renderer
+            .poll_relocation(bound.resource.get_mut(), revision)
+            .map_err(|error| PlayError::ElasticPreparation {
+                reason: error.to_string(),
+            })
     }
 
     pub(crate) fn read_elastic(
@@ -80,6 +123,13 @@ impl PlayerResource {
     }
 }
 
+impl BoundResource {
+    pub(in crate::player) fn into_parts(self: Box<Self>) -> (Resource, PreparedElasticRenderer) {
+        let Self { resource, renderer } = *self;
+        (resource.into_inner(), renderer.into())
+    }
+}
+
 impl PlayerImpl {
     /// Prepares and queues a stream-backed resource for session-bound elastic
     /// playback. Failure leaves the playlist unchanged.
@@ -94,6 +144,80 @@ impl PlayerImpl {
         self.core
             .items
             .insert_with_binding(resource, item_id, binding, prepared, at_position);
+        Ok(())
+    }
+
+    /// Prepare and add the first bound item so it becomes audible at an exact
+    /// beat without mutating the shared session transport.
+    pub(in crate::player) async fn join_track_at(
+        &self,
+        resource: Resource,
+        item_id: Option<Arc<str>>,
+        binding: TrackBinding,
+        target: SessionBeat,
+    ) -> Result<(), PlayError> {
+        if self.item_count() != 0 {
+            return Err(PlayError::SessionJoinPlayerNotEmpty);
+        }
+        self.ensure_engine_started()?;
+        let slot = self.ensure_slot()?;
+        let before = self.core.engine.session_transport()?;
+        ensure_start_target(before, target)?;
+        let (resource, prepared) = self
+            .prepare_bound_resource_at(resource, &binding, target)
+            .await?;
+        let current_context = self.core.engine.preparation_context()?;
+        let current = self.core.engine.session_transport()?;
+        let context = prepared.context;
+        validate_join_context(before, current, context, current_context, target)?;
+        let dispatched = {
+            let transaction = prepare_first_load(
+                &self.core.items,
+                QueuedResource {
+                    binding: Some(binding),
+                    item_id,
+                    prepared: Some(prepared),
+                    resource: Some(resource),
+                },
+                ItemLoadContext::build(context, self.core.item_load_params()),
+            )?;
+            transaction.dispatch(
+                &self.core.engine,
+                slot,
+                TrackStart::Session {
+                    target,
+                    revision: current.revision(),
+                },
+            )?
+        };
+        self.phase.lock().set_abr_handle(dispatched.abr_handle);
+        self.publish_current_track_snapshot(dispatched.duration_seconds);
+        self.enter_playing();
+        self.set_status(PlayerStatus::ReadyToPlay);
+        self.announce_current_item(0);
+        Ok(())
+    }
+
+    pub(in crate::player) fn validate_session_seek(
+        &self,
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: TransportRevision,
+        shape: StreamShape,
+        binding: Option<&TrackBinding>,
+    ) -> Result<(), PlayError> {
+        let binding = binding.ok_or(PlayError::SessionSeekRequiresBoundTrack)?;
+        let playback = self.playback_snapshot().ok_or(PlayError::NotReady)?;
+        if playback.has_multiple_tracks() {
+            return Err(PlayError::SessionSeekHandoverActive);
+        }
+        let context = tempo_context(target, tempo, revision, shape)?;
+        required_source_frame(
+            binding,
+            &context,
+            shape,
+            SignalsmithBackend::<ElasticConfig>::rate_envelope(),
+        )?;
         Ok(())
     }
 
@@ -141,6 +265,61 @@ impl PlayerImpl {
         }
         Ok(())
     }
+}
+
+fn prepare_first_load<'a>(
+    items: &'a ItemQueue,
+    queued: QueuedResource,
+    context: ItemLoadContext<'_>,
+) -> Result<LoadTransaction<'a>, PlayError> {
+    let mut playlist = items.lock_playlist();
+    let rollback_len = playlist.len();
+    if rollback_len != 0 {
+        return Err(PlayError::SessionJoinPlayerNotEmpty);
+    }
+    let index = playlist.insert(queued, None);
+    match ItemQueue::prepare_load(playlist, index, context, rollback_len) {
+        Ok(Some(transaction)) => Ok(transaction),
+        Ok(None) => Err(PlayError::Internal(
+            "inserted first resource is unavailable".into(),
+        )),
+        Err((mut playlist, error)) => {
+            let _ = playlist.remove_at(index);
+            Err(error)
+        }
+    }
+}
+
+fn ensure_start_target(
+    snapshot: SessionTransportSnapshot,
+    target: SessionBeat,
+) -> Result<(), PlayError> {
+    if target > snapshot.position() {
+        Ok(())
+    } else {
+        Err(PlayError::SessionStartTargetElapsed {
+            target: target.get(),
+            position: snapshot.position().get(),
+        })
+    }
+}
+
+fn validate_join_context(
+    before: SessionTransportSnapshot,
+    current: SessionTransportSnapshot,
+    prepared: PreparationContext,
+    current_context: PreparationContext,
+    target: SessionBeat,
+) -> Result<(), PlayError> {
+    if prepared != current_context
+        || current_context.transport_revision() != current.revision()
+        || current_context.tempo() != current.tempo()
+        || current.revision() != before.revision()
+        || current.tempo() != before.tempo()
+    {
+        return Err(PlayError::BindingPreparationContextChanged);
+    }
+    ensure_start_target(current, target)
 }
 
 fn validate_tempo_change(
@@ -375,10 +554,18 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_audio::{BeatGrid, TrackBeat, analysis::TrackAnalysis};
+    use kithara_bufpool::PcmPool;
+    use kithara_events::EventBus;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::api::PlaybackDirection;
+    use crate::{
+        api::{PlaybackDirection, SlotId},
+        engine::{EngineConfig, EngineImpl},
+        player::platform::ItemLoadParams,
+        session::protocol::SessionRosterRevision,
+        test_support::empty_resource,
+    };
 
     #[kithara::test]
     fn bound_resource_type_requires_an_active_renderer() {
@@ -387,6 +574,82 @@ mod tests {
         }
 
         let _: fn(&BoundResource) -> &ActiveElasticRenderer = renderer;
+    }
+
+    #[kithara::test]
+    fn first_load_transaction_removes_inserted_item_on_rejection() {
+        let items = ItemQueue::new(EventBus::default());
+        let pool = PcmPool::default();
+        let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
+        let shape = StreamShape::new(
+            NonZeroU32::new(44_100).expect("static sample rate"),
+            NonZeroU32::new(512).expect("static block size"),
+        );
+        let result = prepare_first_load(
+            &items,
+            QueuedResource {
+                binding: None,
+                item_id: None,
+                prepared: None,
+                resource: Some(empty_resource("joining")),
+            },
+            ItemLoadContext::build(
+                shape,
+                ItemLoadParams {
+                    pool: &pool,
+                    pitch_bend: 1.0,
+                    rate: 1.0,
+                },
+            ),
+        )
+        .expect("first load preparation succeeds")
+        .dispatch(&engine, SlotId::new(0), TrackStart::Immediate);
+
+        assert!(matches!(result, Err(PlayError::SlotNotFound(_))));
+        assert_eq!(items.item_count(), 0);
+        engine.worker().shutdown();
+    }
+
+    #[kithara::test]
+    fn join_rejects_stream_shape_change_after_preparation() {
+        let target = SessionBeat::new(8.0).expect("finite target");
+        let tempo = Tempo::new(120.0).expect("valid tempo");
+        let revision = TransportRevision::FIRST;
+        let before = SessionTransportSnapshot::new(
+            SessionBeat::new(4.0).expect("finite position"),
+            true,
+            tempo,
+            revision,
+        );
+        let current = SessionTransportSnapshot::new(
+            SessionBeat::new(5.0).expect("finite position"),
+            true,
+            tempo,
+            revision,
+        );
+        let prepared = PreparationContext::new(
+            StreamShape::new(
+                NonZeroU32::new(44_100).expect("static sample rate"),
+                NonZeroU32::new(512).expect("static block size"),
+            ),
+            tempo,
+            revision,
+            SessionRosterRevision::new_for_test(1),
+        );
+        let changed = PreparationContext::new(
+            StreamShape::new(
+                NonZeroU32::new(48_000).expect("static sample rate"),
+                NonZeroU32::new(512).expect("static block size"),
+            ),
+            tempo,
+            revision,
+            SessionRosterRevision::new_for_test(1),
+        );
+
+        assert!(matches!(
+            validate_join_context(before, current, prepared, changed, target),
+            Err(PlayError::BindingPreparationContextChanged)
+        ));
     }
 
     fn binding() -> TrackBinding {

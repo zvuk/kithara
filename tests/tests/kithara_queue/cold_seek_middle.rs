@@ -10,6 +10,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -80,7 +81,7 @@ fn build_queue_with_tick(
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::build(player, QueueConfig::default()));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
         loop {
@@ -230,7 +231,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::build(player, QueueConfig::default()));
 
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {

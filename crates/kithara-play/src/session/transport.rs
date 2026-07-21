@@ -7,13 +7,13 @@ use super::{
     PlayerId,
     protocol::{PreparationContext, SessionError},
     render::{
-        RenderFrame, SessionTransportCommit, TransportCommitResult, TransportCommitStamp,
-        TransportObservation,
+        RenderFrame, SessionTransportCommit, TransportBoundary, TransportCommitResult,
+        TransportCommitStamp, TransportObservation,
     },
     state::{AbortDelivery, SessionState, SessionTransportState},
 };
 use crate::{
-    api::{SessionTransportSnapshot, Tempo, TransportRevision},
+    api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
     player::node::StreamShape,
 };
 
@@ -33,6 +33,23 @@ pub(super) fn set_tempo_checked<B: AudioBackend>(
 ) -> Result<(), SessionError> {
     let _ = validate_checked_transport(state, expected_context, player_ids)?;
     set_tempo_after_refresh(state, tempo)
+}
+
+pub(super) fn seek_checked<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    target: SessionBeat,
+    expected_context: PreparationContext,
+    player_ids: &[PlayerId],
+) -> Result<(), SessionError> {
+    let snapshot = validate_checked_transport(state, expected_context, player_ids)?;
+    ensure_no_pending_commit(state)?;
+    let revision = next_revision(state)?;
+    let (target_frame, sample_rate) = commit_boundary(state)?;
+    let next =
+        SessionTransportCommit::relocate(snapshot.tempo(), snapshot.is_playing(), revision, target);
+    let stamp =
+        TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
+    schedule_commit(state, next, stamp)
 }
 
 fn validate_checked_transport<B: AudioBackend>(
@@ -404,7 +421,7 @@ fn publish_transport_commit<B: AudioBackend>(
 fn transport_events(
     previous: Option<SessionTransportCommit>,
     next: SessionTransportCommit,
-) -> [Option<TransportEvent>; 2] {
+) -> [Option<TransportEvent>; 3] {
     let revision = next.revision().get();
     let tempo = previous
         .is_none_or(|commit| commit.tempo() != next.tempo())
@@ -418,7 +435,14 @@ fn transport_events(
             revision,
             playing: next.is_playing(),
         });
-    [tempo, play_state]
+    let seek = match next.boundary() {
+        TransportBoundary::Continuous => None,
+        TransportBoundary::Relocate(target) => Some(TransportEvent::SeekCommitted {
+            position_beats: target.get(),
+            revision,
+        }),
+    };
+    [tempo, play_state, seek]
 }
 
 fn publish_transport_event<B: AudioBackend>(state: &SessionState<B>, event: &TransportEvent) {
@@ -495,5 +519,28 @@ mod tests {
             preparation_commit(&SessionTransportState::default()),
             Err(SessionError::TransportNotConfigured)
         ));
+    }
+
+    #[kithara::test]
+    fn relocation_commit_publishes_the_exact_seek_target() {
+        let target = SessionBeat::new(7.25).expect("invariant: test beat is finite");
+        let next = SessionTransportCommit::relocate(
+            Tempo::new(120.0).expect("invariant: test tempo is valid"),
+            true,
+            revision(2),
+            target,
+        );
+
+        assert_eq!(
+            transport_events(Some(commit(120.0, 1)), next),
+            [
+                None,
+                None,
+                Some(TransportEvent::SeekCommitted {
+                    position_beats: target.get(),
+                    revision: 2,
+                }),
+            ]
+        );
     }
 }

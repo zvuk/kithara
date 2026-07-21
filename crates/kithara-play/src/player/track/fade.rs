@@ -1,20 +1,22 @@
-use std::ops::Range;
+use std::{num::NonZeroU32, ops::Range};
 
 #[rustfmt::skip]
 use firewheel::dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON;
 #[rustfmt::skip]
 use firewheel::param::smoother::SmootherConfig;
-use std::num::NonZeroU32;
 
 use firewheel::dsp::{
     fade::FadeCurve,
     mix::{Mix, MixDSP},
 };
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct TrackFade {
     curve: FadeCurve,
-    duration: f32,
     mix: MixDSP,
+    #[field(get, copy, vis = "pub(super)")]
+    duration: f32,
 }
 
 impl TrackFade {
@@ -29,10 +31,6 @@ impl TrackFade {
                 sample_rate,
             ),
         }
-    }
-
-    pub(super) fn duration(&self) -> f32 {
-        self.duration
     }
 
     pub(super) fn fade_in(&mut self) {
@@ -77,6 +75,13 @@ impl TrackFade {
         self.mix.reset_to_target();
     }
 
+    fn smoother_config(duration: f32) -> SmootherConfig {
+        SmootherConfig {
+            smooth_seconds: duration,
+            settle_epsilon: DEFAULT_SETTLE_EPSILON,
+        }
+    }
+
     pub(super) fn stop(&mut self) {
         self.mix.set_mix(Mix::FULLY_WET, self.curve);
         self.mix.reset_to_target();
@@ -100,12 +105,5 @@ impl TrackFade {
             sample_rate,
         );
         self.duration = duration;
-    }
-
-    fn smoother_config(duration: f32) -> SmootherConfig {
-        SmootherConfig {
-            smooth_seconds: duration,
-            settle_epsilon: DEFAULT_SETTLE_EPSILON,
-        }
     }
 }

@@ -73,10 +73,6 @@ pub enum PlayError {
         index: usize,
     },
 
-    /// The resource cannot open an independent preparation reader.
-    #[error("bound item cannot open an independent preparation reader")]
-    BindingSourceNotReopenable,
-
     /// The resource cannot satisfy bounded reverse source-range demand.
     #[error("bound item source does not support reverse range demand")]
     ReverseSourceUnavailable,
@@ -88,6 +84,30 @@ pub enum PlayError {
     #[error("bound-track seek requires a transactional session transport operation")]
     BoundTrackSeekRequiresSessionTransport,
 
+    /// Session relocation requires every active participant to have a beat binding.
+    #[error("session seek requires a bound current track")]
+    SessionSeekRequiresBoundTrack,
+
+    /// A player has more than one audible track during a local handover.
+    #[error("session seek cannot commit during a player track handover")]
+    SessionSeekHandoverActive,
+
+    /// At least one participating player could not prepare the seek target.
+    #[error("session seek preparation failed before the transport boundary")]
+    SessionSeekPreparationFailed,
+
+    /// Exact session starts require a track with an immutable beat binding.
+    #[error("session start requires a bound current track")]
+    SessionStartRequiresBoundTrack,
+
+    /// The requested exact start is no longer in the future.
+    #[error("session start beat {target} has elapsed at transport beat {position}")]
+    SessionStartTargetElapsed { target: f64, position: f64 },
+
+    /// Explicit join is valid only for an empty player deck.
+    #[error("session join requires an empty player")]
+    SessionJoinPlayerNotEmpty,
+
     #[error("engine not running")]
     EngineNotRunning,
 
@@ -97,6 +117,42 @@ pub enum PlayError {
     /// Players in one transport operation must use the same session.
     #[error("players do not share one session transport")]
     SessionMismatch,
+
+    /// A routed member no longer has a live composition owner.
+    #[error("player member is detached from its composition")]
+    PlayerMemberDetached,
+
+    /// A routed member identity is absent from the current topology.
+    #[error("player member {member_id} is not present in the composition")]
+    PlayerMemberNotFound { member_id: u64 },
+
+    /// The typed member identity space is exhausted.
+    #[error("player member identity space is exhausted")]
+    PlayerMemberIdExhausted,
+
+    /// The typed composition revision space is exhausted.
+    #[error("player topology revision space is exhausted")]
+    PlayerTopologyRevisionExhausted,
+
+    /// The typed session-seek attempt identity space is exhausted.
+    #[error("session seek attempt identity space is exhausted")]
+    SessionSeekAttemptExhausted,
+
+    /// Another root-composition transaction currently owns the member set.
+    #[error("another multi-player transaction is already active")]
+    PlayerTransactionPending,
+
+    /// A nested composition already belongs to another parent.
+    #[error("player component is already registered in a composition")]
+    PlayerComponentAlreadyRegistered,
+
+    /// A component did not expose a player owned by the canonical player core.
+    #[error("player component does not own a canonical player")]
+    PlayerComponentEmpty,
+
+    /// A component exposes more than one nested composition root.
+    #[error("player component exposes more than one composition root")]
+    PlayerComponentTopologyAmbiguous,
 
     /// A bound player cannot render the requested session tempo.
     #[error(

@@ -122,9 +122,9 @@ impl fmt::Display for TransportRevision {
 #[non_exhaustive]
 pub struct SessionTransportSnapshot {
     position: SessionBeat,
-    playing: bool,
     tempo: Tempo,
     revision: TransportRevision,
+    playing: bool,
 }
 
 impl SessionTransportSnapshot {
@@ -136,9 +136,9 @@ impl SessionTransportSnapshot {
     ) -> Self {
         Self {
             position,
-            playing,
             tempo,
             revision,
+            playing,
         }
     }
 

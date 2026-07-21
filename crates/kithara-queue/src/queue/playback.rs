@@ -5,7 +5,7 @@ use kithara_events::{
     TrackStatus,
 };
 use kithara_platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::{
     Queue,
@@ -237,15 +237,8 @@ impl Queue {
     /// `Consumed` to keep the status truthful: a later re-select must go
     /// through the loader-respawn path, not select an emptied slot.
     pub fn play(&self) {
-        let entry = {
-            let guard = self.lock_tracks();
-            guard
-                .get(self.player.current_index())
-                .map(|e| (e.id, e.status.clone()))
-        };
-        self.player.play();
-        if let Some((id, TrackStatus::Loaded)) = entry {
-            self.set_status(id, TrackStatus::Consumed);
+        if let Err(error) = self.start_at_player(kithara_play::StartAt::Immediate) {
+            warn!(%error, "failed to start queue playback");
         }
     }
 
@@ -268,13 +261,36 @@ impl Queue {
         view
     }
 
-    /// Latest monotonic playback position for the current track in
-    /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
-    /// samples the engine produces on pause/resume so downstream UIs
-    /// see stable values.
-    #[must_use]
-    pub fn position_seconds(&self) -> Option<f64> {
-        self.read_cached_position().into()
+    delegate::delegate! {
+        to self {
+            /// Latest monotonic playback position for the current track in
+            /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
+            /// samples the engine produces on pause/resume so downstream UIs
+            /// see stable values.
+            #[must_use]
+            #[into]
+            #[call(read_cached_position)]
+            pub fn position_seconds(&self) -> Option<f64>;
+            /// Seek within the currently-playing track.
+            ///
+            /// Seek-hang detection is not handled here: the audio pipeline's
+            /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
+            /// `Stream::read`, `decode_next_chunk`) already panics with a
+            /// stacktrace and context dump when no progress is observed. Adding
+            /// a second Queue-level watchdog would just duplicate those panics.
+            ///
+            /// Returns the typed [`SeekOutcome`](kithara_play::SeekOutcome) — either
+            /// `Landed` with the requested target (the actual landed position is
+            /// reconciled by the worker after applying the seek; this call returns
+            /// the optimistic outcome) or `PastEof` if the target is beyond the
+            /// known track duration.
+            ///
+            /// # Errors
+            /// Returns [`QueueError::Play`] if the player reports a seek failure.
+            #[expr($.map_err(QueueError::from))]
+            #[call(seek_player)]
+            pub fn seek(&self, seconds: f64) -> Result<kithara_play::SeekOutcome, QueueError>;
+        }
     }
 
     fn process_player_event(&self, ev: &Event) {
@@ -301,23 +317,10 @@ impl Queue {
         }
     }
 
-    /// Seek within the currently-playing track.
-    ///
-    /// Seek-hang detection is not handled here: the audio pipeline's
-    /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
-    /// `Stream::read`, `decode_next_chunk`) already panics with a
-    /// stacktrace and context dump when no progress is observed. Adding
-    /// a second Queue-level watchdog would just duplicate those panics.
-    ///
-    /// Returns the typed [`SeekOutcome`](kithara_play::SeekOutcome) — either
-    /// `Landed` with the requested target (the actual landed position is
-    /// reconciled by the worker after applying the seek; this call returns
-    /// the optimistic outcome) or `PastEof` if the target is beyond the
-    /// known track duration.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::Play`] if the player reports a seek failure.
-    pub fn seek(&self, seconds: f64) -> Result<kithara_play::SeekOutcome, QueueError> {
+    pub(super) fn seek_player(
+        &self,
+        seconds: f64,
+    ) -> Result<kithara_play::SeekOutcome, kithara_play::PlayError> {
         // Superpowered-style resume after end-of-queue: once the last track
         // played to natural EOF the nav cursor ran off the end (`current()` is
         // `None`). Re-park the cursor to the last navigation-owned item and
@@ -334,14 +337,28 @@ impl Queue {
                 self.handle_current_item_changed();
             }
         }
-        let outcome = self
-            .player
-            .seek_seconds(seconds)
-            .map_err(QueueError::from)?;
+        let outcome = self.player.seek_seconds(seconds)?;
         if let kithara_play::SeekOutcome::Landed { landed_at, .. } = outcome {
             self.write_cached_position(CachedPosition::known(landed_at.as_secs_f64()));
         }
         Ok(outcome)
+    }
+
+    pub(super) fn start_at_player(
+        &self,
+        start: kithara_play::StartAt,
+    ) -> Result<(), kithara_play::PlayError> {
+        let entry = {
+            let guard = self.lock_tracks();
+            guard
+                .get(self.player.current_index())
+                .map(|e| (e.id, e.status.clone()))
+        };
+        self.player.start_at(start)?;
+        if let Some((id, TrackStatus::Loaded)) = entry {
+            self.set_status(id, TrackStatus::Consumed);
+        }
+        Ok(())
     }
 
     /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine

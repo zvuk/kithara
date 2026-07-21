@@ -11,10 +11,10 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ElasticRenderRequest {
+    revision: TransportRevision,
     source_end: f64,
     source_start: f64,
     request_id: u64,
-    revision: TransportRevision,
     output_frames: usize,
 }
 
@@ -193,10 +193,10 @@ pub(crate) fn plan_elastic_render(
     }
 
     Ok(ElasticRenderRequest {
+        revision,
         source_end,
         source_start,
         request_id,
-        revision,
         output_frames,
     })
 }

@@ -14,6 +14,7 @@ use kithara::{
         time::{self, Duration, Instant, sleep},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
+        traits::FromWithParams,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
@@ -28,24 +29,24 @@ use url::Url;
 
 struct Consts;
 impl Consts {
-    /// Big enough that "near end" is past any plausible initial-loading
-    /// prefetch window AND the target segment cannot already be in
-    /// flight at seek time.
-    const SEGMENT_COUNT: usize = 50;
-    const SEGMENT_DURATION_S: f64 = 4.0;
-    /// Server-side artificial delay per segment. Picked much larger
-    /// than the test-server roundtrip so initial-loading fetches are
-    /// guaranteed in flight when the seek fires.
-    const SEGMENT_DELAY_MS: u64 = 800;
+    /// Loader settle deadline.
+    const LOAD_DEADLINE: Duration = Duration::from_secs(20);
     /// Tightens the Downloader to a small concurrency so the
     /// stale-fetch starvation is observable. Production default is 5.
     const MAX_CONCURRENT: usize = 3;
-    /// Loader settle deadline.
-    const LOAD_DEADLINE: Duration = Duration::from_secs(20);
     /// Window for collecting post-seek events. Four delay windows is
     /// generous: enough for the reader to actually start consuming
     /// the target segment if the seek path works.
     const POST_SEEK_OBSERVATION: Duration = Duration::from_millis(Self::SEGMENT_DELAY_MS * 4);
+    /// Big enough that "near end" is past any plausible initial-loading
+    /// prefetch window AND the target segment cannot already be in
+    /// flight at seek time.
+    const SEGMENT_COUNT: usize = 50;
+    /// Server-side artificial delay per segment. Picked much larger
+    /// than the test-server roundtrip so initial-loading fetches are
+    /// guaranteed in flight when the seek fires.
+    const SEGMENT_DELAY_MS: u64 = 800;
+    const SEGMENT_DURATION_S: f64 = 4.0;
     /// Allow 1 segment of slack between the nominal target and the
     /// observed value (warmup vs `seek_at` race).
     const WARMUP_TOLERANCE: usize = 1;
@@ -113,10 +114,9 @@ fn build_queue_with_tick(
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(&player))
-            .with_store(store.clone()),
+    let queue = Arc::new(Queue::build(
+        Arc::clone(&player),
+        QueueConfig::default().with_store(store.clone()),
     ));
     let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
@@ -129,19 +129,19 @@ fn build_queue_with_tick(
 
 #[derive(Debug, Default)]
 struct PostSeekObservation {
-    /// First `ReaderSeek` event after `seek_at`. Confirms the decoder
-    /// actually called `Seek::seek` on the stream (not just that
-    /// `SeekControl::begin` ran).
-    reader_seek: Option<Event>,
+    /// `RequestId`s of `RequestEnqueued` after `seek_at` whose URL
+    /// resolves to a prefix segment (`segment_index < target -
+    /// WARMUP_TOLERANCE`). Hard cap.
+    prefix_enqueued_after_seek: HashSet<RequestId>,
     /// First `SegmentReadStart` after `seek_at`. The discriminating
     /// signal: a healthy seek path emits this with `segment_index ≈
     /// target`; a broken one emits it with `segment_index ∈ [0..3]`
     /// because the reader is still chewing through the prefix.
     first_segment_read_start: Option<Event>,
-    /// `RequestId`s of `RequestEnqueued` after `seek_at` whose URL
-    /// resolves to a prefix segment (`segment_index < target -
-    /// WARMUP_TOLERANCE`). Hard cap.
-    prefix_enqueued_after_seek: HashSet<RequestId>,
+    /// First `ReaderSeek` event after `seek_at`. Confirms the decoder
+    /// actually called `Seek::seek` on the stream (not just that
+    /// `SeekControl::begin` ran).
+    reader_seek: Option<Event>,
     /// Whether a new-epoch (`RequestId` Enqueued after `seek_at`) fetch was
     /// observed to `RequestStarted` within the observation window, plus its
     /// `wait_in_queue` (kept for the diagnostic message only — NOT asserted on,
@@ -276,7 +276,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     // `kithara_hls_probe::seek_epoch_reset`. Without this parking the
     // scheduler never observes the new epoch under flash. The budget is a
     // virtual hang ceiling, not a pacing wait; the probe-fired assertion
-    // below is unchanged.
     let (observation, _reset_evt) = tokio::join!(
         observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued),
         probe_recorder.wait_for_probe_async(

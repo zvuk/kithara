@@ -5,7 +5,7 @@ use std::sync::{Mutex, PoisonError};
 use kithara_assets::{AssetStoreBuilder, StorageBackend};
 use kithara_bufpool::Region;
 use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_platform::{CancelScope, CancelToken, sync::Arc};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc, traits::FromWithParams};
 use kithara_play::{PlayerConfig, PlayerImpl};
 
 use super::types::{
@@ -97,45 +97,17 @@ pub struct Queue {
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
     pub(super) player_rx: Mutex<EventReceiver>,
-    /// Master cancel token for the queue. When the queue creates its
-    /// own [`PlayerImpl`] (no caller-supplied player), this token is
-    /// passed into `PlayerConfig.cancel` so the queue's `Drop` cascades
-    /// shutdown to the player's subsystems. When a caller supplies a
-    /// pre-built player, this token is independent — the caller owns
-    /// the player's master directly.
+    /// Master cancel token for the queue. A player created by [`Queue::new`]
+    /// shares this token, while a player supplied through [`FromWithParams`]
+    /// keeps its caller-owned lifetime.
     pub(super) shutdown: CancelToken,
 }
 
 impl Queue {
-    /// Build a queue from a [`QueueConfig`].
-    ///
-    /// If `config.player` is `Some`, the caller-supplied
-    /// [`PlayerImpl`] is used (caller retains ownership; must not
-    /// mutate its item list directly — `play`/`pause`/`seek` OK;
-    /// `replace_item`, `reserve_slots`, `select_item`, `remove_at` are
-    /// Queue-owned). If `None`, a default player is built internally.
-    ///
-    /// Matches the project-wide pattern where config structs accept
-    /// optional built instances (see
-    /// [`ResourceConfig`](kithara_play::ResourceConfig)'s `worker` /
-    /// `runtime` / `bus` fields).
+    /// Build a queue with a queue-owned player.
     #[must_use]
     pub fn new(config: QueueConfig) -> Self {
-        let QueueConfig {
-            player,
-            store,
-            cancel: config_cancel,
-            max_concurrent_loads,
-            prefetch_duration: _,
-            #[cfg(any(test, feature = "probe"))]
-            should_autoplay,
-            #[cfg(not(any(test, feature = "probe")))]
-                should_autoplay: _,
-        } = config;
-        // App path threads a child of the app master; standalone / test
-        // use falls back to a fresh root (the documented safety net).
-        let cancel = CancelScope::new(config_cancel).token();
-        let player = player.unwrap_or_else(|| {
+        build_queue(config, |cancel| {
             let region = Region::default();
             let config = PlayerConfig::builder()
                 .cancel(cancel.clone())
@@ -143,45 +115,67 @@ impl Queue {
                 .pcm_pool(region.pcm_pool())
                 .build();
             Arc::new(PlayerImpl::new(config))
-        });
-        let store = store.unwrap_or_else(|| {
-            AssetStoreBuilder::default()
-                .backend(StorageBackend::default())
-                .cancel(cancel.child())
-                .pool(player.byte_pool().clone())
-                .build()
-        });
-        player.set_auto_advance_enabled(false);
-        let bus = player.bus().clone();
-        let tracks = Arc::new(Tracks::new(bus.clone()));
-        let loader = Arc::new(Loader::new(
-            Arc::clone(&player),
-            store,
-            max_concurrent_loads,
-            Arc::clone(&tracks),
-        ));
-        let player_rx = player.subscribe();
-        Self {
-            player,
-            loader,
-            tracks,
-            bus,
-            #[cfg(any(test, feature = "probe"))]
-            should_autoplay,
-            shutdown: cancel,
-            navigation: Arc::new(Mutex::new(NavigationState::new())),
-            pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
-            select_apply: Arc::new(Mutex::new(())),
-            #[cfg(any(test, feature = "probe"))]
-            test_resources: Arc::new(Mutex::new(HashMap::new())),
-            player_rx: Mutex::new(player_rx),
-            crossfade_armed_for: Arc::new(AtomicTrackId::disarmed()),
-            #[cfg(any(test, feature = "probe"))]
-            autoplay_target: Arc::new(AtomicTrackId::disarmed()),
-            cached_position: Arc::new(AtomicCachedPosition::unknown()),
-        }
+        })
     }
+}
 
+fn build_queue(
+    config: QueueConfig,
+    make_player: impl FnOnce(&CancelToken) -> Arc<PlayerImpl>,
+) -> Queue {
+    let QueueConfig {
+        store,
+        cancel: config_cancel,
+        max_concurrent_loads,
+        prefetch_duration: _,
+        #[cfg(any(test, feature = "probe"))]
+        should_autoplay,
+        #[cfg(not(any(test, feature = "probe")))]
+            should_autoplay: _,
+    } = config;
+    // App path threads a child of the app master; standalone / test
+    // use falls back to a fresh root (the documented safety net).
+    let cancel = CancelScope::new(config_cancel).token();
+    let player = make_player(&cancel);
+    let store = store.unwrap_or_else(|| {
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::default())
+            .cancel(cancel.child())
+            .pool(player.byte_pool().clone())
+            .build()
+    });
+    player.set_auto_advance_enabled(false);
+    let bus = player.bus().clone();
+    let tracks = Arc::new(Tracks::new(bus.clone()));
+    let loader = Arc::new(Loader::new(
+        Arc::clone(&player),
+        store,
+        max_concurrent_loads,
+        Arc::clone(&tracks),
+    ));
+    let player_rx = player.subscribe();
+    Queue {
+        player,
+        loader,
+        tracks,
+        bus,
+        #[cfg(any(test, feature = "probe"))]
+        should_autoplay,
+        shutdown: cancel,
+        navigation: Arc::new(Mutex::new(NavigationState::new())),
+        pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
+        select_apply: Arc::new(Mutex::new(())),
+        #[cfg(any(test, feature = "probe"))]
+        test_resources: Arc::new(Mutex::new(HashMap::new())),
+        player_rx: Mutex::new(player_rx),
+        crossfade_armed_for: Arc::new(AtomicTrackId::disarmed()),
+        #[cfg(any(test, feature = "probe"))]
+        autoplay_target: Arc::new(AtomicTrackId::disarmed()),
+        cached_position: Arc::new(AtomicCachedPosition::unknown()),
+    }
+}
+
+impl Queue {
     pub(super) fn lock_navigation(&self) -> std::sync::MutexGuard<'_, NavigationState> {
         self.navigation
             .lock()
@@ -237,6 +231,12 @@ impl Queue {
     }
 }
 
+impl FromWithParams<Arc<PlayerImpl>, QueueConfig> for Queue {
+    fn build(player: Arc<PlayerImpl>, config: QueueConfig) -> Self {
+        build_queue(config, |_| player)
+    }
+}
+
 impl Drop for Queue {
     fn drop(&mut self) {
         self.shutdown.cancel();
@@ -246,7 +246,10 @@ impl Drop for Queue {
 #[cfg(test)]
 pub(super) mod tests {
     use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
-    use kithara_platform::time::{Duration, Instant, timeout};
+    use kithara_platform::{
+        time::{Duration, Instant, timeout},
+        traits::FromWithParams,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -283,6 +286,20 @@ pub(super) mod tests {
     #[kithara::test]
     fn queue_new_constructs_without_panic() {
         let _queue = make_queue();
+    }
+
+    #[kithara::test]
+    fn from_with_params_wraps_the_supplied_player() {
+        let region = Region::default();
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder()
+                .byte_pool(region.byte_pool())
+                .pcm_pool(region.pcm_pool())
+                .build(),
+        ));
+        let queue = Queue::build(Arc::clone(&player), QueueConfig::default());
+
+        assert!(Arc::ptr_eq(&queue.player, &player));
     }
 
     #[kithara::test]

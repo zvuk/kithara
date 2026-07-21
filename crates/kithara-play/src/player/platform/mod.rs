@@ -5,7 +5,6 @@ mod load;
 mod imp;
 
 pub(crate) use imp::{
-    ActiveElasticRenderer, PreparedBindingResource, PreparedElasticRenderer, prepare_bound_load,
-    restore_prepared_binding,
+    ActiveElasticRenderer, PreparedBindingResource, prepare_bound_load, restore_prepared_binding,
 };
-pub(crate) use load::ItemLoadContext;
+pub(crate) use load::{ItemLoadContext, ItemLoadParams};

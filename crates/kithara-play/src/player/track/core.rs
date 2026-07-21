@@ -8,9 +8,18 @@ use kithara_platform::sync::Arc;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
-#[cfg(test)]
-use crate::session::render::RenderContext;
-use crate::{api::TrackBinding, bridge::TrackState};
+use crate::{
+    api::{SessionBeat, Tempo, TrackBinding, TransportRevision},
+    bridge::{TrackStart, TrackState},
+    error::PlayError,
+    session::render::RenderContext,
+};
+
+#[derive(Clone, Copy)]
+struct PendingStart {
+    target: SessionBeat,
+    revision: TransportRevision,
+}
 
 /// Canonical host-frame axis and optional musical binding for a track.
 #[derive(Clone, Debug, PartialEq)]
@@ -87,6 +96,7 @@ pub struct PlayerTrack {
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
     /// duration) captured under the resource lock.
     pub(super) observed_duration: f64,
+    pending_start: Option<PendingStart>,
     pub(super) sample_rate: u32,
     /// Cumulative frames this track has actually served into the mix output.
     ///
@@ -130,6 +140,7 @@ impl PlayerTrack {
             triggers: TrackTriggers::default(),
             fade: TrackFade::new(fade_duration, fade_curve, sample_rate),
             prefetch_duration: prefetch_duration.max(0.0),
+            pending_start: None,
             sample_rate: sample_rate.get(),
             served_frames: 0,
             ended_at_eof: false,
@@ -138,6 +149,27 @@ impl PlayerTrack {
         };
         track.update_service_class(TrackState::Preloading);
         track
+    }
+
+    pub(crate) fn activate_pending_start(
+        &mut self,
+        context: &RenderContext,
+    ) -> Result<Option<usize>, ()> {
+        let Some(start) = self.pending_start else {
+            return Ok(None);
+        };
+        if context.transport_revision() != Some(start.revision)
+            || context.beat_is_before_output(start.target)
+        {
+            self.pending_start = None;
+            return Err(());
+        }
+        let Some(offset) = context.output_offset_for_beat(start.target) else {
+            return Ok(None);
+        };
+        self.pending_start = None;
+        self.play();
+        Ok(Some(offset))
     }
 
     fn apply_host_sample_rate(&mut self, sample_rate: NonZeroU32) -> bool {
@@ -156,10 +188,50 @@ impl PlayerTrack {
         true
     }
 
-    /// Current visible (post-gapless-trim) duration in seconds.
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        observed_duration(self.observed_duration, self.resource.duration())
+    pub(crate) fn begin_session_seek(
+        &mut self,
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: TransportRevision,
+    ) -> Result<(), PlayError> {
+        let binding = self
+            .binding
+            .as_ref()
+            .ok_or(PlayError::SessionSeekRequiresBoundTrack)?;
+        self.resource
+            .begin_session_seek(binding, target, tempo, revision)
+    }
+
+    delegate! {
+        to self.resource {
+            /// Cancel an uncommitted elastic relocation.
+            pub(crate) fn cancel_session_seek(&mut self, revision: TransportRevision);
+            /// Decoded-ahead frontier in seconds.
+            #[must_use]
+            pub fn decoded_frontier(&self) -> f64;
+            /// Poll a prepared elastic relocation without committing it.
+            pub(crate) fn poll_session_seek(
+                &mut self,
+                revision: TransportRevision,
+            ) -> Result<bool, PlayError>;
+            /// Source identifier.
+            #[must_use]
+            pub fn src(&self) -> &Arc<str>;
+            /// Set the playback rate for the active stretch controls.
+            pub(in crate::player) fn set_playback_rate(&self, rate: f32);
+            /// Set the transport pitch-bend multiplier.
+            pub(in crate::player) fn set_transport_bend(&self, bend: f32);
+            /// Current visible (post-gapless-trim) duration in seconds.
+            #[must_use]
+            #[expr(observed_duration(self.observed_duration, $))]
+            pub fn duration(&self) -> f64;
+        }
+        to self.binding {
+            /// Returns the immutable synchronization binding owned by this active track.
+            #[must_use]
+            #[call(as_ref)]
+            pub fn binding(&self) -> Option<&TrackBinding>;
+        }
     }
 
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
@@ -202,10 +274,11 @@ impl PlayerTrack {
         served_f64 / f64::from(sample_rate)
     }
 
-    /// Reference to the owned resource.
-    #[must_use]
-    pub fn resource(&self) -> &PlayerResource {
-        &self.resource
+    pub(crate) fn schedule_start(&mut self, start: TrackStart) {
+        self.pending_start = match start {
+            TrackStart::Immediate => None,
+            TrackStart::Session { target, revision } => Some(PendingStart { target, revision }),
+        };
     }
 
     /// Seeks standalone playback and updates its served-frame origin.
@@ -265,23 +338,6 @@ impl PlayerTrack {
     fn update_service_class(&mut self, state: TrackState) {
         self.resource
             .set_service_class(service_class_for_state(state));
-    }
-
-    delegate! {
-        to self.resource {
-            /// Decoded-ahead frontier in seconds.
-            #[must_use]
-            pub fn decoded_frontier(&self) -> f64;
-            /// Source identifier.
-            #[must_use]
-            pub fn src(&self) -> &Arc<str>;
-        }
-        to self.binding {
-            /// Returns the immutable synchronization binding owned by this active track.
-            #[must_use]
-            #[call(as_ref)]
-            pub fn binding(&self) -> Option<&TrackBinding>;
-        }
     }
 }
 

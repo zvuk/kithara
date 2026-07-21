@@ -9,7 +9,7 @@ use kithara::{
         time::{Duration, sleep},
     },
     play::{
-        PlaybackDirection, PlayerEvent, Resource, ResourceConfig, SessionBeat,
+        MultiPlayer, PlaybackDirection, PlayerEvent, Resource, ResourceConfig, SessionBeat,
         SessionTransportSnapshot, Tempo, TrackBinding,
     },
 };
@@ -140,13 +140,14 @@ fn shared_transport(harnesses: &[OfflinePlayerHarness]) -> SessionTransportSnaps
 
 fn commit_tempo(harnesses: &[OfflinePlayerHarness], tempo: Tempo) {
     let before = shared_transport(harnesses);
-    let peers: Vec<_> = harnesses[1..]
-        .iter()
-        .map(|harness| harness.player().as_ref())
-        .collect();
-    harnesses[0]
-        .player()
-        .set_session_tempo(&peers, tempo)
+    let players = MultiPlayer::default();
+    for harness in harnesses {
+        players
+            .register(Arc::clone(harness.player()))
+            .expect("shared-session player registers");
+    }
+    players
+        .set_session_tempo(tempo)
         .expect("multi-track tempo change is accepted");
 
     let committed = (0..BLOCK_FRAMES * 8)

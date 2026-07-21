@@ -64,15 +64,6 @@ impl TrackTriggers {
         }
     }
 
-    pub(crate) fn mark_prefetch_requested(&mut self) {
-        self.notified_prefetch_requested = true;
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.notified_prefetch_requested = false;
-        self.notified_track_requested = false;
-    }
-
     fn emit_track_requested(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
         if self.notified_prefetch_requested {
             return;
@@ -85,15 +76,24 @@ impl TrackTriggers {
             self.notified_prefetch_requested = true;
         }
     }
+
+    pub(crate) fn mark_prefetch_requested(&mut self) {
+        self.notified_prefetch_requested = true;
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.notified_prefetch_requested = false;
+        self.notified_track_requested = false;
+    }
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct TriggerInput {
-    pub(crate) block_frames: usize,
-    pub(crate) duration: f64,
-    pub(crate) fade_duration: f32,
     pub(crate) frames_until_eof: Option<usize>,
-    pub(crate) position: f64,
+    pub(crate) fade_duration: f32,
     pub(crate) prefetch_duration: f32,
+    pub(crate) duration: f64,
+    pub(crate) position: f64,
     pub(crate) sample_rate: u32,
+    pub(crate) block_frames: usize,
 }

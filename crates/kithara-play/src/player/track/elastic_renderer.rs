@@ -1,5 +1,7 @@
 #[path = "preparation.rs"]
 mod preparation;
+#[path = "relocation.rs"]
+mod relocation;
 #[path = "rendering.rs"]
 mod rendering;
 
@@ -21,7 +23,7 @@ use crate::{
     },
     player::node::StreamShape,
     resource::Resource,
-    session::render::RenderContext,
+    session::render::{RenderContext, TransportBoundary},
 };
 
 const READY_WINDOW_COUNT: usize = 2;
@@ -52,6 +54,8 @@ pub(crate) enum ElasticPrepareError {
     ReverseUnsupported,
     #[error("elastic preparation source range is outside the prepared fetch window")]
     FetchWindowMismatch,
+    #[error("another elastic relocation is still pending")]
+    RelocationPending,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -88,6 +92,10 @@ pub(crate) enum ElasticRenderError {
     SourceReadFailed,
     #[error("elastic source window missed its render deadline")]
     SourceWindowDeadlineMissed,
+    #[error("elastic relocation was not ready at the committed session boundary")]
+    RelocationNotReady,
+    #[error("elastic relocation could not be primed at the committed session boundary")]
+    RelocationPreparationFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -144,16 +152,30 @@ struct ElasticPreparation {
 
 #[derive(Clone, Copy)]
 struct PreparedRuntime {
-    cursor: SourceCursor,
     direction: PlaybackDirection,
+    cursor: SourceCursor,
     source_window: SourceRange,
-    request_id: u64,
     revision: TransportRevision,
+    request_id: u64,
 }
 
 struct RenderRuntime {
-    prepared: PreparedRuntime,
     pending_source_read: Option<PendingSourceRead>,
+    relocation: Option<ElasticRelocation>,
+    prepared: PreparedRuntime,
+}
+
+struct ElasticRelocation {
+    preparation: ElasticPreparation,
+    read: RelocationRead,
+    target: SessionBeat,
+    revision: TransportRevision,
+}
+
+enum RelocationRead {
+    Idle,
+    Pending(PendingSourceRead),
+    Ready(PcmBuf),
 }
 
 #[derive(Clone, Copy)]
@@ -202,8 +224,8 @@ struct PendingSourceRead {
 }
 
 pub(crate) struct ElasticRenderer<State> {
-    state: State,
     sample_rate: NonZeroU32,
+    relocation_buffer: Option<PcmBuf>,
     discarded: PcmBuf,
     fetch: PcmBuf,
     history: PcmBuf,
@@ -212,6 +234,7 @@ pub(crate) struct ElasticRenderer<State> {
     backend: SignalsmithBackend<ElasticConfig>,
     ready_windows: SmallVec<[BufferedSourceWindow; READY_WINDOW_COUNT]>,
     window_buffers: SmallVec<[PcmBuf; READY_WINDOW_COUNT]>,
+    state: State,
     source_frame_count: u64,
     source_window_frames: u64,
     max_fetch_frames: usize,
@@ -221,6 +244,7 @@ pub(crate) struct ElasticRenderer<State> {
 
 impl<State> ElasticRenderer<State> {
     const PREFETCH_BLOCKS: usize = 8;
+    const RELOCATION_PREFETCH_BLOCKS: usize = 1;
     const SOURCE_CAPACITY_MULTIPLIER: usize = 2;
     const SOURCE_WINDOW_BLOCKS: usize = 8;
     const SUPPORTED_CHANNEL_COUNT: std::ops::RangeInclusive<usize> = 1..=2;
@@ -233,6 +257,7 @@ impl<State> ElasticRenderer<State> {
             fetch,
             history,
             output,
+            relocation_buffer,
             source,
             backend,
             ready_windows,
@@ -244,8 +269,8 @@ impl<State> ElasticRenderer<State> {
             max_warm_frames,
         } = self;
         ElasticRenderer {
-            state: map(state),
             sample_rate,
+            relocation_buffer,
             discarded,
             fetch,
             history,
@@ -259,6 +284,7 @@ impl<State> ElasticRenderer<State> {
             max_fetch_frames,
             max_source_frames,
             max_warm_frames,
+            state: map(state),
         }
     }
 
@@ -429,7 +455,6 @@ impl ElasticRenderer<()> {
             .collect::<Result<SmallVec<_>, _>>()?;
 
         Ok(Self {
-            state: (),
             backend,
             max_warm_frames,
             max_source_frames,
@@ -437,12 +462,14 @@ impl ElasticRenderer<()> {
             source_frame_count,
             source_window_frames,
             window_buffers,
+            state: (),
             sample_rate: shape.sample_rate,
             ready_windows: SmallVec::new(),
             fetch: prepared_buffer(pool, fetch_samples)?,
             history: prepared_buffer(pool, sample_count(latency.source_frames(), channels)?)?,
             source: prepared_buffer(pool, sample_count(source_buffer_frames, channels)?)?,
             output: prepared_buffer(pool, sample_count(max_output_frames, channels)?)?,
+            relocation_buffer: Some(prepared_buffer(pool, fetch_samples)?),
             discarded: prepared_buffer(pool, sample_count(latency.output_frames(), channels)?)?,
         })
     }
@@ -459,6 +486,9 @@ impl ElasticRenderer<Active> {
         source: &mut Resource,
         direction: PlaybackDirection,
     ) -> Result<(), ElasticRenderError> {
+        if self.state.runtime.relocation.is_some() {
+            return Ok(());
+        }
         if self.ready_windows.len() >= READY_WINDOW_COUNT {
             return Ok(());
         }

@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     api::{PlayerEvent, SlotId, TrackBinding},
-    bridge::PlayerCmd,
+    bridge::{PlayerCmd, TrackStart},
     engine::{DeferredPlayerCmdError, EngineImpl},
     error::PlayError,
     player::track::PlayerResource,
@@ -41,6 +41,7 @@ pub(in crate::player) struct LoadTransaction<'a> {
     player_resource: PlayerResource,
     duration_seconds: f64,
     index: usize,
+    rollback_len: usize,
 }
 
 impl LoadTransaction<'_> {
@@ -48,6 +49,7 @@ impl LoadTransaction<'_> {
         self,
         engine: &EngineImpl,
         slot: SlotId,
+        start: TrackStart,
     ) -> Result<DispatchedLoad, PlayError> {
         let Self {
             mut playlist,
@@ -58,6 +60,7 @@ impl LoadTransaction<'_> {
             preparation,
             abr_handle,
             duration_seconds,
+            rollback_len,
         } = self;
         let src = Arc::clone(player_resource.src());
         let mut player_resource = Some(player_resource);
@@ -69,6 +72,7 @@ impl LoadTransaction<'_> {
                 binding: binding.clone(),
                 item_id: item_id.clone(),
                 resource,
+                start,
             })
         });
         match result {
@@ -84,7 +88,7 @@ impl LoadTransaction<'_> {
                 let resource = player_resource.ok_or_else(|| {
                     PlayError::Internal("unsent load consumed its queue resource".into())
                 })?;
-                restore_queue_resource(&mut playlist, index, resource, preparation)?;
+                rollback_load(&mut playlist, index, resource, preparation, rollback_len)?;
                 Err(error)
             }
             Err(DeferredPlayerCmdError::Rejected(rejected)) => {
@@ -94,20 +98,25 @@ impl LoadTransaction<'_> {
                         "load dispatch rejected a non-load command".into(),
                     ));
                 };
-                restore_queue_resource(&mut playlist, index, resource, preparation)?;
+                rollback_load(&mut playlist, index, resource, preparation, rollback_len)?;
                 Err(error)
             }
         }
     }
 }
 
-fn restore_queue_resource(
+fn rollback_load(
     playlist: &mut Playlist,
     index: usize,
     mut player_resource: PlayerResource,
     preparation: Option<PreparationContext>,
+    rollback_len: usize,
 ) -> Result<(), PlayError> {
     player_resource.set_service_class(ServiceClass::Idle);
+    if playlist.len() > rollback_len {
+        let _ = playlist.remove_at(index);
+        return Ok(());
+    }
     let (resource, prepared) = restore_prepared_binding(player_resource.release(), preparation)?;
     restore_queued_resource(playlist, index, prepared, resource)
 }
@@ -174,15 +183,16 @@ impl ItemQueue {
             .is_some_and(|item| item.binding.is_some())
     }
 
-    pub(crate) fn dispatch_load(
+    pub(crate) fn dispatch_load_at(
         &self,
         index: usize,
         context: ItemLoadContext<'_>,
         engine: &EngineImpl,
         slot: SlotId,
+        start: TrackStart,
     ) -> Result<Option<DispatchedLoad>, PlayError> {
         self.take_for_load(index, context)?
-            .map(|transaction| transaction.dispatch(engine, slot))
+            .map(|transaction| transaction.dispatch(engine, slot, start))
             .transpose()
     }
 
@@ -227,10 +237,11 @@ impl ItemQueue {
         self.playlist.lock()
     }
 
-    fn prepare_load<'a>(
+    pub(in crate::player) fn prepare_load<'a>(
         mut playlist: MutexGuard<'a, Playlist>,
         index: usize,
         context: ItemLoadContext<'_>,
+        rollback_len: usize,
     ) -> Result<Option<LoadTransaction<'a>>, (MutexGuard<'a, Playlist>, PlayError)> {
         if index >= playlist.len() {
             return Ok(None);
@@ -286,6 +297,7 @@ impl ItemQueue {
             player_resource,
             duration_seconds,
             index,
+            rollback_len,
         }))
     }
 
@@ -331,7 +343,8 @@ impl ItemQueue {
         context: ItemLoadContext<'_>,
     ) -> Result<Option<LoadTransaction<'_>>, PlayError> {
         let playlist = self.playlist.lock();
-        Self::prepare_load(playlist, index, context).map_err(|(_, error)| error)
+        let rollback_len = playlist.len();
+        Self::prepare_load(playlist, index, context, rollback_len).map_err(|(_, error)| error)
     }
 
     delegate::delegate! {
@@ -360,14 +373,14 @@ mod tests {
     use kithara_bufpool::PcmPool;
     use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
     use kithara_events::{Envelope, Event, PlayerEvent};
-    use kithara_platform::time::Duration;
+    use kithara_platform::{time::Duration, traits::FromWithParams};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         api::{PlaybackDirection, SessionBeat, SlotId},
         engine::EngineConfig,
-        player::node::StreamShape,
+        player::{node::StreamShape, platform::ItemLoadParams},
     };
 
     struct EofReader {
@@ -466,7 +479,14 @@ mod tests {
             sample_rate: NonZeroU32::new(44_100).expect("static rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
-        ItemLoadContext::linear(1.0, 1.0, pool, shape)
+        ItemLoadContext::build(
+            shape,
+            ItemLoadParams {
+                pool,
+                pitch_bend: 1.0,
+                rate: 1.0,
+            },
+        )
     }
 
     #[kithara::test]
@@ -553,7 +573,7 @@ mod tests {
                 .expect("load preparation succeeds")
                 .expect("original resource is available");
             assert!(queue.playlist.try_lock().is_err());
-            transaction.dispatch(&engine, SlotId::new(0))
+            transaction.dispatch(&engine, SlotId::new(0), TrackStart::Immediate)
         };
 
         assert!(matches!(result, Err(PlayError::SlotNotFound(_))));

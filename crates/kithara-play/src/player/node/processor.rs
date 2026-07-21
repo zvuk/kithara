@@ -16,12 +16,21 @@ use tracing::warn;
 
 use super::{ArenaRegistry, RenderPass, RenderTargets};
 use crate::{
+    api::{SessionBeat, TransportRevision},
     bridge::{
-        NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
+        NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, SessionSeekAttempt, TrackState,
+        TrackTransition,
     },
     player::track::{PlayerTrack, TrackRenderMode},
-    session::render::read_render_context,
+    session::render::{TransportBoundary, read_render_context},
 };
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PendingSessionSeek {
+    pub(super) target: SessionBeat,
+    pub(super) attempt: SessionSeekAttempt,
+    pub(super) revision: TransportRevision,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum CrossfadeCurve {
@@ -67,13 +76,17 @@ impl CrossfadeSettings {
 ///
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct PlayerNodeProcessor {
+    #[field(get, deref = false)]
     pub(super) playback: Arc<PlaybackShared>,
     pub(super) tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
     pub(super) crossfade: CrossfadeSettings,
     pub(super) cmd_rx: HeapCons<PlayerCmd>,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
     pub(super) sample_rate: NonZeroU32,
+    pub(super) session_seek: Option<PendingSessionSeek>,
     pub(super) render: RenderPass,
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) prefetch_duration: f32,
@@ -247,12 +260,6 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Reference to the playback atomics used by the processor.
-    #[must_use]
-    pub fn playback(&self) -> &Arc<PlaybackShared> {
-        &self.playback
-    }
-
     pub fn render_audio(
         &mut self,
         buffers: &mut ProcBuffers,
@@ -282,6 +289,15 @@ impl PlayerNodeProcessor {
         self.playback
             .multiple_tracks
             .store(multiple_tracks, Ordering::SeqCst);
+        if let TrackRenderMode::Session(context) = mode
+            && self.session_seek.is_some_and(|pending| {
+                context.transport_revision() == Some(pending.revision)
+                    && context.transport_boundary()
+                        == Some(TransportBoundary::Relocate(pending.target))
+            })
+        {
+            self.session_seek = None;
+        }
         (playback_started, leading_outcome)
     }
 
@@ -376,6 +392,7 @@ impl PlayerNodeProcessor {
             prefetch_duration: 0.0,
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
+            session_seek: None,
         }
     }
 
@@ -433,6 +450,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let (playback_started, leading_outcome_pos_dur) =
             self.render_with_mode(render_mode, &mut buffers, info.frames, is_playing);
+        self.poll_session_seek();
         self.update_position_duration(leading_outcome_pos_dur);
 
         if playback_started {
@@ -449,7 +467,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        bridge::{PlayerCmd, SharedEq, SlotControl, slot_channels},
+        api::{SessionBeat, Tempo, TransportRevision},
+        bridge::{PlayerCmd, SharedEq, SlotControl, TrackStart, slot_channels},
         player::track::PlayerResource,
         test_support::empty_resource,
     };
@@ -473,7 +492,88 @@ mod tests {
             binding: None,
             resource,
             item_id: None,
+            start: TrackStart::Immediate,
         }
+    }
+
+    fn pending_seek(revision: u64, target: f64) -> PendingSessionSeek {
+        PendingSessionSeek {
+            target: SessionBeat::new(target).expect("finite pending target"),
+            attempt: SessionSeekAttempt::new_for_test(revision),
+            revision: TransportRevision::new_for_test(revision),
+        }
+    }
+
+    fn assert_track_mutation_aborts_pending_seek(command: PlayerCmd) {
+        let (mut processor, mut control) = processor_and_control();
+        let src: Arc<str> = Arc::from("pending-seek.wav");
+        control
+            .cmd_tx
+            .try_push(load(&src))
+            .expect("load command fits");
+        processor.drain_commands();
+        let pending = pending_seek(7, 1.0);
+        processor.session_seek = Some(pending);
+
+        control
+            .cmd_tx
+            .try_push(command)
+            .expect("mutation command fits");
+        processor.drain_commands();
+
+        assert_eq!(processor.session_seek, None);
+        assert!(processor.playback.session_seek_failed(pending.attempt));
+    }
+
+    #[kithara::test]
+    fn track_mutations_abort_a_pending_session_seek() {
+        let src: Arc<str> = Arc::from("pending-seek.wav");
+        assert_track_mutation_aborts_pending_seek(PlayerCmd::UnloadTrack {
+            src: Arc::clone(&src),
+        });
+        assert_track_mutation_aborts_pending_seek(PlayerCmd::Transition(TrackTransition::FadeIn(
+            Arc::clone(&src),
+        )));
+        assert_track_mutation_aborts_pending_seek(PlayerCmd::Clear);
+        assert_track_mutation_aborts_pending_seek(load(&src));
+    }
+
+    #[kithara::test]
+    fn session_seek_cancel_clears_the_matching_preparation() {
+        let (mut processor, _control) = processor_and_control();
+        let pending = pending_seek(7, 1.0);
+        processor.session_seek = Some(pending);
+        processor.playback.prepare_session_seek(pending.attempt);
+
+        processor.playback.cancel_session_seek(pending.attempt);
+        processor.poll_session_seek();
+
+        assert_eq!(processor.session_seek, None);
+        assert!(!processor.playback.session_seek_prepared(pending.attempt));
+        assert!(!processor.playback.session_seek_cancelled(pending.attempt));
+    }
+
+    #[kithara::test]
+    fn second_session_seek_prepare_releases_the_stale_owner() {
+        let (mut processor, mut control) = processor_and_control();
+        let first = pending_seek(7, 1.0);
+        let second = pending_seek(8, 2.0);
+        processor.session_seek = Some(first);
+
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::PrepareSessionSeek {
+                attempt: second.attempt,
+                target: second.target,
+                tempo: Tempo::new(120.0).expect("valid tempo"),
+                revision: second.revision,
+            })
+            .expect("second prepare command fits");
+        processor.drain_commands();
+
+        assert_eq!(processor.session_seek, None);
+        assert!(!processor.playback.session_seek_prepared(first.attempt));
+        assert!(processor.playback.session_seek_failed(second.attempt));
     }
 
     #[kithara::test]

@@ -1,4 +1,5 @@
 use kithara_bufpool::PcmPool;
+use kithara_platform::traits::FromWithParams;
 
 use crate::{player::node::StreamShape, session::protocol::PreparationContext};
 
@@ -16,32 +17,20 @@ pub(crate) struct ItemLoadContext<'a> {
     rate: f32,
 }
 
-impl<'a> ItemLoadContext<'a> {
-    pub(crate) const fn bound(
-        rate: f32,
-        pitch_bend: f32,
-        pool: &'a PcmPool,
-        context: PreparationContext,
-    ) -> Self {
-        Self {
-            pool,
-            mode: ItemLoadMode::Bound(context),
-            pitch_bend,
-            rate,
-        }
-    }
+#[derive(Clone, Copy)]
+pub(crate) struct ItemLoadParams<'a> {
+    pub(crate) pool: &'a PcmPool,
+    pub(crate) pitch_bend: f32,
+    pub(crate) rate: f32,
+}
 
-    pub(crate) const fn linear(
-        rate: f32,
-        pitch_bend: f32,
-        pool: &'a PcmPool,
-        shape: StreamShape,
-    ) -> Self {
+impl<'a> ItemLoadContext<'a> {
+    const fn from_mode(mode: ItemLoadMode, params: ItemLoadParams<'a>) -> Self {
         Self {
-            pool,
-            mode: ItemLoadMode::Linear(shape),
-            pitch_bend,
-            rate,
+            mode,
+            pitch_bend: params.pitch_bend,
+            pool: params.pool,
+            rate: params.rate,
         }
     }
 
@@ -69,5 +58,17 @@ impl<'a> ItemLoadContext<'a> {
             ItemLoadMode::Bound(context) => context.shape(),
             ItemLoadMode::Linear(shape) => shape,
         }
+    }
+}
+
+impl<'a> FromWithParams<PreparationContext, ItemLoadParams<'a>> for ItemLoadContext<'a> {
+    fn build(context: PreparationContext, params: ItemLoadParams<'a>) -> Self {
+        Self::from_mode(ItemLoadMode::Bound(context), params)
+    }
+}
+
+impl<'a> FromWithParams<StreamShape, ItemLoadParams<'a>> for ItemLoadContext<'a> {
+    fn build(shape: StreamShape, params: ItemLoadParams<'a>) -> Self {
+        Self::from_mode(ItemLoadMode::Linear(shape), params)
     }
 }

@@ -23,7 +23,7 @@ use kithara::{
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration, traits::FromWithParams},
     play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDispatcher},
     queue::{Queue, QueueConfig, Transition},
     stream::dl::{Downloader, DownloaderConfig},
@@ -63,8 +63,8 @@ const OBSERVE_BLOCKS: usize = 500;
 
 #[derive(Clone, Copy, Debug)]
 struct GateMode {
-    withhold_head: bool,
     withhold_body: bool,
+    withhold_head: bool,
 }
 
 struct Harness {
@@ -191,11 +191,9 @@ async fn run_case(mode: GateMode) {
     );
 
     let harness = Harness::new();
-    let queue = Queue::new(
-        QueueConfig::builder()
-            .should_autoplay(false)
-            .build()
-            .with_player(Arc::clone(&harness.player)),
+    let queue = Queue::build(
+        Arc::clone(&harness.player),
+        QueueConfig::builder().should_autoplay(false).build(),
     );
     let mut rx = harness.player.subscribe();
 

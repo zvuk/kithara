@@ -13,7 +13,7 @@ use super::{
     ItemLoadContext,
 };
 use crate::{
-    api::{SessionTransportSnapshot, Tempo, TrackBinding},
+    api::{SessionBeat, SessionTransportSnapshot, Tempo, TrackBinding, TransportRevision},
     error::PlayError,
     player::{
         node::StreamShape,
@@ -24,7 +24,6 @@ use crate::{
 };
 
 pub(crate) enum ElasticRendererUnavailable {}
-pub(crate) type PreparedElasticRenderer = ElasticRendererUnavailable;
 pub(crate) type ActiveElasticRenderer = ElasticRendererUnavailable;
 
 pub(crate) enum PreparedBindingResource {}
@@ -36,6 +35,25 @@ impl ElasticRendererUnavailable {
 }
 
 impl PlayerResource {
+    pub(crate) fn begin_session_seek(
+        &mut self,
+        _binding: &TrackBinding,
+        _target: SessionBeat,
+        _tempo: Tempo,
+        _revision: TransportRevision,
+    ) -> Result<(), PlayError> {
+        Err(PlayError::ElasticBackendUnavailable)
+    }
+
+    pub(crate) fn cancel_session_seek(&mut self, _revision: TransportRevision) {}
+
+    pub(crate) fn poll_session_seek(
+        &mut self,
+        _revision: TransportRevision,
+    ) -> Result<bool, PlayError> {
+        Err(PlayError::ElasticBackendUnavailable)
+    }
+
     pub(crate) fn read_elastic(
         &mut self,
         _binding: &TrackBinding,
@@ -58,6 +76,32 @@ impl PlayerImpl {
         _at_position: Option<usize>,
     ) -> Result<(), PlayError> {
         Err(PlayError::ElasticBackendUnavailable)
+    }
+
+    /// Browser elastic playback does not provide exact session joining.
+    pub(in crate::player) async fn join_track_at(
+        &self,
+        _resource: Resource,
+        _item_id: Option<Arc<str>>,
+        _binding: TrackBinding,
+        _target: SessionBeat,
+    ) -> Result<(), PlayError> {
+        Err(PlayError::ElasticBackendUnavailable)
+    }
+
+    pub(in crate::player) fn validate_session_seek(
+        &self,
+        _target: SessionBeat,
+        _tempo: Tempo,
+        _revision: TransportRevision,
+        _shape: StreamShape,
+        binding: Option<&TrackBinding>,
+    ) -> Result<(), PlayError> {
+        if binding.is_some() {
+            Err(PlayError::ElasticBackendUnavailable)
+        } else {
+            Err(PlayError::SessionSeekRequiresBoundTrack)
+        }
     }
 
     pub(in crate::player) fn validate_session_tempo(
@@ -115,8 +159,12 @@ pub(crate) fn restore_prepared_binding(
 ) -> Result<(Resource, Option<PreparedBindingResource>), PlayError> {
     match (released, context) {
         (ReleasedPlayerResource::Linear(resource), None) => Ok((resource, None)),
-        _ => Err(PlayError::Internal(
+        (ReleasedPlayerResource::Linear(_), Some(_)) => Err(PlayError::Internal(
             "browser load returned inconsistent binding state".into(),
         )),
+        (ReleasedPlayerResource::Bound(bound), _) => {
+            let bound = *bound;
+            match bound.renderer {}
+        }
     }
 }

@@ -1,7 +1,9 @@
 use js_sys::Object;
 use wasm_bindgen::JsValue;
 
-use super::marshal::{KIND, set_bool, set_f64, set_opt_f64, set_opt_id, set_str};
+use super::marshal::{
+    KIND, set_bool, set_f64, set_opt_f64, set_opt_id, set_opt_u64, set_str, set_u64,
+};
 use crate::types::{
     FfiAdvanceReason, FfiEvictReason, FfiPlaybackDirection, FfiPlayerEvent, FfiPlayerStatus,
     FfiRepeatMode, FfiRouteChangeReason, FfiStretchBackendKind, FfiTimeControlStatus,
@@ -165,16 +167,24 @@ pub(crate) fn encode(event: &FfiPlayerEvent) -> JsValue {
         } => {
             set_str(&obj, KIND, "TransportTempoCommitted");
             set_f64(&obj, "beats_per_minute", *beats_per_minute);
-            set_f64(&obj, "revision", num_traits::cast(*revision).unwrap_or(0.0));
+            set_u64(&obj, "revision", *revision);
         }
         FfiPlayerEvent::TransportPlayStateCommitted { playing, revision } => {
             set_str(&obj, KIND, "TransportPlayStateCommitted");
             set_bool(&obj, "playing", *playing);
-            set_f64(&obj, "revision", num_traits::cast(*revision).unwrap_or(0.0));
+            set_u64(&obj, "revision", *revision);
+        }
+        FfiPlayerEvent::TransportSeekCommitted {
+            position_beats,
+            revision,
+        } => {
+            set_str(&obj, KIND, "TransportSeekCommitted");
+            set_f64(&obj, "position_beats", *position_beats);
+            set_u64(&obj, "revision", *revision);
         }
         FfiPlayerEvent::TransportFailed { revision, reason } => {
             set_str(&obj, KIND, "TransportFailed");
-            set_opt_f64(&obj, "revision", revision.and_then(num_traits::cast));
+            set_opt_u64(&obj, "revision", *revision);
             set_str(&obj, "reason", reason);
         }
         FfiPlayerEvent::SyncBindingCommitted {

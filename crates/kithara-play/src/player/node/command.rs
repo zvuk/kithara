@@ -4,10 +4,12 @@ use kithara_platform::sync::Arc;
 use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
 
-use super::processor::PlayerNodeProcessor;
+use super::processor::{PendingSessionSeek, PlayerNodeProcessor};
 use crate::{
-    api::TrackBinding,
-    bridge::{PlayerCmd, PlayerNotification, TrackState, TrackTransition},
+    api::{SessionBeat, Tempo, TrackBinding, TransportRevision},
+    bridge::{
+        PlayerCmd, PlayerNotification, SessionSeekAttempt, TrackStart, TrackState, TrackTransition,
+    },
     player::track::{PlayerResource, PlayerTrack, TrackAxis, TrackParams},
 };
 
@@ -58,7 +60,82 @@ impl PlayerNodeProcessor {
         }
     }
 
+    fn apply_start(&mut self, start: TrackStart) {
+        let candidate = self
+            .tracks
+            .iter()
+            .find(|(_, track)| track.state().is_leading())
+            .map(|(index, _)| index)
+            .or_else(|| {
+                self.tracks
+                    .iter()
+                    .find(|(_, track)| track.state() == TrackState::Preloading)
+                    .map(|(index, _)| index)
+            });
+        let Some(candidate) = candidate else {
+            return;
+        };
+        let Some(track) = self.tracks.get_by_index_mut(candidate) else {
+            return;
+        };
+        match start {
+            TrackStart::Immediate => track.play(),
+            scheduled @ TrackStart::Session { .. } => track.schedule_start(scheduled),
+        }
+        self.playback.playing.store(true, Ordering::SeqCst);
+    }
+
+    fn begin_session_seek(
+        &mut self,
+        attempt: SessionSeekAttempt,
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: TransportRevision,
+    ) {
+        if let Some(pending) = self.session_seek {
+            self.fail_session_seek(pending.attempt);
+        }
+        self.session_seek = Some(PendingSessionSeek {
+            target,
+            attempt,
+            revision,
+        });
+        let leading_count = self
+            .tracks
+            .iter()
+            .filter(|(_, track)| track.state().is_leading())
+            .count();
+        if leading_count != 1 {
+            self.fail_session_seek(attempt);
+            return;
+        }
+        let prepared = self
+            .tracks
+            .iter_mut()
+            .find(|(_, track)| track.state().is_leading())
+            .is_some_and(|(_, track)| track.begin_session_seek(target, tempo, revision).is_ok());
+        if !prepared {
+            self.fail_session_seek(attempt);
+        }
+    }
+
+    fn cancel_session_seek(&mut self, pending: PendingSessionSeek) {
+        for (_, track) in self.tracks.iter_mut() {
+            track.cancel_session_seek(pending.revision);
+        }
+        if self
+            .session_seek
+            .is_some_and(|current| current.attempt == pending.attempt)
+        {
+            self.session_seek = None;
+        }
+        self.playback.clear_prepared_session_seek(pending.attempt);
+        self.playback
+            .acknowledge_session_seek_cancel(pending.attempt);
+    }
+
     fn clear_all_tracks(&mut self) {
+        self.fail_pending_session_seek();
         for (_, track) in self.tracks.iter_mut() {
             track.stop();
         }
@@ -92,16 +169,20 @@ impl PlayerNodeProcessor {
                     binding,
                     resource,
                     item_id,
+                    start,
                 } => {
-                    self.load_track(resource, item_id, binding);
+                    self.fail_pending_session_seek();
+                    self.load_track(resource, item_id, binding, start);
                 }
                 PlayerCmd::UnloadTrack { src } => {
+                    self.fail_pending_session_seek();
                     self.unload_track(&src);
                 }
                 PlayerCmd::Clear => {
                     self.clear_all_tracks();
                 }
                 PlayerCmd::Transition(transition) => {
+                    self.fail_pending_session_seek();
                     self.handle_transition(transition);
                 }
                 PlayerCmd::Seek {
@@ -109,6 +190,17 @@ impl PlayerNodeProcessor {
                     seek_epoch,
                 } => {
                     self.apply_seek(seconds, seek_epoch);
+                }
+                PlayerCmd::StartAt(start) => {
+                    self.apply_start(start);
+                }
+                PlayerCmd::PrepareSessionSeek {
+                    attempt,
+                    target,
+                    tempo,
+                    revision,
+                } => {
+                    self.begin_session_seek(attempt, target, tempo, revision);
                 }
                 PlayerCmd::SetPaused(paused) => {
                     let playing = !paused;
@@ -123,15 +215,31 @@ impl PlayerNodeProcessor {
                 PlayerCmd::SetPlaybackRate(rate) => {
                     self.tracks
                         .iter()
-                        .for_each(|(_, track)| track.resource().set_playback_rate(rate));
+                        .for_each(|(_, track)| track.set_playback_rate(rate));
                 }
                 PlayerCmd::SetPitchBend(bend) => {
                     self.tracks
                         .iter()
-                        .for_each(|(_, track)| track.resource().set_transport_bend(bend));
+                        .for_each(|(_, track)| track.set_transport_bend(bend));
                 }
             }
         }
+    }
+
+    fn fail_pending_session_seek(&mut self) {
+        if let Some(pending) = self.session_seek {
+            self.fail_session_seek(pending.attempt);
+        }
+    }
+
+    pub(super) fn fail_session_seek(&mut self, attempt: SessionSeekAttempt) {
+        if let Some(pending) = self
+            .session_seek
+            .filter(|pending| pending.attempt == attempt)
+        {
+            self.cancel_session_seek(pending);
+        }
+        self.playback.fail_session_seek(attempt);
     }
 
     fn handle_transition(&mut self, transition: TrackTransition) {
@@ -196,6 +304,7 @@ impl PlayerNodeProcessor {
         resource: PlayerResource,
         item_id: Option<Arc<str>>,
         binding: Option<TrackBinding>,
+        start: TrackStart,
     ) {
         let src = Arc::clone(resource.src());
         if let Some(track) = self.tracks.remove(&src) {
@@ -224,8 +333,13 @@ impl PlayerNodeProcessor {
             .prefetch_duration(self.prefetch_duration)
             .fade_curve(self.crossfade.fade_curve())
             .build();
-        let track = PlayerTrack::new(resource, params);
+        let scheduled = matches!(start, TrackStart::Session { .. });
+        let mut track = PlayerTrack::new(resource, params);
+        track.schedule_start(start);
         self.tracks.insert(src, track);
+        if scheduled {
+            self.playback.playing.store(true, Ordering::SeqCst);
+        }
         self.notif_tx
             .try_push(PlayerNotification::Loaded { src: loaded_src })
             .ok();
@@ -237,6 +351,27 @@ impl PlayerNodeProcessor {
                     track_anchor_beats,
                 })
                 .ok();
+        }
+    }
+
+    pub(super) fn poll_session_seek(&mut self) {
+        let Some(pending) = self.session_seek else {
+            return;
+        };
+        if self.playback.session_seek_cancelled(pending.attempt) {
+            self.cancel_session_seek(pending);
+            return;
+        }
+        let result = self
+            .tracks
+            .iter_mut()
+            .find(|(_, track)| track.state().is_leading())
+            .ok_or(())
+            .and_then(|(_, track)| track.poll_session_seek(pending.revision).map_err(|_| ()));
+        match result {
+            Ok(true) => self.playback.prepare_session_seek(pending.attempt),
+            Ok(false) => {}
+            Err(()) => self.fail_session_seek(pending.attempt),
         }
     }
 }

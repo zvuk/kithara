@@ -44,7 +44,7 @@ consumer directly on the shared `StretchControls` handle.
 <tr><td><code>ItemEvent</code></td><td>Item status, buffering, seek, stall, end-of-stream</td></tr>
 <tr><td><code>EngineEvent</code></td><td>Slot lifecycle, master volume</td></tr>
 <tr><td><code>SessionEvent</code></td><td>Interruption, route change, media services</td></tr>
-<tr><td><code>TransportEvent</code></td><td>Committed session tempo, play state, and failure facts</td></tr>
+<tr><td><code>TransportEvent</code></td><td>Committed session tempo, seek, play state, and failure facts</td></tr>
 <tr><td><code>SyncEvent</code></td><td>Committed track binding facts</td></tr>
 <tr><td><code>DjEvent</code></td><td>Legacy BPM analysis, beat tick, key-lock, and stretch-backend facts only</td></tr>
 </table>
@@ -82,31 +82,72 @@ policy and reacts to `HandoverRequested` by selecting the loaded successor via
 
 `api/` owns stable public shapes; `bridge/` owns cross-plane protocol and shared
 RT handles; `resource/` owns source, config, and reader construction; `player/`
-owns main-thread playlist and parameter state in `state/` and transitions in
-`flow/`, while its callback-side node, processor, and render pass live under
-`player/node/` and per-track state under `player/track/`; `engine/` owns session and slot registration;
-and `session/` owns protocol, state, graph dispatch, shared render context,
-master EQ, and platform clients. Real-time execution is a property of the
-callback processors, not a separate ownership plane. `wasm` is the target-gated
-browser binding surface.
+owns one deck: main-thread playlist and parameter state in `state/`, transitions
+in `flow/`, callback-side node/processor/render state under `player/node/`, and
+per-track state under `player/track/`. `player/multi/` owns heterogeneous player
+composition, routed member handles, topology revision, and group transactions.
+`engine/` owns session and slot registration; `session/` owns the physical
+player roster, protocol, transport ledger, graph dispatch, shared render
+context, master EQ, and platform clients. Real-time execution is a property of
+the callback processors, not a separate ownership plane. `wasm` is the
+target-gated browser binding surface.
 
 `player`, `engine`, and `session` are intentional orchestration planes: their
 entry files import several sibling modules to bind API state, RT controls, and
 session commands. The per-crate `module_fan_out` threshold is raised for
 `kithara-play`; do not add re-export hops solely to lower that count.
 
+### Player Composition
+
+`Player` is the common object-safe control contract implemented by
+`PlayerImpl`, `kithara-queue::Queue`, routed `Member<T>` handles, and
+`MultiPlayer`. `PlayerComponent` contributes canonical `PlayerImpl` leaves to a
+composition without exposing them to callers. `PlayerComponentBox` is only the
+type-erasure boundary used at registration; consumer crates add `From<T>` for
+their own component types rather than teaching `kithara-play` those concrete
+implementations.
+
+`MultiPlayer::register` consumes the component and returns `Member<T>`. The
+caller cannot retain a raw mutable control path to a registered value. Nested
+groups attach to one parent and every member resolves its current root before a
+routed command, so regrouping cannot create a second command owner. The
+composition owns only membership, its monotonic `TopologyRevision`, and one
+active tempo-or-seek guard. It does not mirror deck state, queue state, session
+tempo, bindings, PCM, or decoder state.
+
+Registration fails closed when a component contributes no canonical
+`PlayerImpl` leaf, contributes a duplicate leaf, spans more than one session,
+or exposes more than one nested composition root. Consequently every accepted
+component participates in the existing player/session ownership path; the
+component trait cannot introduce a second transport or player implementation.
+The validated leaf roster is frozen in the registration record; later group
+transactions never call component code to rediscover or replace that roster
+without a `TopologyRevision` change.
+
+`SessionSeek` is the separate musical-relocation capability. Both `MultiPlayer`
+and `Member<T>` implement it; a member request is routed through the current
+root because a bound deck cannot relocate independently of peers sharing the
+session transport. Ordinary unbound `Player::seek_seconds` remains local. A
+group-local seek first reads every member duration and rejects a target at or
+beyond the shortest member before mutating any component.
+
+`StartAt::Immediate` is the base operation used by `Player::play`.
+`StartAt::SessionBeat` schedules a bound player against the shared render
+context. A routed `Member<PlayerImpl>::join_track_at` requires an empty deck,
+prepares the supplied resource through the existing player/worker/elastic path,
+and starts it at the requested future beat without changing session transport.
+No parallel player, queue, source, worker, or allocation layer is created for
+composition or join.
+
 ### Accepted lint residue
 
-The live architecture lint warnings retained after the role-first split are
-intentional: four `single_impl_size` warnings are layout-inherent after the
-fine-grained module split; two `mixed_entities` warnings reflect modules whose
-paired entities share one owner and lifecycle; and the two
-`pub_struct_open_fields` warnings on `SlotControl` and `PlaybackShared` preserve
-the intentional white-box render API used by the offline harness in
-`kithara-integration-tests`. `PlayerImpl` and `PlayerTrack` were decomposed
-into per-responsibility owners (`ItemQueue`, `Handover`, `Notifier`,
-`ConfigPrep`, and the `PlayerPhase` typestate), so no `god_struct` warning
-remains.
+Architecture lint residue is ratcheted and does not license new violations.
+The open `SlotControl` and `PlaybackShared` fields preserve the intentional
+white-box render API used by the offline harness in
+`kithara-integration-tests`. `PlayerImpl` and `PlayerTrack` keep their existing
+per-responsibility modules (`ItemQueue`, `Handover`, `Notifier`, `ConfigPrep`,
+and `PlayerPhase`); composition and group-session transactions stay under
+`player/multi/` rather than widening either owner.
 
 ## Engine Lifecycle
 
@@ -216,9 +257,11 @@ The first tempo command targets the current graph frame. Later changes target
 the current graph frame plus one declared maximum callback, preserving the beat
 at that exact frame and changing only the analytical slope from that frame
 onward. Firewheel musical transport, dynamic keyframes, and transport speed are
-not part of this contract. The public session mutation surface changes tempo
-only; session seek, explicit join, and pause/resume transactions are outside
-this slice.
+not part of this contract. `MultiPlayer` owns the public group mutation surface:
+checked tempo changes and the `SessionSeek` relocation capability. Routed
+player join is a prepared deck operation and does not mutate transport. Group
+pause/resume transactions remain outside this contract; `Player::pause`,
+`play`, and `start_at` compose the existing member controls.
 
 Successful tempo commits advance one monotonic revision; repeating the same
 tempo is a no-op. The control side sends an immediate revisioned `Stage` event
@@ -230,13 +273,17 @@ the previously observed commit authoritative and is returned as a typed session
 error.
 
 Multi-player tempo changes extend the existing player ownership chain rather
-than introducing a participant registry. `PlayerImpl::set_session_tempo`
-receives the participating players, locks their existing `ItemQueue` values in
-`PlayerId` order, and validates every current bound track, including paused
-tracks. The preflight uses the renderer's `plan_elastic_segments` path for the
-old span through the future boundary and the first new-tempo span after it, so
-marker-local rate limits and the decoded source frontier are checked before any
-transport mutation.
+than introducing a composition registry in the session. `MultiPlayer` collects
+the canonical leaves through `PlayerComponent`, locks their existing
+`ItemQueue` values in the frozen registration order, and validates every
+current bound track, including paused tracks. The checked session participant
+IDs are sorted independently before protocol dispatch. Tempo and session-seek transactions derive their
+participants from the same active physical-roster predicate: registered decks
+without a started engine and slot do not belong to the graph roster and do not
+enter the checked player-ID set. The preflight uses the renderer's
+`plan_elastic_segments` path for the old span through the future boundary and
+the first new-tempo span after it, so marker-local rate limits and the decoded
+source frontier are checked before any transport mutation.
 
 The guarded session command rechecks the observed revision, stream shape, and
 the active graph-owned player IDs before it queues the ordinary transport
@@ -245,6 +292,20 @@ commit is observed. A local player handover with two audible tracks rejects a
 tempo change explicitly because one control-side current binding cannot
 describe both callback tracks. These are transient checks over player- and
 session-owned state; the session stores no copy of player bindings or readiness.
+
+Session seek uses one immutable private plan containing the target, observed
+snapshot, preparation context, and candidate `TransportRevision`. Every
+participant allocates a monotonic `SessionSeekAttempt` from its persistent
+`PlaybackShared` lane. The callback starts and polls the canonical bounded
+source request using preallocated `PcmPool` buffers; the existing Audio worker
+performs the decode/seek work. The control path waits for every attempt and
+revalidates the same slot, item, binding, roster, stream shape, and transport
+context before the session queues one boundary commit. Attempt IDs are
+preparation handshakes, not transport revisions. Cancellation is a direct
+atomic handshake with the callback owner, so a saturated command ring cannot
+leave a stale prepared relocation. Any failure cancels all matching attempts
+and leaves the previously observed transport authoritative. A successful apply
+publishes `TransportEvent::SeekCommitted` with the exact target and revision.
 
 Each prepared elastic renderer consumes its declared source history and
 discards its declared output latency before becoming audible. The resulting
@@ -353,7 +414,7 @@ re-aiming across variant discontinuities has its own proven protocol contract.
 Other resources that do not declare reverse range access fail through the same
 typed capability gate. Ordinary track-local seek is rejected for a bound
 current item because moving the session-owned audible cursor and renderer state
-requires a session-level transaction, which is outside this slice.
+requires `SessionSeek` to prepare and commit all affected players together.
 
 Inter-block phase correction is bounded in the source-frame domain. An error of
 at most one source frame is corrected continuously at no more than one frame per

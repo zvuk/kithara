@@ -6,7 +6,7 @@ use kithara::{
     platform::sync::Arc,
     play::{
         PlayerNode, Resource, SharedEq, TrackTransition,
-        bridge::{PlaybackShared, PlayerCmd, SlotControl, slot_channels},
+        bridge::{PlaybackShared, PlayerCmd, SlotControl, TrackStart, slot_channels},
         player::track::PlayerResource,
     },
 };
@@ -78,6 +78,7 @@ impl OfflinePlayer {
                 binding: None,
                 resource: pr,
                 item_id: None,
+                start: TrackStart::Immediate,
             })
             .expect("BUG: send LoadTrack");
         self.control

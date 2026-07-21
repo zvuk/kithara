@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     self,
     decode::PcmSpec,
-    platform::sync::Arc,
+    platform::{sync::Arc, traits::FromWithParams},
     play::Resource,
     queue::{Queue, QueueConfig, Transition},
 };
@@ -83,10 +83,10 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        false,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), false),
+    );
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
     let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
@@ -149,10 +149,10 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        false,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), false),
+    );
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
     let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
@@ -220,10 +220,10 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        false,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), false),
+    );
     let mut rx = queue.subscribe();
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.10));
@@ -291,10 +291,10 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        true,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), true),
+    );
 
     let id_a = queue.register_for_test();
     let id_b = queue.register_for_test();
@@ -355,10 +355,10 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        false,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), false),
+    );
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
     let id_b = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
@@ -424,10 +424,10 @@ async fn queue_pauses_player_when_last_track_ends() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        false,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), false),
+    );
     let mut rx = queue.subscribe();
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.30));
@@ -482,10 +482,10 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::default().with_player(Arc::clone(harness.player())),
-        true,
-    ));
+    let queue = Queue::build(
+        Arc::clone(harness.player()),
+        with_autoplay(QueueConfig::default(), true),
+    );
 
     let _id = queue.insert_loaded_for_test(make_resource("solo", TRACK_SECS, TRACK_VALUE));
 

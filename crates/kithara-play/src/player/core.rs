@@ -6,17 +6,18 @@ use kithara_decode::GaplessMode;
 use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
+    traits::FromWithParams,
 };
 use tracing::debug;
 
 use super::{
     config::PlayerConfig,
-    platform::ItemLoadContext,
+    platform::{ItemLoadContext, ItemLoadParams},
     state::{ItemQueue, PlayerParams, PlayerPhase},
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus},
-    bridge::PlayerCmd,
+    bridge::{PlayerCmd, TrackStart},
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
     resource::Resource,
@@ -32,17 +33,27 @@ pub(crate) struct PlayerCore {
     /// Constructed once and kept address-stable for the player's lifetime.
     pub(crate) engine_load: Arc<EngineLoad>,
 
-    pub(crate) params: PlayerParams,
     pub(crate) timestretch: Arc<StretchControls>,
-    pub(crate) gapless_mode: GaplessMode,
     pub(crate) byte_pool: BytePool,
+    /// Engine drops last; its `Drop` shuts the audio worker down.
+    pub(crate) engine: EngineImpl,
+    pub(crate) gapless_mode: GaplessMode,
+    /// Items drop before engine, while the audio worker is still alive.
+    pub(crate) items: ItemQueue,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
-    /// Items drop before engine, while the audio worker is still alive.
-    pub(crate) items: ItemQueue,
-    /// Engine drops last; its `Drop` shuts the audio worker down.
-    pub(crate) engine: EngineImpl,
+    pub(crate) params: PlayerParams,
+}
+
+impl PlayerCore {
+    pub(crate) fn item_load_params(&self) -> ItemLoadParams<'_> {
+        ItemLoadParams {
+            pool: self.engine.pcm_pool(),
+            pitch_bend: self.params.pitch_bend(),
+            rate: self.timestretch.speed(),
+        }
+    }
 }
 
 /// Concrete Player implementation managing items queue.
@@ -63,8 +74,8 @@ pub struct PlayerImpl {
 }
 
 pub(crate) struct EnqueuedTrack {
-    pub(crate) duration_seconds: f64,
     pub(crate) src: Arc<str>,
+    pub(crate) duration_seconds: f64,
 }
 
 impl PlayerImpl {
@@ -121,10 +132,87 @@ impl PlayerImpl {
         &self.core.byte_pool
     }
 
+    pub(crate) fn enqueue_to_processor(
+        &self,
+        index: usize,
+    ) -> Result<Option<EnqueuedTrack>, PlayError> {
+        self.enqueue_to_processor_at(index, TrackStart::Immediate)
+    }
+
+    pub(crate) fn enqueue_to_processor_at(
+        &self,
+        index: usize,
+        start: TrackStart,
+    ) -> Result<Option<EnqueuedTrack>, PlayError> {
+        let slot_id = self
+            .require_active_slot()
+            .map_err(|_| PlayError::NoActiveSlot)?;
+        let params = self.core.item_load_params();
+        let context = if self.core.items.has_binding(index) {
+            ItemLoadContext::build(self.core.engine.preparation_context()?, params)
+        } else {
+            ItemLoadContext::build(self.core.engine.stream_shape()?, params)
+        };
+        let dispatched =
+            self.core
+                .items
+                .dispatch_load_at(index, context, &self.core.engine, slot_id, start)?;
+        let Some(dispatched) = dispatched else {
+            return Ok(None);
+        };
+        self.phase.lock().set_abr_handle(dispatched.abr_handle);
+        Ok(Some(EnqueuedTrack {
+            duration_seconds: dispatched.duration_seconds,
+            src: dispatched.src,
+        }))
+    }
+
     /// PCM pool used by this player's audio engine.
     #[must_use]
     pub fn pcm_pool(&self) -> &PcmPool {
         self.core.engine.pcm_pool()
+    }
+
+    /// Remove all items from the queue.
+    pub fn remove_all_items(&self) {
+        self.unarm_next();
+        self.core.items.clear_all();
+        self.set_status(PlayerStatus::Unknown);
+        let _ = self.send_to_slot(PlayerCmd::Clear);
+        self.enter_stopped();
+        debug!("all items removed");
+    }
+
+    /// Remove item at index. Returns the removed resource, or `None` if out of
+    /// bounds or already consumed.
+    pub fn remove_at(&self, index: usize) -> Option<Resource> {
+        self.unarm_next();
+
+        self.core
+            .items
+            .remove_at(index)
+            .and_then(|queued| queued.resource)
+    }
+
+    /// Replace a consumed (or existing) resource at the given index.
+    ///
+    /// Use this to re-load a track that was previously played and consumed
+    /// by `load_current_item`. Does nothing if `index` is out of bounds.
+    pub fn replace_item(&self, index: usize, resource: Resource) {
+        self.replace_item_tagged(index, resource, None);
+    }
+
+    /// Internal: set status and emit event if changed.
+    pub(crate) fn set_status(&self, new_status: PlayerStatus) {
+        let mut status = self.core.status.lock();
+        if *status != new_status {
+            *status = new_status;
+            drop(status);
+            self.core
+                .engine
+                .bus()
+                .publish(PlayerEvent::StatusChanged { status: new_status });
+        }
     }
 
     delegate! {
@@ -159,84 +247,6 @@ impl PlayerImpl {
             pub fn reserve_slots(&self, count: usize);
         }
     }
-
-    pub(crate) fn enqueue_to_processor(
-        &self,
-        index: usize,
-    ) -> Result<Option<EnqueuedTrack>, PlayError> {
-        let slot_id = self
-            .require_active_slot()
-            .map_err(|_| PlayError::NoActiveSlot)?;
-        let context = if self.core.items.has_binding(index) {
-            ItemLoadContext::bound(
-                self.core.timestretch.speed(),
-                self.core.params.pitch_bend(),
-                self.core.engine.pcm_pool(),
-                self.core.engine.preparation_context()?,
-            )
-        } else {
-            ItemLoadContext::linear(
-                self.core.timestretch.speed(),
-                self.core.params.pitch_bend(),
-                self.core.engine.pcm_pool(),
-                self.core.engine.stream_shape()?,
-            )
-        };
-        let dispatched =
-            self.core
-                .items
-                .dispatch_load(index, context, &self.core.engine, slot_id)?;
-        let Some(dispatched) = dispatched else {
-            return Ok(None);
-        };
-        self.phase.lock().set_abr_handle(dispatched.abr_handle);
-        Ok(Some(EnqueuedTrack {
-            duration_seconds: dispatched.duration_seconds,
-            src: dispatched.src,
-        }))
-    }
-
-    /// Remove item at index. Returns the removed resource, or `None` if out of
-    /// bounds or already consumed.
-    pub fn remove_at(&self, index: usize) -> Option<Resource> {
-        self.unarm_next();
-
-        self.core
-            .items
-            .remove_at(index)
-            .and_then(|queued| queued.resource)
-    }
-
-    /// Remove all items from the queue.
-    pub fn remove_all_items(&self) {
-        self.unarm_next();
-        self.core.items.clear_all();
-        self.set_status(PlayerStatus::Unknown);
-        let _ = self.send_to_slot(PlayerCmd::Clear);
-        self.enter_stopped();
-        debug!("all items removed");
-    }
-
-    /// Replace a consumed (or existing) resource at the given index.
-    ///
-    /// Use this to re-load a track that was previously played and consumed
-    /// by `load_current_item`. Does nothing if `index` is out of bounds.
-    pub fn replace_item(&self, index: usize, resource: Resource) {
-        self.replace_item_tagged(index, resource, None);
-    }
-
-    /// Internal: set status and emit event if changed.
-    pub(crate) fn set_status(&self, new_status: PlayerStatus) {
-        let mut status = self.core.status.lock();
-        if *status != new_status {
-            *status = new_status;
-            drop(status);
-            self.core
-                .engine
-                .bus()
-                .publish(PlayerEvent::StatusChanged { status: new_status });
-        }
-    }
 }
 
 impl Drop for PlayerImpl {
@@ -257,6 +267,25 @@ impl crate::api::Equalizer for PlayerImpl {
             #[call(set_eq_gain)]
             fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError>;
         }
+    }
+}
+
+impl crate::api::Player for PlayerImpl {
+    fn duration_seconds(&self) -> Option<f64> {
+        Self::duration_seconds(self)
+    }
+
+    fn pause(&self) -> Result<(), PlayError> {
+        Self::pause(self);
+        Ok(())
+    }
+
+    fn seek_seconds(&self, seconds: f64) -> Result<kithara_audio::SeekOutcome, PlayError> {
+        Self::seek_seconds(self, seconds)
+    }
+
+    fn start_at(&self, start: crate::api::StartAt) -> Result<(), PlayError> {
+        Self::start_at(self, start)
     }
 }
 
