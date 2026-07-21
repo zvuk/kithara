@@ -12,7 +12,7 @@ the current `xtask` executable and its source fingerprint into a complete
 versioned generation under `<worktree-git-dir>/kithara-agent-hook/`, then
 atomically publishes its absolute path through the ignored
 `xtask/.agent-hook-cache` pointer file. Installation is explicit: tool adapters
-and the checked-in launcher never invoke Cargo or start a build.
+and the hidden `_agent-hook` Just launcher never invoke Cargo or start a build.
 
 A missing, malformed, or dangling pointer, or an unlaunchable installed binary,
 prints the install command and skips the guard. A stale installed generation
@@ -21,7 +21,7 @@ These hooks protect workflow conventions; they are not a security boundary.
 
 ## Pre Bash Guard
 
-`xtask/agent-hook pre-bash` reads agent hook JSON from stdin and denies
+`just --quiet _agent-hook pre-bash` reads agent hook JSON from stdin and denies
 only common expensive command mistakes:
 
 - Broad raw test acceptance: `cargo test`, `cargo test --workspace`, or
@@ -42,8 +42,8 @@ run with a filter expression.
 
 ## Post Edit Format
 
-`xtask/agent-hook post-edit` formats only the reported file for known edited
-file classes:
+`just --quiet _agent-hook post-edit` formats only the reported file for known
+edited file classes:
 
 - `.rs` -> nightly `rustfmt` with child-module traversal disabled
 - other `.toml` -> `taplo format`
@@ -57,9 +57,10 @@ lints, markdown formatting, or architecture checks.
 ## Runner Cache
 
 Rust installation owns concrete Git-directory discovery, cache layout, complete
-generation publication, and pointer activation. The checked-in runner derives
-only its checkout root, reads `xtask/.agent-hook-cache` once, validates the
-absolute generation path and executable, then directly executes that binary.
+generation publication, and pointer activation. The hidden `_agent-hook` recipe
+uses its Just working directory as the checkout root, reads
+`xtask/.agent-hook-cache` once, validates the absolute generation path and
+executable, then directly executes that binary.
 It does not read `.git`, construct a cache path, invoke Git or Cargo, fingerprint
 sources, lock files, create a build target, or manage processes.
 
@@ -75,11 +76,15 @@ a launch-liveness contract.
 The fingerprint covers `xtask/src/agent_hook.rs`, the `agent_hook` module tree,
 `xtask/src/main.rs`, the xtask manifest, optional Cargo/toolchain configuration,
 and the host OS and architecture. Unrelated xtask command sources and the root
-workspace manifest or lockfile do not invalidate the policy binary.
+workspace manifest or lockfile do not invalidate the policy binary. The root
+`justfile` is also excluded: adapters always execute its current launcher
+recipe, so launcher-only changes do not require reinstalling the Rust policy.
 
 `cargo xtask agent-hook pre-bash|post-edit` remains available as an explicit
-diagnostic entry point. Tool adapters must use `xtask/agent-hook` so installed
-hook invocations remain Cargo-free.
+diagnostic entry point. Tool adapters ascend to a checkout containing both the
+root `justfile` and `xtask/Cargo.toml`, then invoke `_agent-hook` with explicit
+`--justfile` and `--working-directory` arguments so installed hook invocations
+remain Cargo-free.
 
 ## Tool Adapter Rule
 

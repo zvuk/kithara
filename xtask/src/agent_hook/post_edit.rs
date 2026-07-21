@@ -8,9 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use super::input::HookInput;
-
-const PROJECT_MARKER: &str = "xtask/agent-hook";
+use super::{input::HookInput, is_project_root};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FormatTarget {
@@ -102,7 +100,7 @@ fn hook_project_root(input: &HookInput) -> Result<PathBuf> {
     if let Some(root) = env::var_os("KITHARA_AGENT_HOOK_ROOT").filter(|value| !value.is_empty()) {
         let root = fs::canonicalize(PathBuf::from(root))
             .context("resolve launcher-owned Kithara project root")?;
-        if !root.join(PROJECT_MARKER).is_file() {
+        if !is_project_root(&root) {
             bail!("launcher-owned project root is not a Kithara checkout");
         }
         return Ok(root);
@@ -134,7 +132,7 @@ fn hook_project_root(input: &HookInput) -> Result<PathBuf> {
 fn find_project_root(start: &Path) -> Option<PathBuf> {
     start
         .ancestors()
-        .find(|path| path.join(PROJECT_MARKER).is_file())
+        .find(|path| is_project_root(path))
         .map(Path::to_path_buf)
 }
 

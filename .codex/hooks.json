@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "repo=$PWD; until [ -x \"$repo/xtask/agent-hook\" ]; do [ \"$repo\" != / ] || { printf 'error: cannot find xtask/agent-hook\\n' >&2; exit 1; }; repo=${repo%/*}; [ -n \"$repo\" ] || repo=/; done; exec \"$repo/xtask/agent-hook\" pre-bash"
+            "command": "repo=$PWD; until [ -f \"$repo/justfile\" ] && [ -f \"$repo/xtask/Cargo.toml\" ]; do [ \"$repo\" != / ] || { printf 'error: cannot find Kithara repository root\\n' >&2; exit 1; }; repo=${repo%/*}; [ -n \"$repo\" ] || repo=/; done; warn_launcher() { printf 'warning: agent hook launcher is unavailable; install just and retry\\n' >&2; exit 0; }; command -v just >/dev/null 2>&1 || warn_launcher; if just --quiet --justfile \"$repo/justfile\" --working-directory \"$repo\" _agent-hook pre-bash; then exit 0; else status=$?; fi; case \"$status\" in 126|127) warn_launcher ;; *) exit \"$status\" ;; esac"
           }
         ]
       }

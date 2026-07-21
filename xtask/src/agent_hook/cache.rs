@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use super::fingerprint;
+use super::{fingerprint, is_project_root};
 
 mod pointer;
 
@@ -60,8 +60,8 @@ fn project_root() -> Result<PathBuf> {
     };
     let root = fs::canonicalize(&root)
         .with_context(|| format!("resolve Kithara project root {}", root.display()))?;
-    if !root.join("xtask/agent-hook").is_file() {
-        bail!("project root does not contain xtask/agent-hook");
+    if !is_project_root(&root) {
+        bail!("project root does not contain justfile and xtask/Cargo.toml");
     }
     Ok(root)
 }
@@ -69,7 +69,7 @@ fn project_root() -> Result<PathBuf> {
 fn find_project_root(start: &Path) -> Result<PathBuf> {
     start
         .ancestors()
-        .find(|path| path.join("xtask/agent-hook").is_file() && path.join(".git").exists())
+        .find(|path| is_project_root(path) && path.join(".git").exists())
         .map(Path::to_path_buf)
         .with_context(|| format!("find Kithara project root from {}", start.display()))
 }

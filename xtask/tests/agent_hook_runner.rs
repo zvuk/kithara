@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use serde_json::Value;
 use tempfile::TempDir;
 
 #[derive(Clone, Copy)]
@@ -24,7 +25,7 @@ struct Fixture {
     git_dir: PathBuf,
     path: std::ffi::OsString,
     repo: PathBuf,
-    runner: PathBuf,
+    justfile: PathBuf,
     xtask_log: PathBuf,
 }
 
@@ -53,7 +54,7 @@ impl Fixture {
         let fake_bin = temp.path().join("bin");
         let cargo_log = temp.path().join("cargo.log");
         let xtask_log = temp.path().join("xtask.log");
-        let runner = repo.join("xtask/agent-hook");
+        let justfile = repo.join("justfile");
 
         fs::create_dir_all(&git_dir)?;
         fs::create_dir_all(repo.join("xtask/src/agent_hook"))?;
@@ -80,12 +81,10 @@ impl Fixture {
             repo.join("xtask/src/agent_hook/input.rs"),
             "pub fn read() {}\n",
         )?;
-        fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("agent-hook"),
-            &runner,
-        )
-        .context("copy xtask agent-hook runner")?;
-        make_executable(&runner)?;
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .context("resolve repository root")?;
+        fs::copy(repository.join("justfile"), &justfile).context("copy repository justfile")?;
         write_executable(
             &fake_bin.join("cargo"),
             r#"#!/bin/sh
@@ -107,7 +106,7 @@ exit 91
             git_dir,
             path,
             repo,
-            runner,
+            justfile,
             xtask_log,
         })
     }
@@ -126,9 +125,13 @@ exit 91
     }
 
     fn command(&self, hook: &str) -> Command {
-        let mut command = Command::new(&self.runner);
+        let mut command = Command::new("just");
         command
-            .arg(hook)
+            .args(["--quiet", "--justfile"])
+            .arg(&self.justfile)
+            .arg("--working-directory")
+            .arg(&self.repo)
+            .args(["_agent-hook", hook])
             .current_dir(self.repo.join("xtask/src"))
             .env("FAKE_CARGO_LOG", &self.cargo_log)
             .env("FAKE_XTASK_LOG", &self.xtask_log)
@@ -183,7 +186,7 @@ cat >/dev/null
     }
 
     fn assert_cargo_not_run(&self) {
-        assert!(!self.cargo_log.exists(), "runner invoked Cargo");
+        assert!(!self.cargo_log.exists(), "Just recipe invoked Cargo");
     }
 }
 
@@ -207,16 +210,88 @@ fn write_executable(path: &Path, body: &str) -> Result<()> {
     make_executable(path)
 }
 
+fn collect_adapter_commands(value: &Value, commands: &mut Vec<String>) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_adapter_commands(value, commands);
+            }
+        }
+        Value::Object(values) => {
+            for (key, value) in values {
+                if key == "command"
+                    && let Some(command) = value.as_str()
+                {
+                    commands.push(command.to_owned());
+                }
+                collect_adapter_commands(value, commands);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn adapter_commands(repository: &Path) -> Result<Vec<String>> {
+    let mut commands = Vec::new();
+    for adapter in [".claude/settings.json", ".codex/hooks.json"] {
+        let value = serde_json::from_slice(&fs::read(repository.join(adapter))?)?;
+        collect_adapter_commands(&value, &mut commands);
+    }
+    Ok(commands)
+}
+
 #[test]
 fn missing_pointer_skips_hook_without_invoking_cargo() -> Result<()> {
     let fixture = Fixture::new()?;
     let output = fixture.run("pre-bash")?;
 
     assert_success(&output);
-    assert!(String::from_utf8_lossy(&output.stderr).contains("cargo xtask agent-hook install"));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "warning: agent hook is not installed for this worktree; run `cargo xtask agent-hook install`\n"
+    );
     fixture.assert_cargo_not_run();
     assert!(!fixture.cache_dir().exists());
     assert!(!fixture.cache_pointer().exists());
+    Ok(())
+}
+
+#[test]
+fn adapters_fail_open_when_just_is_unavailable() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .context("resolve repository root")?;
+    let missing = fixture.repo.join("missing-just");
+    let unlaunchable = fixture.repo.join("unlaunchable-just");
+    fs::create_dir(&missing)?;
+    fs::create_dir(&unlaunchable)?;
+    write_executable(&unlaunchable.join("just"), "#!/bin/sh\nexit 126\n")?;
+
+    let commands = adapter_commands(repository)?;
+    assert_eq!(commands.len(), 3);
+    for path in [missing, unlaunchable] {
+        for command in &commands {
+            let output = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(command)
+                .current_dir(fixture.repo.join("xtask/src"))
+                .env("CLAUDE_PROJECT_DIR", &fixture.repo)
+                .env("PATH", &path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .context("run adapter without usable Just")?;
+
+            assert_success(&output);
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr),
+                "warning: agent hook launcher is unavailable; install just and retry\n"
+            );
+        }
+    }
+    fixture.assert_cargo_not_run();
     Ok(())
 }
 
@@ -331,14 +406,15 @@ fn installed_cache_executes_directly_without_invoking_cargo() -> Result<()> {
     assert_success(&fixture.run("post-edit")?);
 
     fixture.assert_cargo_not_run();
+    let root = fs::canonicalize(&fixture.repo)?;
     let generation = fs::canonicalize(fixture.cache_dir().join("generation-test"))?;
     assert_eq!(
         fs::read_to_string(&fixture.xtask_log)?,
         format!(
             "args=agent-hook pre-bash\nroot={}\ncache={}\nargs=agent-hook post-edit\nroot={}\ncache={}\n",
-            fixture.repo.display(),
+            root.display(),
             generation.display(),
-            fixture.repo.display(),
+            root.display(),
             generation.display()
         )
     );
@@ -346,7 +422,7 @@ fn installed_cache_executes_directly_without_invoking_cargo() -> Result<()> {
 }
 
 #[test]
-fn explicit_install_publishes_generation_pointer_for_runner() -> Result<()> {
+fn explicit_install_publishes_generation_pointer_for_recipe() -> Result<()> {
     let fixture = Fixture::new()?;
     let install = fixture.install_real_xtask()?;
     assert_success(&install);
@@ -370,14 +446,14 @@ fn explicit_install_publishes_generation_pointer_for_runner() -> Result<()> {
         r#"{"tool_name":"Bash","tool_input":{"command":"cargo test"}}"#,
     )?;
     assert_success(&output);
-    let response: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let response: Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(response["hookSpecificOutput"]["permissionDecision"], "deny");
     fixture.assert_cargo_not_run();
     Ok(())
 }
 
 #[test]
-fn installed_runner_cannot_install_itself() -> Result<()> {
+fn installed_recipe_cannot_install_itself() -> Result<()> {
     let fixture = Fixture::new()?;
     assert_success(&fixture.install_real_xtask()?);
 
@@ -405,7 +481,29 @@ fn stale_cache_warns_and_runs_last_good_policy_without_cargo() -> Result<()> {
 
     assert_success(&output);
     assert!(String::from_utf8_lossy(&output.stderr).contains("cached agent hook is stale"));
-    let response: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let response: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(response["hookSpecificOutput"]["permissionDecision"], "deny");
+    fixture.assert_cargo_not_run();
+    Ok(())
+}
+
+#[test]
+fn justfile_change_does_not_stale_installed_policy() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.install_real_xtask()?);
+    let mut justfile = fs::OpenOptions::new()
+        .append(true)
+        .open(&fixture.justfile)?;
+    writeln!(justfile, "# launcher-only change")?;
+
+    let output = fixture.run_with_input(
+        "pre-bash",
+        r#"{"tool_name":"Bash","tool_input":{"command":"cargo test"}}"#,
+    )?;
+
+    assert_success(&output);
+    assert!(output.stderr.is_empty());
+    let response: Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(response["hookSpecificOutput"]["permissionDecision"], "deny");
     fixture.assert_cargo_not_run();
     Ok(())
@@ -482,11 +580,19 @@ fn reinstall_switches_pointer_between_complete_generations() -> Result<()> {
 }
 
 #[test]
-fn runner_stays_thin_and_contains_no_bootstrap_build_logic() -> Result<()> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("agent-hook");
-    let body = fs::read_to_string(path)?;
+fn just_recipe_contains_no_bootstrap_build_logic() -> Result<()> {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .context("resolve repository root")?;
+    let body = fs::read_to_string(repository.join("justfile"))?;
+    let recipe = body
+        .split_once("_agent-hook HOOK:\n")
+        .context("find agent hook recipe")?
+        .1
+        .split_once("# --- formatting ---")
+        .context("find end of agent hook section")?
+        .0;
 
-    assert!(body.lines().count() <= 25);
     for forbidden in [
         ".git",
         "gitdir:",
@@ -500,16 +606,39 @@ fn runner_stays_thin_and_contains_no_bootstrap_build_logic() -> Result<()> {
         "shasum",
         "CARGO_TARGET_DIR",
     ] {
-        assert!(!body.contains(forbidden), "runner contains {forbidden}");
+        assert!(
+            !recipe.contains(forbidden),
+            "agent hook recipe contains {forbidden}"
+        );
     }
     Ok(())
 }
 
 #[test]
-fn runner_is_checked_in_as_executable() -> Result<()> {
-    let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("agent-hook");
-    let mode = fs::metadata(runner)?.permissions().mode();
+fn agent_hook_recipe_is_hidden_from_just_list() -> Result<()> {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .context("resolve repository root")?;
+    let output = Command::new("just")
+        .args(["--justfile"])
+        .arg(repository.join("justfile"))
+        .arg("--list")
+        .output()
+        .context("list public Just recipes")?;
 
-    assert_ne!(mode & 0o111, 0);
+    assert_success(&output);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("_agent-hook"));
+    Ok(())
+}
+
+#[test]
+fn launcher_is_owned_only_by_justfile() -> Result<()> {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .context("resolve repository root")?;
+    let body = fs::read_to_string(repository.join("justfile"))?;
+
+    assert!(body.contains("_agent-hook HOOK:"));
+    assert!(!repository.join("xtask/agent-hook").exists());
     Ok(())
 }

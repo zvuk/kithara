@@ -4,6 +4,33 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
+_agent-hook HOOK:
+    #!/bin/sh
+    set -eu
+    repo_root=$PWD
+    pointer="$repo_root/xtask/.agent-hook-cache"
+    warn_install() {
+        printf 'warning: agent hook is not installed for this worktree; run `cargo xtask agent-hook install`\n' >&2
+        exit 0
+    }
+    [ -r "$pointer" ] || warn_install
+    generation_dir= extra=
+    if ! { IFS= read -r generation_dir && ! IFS= read -r extra && [ -z "$extra" ]; } < "$pointer"; then
+        warn_install
+    fi
+    case "$generation_dir" in
+        /*) ;;
+        *) warn_install ;;
+    esac
+    binary="$generation_dir/xtask"
+    [ -x "$binary" ] || warn_install
+    export KITHARA_AGENT_HOOK_ROOT=$repo_root KITHARA_AGENT_HOOK_CACHE=$generation_dir
+    if "$binary" agent-hook {{quote(HOOK)}}; then exit 0; else status=$?; fi
+    case "$status" in
+        126|127) warn_install ;;
+        *) exit "$status" ;;
+    esac
+
 # --- formatting ---
 
 # Auto-format Rust, Cargo manifests, TOML configs, and JSON files.
