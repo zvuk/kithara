@@ -35,10 +35,9 @@
                         read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
                         size: (w: Fill, h: Fixed(40.0)),
                     ),
-                    Text(
+                    Bpm(
                         id: "bpm",
-                        style: Telemetry,
-                        label: "70.00",
+                        read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                         size: (w: Fixed(64.0), h: Fixed(40.0)),
                     ),
                     Select(id: "auto", label: "AUTO·320", size: (w: Fixed(84.0), h: Fixed(26.0))),

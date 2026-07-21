@@ -211,6 +211,14 @@ impl ScalarDrag {
         .and_capture()
     }
 
+    pub(crate) fn publish_child(&self, child: &str, value: f32) -> Action<UiEvent> {
+        Action::publish(UiEvent::Control {
+            path: format!("{}/{child}", self.path),
+            action: ControlAction::SetScalar(f64::from(value)),
+        })
+        .and_capture()
+    }
+
     fn double_click_action(
         &self,
         state: &mut ScalarDragState,

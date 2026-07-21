@@ -25,6 +25,7 @@ pub struct ModuleChrome<'a, 'skin, Content, Message> {
     content: Content,
     title: Option<&'a str>,
     chip: Option<&'a str>,
+    assign: Vec<&'a str>,
     #[builder(default)]
     style: ChromeStyle,
     #[builder(default)]
@@ -91,6 +92,7 @@ where
     let header = header(
         chrome.title,
         chrome.chip,
+        chrome.assign,
         chrome.on_toggle,
         chrome.collapsed,
         skin,
@@ -148,6 +150,7 @@ where
 fn header<'a, Message>(
     title: Option<&'a str>,
     chip: Option<&'a str>,
+    assign: Vec<&'a str>,
     on_toggle: Option<Message>,
     collapsed: bool,
     skin: &Skin,
@@ -156,24 +159,9 @@ where
     Message: Clone + 'a,
 {
     let metrics = skin.chrome;
-    let mut children = Vec::with_capacity(5);
+    let mut children = Vec::with_capacity(5 + assign.len());
     if let Some(chip) = chip {
-        let background = skin.color(metrics.chip_background);
-        let text = skin.color(metrics.chip_text);
-        let border = skin.border(metrics.chip_frame);
-        children.push(
-            container(
-                shaped_text(chip)
-                    .font(fonts::MONO)
-                    .size(metrics.chip_text_size)
-                    .color(text),
-            )
-            .padding([0.0, metrics.chip_pad])
-            .height(Length::Fill)
-            .align_y(Vertical::Center)
-            .style(move |_| panel_frame_style(background, border))
-            .into(),
-        );
+        children.push(header_chip(chip, skin));
     }
     if let Some(title) = title {
         let background = skin.color(metrics.title_background);
@@ -195,6 +183,7 @@ where
         children.push(vertical_line(skin));
     }
     children.push(Space::new().width(Length::Fill).into());
+    children.extend(assign.into_iter().map(|label| header_chip(label, skin)));
     let chevron_background = skin.color(metrics.header_background);
     let chevron_border = skin.border(metrics.chevron_frame);
     children.push(
@@ -235,6 +224,27 @@ where
         })
         .on_press_maybe(on_toggle)
         .into()
+}
+
+fn header_chip<'a, Message>(label: &'a str, skin: &Skin) -> Element<'a, Message>
+where
+    Message: 'a,
+{
+    let metrics = skin.chrome;
+    let background = skin.color(metrics.chip_background);
+    let text = skin.color(metrics.chip_text);
+    let border = skin.border(metrics.chip_frame);
+    container(
+        shaped_text(label)
+            .font(fonts::MONO)
+            .size(metrics.chip_text_size)
+            .color(text),
+    )
+    .padding([0.0, metrics.chip_pad])
+    .height(Length::Fill)
+    .align_y(Vertical::Center)
+    .style(move |_| panel_frame_style(background, border))
+    .into()
 }
 
 fn framed<'a, Message>(

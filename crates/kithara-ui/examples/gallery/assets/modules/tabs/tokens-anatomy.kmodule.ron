@@ -4,22 +4,13 @@
     id: "gallery-tokens-anatomy",
     title: Some("Название модуля"),
     chip: Some("MOD"),
+    assign: ["A"],
     chrome: Full,
     footer: Some(Model(id: "gallery.footer.tokens_anatomy")),
     root: Column(
         gap: Some(8.0),
         pad: Some(10.0),
         children: [
-            Row(size: (w: Fill, h: Fixed(18.0)), children: [
-                Spacer(id: "assign-spacer"),
-                Chip(
-                    id: "assign",
-                    label: "A",
-                    style: Routing,
-                    read: Model(id: "gallery.anatomy.assign"),
-                    size: (w: Fixed(36.0), h: Fixed(18.0)),
-                ),
-            ]),
             Row(size: (w: Fill, h: Fill), children: [
                 Spacer(id: "content-left"),
                 Text(

@@ -54,6 +54,10 @@ pub(crate) fn norm_to_x(norm: f32, window: &Range<f32>, width: f32) -> f32 {
     (norm - window.start) / (window.end - window.start) * width
 }
 
+pub(crate) fn x_to_norm(x: f32, window: &Range<f32>, width: f32) -> Option<f32> {
+    (width > 0.0).then(|| (window.start + x / width * (window.end - window.start)).clamp(0.0, 1.0))
+}
+
 pub(crate) fn visible_marks<'a>(marks: &'a [f32], window: &Range<f32>) -> &'a [f32] {
     marks
         .get(visible_mark_range(marks, window))
@@ -158,6 +162,19 @@ mod tests {
         assert_near(norm_to_x(0.4, &window, 200.0), 0.0);
         assert_near(norm_to_x(0.5, &window, 200.0), 100.0);
         assert_near(norm_to_x(0.6, &window, 200.0), 200.0);
+        assert_eq!(x_to_norm(0.0, &window, 200.0), Some(0.4));
+        assert_eq!(x_to_norm(100.0, &window, 200.0), Some(0.5));
+        assert_eq!(x_to_norm(200.0, &window, 200.0), Some(0.6));
+        assert_eq!(x_to_norm(100.0, &window, 0.0), None);
+    }
+
+    #[kithara::test]
+    fn pointer_positions_clamp_to_track_bounds() {
+        let start = window_bounds(0.01, DEFAULT_ZOOM);
+        let end = window_bounds(0.99, DEFAULT_ZOOM);
+
+        assert_eq!(x_to_norm(0.0, &start, 200.0), Some(0.0));
+        assert_eq!(x_to_norm(200.0, &end, 200.0), Some(1.0));
     }
 
     #[kithara::test]

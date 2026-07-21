@@ -40,10 +40,9 @@
                                 read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
                                 size: (w: Fill, h: Fixed(38.0)),
                             ),
-                            Text(
+                            Bpm(
                                 id: "bpm",
-                                style: Telemetry,
-                                label: "70.00",
+                                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                                 size: (w: Fixed(64.0), h: Fixed(38.0)),
                             ),
                             Glyph(id: "close", icon: X, size: (w: Fixed(28.0), h: Fixed(38.0))),

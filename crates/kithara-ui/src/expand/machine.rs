@@ -86,6 +86,11 @@ impl<'m, 'v> Expander<'m, 'v> {
             .as_deref()
             .map(|chip| self.interner.intern(chip, entry))
             .transpose()?;
+        let assign = doc
+            .assign
+            .iter()
+            .map(|label| self.interner.intern(label, entry))
+            .collect::<Result<Vec<_>, UiDocError>>()?;
         let collapsed = self
             .interner
             .intern(&format!("ui.module.{}.collapsed", doc.id.0), entry)?;
@@ -93,6 +98,7 @@ impl<'m, 'v> Expander<'m, 'v> {
             module,
             title,
             chip,
+            assign,
             chrome: doc.chrome,
             footer,
             collapsed,

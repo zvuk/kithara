@@ -6,6 +6,7 @@ use std::{
 use iced::{
     Color, Element, Event, Font, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
+    keyboard::{Event as KeyboardEvent, Modifiers},
     mouse::{self, Cursor, ScrollDelta},
     widget::{
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
@@ -16,9 +17,7 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     module::WaveStyle,
-    render::{
-        ControlAction, ReadValue, Reads, Skin, UiEvent, WaveBucket, fonts, theme::RenderPalette,
-    },
+    render::{ReadValue, Reads, Skin, UiEvent, WaveBucket, fonts, theme::RenderPalette},
     skin::{FontSkin, FrameSkin, WaveOverlaySkin, WaveSkin},
     widgets::{
         Widget,
@@ -26,7 +25,7 @@ use crate::{
         deck::format_time,
         wave::{
             hero::{HeroPalette, HeroWave, draw as draw_hero_wave},
-            zoom_math::{clamp_zoom, zoom_for_wheel},
+            zoom_math::{clamp_zoom, window_bounds, x_to_norm, zoom_for_wheel},
         },
     },
 };
@@ -110,7 +109,6 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_> {
             show_beats,
             wave_revision,
             zoom,
-            zoom_path: format!("{}/zoom", self.path),
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -132,12 +130,13 @@ struct MiniWaveCanvas {
     show_beats: bool,
     wave_revision: Option<u64>,
     zoom: f32,
-    zoom_path: String,
 }
 
 #[derive(Default)]
 struct MiniWaveState {
     drag: ScalarDragState,
+    loop_start: Option<f32>,
+    modifiers: Modifiers,
     wave: canvas::Cache,
     wave_revision: Cell<Option<u64>>,
 }
@@ -295,21 +294,40 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
+        if let Event::Keyboard(KeyboardEvent::ModifiersChanged(modifiers)) = event {
+            state.modifiers = *modifiers;
+            return None;
+        }
         if !self.has_waveform() {
             return None;
+        }
+        if self.show_beats {
+            match event {
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                    if state.modifiers.shift() && cursor.is_over(bounds) =>
+                {
+                    let start = self.track_position(bounds, cursor)?;
+                    state.loop_start = Some(start);
+                    return Some(self.drag.publish_child("loop_start", start));
+                }
+                Event::Mouse(mouse::Event::CursorMoved { .. }) if state.loop_start.is_some() => {
+                    let end = self.track_position(bounds, cursor)?;
+                    return Some(self.drag.publish_child("loop_end", end));
+                }
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                    if state.loop_start.take().is_some() =>
+                {
+                    return Some(Action::capture());
+                }
+                _ => {}
+            }
         }
         if self.show_beats
             && let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event
             && cursor.is_over(bounds)
         {
             let zoom = zoom_for_wheel(self.zoom, scroll_y(*delta));
-            return Some(
-                Action::publish(UiEvent::Control {
-                    path: self.zoom_path.clone(),
-                    action: ControlAction::SetScalar(f64::from(zoom)),
-                })
-                .and_capture(),
-            );
+            return Some(self.drag.publish_child("zoom", zoom));
         }
         self.drag.update(&mut state.drag, event, bounds, cursor)
     }
@@ -354,6 +372,12 @@ impl MiniWaveCanvas {
                 cue_text: self.cue_badge_text_color,
             },
         );
+    }
+
+    fn track_position(&self, bounds: Rectangle, cursor: Cursor) -> Option<f32> {
+        let position = cursor.position()?;
+        let window = window_bounds(self.progress, self.zoom);
+        x_to_norm(position.x - bounds.x, &window, bounds.width)
     }
 }
 

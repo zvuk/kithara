@@ -102,7 +102,7 @@ impl<'a> Widget<'a> for Bpm<'_, '_, '_, '_, '_> {
         let content: Element<'a, UiEvent> = if let Some(bpm) =
             analysis_bpm(waveform_value(self.value))
         {
-            shaped_text(format!("{bpm:.1}"))
+            shaped_text(format_bpm(bpm))
                 .font(fonts::mono(self.skin.deck.bpm_text.weight))
                 .size(self.skin.deck.bpm_text.size)
                 .color(palette.accent_strong)
@@ -185,6 +185,22 @@ fn analysis_bpm(analysis: Option<WaveformView<'_>>) -> Option<f64> {
         .and_then(|view| view.bpm)
         .map(f64::from)
         .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+}
+
+fn format_bpm(bpm: f64) -> String {
+    format!("{bpm:.2}")
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn bpm_uses_two_decimal_places() {
+        assert_eq!(format_bpm(70.0), "70.00");
+    }
 }
 
 fn waveform_value<'data>(value: Option<&ReadValue<'data>>) -> Option<WaveformView<'data>> {

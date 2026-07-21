@@ -170,6 +170,7 @@ pub(crate) struct ExpandedModule {
     pub(crate) module: InternId,
     pub(crate) title: Option<InternId>,
     pub(crate) chip: Option<InternId>,
+    pub(crate) assign: Vec<InternId>,
     pub(crate) chrome: ChromeStyle,
     pub(crate) footer: Option<Binding>,
     pub(crate) collapsed: InternId,

@@ -365,7 +365,7 @@ fn module_shell_metadata_compiles_into_the_module_node() {
     resolver.insert(
         "shell.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "deck", parameters: ["deck"],
-            title: Some("Deck"), chip: Some("DECK"), chrome: Full,
+            title: Some("Deck"), chip: Some("DECK"), assign: ["A", "B"], chrome: Full,
             footer: Some(Telemetry(id: "deck.track.title", with: { "deck": "$deck" })),
             root: Text(id: "label"))"#,
     );
@@ -382,6 +382,7 @@ fn module_shell_metadata_compiles_into_the_module_node() {
         module,
         title,
         chip,
+        assign,
         chrome,
         frame,
         corners,
@@ -396,6 +397,10 @@ fn module_shell_metadata_compiles_into_the_module_node() {
     assert_eq!(ui.resolve(*module), "deck");
     assert_eq!(title.map(|id| ui.resolve(id)), Some("Deck"));
     assert_eq!(chip.map(|id| ui.resolve(id)), Some("DECK"));
+    assert_eq!(
+        assign.iter().map(|id| ui.resolve(*id)).collect::<Vec<_>>(),
+        ["A", "B"]
+    );
     assert_eq!(*chrome, ChromeStyle::Full);
     assert!(frame.top);
     assert!(!frame.right);

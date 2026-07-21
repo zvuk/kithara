@@ -4,6 +4,7 @@ pub(super) struct DeckTransport {
     bpm: f64,
     cues: Vec<f32>,
     duration_secs: f64,
+    loop_anchor: f32,
     loop_region: Option<[f32; 2]>,
     playing: bool,
     position_secs: f64,
@@ -32,6 +33,7 @@ impl DeckTransport {
             bpm: f64::from(bpm),
             cues: cues.to_vec(),
             duration_secs,
+            loop_anchor: loop_region[0],
             loop_region: Some(loop_region),
             playing: true,
             position_secs,
@@ -90,6 +92,15 @@ impl DeckTransport {
         self.zoom = zoom.clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
     }
 
+    pub(super) fn set_loop_end(&mut self, end: f64) {
+        self.loop_region = normalized_loop(self.loop_anchor, end.clamp(0.0, 1.0).as_());
+    }
+
+    pub(super) fn set_loop_start(&mut self, start: f64) {
+        self.loop_anchor = start.clamp(0.0, 1.0).as_();
+        self.loop_region = None;
+    }
+
     pub(super) fn toggle_play(&mut self) {
         self.playing = !self.playing;
     }
@@ -120,8 +131,13 @@ impl DeckTransport {
             Self::BARS_PER_LOOP * Self::BEATS_PER_BAR * Self::SECS_PER_MINUTE / self.bpm;
         let start = self.position_normalized();
         let end = ((self.position_secs + loop_secs) / self.duration_secs).min(1.0);
+        self.loop_anchor = start.as_();
         self.loop_region = Some([start.as_(), end.as_()]);
     }
+}
+
+fn normalized_loop(start: f32, end: f32) -> Option<[f32; 2]> {
+    (start != end).then(|| [start.min(end), start.max(end)])
 }
 
 #[cfg(test)]
@@ -190,6 +206,36 @@ mod tests {
             transport.loop_region(),
             Some([0.25, (0.25 + four_bars / Consts::DURATION_SECS).as_()])
         );
+    }
+
+    #[kithara::test]
+    fn loop_drag_sets_region_from_start_to_end() {
+        let mut transport = transport();
+
+        transport.set_loop_start(0.4);
+        transport.set_loop_end(0.5);
+
+        assert_eq!(transport.loop_region(), Some([0.4, 0.5]));
+    }
+
+    #[kithara::test]
+    fn loop_drag_normalizes_reverse_direction() {
+        let mut transport = transport();
+
+        transport.set_loop_start(0.5);
+        transport.set_loop_end(0.4);
+
+        assert_eq!(transport.loop_region(), Some([0.4, 0.5]));
+    }
+
+    #[kithara::test]
+    fn zero_length_loop_drag_clears_region() {
+        let mut transport = transport();
+
+        transport.set_loop_start(0.4);
+        transport.set_loop_end(0.4);
+
+        assert_eq!(transport.loop_region(), None);
     }
 
     #[kithara::test]

@@ -104,6 +104,7 @@ fn render_compiled<'a>(
             module,
             title,
             chip,
+            assign,
             chrome,
             frame,
             corners,
@@ -133,6 +134,7 @@ fn render_compiled<'a>(
                 .content(content)
                 .maybe_title(title.map(|id| ui.resolve(id)))
                 .maybe_chip(chip.map(|id| ui.resolve(id)))
+                .assign(assign.iter().map(|id| ui.resolve(*id)).collect())
                 .style(*chrome)
                 .frame(*frame)
                 .corners(*corners)

@@ -23,6 +23,8 @@ pub struct ModuleDoc {
     #[serde(default)]
     pub chip: Option<String>,
     #[serde(default)]
+    pub assign: Vec<String>,
+    #[serde(default)]
     pub chrome: ChromeStyle,
     #[serde(default)]
     pub footer: Option<BindingRef>,
@@ -890,6 +892,7 @@ mod tests {
 
         assert_eq!(document.title, None);
         assert_eq!(document.chip, None);
+        assert!(document.assign.is_empty());
         assert_eq!(document.chrome, ChromeStyle::Frame);
         assert_eq!(document.footer, None);
     }
@@ -899,6 +902,7 @@ mod tests {
         let text = r#"(schema: "kithara.module", version: 1, id: "full",
             title: Some("Module title"),
             chip: Some("MOD"),
+            assign: ["A", "B"],
             chrome: Full,
             footer: Some(Model(id: "module.status")),
             root: Text(id: "label"))"#;
@@ -907,6 +911,7 @@ mod tests {
 
         assert_eq!(document.title.as_deref(), Some("Module title"));
         assert_eq!(document.chip.as_deref(), Some("MOD"));
+        assert_eq!(document.assign, ["A", "B"]);
         assert_eq!(document.chrome, ChromeStyle::Full);
         assert!(matches!(document.footer, Some(BindingRef::Model { .. })));
     }

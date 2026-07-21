@@ -300,7 +300,11 @@ impl MockReads {
             return;
         }
         let value = value.clamp(0.0, 1.0);
-        if path.ends_with("/zoom") {
+        if path.ends_with("/loop_start") {
+            self.transport.set_loop_start(value);
+        } else if path.ends_with("/loop_end") {
+            self.transport.set_loop_end(value);
+        } else if path.ends_with("/zoom") {
             self.transport.set_zoom(value);
         } else if let Some(index) = match path {
             "atoms/knobs/size-26" => Some(0),
@@ -421,7 +425,7 @@ impl Reads for MockReads {
             "gallery.label.text" => ReadValue::Text("TEXT STYLES"),
             "gallery.label.faders" => ReadValue::Text("HORIZONTAL FADERS"),
             "gallery.label.scalar" => ReadValue::Text("SCALAR TELEMETRY"),
-            "gallery.anatomy.assign" | "vis.badge" => ReadValue::Bool(true),
+            "vis.badge" => ReadValue::Bool(true),
             "gallery.tab.atoms" => ReadValue::Bool(self.active_tab == Tab::Atoms),
             "gallery.tab.buttons" => ReadValue::Bool(self.active_tab == Tab::Buttons),
             "gallery.tab.faders" => ReadValue::Bool(self.active_tab == Tab::Faders),
@@ -715,7 +719,6 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.module.global_bar",
         "gallery.module.telemetry",
         "gallery.module.layout",
-        "gallery.anatomy.assign",
         "mock.toggle.on",
         "mock.toggle.off",
         "mock.checkbox.on",
