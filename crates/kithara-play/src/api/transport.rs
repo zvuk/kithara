@@ -1,3 +1,5 @@
+const SECONDS_PER_MINUTE: f64 = 60.0;
+
 /// A finite, positive musical tempo in beats per minute.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct Tempo(f64);
@@ -16,6 +18,10 @@ impl Tempo {
     /// Returns the tempo in beats per minute.
     pub fn beats_per_minute(self) -> f64 {
         self.0
+    }
+
+    pub(crate) fn beats_per_second(self) -> f64 {
+        self.0 / SECONDS_PER_MINUTE
     }
 }
 

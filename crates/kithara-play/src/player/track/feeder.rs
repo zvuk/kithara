@@ -5,30 +5,24 @@ use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
 use tracing::warn;
 
-#[cfg_attr(target_arch = "wasm32", path = "../platform/browser.rs")]
-#[cfg_attr(not(target_arch = "wasm32"), path = "native.rs")]
-mod platform;
-
 #[rustfmt::skip]
 use crate::resource::Resource;
 
-pub(crate) use platform::PreparedElasticRenderer;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use platform::{ElasticPreparationPoll, PreparingElasticRenderer};
+use crate::player::platform::{ActiveElasticRenderer, PreparedElasticRenderer};
 
 /// RT-safe resource whose storage is fixed by its playback capability.
 #[non_exhaustive]
 pub struct PlayerResource {
-    src: Arc<str>,
-    kind: PlayerResourceKind,
+    pub(in crate::player) src: Arc<str>,
+    pub(in crate::player) kind: PlayerResourceKind,
 }
 
-enum PlayerResourceKind {
+pub(in crate::player) enum PlayerResourceKind {
     Linear(Box<LinearResource>),
     Bound(Box<BoundResource>),
 }
 
-struct LinearResource {
+pub(in crate::player) struct LinearResource {
     resource: WasmSend<Resource>,
     channel_buffers: [PcmBuf; PlayerResource::STEREO_CHANNELS],
     eof_seen: bool,
@@ -38,8 +32,8 @@ struct LinearResource {
 }
 
 pub(in crate::player) struct BoundResource {
-    resource: WasmSend<Resource>,
-    renderer: PreparedElasticRenderer,
+    pub(in crate::player) resource: WasmSend<Resource>,
+    pub(in crate::player) renderer: ActiveElasticRenderer,
 }
 
 pub(in crate::player) enum ReleasedPlayerResource {
@@ -220,7 +214,7 @@ impl PlayerResource {
 impl BoundResource {
     pub(in crate::player) fn into_parts(self: Box<Self>) -> (Resource, PreparedElasticRenderer) {
         let Self { resource, renderer } = *self;
-        (resource.into_inner(), renderer)
+        (resource.into_inner(), renderer.into())
     }
 }
 

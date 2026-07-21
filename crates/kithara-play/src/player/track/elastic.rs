@@ -83,6 +83,8 @@ pub(crate) fn plan_elastic_segments(
     supported_rates: ElasticRateEnvelope,
 ) -> Result<SmallVec<[ElasticRenderSegment; 4]>, ElasticPlanError> {
     const MAX_SEGMENTS: usize = 4;
+    const SPLIT_PARTS: usize = 2;
+
     let mut pending = SmallVec::<[Range<usize>; 4]>::new();
     pending.push(output_range);
     let mut segments = SmallVec::<[ElasticRenderSegment; 4]>::new();
@@ -111,7 +113,7 @@ pub(crate) fn plan_elastic_segments(
                 });
             }
             Err(ElasticPlanError::MarkerBoundaryCrossing { boundary }) => {
-                if pending.len() + segments.len() + 2 > MAX_SEGMENTS {
+                if pending.len() + segments.len() + SPLIT_PARTS > MAX_SEGMENTS {
                     return Err(ElasticPlanError::TooManySegments);
                 }
                 let split = boundary_output_frame(binding, context, range.clone(), boundary)?;
@@ -200,12 +202,17 @@ pub(crate) fn plan_elastic_render(
 }
 
 fn crossed_marker_boundary(start: f64, end: f64, output_frames: usize) -> Option<f64> {
+    const BOUNDARY_OFFSETS: [f64; 3] = [0.0, 1.0, 2.0];
+    const HALF_FRAME_DIVISOR: usize = 2;
+
     let lower = start.min(end);
     let upper = start.max(end);
     let output_frames_f64 = output_frames.to_f64()?;
-    let half_frame = (upper - lower) / (2.0 * output_frames_f64);
+    let half_frame_divisor = HALF_FRAME_DIVISOR.to_f64()?;
+    let half_frame = (upper - lower) / (half_frame_divisor * output_frames_f64);
     let candidate = (lower + half_frame).floor();
-    [candidate, candidate + 1.0, candidate + 2.0]
+    BOUNDARY_OFFSETS
+        .map(|offset| candidate + offset)
         .into_iter()
         .filter(|boundary| *boundary > lower && *boundary < upper)
         .find(|boundary| {
@@ -255,7 +262,7 @@ mod tests {
     use std::{num::NonZeroU32, ops::Range};
 
     use kithara_audio::{BeatGrid, TrackBeat, analysis::TrackAnalysis};
-    use kithara_stretch::SignalsmithElastic;
+    use kithara_stretch::{ElasticConfig, SignalsmithBackend};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -275,7 +282,7 @@ mod tests {
         const SAMPLE_RATE: u32 = 48_000;
 
         fn supported_rates() -> ElasticRateEnvelope {
-            SignalsmithElastic::rate_envelope()
+            SignalsmithBackend::<ElasticConfig>::rate_envelope()
         }
     }
 

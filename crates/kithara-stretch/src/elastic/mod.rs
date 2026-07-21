@@ -16,10 +16,5 @@ pub use rate::ElasticRateEnvelope;
 mod request;
 pub use request::ElasticRequest;
 
-#[cfg(feature = "stretch-signalsmith")]
-mod signalsmith;
-#[cfg(feature = "stretch-signalsmith")]
-pub use signalsmith::SignalsmithElastic;
-
 #[cfg(all(test, feature = "stretch-signalsmith"))]
 mod tests;

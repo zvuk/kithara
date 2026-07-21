@@ -9,7 +9,7 @@ use kithara_audio::{
     SourceFrameIndex, SourceRange, SourceRangeError, SourceRangeReadOutcome, SourceRangeRequest,
 };
 use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
-use kithara_stretch::{ElasticConfig, ElasticError, ElasticRequest, SignalsmithElastic};
+use kithara_stretch::{ElasticConfig, ElasticError, ElasticRequest, SignalsmithBackend};
 use num_traits::ToPrimitive;
 use rendering::SourceCopy;
 use smallvec::SmallVec;
@@ -78,8 +78,6 @@ pub(crate) enum ElasticRenderError {
     FetchWindowMismatch,
     #[error("elastic renderer output channel layout does not match its preparation")]
     OutputChannelMismatch,
-    #[error("elastic renderer was not prepared for this resource")]
-    NotPrepared,
     #[error("elastic renderer history was prepared for a different playback direction")]
     DirectionMismatch,
     #[error("elastic source reader is unavailable")]
@@ -120,12 +118,6 @@ pub(crate) enum ElasticRenderOutcome {
     Eof,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ElasticPreparationOutcome {
-    Ready,
-    Pending,
-}
-
 #[derive(Clone, Copy, Debug)]
 struct IntegerSegment {
     source_end: i64,
@@ -148,6 +140,55 @@ struct ElasticPreparation {
     fetch_range: SourceRange,
 }
 
+#[derive(Clone, Copy)]
+struct PreparedRuntime {
+    cursor: SourceCursor,
+    direction: PlaybackDirection,
+    source_window: SourceRange,
+    request_id: u64,
+    revision: u64,
+}
+
+struct RenderRuntime {
+    prepared: PreparedRuntime,
+    pending_source_read: Option<PendingSourceRead>,
+}
+
+#[derive(Clone, Copy)]
+enum PreparationPhase {
+    Priming {
+        request: SourceRangeRequest,
+        range: SourceRange,
+        extension: Option<SourceRange>,
+    },
+    Window {
+        request: SourceRangeRequest,
+        range: SourceRange,
+        runtime: PreparedRuntime,
+    },
+}
+
+pub(crate) struct Preparing {
+    preparation: ElasticPreparation,
+    phase: PreparationPhase,
+    revision: u64,
+}
+
+pub(crate) struct Ready {
+    runtime: RenderRuntime,
+}
+
+pub(crate) struct Active {
+    runtime: RenderRuntime,
+}
+
+pub(crate) enum ElasticPreparationPoll {
+    Pending(ElasticRenderer<Preparing>),
+    Ready(ElasticRenderer<Ready>),
+}
+
+pub(crate) type PreparingElasticRenderer = ElasticRenderer<Preparing>;
+
 struct BufferedSourceWindow {
     samples: PcmBuf,
     range: SourceRange,
@@ -158,28 +199,17 @@ struct PendingSourceRead {
     request: SourceRangeRequest,
 }
 
-pub(crate) struct ElasticRenderer {
+pub(crate) struct ElasticRenderer<State> {
+    state: State,
     sample_rate: NonZeroU32,
-    cursor: Option<SourceCursor>,
-    request: Option<SourceRangeRequest>,
-    direction: Option<PlaybackDirection>,
-    pending_source_read: Option<PendingSourceRead>,
-    preparation: Option<ElasticPreparation>,
-    preparation_extension: Option<SourceRange>,
-    preparation_request: Option<SourceRange>,
-    preparation_window: Option<SourceRange>,
-    source_window: Option<SourceRange>,
     discarded: PcmBuf,
     fetch: PcmBuf,
     history: PcmBuf,
     output: PcmBuf,
     source: PcmBuf,
-    backend: SignalsmithElastic,
+    backend: SignalsmithBackend<ElasticConfig>,
     ready_windows: SmallVec<[BufferedSourceWindow; READY_WINDOW_COUNT]>,
     window_buffers: SmallVec<[PcmBuf; READY_WINDOW_COUNT]>,
-    primed: bool,
-    request_id: u64,
-    revision: u64,
     source_frame_count: u64,
     source_window_frames: u64,
     max_fetch_frames: usize,
@@ -187,53 +217,47 @@ pub(crate) struct ElasticRenderer {
     max_warm_frames: usize,
 }
 
-impl ElasticRenderer {
+impl<State> ElasticRenderer<State> {
     const PREFETCH_BLOCKS: usize = 8;
+    const SOURCE_CAPACITY_MULTIPLIER: usize = 2;
     const SOURCE_WINDOW_BLOCKS: usize = 8;
+    const SUPPORTED_CHANNEL_COUNT: std::ops::RangeInclusive<usize> = 1..=2;
 
-    pub(super) fn decoded_frontier(&self) -> f64 {
-        self.source_window
-            .iter()
-            .map(|window| window.end().get())
-            .chain(
-                self.ready_windows
-                    .iter()
-                    .map(|window| window.range.end().get()),
-            )
-            .max()
-            .and_then(|frame| frame.to_f64())
-            .map_or(0.0, |frame| frame / f64::from(self.sample_rate.get()))
-    }
-
-    pub(super) fn ensure_window(
-        &mut self,
-        source: &mut Resource,
-        range: SourceRange,
-        direction: PlaybackDirection,
-    ) -> Result<(), ElasticRenderError> {
-        self.poll_source_read(source, direction)?;
-        if self
-            .source_window
-            .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
-        {
-            self.schedule_window(source, direction)?;
-            return Ok(());
+    fn map_state<Next>(self, map: impl FnOnce(State) -> Next) -> ElasticRenderer<Next> {
+        let Self {
+            state,
+            sample_rate,
+            discarded,
+            fetch,
+            history,
+            output,
+            source,
+            backend,
+            ready_windows,
+            window_buffers,
+            source_frame_count,
+            source_window_frames,
+            max_fetch_frames,
+            max_source_frames,
+            max_warm_frames,
+        } = self;
+        ElasticRenderer {
+            state: map(state),
+            sample_rate,
+            discarded,
+            fetch,
+            history,
+            output,
+            source,
+            backend,
+            ready_windows,
+            window_buffers,
+            source_frame_count,
+            source_window_frames,
+            max_fetch_frames,
+            max_source_frames,
+            max_warm_frames,
         }
-        if self
-            .ready_windows
-            .first()
-            .map(|window| window.range)
-            .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
-        {
-            let window = self.ready_windows.remove(0);
-            let old = replace(&mut self.fetch, window.samples);
-            self.window_buffers.push(old);
-            self.source_window = Some(window.range);
-            self.schedule_window(source, direction)?;
-            return Ok(());
-        }
-        self.schedule_window(source, direction)?;
-        Err(ElasticRenderError::SourceWindowDeadlineMissed)
     }
 
     pub(super) fn next_source_window(
@@ -269,13 +293,56 @@ impl ElasticRenderer {
         }
         SourceRange::try_from(start..end).map(Some)
     }
+}
+
+impl ElasticRenderer<Active> {
+    pub(super) fn decoded_frontier(&self) -> f64 {
+        std::iter::once(self.state.runtime.prepared.source_window.end().get())
+            .chain(
+                self.ready_windows
+                    .iter()
+                    .map(|window| window.range.end().get()),
+            )
+            .max()
+            .and_then(|frame| frame.to_f64())
+            .map_or(0.0, |frame| frame / f64::from(self.sample_rate.get()))
+    }
+
+    pub(super) fn ensure_window(
+        &mut self,
+        source: &mut Resource,
+        range: SourceRange,
+        direction: PlaybackDirection,
+    ) -> Result<(), ElasticRenderError> {
+        self.poll_source_read(source, direction)?;
+        let source_window = self.state.runtime.prepared.source_window;
+        if source_window.start() <= range.start() && range.end() <= source_window.end() {
+            self.schedule_window(source, direction)?;
+            return Ok(());
+        }
+        if self
+            .ready_windows
+            .first()
+            .map(|window| window.range)
+            .is_some_and(|window| window.start() <= range.start() && range.end() <= window.end())
+        {
+            let window = self.ready_windows.remove(0);
+            let old = replace(&mut self.fetch, window.samples);
+            self.window_buffers.push(old);
+            self.state.runtime.prepared.source_window = window.range;
+            self.schedule_window(source, direction)?;
+            return Ok(());
+        }
+        self.schedule_window(source, direction)?;
+        Err(ElasticRenderError::SourceWindowDeadlineMissed)
+    }
 
     pub(super) fn poll_source_read(
         &mut self,
         source: &mut Resource,
         direction: PlaybackDirection,
     ) -> Result<(), ElasticRenderError> {
-        let Some(pending) = self.pending_source_read.as_mut() else {
+        let Some(pending) = self.state.runtime.pending_source_read.as_mut() else {
             return Ok(());
         };
         let range = pending.request.range();
@@ -288,6 +355,8 @@ impl ElasticRenderer {
             Ok(SourceRangeReadOutcome::Pending) => Ok(()),
             Ok(SourceRangeReadOutcome::Ready { .. }) => {
                 let pending = self
+                    .state
+                    .runtime
                     .pending_source_read
                     .take()
                     .ok_or(ElasticRenderError::SourceUnavailable)?;
@@ -303,8 +372,9 @@ impl ElasticRenderer {
             }
         }
     }
-
-    pub(crate) fn prepare(
+}
+impl ElasticRenderer<()> {
+    fn allocate(
         spec_sample_rate: NonZeroU32,
         channels: usize,
         source_frame_count: u64,
@@ -317,7 +387,7 @@ impl ElasticRenderer {
         let max_output_frames = usize::try_from(shape.max_block_frames.get())
             .map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let prepared_source_limit = max_output_frames
-            .checked_mul(2)
+            .checked_mul(Self::SOURCE_CAPACITY_MULTIPLIER)
             .ok_or(ElasticPrepareError::FrameOverflow)?;
         let config = ElasticConfig::new(
             shape.sample_rate.get(),
@@ -325,10 +395,10 @@ impl ElasticRenderer {
             prepared_source_limit,
             max_output_frames,
         )?;
-        let backend = SignalsmithElastic::prepare(config)?;
+        let backend = SignalsmithBackend::prepare(config)?;
         let capabilities = backend.capabilities();
         let rate = capabilities.rate_envelope().max_source_frames_per_output();
-        if !(1..=2).contains(&channels) {
+        if !Self::SUPPORTED_CHANNEL_COUNT.contains(&channels) {
             return Err(ElasticPrepareError::UnsupportedChannelLayout);
         }
         let max_source_frames = scaled_frames(max_output_frames, rate)?
@@ -357,6 +427,7 @@ impl ElasticRenderer {
             .collect::<Result<SmallVec<_>, _>>()?;
 
         Ok(Self {
+            state: (),
             backend,
             max_warm_frames,
             max_source_frames,
@@ -365,18 +436,6 @@ impl ElasticRenderer {
             source_window_frames,
             window_buffers,
             sample_rate: shape.sample_rate,
-            request_id: 1,
-            revision: 0,
-            request: None,
-            cursor: None,
-            direction: None,
-            pending_source_read: None,
-            preparation: None,
-            preparation_extension: None,
-            preparation_request: None,
-            preparation_window: None,
-            primed: false,
-            source_window: None,
             ready_windows: SmallVec::new(),
             fetch: prepared_buffer(pool, fetch_samples)?,
             history: prepared_buffer(pool, sample_count(latency.source_frames(), channels)?)?,
@@ -385,9 +444,10 @@ impl ElasticRenderer {
             discarded: prepared_buffer(pool, sample_count(latency.output_frames(), channels)?)?,
         })
     }
-
+}
+impl ElasticRenderer<Active> {
     fn release_pending_source_read(&mut self) {
-        if let Some(pending) = self.pending_source_read.take() {
+        if let Some(pending) = self.state.runtime.pending_source_read.take() {
             self.window_buffers.push(pending.samples);
         }
     }
@@ -400,15 +460,15 @@ impl ElasticRenderer {
         if self.ready_windows.len() >= READY_WINDOW_COUNT {
             return Ok(());
         }
-        if self.pending_source_read.is_some() || self.window_buffers.is_empty() {
+        if self.state.runtime.pending_source_read.is_some() || self.window_buffers.is_empty() {
             return Ok(());
         }
         let current = self
             .ready_windows
             .last()
-            .map(|window| window.range)
-            .or(self.source_window)
-            .ok_or(ElasticRenderError::FetchWindowMismatch)?;
+            .map_or(self.state.runtime.prepared.source_window, |window| {
+                window.range
+            });
         let Some(request_range) = self.next_source_window(current, direction)? else {
             return Ok(());
         };
@@ -417,7 +477,7 @@ impl ElasticRenderer {
             .window_buffers
             .pop()
             .ok_or(ElasticRenderError::SourceUnavailable)?;
-        self.pending_source_read = Some(PendingSourceRead { samples, request });
+        self.state.runtime.pending_source_read = Some(PendingSourceRead { samples, request });
         Ok(())
     }
 
@@ -430,12 +490,13 @@ impl ElasticRenderer {
         let frontier = self
             .ready_windows
             .last()
-            .map(|window| window.range)
-            .or(self.source_window);
-        let advances = frontier.is_none_or(|current| match direction {
-            PlaybackDirection::Forward => range.end() > current.end(),
-            PlaybackDirection::Reverse => range.start() < current.start(),
-        });
+            .map_or(self.state.runtime.prepared.source_window, |window| {
+                window.range
+            });
+        let advances = match direction {
+            PlaybackDirection::Forward => range.end() > frontier.end(),
+            PlaybackDirection::Reverse => range.start() < frontier.start(),
+        };
         if !advances || self.ready_windows.len() >= READY_WINDOW_COUNT {
             self.window_buffers.push(samples);
             return Err(ElasticRenderError::SourceReadFailed);

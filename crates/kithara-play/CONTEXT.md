@@ -251,7 +251,9 @@ discards its declared output latency before becoming audible. The resulting
 presentation cursor is therefore latency-compensated per track, while every
 track continues to receive the same immutable session context and revision.
 The browser path retains the same player API but rejects a current bound track
-with `ElasticBackendUnavailable` until a browser elastic backend exists.
+with `ElasticBackendUnavailable` until a browser elastic backend exists. Its
+renderer capability type is uninhabited, so browser code cannot construct a
+fake ready or active renderer.
 
 `SessionTransportSnapshot` is published as one render-observed value by the
 same adapter node. It never combines a control-side tempo or revision with an
@@ -281,8 +283,10 @@ The playlist carries an optional immutable `TrackBinding` beside its resource.
 For a bound item, `PlayerImpl` transfers the original `Resource` into off-callback
 elastic preparation. `PreparingElasticRenderer` polls bounded ranges directly
 from that resource and can become `PreparedElasticRenderer` only through the
-ready outcome. The same resource and prepared renderer then move together into
-the queued entry and, on activation, the `PlayerResource::Bound` variant. No
+ready outcome. Activation consumes that ready state and stores only
+`ElasticRenderer<Active>` in `PlayerResource::Bound`; release consumes the
+active state and restores `ElasticRenderer<Ready>` to the queued item. The same
+resource and renderer move together through every transition. No
 reopen recipe, second decoder, or isolated event scope exists. Custom readers
 either implement the canonical bounded-read capability or fail with its typed
 unsupported error.

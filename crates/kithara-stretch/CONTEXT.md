@@ -24,9 +24,11 @@ in `kithara-audio`. The audio graph passes its existing `PcmPool` through
 `kithara-stretch` depends downward on `kithara-bufpool` for backend scratch
 storage and on `kithara-workspace-hack` for native workspace unification.
 
-The crate also owns the transport-facing numeric elastic DSP implementation.
-`SignalsmithElastic` processes one exact source-frame span into one exact
-output span, while `ElasticCapabilities` declares the supported rate envelope,
+The crate also owns the transport-facing numeric elastic DSP contract. The
+existing `SignalsmithBackend` family processes both streaming chunks and exact
+source/output spans. `ElasticConfig` is the type parameter that selects the
+validated exact-span mode; the private streaming mode implements
+`StretchBackend`. `ElasticCapabilities` declares the supported rate envelope,
 algorithmic latency, channel/sample-rate identity, prepared block limits, and
 whether caller-ordered reverse input is supported.
 `ElasticRequest` contains only frame counts; session beats, track bindings,
@@ -34,9 +36,11 @@ phase correction, source-window policy, and graph scheduling remain in
 `kithara-play`.
 
 The exact-span path currently has one adapter, so callers use the concrete
-prepared `SignalsmithElastic` instead of a single-implementation trait object.
-Backend capability selection remains above this implementation; introduce an
-interface at this seam only when a second exact-span adapter exists.
+`SignalsmithBackend<ElasticConfig>` instead of a single-implementation trait
+object. Both modes own the same concrete engine family; there is no second
+Signalsmith wrapper or runtime unsupported branch. Backend capability selection
+remains above this implementation; introduce an interface at this seam only
+when a second exact-span adapter exists.
 
 ## Backend Contract
 
@@ -63,7 +67,8 @@ swap. A spec change is handled by the caller rebuilding the backend with the
 new scalar sample rate and channel count; the backend trait intentionally does
 not depend on `kithara-decode::PcmSpec`.
 
-`SignalsmithElastic` is prepared for fixed maximum source and output blocks.
+`SignalsmithBackend<ElasticConfig>` is prepared for fixed maximum source and
+output blocks.
 Every numeric request is checked against those limits and the declared rate
 envelope before processing. `prime` resets the algorithm, consumes the required
 warm-up span, and discards the reported output latency so the caller can align

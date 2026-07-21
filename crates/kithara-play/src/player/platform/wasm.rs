@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use kithara_platform::sync::Arc;
 
 use super::{
@@ -13,11 +15,37 @@ use super::{
 use crate::{
     api::{SessionTransportSnapshot, Tempo, TrackBinding},
     error::PlayError,
-    player::{node::StreamShape, track::ReleasedPlayerResource},
+    player::{
+        node::StreamShape,
+        track::{PlayerResource, ReadOutcome, ReleasedPlayerResource},
+    },
     resource::Resource,
+    session::render::RenderContext,
 };
 
+pub(crate) enum ElasticRendererUnavailable {}
+pub(crate) type PreparedElasticRenderer = ElasticRendererUnavailable;
+pub(crate) type ActiveElasticRenderer = ElasticRendererUnavailable;
+
 pub(crate) enum PreparedBindingResource {}
+
+impl ElasticRendererUnavailable {
+    pub(in crate::player) fn decoded_frontier(&self) -> f64 {
+        match *self {}
+    }
+}
+
+impl PlayerResource {
+    pub(crate) fn read_elastic(
+        &mut self,
+        _binding: &TrackBinding,
+        _context: &RenderContext,
+        _range: Range<usize>,
+        _output: &mut [&mut [f32]],
+    ) -> ReadOutcome {
+        ReadOutcome::Failed
+    }
+}
 
 impl PlayerImpl {
     /// Rejects session-bound elastic insertion because the browser backend

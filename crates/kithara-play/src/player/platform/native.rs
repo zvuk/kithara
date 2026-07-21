@@ -1,6 +1,8 @@
+use std::ops::Range;
+
 use kithara_audio::ServiceClass;
-use kithara_platform::sync::Arc;
-use kithara_stretch::{ElasticError, ElasticRateEnvelope, SignalsmithElastic};
+use kithara_platform::{maybe_send::WasmSend, sync::Arc};
+use kithara_stretch::{ElasticConfig, ElasticError, ElasticRateEnvelope, SignalsmithBackend};
 
 use super::{
     super::{
@@ -18,7 +20,8 @@ use crate::{
     player::{
         node::StreamShape,
         track::{
-            ElasticPlanError, ElasticPrepareError, PlayerResource, PreparedElasticRenderer,
+            Active, BoundResource, ElasticPlanError, ElasticPrepareError, ElasticRenderOutcome,
+            ElasticRenderer, PlayerResource, PlayerResourceKind, ReadOutcome, Ready,
             ReleasedPlayerResource, plan_elastic_segments,
         },
     },
@@ -26,9 +29,52 @@ use crate::{
     session::render::{RenderContext, RenderFrame, SessionTransportCommit},
 };
 
+pub(crate) type PreparedElasticRenderer = ElasticRenderer<Ready>;
+pub(crate) type ActiveElasticRenderer = ElasticRenderer<Active>;
+
 pub(crate) struct PreparedBindingResource {
     pub(crate) stamp: PreparedBindingStamp,
     pub(crate) renderer: PreparedElasticRenderer,
+}
+
+impl PlayerResource {
+    pub(crate) fn new_bound(
+        resource: Resource,
+        src: Arc<str>,
+        renderer: PreparedElasticRenderer,
+    ) -> Self {
+        Self {
+            src,
+            kind: PlayerResourceKind::Bound(Box::new(BoundResource {
+                resource: WasmSend::new(resource),
+                renderer: renderer.activate(),
+            })),
+        }
+    }
+
+    pub(crate) fn read_elastic(
+        &mut self,
+        binding: &TrackBinding,
+        context: &RenderContext,
+        range: Range<usize>,
+        output: &mut [&mut [f32]],
+    ) -> ReadOutcome {
+        let requested_frames = range.len();
+        let PlayerResourceKind::Bound(bound) = &mut self.kind else {
+            return ReadOutcome::Failed;
+        };
+        let outcome =
+            bound
+                .renderer
+                .render(bound.resource.get_mut(), binding, context, range, output);
+        match outcome {
+            Ok(ElasticRenderOutcome::Ready { frames }) if frames == requested_frames => {
+                ReadOutcome::Full { frames }
+            }
+            Ok(ElasticRenderOutcome::Eof) => ReadOutcome::Eof,
+            Ok(ElasticRenderOutcome::Ready { .. }) | Err(_) => ReadOutcome::Failed,
+        }
+    }
 }
 
 impl PlayerImpl {
@@ -101,7 +147,7 @@ fn validate_tempo_change(
     shape: StreamShape,
     available: f64,
 ) -> Result<(), PlayError> {
-    let envelope = SignalsmithElastic::rate_envelope();
+    let envelope = SignalsmithBackend::<ElasticConfig>::rate_envelope();
     let old_context = tempo_context(
         snapshot.position(),
         snapshot.tempo(),
@@ -141,8 +187,8 @@ fn tempo_context(
     shape: StreamShape,
 ) -> Result<RenderContext, PlayError> {
     let output_frames = i64::from(shape.max_block_frames.get());
-    let beat_span = f64::from(shape.max_block_frames.get()) * tempo.beats_per_minute()
-        / (f64::from(shape.sample_rate.get()) * 60.0);
+    let beat_span = f64::from(shape.max_block_frames.get()) * tempo.beats_per_second()
+        / f64::from(shape.sample_rate.get());
     let end = SessionBeat::new(start.get() + beat_span).map_err(|error| {
         PlayError::ElasticPreparation {
             reason: error.to_string(),
@@ -285,7 +331,7 @@ pub(crate) fn prepare_bound_load(
 fn map_successor_retarget_error(error: ElasticPrepareError) -> PlayError {
     match error {
         ElasticPrepareError::Backend(ElasticError::InvalidRate(rate)) => {
-            let envelope = SignalsmithElastic::rate_envelope();
+            let envelope = SignalsmithBackend::<ElasticConfig>::rate_envelope();
             PlayError::SessionTempoUnsupported {
                 rate,
                 minimum: envelope.min_source_frames_per_output(),
@@ -329,6 +375,15 @@ mod tests {
 
     use super::*;
     use crate::api::PlaybackDirection;
+
+    #[kithara::test]
+    fn bound_resource_type_requires_an_active_renderer() {
+        fn renderer(bound: &BoundResource) -> &ActiveElasticRenderer {
+            &bound.renderer
+        }
+
+        let _: fn(&BoundResource) -> &ActiveElasticRenderer = renderer;
+    }
 
     fn binding() -> TrackBinding {
         let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");

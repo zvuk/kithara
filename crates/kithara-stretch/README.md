@@ -14,9 +14,9 @@
 
 Pure time-stretch DSP contracts and backend adapters for Kithara.
 
-This crate owns the streaming `StretchBackend` contract, the exact-span
-`SignalsmithElastic` implementation, backend selection, factories, and native
-C++ adapters. Elastic rendering exposes a numeric rate envelope and
+This crate owns the streaming `StretchBackend` contract, the shared
+`SignalsmithBackend` family for streaming and exact-span processing, backend
+selection, factories, and native C++ adapters. Elastic rendering exposes a numeric rate envelope and
 deterministic algorithmic latency; session-grid and source-window policy stay
 in `kithara-play`. Backend features depend downward on `kithara-bufpool` for
 scratch storage, and native builds include `kithara-workspace-hack`; audio

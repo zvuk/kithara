@@ -18,10 +18,10 @@ mod factory;
 pub use factory::build_backend;
 
 mod backends;
+#[cfg(feature = "stretch-signalsmith")]
+pub use backends::SignalsmithBackend;
 
 mod elastic;
-#[cfg(feature = "stretch-signalsmith")]
-pub use elastic::SignalsmithElastic;
 pub use elastic::{
     ElasticCapabilities, ElasticConfig, ElasticError, ElasticLatency, ElasticRateEnvelope,
     ElasticRequest,

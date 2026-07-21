@@ -4,12 +4,14 @@ use num_traits::ToPrimitive;
 use smallvec::SmallVec;
 
 use super::{
-    ElasticCopyError, ElasticPlanError, ElasticRenderError, ElasticRenderOutcome,
+    Active, ElasticCopyError, ElasticPlanError, ElasticRenderError, ElasticRenderOutcome,
     ElasticRenderSegment, ElasticRenderer, ElasticRequest, IntegerSegment, PlaybackDirection,
     RenderContext, SourceCursor, SourceRange, TrackBinding, plan_elastic_segments, quantize_source,
     sample_count,
 };
 use crate::resource::Resource;
+
+const CONTINUITY_PAIR_SIZE: usize = 2;
 
 pub(super) struct SourceCopy<'a> {
     pub(super) fetch: &'a [f32],
@@ -57,7 +59,7 @@ impl PhasePlan {
     }
 }
 
-impl ElasticRenderer {
+impl ElasticRenderer<Active> {
     fn integer_segments(
         &self,
         planned: &[ElasticRenderSegment],
@@ -80,7 +82,7 @@ impl ElasticRenderer {
         let envelope = capabilities.rate_envelope();
         quantize_segments(
             &continuous,
-            self.cursor,
+            Some(self.state.runtime.prepared.cursor),
             capabilities.max_output_frames(),
             envelope.min_source_frames_per_output(),
             envelope.max_source_frames_per_output(),
@@ -96,20 +98,17 @@ impl ElasticRenderer {
         output_range: Range<usize>,
         output: &mut [&mut [f32]],
     ) -> Result<ElasticRenderOutcome, ElasticRenderError> {
-        if !self.primed {
-            return Err(ElasticRenderError::NotPrepared);
-        }
-        if self.direction != Some(binding.direction()) {
+        if self.state.runtime.prepared.direction != binding.direction() {
             return Err(ElasticRenderError::DirectionMismatch);
         }
-        if output.len() != 2 {
+        if output.len() != self.backend.capabilities().channels() {
             return Err(ElasticRenderError::OutputChannelMismatch);
         }
         let commit = context
             .transport_commit()
             .ok_or(ElasticRenderError::TransportCommitUnavailable)?;
         let revision = commit.revision();
-        if revision < self.revision {
+        if revision < self.state.runtime.prepared.revision {
             return Err(ElasticRenderError::RevisionMismatch);
         }
         let envelope = self.backend.capabilities().rate_envelope();
@@ -119,12 +118,12 @@ impl ElasticRenderer {
             binding,
             context,
             output_range,
-            self.request_id,
+            self.state.runtime.prepared.request_id,
             revision,
             envelope,
         ) {
             Ok(planned) => planned,
-            Err(ElasticPlanError::OutsideMarkerDomain { .. }) if self.cursor.is_some() => {
+            Err(ElasticPlanError::OutsideMarkerDomain { .. }) => {
                 return Ok(ElasticRenderOutcome::Eof);
             }
             Err(error) => return Err(error.into()),
@@ -168,9 +167,7 @@ impl ElasticRenderer {
         }
         let fetch_range = SourceRange::try_from(source_start..source_end)?;
         self.ensure_window(source, fetch_range, direction)?;
-        let source_window = self
-            .source_window
-            .ok_or(ElasticRenderError::FetchWindowMismatch)?;
+        let source_window = self.state.runtime.prepared.source_window;
         let fetch_frames =
             usize::try_from(source_window.len()).map_err(|_| ElasticRenderError::FrameOverflow)?;
         if fetch_frames > self.max_fetch_frames {
@@ -182,9 +179,9 @@ impl ElasticRenderer {
             self.render_segment(*segment, direction, source_window, fetch_samples, output)?;
         }
 
-        self.cursor = Some(staged_cursor);
-        self.revision = revision;
-        self.request_id = planned
+        self.state.runtime.prepared.cursor = staged_cursor;
+        self.state.runtime.prepared.revision = revision;
+        self.state.runtime.prepared.request_id = planned
             .last()
             .ok_or(ElasticRenderError::FrameOverflow)?
             .request
@@ -305,7 +302,7 @@ fn quantize_segments(
 }
 
 fn validate_continuity(segments: &[ContinuousSegment]) -> Result<(), ElasticRenderError> {
-    if let Some(pair) = segments.windows(2).find(|pair| {
+    if let Some(pair) = segments.windows(CONTINUITY_PAIR_SIZE).find(|pair| {
         (pair[0].source_end - pair[1].source_start).abs() > PhasePlan::CONTINUITY_EPSILON
     }) {
         return Err(ElasticRenderError::DiscontinuousSource {

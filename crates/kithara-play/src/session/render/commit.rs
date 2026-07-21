@@ -145,8 +145,7 @@ impl TransportAnchor {
             .and_then(|value| value.to_f64())
             .ok_or(TransportProcessError::InvalidBeatRange)?;
         let beats = self.beat.get()
-            + frames * self.commit.tempo().beats_per_minute()
-                / (f64::from(self.sample_rate.get()) * 60.0);
+            + frames * self.commit.tempo().beats_per_second() / f64::from(self.sample_rate.get());
         SessionBeat::new(beats).map_err(|_| TransportProcessError::InvalidBeatRange)
     }
 }
@@ -154,7 +153,6 @@ impl TransportAnchor {
 #[derive(Clone, Copy, Debug)]
 struct RenderBoundary {
     frame: RenderFrame,
-    beat: SessionBeat,
 }
 
 #[derive(Debug, Default)]
@@ -385,9 +383,9 @@ impl TransportCommitState {
         session_beats: Option<&Range<SessionBeat>>,
         current: Option<RenderBoundary>,
     ) -> Result<Option<RenderBoundary>, TransportProcessError> {
-        let Some(beats) = session_beats else {
+        if session_beats.is_none() {
             return Ok(current);
-        };
+        }
         let frames =
             i64::try_from(info.frames).map_err(|_| TransportProcessError::InvalidBeatRange)?;
         let frame = info
@@ -396,7 +394,6 @@ impl TransportCommitState {
             .checked_add(frames)
             .ok_or(TransportProcessError::InvalidBeatRange)?;
         Ok(Some(RenderBoundary {
-            beat: beats.end,
             frame: RenderFrame::new(frame),
         }))
     }
@@ -479,10 +476,7 @@ impl TransportCommitState {
 
     fn restart(&mut self) {
         self.reject_pending();
-        self.reanchor_beat = self
-            .boundary
-            .map(|boundary| boundary.beat)
-            .or_else(|| self.snapshot.map(SessionTransportSnapshot::position));
+        self.reanchor_beat = self.snapshot.map(SessionTransportSnapshot::position);
         self.anchor = None;
         self.boundary = None;
     }
