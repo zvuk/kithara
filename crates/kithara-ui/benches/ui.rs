@@ -461,6 +461,7 @@ fn button(id: &str, endpoint: &str) -> ControlNode {
         label: "PLAY".to_owned(),
         active_label: Some("PAUSE".to_owned()),
         style: ButtonStyle::default(),
+        icon: None,
     }
 }
 
@@ -473,6 +474,7 @@ fn wave(id: &str, endpoint: &str) -> ControlNode {
         adaptive: AdaptivePolicy::default(),
         style: WaveStyle::default(),
         badge: None,
+        zoom: None,
     }
 }
 
@@ -519,6 +521,8 @@ fn waveform_value(waveform: &[WaveBucket]) -> ReadValue<'_> {
         beats: &[],
         downbeats: &[],
         bpm: None,
+        r#loop: None,
+        cues: &[],
     })
 }
 
