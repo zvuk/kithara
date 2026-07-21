@@ -282,7 +282,7 @@ async fn read_outcome_partial_then_eof() {
                 assert!(frames > 0);
                 saw_partial = true;
             }
-            TrackReadOutcome::Eof { .. } => {
+            TrackReadOutcome::Eof => {
                 if saw_partial {
                     saw_eof_after_partial = true;
                     break;
@@ -747,5 +747,5 @@ async fn read_outcome_eof_when_track_finished() {
         &mut notification_tx,
     );
 
-    assert!(matches!(outcome, TrackReadOutcome::Eof { .. }));
+    assert!(matches!(outcome, TrackReadOutcome::Eof));
 }

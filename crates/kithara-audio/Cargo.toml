@@ -98,7 +98,6 @@ delegate = { workspace = true }
 derive_more = { workspace = true }
 fast-interleave = { workspace = true }
 fieldwork = { workspace = true }
-hotpath = { workspace = true, optional = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 realfft = { workspace = true, optional = true }
@@ -110,6 +109,10 @@ tracing = { workspace = true }
 unimock = { workspace = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
+hotpath = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }

@@ -1,0 +1,36 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-readouts",
+    root: Column(
+        gap: Some(8.0),
+        children: [
+            Text(id: "title", style: Section, read: Model(id: "gallery.label.readouts")),
+            Row(
+                gap: Some(18.0),
+                children: [
+                    Readout(
+                        id: "bpm",
+                        size: (w: Fixed(64.0), h: Fixed(26.0)),
+                        label: Some("BPM"),
+                        tone: Accent,
+                        read: Model(id: "mock.bpm"),
+                    ),
+                    Readout(
+                        id: "key",
+                        size: (w: Fixed(46.0), h: Fixed(26.0)),
+                        label: Some("KEY"),
+                        read: Model(id: "mock.key"),
+                    ),
+                    Readout(
+                        id: "remain",
+                        size: (w: Fixed(72.0), h: Fixed(26.0)),
+                        label: Some("REMAIN"),
+                        framed: true,
+                        read: Model(id: "mock.remain"),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

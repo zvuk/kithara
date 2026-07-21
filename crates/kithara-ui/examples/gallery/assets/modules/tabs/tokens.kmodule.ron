@@ -1,0 +1,40 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-tokens-tab",
+    root: Column(
+        gap: Some(14.0),
+        pad: Some(24.0),
+        children: [
+            Text(id: "heading", style: Section, label: "12A · ТОКЕНЫ · ЦВЕТ", size: (w: Fill, h: Fixed(20.0))),
+            Row(gap: Some(20.0), children: [
+                Swatch(id: "bg", role: Bg, label: "BG"),
+                Swatch(id: "deep", role: BgDeep, label: "DEEP"),
+                Swatch(id: "panel", role: BgPanel, label: "PANEL"),
+                Swatch(id: "panel-2", role: BgFooter, label: "PANEL-2"),
+                Swatch(id: "inset", role: BgInset, label: "INSET"),
+            ]),
+            Row(gap: Some(20.0), children: [
+                Swatch(id: "select", role: BgSelect, label: "SELECT"),
+                Swatch(id: "line", role: Line, label: "LINE"),
+                Swatch(id: "line-dim", role: LineInner, label: "LINE-DIM"),
+                Swatch(id: "text", role: Text, label: "TEXT"),
+                Swatch(id: "dim", role: TextDim, label: "DIM"),
+            ]),
+            Row(gap: Some(20.0), children: [
+                Swatch(id: "muted", role: Muted, label: "MUTED"),
+                Swatch(id: "gold", role: Accent, label: "GOLD · ACTIVE"),
+                Swatch(id: "gold-hi", role: AccentStrong, label: "GOLD-HI"),
+                Swatch(id: "wave-low", role: WaveLow, label: "WAVE LOW"),
+                Swatch(id: "wave-mid", role: WaveMid, label: "WAVE MID"),
+            ]),
+            Row(gap: Some(20.0), children: [
+                Swatch(id: "wave-high", role: WaveHigh, label: "WAVE HIGH · CUE"),
+                Swatch(id: "ok", role: Success, label: "OK"),
+                Swatch(id: "warn", role: Warning, label: "WARN"),
+                Swatch(id: "alert", role: Danger, label: "ALERT · REC"),
+                Spacer(id: "last-empty", size: (w: Fill, h: Fixed(78.0))),
+            ]),
+        ],
+    ),
+)

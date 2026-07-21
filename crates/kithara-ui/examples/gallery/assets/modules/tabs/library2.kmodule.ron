@@ -1,0 +1,39 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-library2-tab",
+    chrome: Plain,
+    root: Row(
+        gap: Some(1.0),
+        children: [
+            Tree(
+                id: "browser",
+                size: (w: Fixed(232.0), h: Fill),
+                read: Model(id: "library.tree"),
+                query: Model(id: "library.query"),
+                adaptive: (priority: Required),
+            ),
+            Column(
+                size: (w: Fill, h: Fill),
+                children: [
+                    ContextBar(
+                        id: "context",
+                        size: (w: Fill, h: Fixed(26.0)),
+                        read: Model(id: "library.breadcrumb"),
+                        write: Model(id: "library.scope"),
+                        scope_items: ["ЗВУК", "ЛОКАЛЬНО"],
+                        scope: Model(id: "library.scope"),
+                        adaptive: (priority: Required),
+                    ),
+                    TrackList(
+                        id: "table",
+                        size: (w: Fill, h: Fill),
+                        read: Model(id: "library.visible_tracks"),
+                        columns: [Index, Title, Artist, Bpm, Key, Time],
+                        adaptive: (priority: Required),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

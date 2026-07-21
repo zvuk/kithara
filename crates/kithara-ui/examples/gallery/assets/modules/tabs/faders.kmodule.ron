@@ -1,0 +1,48 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-faders-tab",
+    root: Column(
+        gap: Some(18.0),
+        pad: Some(14.0),
+        children: [
+            Text(id: "text-title", style: Section, read: Model(id: "gallery.label.text")),
+            Text(
+                id: "track-title",
+                style: TrackTitle,
+                read: Model(id: "mock.track.title"),
+            ),
+            Text(id: "artist", read: Model(id: "mock.track.artist")),
+            Text(id: "fader-title", style: Section, read: Model(id: "gallery.label.faders")),
+            Fader(
+                id: "default",
+                size: (w: Fixed(220.0), h: Fixed(34.0)),
+                read: Model(id: "mock.volume"),
+            ),
+            Fader(
+                id: "volume",
+                size: (w: Fixed(120.0), h: Fixed(34.0)),
+                style: Volume,
+                read: Model(id: "mock.volume"),
+            ),
+            Text(id: "vertical-title", style: Section, label: Some("VERTICAL FADER + VU")),
+            Row(
+                size: (w: Fill, h: Fixed(120.0)),
+                children: [
+                    VuVertical(
+                        id: "vertical",
+                        size: (w: Fixed(18.0), h: Fixed(120.0)),
+                        read: Model(id: "mock.levels"),
+                    ),
+                ],
+            ),
+            Text(id: "scalar-title", style: Section, read: Model(id: "gallery.label.scalar")),
+            Scalar(
+                id: "scalar",
+                size: (w: Fixed(64.0), h: Fixed(18.0)),
+                format: Percent,
+                read: Model(id: "mock.volume"),
+            ),
+        ],
+    ),
+)

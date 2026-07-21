@@ -1,0 +1,56 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "gallery-micro",
+    root: Split(
+        axis: Vertical,
+        children: [
+            (weight: 1.0, node: Module(
+                instance: "titlebar",
+                source: "modules/titlebar.kmodule.ron",
+                size: (w: Fill, h: Fixed(26.0)),
+            )),
+            (weight: 1.0, node: Split(
+                axis: Horizontal,
+                children: [
+                    (weight: 1.0, node: Module(
+                        instance: "gallery",
+                        source: "modules/nav.kmodule.ron",
+                        frame: (right: false),
+                        corners: false,
+                        size: (w: Fixed(198.0), h: Fill),
+                    )),
+                    (weight: 1.0, node: Split(
+                        axis: Vertical,
+                        children: [
+                            (weight: 1.0, node: Module(
+                                instance: "micro-4a",
+                                source: "modules/tabs/micro-4a.kmodule.ron",
+                                with: { "deck": "a" },
+                                size: (w: Fill, h: Fixed(132.0)),
+                            )),
+                            (weight: 1.0, node: Module(
+                                instance: "micro-4b",
+                                source: "modules/tabs/micro-4b.kmodule.ron",
+                                with: { "deck": "a" },
+                                size: (w: Fill, h: Fixed(132.0)),
+                            )),
+                            (weight: 1.0, node: Module(
+                                instance: "micro-4c",
+                                source: "modules/tabs/micro-4c.kmodule.ron",
+                                with: { "deck": "a" },
+                                size: (w: Fill, h: Fixed(132.0)),
+                            )),
+                            (weight: 1.0, node: Module(
+                                instance: "micro-4d",
+                                source: "modules/tabs/micro-4d.kmodule.ron",
+                                with: { "deck": "a" },
+                                size: (w: Fill, h: Fill),
+                            )),
+                        ],
+                    )),
+                ],
+            )),
+        ],
+    ),
+)
