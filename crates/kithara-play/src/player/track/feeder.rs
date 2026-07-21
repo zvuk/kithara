@@ -8,7 +8,7 @@ use tracing::warn;
 #[rustfmt::skip]
 use crate::resource::Resource;
 
-use crate::player::platform::ActiveElasticRenderer;
+use crate::player::platform::ActiveBoundReader;
 
 /// RT-safe resource whose storage is fixed by its playback capability.
 #[derive(fieldwork::Fieldwork)]
@@ -28,7 +28,7 @@ pub(in crate::player) enum PlayerResourceKind {
 
 pub(in crate::player) struct LinearResource {
     resource: WasmSend<Resource>,
-    channel_buffers: [PcmBuf; PlayerResource::STEREO_CHANNELS],
+    channel_buffers: [PcmBuf; PlayerResource::OUTPUT_CHANNELS],
     eof_seen: bool,
     failed: bool,
     write_len: usize,
@@ -36,7 +36,7 @@ pub(in crate::player) struct LinearResource {
 }
 
 pub(in crate::player) struct BoundResource {
-    pub(in crate::player) renderer: ActiveElasticRenderer,
+    pub(in crate::player) reader: ActiveBoundReader,
     pub(in crate::player) resource: WasmSend<Resource>,
 }
 
@@ -80,8 +80,8 @@ impl PlayerResource {
     /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
     const BUFFER_DURATION_DIVISOR: usize = 5;
 
-    /// Number of stereo output channels.
-    const STEREO_CHANNELS: usize = 2;
+    /// Fixed output channel count of the player node.
+    pub(in crate::player) const OUTPUT_CHANNELS: usize = 2;
 
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
@@ -92,7 +92,7 @@ impl PlayerResource {
         let spec = resource.spec();
         let channels = spec.channels as usize;
         let buffer_len = (spec.sample_rate.get() as usize / Self::BUFFER_DURATION_DIVISOR)
-            * channels.max(Self::STEREO_CHANNELS);
+            * channels.max(Self::OUTPUT_CHANNELS);
 
         let channel_buffers = std::array::from_fn(|_| {
             pool.get_with(|b: &mut Vec<f32>| {
@@ -125,7 +125,7 @@ impl PlayerResource {
             PlayerResourceKind::Linear(linear) => {
                 linear.resource.get().decoded_frontier().as_secs_f64()
             }
-            PlayerResourceKind::Bound(bound) => bound.renderer.decoded_frontier(),
+            PlayerResourceKind::Bound(bound) => bound.reader.decoded_frontier(),
         }
     }
 
@@ -228,7 +228,7 @@ impl LinearResource {
             let (left_buf, right_buf) = self.channel_buffers.split_at_mut(1);
             let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; PlayerResource::STEREO_CHANNELS] = [left, right];
+            let mut planar: [&mut [f32]; PlayerResource::OUTPUT_CHANNELS] = [left, right];
 
             let n = match self.resource.get_mut().read_planar(&mut planar) {
                 Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
@@ -267,7 +267,7 @@ impl LinearResource {
             let frames_to_write = frames_to_read.min(self.write_len);
             let tail_size = self.write_len - frames_to_write;
 
-            if output.len() >= PlayerResource::STEREO_CHANNELS {
+            if output.len() >= PlayerResource::OUTPUT_CHANNELS {
                 output[0][..frames_to_write]
                     .copy_from_slice(&self.channel_buffers[0][..frames_to_write]);
                 output[1][..frames_to_write]

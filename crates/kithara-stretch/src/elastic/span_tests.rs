@@ -1,18 +1,24 @@
 use kithara_test_utils::kithara;
 
 use crate::{
-    ElasticConfig, ElasticCursor, ElasticError, ElasticSpan, ElasticSpanPlan, SignalsmithBackend,
+    ElasticConfig, ElasticCursor, ElasticError, ElasticSpan, ElasticSpanConfig, ElasticSpanPlan,
+    SignalsmithBackend,
 };
 
 const CONTINUITY_EPSILON: f64 = 1.0e-6;
 const MAX_OUTPUT_FRAMES: usize = 480;
 
 fn capabilities() -> super::ElasticCapabilities {
-    let config =
-        ElasticConfig::new(44_100, 2, 960, MAX_OUTPUT_FRAMES).expect("static exact-span config");
+    let config = ElasticConfig::try_from((44_100, 2, 960, MAX_OUTPUT_FRAMES))
+        .expect("invariant: static exact-span config");
     SignalsmithBackend::prepare(config)
         .expect("signalsmith exact-span backend")
         .capabilities()
+}
+
+fn span_config() -> ElasticSpanConfig {
+    ElasticSpanConfig::try_from((CONTINUITY_EPSILON, 1.0, 1.0))
+        .expect("invariant: static span policy")
 }
 
 fn span(source_start: f64, source_end: f64, output_frames: usize) -> ElasticSpan {
@@ -23,11 +29,32 @@ fn plan(
     spans: &[ElasticSpan],
     cursor: Option<ElasticCursor>,
 ) -> Result<ElasticSpanPlan, ElasticError> {
-    ElasticSpanPlan::new(spans.iter().copied(), cursor, capabilities())
+    ElasticSpanPlan::new(spans.iter().copied(), cursor, capabilities(), span_config())
 }
 
 fn source_cursor(source: f64) -> ElasticCursor {
     ElasticCursor::try_from(source).expect("representable source cursor")
+}
+
+#[kithara::test]
+fn configured_phase_limit_rejects_a_larger_cursor_error() {
+    let config =
+        ElasticSpanConfig::try_from((1.0e-6, 0.25, 1.0)).expect("finite positive span policy");
+    let error = ElasticSpanPlan::new(
+        [span(0.5, 480.5, MAX_OUTPUT_FRAMES)],
+        Some(source_cursor(0.0)),
+        capabilities(),
+        config,
+    )
+    .expect_err("configured phase limit must be enforced");
+
+    assert_eq!(
+        error,
+        ElasticError::PhaseDiscontinuity {
+            error: 0.5,
+            limit: 0.25,
+        }
+    );
 }
 
 fn assert_close(actual: f64, expected: f64) {

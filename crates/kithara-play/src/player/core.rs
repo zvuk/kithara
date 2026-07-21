@@ -1,6 +1,6 @@
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
-use kithara_audio::{EngineLoad, StretchControls};
+use kithara_audio::{EngineLoad, StretchControls, elastic::ElasticReaderConfig};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_platform::{
@@ -38,6 +38,7 @@ pub(crate) struct PlayerCore {
     /// Engine drops last; its `Drop` shuts the audio worker down.
     pub(crate) engine: EngineImpl,
     pub(crate) gapless_mode: GaplessMode,
+    pub(crate) elastic: ElasticReaderConfig,
     /// Items drop before engine, while the audio worker is still alive.
     pub(crate) items: ItemQueue,
     /// Status kept explicit (not derived from phase): `set_status` emits
@@ -114,6 +115,7 @@ impl PlayerImpl {
             engine_load: Arc::new(EngineLoad::default()),
             params: PlayerParams::from(&config),
             timestretch: config.timestretch,
+            elastic: config.elastic,
             gapless_mode: config.gapless_mode,
             byte_pool: config.byte_pool,
             status: Mutex::default(),

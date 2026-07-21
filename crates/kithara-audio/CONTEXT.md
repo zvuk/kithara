@@ -216,6 +216,31 @@ existing trash ring before propagating an error. Natural EOF remains distinct
 from decoder failure. Readers without canonical decoded coordinates report the
 typed unsupported capability instead of fabricating a second signal path.
 
+## Elastic Reader
+
+With `stretch-signalsmith`, `elastic::ElasticReader<State>` is the canonical
+integration between bounded decoded PCM and exact-span time stretching. It is
+generic over the existing `PcmReader` contract: `Resource`, `Audio`, and test
+readers are not wrapped in a second source abstraction. The caller retains the
+reader owner and lends `&mut impl PcmReader` to preparation, relocation polling,
+and rendering.
+
+The typestates `Unprepared`, `Preparing`, `Ready`, and `Active` make buffer and
+DSP readiness a construction property. The reader owns the directional source
+cursor, the prepared Signalsmith backend, bounded range requests, relocation
+PCM, and a fixed-capacity bank of `PcmBuf` values acquired from the existing
+`PcmPool` before callback use. Steady-state render and relocation polling do not
+allocate, block, lock, or return buffers to the pool. `ElasticReaderConfig`
+owns source-window depth and span continuity policy; allocation derives source
+capacity from the backend rate envelope and the host's maximum output block.
+
+Session beats, `TrackBinding`, transport revisions, request identity, queue
+selection, and relocation commit boundaries stay above this crate in
+`kithara-play`. The reader accepts only transport-neutral `ElasticAnchor` and
+`ElasticSpan` values. It stages the numeric cursor and publishes it only after
+all exact backend requests succeed; a failed render leaves the previous cursor
+authoritative.
+
 ## Waveform
 
 Pure, synchronous DSP that turns decoded PCM into a `Waveform` for display. No

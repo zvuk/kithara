@@ -280,10 +280,11 @@ current bound track, including paused tracks. The checked session participant
 IDs are sorted independently before protocol dispatch. Tempo and session-seek transactions derive their
 participants from the same active physical-roster predicate: registered decks
 without a started engine and slot do not belong to the graph roster and do not
-enter the checked player-ID set. The preflight uses the renderer's
-`plan_elastic_segments` path for the old span through the future boundary and
-the first new-tempo span after it, so marker-local rate limits and the decoded
-source frontier are checked before any transport mutation.
+enter the checked player-ID set. The preflight uses the same
+`bound_plan::plan_elastic_segments` path as rendering for the old span through
+the future boundary and the first new-tempo span after it, so marker-local rate
+limits and the decoded source frontier are checked before any transport
+mutation.
 
 The guarded session command rechecks the observed revision, stream shape, and
 the active graph-owned player IDs before it queues the ordinary transport
@@ -307,14 +308,14 @@ leave a stale prepared relocation. Any failure cancels all matching attempts
 and leaves the previously observed transport authoritative. A successful apply
 publishes `TransportEvent::SeekCommitted` with the exact target and revision.
 
-Each prepared elastic renderer consumes its declared source history and
+Each prepared elastic reader consumes its declared source history and
 discards its declared output latency before becoming audible. The resulting
 presentation cursor is therefore latency-compensated per track, while every
 track continues to receive the same immutable session context and revision.
 The browser path retains the same player API but rejects a current bound track
 with `ElasticBackendUnavailable` until a browser elastic backend exists. Its
-renderer capability type is uninhabited, so browser code cannot construct a
-fake ready or active renderer.
+prepared-bound state is uninhabited, so browser code cannot construct a fake
+ready or active reader.
 
 `SessionTransportSnapshot` is published as one render-observed value by the
 same adapter node. It never combines a control-side tempo or revision with an
@@ -342,55 +343,60 @@ re-prepared. Unbound tracks update through the ordinary route-change path.
 
 The playlist carries an optional immutable `TrackBinding` beside its resource.
 For a bound item, `PlayerImpl` transfers the original `Resource` into off-callback
-elastic preparation. `PreparingElasticRenderer` polls bounded ranges directly
-from that resource and can become `PreparedElasticRenderer` only through the
-ready outcome. Activation consumes that ready state and stores only
-`ElasticRenderer<Active>` in `PlayerResource::Bound`; release consumes the
-active state and restores `ElasticRenderer<Ready>` to the queued item. The same
-resource and renderer move together through every transition. No
+elastic preparation. `kithara-audio::elastic::ElasticReader<Preparing>` polls
+bounded ranges through the resource's existing `PcmReader` implementation and
+can become `ElasticReader<Ready>` only through the ready outcome. Activation
+consumes that ready state and stores `ElasticReader<Active>` inside the
+player-owned `ActiveBoundReader`; release restores `ElasticReader<Ready>` to the
+queued item. The same resource and reader move together through every
+transition. No
 reopen recipe, second decoder, or isolated event scope exists. Custom readers
 either implement the canonical bounded-read capability or fail with its typed
 unsupported error.
 
 `PlayerImpl::insert_with_binding` owns this asynchronous preparation. Success
-means the queued item already has a fully primed renderer stamped with one
+means the queued item already has a fully primed reader stamped with one
 atomic `(transport revision, sample rate, maximum block size)` snapshot.
 Preparation failure leaves the playlist unchanged. Slot existence and command
 capacity are checked before activation; either rejection restores the dormant
-renderer, while activation failure restores the same complete queue entry. The
+reader, while activation failure restores the same complete queue entry. The
 playlist lock spans take through command publication, so insert, remove, and
 replacement linearize entirely before or after the load; rollback cannot target
 a shifted or replaced coordinate.
 
 `ItemQueue` also owns successor demand. A future bound entry keeps one binding,
-one prepared renderer, and its original resource; the binding session anchor is
+one prepared reader, and its original resource; the binding session anchor is
 its intended start coordinate. Initial preparation retains the maximum backend warm-up
 history together with the normal directional look-ahead. The exact-tempo range
 and only the additional envelope history are fetched as separate bounded demands
 into the same prepared PCM window. Before a tempo commit, the player validates
-every future bound renderer against the candidate tempo and current stream
+every future bound reader against the candidate tempo and current stream
 shape. When a later selection observes the committed revision, it re-primes
-that same dormant renderer from the retained PCM window and updates its stamp
+that same dormant reader from the retained PCM window and updates its stamp
 without reopening the resource or duplicating cached source audio. Replacement
 and removal discard the whole queue entry, so no stale successor demand survives
 either mutation.
 
-`ElasticRenderer` is the sole owner of the audible directional source cursor.
-For each render range it derives the desired source path from `TrackBinding` and
-the shared `RenderContext`, attaches the player-owned request/revision identity,
-and delegates only transport-neutral continuous-to-integer span planning to
-`kithara-stretch`. It then reads the resulting typed bounded source windows from
-the canonical `Resource`/`Audio` seek epoch and submits exact requests to the
-pitch-preserving backend. The backend declares its rate envelope and
-deterministic latency and is primed before activation. Decoder position and
-legacy pitch bend are not parallel phase authorities for a bound item.
+`player::track::bound_plan` maps `TrackBinding`, `SessionBeat`, and
+`RenderContext` into transport-neutral `ElasticAnchor` and `ElasticSpan`
+values. `ActiveBoundReader` decorates the audio reader only with player-owned
+request identity, `TransportRevision`, and the pending session relocation
+target/revision. It does not own PCM windows, a DSP backend, or another source
+cursor.
 
-The bound `PlayerResource` owns one `Resource` and one prepared renderer, while
+`kithara-audio::elastic::ElasticReader` is the sole owner of the audible
+directional source cursor, bounded source windows, and exact-span backend. It
+reads through the canonical `Resource`/`Audio` seek epoch using the existing
+`PcmReader` traits. The backend declares its rate envelope and deterministic
+latency and is primed before activation. Decoder position and legacy pitch bend
+are not parallel phase authorities for a bound item.
+
+The bound `PlayerResource` owns one `Resource` and one prepared reader, while
 the linear variant owns one `Resource` and its pooled planar scratch. These
 storage modes cannot coexist. Bound reads use the shared `AudioWorker`, PCM ring,
 seek epoch, trash ring, and existing `PcmPool` owned by `kithara-audio`;
 `kithara-play` adds no source thread, cache, port protocol, allocator, or player
-infrastructure. The renderer rotates a fixed preallocated `PcmBuf` bank.
+infrastructure. The audio reader rotates a fixed preallocated `PcmBuf` bank.
 Polling and deadline failure never allocate, block, or return a buffer to the
 pool on the audio callback.
 
@@ -398,9 +404,9 @@ Bound elastic rendering supports native forward playback and reverse playback
 for files and single-variant HLS. Activation requires a session-created node
 and its shared `RenderContext`; browser WASM returns a typed backend capability
 error. Every source request remains one bounded ascending `SourceRange`. A
-reverse renderer primes history and two successor windows
+reverse reader primes history and the configured number of successor windows
 before publication, consumes each window toward lower frames, and replenishes
-the same fixed-depth inline FIFO with earlier ascending ranges. A ready
+the same preallocated bounded queue with earlier ascending ranges. A ready
 successor never replaces the active PCM window before the render cursor crosses
 their overlap. Reaching source frame zero produces the defined end boundary and
 never wraps or replays stale PCM.
@@ -414,20 +420,21 @@ variant. Adaptive/multi-variant HLS is rejected with
 re-aiming across variant discontinuities has its own proven protocol contract.
 Other resources that do not declare reverse range access fail through the same
 typed capability gate. Ordinary track-local seek is rejected for a bound
-current item because moving the session-owned audible cursor and renderer state
-requires `SessionSeek` to prepare and commit all affected players together.
+current item because it would bypass the shared transport transaction;
+`SessionSeek` prepares and commits every affected reader together.
 
-Inter-block phase correction is bounded in the source-frame domain. An error of
-at most one source frame is corrected continuously at no more than one frame per
-maximum render block, scaled for sub-blocks and constrained by the backend rate
-envelope. The integer span always begins at the previous cursor, so correction
-cannot jump over source. A larger error requires prepared relocation; absence of
-rate-envelope headroom is a typed failure rather than silent drift. The numeric
-quantization and correction algorithm belongs to `kithara-stretch`; the player
-remains the canonical owner of the audible cursor and commits the staged cursor
-only after all planned segments render. It also remains the sole owner of the
-prepared relocation transaction when the numeric planner reports a phase
-discontinuity.
+Inter-block phase correction is bounded in the source-frame domain by
+`ElasticSpanConfig`, supplied through `PlayerConfig`'s existing
+`ElasticReaderConfig`. Its defaults accept and correct at most one source frame
+per maximum render block, scaled for sub-blocks and constrained by the backend
+rate envelope. The integer span always begins at the previous cursor, so
+correction cannot jump over source. A larger error requires prepared
+relocation; absence of rate-envelope headroom is a typed failure rather than
+silent drift. The numeric quantization algorithm belongs to `kithara-stretch`,
+and the audio reader commits its staged cursor only after all planned segments
+render. The player owns the session target/revision transaction and tells the
+reader to publish a prepared relocation only at the matching transport
+boundary.
 
 Ordinary bound preparation uses the transport commit already observed by the
 render graph. Before the session has any active commit, it may use the first

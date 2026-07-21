@@ -1,13 +1,15 @@
-use num_traits::ToPrimitive;
+use kithara_events::PlaybackDirection;
 
 use super::{
-    Active, BufferedSourceWindow, ElasticCursor, ElasticPreparation, ElasticPreparationPoll,
-    ElasticPrepareError, ElasticRenderer, PcmPool, PlaybackDirection, PreparationPhase,
-    PreparedRuntime, Preparing, READY_WINDOW_COUNT, Ready, RenderRuntime, SessionBeat, SourceCopy,
-    SourceRange, SourceRangeReadOutcome, SourceRangeRequest, StreamShape, Tempo, TrackBinding,
-    TransportRevision, sample_count,
+    super::{ElasticAnchor, ElasticReaderError},
+    Active, BufferedSourceWindow, ElasticPreparation, ElasticPreparationPoll, ElasticReader,
+    PreparationPhase, PreparedRuntime, Preparing, Ready, RenderRuntime, Unprepared,
+    rendering::SourceCopy,
+    sample_count,
 };
-use crate::resource::Resource;
+use crate::{PcmReader, SourceRange, SourceRangeReadOutcome, SourceRangeRequest};
+
+type ElasticPrepareError = ElasticReaderError;
 
 fn expand_preparation_history(
     max_warm_frames: usize,
@@ -44,45 +46,33 @@ fn expand_preparation_history(
     Ok(extension)
 }
 
-impl ElasticRenderer<Preparing> {
-    pub(crate) fn begin(
-        resource: &mut Resource,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
-        revision: TransportRevision,
-        shape: StreamShape,
-        pool: &PcmPool,
-    ) -> Result<Self, ElasticPrepareError> {
-        let spec = resource.spec();
-        let renderer = ElasticRenderer::<()>::allocate(
-            spec.sample_rate,
-            usize::from(spec.channels),
-            binding.map().source_frame_count(),
-            shape,
-            pool,
-        )?;
-        if binding.direction() == PlaybackDirection::Reverse
-            && !renderer.backend.capabilities().supports_reverse()
+impl ElasticReader<Unprepared> {
+    /// Starts bounded source preparation for a validated source anchor.
+    /// # Errors
+    /// Returns a typed source, range, direction, or preparation error.
+    pub fn begin<R>(
+        self,
+        source: &mut R,
+        anchor: ElasticAnchor,
+    ) -> Result<ElasticReader<Preparing>, ElasticPrepareError>
+    where
+        R: PcmReader + ?Sized,
+    {
+        if anchor.direction() == PlaybackDirection::Reverse
+            && !self.backend.capabilities().supports_reverse()
         {
             return Err(ElasticPrepareError::ReverseUnsupported);
         }
-        let mut preparation = renderer.plan_preparation(
-            binding,
-            anchor,
-            tempo,
-            ElasticRenderer::<()>::PREFETCH_BLOCKS,
-        )?;
+        let mut preparation = self.plan_preparation(anchor, self.config.prefetch_blocks())?;
         let range = preparation.fetch_range;
         let extension = expand_preparation_history(
-            renderer.max_warm_frames,
-            renderer.source_frame_count,
+            self.max_warm_frames,
+            self.source_frame_count,
             &mut preparation,
         )?;
-        let request = resource.request_source_range(range)?;
-        Ok(renderer.map_state(|()| Preparing {
+        let request = source.request_source_range(range)?;
+        Ok(self.map_state(|Unprepared| Preparing {
             preparation,
-            revision,
             phase: PreparationPhase::Priming {
                 request,
                 range,
@@ -90,17 +80,22 @@ impl ElasticRenderer<Preparing> {
             },
         }))
     }
+}
 
-    fn begin_preparation_window(
+impl ElasticReader<Preparing> {
+    fn begin_preparation_window<R>(
         &mut self,
-        resource: &mut Resource,
+        source: &mut R,
         current: SourceRange,
         runtime: PreparedRuntime,
-    ) -> Result<bool, ElasticPrepareError> {
+    ) -> Result<bool, ElasticPrepareError>
+    where
+        R: PcmReader + ?Sized,
+    {
         let Some(range) = self.next_source_window(current, runtime.direction)? else {
             return Ok(false);
         };
-        let request = resource.request_source_range(range)?;
+        let request = source.request_source_range(range)?;
         self.state.phase = PreparationPhase::Window {
             request,
             range,
@@ -110,35 +105,16 @@ impl ElasticRenderer<Preparing> {
     }
 }
 
-impl<State> ElasticRenderer<State> {
+impl<State> ElasticReader<State> {
     pub(super) fn plan_preparation(
         &self,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
+        anchor: ElasticAnchor,
         prefetch_blocks: usize,
     ) -> Result<ElasticPreparation, ElasticPrepareError> {
         let capabilities = self.backend.capabilities();
-        let anchor_continuous = binding
-            .source_frame_at(anchor)?
-            .ok_or(ElasticPrepareError::AnchorOutsideMarkerDomain)?
-            .get();
-        let source_cursor = ElasticCursor::try_from(anchor_continuous)?;
+        let source_cursor = anchor.cursor();
         let anchor_integer = source_cursor.integer();
-        let output_frames = capabilities.latency().output_frames();
-        let output_frames_f64 = output_frames
-            .to_f64()
-            .ok_or(ElasticPrepareError::FrameOverflow)?;
-        let beat_advance = output_frames_f64 * tempo.beats_per_second()
-            / f64::from(binding.map().host_sample_rate().get());
-        let horizon = SessionBeat::new(anchor.get() + beat_advance)
-            .map_err(|_| ElasticPrepareError::FrameOverflow)?;
-        let horizon_source = binding
-            .source_frame_at(horizon)?
-            .ok_or(ElasticPrepareError::AnchorOutsideMarkerDomain)?
-            .get();
-        let rate = (horizon_source - anchor_continuous).abs() / output_frames_f64;
-        let warmup = capabilities.warmup_request(rate)?;
+        let warmup = capabilities.warmup_request(anchor.source_frames_per_output())?;
         let before = capabilities
             .latency()
             .source_frames()
@@ -152,7 +128,7 @@ impl<State> ElasticRenderer<State> {
         let after = i64::try_from(after).map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let source_end = i64::try_from(self.source_frame_count)
             .map_err(|_| ElasticPrepareError::FrameOverflow)?;
-        let (start, end) = match binding.direction() {
+        let (start, end) = match anchor.direction() {
             PlaybackDirection::Forward => (
                 anchor_integer.saturating_sub(before).max(0),
                 anchor_integer
@@ -177,38 +153,44 @@ impl<State> ElasticRenderer<State> {
         Ok(ElasticPreparation {
             warmup,
             anchor: source_cursor,
-            direction: binding.direction(),
+            direction: anchor.direction(),
             fetch_range: range,
         })
     }
 }
 
-impl ElasticRenderer<Preparing> {
-    pub(crate) fn poll(
-        self,
-        resource: &mut Resource,
-    ) -> Result<ElasticPreparationPoll, ElasticPrepareError> {
+impl ElasticReader<Preparing> {
+    /// Polls bounded source preparation without blocking.
+    /// # Errors
+    /// Returns a typed source, range, or DSP preparation error.
+    pub fn poll<R>(self, source: &mut R) -> Result<ElasticPreparationPoll, ElasticPrepareError>
+    where
+        R: PcmReader + ?Sized,
+    {
         match self.state.phase {
             PreparationPhase::Priming {
                 request,
                 range,
                 extension,
-            } => self.poll_priming(resource, request, range, extension),
+            } => self.poll_priming(source, request, range, extension),
             PreparationPhase::Window {
                 request,
                 range,
                 runtime,
-            } => self.poll_preparation_window(resource, request, range, runtime),
+            } => self.poll_preparation_window(source, request, range, runtime),
         }
     }
 
-    fn poll_preparation_window(
+    fn poll_preparation_window<R>(
         mut self,
-        resource: &mut Resource,
+        source: &mut R,
         request: SourceRangeRequest,
         range: SourceRange,
         runtime: PreparedRuntime,
-    ) -> Result<ElasticPreparationPoll, ElasticPrepareError> {
+    ) -> Result<ElasticPreparationPoll, ElasticPrepareError>
+    where
+        R: PcmReader + ?Sized,
+    {
         let frames =
             usize::try_from(range.len()).map_err(|_| ElasticPrepareError::FrameOverflow)?;
         if frames > self.max_fetch_frames {
@@ -219,7 +201,7 @@ impl ElasticRenderer<Preparing> {
             .window_buffers
             .last_mut()
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
-        match resource.read_source_range(request, &mut buffer[..samples])? {
+        match source.read_source_range(request, &mut buffer[..samples])? {
             SourceRangeReadOutcome::Ready { .. } => {}
             SourceRangeReadOutcome::Pending => {
                 return Ok(ElasticPreparationPoll::Pending(self));
@@ -231,22 +213,25 @@ impl ElasticRenderer<Preparing> {
             .pop()
             .ok_or(ElasticPrepareError::SourceUnavailable)?;
         self.ready_windows
-            .push(BufferedSourceWindow { samples, range });
-        if self.ready_windows.len() < READY_WINDOW_COUNT
-            && self.begin_preparation_window(resource, range, runtime)?
+            .push_back(BufferedSourceWindow { samples, range });
+        if self.ready_windows.len() < self.config.ready_window_count()
+            && self.begin_preparation_window(source, range, runtime)?
         {
             return Ok(ElasticPreparationPoll::Pending(self));
         }
         Ok(self.ready(runtime))
     }
 
-    fn poll_priming(
+    fn poll_priming<R>(
         mut self,
-        resource: &mut Resource,
+        source: &mut R,
         request: SourceRangeRequest,
         range: SourceRange,
         extension: Option<SourceRange>,
-    ) -> Result<ElasticPreparationPoll, ElasticPrepareError> {
+    ) -> Result<ElasticPreparationPoll, ElasticPrepareError>
+    where
+        R: PcmReader + ?Sized,
+    {
         let preparation = self.state.preparation;
         let fetch_frames = usize::try_from(preparation.fetch_range.len())
             .map_err(|_| ElasticPrepareError::FrameOverflow)?;
@@ -268,7 +253,7 @@ impl ElasticRenderer<Preparing> {
         let request_sample_end = request_sample_start
             .checked_add(sample_count(request_frames, channels)?)
             .ok_or(ElasticPrepareError::FrameOverflow)?;
-        match resource.read_source_range(
+        match source.read_source_range(
             request,
             &mut self.fetch[request_sample_start..request_sample_end],
         )? {
@@ -279,7 +264,7 @@ impl ElasticRenderer<Preparing> {
             SourceRangeReadOutcome::Eof => return Err(ElasticPrepareError::SourceEnded),
         }
         if let Some(extension) = extension {
-            let request = resource.request_source_range(extension)?;
+            let request = source.request_source_range(extension)?;
             self.state.phase = PreparationPhase::Priming {
                 request,
                 range: extension,
@@ -292,11 +277,9 @@ impl ElasticRenderer<Preparing> {
             direction: preparation.direction,
             cursor: preparation.anchor,
             source_window: preparation.fetch_range,
-            revision: self.state.revision,
-            request_id: 1,
         };
         if preparation.direction == PlaybackDirection::Reverse
-            && self.begin_preparation_window(resource, preparation.fetch_range, runtime)?
+            && self.begin_preparation_window(source, preparation.fetch_range, runtime)?
         {
             return Ok(ElasticPreparationPoll::Pending(self));
         }
@@ -314,7 +297,7 @@ impl ElasticRenderer<Preparing> {
     }
 }
 
-impl<State> ElasticRenderer<State> {
+impl<State> ElasticReader<State> {
     pub(super) fn prime(
         &mut self,
         preparation: ElasticPreparation,
@@ -386,37 +369,31 @@ impl<State> ElasticRenderer<State> {
     }
 }
 
-impl ElasticRenderer<Ready> {
-    pub(crate) fn activate(self) -> ElasticRenderer<Active> {
+impl ElasticReader<Ready> {
+    #[must_use]
+    pub fn activate(self) -> ElasticReader<Active> {
         self.map_state(|Ready { runtime }| Active { runtime })
     }
 
-    pub(crate) fn retarget(
-        &mut self,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
-        revision: TransportRevision,
-    ) -> Result<(), ElasticPrepareError> {
-        let preparation = self.retarget_preparation(binding, anchor, tempo)?;
+    /// Re-primes the ready reader at an anchor inside its retained PCM window.
+    /// # Errors
+    /// Returns a typed range or DSP preparation error.
+    pub fn retarget(&mut self, anchor: ElasticAnchor) -> Result<(), ElasticPrepareError> {
+        let preparation = self.retarget_preparation(anchor)?;
         let fetch_frames = usize::try_from(preparation.fetch_range.len())
             .map_err(|_| ElasticPrepareError::FrameOverflow)?;
         let fetch_samples = sample_count(fetch_frames, self.backend.capabilities().channels())?;
         self.prime(preparation, fetch_samples)?;
         self.state.runtime.prepared.cursor = preparation.anchor;
         self.state.runtime.prepared.direction = preparation.direction;
-        self.state.runtime.prepared.revision = revision;
         Ok(())
     }
 
     fn retarget_preparation(
         &self,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
+        anchor: ElasticAnchor,
     ) -> Result<ElasticPreparation, ElasticPrepareError> {
-        let mut preparation =
-            self.plan_preparation(binding, anchor, tempo, Self::PREFETCH_BLOCKS)?;
+        let mut preparation = self.plan_preparation(anchor, self.config.prefetch_blocks())?;
         let fetch_range = self.state.runtime.prepared.source_window;
         if fetch_range.start() > preparation.fetch_range.start()
             || fetch_range.end() < preparation.fetch_range.end()
@@ -427,19 +404,17 @@ impl ElasticRenderer<Ready> {
         Ok(preparation)
     }
 
-    pub(crate) fn validate_retarget(
-        &self,
-        binding: &TrackBinding,
-        anchor: SessionBeat,
-        tempo: Tempo,
-    ) -> Result<(), ElasticPrepareError> {
-        self.retarget_preparation(binding, anchor, tempo).map(drop)
+    /// Checks whether the retained PCM window can support an anchor.
+    /// # Errors
+    /// Returns a typed range or preparation error without mutating the reader.
+    pub fn validate_retarget(&self, anchor: ElasticAnchor) -> Result<(), ElasticPrepareError> {
+        self.retarget_preparation(anchor).map(drop)
     }
 }
 
-impl From<ElasticRenderer<Active>> for ElasticRenderer<Ready> {
-    fn from(renderer: ElasticRenderer<Active>) -> Self {
-        renderer.map_state(|Active { runtime }| Ready { runtime })
+impl From<ElasticReader<Active>> for ElasticReader<Ready> {
+    fn from(reader: ElasticReader<Active>) -> Self {
+        reader.map_state(|Active { runtime }| Ready { runtime })
     }
 }
 
@@ -447,103 +422,105 @@ impl From<ElasticRenderer<Active>> for ElasticRenderer<Ready> {
 mod tests {
     use std::{mem::replace, num::NonZeroU32};
 
-    use kithara_audio::{BeatGrid, TrackBeat, analysis::TrackAnalysis};
     use kithara_bufpool::PcmPool;
+    use kithara_decode::PcmSpec;
     use kithara_test_utils::kithara;
+    use num_traits::ToPrimitive;
 
-    use super::*;
-    use crate::player::node::StreamShape;
+    use super::{super::ElasticReaderConfig, *};
 
-    const SAMPLE_RATE: u32 = 44_100;
+    struct TestConfig {
+        sample_rate: u32,
+        pcm_max_buffers: usize,
+        pcm_trim_capacity: usize,
+    }
+
+    const CONFIG: TestConfig = TestConfig {
+        sample_rate: 44_100,
+        pcm_max_buffers: 32,
+        pcm_trim_capacity: 0,
+    };
+
+    fn test_pool() -> PcmPool {
+        PcmPool::new(CONFIG.pcm_max_buffers, CONFIG.pcm_trim_capacity)
+    }
 
     fn source_frames() -> u64 {
-        u64::from(SAMPLE_RATE) * 5
+        u64::from(CONFIG.sample_rate) * 5
     }
 
-    fn renderer(pool: &PcmPool) -> ElasticRenderer<()> {
-        let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("static sample rate");
-        ElasticRenderer::<()>::allocate(
-            sample_rate,
-            1,
+    fn reader(pool: &PcmPool) -> ElasticReader<Unprepared> {
+        let sample_rate =
+            NonZeroU32::new(CONFIG.sample_rate).expect("invariant: static sample rate");
+        ElasticReader::<Unprepared>::allocate(
+            PcmSpec::new(1, sample_rate),
             source_frames(),
-            StreamShape {
-                sample_rate,
-                max_block_frames: NonZeroU32::new(512).expect("static block size"),
-            },
+            sample_rate,
+            NonZeroU32::new(512).expect("invariant: static block size"),
+            2,
+            ElasticReaderConfig::default(),
             pool,
         )
-        .expect("elastic renderer preparation")
+        .expect("invariant: elastic reader allocation")
     }
 
-    fn active_renderer(
+    fn active_reader(
         pool: &PcmPool,
         source_window: SourceRange,
         direction: PlaybackDirection,
-    ) -> ElasticRenderer<Active> {
-        let integer = i64::try_from(source_window.start().get()).expect("test range fits i64");
-        renderer(pool).map_state(|()| Active {
+    ) -> ElasticReader<Active> {
+        let integer =
+            i64::try_from(source_window.start().get()).expect("invariant: test range fits i64");
+        let cursor = ElasticAnchor::try_from((
+            integer
+                .to_f64()
+                .expect("invariant: test range converts to f64"),
+            1.0,
+            direction,
+        ))
+        .expect("invariant: test anchor is representable")
+        .cursor();
+        reader(pool).map_state(|Unprepared| Active {
             runtime: RenderRuntime {
                 pending_source_read: None,
                 relocation: None,
                 prepared: PreparedRuntime {
+                    cursor,
                     direction,
-                    cursor: ElasticCursor::try_from(
-                        integer.to_f64().expect("test range converts to f64"),
-                    )
-                    .expect("test cursor is representable"),
                     source_window,
-                    revision: TransportRevision::FIRST,
-                    request_id: 1,
                 },
             },
         })
     }
 
-    fn binding(direction: PlaybackDirection) -> TrackBinding {
-        let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("static sample rate");
-        let frames_per_beat = u64::from(SAMPLE_RATE) / 2;
-        let analysis = TrackAnalysis::with_source_rate(
-            Some(BeatGrid::new(
-                120.0,
-                (0..=10).map(|beat| beat * frames_per_beat).collect(),
-                vec![0],
-                Vec::new(),
-            )),
-            None,
-            source_frames(),
-            sample_rate,
-        );
-        TrackBinding::new(
-            &analysis,
-            sample_rate,
-            SessionBeat::new(0.0).expect("finite session beat"),
-            TrackBeat::new(4.0).expect("finite track beat"),
-            direction,
-        )
-        .expect("valid track binding")
+    fn anchor(direction: PlaybackDirection, rate: f64) -> ElasticAnchor {
+        ElasticAnchor::try_from((f64::from(CONFIG.sample_rate) * 2.5, rate, direction))
+            .expect("invariant: valid numeric elastic anchor")
     }
 
     #[kithara::test]
-    fn direction_and_tempo_stress_stays_inside_fixed_preparation_budgets() {
-        let pool = PcmPool::default();
-        let renderer = renderer(&pool);
+    fn direction_and_rate_stress_stays_inside_configured_preparation_budgets() {
+        let pool = test_pool();
+        let reader = reader(&pool);
         let max_fetch_frames =
-            u64::try_from(renderer.max_fetch_frames).expect("fetch budget fits u64");
+            u64::try_from(reader.max_fetch_frames).expect("invariant: fetch budget fits u64");
+        let envelope = reader.capabilities().rate_envelope();
+        let rates = [
+            envelope.min_source_frames_per_output(),
+            0.8,
+            1.0,
+            1.2,
+            envelope.max_source_frames_per_output(),
+        ];
         for direction in [PlaybackDirection::Forward, PlaybackDirection::Reverse] {
-            let binding = binding(direction);
-            for beats_per_minute in [80.0, 100.0, 120.0, 140.0, 160.0] {
-                let preparation = renderer
-                    .plan_preparation(
-                        &binding,
-                        SessionBeat::new(0.0).expect("finite anchor"),
-                        Tempo::new(beats_per_minute).expect("valid tempo"),
-                        ElasticRenderer::<()>::PREFETCH_BLOCKS,
-                    )
-                    .expect("supported direction and tempo prepare inside fixed buffers");
+            for rate in rates {
+                let preparation = reader
+                    .plan_preparation(anchor(direction, rate), reader.config.prefetch_blocks())
+                    .expect("invariant: supported rate prepares inside configured buffers");
 
                 assert!(preparation.fetch_range.start() < preparation.fetch_range.end());
                 assert!(preparation.fetch_range.len() <= max_fetch_frames);
-                assert!(preparation.warmup.source_frames() <= renderer.max_warm_frames);
+                assert!(preparation.warmup.source_frames() <= reader.max_warm_frames);
             }
         }
     }
@@ -551,96 +528,100 @@ mod tests {
     fn assert_window_stress(direction: PlaybackDirection, initial: SourceRange) {
         const PROMOTIONS: usize = 24;
 
-        let pool = PcmPool::default();
-        let mut renderer = active_renderer(&pool, initial, direction);
-        while renderer.ready_windows.len() < READY_WINDOW_COUNT {
-            let frontier = renderer
+        let pool = test_pool();
+        let mut reader = active_reader(&pool, initial, direction);
+        let ready_window_count = reader.config.ready_window_count();
+        let ready_capacity = reader.ready_windows.capacity();
+        let buffer_capacity = reader.window_buffers.capacity();
+        while reader.ready_windows.len() < ready_window_count {
+            let frontier = reader
                 .ready_windows
-                .last()
+                .back()
                 .map_or(initial, |window| window.range);
-            let range = renderer
+            let range = reader
                 .next_source_window(frontier, direction)
-                .expect("successor range calculation")
-                .expect("source has another successor window");
-            let samples = renderer
+                .expect("invariant: successor range calculation")
+                .expect("invariant: source has another successor window");
+            let samples = reader
                 .window_buffers
                 .pop()
-                .expect("fixed window buffer is available");
-            renderer
+                .expect("invariant: fixed window buffer is available");
+            reader
                 .stage_ready_window(range, samples, direction)
-                .expect("successor advances the directional frontier");
+                .expect("invariant: successor advances the directional frontier");
         }
-        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 1);
+        assert_eq!(fixed_buffer_count(&reader), ready_window_count + 1);
 
         for _ in 0..PROMOTIONS {
-            let window = renderer.ready_windows.remove(0);
-            let next = window.range;
-            let old = replace(&mut renderer.fetch, window.samples);
-            renderer.window_buffers.push(old);
-            renderer.state.runtime.prepared.source_window = next;
-            assert_eq!(renderer.state.runtime.prepared.source_window, next);
-            assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT - 1);
-
-            let frontier = renderer
+            let window = reader
                 .ready_windows
-                .last()
+                .pop_front()
+                .expect("invariant: a ready window is available");
+            let next = window.range;
+            let old = replace(&mut reader.fetch, window.samples);
+            reader.window_buffers.push(old);
+            reader.state.runtime.prepared.source_window = next;
+            assert_eq!(reader.state.runtime.prepared.source_window, next);
+            assert_eq!(reader.ready_windows.len(), ready_window_count - 1);
+
+            let frontier = reader
+                .ready_windows
+                .back()
                 .map_or(next, |ready| ready.range);
-            let range = renderer
+            let range = reader
                 .next_source_window(frontier, direction)
-                .expect("successor range calculation")
-                .expect("stress range stays away from source boundary");
-            let samples = renderer
+                .expect("invariant: successor range calculation")
+                .expect("invariant: stress range stays away from source boundary");
+            let samples = reader
                 .window_buffers
                 .pop()
-                .expect("promoted buffer replenishes the fixed bank");
-            renderer
+                .expect("invariant: promoted buffer replenishes the fixed bank");
+            reader
                 .stage_ready_window(range, samples, direction)
-                .expect("scheduled successor restores the full pipeline");
-            assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT);
-            assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 1);
-            assert!(!renderer.ready_windows.spilled());
-            assert!(!renderer.window_buffers.spilled());
+                .expect("invariant: scheduled successor restores the full pipeline");
+            assert_eq!(reader.ready_windows.len(), ready_window_count);
+            assert_eq!(fixed_buffer_count(&reader), ready_window_count + 1);
+            assert_eq!(reader.ready_windows.capacity(), ready_capacity);
+            assert_eq!(reader.window_buffers.capacity(), buffer_capacity);
         }
     }
 
-    fn fixed_buffer_count(renderer: &ElasticRenderer<Active>) -> usize {
-        let primary_pending = usize::from(renderer.state.runtime.pending_source_read.is_some());
-        1 + renderer.window_buffers.len() + renderer.ready_windows.len() + primary_pending
+    fn fixed_buffer_count(reader: &ElasticReader<Active>) -> usize {
+        let primary_pending = usize::from(reader.state.runtime.pending_source_read.is_some());
+        1 + reader.window_buffers.len() + reader.ready_windows.len() + primary_pending
     }
 
     #[kithara::test]
     fn forward_and_reverse_window_stress_never_exceeds_the_ready_bound() {
         assert_window_stress(
             PlaybackDirection::Forward,
-            SourceRange::try_from(10_000..20_000).expect("valid forward window"),
+            SourceRange::try_from(10_000..20_000).expect("invariant: valid forward window"),
         );
         assert_window_stress(
             PlaybackDirection::Reverse,
-            SourceRange::try_from(200_000..210_000).expect("valid reverse window"),
+            SourceRange::try_from(200_000..210_000).expect("invariant: valid reverse window"),
         );
     }
 
     #[kithara::test]
     fn reverse_preparation_requests_one_ascending_bounded_range() {
-        let pool = PcmPool::default();
-        let renderer = renderer(&pool);
-        let preparation = renderer
+        let pool = test_pool();
+        let reader = reader(&pool);
+        let preparation = reader
             .plan_preparation(
-                &binding(PlaybackDirection::Reverse),
-                SessionBeat::new(0.0).expect("finite anchor"),
-                Tempo::new(120.0).expect("valid tempo"),
-                ElasticRenderer::<()>::PREFETCH_BLOCKS,
+                anchor(PlaybackDirection::Reverse, 1.0),
+                reader.config.prefetch_blocks(),
             )
-            .expect("reverse preparation plan");
-        let anchor = u64::try_from(preparation.anchor.integer()).expect("positive source anchor");
-        let prefetch =
-            u64::try_from(renderer.max_source_frames * ElasticRenderer::<()>::PREFETCH_BLOCKS)
-                .expect("prefetch span fits u64");
+            .expect("invariant: reverse preparation plan");
+        let anchor =
+            u64::try_from(preparation.anchor.integer()).expect("invariant: positive source anchor");
+        let prefetch = u64::try_from(reader.max_source_frames * reader.config.prefetch_blocks())
+            .expect("invariant: prefetch span fits u64");
         let history = u64::try_from(
-            renderer.backend.capabilities().latency().source_frames()
+            reader.backend.capabilities().latency().source_frames()
                 + preparation.warmup.source_frames(),
         )
-        .expect("history span fits u64");
+        .expect("invariant: history span fits u64");
 
         assert_eq!(anchor - preparation.fetch_range.start().get(), prefetch);
         assert_eq!(preparation.fetch_range.end().get() - anchor, history);
@@ -649,108 +630,122 @@ mod tests {
 
     #[kithara::test]
     fn reverse_preparation_fetches_extra_tempo_history_as_a_separate_range() {
-        let pool = PcmPool::default();
-        let renderer = renderer(&pool);
-        let mut preparation = renderer
+        let pool = test_pool();
+        let reader = reader(&pool);
+        let mut preparation = reader
             .plan_preparation(
-                &binding(PlaybackDirection::Reverse),
-                SessionBeat::new(0.0).expect("finite anchor"),
-                Tempo::new(120.0).expect("valid tempo"),
-                ElasticRenderer::<()>::PREFETCH_BLOCKS,
+                anchor(PlaybackDirection::Reverse, 1.0),
+                reader.config.prefetch_blocks(),
             )
-            .expect("reverse preparation plan");
+            .expect("invariant: reverse preparation plan");
         let request = preparation.fetch_range;
 
         let extension = expand_preparation_history(
-            renderer.max_warm_frames,
-            renderer.source_frame_count,
+            reader.max_warm_frames,
+            reader.source_frame_count,
             &mut preparation,
         )
-        .expect("expanded preparation history")
-        .expect("maximum rate needs additional history");
+        .expect("invariant: expanded preparation history")
+        .expect("invariant: maximum rate needs additional history");
 
         assert_eq!(extension.start(), request.end());
         assert_eq!(preparation.fetch_range.start(), request.start());
         assert_eq!(preparation.fetch_range.end(), extension.end());
         assert_eq!(
             extension.len(),
-            u64::try_from(renderer.max_warm_frames - preparation.warmup.source_frames())
-                .expect("history extension fits u64")
+            u64::try_from(reader.max_warm_frames - preparation.warmup.source_frames())
+                .expect("invariant: history extension fits u64")
         );
     }
 
     #[kithara::test]
     fn reverse_window_renewal_keeps_the_active_window_until_successor_use() {
-        let pool = PcmPool::default();
-        let current = SourceRange::try_from(10_000..20_000).expect("valid current source window");
-        let mut renderer = active_renderer(&pool, current, PlaybackDirection::Reverse);
+        let pool = test_pool();
+        let current =
+            SourceRange::try_from(10_000..20_000).expect("invariant: valid current source window");
+        let mut reader = active_reader(&pool, current, PlaybackDirection::Reverse);
+        let ready_window_count = reader.config.ready_window_count();
 
-        let request = renderer
+        let request = reader
             .next_source_window(current, PlaybackDirection::Reverse)
-            .expect("reverse range calculation")
-            .expect("reverse renewal range");
+            .expect("invariant: reverse range calculation")
+            .expect("invariant: reverse renewal range");
         assert!(request.start().get() < 10_000);
         assert_eq!(
             request.end().get(),
-            10_000 + u64::try_from(renderer.max_source_frames).expect("window overlap fits u64")
+            10_000
+                + u64::try_from(reader.max_source_frames)
+                    .expect("invariant: window overlap fits u64")
         );
-        assert!(request.len() <= renderer.source_window_frames);
-        let samples = renderer
+        assert!(request.len() <= reader.source_window_frames);
+        let samples = reader
             .window_buffers
             .pop()
-            .expect("first fixed window buffer");
-        renderer
+            .expect("invariant: first fixed window buffer");
+        reader
             .stage_ready_window(request, samples, PlaybackDirection::Reverse)
-            .expect("earlier source window is accepted");
-        assert_eq!(renderer.state.runtime.prepared.source_window, current);
+            .expect("invariant: earlier source window is accepted");
+        assert_eq!(reader.state.runtime.prepared.source_window, current);
         assert_eq!(
-            renderer.ready_windows.first().map(|window| window.range),
+            reader.ready_windows.front().map(|window| window.range),
             Some(request)
         );
 
-        let second = renderer
+        let second = reader
             .next_source_window(request, PlaybackDirection::Reverse)
-            .expect("second reverse range calculation")
-            .expect("second reverse successor range");
+            .expect("invariant: second reverse range calculation")
+            .expect("invariant: second reverse successor range");
         assert!(second.start() < request.start());
-        let samples = renderer
+        let samples = reader
             .window_buffers
             .pop()
-            .expect("second fixed window buffer");
-        renderer
+            .expect("invariant: second fixed window buffer");
+        reader
             .stage_ready_window(second, samples, PlaybackDirection::Reverse)
-            .expect("second reverse successor is accepted");
-        assert_eq!(renderer.ready_windows.len(), READY_WINDOW_COUNT);
+            .expect("invariant: second reverse successor is accepted");
+        assert_eq!(reader.ready_windows.len(), ready_window_count);
 
-        let successor_range = SourceRange::try_from(9_000..9_512).expect("valid successor range");
+        let successor_range =
+            SourceRange::try_from(9_000..9_512).expect("invariant: valid successor range");
         assert!(request.start() <= successor_range.start());
         assert!(successor_range.end() <= request.end());
-        let window = renderer.ready_windows.remove(0);
-        let old = replace(&mut renderer.fetch, window.samples);
-        renderer.window_buffers.push(old);
-        renderer.state.runtime.prepared.source_window = window.range;
-        assert_eq!(renderer.state.runtime.prepared.source_window, request);
+        let window = reader
+            .ready_windows
+            .pop_front()
+            .expect("invariant: a ready window is available");
+        let old = replace(&mut reader.fetch, window.samples);
+        reader.window_buffers.push(old);
+        reader.state.runtime.prepared.source_window = window.range;
+        assert_eq!(reader.state.runtime.prepared.source_window, request);
         assert_eq!(
-            renderer.ready_windows.first().map(|window| window.range),
+            reader.ready_windows.front().map(|window| window.range),
             Some(second)
         );
-        assert_eq!(fixed_buffer_count(&renderer), READY_WINDOW_COUNT + 1);
+        assert_eq!(fixed_buffer_count(&reader), ready_window_count + 1);
     }
 
     #[kithara::test]
-    fn decoded_frontier_includes_a_ready_forward_window() {
-        let pool = PcmPool::default();
-        let active = SourceRange::try_from(10_000..20_000).expect("valid active window");
-        let mut renderer = active_renderer(&pool, active, PlaybackDirection::Forward);
-        let samples = renderer.window_buffers.pop().expect("fixed window buffer");
-        renderer.ready_windows.push(BufferedSourceWindow {
-            samples,
-            range: SourceRange::try_from(19_000..30_000).expect("valid ready window"),
-        });
+    fn decoded_frontier_uses_the_directional_window_extent() {
+        let pool = test_pool();
+        for (direction, active, ready) in [
+            (PlaybackDirection::Forward, 10_000..20_000, 19_000..30_000),
+            (PlaybackDirection::Reverse, 20_000..30_000, 10_000..21_000),
+        ] {
+            let active = SourceRange::try_from(active).expect("invariant: valid active window");
+            let mut reader = active_reader(&pool, active, direction);
+            let samples = reader
+                .window_buffers
+                .pop()
+                .expect("invariant: fixed window buffer");
+            reader.ready_windows.push_back(BufferedSourceWindow {
+                samples,
+                range: SourceRange::try_from(ready).expect("invariant: valid ready window"),
+            });
 
-        assert_eq!(
-            renderer.decoded_frontier(),
-            30_000.0 / f64::from(SAMPLE_RATE)
-        );
+            assert_eq!(
+                reader.decoded_frontier(),
+                30_000.0 / f64::from(CONFIG.sample_rate)
+            );
+        }
     }
 }

@@ -44,7 +44,8 @@ to the single `decoder` field.
   transport with an immutable direction.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
 - `PlayerResource` owns exactly one linear or prepared-bound playback resource;
-  bound preparation transfers the original `Resource` without reopening it.
+  bound preparation transfers the original `Resource` without reopening it and
+  drives `kithara-audio::elastic::ElasticReader` through `PcmReader`.
 - `PlayerNode` is the public standalone real-time audio graph node. Nodes owned
   by a `SessionState` additionally consume its shared render context.
 - `Equalizer` is the remaining mockable trait surface.

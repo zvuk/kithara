@@ -16,28 +16,34 @@ fn interleaved_signal(frames: usize) -> Vec<f32> {
 }
 
 fn indexed_markers(frames: usize, offset: usize) -> Vec<f32> {
-    (0..frames)
-        .flat_map(|frame| {
-            let index = offset.wrapping_add(frame);
-            let marker_index = u16::try_from(index.wrapping_mul(73) % 997)
-                .expect("marker index is bounded below 997");
-            let marker = (f32::from(marker_index) / 997.0) * 1.5 - 0.75;
-            [marker, marker * -0.5]
-        })
-        .collect()
+    marker_signal(frames, offset, |index| {
+        let marker_index = u16::try_from(index.wrapping_mul(73) % 997)
+            .expect("invariant: marker index is bounded below 997");
+        (f32::from(marker_index) / 997.0) * 1.5 - 0.75
+    })
 }
 
 fn impulse_markers(frames: usize, offset: usize) -> Vec<f32> {
+    marker_signal(frames, offset, |index| {
+        if index.is_multiple_of(64) {
+            let marker_index = u16::try_from((index / 64) % 7)
+                .expect("invariant: marker index is bounded below 7");
+            0.5 + f32::from(marker_index) / 14.0
+        } else {
+            0.0
+        }
+    })
+}
+
+fn marker_signal(
+    frames: usize,
+    offset: usize,
+    mut marker_at: impl FnMut(usize) -> f32,
+) -> Vec<f32> {
     (0..frames)
         .flat_map(|frame| {
             let index = offset.wrapping_add(frame);
-            let marker = if index.is_multiple_of(64) {
-                let marker_index =
-                    u16::try_from((index / 64) % 7).expect("marker index is bounded below 7");
-                0.5 + f32::from(marker_index) / 14.0
-            } else {
-                0.0
-            };
+            let marker = marker_at(index);
             [marker, marker * -0.5]
         })
         .collect()
@@ -58,8 +64,8 @@ fn assert_exact_samples(actual: &[f32], expected: &[f32]) {
 
 #[kithara::test]
 fn signalsmith_declares_reverse_input_support() {
-    let config =
-        ElasticConfig::new(48_000, CHANNELS, 512, 512).expect("the test configuration is valid");
+    let config = ElasticConfig::try_from((48_000, CHANNELS, 512, 512))
+        .expect("the test configuration is valid");
     let backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
 
     assert!(backend.capabilities().supports_reverse());
@@ -67,8 +73,8 @@ fn signalsmith_declares_reverse_input_support() {
 
 #[kithara::test]
 fn renders_the_requested_output_frame_count() {
-    let config =
-        ElasticConfig::new(48_000, CHANNELS, 8192, 8192).expect("the test configuration is valid");
+    let config = ElasticConfig::try_from((48_000, CHANNELS, 8192, 8192))
+        .expect("the test configuration is valid");
     let mut backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let request = ElasticRequest::new(4800, 4000).expect("the request is non-empty");
     let source = interleaved_signal(request.source_frames());
@@ -87,7 +93,7 @@ fn renders_the_requested_output_frame_count() {
 fn unity_render_exposes_the_declared_source_and_output_latency() {
     const FRAMES: usize = 8192;
 
-    let config = ElasticConfig::new(48_000, CHANNELS, FRAMES, FRAMES)
+    let config = ElasticConfig::try_from((48_000, CHANNELS, FRAMES, FRAMES))
         .expect("the test configuration is valid");
     let mut backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let latency = backend.capabilities().latency();
@@ -107,8 +113,8 @@ fn unity_render_exposes_the_declared_source_and_output_latency() {
 
 #[kithara::test]
 fn warmup_request_has_exact_latency_spans() {
-    let config =
-        ElasticConfig::new(48_000, CHANNELS, 512, 512).expect("the test configuration is valid");
+    let config = ElasticConfig::try_from((48_000, CHANNELS, 512, 512))
+        .expect("the test configuration is valid");
     let backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let latency = backend.capabilities().latency();
 
@@ -143,7 +149,7 @@ fn warmup_request_has_exact_latency_spans() {
 fn history_and_output_warmup_remove_the_initial_gap() {
     const FRAMES: usize = 512;
 
-    let config = ElasticConfig::new(48_000, CHANNELS, FRAMES * 2, FRAMES)
+    let config = ElasticConfig::try_from((48_000, CHANNELS, FRAMES * 2, FRAMES))
         .expect("the test configuration is valid");
     let mut backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let capabilities = backend.capabilities();
@@ -176,7 +182,7 @@ fn non_unity_warmup_aligns_the_first_audible_frame() {
     const SOURCE_FRAMES: usize = 600;
     const OUTPUT_FRAMES: usize = 500;
 
-    let config = ElasticConfig::new(48_000, CHANNELS, SOURCE_FRAMES, OUTPUT_FRAMES)
+    let config = ElasticConfig::try_from((48_000, CHANNELS, SOURCE_FRAMES, OUTPUT_FRAMES))
         .expect("the test configuration is valid");
     let mut backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let capabilities = backend.capabilities();
@@ -207,8 +213,8 @@ fn non_unity_warmup_aligns_the_first_audible_frame() {
 
 #[kithara::test]
 fn prime_rejects_every_ambiguous_buffer_count() {
-    let config =
-        ElasticConfig::new(48_000, CHANNELS, 1024, 512).expect("the test configuration is valid");
+    let config = ElasticConfig::try_from((48_000, CHANNELS, 1024, 512))
+        .expect("the test configuration is valid");
     let mut backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let capabilities = backend.capabilities();
     let warmup = capabilities
@@ -268,8 +274,8 @@ fn prime_rejects_every_ambiguous_buffer_count() {
 
 #[kithara::test]
 fn keeps_the_same_latency_through_unity_and_rate_changes() {
-    let config =
-        ElasticConfig::new(48_000, CHANNELS, 8192, 8192).expect("the test configuration is valid");
+    let config = ElasticConfig::try_from((48_000, CHANNELS, 8192, 8192))
+        .expect("the test configuration is valid");
     let mut backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let capabilities = backend.capabilities();
     assert_eq!(capabilities.sample_rate(), 48_000);
@@ -301,7 +307,7 @@ fn reset_clears_stream_history_without_changing_capabilities() {
     const LONG_FRAMES: usize = 8192;
     const SHORT_FRAMES: usize = 4096;
 
-    let config = ElasticConfig::new(48_000, CHANNELS, LONG_FRAMES, LONG_FRAMES)
+    let config = ElasticConfig::try_from((48_000, CHANNELS, LONG_FRAMES, LONG_FRAMES))
         .expect("the test configuration is valid");
     let mut backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let capabilities = backend.capabilities();
@@ -339,7 +345,7 @@ fn reset_reprime_keeps_the_first_frame_aligned() {
     const SOURCE_FRAMES: usize = 600;
     const OUTPUT_FRAMES: usize = 500;
 
-    let config = ElasticConfig::new(48_000, CHANNELS, SOURCE_FRAMES, OUTPUT_FRAMES)
+    let config = ElasticConfig::try_from((48_000, CHANNELS, SOURCE_FRAMES, OUTPUT_FRAMES))
         .expect("the test configuration is valid");
     let mut backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let capabilities = backend.capabilities();
@@ -379,7 +385,7 @@ fn reset_reprime_keeps_the_first_frame_aligned() {
 fn prime_discards_previous_stream_state() {
     const FRAMES: usize = 4096;
 
-    let config = ElasticConfig::new(48_000, CHANNELS, FRAMES, FRAMES)
+    let config = ElasticConfig::try_from((48_000, CHANNELS, FRAMES, FRAMES))
         .expect("the test configuration is valid");
     let mut fresh = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let mut reused = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
@@ -424,7 +430,7 @@ fn primed_output_is_independent_of_unity_request_partitioning() {
     const FRAMES: usize = 4096;
     const PARTITION_FRAMES: usize = 512;
 
-    let config = ElasticConfig::new(48_000, CHANNELS, FRAMES, FRAMES)
+    let config = ElasticConfig::try_from((48_000, CHANNELS, FRAMES, FRAMES))
         .expect("the test configuration is valid");
     let mut whole = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let mut partitioned = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
@@ -479,7 +485,7 @@ fn preserves_tone_pitch_when_source_advance_changes() {
     const SOURCE_FRAMES: usize = 19_200;
     const OUTPUT_FRAMES: usize = 16_000;
 
-    let config = ElasticConfig::new(SAMPLE_RATE, 1, SOURCE_FRAMES, OUTPUT_FRAMES)
+    let config = ElasticConfig::try_from((SAMPLE_RATE, 1, SOURCE_FRAMES, OUTPUT_FRAMES))
         .expect("the test configuration is valid");
     let mut backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let request = ElasticRequest::new(SOURCE_FRAMES, OUTPUT_FRAMES).expect("non-empty request");
@@ -511,8 +517,8 @@ fn preserves_tone_pitch_when_source_advance_changes() {
 
 #[kithara::test]
 fn rejects_requests_outside_the_prepared_contract() {
-    let config =
-        ElasticConfig::new(48_000, CHANNELS, 8192, 8192).expect("the test configuration is valid");
+    let config = ElasticConfig::try_from((48_000, CHANNELS, 8192, 8192))
+        .expect("the test configuration is valid");
     let mut backend = SignalsmithBackend::prepare(config).expect("Signalsmith prepares");
     let request = ElasticRequest::new(6000, 4000).expect("non-empty request");
     let source = interleaved_signal(request.source_frames());

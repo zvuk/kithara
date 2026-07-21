@@ -38,13 +38,18 @@ one capability snapshot, quantizes them without leaving inline storage, and
 returns both backend requests and the staged `ElasticCursor`. It also owns the
 bounded inter-block phase correction because that correction is constrained by
 the backend rate envelope and exact source/output frame arithmetic.
+`ElasticSpanConfig` carries the continuity tolerance, maximum accepted phase
+error, and per-block correction budget; these values are supplied by the
+reader's configuration rather than hidden in the planner.
 
-Session beats, track bindings, request/revision identity, source-window policy,
-relocation transactions, and graph scheduling remain in `kithara-play`. A
-`PhaseDiscontinuity` is numeric evidence that continuous correction is
-impossible; only the player may turn that evidence into a prepared relocation
-and publish a new cursor. The cursor returned by `ElasticSpanPlan` is staged and
-must not be committed until every backend request in the plan succeeds.
+Session beats, track bindings, request/revision identity, relocation commit
+boundaries, and graph scheduling remain in `kithara-play`. Source-window policy,
+bounded PCM polling, DSP readiness, and the numeric cursor belong to
+`kithara-audio::elastic::ElasticReader`. A `PhaseDiscontinuity` is numeric
+evidence that continuous correction is impossible; the player may map that
+evidence to a session relocation, while the audio reader owns its prepared PCM
+and cursor. The cursor returned by `ElasticSpanPlan` is staged and must not be
+committed until every backend request in the plan succeeds.
 
 The exact-span path currently has one adapter, so callers use the concrete
 `SignalsmithBackend<ElasticConfig>` instead of a single-implementation trait

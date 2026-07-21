@@ -3,7 +3,7 @@ use std::ops::Range;
 use num_traits::ToPrimitive;
 use smallvec::SmallVec;
 
-use super::{ElasticCapabilities, ElasticError, ElasticRequest};
+use super::{ElasticCapabilities, ElasticError, ElasticRequest, ElasticSpanConfig};
 
 const MAX_SPANS: usize = 4;
 
@@ -180,6 +180,7 @@ impl ElasticSpanPlan {
         spans: I,
         cursor: Option<ElasticCursor>,
         capabilities: ElasticCapabilities,
+        config: ElasticSpanConfig,
     ) -> Result<Self, ElasticError>
     where
         I: IntoIterator<Item = ElasticSpan>,
@@ -195,8 +196,15 @@ impl ElasticSpanPlan {
             .first()
             .copied()
             .ok_or(ElasticError::EmptySpanPlan)?;
-        let (direction, output_frames) = validate_spans(&continuous, capabilities)?;
-        let phase = PhasePlan::new(&continuous, cursor, capabilities, direction, output_frames)?;
+        let (direction, output_frames) = validate_spans(&continuous, capabilities, config)?;
+        let phase = PhasePlan::new(
+            &continuous,
+            cursor,
+            capabilities,
+            config,
+            direction,
+            output_frames,
+        )?;
         let mut boundary = cursor.map_or_else(
             || quantize_source(first.source_start),
             |cursor| Ok(cursor.integer),
@@ -267,30 +275,27 @@ struct PhasePlan {
 }
 
 impl PhasePlan {
-    const CONTINUITY_EPSILON: f64 = 1.0e-6;
-    const MAX_CONTINUOUS_PHASE_ERROR: f64 = 1.0;
-    const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
-
     fn new(
         spans: &[ElasticSpan],
         cursor: Option<ElasticCursor>,
         capabilities: ElasticCapabilities,
+        config: ElasticSpanConfig,
         direction: SourceDirection,
         output_frames: usize,
     ) -> Result<Self, ElasticError> {
         let first = spans.first().ok_or(ElasticError::EmptySpanPlan)?;
         let cursor_origin = cursor.map_or(first.source_start, ElasticCursor::continuous);
         let error = first.source_start - cursor_origin;
-        if error.abs() > Self::MAX_CONTINUOUS_PHASE_ERROR {
+        if error.abs() > config.max_phase_error() {
             return Err(ElasticError::PhaseDiscontinuity {
                 error,
-                limit: Self::MAX_CONTINUOUS_PHASE_ERROR,
+                limit: config.max_phase_error(),
             });
         }
         let correction_budget = output_frames
             .to_f64()
             .zip(capabilities.max_output_frames().to_f64())
-            .map(|(output, maximum)| (output / maximum).min(Self::MAX_CORRECTION_PER_BLOCK))
+            .map(|(output, maximum)| (output / maximum).min(config.max_correction_per_block()))
             .filter(|budget| budget.is_finite() && *budget > 0.0)
             .ok_or(ElasticError::SpanArithmeticOverflow)?;
         let desired = error.clamp(-correction_budget, correction_budget);
@@ -303,7 +308,9 @@ impl PhasePlan {
             envelope.max_source_frames_per_output(),
             direction,
         )?;
-        if error.abs() > Self::CONTINUITY_EPSILON && correction.abs() <= Self::CONTINUITY_EPSILON {
+        if error.abs() > config.continuity_tolerance()
+            && correction.abs() <= config.continuity_tolerance()
+        {
             return Err(ElasticError::PhaseCorrectionUnavailable { error });
         }
         Ok(Self {
@@ -337,15 +344,19 @@ impl PhasePlan {
 fn validate_spans(
     spans: &[ElasticSpan],
     capabilities: ElasticCapabilities,
+    config: ElasticSpanConfig,
 ) -> Result<(SourceDirection, usize), ElasticError> {
-    const CONTINUITY_PAIR_SIZE: usize = 2;
-
-    if let Some(pair) = spans.windows(CONTINUITY_PAIR_SIZE).find(|pair| {
-        (pair[0].source_end - pair[1].source_start).abs() > PhasePlan::CONTINUITY_EPSILON
-    }) {
+    if let Some((previous, next)) =
+        spans
+            .iter()
+            .zip(spans.iter().skip(1))
+            .find(|(previous, next)| {
+                (previous.source_end - next.source_start).abs() > config.continuity_tolerance()
+            })
+    {
         return Err(ElasticError::DiscontinuousSource {
-            expected: pair[0].source_end,
-            actual: pair[1].source_start,
+            expected: previous.source_end,
+            actual: next.source_start,
         });
     }
     let first = spans.first().ok_or(ElasticError::EmptySpanPlan)?;

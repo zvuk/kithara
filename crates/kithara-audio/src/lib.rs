@@ -14,6 +14,7 @@ pub mod analysis;
 mod audio;
 mod blob;
 pub mod effects;
+pub mod elastic;
 mod exports;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;

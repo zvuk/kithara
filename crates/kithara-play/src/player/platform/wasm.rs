@@ -23,12 +23,15 @@ use crate::{
     session::{protocol::PreparationContext, render::RenderContext},
 };
 
-pub(crate) enum ElasticRendererUnavailable {}
-pub(crate) type ActiveElasticRenderer = ElasticRendererUnavailable;
+pub(crate) enum ActiveBoundReader {}
 
 pub(crate) enum PreparedBindingResource {}
 
-impl ElasticRendererUnavailable {
+fn elastic_unavailable<T>() -> Result<T, PlayError> {
+    Err(PlayError::ElasticBackendUnavailable)
+}
+
+impl ActiveBoundReader {
     pub(in crate::player) fn decoded_frontier(&self) -> f64 {
         match *self {}
     }
@@ -42,7 +45,7 @@ impl PlayerResource {
         _tempo: Tempo,
         _revision: TransportRevision,
     ) -> Result<(), PlayError> {
-        Err(PlayError::ElasticBackendUnavailable)
+        elastic_unavailable()
     }
 
     pub(crate) fn cancel_session_seek(&mut self, _revision: TransportRevision) {}
@@ -51,7 +54,7 @@ impl PlayerResource {
         &mut self,
         _revision: TransportRevision,
     ) -> Result<bool, PlayError> {
-        Err(PlayError::ElasticBackendUnavailable)
+        elastic_unavailable()
     }
 
     pub(crate) fn read_elastic(
@@ -66,8 +69,7 @@ impl PlayerResource {
 }
 
 impl PlayerImpl {
-    /// Rejects session-bound elastic insertion because the browser backend
-    /// does not provide the required renderer.
+    /// Rejects session-bound insertion when the browser has no elastic reader.
     pub async fn insert_with_binding(
         &self,
         _resource: Resource,
@@ -75,7 +77,7 @@ impl PlayerImpl {
         _binding: TrackBinding,
         _at_position: Option<usize>,
     ) -> Result<(), PlayError> {
-        Err(PlayError::ElasticBackendUnavailable)
+        elastic_unavailable()
     }
 
     /// Browser elastic playback does not provide exact session joining.
@@ -86,7 +88,7 @@ impl PlayerImpl {
         _binding: TrackBinding,
         _target: SessionBeat,
     ) -> Result<(), PlayError> {
-        Err(PlayError::ElasticBackendUnavailable)
+        elastic_unavailable()
     }
 
     pub(in crate::player) fn validate_session_seek(
@@ -97,11 +99,10 @@ impl PlayerImpl {
         _shape: StreamShape,
         binding: Option<&TrackBinding>,
     ) -> Result<(), PlayError> {
-        if binding.is_some() {
-            Err(PlayError::ElasticBackendUnavailable)
-        } else {
-            Err(PlayError::SessionSeekRequiresBoundTrack)
-        }
+        binding.map_or_else(
+            || Err(PlayError::SessionSeekRequiresBoundTrack),
+            |_| elastic_unavailable(),
+        )
     }
 
     pub(in crate::player) fn validate_session_tempo(
@@ -111,11 +112,7 @@ impl PlayerImpl {
         _shape: StreamShape,
         binding: Option<&TrackBinding>,
     ) -> Result<(), PlayError> {
-        if binding.is_some() {
-            Err(PlayError::ElasticBackendUnavailable)
-        } else {
-            Ok(())
-        }
+        binding.map_or(Ok(()), |_| elastic_unavailable())
     }
 
     pub(in crate::player) fn validate_successor_tempo(
@@ -128,7 +125,7 @@ impl PlayerImpl {
                 .get(index)
                 .is_some_and(|queued| queued.binding.is_some())
         }) {
-            Err(PlayError::ElasticBackendUnavailable)
+            elastic_unavailable()
         } else {
             Ok(())
         }
@@ -164,7 +161,7 @@ pub(crate) fn restore_prepared_binding(
         )),
         (ReleasedPlayerResource::Bound(bound), _) => {
             let bound = *bound;
-            match bound.renderer {}
+            match bound.reader {}
         }
     }
 }

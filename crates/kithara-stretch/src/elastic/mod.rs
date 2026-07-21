@@ -2,7 +2,7 @@ mod capabilities;
 pub use capabilities::ElasticCapabilities;
 
 mod config;
-pub use config::ElasticConfig;
+pub use config::{ElasticConfig, ElasticSpanConfig};
 
 mod error;
 pub use error::ElasticError;

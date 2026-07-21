@@ -70,6 +70,9 @@ pub enum ElasticError {
     /// Exact-span planning received no source spans.
     #[error("elastic span plan must contain at least one span")]
     EmptySpanPlan,
+    /// Exact-span continuity policy contained a non-positive or non-finite value.
+    #[error("elastic span config field `{field}` must be finite and positive, received {value}")]
+    InvalidSpanConfig { field: &'static str, value: f64 },
     /// Exact-span planning exceeded its fixed real-time span capacity.
     #[error("elastic span plan exceeds its fixed capacity of {limit} spans")]
     SpanLimit { limit: usize },

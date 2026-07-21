@@ -1,8 +1,13 @@
 use std::ops::Range;
 
-use kithara_audio::ServiceClass;
+use kithara_audio::{
+    ServiceClass,
+    elastic::{
+        Active, ElasticError, ElasticRateEnvelope, ElasticReadOutcome, ElasticReader,
+        ElasticReaderError, Ready, Unprepared,
+    },
+};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc, traits::FromWithParams};
-use kithara_stretch::{ElasticConfig, ElasticError, ElasticRateEnvelope, SignalsmithBackend};
 
 use super::{
     super::{
@@ -23,24 +28,207 @@ use crate::{
     player::{
         node::StreamShape,
         track::{
-            Active, BoundResource, ElasticPlanError, ElasticPrepareError, ElasticRenderOutcome,
-            ElasticRenderer, PlayerResource, PlayerResourceKind, ReadOutcome, Ready,
-            ReleasedPlayerResource, plan_elastic_segments,
+            BoundResource, ElasticPlanError, PlayerResource, PlayerResourceKind, ReadOutcome,
+            ReleasedPlayerResource, plan_elastic_anchor, plan_elastic_segments,
         },
     },
     resource::Resource,
     session::{
         protocol::PreparationContext,
-        render::{RenderContext, RenderFrame, SessionTransportCommit},
+        render::{RenderContext, RenderFrame, SessionTransportCommit, TransportBoundary},
     },
 };
 
-pub(crate) type PreparedElasticRenderer = ElasticRenderer<Ready>;
-pub(crate) type ActiveElasticRenderer = ElasticRenderer<Active>;
+pub(crate) type PreparedElasticReader = ElasticReader<Ready>;
+
+struct BoundRelocation {
+    target: SessionBeat,
+    revision: TransportRevision,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum BoundRenderError {
+    #[error(transparent)]
+    Plan(#[from] ElasticPlanError),
+    #[error(transparent)]
+    Reader(#[from] ElasticReaderError),
+    #[error("bound render context has no committed session transport")]
+    TransportCommitUnavailable,
+    #[error("bound render revision does not match the prepared stream")]
+    RevisionMismatch,
+    #[error("bound render frame arithmetic overflowed")]
+    FrameOverflow,
+}
+
+pub(crate) struct ActiveBoundReader {
+    reader: ElasticReader<Active>,
+    relocation: Option<BoundRelocation>,
+    revision: TransportRevision,
+    request_id: u64,
+}
+
+impl ActiveBoundReader {
+    fn new(reader: PreparedElasticReader, revision: TransportRevision) -> Self {
+        Self {
+            revision,
+            reader: reader.activate(),
+            relocation: None,
+            request_id: 1,
+        }
+    }
+
+    fn begin_relocation(
+        &mut self,
+        binding: &TrackBinding,
+        target: SessionBeat,
+        tempo: Tempo,
+        revision: TransportRevision,
+    ) -> Result<(), BoundRenderError> {
+        if self.relocation.is_some() {
+            return Err(ElasticReaderError::RelocationPending.into());
+        }
+        let anchor = plan_elastic_anchor(binding, target, tempo, self.reader.capabilities())?;
+        self.reader.begin_relocation(anchor)?;
+        self.relocation = Some(BoundRelocation { target, revision });
+        Ok(())
+    }
+
+    fn cancel_relocation(&mut self, revision: TransportRevision) {
+        if self
+            .relocation
+            .as_ref()
+            .is_some_and(|relocation| relocation.revision == revision)
+        {
+            self.reader.discard_relocation();
+            self.relocation = None;
+        }
+    }
+
+    pub(in crate::player) fn decoded_frontier(&self) -> f64 {
+        self.reader.decoded_frontier()
+    }
+
+    fn into_ready(mut self) -> PreparedElasticReader {
+        self.reader.discard_relocation();
+        self.reader.into()
+    }
+
+    fn poll_relocation<R>(
+        &mut self,
+        source: &mut R,
+        revision: TransportRevision,
+    ) -> Result<bool, BoundRenderError>
+    where
+        R: kithara_audio::PcmReader + ?Sized,
+    {
+        let relocation = self
+            .relocation
+            .as_ref()
+            .ok_or(BoundRenderError::RevisionMismatch)?;
+        if relocation.revision != revision {
+            return Err(BoundRenderError::RevisionMismatch);
+        }
+        self.reader.poll_relocation(source).map_err(Into::into)
+    }
+
+    fn render<R>(
+        &mut self,
+        source: &mut R,
+        binding: &TrackBinding,
+        context: &RenderContext,
+        output_range: Range<usize>,
+        output: &mut [&mut [f32]],
+    ) -> Result<ElasticReadOutcome, BoundRenderError>
+    where
+        R: kithara_audio::PcmReader + ?Sized,
+    {
+        let commit = context
+            .transport_commit()
+            .ok_or(BoundRenderError::TransportCommitUnavailable)?;
+        let revision = commit.revision();
+        if let Some(relocation) = self.relocation.as_ref() {
+            self.reader.refresh_relocation(source)?;
+            let prepared_revision = relocation.revision;
+            let target = relocation.target;
+            if prepared_revision == revision
+                && commit.boundary() == TransportBoundary::Relocate(target)
+            {
+                self.reader.commit_relocation()?;
+                self.relocation = None;
+            } else if revision >= prepared_revision {
+                self.reader.discard_relocation();
+                self.relocation = None;
+            }
+        }
+        if revision < self.revision {
+            return Err(BoundRenderError::RevisionMismatch);
+        }
+        let requested_frames = output_range.len();
+        let requested_end = output_range.end;
+        let planned = match plan_elastic_segments(
+            binding,
+            context,
+            output_range,
+            self.request_id,
+            revision,
+            self.reader.capabilities().rate_envelope(),
+        ) {
+            Ok(planned) => planned,
+            Err(ElasticPlanError::OutsideMarkerDomain { .. }) => {
+                return Ok(ElasticReadOutcome::Eof);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if planned
+            .iter()
+            .any(|segment| segment.request.revision() != revision)
+        {
+            return Err(BoundRenderError::RevisionMismatch);
+        }
+        let rendered_end = planned
+            .last()
+            .and_then(|segment| {
+                segment
+                    .output_start
+                    .checked_add(segment.request.span().output_frames())
+            })
+            .ok_or(BoundRenderError::FrameOverflow)?;
+        if rendered_end < requested_end {
+            for channel in output.iter_mut() {
+                channel[rendered_end..requested_end].fill(0.0);
+            }
+        }
+        let output_start = planned
+            .first()
+            .map(|segment| segment.output_start)
+            .ok_or(BoundRenderError::FrameOverflow)?;
+        match self.reader.render(
+            source,
+            planned.iter().map(|segment| segment.request.span()),
+            output_start,
+            output,
+        )? {
+            ElasticReadOutcome::Ready { .. } => {
+                self.revision = revision;
+                self.request_id = planned
+                    .last()
+                    .ok_or(BoundRenderError::FrameOverflow)?
+                    .request
+                    .request_id()
+                    .checked_add(1)
+                    .ok_or(BoundRenderError::FrameOverflow)?;
+                Ok(ElasticReadOutcome::Ready {
+                    frames: requested_frames,
+                })
+            }
+            ElasticReadOutcome::Eof => Ok(ElasticReadOutcome::Eof),
+        }
+    }
+}
 
 pub(crate) struct PreparedBindingResource {
     pub(crate) context: PreparationContext,
-    pub(crate) renderer: PreparedElasticRenderer,
+    pub(crate) reader: PreparedElasticReader,
 }
 
 impl PlayerResource {
@@ -55,7 +243,7 @@ impl PlayerResource {
             return Err(PlayError::SessionSeekRequiresBoundTrack);
         };
         bound
-            .renderer
+            .reader
             .begin_relocation(binding, target, tempo, revision)
             .map_err(|error| PlayError::ElasticPreparation {
                 reason: error.to_string(),
@@ -64,19 +252,20 @@ impl PlayerResource {
 
     pub(crate) fn cancel_session_seek(&mut self, revision: TransportRevision) {
         if let PlayerResourceKind::Bound(bound) = &mut self.kind {
-            bound.renderer.discard_relocation(revision);
+            bound.reader.cancel_relocation(revision);
         }
     }
 
     pub(crate) fn new_bound(
         resource: Resource,
         src: Arc<str>,
-        renderer: PreparedElasticRenderer,
+        reader: PreparedElasticReader,
+        revision: TransportRevision,
     ) -> Self {
         Self {
             src,
             kind: BoundResource {
-                renderer: renderer.activate(),
+                reader: ActiveBoundReader::new(reader, revision),
                 resource: WasmSend::new(resource),
             }
             .into(),
@@ -91,7 +280,7 @@ impl PlayerResource {
             return Err(PlayError::SessionSeekRequiresBoundTrack);
         };
         bound
-            .renderer
+            .reader
             .poll_relocation(bound.resource.get_mut(), revision)
             .map_err(|error| PlayError::ElasticPreparation {
                 reason: error.to_string(),
@@ -111,22 +300,22 @@ impl PlayerResource {
         };
         let outcome =
             bound
-                .renderer
+                .reader
                 .render(bound.resource.get_mut(), binding, context, range, output);
         match outcome {
-            Ok(ElasticRenderOutcome::Ready { frames }) if frames == requested_frames => {
+            Ok(ElasticReadOutcome::Ready { frames }) if frames == requested_frames => {
                 ReadOutcome::Full { frames }
             }
-            Ok(ElasticRenderOutcome::Eof) => ReadOutcome::Eof,
-            Ok(ElasticRenderOutcome::Ready { .. }) | Err(_) => ReadOutcome::Failed,
+            Ok(ElasticReadOutcome::Eof) => ReadOutcome::Eof,
+            Ok(ElasticReadOutcome::Ready { .. }) | Err(_) => ReadOutcome::Failed,
         }
     }
 }
 
 impl BoundResource {
-    pub(in crate::player) fn into_parts(self: Box<Self>) -> (Resource, PreparedElasticRenderer) {
-        let Self { resource, renderer } = *self;
-        (resource.into_inner(), renderer.into())
+    pub(in crate::player) fn into_parts(self: Box<Self>) -> (Resource, PreparedElasticReader) {
+        let Self { resource, reader } = *self;
+        (resource.into_inner(), reader.into_ready())
     }
 }
 
@@ -174,8 +363,8 @@ impl PlayerImpl {
             let transaction = prepare_first_load(
                 &self.core.items,
                 QueuedResource {
-                    binding: Some(binding),
                     item_id,
+                    binding: Some(binding),
                     prepared: Some(prepared),
                     resource: Some(resource),
                 },
@@ -216,7 +405,7 @@ impl PlayerImpl {
             binding,
             &context,
             shape,
-            SignalsmithBackend::<ElasticConfig>::rate_envelope(),
+            ElasticReader::<Unprepared>::rate_envelope(),
         )?;
         Ok(())
     }
@@ -258,9 +447,18 @@ impl PlayerImpl {
             if prepared.context.shape() != shape {
                 return Err(PlayError::BindingPreparationStale { index });
             }
+            let anchor = plan_elastic_anchor(
+                binding,
+                binding.session_anchor(),
+                tempo,
+                prepared.reader.capabilities(),
+            )
+            .map_err(|error| PlayError::ElasticPreparation {
+                reason: error.to_string(),
+            })?;
             prepared
-                .renderer
-                .validate_retarget(binding, binding.session_anchor(), tempo)
+                .reader
+                .validate_retarget(anchor)
                 .map_err(map_successor_retarget_error)?;
         }
         Ok(())
@@ -329,7 +527,7 @@ fn validate_tempo_change(
     shape: StreamShape,
     available: f64,
 ) -> Result<(), PlayError> {
-    let envelope = SignalsmithBackend::<ElasticConfig>::rate_envelope();
+    let envelope = ElasticReader::<Unprepared>::rate_envelope();
     let old_context = tempo_context(
         snapshot.position(),
         snapshot.tempo(),
@@ -472,21 +670,30 @@ pub(crate) fn prepare_bound_load(
         restore_queued_resource(playlist, index, Some(prepared), resource)?;
         return Err(PlayError::BindingPreparationStale { index });
     }
-    if prepared.context.transport_revision() != load_context.transport_revision()
-        && let Err(error) = prepared.renderer.retarget(
+    if prepared.context.transport_revision() != load_context.transport_revision() {
+        let anchor = match plan_elastic_anchor(
             binding,
             binding.session_anchor(),
             load_context.tempo(),
-            load_context.transport_revision(),
-        )
-    {
-        restore_queued_resource(playlist, index, Some(prepared), resource)?;
-        return Err(map_successor_retarget_error(error));
+            prepared.reader.capabilities(),
+        ) {
+            Ok(anchor) => anchor,
+            Err(error) => {
+                restore_queued_resource(playlist, index, Some(prepared), resource)?;
+                return Err(PlayError::ElasticPreparation {
+                    reason: error.to_string(),
+                });
+            }
+        };
+        if let Err(error) = prepared.reader.retarget(anchor) {
+            restore_queued_resource(playlist, index, Some(prepared), resource)?;
+            return Err(map_successor_retarget_error(error));
+        }
     }
     prepared.context = load_context;
 
     let PreparedBindingResource {
-        renderer,
+        reader,
         context: prepared_context,
     } = prepared;
     let abr_handle = resource.abr_handle();
@@ -498,7 +705,8 @@ pub(crate) fn prepare_bound_load(
     );
     resource.set_service_class(ServiceClass::Idle);
     let src = Arc::clone(resource.src());
-    let player_resource = PlayerResource::new_bound(resource, src, renderer);
+    let player_resource =
+        PlayerResource::new_bound(resource, src, reader, prepared_context.transport_revision());
     Ok(BoundLoad {
         player_resource,
         abr_handle,
@@ -506,10 +714,10 @@ pub(crate) fn prepare_bound_load(
     })
 }
 
-fn map_successor_retarget_error(error: ElasticPrepareError) -> PlayError {
+fn map_successor_retarget_error(error: ElasticReaderError) -> PlayError {
     match error {
-        ElasticPrepareError::Elastic(ElasticError::InvalidRate(rate)) => {
-            let envelope = SignalsmithBackend::<ElasticConfig>::rate_envelope();
+        ElasticReaderError::Elastic(ElasticError::InvalidRate(rate)) => {
+            let envelope = ElasticReader::<Unprepared>::rate_envelope();
             PlayError::SessionTempoUnsupported {
                 rate,
                 minimum: envelope.min_source_frames_per_output(),
@@ -528,11 +736,8 @@ pub(crate) fn restore_prepared_binding(
 ) -> Result<(Resource, Option<PreparedBindingResource>), PlayError> {
     match (released, context) {
         (ReleasedPlayerResource::Bound(bound), Some(context)) => {
-            let (resource, renderer) = bound.into_parts();
-            Ok((
-                resource,
-                Some(PreparedBindingResource { context, renderer }),
-            ))
+            let (resource, reader) = bound.into_parts();
+            Ok((resource, Some(PreparedBindingResource { context, reader })))
         }
         (ReleasedPlayerResource::Linear(resource), None) => Ok((resource, None)),
         _ => Err(PlayError::Internal(
@@ -566,22 +771,22 @@ mod tests {
     };
 
     #[kithara::test]
-    fn bound_resource_type_requires_an_active_renderer() {
-        fn renderer(bound: &BoundResource) -> &ActiveElasticRenderer {
-            &bound.renderer
+    fn bound_resource_type_requires_an_active_reader() {
+        fn reader(bound: &BoundResource) -> &ActiveBoundReader {
+            &bound.reader
         }
 
-        let _: fn(&BoundResource) -> &ActiveElasticRenderer = renderer;
+        let _: fn(&BoundResource) -> &ActiveBoundReader = reader;
     }
 
     #[kithara::test]
     fn first_load_transaction_removes_inserted_item_on_rejection() {
         let items = ItemQueue::new(EventBus::default());
-        let pool = PcmPool::default();
+        let pool = PcmPool::new(usize::MAX, usize::MIN);
         let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
         let shape = StreamShape::new(
-            NonZeroU32::new(44_100).expect("static sample rate"),
-            NonZeroU32::new(512).expect("static block size"),
+            NonZeroU32::new(44_100).expect("invariant: static sample rate"),
+            NonZeroU32::new(512).expect("invariant: static block size"),
         );
         let result = prepare_first_load(
             &items,
@@ -600,7 +805,7 @@ mod tests {
                 },
             ),
         )
-        .expect("first load preparation succeeds")
+        .expect("invariant: first load preparation succeeds")
         .dispatch(&engine, SlotId::new(0), TrackStart::Immediate);
 
         assert!(matches!(result, Err(PlayError::SlotNotFound(_))));
@@ -610,25 +815,25 @@ mod tests {
 
     #[kithara::test]
     fn join_rejects_stream_shape_change_after_preparation() {
-        let target = SessionBeat::new(8.0).expect("finite target");
-        let tempo = Tempo::new(120.0).expect("valid tempo");
+        let target = SessionBeat::new(8.0).expect("invariant: finite target");
+        let tempo = Tempo::new(120.0).expect("invariant: valid tempo");
         let revision = TransportRevision::FIRST;
         let before = SessionTransportSnapshot::new(
-            SessionBeat::new(4.0).expect("finite position"),
+            SessionBeat::new(4.0).expect("invariant: finite position"),
             true,
             tempo,
             revision,
         );
         let current = SessionTransportSnapshot::new(
-            SessionBeat::new(5.0).expect("finite position"),
+            SessionBeat::new(5.0).expect("invariant: finite position"),
             true,
             tempo,
             revision,
         );
         let prepared = PreparationContext::new(
             StreamShape::new(
-                NonZeroU32::new(44_100).expect("static sample rate"),
-                NonZeroU32::new(512).expect("static block size"),
+                NonZeroU32::new(44_100).expect("invariant: static sample rate"),
+                NonZeroU32::new(512).expect("invariant: static block size"),
             ),
             tempo,
             revision,
@@ -636,8 +841,8 @@ mod tests {
         );
         let changed = PreparationContext::new(
             StreamShape::new(
-                NonZeroU32::new(48_000).expect("static sample rate"),
-                NonZeroU32::new(512).expect("static block size"),
+                NonZeroU32::new(48_000).expect("invariant: static sample rate"),
+                NonZeroU32::new(512).expect("invariant: static block size"),
             ),
             tempo,
             revision,
@@ -651,70 +856,54 @@ mod tests {
     }
 
     fn binding() -> TrackBinding {
-        let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
         let frames_per_beat = 26_460;
-        let analysis = TrackAnalysis::with_source_rate(
-            Some(BeatGrid::new(
-                100.0,
-                (0..=6).map(|beat| beat * frames_per_beat).collect(),
-                vec![0],
-                Vec::new(),
-            )),
-            None,
-            frames_per_beat * 6,
-            sample_rate,
-        );
-        TrackBinding::new(
-            &analysis,
-            sample_rate,
-            SessionBeat::new(0.0).expect("finite session anchor"),
-            TrackBeat::new(0.0).expect("finite track anchor"),
-            PlaybackDirection::Forward,
-        )
-        .expect("valid binding")
+        analyzed_binding((0..=6).map(|beat| beat * frames_per_beat).collect())
     }
 
     fn variable_binding() -> TrackBinding {
-        let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
+        analyzed_binding(vec![0, 26_460, 70_560, 114_660])
+    }
+
+    fn analyzed_binding(markers: Vec<u64>) -> TrackBinding {
+        let sample_rate = NonZeroU32::new(44_100).expect("invariant: static sample rate");
+        let source_frame_count = markers
+            .last()
+            .copied()
+            .expect("invariant: non-empty marker fixture");
         let analysis = TrackAnalysis::with_source_rate(
-            Some(BeatGrid::new(
-                100.0,
-                vec![0, 26_460, 70_560, 114_660],
-                vec![0],
-                Vec::new(),
-            )),
+            Some(BeatGrid::new(100.0, markers, vec![0], Vec::new())),
             None,
-            114_660,
+            source_frame_count,
             sample_rate,
         );
         TrackBinding::new(
             &analysis,
             sample_rate,
-            SessionBeat::new(0.0).expect("finite session anchor"),
-            TrackBeat::new(0.0).expect("finite track anchor"),
+            SessionBeat::new(0.0).expect("invariant: finite session anchor"),
+            TrackBeat::new(0.0).expect("invariant: finite track anchor"),
             PlaybackDirection::Forward,
         )
-        .expect("valid variable binding")
+        .expect("invariant: valid binding fixture")
     }
 
     #[kithara::test]
     fn tempo_preflight_rejects_insufficient_source_lookahead() {
-        let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
+        let sample_rate = NonZeroU32::new(44_100).expect("invariant: static sample rate");
         let shape = StreamShape::new(
             sample_rate,
-            NonZeroU32::new(512).expect("static block size"),
+            NonZeroU32::new(512).expect("invariant: static block size"),
         );
         let snapshot = SessionTransportSnapshot::new(
-            SessionBeat::new(0.0).expect("finite position"),
+            SessionBeat::new(0.0).expect("invariant: finite position"),
             true,
-            Tempo::new(120.0).expect("valid tempo"),
+            Tempo::new(120.0).expect("invariant: valid tempo"),
             TransportRevision::FIRST,
         );
 
         let error = validate_tempo_change(
             &binding(),
             snapshot,
-            Tempo::new(100.0).expect("valid changed tempo"),
+            Tempo::new(100.0).expect("invariant: valid changed tempo"),
             shape,
             0.0,
         )
@@ -728,23 +917,23 @@ mod tests {
 
     #[kithara::test]
     fn tempo_preflight_rejects_one_unsupported_marker_segment() {
-        let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
+        let sample_rate = NonZeroU32::new(44_100).expect("invariant: static sample rate");
         let shape = StreamShape::new(
             sample_rate,
-            NonZeroU32::new(512).expect("static block size"),
+            NonZeroU32::new(512).expect("invariant: static block size"),
         );
         let block_beats = 512.0 * 120.0 / (44_100.0 * 60.0);
         let snapshot = SessionTransportSnapshot::new(
-            SessionBeat::new(0.98 - block_beats).expect("finite position"),
+            SessionBeat::new(0.98 - block_beats).expect("invariant: finite position"),
             true,
-            Tempo::new(120.0).expect("valid tempo"),
+            Tempo::new(120.0).expect("invariant: valid tempo"),
             TransportRevision::FIRST,
         );
 
         let error = validate_tempo_change(
             &variable_binding(),
             snapshot,
-            Tempo::new(120.0).expect("valid changed tempo"),
+            Tempo::new(120.0).expect("invariant: valid changed tempo"),
             shape,
             200_000.0,
         )

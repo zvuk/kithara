@@ -2,8 +2,9 @@ use std::num::NonZeroU32;
 
 use delegate::delegate;
 use kithara_audio::{
-    Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
-    ServiceClass,
+    Audio, AudioConfig, ChunkOutcome, PcmControl, PcmRead, PcmReader, PcmSession, PreloadGate,
+    ReadOutcome, ResamplerBackend, SeekOutcome, ServiceClass, SourceRange, SourceRangeError,
+    SourceRangeReadOutcome, SourceRangeRequest,
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
@@ -261,6 +262,60 @@ impl Resource {
     }
 }
 
+impl PcmRead for Resource {
+    delegate! {
+        to self.inner {
+            fn decoded_frontier(&self) -> Duration;
+            fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
+            fn position(&self) -> Duration;
+            fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
+            fn read_planar<'a>(
+                &mut self,
+                output: &'a mut [&'a mut [f32]],
+            ) -> Result<ReadOutcome, DecodeError>;
+            fn read_source_range(
+                &mut self,
+                request: SourceRangeRequest,
+                output: &mut [f32],
+            ) -> Result<SourceRangeReadOutcome, SourceRangeError>;
+            fn spec(&self) -> PcmSpec;
+        }
+    }
+}
+
+impl PcmSession for Resource {
+    delegate! {
+        to self.inner {
+            fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            fn duration(&self) -> Option<Duration>;
+            fn metadata(&self) -> &TrackMetadata;
+            fn preload_epoch(&self) -> u64;
+            fn preload_gate(&self) -> Option<Arc<PreloadGate>>;
+        }
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+}
+
+impl PcmControl for Resource {
+    delegate! {
+        to self.inner {
+            fn preload(&mut self) -> Result<(), DecodeError>;
+            fn request_source_range(
+                &mut self,
+                range: SourceRange,
+            ) -> Result<SourceRangeRequest, SourceRangeError>;
+            fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+            fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
+            fn set_playback_rate(&self, rate: f32);
+            fn set_service_class(&self, class: ServiceClass);
+            fn set_transport_bend(&self, bend: f32);
+        }
+    }
+}
+
 /// Unwrap a `Resource` into its underlying reader, e.g. to hand the opened
 /// source to the shared analysis worker (`kithara_audio::analysis`).
 ///
@@ -303,7 +358,7 @@ mod tests {
             Self {
                 bus: EventBus::default(),
                 meta: TrackMetadata::default(),
-                spec: PcmSpec::new(2, NonZeroU32::new(44_100).expect("static rate")),
+                spec: PcmSpec::new(2, NonZeroU32::new(44_100).expect("invariant: static rate")),
             }
         }
     }
@@ -396,20 +451,20 @@ mod tests {
         let mut config = ResourceConfig::new(
             fixture,
             AssetStoreBuilder::default().build(),
-            BytePool::default(),
-            PcmPool::default(),
+            BytePool::new(usize::MAX, usize::MIN),
+            PcmPool::new(usize::MAX, usize::MIN),
         )
-        .expect("fixture path must be a valid local resource");
+        .expect("invariant: fixture path must be a valid local resource");
         config.cancel = Some(owner.clone());
 
         let resource = Resource::new(config)
             .await
-            .expect("fixture resource must open");
+            .expect("invariant: fixture resource must open");
         let reader_cancel = resource
             .cancel
             .0
             .as_ref()
-            .expect("opened resource must own its cancel token")
+            .expect("invariant: opened resource must own its cancel token")
             .clone();
 
         let reader: Box<dyn PcmReader> = resource.into();

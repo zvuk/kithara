@@ -1,11 +1,14 @@
 use std::ops::Range;
 
-use kithara_stretch::{ElasticError, ElasticRateEnvelope, ElasticSpan, ElasticSpanPlan};
+use kithara_audio::elastic::{
+    ElasticAnchor, ElasticCapabilities, ElasticError, ElasticRateEnvelope, ElasticSpan,
+    ElasticSpanPlan,
+};
 use num_traits::ToPrimitive;
 use smallvec::SmallVec;
 
 use crate::{
-    api::{SyncUnavailable, TrackBinding, TransportRevision},
+    api::{SessionBeat, SyncUnavailable, Tempo, TrackBinding, TransportRevision},
     session::render::RenderContext,
 };
 
@@ -58,6 +61,8 @@ pub(crate) enum ElasticPlanError {
     TooManySegments,
     #[error("analysed marker boundary cannot be placed inside the render block")]
     InvalidBoundarySplit,
+    #[error("elastic preparation anchor is not representable")]
+    InvalidAnchor,
 }
 
 const MAX_SEGMENTS: usize = ElasticSpanPlan::MAX_SPANS;
@@ -68,6 +73,34 @@ pub(crate) struct ElasticRenderSegment {
     pub(crate) output_start: usize,
 }
 
+pub(crate) fn plan_elastic_anchor(
+    binding: &TrackBinding,
+    anchor: SessionBeat,
+    tempo: Tempo,
+    capabilities: ElasticCapabilities,
+) -> Result<ElasticAnchor, ElasticPlanError> {
+    let source_start = binding
+        .source_frame_at(anchor)?
+        .ok_or_else(|| ElasticPlanError::OutsideMarkerDomain { beat: anchor.get() })?
+        .get();
+    let output_frames = capabilities.latency().output_frames();
+    let output_frames_f64 = output_frames
+        .to_f64()
+        .ok_or(ElasticPlanError::InvalidAnchor)?;
+    let beat_advance = output_frames_f64 * tempo.beats_per_second()
+        / f64::from(binding.map().host_sample_rate().get());
+    let horizon = SessionBeat::new(anchor.get() + beat_advance)
+        .map_err(|_| ElasticPlanError::InvalidAnchor)?;
+    let source_end = binding
+        .source_frame_at(horizon)?
+        .ok_or_else(|| ElasticPlanError::OutsideMarkerDomain {
+            beat: horizon.get(),
+        })?
+        .get();
+    let rate = (source_end - source_start).abs() / output_frames_f64;
+    ElasticAnchor::try_from((source_start, rate, binding.direction())).map_err(Into::into)
+}
+
 pub(crate) fn plan_elastic_segments(
     binding: &TrackBinding,
     context: &RenderContext,
@@ -76,8 +109,6 @@ pub(crate) fn plan_elastic_segments(
     revision: TransportRevision,
     supported_rates: ElasticRateEnvelope,
 ) -> Result<SmallVec<[ElasticRenderSegment; MAX_SEGMENTS]>, ElasticPlanError> {
-    const SPLIT_PARTS: usize = 2;
-
     let mut pending = SmallVec::<[Range<usize>; MAX_SEGMENTS]>::new();
     pending.push(output_range);
     let mut segments = SmallVec::<[ElasticRenderSegment; MAX_SEGMENTS]>::new();
@@ -106,12 +137,12 @@ pub(crate) fn plan_elastic_segments(
                 });
             }
             Err(ElasticPlanError::MarkerBoundaryCrossing { boundary }) => {
-                if pending.len() + segments.len() + SPLIT_PARTS > MAX_SEGMENTS {
+                let split = boundary_output_frame(binding, context, range.clone(), boundary)?;
+                let split_ranges = [range.start..split, split..range.end];
+                if pending.len() + segments.len() + split_ranges.len() > MAX_SEGMENTS {
                     return Err(ElasticPlanError::TooManySegments);
                 }
-                let split = boundary_output_frame(binding, context, range.clone(), boundary)?;
-                pending.push(split..range.end);
-                pending.push(range.start..split);
+                pending.extend(split_ranges.into_iter().rev());
             }
             Err(ElasticPlanError::OutsideMarkerDomain { .. }) if !segments.is_empty() => {}
             Err(error) => return Err(error),
@@ -193,18 +224,14 @@ pub(crate) fn plan_elastic_render(
 }
 
 fn crossed_marker_boundary(start: f64, end: f64, output_frames: usize) -> Option<f64> {
-    const BOUNDARY_OFFSETS: [f64; 3] = [0.0, 1.0, 2.0];
-    const HALF_FRAME_DIVISOR: usize = 2;
-
     let lower = start.min(end);
     let upper = start.max(end);
     let output_frames_f64 = output_frames.to_f64()?;
-    let half_frame_divisor = HALF_FRAME_DIVISOR.to_f64()?;
-    let half_frame = (upper - lower) / (half_frame_divisor * output_frames_f64);
+    let half_frame = (upper - lower).midpoint(0.0) / output_frames_f64;
     let candidate = (lower + half_frame).floor();
-    BOUNDARY_OFFSETS
+    (0..MAX_SEGMENTS - 1)
+        .filter_map(|offset| offset.to_f64())
         .map(|offset| candidate + offset)
-        .into_iter()
         .filter(|boundary| *boundary > lower && *boundary < upper)
         .find(|boundary| {
             boundary_output_offset(start, end, output_frames, *boundary)
@@ -252,8 +279,11 @@ fn boundary_output_frame(
 mod tests {
     use std::{num::NonZeroU32, ops::Range};
 
-    use kithara_audio::{BeatGrid, TrackBeat, analysis::TrackAnalysis};
-    use kithara_stretch::{ElasticConfig, SignalsmithBackend};
+    use kithara_audio::{
+        BeatGrid, TrackBeat,
+        analysis::TrackAnalysis,
+        elastic::{ElasticReader, Unprepared},
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -273,7 +303,7 @@ mod tests {
         const SAMPLE_RATE: u32 = 48_000;
 
         fn supported_rates() -> ElasticRateEnvelope {
-            SignalsmithBackend::<ElasticConfig>::rate_envelope()
+            ElasticReader::<Unprepared>::rate_envelope()
         }
     }
 
@@ -286,10 +316,11 @@ mod tests {
         track_anchor: f64,
         direction: PlaybackDirection,
     ) -> TrackBinding {
-        let sample_rate = NonZeroU32::new(TestSpec::SAMPLE_RATE).expect("static sample rate");
+        let sample_rate =
+            NonZeroU32::new(TestSpec::SAMPLE_RATE).expect("invariant: static sample rate");
         let beat_frames = (60.0 * f64::from(TestSpec::SAMPLE_RATE) / track_tempo)
             .to_u64()
-            .expect("test tempo resolves to an integer frame span");
+            .expect("invariant: test tempo resolves to an integer frame span");
         let analysis = TrackAnalysis::with_source_rate(
             Some(BeatGrid::new(
                 track_tempo,
@@ -310,11 +341,11 @@ mod tests {
         TrackBinding::new(
             &analysis,
             sample_rate,
-            SessionBeat::new(0.0).expect("finite session beat"),
-            TrackBeat::new(track_anchor).expect("finite track beat"),
+            SessionBeat::new(0.0).expect("invariant: finite session beat"),
+            TrackBeat::new(track_anchor).expect("invariant: finite track beat"),
             direction,
         )
-        .expect("valid track binding")
+        .expect("invariant: valid track binding")
     }
 
     fn context(beats: Range<f64>) -> RenderContext {
@@ -325,20 +356,21 @@ mod tests {
         RenderContext::new(
             RenderFrame::new(0)
                 ..RenderFrame::new(
-                    i64::try_from(output_frames).expect("block size fits the render axis"),
+                    i64::try_from(output_frames)
+                        .expect("invariant: block size fits the render axis"),
                 ),
-            NonZeroU32::new(TestSpec::SAMPLE_RATE).expect("static sample rate"),
+            NonZeroU32::new(TestSpec::SAMPLE_RATE).expect("invariant: static sample rate"),
             Some(
-                SessionBeat::new(beats.start).expect("finite start beat")
-                    ..SessionBeat::new(beats.end).expect("finite end beat"),
+                SessionBeat::new(beats.start).expect("invariant: finite start beat")
+                    ..SessionBeat::new(beats.end).expect("invariant: finite end beat"),
             ),
             Some(SessionTransportCommit::new(
-                Tempo::new(120.0).expect("valid tempo"),
+                Tempo::new(120.0).expect("invariant: valid tempo"),
                 true,
                 TestSpec::REVISION,
             )),
         )
-        .expect("valid render context")
+        .expect("invariant: valid render context")
     }
 
     #[kithara::test]
@@ -351,7 +383,7 @@ mod tests {
             TestSpec::REVISION,
             TestSpec::supported_rates(),
         )
-        .expect("supported elastic request");
+        .expect("invariant: supported elastic request");
 
         assert_eq!(request.request_id(), TestSpec::REQUEST_ID);
         assert_eq!(request.revision(), TestSpec::REVISION);
@@ -370,7 +402,7 @@ mod tests {
             TestSpec::REVISION,
             TestSpec::supported_rates(),
         )
-        .expect("supported elastic request");
+        .expect("invariant: supported elastic request");
 
         assert_eq!(request.span().source_start(), 288.0);
         assert_eq!(request.span().source_end(), 576.0);
@@ -423,7 +455,7 @@ mod tests {
             TestSpec::REVISION,
             TestSpec::supported_rates(),
         )
-        .expect("one marker boundary is split");
+        .expect("invariant: one marker boundary is split");
 
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].output_start, 0);
@@ -453,7 +485,7 @@ mod tests {
             TestSpec::REVISION,
             TestSpec::supported_rates(),
         )
-        .expect("source-start crossing retains the renderable prefix");
+        .expect("invariant: source-start crossing retains the renderable prefix");
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].output_start, 0);
@@ -466,7 +498,7 @@ mod tests {
     fn rounds_a_marker_split_to_the_nearest_render_frame() {
         let output_frames = TestSpec::OUTPUT_FRAMES
             .to_f64()
-            .expect("output frame count fits f64");
+            .expect("invariant: output frame count fits f64");
         let start = 0.99;
         let split = 389.25;
         let end = start + (1.0 - start) * output_frames / split;
@@ -478,7 +510,7 @@ mod tests {
             TestSpec::REVISION,
             TestSpec::supported_rates(),
         )
-        .expect("sub-frame marker boundary uses the nearest render-frame split");
+        .expect("invariant: sub-frame marker uses the nearest render-frame split");
 
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].request.span().output_frames(), 389);
@@ -501,7 +533,7 @@ mod tests {
             TestSpec::REVISION,
             TestSpec::supported_rates(),
         )
-        .expect("four marker segments fit the inline plan");
+        .expect("invariant: four marker segments fit the inline plan");
 
         assert_eq!(segments.len(), 4);
         assert!(!segments.spilled());
@@ -528,7 +560,7 @@ mod tests {
             TestSpec::REVISION,
             TestSpec::supported_rates(),
         )
-        .expect("endpoint marker belongs to the current segment");
+        .expect("invariant: endpoint marker belongs to the current segment");
 
         assert_eq!(request.span().source_end(), 28_800.0);
     }
@@ -543,11 +575,11 @@ mod tests {
             TestSpec::REVISION,
             TestSpec::supported_rates(),
         )
-        .expect("declared upper rate remains supported after coordinate mapping");
+        .expect("invariant: declared upper rate survives coordinate mapping");
 
         let output_frames = TestSpec::OUTPUT_FRAMES
             .to_f64()
-            .expect("output frame count fits f64");
+            .expect("invariant: output frame count fits f64");
         assert!((request.span().source_end() / output_frames - 4.0 / 3.0).abs() <= f64::EPSILON);
     }
 

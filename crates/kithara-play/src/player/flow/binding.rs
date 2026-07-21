@@ -1,5 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use kithara_audio::elastic::{ElasticPreparationPoll, ElasticReader, Unprepared};
 use kithara_platform::{
     CancelToken,
     time::{Duration, sleep},
@@ -10,7 +11,7 @@ use super::super::{core::PlayerImpl, state::PreparedBindingResource};
 use crate::{
     api::{PlaybackDirection, SessionBeat, TrackBinding},
     error::PlayError,
-    player::track::{ElasticPreparationPoll, PreparingElasticRenderer},
+    player::track::{PlayerResource, plan_elastic_anchor},
     resource::Resource,
     session::protocol::PreparationContext,
 };
@@ -66,26 +67,37 @@ impl PlayerImpl {
         resource.set_playback_rate(self.core.timestretch.speed());
         resource.set_transport_bend(self.core.params.pitch_bend());
         resource.set_host_sample_rate(context.shape().sample_rate);
-        let mut preparation = PreparingElasticRenderer::begin(
-            &mut resource,
-            binding,
-            anchor,
-            context.tempo(),
-            context.transport_revision(),
-            context.shape(),
+        let reader = ElasticReader::<Unprepared>::allocate(
+            resource.spec(),
+            binding.map().source_frame_count(),
+            context.shape().sample_rate,
+            context.shape().max_block_frames,
+            PlayerResource::OUTPUT_CHANNELS,
+            self.core.elastic,
             self.core.engine.pcm_pool(),
         )
         .map_err(|error| PlayError::ElasticPreparation {
             reason: error.to_string(),
         })?;
+        let elastic_anchor =
+            plan_elastic_anchor(binding, anchor, context.tempo(), reader.capabilities()).map_err(
+                |error| PlayError::ElasticPreparation {
+                    reason: error.to_string(),
+                },
+            )?;
+        let mut preparation = reader
+            .begin(&mut resource, elastic_anchor)
+            .map_err(|error| PlayError::ElasticPreparation {
+                reason: error.to_string(),
+            })?;
 
-        let renderer = loop {
+        let reader = loop {
             match preparation.poll(&mut resource).map_err(|error| {
                 PlayError::ElasticPreparation {
                     reason: error.to_string(),
                 }
             })? {
-                ElasticPreparationPoll::Ready(renderer) => break renderer,
+                ElasticPreparationPoll::Ready(reader) => break reader,
                 ElasticPreparationPoll::Pending(next) => {
                     preparation = next;
                     wait_for_preparation_poll(&cancel).await?;
@@ -97,7 +109,7 @@ impl PlayerImpl {
             return Err(PlayError::BindingPreparationContextChanged);
         }
 
-        Ok((resource, PreparedBindingResource { context, renderer }))
+        Ok((resource, PreparedBindingResource { context, reader }))
     }
 }
 
