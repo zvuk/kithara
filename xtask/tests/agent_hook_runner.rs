@@ -2,11 +2,10 @@
 
 use std::{
     env, fs,
-    os::unix::fs::PermissionsExt,
+    io::Write,
+    os::unix::fs::{PermissionsExt, symlink},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    thread,
-    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -21,12 +20,7 @@ enum GitLayout {
 
 struct Fixture {
     _temp: TempDir,
-    cargo_jobs_log: PathBuf,
     cargo_log: PathBuf,
-    cargo_ready: PathBuf,
-    child_pid: PathBuf,
-    fake_bin: PathBuf,
-    fake_xtask: PathBuf,
     git_dir: PathBuf,
     path: std::ffi::OsString,
     repo: PathBuf,
@@ -57,16 +51,13 @@ impl Fixture {
             }
         };
         let fake_bin = temp.path().join("bin");
-        let cargo_jobs_log = temp.path().join("cargo-jobs.log");
         let cargo_log = temp.path().join("cargo.log");
-        let cargo_ready = temp.path().join("cargo.ready");
-        let child_pid = temp.path().join("child.pid");
         let xtask_log = temp.path().join("xtask.log");
-        let fake_xtask = fake_bin.join("xtask-built");
         let runner = repo.join("xtask/agent-hook");
 
         fs::create_dir_all(&git_dir)?;
-        fs::create_dir_all(&repo)?;
+        fs::create_dir_all(repo.join("xtask/src/agent_hook"))?;
+        fs::create_dir_all(&fake_bin)?;
         match layout {
             GitLayout::Directory => {}
             GitLayout::LinkedAbsolute => {
@@ -79,37 +70,28 @@ impl Fixture {
                 fs::write(repo.join(".git"), "gitdir: ../git/worktrees/repo\n")?;
             }
         }
-        fs::create_dir_all(repo.join("xtask/src"))?;
-        fs::create_dir_all(&fake_bin)?;
         fs::write(
             repo.join("xtask/Cargo.toml"),
             "[package]\nname = \"xtask\"\nversion = \"0.0.0\"\n",
         )?;
         fs::write(repo.join("xtask/src/main.rs"), "fn main() {}\n")?;
+        fs::write(repo.join("xtask/src/agent_hook.rs"), "pub fn run() {}\n")?;
+        fs::write(
+            repo.join("xtask/src/agent_hook/input.rs"),
+            "pub fn read() {}\n",
+        )?;
         fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("agent-hook"),
             &runner,
         )
         .context("copy xtask agent-hook runner")?;
         make_executable(&runner)?;
-
         write_executable(
             &fake_bin.join("cargo"),
             r#"#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$FAKE_CARGO_LOG"
-printf '%s\n' "${CARGO_BUILD_JOBS-}" >> "$FAKE_CARGO_JOBS_LOG"
-mkdir -p "$CARGO_TARGET_DIR/debug"
-cp "$FAKE_XTASK_SOURCE" "$CARGO_TARGET_DIR/debug/xtask"
-chmod 755 "$CARGO_TARGET_DIR/debug/xtask"
-"#,
-        )?;
-        write_executable(
-            &fake_xtask,
-            r#"#!/bin/sh
-set -eu
-printf '%s\n' "$*" >> "$FAKE_XTASK_LOG"
-cat >/dev/null
+exit 91
 "#,
         )?;
 
@@ -121,12 +103,7 @@ cat >/dev/null
 
         Ok(Self {
             _temp: temp,
-            cargo_jobs_log,
             cargo_log,
-            cargo_ready,
-            child_pid,
-            fake_bin,
-            fake_xtask,
             git_dir,
             path,
             repo,
@@ -139,104 +116,72 @@ cat >/dev/null
         self.git_dir.join("kithara-agent-hook")
     }
 
-    fn fail_cargo(&self) -> Result<()> {
-        write_executable(
-            &self.fake_bin.join("cargo"),
-            r#"#!/bin/sh
-set -eu
-printf '%s\n' "$*" >> "$FAKE_CARGO_LOG"
-mkdir -p "$CARGO_TARGET_DIR"
-printf 'partial\n' > "$CARGO_TARGET_DIR/partial"
-exit 77
-"#,
-        )
-    }
-
     fn command(&self, hook: &str) -> Command {
         let mut command = Command::new(&self.runner);
-        command.arg(hook);
-        self.configure(&mut command);
         command
-    }
-
-    fn command_with_shell(&self, shell: &Path, hook: &str) -> Command {
-        let mut command = Command::new(shell);
-        command.arg(&self.runner).arg(hook);
-        self.configure(&mut command);
-        command
-    }
-
-    fn configure(&self, command: &mut Command) {
-        command
+            .arg(hook)
             .current_dir(self.repo.join("xtask/src"))
-            .env("FAKE_CARGO_JOBS_LOG", &self.cargo_jobs_log)
             .env("FAKE_CARGO_LOG", &self.cargo_log)
-            .env("FAKE_CARGO_READY", &self.cargo_ready)
-            .env("FAKE_CHILD_PID", &self.child_pid)
             .env("FAKE_XTASK_LOG", &self.xtask_log)
-            .env("FAKE_XTASK_SOURCE", &self.fake_xtask)
             .env("PATH", &self.path)
-            .env_remove("CARGO_BUILD_JOBS")
-            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        command
     }
 
     fn run(&self, hook: &str) -> Result<Output> {
         self.command(hook)
+            .stdin(Stdio::null())
             .output()
             .with_context(|| format!("run agent hook command {hook}"))
     }
 
-    fn hang_cargo_with_child(&self) -> Result<()> {
+    fn run_with_input(&self, hook: &str, input: &str) -> Result<Output> {
+        let mut child = self.command(hook).stdin(Stdio::piped()).spawn()?;
+        child
+            .stdin
+            .take()
+            .context("open hook stdin")?
+            .write_all(input.as_bytes())?;
+        child.wait_with_output().context("wait for agent hook")
+    }
+
+    fn install_fake_xtask(&self) -> Result<()> {
+        let cache = self.cache_dir();
+        let generation = cache.join("generation-test");
+        fs::create_dir_all(&generation)?;
+        symlink("generation-test", cache.join("current"))?;
         write_executable(
-            &self.fake_bin.join("cargo"),
+            &generation.join("xtask"),
             r#"#!/bin/sh
 set -eu
-printf '%s\n' "$*" >> "$FAKE_CARGO_LOG"
-printf '%s\n' "${CARGO_BUILD_JOBS-}" >> "$FAKE_CARGO_JOBS_LOG"
-(
-    trap '' TERM
-    while :; do
-        sleep 1
-    done
-) &
-child=$!
-printf '%s\n' "$child" > "$FAKE_CHILD_PID"
-printf 'ready\n' > "$FAKE_CARGO_READY"
-wait "$child"
+printf 'args=%s\nroot=%s\ncache=%s\n' "$*" "$KITHARA_AGENT_HOOK_ROOT" "$KITHARA_AGENT_HOOK_CACHE" >> "$FAKE_XTASK_LOG"
+cat >/dev/null
 "#,
         )
     }
 
-    fn install_setsid_shim(&self) -> Result<()> {
-        write_executable(
-            &self.fake_bin.join("setsid"),
-            r#"#!/bin/sh
-exec perl -MPOSIX=setsid -e 'my $sid = setsid(); die "setsid: $!" if !defined($sid) || $sid < 0; exec @ARGV or die "exec: $!";' "$@"
-"#,
-        )
+    fn install_real_xtask(&self) -> Result<Output> {
+        Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args(["agent-hook", "install"])
+            .current_dir(&self.repo)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .context("install cached xtask")
     }
-}
 
-struct ProcessGuard(u32);
-
-impl Drop for ProcessGuard {
-    fn drop(&mut self) {
-        let _ = signal(self.0, "-KILL");
+    fn assert_cargo_not_run(&self) {
+        assert!(!self.cargo_log.exists(), "runner invoked Cargo");
     }
 }
 
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
-        "runner failed: {}",
+        "command failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn line_count(path: &Path) -> Result<usize> {
-    Ok(fs::read_to_string(path)?.lines().count())
 }
 
 fn make_executable(path: &Path) -> Result<()> {
@@ -251,168 +196,180 @@ fn write_executable(path: &Path, body: &str) -> Result<()> {
     make_executable(path)
 }
 
-fn signal(pid: u32, signal: &str) -> Result<()> {
-    let status = Command::new("kill")
-        .args([signal, &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    anyhow::ensure!(status.success(), "signal {signal} failed for pid {pid}");
-    Ok(())
-}
+#[test]
+fn missing_cache_skips_hook_without_invoking_cargo() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let output = fixture.run("pre-bash")?;
 
-fn process_exists(pid: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-fn wait_for_file(path: &Path) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !path.is_file() {
-        anyhow::ensure!(
-            Instant::now() < deadline,
-            "timed out waiting for {}",
-            path.display()
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-    Ok(())
-}
-
-fn wait_for_process_exit(pid: u32) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while process_exists(pid) {
-        anyhow::ensure!(
-            Instant::now() < deadline,
-            "pid {pid} survived runner cleanup"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-    Ok(())
-}
-
-fn find_program(name: &str) -> Option<PathBuf> {
-    env::var_os("PATH").and_then(|paths| {
-        env::split_paths(&paths)
-            .map(|path| path.join(name))
-            .find(|path| path.is_file())
-    })
-}
-
-fn assert_interrupted_bootstrap_cleanup(fixture: &Fixture, mut command: Command) -> Result<()> {
-    fixture.hang_cargo_with_child()?;
-    let runner = command.spawn()?;
-
-    wait_for_file(&fixture.cargo_ready)?;
-    wait_for_file(&fixture.child_pid)?;
-    let child_pid = fs::read_to_string(&fixture.child_pid)?
-        .trim()
-        .parse::<u32>()?;
-    let _guard = ProcessGuard(child_pid);
-    signal(runner.id(), "-TERM")?;
-    let output = runner.wait_with_output()?;
-
-    assert!(!output.status.success());
-    wait_for_process_exit(child_pid)?;
-    assert!(!fixture.cache_dir().join("target").exists());
-    assert!(!fixture.cache_dir().join("xtask").exists());
+    assert_success(&output);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cargo xtask agent-hook install"));
+    fixture.assert_cargo_not_run();
+    assert!(!fixture.cache_dir().exists());
     Ok(())
 }
 
 #[test]
-fn runner_builds_full_xtask_once_and_executes_cached_hook() -> Result<()> {
+fn legacy_flat_cache_is_ignored() -> Result<()> {
     let fixture = Fixture::new()?;
+    fs::create_dir_all(fixture.cache_dir())?;
+    write_executable(
+        &fixture.cache_dir().join("xtask"),
+        "#!/bin/sh\nprintf legacy >\"$FAKE_XTASK_LOG\"\n",
+    )?;
+    fs::write(fixture.cache_dir().join("fingerprint"), "legacy\n")?;
+
+    let output = fixture.run("pre-bash")?;
+
+    assert_success(&output);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cargo xtask agent-hook install"));
+    assert!(!fixture.xtask_log.exists());
+    fixture.assert_cargo_not_run();
+
+    assert_success(&fixture.install_real_xtask()?);
+    assert!(!fixture.cache_dir().join("xtask").exists());
+    assert!(!fixture.cache_dir().join("fingerprint").exists());
+    assert!(fixture.cache_dir().join("current/xtask").is_file());
+    Ok(())
+}
+
+#[test]
+fn installed_cache_executes_directly_without_invoking_cargo() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.install_fake_xtask()?;
 
     assert_success(&fixture.run("pre-bash")?);
     assert_success(&fixture.run("post-edit")?);
 
-    assert_eq!(line_count(&fixture.cargo_log)?, 1);
-    assert_eq!(fs::read_to_string(&fixture.cargo_jobs_log)?, "4\n");
-    assert_eq!(
-        fs::read_to_string(&fixture.cargo_log)?,
-        format!(
-            "build --locked --manifest-path {}/Cargo.toml -p xtask --bin xtask\n",
-            fixture.repo.display()
-        )
-    );
+    fixture.assert_cargo_not_run();
+    let generation = fs::canonicalize(fixture.cache_dir().join("generation-test"))?;
     assert_eq!(
         fs::read_to_string(&fixture.xtask_log)?,
-        "agent-hook pre-bash\nagent-hook post-edit\n"
+        format!(
+            "args=agent-hook pre-bash\nroot={}\ncache={}\nargs=agent-hook post-edit\nroot={}\ncache={}\n",
+            fixture.repo.display(),
+            generation.display(),
+            fixture.repo.display(),
+            generation.display()
+        )
     );
-    assert!(fixture.cache_dir().join("xtask").is_file());
-    assert!(!fixture.cache_dir().join("target").exists());
     Ok(())
 }
 
 #[test]
-fn runner_preserves_explicit_cargo_jobs() -> Result<()> {
+fn explicit_install_publishes_current_xtask_for_the_runner() -> Result<()> {
     let fixture = Fixture::new()?;
-    let output = fixture
-        .command("pre-bash")
-        .env("CARGO_BUILD_JOBS", "2")
-        .output()?;
+    let install = fixture.install_real_xtask()?;
+    assert_success(&install);
+
+    let binary = fixture.cache_dir().join("current/xtask");
+    assert!(binary.is_file());
+    assert_ne!(fs::metadata(&binary)?.permissions().mode() & 0o111, 0);
+    assert!(fixture.cache_dir().join("current/fingerprint").is_file());
+
+    let output = fixture.run_with_input(
+        "pre-bash",
+        r#"{"tool_name":"Bash","tool_input":{"command":"cargo test"}}"#,
+    )?;
+    assert_success(&output);
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(response["hookSpecificOutput"]["permissionDecision"], "deny");
+    fixture.assert_cargo_not_run();
+    Ok(())
+}
+
+#[test]
+fn installed_runner_cannot_mark_itself_current() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.install_real_xtask()?);
+
+    let output = fixture.run("install")?;
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cargo xtask agent-hook install"));
+    fixture.assert_cargo_not_run();
+    Ok(())
+}
+
+#[test]
+fn stale_cache_warns_and_runs_last_good_policy_without_cargo() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.install_real_xtask()?);
+    fs::write(
+        fixture.repo.join("xtask/src/agent_hook.rs"),
+        "pub fn run() { println!(\"changed\"); }\n",
+    )?;
+
+    let output = fixture.run_with_input(
+        "pre-bash",
+        r#"{"tool_name":"Bash","tool_input":{"command":"cargo test"}}"#,
+    )?;
 
     assert_success(&output);
-    assert_eq!(fs::read_to_string(&fixture.cargo_jobs_log)?, "2\n");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cached agent hook is stale"));
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(response["hookSpecificOutput"]["permissionDecision"], "deny");
+    fixture.assert_cargo_not_run();
     Ok(())
 }
 
 #[test]
-fn interrupted_bootstrap_terminates_build_descendants() -> Result<()> {
+fn manifest_post_edit_never_invokes_cargo() -> Result<()> {
     let fixture = Fixture::new()?;
-    let command = fixture.command("pre-bash");
-    assert_interrupted_bootstrap_cleanup(&fixture, command)
-}
-
-#[test]
-fn dash_bootstrap_uses_setsid_process_group_when_available() -> Result<()> {
-    let Some(dash) = find_program("dash") else {
-        return Ok(());
-    };
-    let fixture = Fixture::new()?;
-    if find_program("setsid").is_none() {
-        if find_program("perl").is_none() {
-            return Ok(());
+    assert_success(&fixture.install_real_xtask()?);
+    let manifest = fixture.repo.join("xtask/Cargo.toml");
+    let before = fs::read(&manifest)?;
+    let input = serde_json::json!({
+        "tool_name": "Edit",
+        "tool_input": {
+            "file_path": manifest
         }
-        fixture.install_setsid_shim()?;
-    }
-    let command = fixture.command_with_shell(&dash, "pre-bash");
-    assert_interrupted_bootstrap_cleanup(&fixture, command)
-}
+    })
+    .to_string();
 
-#[test]
-fn concurrent_cold_starts_publish_one_xtask() -> Result<()> {
-    let fixture = Fixture::new()?;
+    let output = fixture.run_with_input("post-edit", &input)?;
 
-    let first = fixture.command("pre-bash").spawn()?;
-    let second = fixture.command("pre-bash").spawn()?;
-    let first = first.wait_with_output()?;
-    let second = second.wait_with_output()?;
-
-    assert_success(&first);
-    assert_success(&second);
-    assert_eq!(line_count(&fixture.cargo_log)?, 1);
-    assert_eq!(line_count(&fixture.xtask_log)?, 2);
+    assert_success(&output);
+    assert_eq!(before, fs::read(fixture.repo.join("xtask/Cargo.toml"))?);
+    fixture.assert_cargo_not_run();
     Ok(())
 }
 
 #[test]
-fn linked_worktrees_own_distinct_xtask_caches() -> Result<()> {
+fn linked_worktrees_use_distinct_installed_caches() -> Result<()> {
     let absolute = Fixture::linked_absolute()?;
     let relative = Fixture::linked_relative()?;
+    assert_success(&absolute.install_real_xtask()?);
+    assert_success(&relative.install_real_xtask()?);
 
     assert_success(&absolute.run("pre-bash")?);
     assert_success(&relative.run("pre-bash")?);
 
     assert_ne!(absolute.cache_dir(), relative.cache_dir());
-    assert!(absolute.cache_dir().join("xtask").is_file());
-    assert!(relative.cache_dir().join("xtask").is_file());
-    assert!(!absolute.repo.join(".git/kithara-agent-hook").exists());
-    assert!(!relative.repo.join(".git/kithara-agent-hook").exists());
+    assert!(absolute.cache_dir().join("current/xtask").is_file());
+    assert!(relative.cache_dir().join("current/xtask").is_file());
+    assert!(absolute.cache_dir().join("current/fingerprint").is_file());
+    assert!(relative.cache_dir().join("current/fingerprint").is_file());
+    absolute.assert_cargo_not_run();
+    relative.assert_cargo_not_run();
+    Ok(())
+}
+
+#[test]
+fn runner_stays_thin_and_contains_no_bootstrap_build_logic() -> Result<()> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("agent-hook");
+    let body = fs::read_to_string(path)?;
+
+    assert!(body.lines().count() <= 50);
+    for forbidden in [
+        "cargo build",
+        "lockf",
+        "flock",
+        "setsid",
+        "shasum",
+        "CARGO_TARGET_DIR",
+    ] {
+        assert!(!body.contains(forbidden), "runner contains {forbidden}");
+    }
     Ok(())
 }
 
@@ -422,30 +379,5 @@ fn runner_is_checked_in_as_executable() -> Result<()> {
     let mode = fs::metadata(runner)?.permissions().mode();
 
     assert_ne!(mode & 0o111, 0);
-    Ok(())
-}
-
-#[test]
-fn stale_post_edit_uses_last_good_xtask() -> Result<()> {
-    let fixture = Fixture::new()?;
-    assert_success(&fixture.run("pre-bash")?);
-
-    fs::write(
-        fixture.repo.join("xtask/src/main.rs"),
-        "fn main() { println!(\"changed\"); }\n",
-    )?;
-    fixture.fail_cargo()?;
-
-    assert_success(&fixture.run("post-edit")?);
-    assert_eq!(line_count(&fixture.cargo_log)?, 1);
-    assert_eq!(
-        fs::read_to_string(&fixture.xtask_log)?,
-        "agent-hook pre-bash\nagent-hook post-edit\n"
-    );
-
-    let pre_bash = fixture.run("pre-bash")?;
-    assert!(!pre_bash.status.success());
-    assert_eq!(line_count(&fixture.cargo_log)?, 2);
-    assert!(!fixture.cache_dir().join("target").exists());
     Ok(())
 }

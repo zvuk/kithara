@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
+mod cache;
+mod fingerprint;
 mod input;
 mod post_edit;
 mod pre_bash;
@@ -13,6 +15,8 @@ pub(crate) struct AgentHookArgs {
 
 #[derive(Debug, Subcommand)]
 enum AgentHookCommand {
+    /// Install the current xtask binary for this Git worktree.
+    Install,
     /// Claude PreToolUse(Bash) guard for command misuse.
     PreBash,
     /// Claude PostToolUse(Write|Edit|MultiEdit) formatting hook.
@@ -20,9 +24,15 @@ enum AgentHookCommand {
 }
 
 pub(crate) fn run(args: &AgentHookArgs) -> Result<()> {
-    let input = input::read()?;
     match args.command {
-        AgentHookCommand::PreBash => pre_bash::run(&input),
-        AgentHookCommand::PostEdit => post_edit::run(&input),
+        AgentHookCommand::Install => cache::install(),
+        AgentHookCommand::PreBash => {
+            cache::warn_if_stale();
+            pre_bash::run(&input::read()?)
+        }
+        AgentHookCommand::PostEdit => {
+            cache::warn_if_stale();
+            post_edit::run(&input::read()?)
+        }
     }
 }

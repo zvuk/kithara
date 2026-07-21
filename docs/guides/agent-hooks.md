@@ -4,6 +4,19 @@ Use this only when touching tool adapters, hook behavior, or command routing.
 Hooks are workflow guards, not code-style policy. Architecture and Rust shape are
 still enforced by `ast-grep` and `cargo xtask lint`.
 
+## Install
+
+Run `cargo xtask agent-hook install` once for each concrete Git worktree and
+again whenever an installed hook reports that it is stale. The command copies
+the current `xtask` executable and its source fingerprint into a complete
+versioned generation under `<worktree-git-dir>/kithara-agent-hook/`, then
+atomically switches the `current` symlink. Installation is explicit: tool
+adapters and the checked-in launcher never invoke Cargo or start a build.
+
+An absent cache prints the install command and skips the guard. A stale cache
+prints the same instruction and continues with the last-good policy binary.
+These hooks protect workflow conventions; they are not a security boundary.
+
 ## Pre Bash Guard
 
 `xtask/agent-hook pre-bash` reads agent hook JSON from stdin and denies
@@ -31,44 +44,38 @@ run with a filter expression.
 file classes:
 
 - `.rs` -> nightly `rustfmt` with child-module traversal disabled
-- `Cargo.toml` -> `cargo xtask format --only manifest --allow-dirty`
 - other `.toml` -> `taplo format`
 - `.json` / `.jsonc` -> `tidy-json --write`
 
-The manifest path is the deliberate exception to the Cargo-free edit path: it
-keeps the canonical workspace-wide dependency-order rewrite instead of copying
-that policy into the hook tool. The hook does not run tests, lints, markdown
-formatting, or architecture checks.
+`Cargo.toml` is deliberately skipped because its canonical workspace-wide
+dependency-order rewrite requires `cargo xtask format --only manifest
+--allow-dirty`. Run that command explicitly. The hook does not run Cargo, tests,
+lints, markdown formatting, or architecture checks.
 
 ## Runner Cache
 
-The checked-in runner builds the full `xtask` package once into a cache owned by
-the current Git worktree. Its fingerprint covers the xtask source, package
-manifest, Cargo config, toolchain file, and host platform. The steady-state path
-executes the cached binary directly and dispatches the hook before loading the
-normal xtask context. Bootstrap Cargo runs only when that cache is missing or
-stale; `post-edit` for `Cargo.toml` remains the separate formatting exception
-described above.
+The checked-in runner resolves the current checkout and its concrete worktree
+Git directory, then directly executes the installed binary. It contains no
+fingerprinting, locking, Cargo invocation, build target, or process-management
+logic. The runner exports the resolved checkout and cache paths so Rust owns
+path containment and freshness validation.
 
-Workspace manifest and lockfile changes intentionally do not invalidate the
-already linked policy binary. When hook policy inputs do change, bootstrap uses
-`cargo build --locked`, so it never rewrites the workspace lockfile.
+The runner only accepts the versioned `current` generation, so flat caches from
+older launchers are treated as absent. Failed or concurrent installs cannot
+expose a binary from one generation with another generation's fingerprint. On
+later installs, inactive generations older than one hour are pruned; the active
+and recent generations remain available across an in-flight launcher handoff.
+Orphaned temporary generations and pointers from an interrupted install use the
+same age-safe cleanup.
 
-The bootstrap uses the host's kernel file lock, defaults Cargo to four build
-jobs unless `CARGO_BUILD_JOBS` is already set, and removes its temporary target
-after copying the binary. The build runs in its own process group so an
-interrupted bootstrap terminates Cargo and its descendants before cleanup. A
-cached post-edit binary is preserved long enough to format a just-changed
-manifest. Tool adapters locate the runner by walking up from the host project
-directory using shell builtins, so neither a nested session directory nor Git
-discovery adds work to the hot path.
-The runner passes its resolved checkout root to the binary as the canonical
-path-containment owner; only the compatibility `xtask` entry point falls back to
-the hook payload directory.
+The fingerprint covers `xtask/src/agent_hook.rs`, the `agent_hook` module tree,
+`xtask/src/main.rs`, the xtask manifest, optional Cargo/toolchain configuration,
+and the host OS and architecture. Unrelated xtask command sources and the root
+workspace manifest or lockfile do not invalidate the policy binary.
 
-`cargo xtask agent-hook pre-bash|post-edit` remains a direct entry point, but tool
-adapters must use the checked-in runner so routine commands do not enter Cargo's
-global package-cache lock.
+`cargo xtask agent-hook pre-bash|post-edit` remains available as an explicit
+diagnostic entry point. Tool adapters must use `xtask/agent-hook` so installed
+hook invocations remain Cargo-free.
 
 ## Tool Adapter Rule
 

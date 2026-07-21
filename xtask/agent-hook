@@ -3,7 +3,6 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
-export KITHARA_AGENT_HOOK_ROOT=$repo_root
 dot_git="$repo_root/.git"
 
 if [ -d "$dot_git" ]; then
@@ -28,143 +27,18 @@ else
 fi
 
 cache_dir="$git_dir/kithara-agent-hook"
-binary="$cache_dir/xtask"
-stamp="$cache_dir/fingerprint"
-lock_file="$cache_dir/build.lock"
-target_dir="$cache_dir/target"
-
-compute_fingerprint() {
-    {
-        find "$script_dir/src" -type f -name '*.rs' -exec shasum -a 256 {} + | LC_ALL=C sort
-        for path in \
-            "$script_dir/Cargo.toml" \
-            "$repo_root/.cargo/config.toml" \
-            "$repo_root/rust-toolchain.toml"
-        do
-            if [ -f "$path" ]; then
-                printf '%s\0' "$path"
-            fi
-        done | xargs -0 shasum -a 256
-        uname -sm
-    } | shasum -a 256
-}
-
-fingerprint=$(compute_fingerprint)
-fingerprint=${fingerprint%% *}
-
-cache_is_current() {
-    [ -x "$binary" ] || return 1
-    [ -r "$stamp" ] || return 1
-    IFS= read -r cached_fingerprint < "$stamp" || return 1
-    [ "$cached_fingerprint" = "$fingerprint" ]
-}
-
-if cache_is_current; then
-    exec "$binary" agent-hook "$@"
-fi
-
-if [ "${1-}" = post-edit ] && [ -x "$binary" ]; then
-    exec "$binary" agent-hook "$@"
-fi
-
-mkdir -p "$cache_dir"
-exec 9>"$lock_file"
-if command -v lockf >/dev/null 2>&1; then
-    if ! lockf -s -t 180 9; then
-        printf 'error: timed out waiting for agent-hook bootstrap\n' >&2
-        exit 1
-    fi
-elif command -v flock >/dev/null 2>&1; then
-    if ! flock -w 180 9; then
-        printf 'error: timed out waiting for agent-hook bootstrap\n' >&2
-        exit 1
-    fi
+current="$cache_dir/current"
+if [ -d "$current" ]; then
+    generation_dir=$(CDPATH= cd -- "$current" && pwd -P)
 else
-    printf 'error: agent-hook bootstrap requires lockf or flock\n' >&2
-    exit 1
+    generation_dir=$current
+fi
+binary="$generation_dir/xtask"
+if [ ! -x "$binary" ]; then
+    printf 'warning: agent hook is not installed for this worktree; run `cargo xtask agent-hook install`\n' >&2
+    exit 0
 fi
 
-fingerprint=$(compute_fingerprint)
-fingerprint=${fingerprint%% *}
-if ! cache_is_current; then
-    build_pid=
-    temp_binary=
-    temp_stamp=
-
-    cleanup_bootstrap() {
-        if [ -n "$build_pid" ]; then
-            kill -TERM "-$build_pid" 2>/dev/null || true
-            kill -KILL "-$build_pid" 2>/dev/null || true
-            wait "$build_pid" 2>/dev/null || true
-            build_pid=
-        fi
-        if [ -n "$temp_binary" ]; then
-            rm -f "$temp_binary"
-        fi
-        if [ -n "$temp_stamp" ]; then
-            rm -f "$temp_stamp"
-        fi
-        rm -rf -- "$target_dir"
-    }
-
-    exit_on_signal() {
-        signal_status=$1
-        cleanup_bootstrap
-        exit "$signal_status"
-    }
-
-    trap cleanup_bootstrap EXIT
-    trap 'exit_on_signal 129' HUP
-    trap 'exit_on_signal 130' INT
-    trap 'exit_on_signal 143' TERM
-
-    rm -rf -- "$target_dir"
-    if command -v setsid >/dev/null 2>&1; then
-        group_launcher=setsid
-    else
-        group_launcher=
-        set -m
-    fi
-    (
-        cd "$repo_root"
-        export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
-        export CARGO_TARGET_DIR=$target_dir
-        if [ -n "$group_launcher" ]; then
-            exec "$group_launcher" cargo build --locked --manifest-path "$repo_root/Cargo.toml" -p xtask --bin xtask
-        fi
-        exec cargo build --locked --manifest-path "$repo_root/Cargo.toml" -p xtask --bin xtask
-    ) </dev/null >&2 &
-    build_pid=$!
-    if [ -z "$group_launcher" ]; then
-        set +m
-    fi
-    if wait "$build_pid"; then
-        build_pid=
-    else
-        build_status=$?
-        build_pid=
-        exit "$build_status"
-    fi
-
-    built_binary="$target_dir/debug/xtask"
-    if [ ! -x "$built_binary" ]; then
-        printf 'error: xtask build did not produce %s\n' "$built_binary" >&2
-        exit 1
-    fi
-
-    temp_binary="$cache_dir/.xtask.$$"
-    temp_stamp="$cache_dir/.fingerprint.$$"
-    cp "$built_binary" "$temp_binary"
-    chmod 755 "$temp_binary"
-    printf '%s\n' "$fingerprint" > "$temp_stamp"
-    mv -f "$temp_binary" "$binary"
-    temp_binary=
-    mv -f "$temp_stamp" "$stamp"
-    temp_stamp=
-
-    cleanup_bootstrap
-    trap - EXIT HUP INT TERM
-fi
-
-exec 9>&-
+export KITHARA_AGENT_HOOK_ROOT=$repo_root
+export KITHARA_AGENT_HOOK_CACHE=$generation_dir
 exec "$binary" agent-hook "$@"

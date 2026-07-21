@@ -15,7 +15,6 @@ const PROJECT_MARKER: &str = "xtask/agent-hook";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FormatTarget {
     Rust,
-    Manifest,
     Toml,
     Json,
 }
@@ -30,7 +29,6 @@ impl FormatTarget {
     fn name(self) -> &'static str {
         match self {
             Self::Rust => "rust",
-            Self::Manifest => "manifest",
             Self::Toml => "toml",
             Self::Json => "json",
         }
@@ -82,16 +80,6 @@ fn format_command(target: FormatTarget, root: &Path, path: &Path) -> FormatComma
                 "--config".into(),
                 "skip_children=true".into(),
                 path.as_os_str().to_owned(),
-            ],
-        },
-        FormatTarget::Manifest => FormatCommand {
-            program: "cargo",
-            args: vec![
-                "xtask".into(),
-                "format".into(),
-                "--only".into(),
-                "manifest".into(),
-                "--allow-dirty".into(),
             ],
         },
         FormatTarget::Toml => FormatCommand {
@@ -165,7 +153,7 @@ fn resolve_edited_path(root: &Path, path: &Path) -> Result<Option<PathBuf>> {
 
 fn format_target_for_path(path: &Path) -> Option<FormatTarget> {
     if path.file_name() == Some(OsStr::new("Cargo.toml")) {
-        return Some(FormatTarget::Manifest);
+        return None;
     }
     match path.extension().and_then(OsStr::to_str) {
         Some("rs") => Some(FormatTarget::Rust),
@@ -208,16 +196,8 @@ mod tests {
     #[test]
     fn uses_path_scoped_data_formatters() {
         let root = Path::new("/repo");
-        let manifest = Path::new("/repo/crates/foo/Cargo.toml");
         let toml = Path::new("/repo/.config/foo.toml");
         let json = Path::new("/repo/tests/foo.jsonc");
-
-        let manifest_command = format_command(FormatTarget::Manifest, root, manifest);
-        assert_eq!(manifest_command.program, "cargo");
-        assert_eq!(
-            manifest_command.args,
-            ["xtask", "format", "--only", "manifest", "--allow-dirty"]
-        );
 
         let toml_command = format_command(FormatTarget::Toml, root, toml);
         assert_eq!(toml_command.program, "taplo");
@@ -236,7 +216,7 @@ mod tests {
         );
         assert_eq!(
             format_target_for_path(Path::new("crates/foo/Cargo.toml")),
-            Some(FormatTarget::Manifest)
+            None
         );
         assert_eq!(
             format_target_for_path(Path::new(".config/foo.toml")),

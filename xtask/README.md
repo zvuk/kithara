@@ -9,8 +9,9 @@ Workspace automation binary for Kithara. Provides repo-local lints and audits th
 - `cargo run -p xtask -- lint idioms` — Rust idiom checks (function branch density, loop allocation, guard cascades, etc.). 18 rules in `.config/idioms/thresholds.toml`.
 - `cargo run -p xtask -- ast-grep` — runs the 55 ast-grep rules from `.config/ast-grep/`.
 - `cargo run -p xtask -- format --check` — formatter harness for Rust, Cargo manifests, non-Cargo TOML, and JSON/JSONC.
-- `xtask/agent-hook pre-bash|post-edit` - worktree-cached command guards for tool-specific agent hooks.
-- `cargo run -p xtask -- agent-hook pre-bash|post-edit` - direct Cargo entry point for the same guard logic.
+- `cargo xtask agent-hook install` - atomically installs the current xtask binary and fingerprint in the concrete worktree Git directory.
+- `xtask/agent-hook pre-bash|post-edit` - runs the installed command guards without entering Cargo.
+- `cargo xtask agent-hook pre-bash|post-edit` - explicit diagnostic entry point that bypasses the installed cache.
 - `cargo run -p xtask -- manifest dependency-order` — checks that internal `kithara` / `kithara-*` dependencies come before external crates in Cargo manifests.
 - `cargo run -p xtask -- health` — broad local health report, including formatter, dependency, unsafe-inventory, lint, quality, and test stages.
 
@@ -30,5 +31,6 @@ Never grow a baseline to make a commit pass. See `AGENTS.md` Non-Negotiables.
 - `src/style/` — style checks.
 - `src/idioms/` — idiom checks.
 - `src/common/` — shared scope/violation/baseline plumbing.
+- `src/agent_hook/` — agent command guards, installation, and cache freshness.
 
 Each check is one file under `src/<ns>/checks/<rule>.rs` implementing the `Check` trait.
