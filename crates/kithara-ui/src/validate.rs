@@ -176,6 +176,7 @@ fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Bpm { id, .. }
         | ControlNode::Time { id, .. }
         | ControlNode::Scalar { id, .. }
+        | ControlNode::Crossfader { id, .. }
         | ControlNode::Fader { id, .. }
         | ControlNode::Wave { id, .. }
         | ControlNode::TrackList { id, .. }
@@ -388,7 +389,7 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
         | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
         ControlNode::Segmented { .. } => (Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
         ControlNode::Time { .. } | ControlNode::Scalar { .. } => (Some(ValueKind::Scalar), None),
-        ControlNode::Fader { .. } | ControlNode::Knob { .. } => {
+        ControlNode::Crossfader { .. } | ControlNode::Fader { .. } | ControlNode::Knob { .. } => {
             (Some(ValueKind::Scalar), Some(ValueKind::Scalar))
         }
         ControlNode::Wave { .. } => (Some(ValueKind::Waveform), Some(ValueKind::Scalar)),
@@ -854,6 +855,49 @@ mod tests {
                 path,
                 ..
             } if id == "player.output.volume" && scope == "deck" && path == "volume"
+        ));
+    }
+
+    #[kithara::test]
+    fn crossfader_requires_scalar_read_and_write_endpoints() {
+        let document = parse_module(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Crossfader(
+                    id: "xfade",
+                    read: Model(id: "library.breadcrumb"),
+                    write: Parameter(id: "player.output.volume"),
+                ))"#,
+            &origin(),
+        )
+        .unwrap();
+        let ControlNode::Crossfader { read, write, .. } = &document.root else {
+            panic!("expected crossfader");
+        };
+
+        let error = check_controls(
+            ControlSite {
+                path: "mixer/xfade",
+                control: &document.root,
+                read: read.as_ref(),
+                write: write.as_ref(),
+                columns_state: None,
+                query: None,
+                scope: None,
+                zoom: None,
+            },
+            &origin(),
+            &registry(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::BindingType {
+                expected,
+                got,
+                path,
+                ..
+            } if expected == "Scalar" && got == "Text" && path == "mixer/xfade"
         ));
     }
 

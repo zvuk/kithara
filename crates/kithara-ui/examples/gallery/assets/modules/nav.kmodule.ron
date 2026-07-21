@@ -76,6 +76,12 @@
                 read: Model(id: "gallery.tab.micro"),
             ),
             NavItem(
+                id: "mixer",
+                label: "МИКШЕР",
+                icon: Faders,
+                read: Model(id: "gallery.tab.mixer"),
+            ),
+            NavItem(
                 id: "chrome",
                 label: "ХРОМ",
                 icon: Disc,

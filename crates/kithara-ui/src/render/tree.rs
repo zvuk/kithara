@@ -10,7 +10,8 @@ use crate::{
     atoms::{
         chip::Chip,
         design::{
-            cell::Cell, segmented::Segmented, select::Select, status_dot::StatusDot, swatch::Swatch,
+            cell::Cell, crossfader::Crossfader, segmented::Segmented, select::Select,
+            status_dot::StatusDot, swatch::Swatch,
         },
         knob::Knob,
         meter::StereoMeter,
@@ -48,7 +49,7 @@ pub fn render<'a>(
     node: &CompiledNode,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    skin: &Skin,
+    skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
     render_compiled(node, ui, reads, skin)
 }
@@ -57,7 +58,7 @@ fn render_compiled<'a>(
     node: &CompiledNode,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    skin: &Skin,
+    skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
     let palette = skin.palette;
     match node {
@@ -147,7 +148,7 @@ fn render_node<'a>(
     node: &ExpandedNode,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    skin: &Skin,
+    skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
     let element = match node {
         ExpandedNode::Row {
@@ -202,7 +203,7 @@ fn render_control<'a>(
     read: Option<&Binding>,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
-    skin: &Skin,
+    skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
     let value = read.and_then(|binding| resolve(reads, binding, ui));
     let value = value.as_ref();
@@ -265,6 +266,7 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
+        ControlSpec::Crossfader => render_crossfader(path, value, skin),
         ControlSpec::Fader { style } => Fader::builder()
             .path(path)
             .style(*style)
@@ -353,6 +355,19 @@ fn render_control<'a>(
             render_context_bar(path, scope_items, scope.as_ref(), value, ui, reads, skin)
         }
     }
+}
+
+fn render_crossfader<'a>(
+    path: &'a str,
+    value: Option<&ReadValue<'_>>,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    Crossfader::builder()
+        .path(path)
+        .maybe_value(value)
+        .skin(skin)
+        .build()
+        .view()
 }
 
 fn render_deck_summary<'a>(
@@ -636,6 +651,7 @@ fn render_icon(icon: IconName) -> Icon {
         IconName::Faders => Icon::Faders,
         IconName::FastForward => Icon::FastForward,
         IconName::Gear => Icon::Gear,
+        IconName::Headphones => Icon::Headphones,
         IconName::Menu => Icon::Menu,
         IconName::Play => Icon::Play,
         IconName::PlayReverse => Icon::PlayReverse,

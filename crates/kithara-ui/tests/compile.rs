@@ -44,6 +44,52 @@ fn compiles_micro_layout_end_to_end() {
 }
 
 #[kithara::test]
+fn crossfader_compiles_with_scalar_read_and_write_bindings() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "mixer.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "mixer",
+            root: Module(instance: "mixer", source: "mixer.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "mixer.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Crossfader(
+                id: "xfade",
+                read: Parameter(id: "mixer.xfade"),
+                write: Parameter(id: "mixer.xfade"),
+            ))"#,
+    );
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Parameter,
+        "mixer.xfade",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+
+    let ui = compile(
+        "mixer.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Crossfader,
+        read: Some(Binding::Parameter { .. }),
+        write: Some(Binding::Parameter { .. }),
+        ..
+    } = &**root
+    else {
+        panic!("expected compiled crossfader");
+    };
+}
+
+#[kithara::test]
 fn track_list_requires_title_column_at_compile_time() {
     let resolver = track_list_resolver(
         r#"(schema: "kithara.module", version: 1, id: "track-list",

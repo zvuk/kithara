@@ -40,6 +40,12 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.knob.indicator_color, ColorRole::Text);
     assert_eq!(document.knob.track_alpha, 1.0);
     assert_eq!(document.knob.drag_range, 140.0);
+    assert_eq!(document.crossfader.rail_height, 6.0);
+    assert_eq!(document.crossfader.thumb_width, 10.0);
+    assert_eq!(document.crossfader.thumb_height, 16.0);
+    assert_eq!(document.crossfader.left_label, "A \u{2039}");
+    assert_eq!(document.crossfader.center_label, "XFADE");
+    assert_eq!(document.crossfader.right_label, "\u{203a} B");
     assert_eq!(document.vu_stereo.segment_count, 16);
     assert_eq!(document.vu_vertical.warning_threshold, 0.66);
     assert_eq!(
@@ -152,6 +158,14 @@ fn unknown_skin_field_is_rejected() {
 #[kithara::test]
 fn required_control_skin_field_is_rejected_when_missing() {
     let text = builtin::DARK_SKIN.replacen("        body_fill: BgSelect,\n", "", 1);
+    let error = parse_skin(&text, &origin()).unwrap_err();
+
+    assert!(matches!(error, UiDocError::Syntax { .. }));
+}
+
+#[kithara::test]
+fn required_crossfader_skin_field_is_rejected_when_missing() {
+    let text = builtin::DARK_SKIN.replacen("        rail_height: 6.0,\n", "", 1);
     let error = parse_skin(&text, &origin()).unwrap_err();
 
     assert!(matches!(error, UiDocError::Syntax { .. }));

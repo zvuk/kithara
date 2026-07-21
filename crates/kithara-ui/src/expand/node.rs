@@ -88,6 +88,7 @@ pub enum ControlSpec {
     Scalar {
         format: ScalarFormat,
     },
+    Crossfader,
     Fader {
         style: FaderStyle,
     },

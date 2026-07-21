@@ -1,0 +1,18 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-mixer-label",
+    chrome: Plain,
+    parameters: ["label"],
+    root: Column(
+        pad: Some(22.0),
+        children: [
+            Text(
+                id: "label",
+                style: MicroLabel,
+                label: "$label",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+        ],
+    ),
+)

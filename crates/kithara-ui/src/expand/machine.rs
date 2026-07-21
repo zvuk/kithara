@@ -385,6 +385,7 @@ fn expand_control(
         },
         ControlNode::Time { .. } => ControlSpec::Time,
         ControlNode::Scalar { format, .. } => ControlSpec::Scalar { format: *format },
+        ControlNode::Crossfader { .. } => ControlSpec::Crossfader,
         ControlNode::Fader { style, .. } => ControlSpec::Fader { style: *style },
         ControlNode::Wave { style, badge, .. } => ControlSpec::Wave {
             style: *style,
@@ -625,6 +626,13 @@ fn expand_value_control(
             write,
             adaptive,
             ..
+        }
+        | ControlNode::Crossfader {
+            id,
+            size,
+            read,
+            write,
+            adaptive,
         }
         | ControlNode::Fader {
             id,
@@ -898,6 +906,7 @@ fn walk(
         | ControlNode::Bpm { .. }
         | ControlNode::Time { .. }
         | ControlNode::Scalar { .. }
+        | ControlNode::Crossfader { .. }
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
         | ControlNode::TrackList { .. }

@@ -1,5 +1,7 @@
 mod mock;
 mod mock_data;
+mod mock_mixer;
+mod mock_stress;
 mod mock_transport;
 mod sections;
 mod shot;
@@ -55,6 +57,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "gallery-micro.klayout.ron",
         include_str!("assets/gallery-micro.klayout.ron"),
+    ),
+    (
+        "gallery-mixer.klayout.ron",
+        include_str!("assets/gallery-mixer.klayout.ron"),
     ),
     (
         "gallery-modules-deck-micro.klayout.ron",
@@ -223,6 +229,18 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/micro-4d.kmodule.ron",
         include_str!("assets/modules/tabs/micro-4d.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/mixer-1d.kmodule.ron",
+        include_str!("assets/modules/tabs/mixer-1d.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/mixer-1g.kmodule.ron",
+        include_str!("assets/modules/tabs/mixer-1g.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/mixer-label.kmodule.ron",
+        include_str!("assets/modules/tabs/mixer-label.kmodule.ron"),
     ),
     (
         "modules/tabs/sizes.kmodule.ron",

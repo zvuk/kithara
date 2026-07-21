@@ -171,6 +171,7 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Bpm { .. } => skin.deck.bpm_size,
         ControlSpec::Time => skin.deck.time_size,
         ControlSpec::Scalar { .. } => skin.telemetry.size,
+        ControlSpec::Crossfader => skin.crossfader.size,
         ControlSpec::Fader { .. } => skin.fader.size,
         ControlSpec::Wave { .. } => skin.wave.size,
         ControlSpec::TrackList { .. } => skin.track_list.size,
@@ -328,6 +329,16 @@ mod tests {
     fn fill_has_no_intrinsic_bounds() {
         assert_eq!(Dim::Fill.min(), 0.0);
         assert_eq!(Dim::Fill.max(), None);
+    }
+
+    #[kithara::test]
+    fn crossfader_uses_skin_intrinsic_size() {
+        let skin = builtin::skin_doc();
+
+        assert_eq!(
+            control_size(&ControlSpec::Crossfader, skin),
+            skin.crossfader.size
+        );
     }
 
     #[kithara::test]

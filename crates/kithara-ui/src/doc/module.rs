@@ -260,6 +260,17 @@ pub enum ControlNode {
         #[serde(default)]
         format: ScalarFormat,
     },
+    Crossfader {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
     Fader {
         id: NodeId,
         #[serde(default)]
@@ -490,6 +501,7 @@ pub enum IconName {
     Faders,
     FastForward,
     Gear,
+    Headphones,
     Menu,
     Play,
     PlayReverse,
@@ -723,6 +735,38 @@ mod tests {
         };
 
         assert_eq!(size, None);
+    }
+
+    #[kithara::test]
+    fn crossfader_control_parses_scalar_bindings() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Crossfader(
+                id: "xfade",
+                read: Model(id: "mixer.xfade"),
+                write: Parameter(id: "mixer.xfade"),
+                size: Some((w: Fixed(220.0), h: Fixed(38.0))),
+                adaptive: (priority: Required),
+            ))"#;
+
+        let document = parse_module(text, &origin()).unwrap();
+        let ControlNode::Crossfader {
+            read,
+            write,
+            size,
+            adaptive,
+            ..
+        } = document.root
+        else {
+            panic!("expected crossfader");
+        };
+
+        assert!(matches!(read, Some(BindingRef::Model { .. })));
+        assert!(matches!(write, Some(BindingRef::Parameter { .. })));
+        assert_eq!(
+            size,
+            Some(SizeSpec::new(Dim::Fixed(220.0), Dim::Fixed(38.0)))
+        );
+        assert_eq!(adaptive.priority, Priority::Required);
     }
 
     #[kithara::test]

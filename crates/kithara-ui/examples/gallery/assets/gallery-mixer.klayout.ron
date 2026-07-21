@@ -1,0 +1,60 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "gallery-mixer",
+    root: Split(
+        axis: Vertical,
+        children: [
+            (weight: 1.0, node: Module(
+                instance: "titlebar",
+                source: "modules/titlebar.kmodule.ron",
+                size: (w: Fill, h: Fixed(26.0)),
+            )),
+            (weight: 1.0, node: Split(
+                axis: Horizontal,
+                children: [
+                    (weight: 1.0, node: Module(
+                        instance: "gallery",
+                        source: "modules/nav.kmodule.ron",
+                        frame: (right: false),
+                        corners: false,
+                        size: (w: Fixed(198.0), h: Fill),
+                    )),
+                    (weight: 1.0, node: Split(
+                        axis: Vertical,
+                        children: [
+                            (weight: 1.0, node: Module(
+                                instance: "mixer-standard-label",
+                                source: "modules/tabs/mixer-label.kmodule.ron",
+                                with: { "label": "1D MIXER · STANDARD" },
+                                size: (w: Fill, h: Fixed(62.0)),
+                            )),
+                            (weight: 1.0, node: Module(
+                                instance: "mixer-standard",
+                                source: "modules/tabs/mixer-1d.kmodule.ron",
+                                frame: (right: false),
+                                size: (w: Fill, h: Fill),
+                            )),
+                        ],
+                    )),
+                    (weight: 1.0, node: Split(
+                        axis: Vertical,
+                        children: [
+                            (weight: 1.0, node: Module(
+                                instance: "mixer-xone-label",
+                                source: "modules/tabs/mixer-label.kmodule.ron",
+                                with: { "label": "1G MIXER · XONE 4-BAND EQ" },
+                                size: (w: Fill, h: Fixed(62.0)),
+                            )),
+                            (weight: 1.0, node: Module(
+                                instance: "mixer-xone",
+                                source: "modules/tabs/mixer-1g.kmodule.ron",
+                                size: (w: Fill, h: Fill),
+                            )),
+                        ],
+                    )),
+                ],
+            )),
+        ],
+    ),
+)

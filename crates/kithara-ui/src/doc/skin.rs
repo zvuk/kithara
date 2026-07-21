@@ -22,6 +22,7 @@ pub struct SkinDoc {
     pub window: WindowSkin,
     pub text_input: TextInputSkin,
     pub knob: KnobSkin,
+    pub crossfader: CrossfaderSkin,
     pub vu_stereo: VuStereoSkin,
     pub vu_vertical: VuVerticalSkin,
     pub toggle: ToggleSkin,
@@ -354,6 +355,25 @@ pub struct KnobSkin {
     pub track_width: f32,
     pub track_alpha: f32,
     pub body_border_width: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct CrossfaderSkin {
+    pub size: SizeSpec,
+    pub rail_height: f32,
+    pub rail_frame: FrameSkin,
+    pub rail_background: ColorRole,
+    pub thumb_width: f32,
+    pub thumb_height: f32,
+    pub thumb_color: ColorRole,
+    pub label_text: FontSkin,
+    pub label_color: ColorRole,
+    pub label_gap: f32,
+    pub left_label: String,
+    pub center_label: String,
+    pub right_label: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

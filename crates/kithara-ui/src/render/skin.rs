@@ -5,11 +5,11 @@ use crate::{
     error::UiDocError,
     ids::SourceUri,
     skin::{
-        ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, DeckSkin, FaderSkin,
-        FrameSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin, LayoutSkin, NavSkin, ReadoutSkin,
-        SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin, TelemetrySkin,
-        TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin, VuStereoSkin, VuVerticalSkin,
-        WaveSkin, WindowSkin, parse_color,
+        ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, CrossfaderSkin,
+        DeckSkin, FaderSkin, FrameSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin, LayoutSkin,
+        NavSkin, ReadoutSkin, SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin,
+        TabLargeSkin, TelemetrySkin, TextInputSkin, TextSkin, ToggleSkin, TrackListSkin, TreeSkin,
+        VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
     },
 };
 
@@ -24,6 +24,7 @@ pub struct Skin {
     pub window: WindowSkin,
     pub text_input: TextInputSkin,
     pub knob: KnobSkin,
+    pub crossfader: CrossfaderSkin,
     pub vu_stereo: VuStereoSkin,
     pub vu_vertical: VuVerticalSkin,
     pub toggle: ToggleSkin,
@@ -86,6 +87,7 @@ impl Skin {
             window: document.window,
             text_input: document.text_input,
             knob: document.knob,
+            crossfader: document.crossfader.clone(),
             vu_stereo: document.vu_stereo,
             vu_vertical: document.vu_vertical,
             toggle: document.toggle,

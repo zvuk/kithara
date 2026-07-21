@@ -117,6 +117,7 @@ fn walk_includes(
         | ControlNode::Bpm { .. }
         | ControlNode::Time { .. }
         | ControlNode::Scalar { .. }
+        | ControlNode::Crossfader { .. }
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
         | ControlNode::TrackList { .. }

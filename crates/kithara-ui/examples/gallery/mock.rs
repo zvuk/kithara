@@ -1,6 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
-use kithara_platform::time::Instant;
 use kithara_ui::{
     ids::EndpointId,
     module::TrackColumn,
@@ -11,6 +10,8 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     mock_data::CATALOG,
+    mock_mixer::{self, MixerState},
+    mock_stress::{self, StressState},
     mock_transport::DeckTransport,
     sections::{ModuleDemo, Tab},
 };
@@ -22,13 +23,11 @@ impl Consts {
     const BPM_VALUE: f32 = 70.0;
     const CUES: &[f32] = &[0.27, 0.31];
     const DURATION_SECS: f64 = 360.0;
-    const FRAME_WINDOW: usize = 300;
     const KEY: &str = "4m";
     const LOOP_REGION: [f32; 2] = [0.30, 0.34];
     const POSITION_SECS: f64 = 103.0;
     const REMAIN: &str = "−04:17";
     const TEMPO: &str = "+0.0%";
-    const STRESS_WAVE_BUCKETS: u16 = 8_192;
     const TRACK_COLUMNS: [TrackColumn; 9] = [
         TrackColumn::Index,
         TrackColumn::Deck,
@@ -60,17 +59,13 @@ pub(super) struct MockReads {
     chip_active: bool,
     chip_inactive: bool,
     collapsed: BTreeSet<String>,
-    frame_ms: VecDeque<f64>,
-    frame_ms_ordered: Vec<f64>,
-    frame_ms_avg: String,
-    frame_ms_p99: String,
-    fps: String,
     knobs: [f64; 4],
-    last_tick: Option<Instant>,
     levels_volume: f64,
     library_query: String,
     library_scope: usize,
+    mixer: MixerState,
     segmented_index: f64,
+    stress: StressState,
     toggle_off: bool,
     toggle_on: bool,
     volume: f64,
@@ -78,10 +73,6 @@ pub(super) struct MockReads {
     wave_downbeats: Vec<f32>,
     waveform: Vec<WaveBucket>,
     transport: DeckTransport,
-    stress_fader: f64,
-    stress_levels: [StereoLevels; 8],
-    stress_phase: f32,
-    stress_waveforms: [Vec<WaveBucket>; 4],
     tracklist_columns: [bool; 9],
     tracklist_preset: usize,
     tracklist_widths: BTreeMap<TrackColumn, f64>,
@@ -115,17 +106,13 @@ impl Default for MockReads {
             chip_active: true,
             chip_inactive: false,
             collapsed: BTreeSet::new(),
-            frame_ms: VecDeque::with_capacity(Consts::FRAME_WINDOW),
-            frame_ms_ordered: Vec::with_capacity(Consts::FRAME_WINDOW),
-            frame_ms_avg: "--".to_owned(),
-            frame_ms_p99: "--".to_owned(),
-            fps: "--".to_owned(),
             knobs: [0.35, 0.5, 0.65, 0.8],
-            last_tick: None,
             levels_volume: 0.7,
             library_query: String::new(),
             library_scope: 0,
+            mixer: MixerState::default(),
             segmented_index: 2.0,
+            stress: StressState::default(),
             toggle_off: false,
             toggle_on: true,
             volume: 0.7,
@@ -140,10 +127,6 @@ impl Default for MockReads {
                 Consts::POSITION_SECS,
                 Consts::ZOOM,
             ),
-            stress_fader: 0.7,
-            stress_levels: [StereoLevels::default(); 8],
-            stress_phase: 0.0,
-            stress_waveforms: std::array::from_fn(stress_waveform),
             tracklist_columns: Consts::TRACKLIST_QUEUE,
             tracklist_preset: Consts::TRACKLIST_QUEUE_PRESET,
             tracklist_widths: BTreeMap::new(),
@@ -168,7 +151,7 @@ impl MockReads {
 
     pub(super) fn select_tab(&mut self, tab: Tab) {
         if self.active_tab != tab {
-            self.last_tick = None;
+            self.stress.reset_clock();
         }
         self.active_tab = tab;
     }
@@ -177,11 +160,7 @@ impl MockReads {
         if self.active_tab != Tab::Stress {
             return;
         }
-        let now = Instant::now();
-        if let Some(previous) = self.last_tick.replace(now) {
-            self.record_frame(now.duration_since(previous).as_secs_f64() * 1_000.0);
-        }
-        self.push_stress_data();
+        self.stress.tick();
     }
 
     pub(super) fn set_library_query(&mut self, query: String) {
@@ -296,6 +275,12 @@ impl MockReads {
     }
 
     fn set_scalar(&mut self, path: &str, value: f64) {
+        if self.mixer.set_scalar(path, value) {
+            return;
+        }
+        if self.stress.set_scalar(path, value) {
+            return;
+        }
         if let Some((_, name)) = path.rsplit_once("/width/") {
             self.set_tracklist_width(name, value);
             return;
@@ -315,14 +300,15 @@ impl MockReads {
             self.levels_volume = value;
         } else if path.starts_with("faders/") || path.ends_with("/volume") {
             self.volume = value;
-        } else if path == "stress/master" {
-            self.stress_fader = value;
         } else if path.ends_with("/wave") {
             self.transport.seek_normalized(value);
         }
     }
 
     fn activate(&mut self, path: &str) {
+        if self.mixer.activate(path) {
+            return;
+        }
         if self.transport.activate(path) {
             return;
         }
@@ -360,6 +346,12 @@ impl MockReads {
 
 impl Reads for MockReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        if let Some(value) = self.mixer.get(endpoint) {
+            return Some(value);
+        }
+        if let Some(value) = self.stress.get(endpoint) {
+            return Some(value);
+        }
         if let Some(module) = endpoint
             .strip_prefix("ui.module.")
             .and_then(|value| value.strip_suffix(".collapsed"))
@@ -403,6 +395,7 @@ impl Reads for MockReads {
             "gallery.tab.sizes" => ReadValue::Bool(self.active_tab == Tab::Sizes),
             "gallery.tab.tokens" => ReadValue::Bool(self.active_tab == Tab::Tokens),
             "gallery.tab.micro" => ReadValue::Bool(self.active_tab == Tab::Micro),
+            "gallery.tab.mixer" => ReadValue::Bool(self.active_tab == Tab::Mixer),
             "gallery.tab.chrome" => ReadValue::Bool(self.active_tab == Tab::Chrome),
             "gallery.tab.titlebars" => ReadValue::Bool(self.active_tab == Tab::Titlebars),
             "gallery.tab.tracklist" => ReadValue::Bool(self.active_tab == Tab::Tracklist),
@@ -426,22 +419,6 @@ impl Reads for MockReads {
             "gallery.footer.telemetry" => ReadValue::Text("LIVE"),
             "gallery.footer.layout" => ReadValue::Text("5 MODULES"),
             "gallery.footer.tokens_anatomy" => ReadValue::Text(CATALOG.footer_tokens_anatomy),
-            "bench.fps" => ReadValue::Text(&self.fps),
-            "bench.frame_ms_avg" => ReadValue::Text(&self.frame_ms_avg),
-            "bench.frame_ms_p99" => ReadValue::Text(&self.frame_ms_p99),
-            "bench.fader" => ReadValue::Scalar(self.stress_fader),
-            "bench.wave.0" => stress_waveform_value(&self.stress_waveforms[0]),
-            "bench.wave.1" => stress_waveform_value(&self.stress_waveforms[1]),
-            "bench.wave.2" => stress_waveform_value(&self.stress_waveforms[2]),
-            "bench.wave.3" => stress_waveform_value(&self.stress_waveforms[3]),
-            "bench.level.0" => ReadValue::Stereo(self.stress_levels[0]),
-            "bench.level.1" => ReadValue::Stereo(self.stress_levels[1]),
-            "bench.level.2" => ReadValue::Stereo(self.stress_levels[2]),
-            "bench.level.3" => ReadValue::Stereo(self.stress_levels[3]),
-            "bench.level.4" => ReadValue::Stereo(self.stress_levels[4]),
-            "bench.level.5" => ReadValue::Stereo(self.stress_levels[5]),
-            "bench.level.6" => ReadValue::Stereo(self.stress_levels[6]),
-            "bench.level.7" => ReadValue::Stereo(self.stress_levels[7]),
             "deck.playback.playing" => ReadValue::Bool(self.transport.playing()),
             "deck.playback.position_normalized" => {
                 ReadValue::Scalar(self.transport.position_normalized())
@@ -506,51 +483,6 @@ impl Reads for MockReads {
     }
 }
 
-impl MockReads {
-    fn record_frame(&mut self, frame_ms: f64) {
-        if self.frame_ms.len() == Consts::FRAME_WINDOW {
-            self.frame_ms.pop_front();
-        }
-        self.frame_ms.push_back(frame_ms);
-        let count = u32::try_from(self.frame_ms.len()).map_or(1.0, f64::from);
-        let average = self.frame_ms.iter().sum::<f64>() / count;
-        self.frame_ms_ordered.clear();
-        self.frame_ms_ordered.extend(self.frame_ms.iter().copied());
-        self.frame_ms_ordered.sort_by(f64::total_cmp);
-        let percentile = self
-            .frame_ms_ordered
-            .len()
-            .saturating_mul(99)
-            .div_ceil(100)
-            .saturating_sub(1);
-        let Some(p99) = self.frame_ms_ordered.get(percentile).copied() else {
-            return;
-        };
-        self.fps = format!("{:.1}", 1_000.0 / average);
-        self.frame_ms_avg = format!("{average:.2}");
-        self.frame_ms_p99 = format!("{p99:.2}");
-    }
-
-    fn push_stress_data(&mut self) {
-        self.stress_phase += 0.037;
-        for (index, waveform) in self.stress_waveforms.iter_mut().enumerate() {
-            waveform.rotate_left(1);
-            let offset = u16::try_from(index).map_or(0.0, f32::from);
-            if let Some(bucket) = waveform.last_mut() {
-                *bucket = stress_bucket(self.stress_phase + offset * 0.71);
-            }
-        }
-        for (index, levels) in self.stress_levels.iter_mut().enumerate() {
-            let offset = u16::try_from(index).map_or(0.0, f32::from);
-            let carrier = (self.stress_phase * 2.3 + offset * 0.47).sin();
-            let noise = (self.stress_phase * 31.7 + offset * 7.13).sin();
-            levels.l = (carrier.mul_add(0.32, noise * 0.08 + 0.54)).clamp(0.0, 1.0);
-            levels.r = ((carrier + 0.63).sin().mul_add(0.3, noise * 0.09 + 0.5)).clamp(0.0, 1.0);
-            levels.volume = self.stress_fader.as_();
-        }
-    }
-}
-
 fn waveform() -> Vec<WaveBucket> {
     let total: f32 = Consts::WAVE_BUCKETS.as_();
     (0..Consts::WAVE_BUCKETS)
@@ -586,39 +518,18 @@ fn beat_grid() -> (Vec<f32>, Vec<f32>) {
     (beats, downbeats)
 }
 
-fn stress_waveform(index: usize) -> Vec<WaveBucket> {
-    let offset = u16::try_from(index).map_or(0.0, f32::from);
-    (0..Consts::STRESS_WAVE_BUCKETS)
-        .map(|bucket| stress_bucket(f32::from(bucket).mul_add(0.013, offset)))
-        .collect()
-}
-
-fn stress_bucket(phase: f32) -> WaveBucket {
-    WaveBucket {
-        low: phase.sin().mul_add(0.34, 0.52).clamp(0.0, 1.0),
-        mid: (phase * 1.73).sin().mul_add(0.29, 0.45).clamp(0.0, 1.0),
-        high: (phase * 3.11).sin().mul_add(0.2, 0.34).clamp(0.0, 1.0),
-    }
-}
-
-fn stress_waveform_value(waveform: &[WaveBucket]) -> ReadValue<'_> {
-    ReadValue::Waveform(WaveformView {
-        buckets: waveform,
-        beats: &[],
-        downbeats: &[],
-        bpm: None,
-        r#loop: None,
-        cues: &[],
-    })
-}
-
 #[derive(Default)]
-struct MockRegistry {
+pub(super) struct MockRegistry {
     endpoints: BTreeMap<(EndpointCategory, EndpointId), EndpointDesc>,
 }
 
 impl MockRegistry {
-    fn insert(&mut self, category: EndpointCategory, id: &str, description: EndpointDesc) {
+    pub(super) fn insert(
+        &mut self,
+        category: EndpointCategory,
+        id: &str,
+        description: EndpointDesc,
+    ) {
         self.endpoints
             .insert((category, EndpointId(id.to_owned())), description);
     }
@@ -683,6 +594,8 @@ fn insert_deck_endpoints(registry: &mut MockRegistry) {
 pub(super) fn registry() -> impl EndpointRegistry {
     let mut registry = MockRegistry::default();
     insert_deck_endpoints(&mut registry);
+    mock_mixer::insert_endpoints(&mut registry);
+    mock_stress::insert_endpoints(&mut registry);
     insert_output_levels(&mut registry);
     for id in ["player.output.volume", "mock.cells.segmented"] {
         registry.insert(
@@ -731,6 +644,7 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "gallery.tab.sizes",
         "gallery.tab.tokens",
         "gallery.tab.micro",
+        "gallery.tab.mixer",
         "gallery.tab.chrome",
         "gallery.tab.titlebars",
         "gallery.tab.tracklist",
@@ -780,32 +694,6 @@ pub(super) fn registry() -> impl EndpointRegistry {
         "mock.levels",
         EndpointDesc::new(ValueKind::Stereo),
     );
-    for id in ["bench.fps", "bench.frame_ms_avg", "bench.frame_ms_p99"] {
-        registry.insert(
-            EndpointCategory::Model,
-            id,
-            EndpointDesc::new(ValueKind::Text),
-        );
-    }
-    registry.insert(
-        EndpointCategory::Model,
-        "bench.fader",
-        EndpointDesc::new(ValueKind::Scalar),
-    );
-    for index in 0..4 {
-        registry.insert(
-            EndpointCategory::Model,
-            &format!("bench.wave.{index}"),
-            EndpointDesc::new(ValueKind::Waveform),
-        );
-    }
-    for index in 0..8 {
-        registry.insert(
-            EndpointCategory::Model,
-            &format!("bench.level.{index}"),
-            EndpointDesc::new(ValueKind::Stereo),
-        );
-    }
     registry
 }
 
