@@ -223,7 +223,11 @@ impl<S> Audio<S> {
             });
         }
         if let Some(wake) = &self.session.peer_wake {
-            wake.notify_now();
+            if intent.is_application_visible() {
+                wake.notify_now();
+            } else {
+                wake.arm();
+            }
         }
         self.session.preload_gate.rearm();
         self.events.reset_underrun();
@@ -654,7 +658,7 @@ mod tests {
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmMeta};
     use kithara_platform::sync::Arc;
-    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_stream::{DeferredWake, PlayheadState, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -761,6 +765,20 @@ mod tests {
         PcmControl::set_transport_bend(&fixture.audio, 1.02);
 
         assert_eq!(fixture.audio.controls.pitch_bend.multiplier(), 1.02);
+    }
+
+    #[kithara::test]
+    fn bounded_range_defers_peer_wake_to_the_worker_shell() {
+        let mut fixture = AudioFixture::default();
+        let peer_wake = Arc::new(DeferredWake::default());
+        fixture.audio.session.peer_wake = Some(Arc::clone(&peer_wake));
+
+        fixture
+            .audio
+            .request_source_range(SourceRange::try_from(0..2).expect("valid source range"))
+            .expect("bounded request starts");
+
+        assert!(peer_wake.flush());
     }
 
     #[kithara::test]

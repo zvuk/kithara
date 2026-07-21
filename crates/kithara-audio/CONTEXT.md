@@ -200,7 +200,9 @@ cross this boundary.
 the canonical `SeekState` transaction with `SeekIntent::Reposition`; a
 `SourceRangeRequest` carries that exact epoch, and a newer playback seek or
 range invalidates it. The reposition uses the normal seek, decoder, and worker
-path but owns no application-visible seek lifecycle. The decoder switches one
+path but owns no application-visible seek lifecycle. Its HLS peer wake is armed
+lock-free and flushed by the already-woken worker shell; it never calls the
+runtime notifier from the render callback. The decoder switches one
 resource between exclusive linear and bounded read modes, and both modes use
 the same decoder, worker, PCM ring, gapless metadata, trash ring, and `PcmPool`.
 There is no source sidecar worker, cache, port protocol, event bus, or second
