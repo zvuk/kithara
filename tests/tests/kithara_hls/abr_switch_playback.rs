@@ -1,8 +1,10 @@
+use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
 use kithara::{
+    abr::AbrHandle,
     assets::AssetStore,
     audio::{Audio, AudioConfig, ChunkOutcome, ReadOutcome},
     decode::DecoderBackend,
-    events::{AbrEvent, Event, EventBus},
+    events::{AbrEvent, DecoderChangeCause, DecoderEvent, Event, EventBus, EventReceiver},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -10,15 +12,17 @@ use kithara::{
         time::{Duration, Instant, sleep},
         tokio::task::spawn_blocking,
     },
+    play::{Resource, ResourceConfig},
     stream::{AudioCodec, Stream},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
-    fixture_protocol::{DelayRule, PcmPattern},
+    fixture_protocol::{DelayRule, PackagedSignal},
     flash_pace::virtual_pace,
     offline::{OfflinePlayer, resource_from_reader},
     temp_dir,
 };
+use num_traits::ToPrimitive;
 use tracing::info;
 
 use crate::continuity::{
@@ -27,6 +31,272 @@ use crate::continuity::{
 
 fn forced_downswitch_abr_options() -> AbrMode {
     auto(0)
+}
+
+const ORACLE_WARMUP_SECS: f64 = 1.0;
+const ORACLE_OBSERVATION_FRAMES: usize = CONTINUITY_SAMPLE_RATE as usize * 3;
+const ORACLE_RATIO: f32 = 3.0;
+const ORACLE_SLACK: f32 = 2.0e-3;
+const ORACLE_SILENCE_THRESHOLD: f32 = 1.0e-4;
+const ORACLE_TIMELINE_WINDOW_MS: f64 = 20.0;
+const ORACLE_SIGNAL_FREQ_HZ: f64 = 440.0;
+
+struct PreparedPlayer {
+    _temp: TestTempDir,
+    abr: AbrHandle,
+    events: EventReceiver,
+    player: OfflinePlayer,
+}
+
+struct PlayerCapture {
+    capture_frame: usize,
+    samples: Vec<f32>,
+}
+
+struct SwitchCapture {
+    capture: PlayerCapture,
+    seam_frame: usize,
+}
+
+fn source_frame(position: f64, label: &str) -> usize {
+    let exact = position * f64::from(CONTINUITY_SAMPLE_RATE);
+    let rounded = exact.round();
+    assert!(
+        (exact - rounded).abs() <= 1.0e-6,
+        "{label} capture position must resolve to an exact source frame: position={position:.12}s, frame={exact:.9}"
+    );
+    rounded
+        .to_usize()
+        .expect("validated source frame fits usize")
+}
+
+fn drain_decoder_changes(
+    events: &mut EventReceiver,
+    frame_end: usize,
+) -> Vec<(usize, DecoderChangeCause, Option<u32>)> {
+    let mut changes = Vec::new();
+    while let Ok(envelope) = events.try_recv() {
+        if let Event::Decoder(DecoderEvent::DecoderChanged { cause, variant, .. }) = envelope.event
+        {
+            changes.push((frame_end, cause, variant));
+        }
+    }
+    changes
+}
+
+async fn render_paced(player: &mut OfflinePlayer, frames: usize) -> Vec<f32> {
+    let block = player.render(frames);
+    sleep(Duration::from_secs_f64(
+        frames.to_f64().expect("render frame count fits f64") / f64::from(CONTINUITY_SAMPLE_RATE),
+    ))
+    .await;
+    block
+}
+
+async fn prepare_manual_player(master_url: &url::Url, label: &str) -> (PreparedPlayer, usize) {
+    let temp = TestTempDir::new();
+    let bus = EventBus::new(1_024);
+    let mut events = bus.subscribe();
+    let config = ResourceConfig::for_src(master_url.as_str())
+        .expect("valid packaged ABR master URL")
+        .store(kithara_integration_tests::disk_asset_store(temp.path()))
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .initial_abr_mode(AbrMode::manual(0))
+        .events(bus)
+        .build();
+    let resource = Resource::new(config)
+        .await
+        .unwrap_or_else(|error| panic!("open {label} resource: {error:?}"));
+    let abr = resource
+        .abr_handle()
+        .unwrap_or_else(|| panic!("{label} HLS resource must expose ABR"));
+    let mut player = OfflinePlayer::new(CONTINUITY_SAMPLE_RATE);
+    player.load_and_fadein(resource, label);
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut active_blocks = 0usize;
+    let mut changes = drain_decoder_changes(&mut events, 0);
+    loop {
+        let block = render_paced(&mut player, CONTINUITY_BLOCK_FRAMES).await;
+        changes.extend(drain_decoder_changes(&mut events, 0));
+        if block
+            .iter()
+            .any(|sample| sample.abs() > ORACLE_SILENCE_THRESHOLD)
+        {
+            active_blocks = active_blocks.saturating_add(1);
+        } else {
+            active_blocks = 0;
+        }
+        if abr.current_variant_index() == Some(0)
+            && player.position() >= ORACLE_WARMUP_SECS
+            && active_blocks >= 2
+        {
+            break;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "timed out preparing {label}: variant={:?}, position={:.3}",
+            abr.current_variant_index(),
+            player.position(),
+        );
+    }
+    assert_eq!(
+        changes.len(),
+        1,
+        "{label} must emit exactly one initial decoder event: {changes:?}"
+    );
+    assert_eq!(
+        changes[0].1,
+        DecoderChangeCause::Initial,
+        "{label} initial cause"
+    );
+    assert_eq!(changes[0].2, Some(0), "{label} initial variant");
+
+    let capture_frame = source_frame(player.position(), label);
+    (
+        PreparedPlayer {
+            _temp: temp,
+            abr,
+            events,
+            player,
+        },
+        capture_frame,
+    )
+}
+
+async fn render_no_switch_control(master_url: &url::Url) -> PlayerCapture {
+    let (mut prepared, capture_frame) =
+        prepare_manual_player(master_url, "no-switch-control").await;
+    let mut samples = Vec::with_capacity(ORACLE_OBSERVATION_FRAMES * 2);
+    let mut changes = Vec::new();
+    while samples.len() / 2 < ORACLE_OBSERVATION_FRAMES {
+        let remaining = ORACLE_OBSERVATION_FRAMES.saturating_sub(samples.len() / 2);
+        samples.extend(
+            render_paced(&mut prepared.player, remaining.min(CONTINUITY_BLOCK_FRAMES)).await,
+        );
+        changes.extend(drain_decoder_changes(
+            &mut prepared.events,
+            samples.len() / 2,
+        ));
+    }
+    assert_eq!(prepared.abr.current_variant_index(), Some(0));
+    assert!(
+        changes.is_empty(),
+        "no-switch control must not recreate its decoder: {changes:?}"
+    );
+    PlayerCapture {
+        capture_frame,
+        samples,
+    }
+}
+
+async fn render_manual_switch(master_url: &url::Url) -> SwitchCapture {
+    let (mut prepared, capture_frame) = prepare_manual_player(master_url, "manual-switch").await;
+    prepared
+        .abr
+        .set_mode(AbrMode::manual(1))
+        .expect("manual target variant must be valid");
+
+    let mut samples = Vec::with_capacity(ORACLE_OBSERVATION_FRAMES * 2);
+    let mut changes = Vec::new();
+    while samples.len() / 2 < ORACLE_OBSERVATION_FRAMES {
+        let remaining = ORACLE_OBSERVATION_FRAMES.saturating_sub(samples.len() / 2);
+        samples.extend(
+            render_paced(&mut prepared.player, remaining.min(CONTINUITY_BLOCK_FRAMES)).await,
+        );
+        changes.extend(drain_decoder_changes(
+            &mut prepared.events,
+            samples.len() / 2,
+        ));
+    }
+    assert_eq!(
+        prepared.abr.current_variant_index(),
+        Some(1),
+        "manual ABR request must apply to the player resource"
+    );
+    assert_eq!(
+        changes.len(),
+        1,
+        "manual ABR request must recreate exactly one decoder: {changes:?}"
+    );
+    let (seam_frame, cause, variant) = changes[0];
+    assert_eq!(
+        cause,
+        DecoderChangeCause::FormatBoundary,
+        "decoder recreation cause"
+    );
+    assert_eq!(variant, Some(1), "decoder recreation variant");
+    SwitchCapture {
+        capture: PlayerCapture {
+            capture_frame,
+            samples,
+        },
+        seam_frame,
+    }
+}
+
+fn percentile_999(values: &mut [f32]) -> f32 {
+    assert!(!values.is_empty(), "continuity metric needs samples");
+    values.sort_by(f32::total_cmp);
+    values[values.len().saturating_sub(1).saturating_mul(999) / 1_000]
+}
+
+fn max_step_excess(candidate: &[f32], control: &[f32]) -> (f32, f32, usize) {
+    assert_eq!(candidate.len(), control.len(), "time-aligned PCM lengths");
+    let frames = candidate.len() / 2;
+    let mut excesses = Vec::with_capacity(frames.saturating_sub(1));
+    let mut peak = 0.0f32;
+    let mut peak_frame = 0usize;
+    for frame in 1..frames {
+        let candidate_step = (candidate[frame * 2] - candidate[(frame - 1) * 2]).abs();
+        let control_step = (control[frame * 2] - control[(frame - 1) * 2]).abs();
+        let excess = (candidate_step - control_step).max(0.0);
+        excesses.push(excess);
+        if excess > peak {
+            peak = excess;
+            peak_frame = frame;
+        }
+    }
+    (peak, percentile_999(&mut excesses), peak_frame)
+}
+
+fn longest_silent_run(samples: &[f32], start_frame: usize, end_frame: usize) -> usize {
+    let mut current = 0usize;
+    let mut longest = 0usize;
+    for frame in samples[start_frame * 2..end_frame * 2].chunks_exact(2) {
+        if frame
+            .iter()
+            .all(|sample| sample.abs() <= ORACLE_SILENCE_THRESHOLD)
+        {
+            current = current.saturating_add(1);
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    longest
+}
+
+fn cochlea_silent_segments(samples: &[f32], start_frame: usize, end_frame: usize) -> usize {
+    let audio = CochleaAudio {
+        samples: samples.to_vec(),
+        channels: 2,
+        sample_rate: CONTINUITY_SAMPLE_RATE,
+    };
+    let timeline = segment_timeline(
+        &audio,
+        &SegmentOpts::default().with_window_ms(ORACLE_TIMELINE_WINDOW_MS),
+    );
+    let start_ms = start_frame as f64 / f64::from(CONTINUITY_SAMPLE_RATE) * 1_000.0;
+    let end_ms = end_frame as f64 / f64::from(CONTINUITY_SAMPLE_RATE) * 1_000.0;
+    timeline
+        .segments
+        .iter()
+        .filter(|segment| {
+            segment.start_ms >= start_ms && segment.end_ms <= end_ms && segment.silent
+        })
+        .count()
 }
 
 fn packaged_identical_content_abr_builder(codec: AudioCodec) -> HlsFixtureBuilder {
@@ -40,26 +310,25 @@ fn packaged_identical_content_abr_builder(codec: AudioCodec) -> HlsFixtureBuilde
             segment_gte: Some(2),
             delay_ms: 500,
             ..Default::default()
-        }]);
+        }])
+        .packaged_audio_signal_aac_lc(
+            CONTINUITY_SAMPLE_RATE,
+            2,
+            PackagedSignal::Sine {
+                freq_hz: ORACLE_SIGNAL_FREQ_HZ,
+            },
+        );
     match codec {
-        AudioCodec::AacLc => builder.packaged_audio_per_variant_pcm_aac_lc(
-            CONTINUITY_SAMPLE_RATE,
-            2,
-            vec![PcmPattern::Ascending, PcmPattern::Ascending],
-        ),
-        AudioCodec::Flac => builder.packaged_audio_per_variant_pcm_flac(
-            CONTINUITY_SAMPLE_RATE,
-            2,
-            vec![PcmPattern::Ascending, PcmPattern::Ascending],
-        ),
+        AudioCodec::AacLc => builder,
+        AudioCodec::Flac => builder.override_variant_codec(1, AudioCodec::Flac),
         other => panic!("unsupported packaged ABR codec: {other:?}"),
     }
 }
 
-async fn create_packaged_abr_fixture() -> (TestServerHelper, url::Url) {
+async fn create_packaged_abr_fixture(target_codec: AudioCodec) -> (TestServerHelper, url::Url) {
     let server = TestServerHelper::new().await;
     let created = server
-        .create_hls(packaged_identical_content_abr_builder(AudioCodec::AacLc))
+        .create_hls(packaged_identical_content_abr_builder(target_codec))
         .await
         .unwrap_or_else(|error| panic!("create packaged ABR fixture: {error}"));
     (server, created.master_url())
@@ -180,6 +449,79 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     .expect("read phase join");
 }
 
+async fn assert_manual_abr_switch_matches_no_switch_pcm_and_cochlea(target_codec: AudioCodec) {
+    let (_server, url) = create_packaged_abr_fixture(target_codec).await;
+    let control = render_no_switch_control(&url).await;
+    let switched = render_manual_switch(&url).await;
+
+    assert_eq!(
+        switched.capture.capture_frame, control.capture_frame,
+        "switch and no-switch control must capture the same source frame"
+    );
+    assert_eq!(
+        switched.capture.samples.len(),
+        control.samples.len(),
+        "switch and no-switch control must render the same PCM length"
+    );
+
+    // The decoder event is produced upstream of the playback buffer, so it
+    // does not identify the audible seam. Compare the complete aligned output
+    // interval instead; the no-switch run is the only valid baseline.
+    let window_start = 0;
+    let window_end = ORACLE_OBSERVATION_FRAMES;
+    let control_silence = longest_silent_run(&control.samples, window_start, window_end);
+    let switched_silence = longest_silent_run(&switched.capture.samples, window_start, window_end);
+    assert!(
+        switched_silence <= control_silence.saturating_add(2),
+        "manual ABR decoder recreation inserted silence: switched={switched_silence} frames, control={control_silence} frames, window=[{window_start}..{window_end}), seam={}",
+        switched.seam_frame,
+    );
+
+    let control_segments = cochlea_silent_segments(&control.samples, window_start, window_end);
+    let switched_segments =
+        cochlea_silent_segments(&switched.capture.samples, window_start, window_end);
+    assert!(
+        switched_segments <= control_segments,
+        "Cochlea found switch-only silent segments: switched={switched_segments}, control={control_segments}, window=[{window_start}..{window_end}), seam={}",
+        switched.seam_frame,
+    );
+
+    let (peak_excess, background_excess, peak_frame) =
+        max_step_excess(&switched.capture.samples, &control.samples);
+    let excess_limit = background_excess.mul_add(ORACLE_RATIO, ORACLE_SLACK);
+    assert!(
+        peak_excess <= excess_limit,
+        "manual ABR decoder recreation added a PCM discontinuity: peak_excess={peak_excess:.6} at frame {peak_frame}, background={background_excess:.6}, limit={excess_limit:.6}, seam={}, switched=[{:.6}, {:.6}], control=[{:.6}, {:.6}]",
+        switched.seam_frame,
+        switched.capture.samples[(peak_frame - 1) * 2],
+        switched.capture.samples[peak_frame * 2],
+        control.samples[(peak_frame - 1) * 2],
+        control.samples[peak_frame * 2],
+    );
+}
+
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+)]
+async fn manual_aac_abr_switch_matches_no_switch_pcm_and_cochlea() {
+    assert_manual_abr_switch_matches_no_switch_pcm_and_cochlea(AudioCodec::AacLc).await;
+}
+
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+)]
+async fn manual_aac_to_flac_switch_matches_no_switch_pcm_and_cochlea() {
+    assert_manual_abr_switch_matches_no_switch_pcm_and_cochlea(AudioCodec::Flac).await;
+}
+
 /// Packaged ABR HLS must switch variants without losing continuity.
 ///
 /// Acceptance is split deliberately:
@@ -195,7 +537,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
-    let (_server, url) = create_packaged_abr_fixture().await;
+    let (_server, url) = create_packaged_abr_fixture(AudioCodec::AacLc).await;
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
 
     let bus = EventBus::new(64);

@@ -113,6 +113,7 @@ kithara-encode = { workspace = true }
 
 assert_no_alloc = { workspace = true }
 axum = { workspace = true }
+cochlea-features = { workspace = true }
 firewheel = { workspace = true }
 
 # Performance monitoring (optional)

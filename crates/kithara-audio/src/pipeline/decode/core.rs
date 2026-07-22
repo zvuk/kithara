@@ -5,12 +5,13 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use kithara_bufpool::PcmPool;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessMode,
-    PcmChunk,
+    PcmChunk, PcmMeta, duration_for_frames,
 };
 use kithara_events::{DeferredBus, Event};
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{MediaInfo, PlayheadWrite, SeekObserve, StreamType};
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
@@ -20,6 +21,7 @@ use crate::{
         decode::{drain::EofDrain, resume::ResumeCursor},
         fetch::Fetch,
         gapless::GaplessStage,
+        gapless_blender::GaplessBlender,
         rebuild::RecreateState,
         seek::{ResumeState, SeekEngine, emit::commit_outcome},
         stream::shared::SharedStream,
@@ -35,6 +37,7 @@ pub(crate) struct DecoderSession {
     pub(crate) media_info: Option<MediaInfo>,
     pub(crate) base_offset: u64,
     pub(crate) installed_at_seek_epoch: u64,
+    decoder_origin: Duration,
 }
 
 /// Factory closure that creates a new decoder from stream, media info, and base offset.
@@ -52,6 +55,7 @@ pub(crate) struct DecodeInit<T: StreamType> {
     pub(crate) decoder_factory: DecoderFactory<T>,
     pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     pub(crate) gapless_mode: GaplessMode,
+    pub(crate) pcm_pool: PcmPool,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) media_info: Option<MediaInfo>,
     pub(crate) playback_resampler_backend: &'static str,
@@ -93,6 +97,7 @@ impl<T: StreamType> DecodeInit<T> {
             decoder_factory,
             decoder_backend,
             gapless_mode,
+            pcm_pool,
             host_sample_rate,
             media_info,
             playback_resampler_backend,
@@ -101,6 +106,7 @@ impl<T: StreamType> DecodeInit<T> {
         DecodeParts {
             core: DecodeCore::new(
                 DecoderSession {
+                    decoder_origin: decoder_origin(decoder.as_ref()),
                     decoder,
                     base_offset: 0,
                     media_info,
@@ -108,6 +114,7 @@ impl<T: StreamType> DecodeInit<T> {
                 },
                 gapless_mode,
                 gapless,
+                pcm_pool,
                 effects,
             ),
             factory: decoder_factory,
@@ -122,8 +129,10 @@ impl<T: StreamType> DecodeInit<T> {
 
 pub(crate) struct DecodeCore {
     session: DecoderSession,
+    content_origin: Duration,
     gapless_mode: GaplessMode,
     gapless: GaplessStage,
+    blender: GaplessBlender,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EofDrain,
 }
@@ -152,13 +161,18 @@ impl DecodeCore {
         session: DecoderSession,
         gapless_mode: GaplessMode,
         gapless: GaplessStage,
+        pcm_pool: PcmPool,
         effects: Vec<Box<dyn AudioEffect>>,
     ) -> Self {
         let drain = EofDrain::new(effects.len());
+        let blender = GaplessBlender::new(pcm_pool, session.decoder.blend_duration());
+        let content_origin = session.decoder_origin;
         Self {
             session,
+            content_origin,
             gapless_mode,
             gapless,
+            blender,
             effects,
             drain,
         }
@@ -179,6 +193,7 @@ impl DecodeCore {
 
     pub(crate) fn notify_seek(&mut self) {
         self.gapless.notify_seek();
+        self.blender.reset();
     }
 
     pub(crate) fn set_tail_compensation(&mut self) {
@@ -187,8 +202,32 @@ impl DecodeCore {
         self.gapless.flush();
     }
 
+    pub(crate) fn flush_gapless(&mut self) -> DecodeResult<()> {
+        self.drain_gapless()?;
+        self.blender.flush();
+        Ok(())
+    }
+
+    pub(crate) fn begin_format_transition(&mut self) -> DecodeResult<Option<Duration>> {
+        self.drain_gapless()?;
+        self.blender.begin_transition()
+    }
+
+    #[must_use]
+    pub(crate) fn blend_active(&self) -> bool {
+        self.blender.transition_active()
+    }
+
     pub(crate) fn push(&mut self, chunk: PcmChunk) {
         self.gapless.push(chunk);
+    }
+
+    pub(crate) fn normalize_timeline(&self, chunk: &mut PcmChunk) {
+        normalize_meta(
+            &mut chunk.meta,
+            self.session.decoder_origin,
+            self.content_origin,
+        );
     }
 
     pub(crate) fn track(
@@ -200,13 +239,25 @@ impl DecodeCore {
         self.drain.track(chunk, playhead, emit);
     }
 
-    pub(crate) fn next_gapless(&mut self) -> Option<PcmChunk> {
-        while let Some(chunk) = self.gapless.next() {
-            if let Some(output) = apply_effects(&mut self.effects, chunk) {
-                return Some(output);
+    pub(crate) fn next_gapless(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        loop {
+            if let Some(chunk) = self.blender.next()
+                && let Some(output) = apply_effects(&mut self.effects, chunk)
+            {
+                return Ok(Some(output));
             }
+            let Some(chunk) = self.gapless.next() else {
+                return Ok(None);
+            };
+            self.blender.push(chunk)?;
         }
-        None
+    }
+
+    fn drain_gapless(&mut self) -> DecodeResult<()> {
+        while let Some(chunk) = self.gapless.next() {
+            self.blender.push(chunk)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn next_drain(&mut self) -> Option<PcmChunk> {
@@ -251,11 +302,21 @@ impl DecodeCore {
         &mut self,
         stream: &SharedStream<T>,
         playhead: &dyn PlayheadWrite,
-        position: kithara_platform::time::Duration,
+        position: Duration,
     ) -> DecodeResult<DecoderSeekOutcome> {
         let before = stream.position();
-        let outcome = match catch_unwind(AssertUnwindSafe(|| self.session.decoder.seek(position))) {
-            Ok(result) => result,
+        let decoder_position = shift(position, self.content_origin, self.session.decoder_origin);
+        let outcome = match catch_unwind(AssertUnwindSafe(|| {
+            self.session.decoder.seek(decoder_position)
+        })) {
+            Ok(result) => result.map(|outcome| {
+                normalize_seek(
+                    outcome,
+                    self.session.decoder.spec().sample_rate.get(),
+                    self.session.decoder_origin,
+                    self.content_origin,
+                )
+            }),
             Err(payload) => {
                 warn!(panic = %panic_message(payload), "decoder panicked during seek");
                 return Err(DecodeError::InvalidData {
@@ -268,6 +329,7 @@ impl DecodeCore {
         }
         debug!(
             ?position,
+            ?decoder_position,
             before,
             after = stream.position(),
             ?outcome,
@@ -287,7 +349,13 @@ impl DecodeCore {
         offset: u64,
         seek_epoch: u64,
     ) -> Box<dyn Decoder> {
+        self.blender.set_duration(decoder.blend_duration());
+        let mut gapless =
+            GaplessStage::build(decoder.as_ref(), self.gapless_mode, Some(&media_info));
+        gapless.notify_seek();
+        self.gapless = gapless;
         let session = DecoderSession {
+            decoder_origin: decoder_origin(&*decoder),
             decoder,
             media_info: Some(media_info),
             base_offset: offset,
@@ -299,6 +367,86 @@ impl DecodeCore {
 
     pub(crate) fn flush_reader_signals(&mut self) {
         self.session.decoder.flush_reader_signals();
+    }
+}
+
+fn decoder_origin(decoder: &dyn Decoder) -> Duration {
+    let frames = decoder
+        .track_info()
+        .gapless
+        .map_or(0, |gapless| gapless.leading_frames);
+    duration_for_frames(decoder.spec().sample_rate.get(), frames)
+}
+
+fn normalize_meta(meta: &mut PcmMeta, decoder_origin: Duration, content_origin: Duration) {
+    if decoder_origin == content_origin {
+        return;
+    }
+    let sample_rate = meta.spec.sample_rate.get();
+    meta.timestamp = shift(meta.timestamp, decoder_origin, content_origin);
+    meta.end_timestamp = shift(meta.end_timestamp, decoder_origin, content_origin);
+    meta.frame_offset = shift_frames(
+        meta.frame_offset,
+        frames_at(sample_rate, decoder_origin),
+        frames_at(sample_rate, content_origin),
+    );
+}
+
+fn normalize_seek(
+    outcome: DecoderSeekOutcome,
+    sample_rate: u32,
+    decoder_origin: Duration,
+    content_origin: Duration,
+) -> DecoderSeekOutcome {
+    if decoder_origin == content_origin {
+        return outcome;
+    }
+    match outcome {
+        DecoderSeekOutcome::Landed {
+            landed_at,
+            landed_frame,
+            landed_byte,
+            preroll,
+        } => DecoderSeekOutcome::Landed {
+            landed_at: shift(landed_at, decoder_origin, content_origin),
+            landed_frame: shift_frames(
+                landed_frame,
+                frames_at(sample_rate, decoder_origin),
+                frames_at(sample_rate, content_origin),
+            ),
+            landed_byte,
+            preroll,
+        },
+        DecoderSeekOutcome::PastEof { duration } => DecoderSeekOutcome::PastEof {
+            duration: shift(duration, decoder_origin, content_origin),
+        },
+    }
+}
+
+fn shift(value: Duration, from: Duration, to: Duration) -> Duration {
+    if to >= from {
+        value.saturating_add(to.saturating_sub(from))
+    } else {
+        value.saturating_sub(from.saturating_sub(to))
+    }
+}
+
+fn frames_at(sample_rate: u32, at: Duration) -> u64 {
+    let seconds = at.as_secs();
+    let subsecond = u64::from(at.subsec_nanos())
+        .saturating_mul(u64::from(sample_rate))
+        .saturating_add(500_000_000)
+        / 1_000_000_000;
+    seconds
+        .saturating_mul(u64::from(sample_rate))
+        .saturating_add(subsecond)
+}
+
+fn shift_frames(value: u64, from: u64, to: u64) -> u64 {
+    if to >= from {
+        value.saturating_add(to.saturating_sub(from))
+    } else {
+        value.saturating_sub(from.saturating_sub(to))
     }
 }
 

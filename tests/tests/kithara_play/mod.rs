@@ -2,6 +2,7 @@
 #[path = "../common/offline_player_harness.rs"]
 mod offline_player_harness;
 
+mod cochlea_continuity_oracle;
 mod engine_tests;
 mod gapless_offline_e2e;
 mod gapless_startup_regressions;

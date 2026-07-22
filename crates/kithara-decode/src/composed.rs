@@ -25,6 +25,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     codec: C,
     demuxer: D,
     byte_len_handle: Option<Arc<AtomicU64>>,
+    blend_duration: Duration,
     duration: Option<Duration>,
     /// Reader-side event sink. Single-owner `Box<dyn ReaderEventSink>` —
     /// `None` skips emission entirely; `Some(_)` calls `on_chunk` /
@@ -69,6 +70,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
 /// so production code physically cannot reach it.
 pub(crate) struct DecoderRuntime {
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
+    pub(crate) blend_duration: Duration,
     pub(crate) hooks: Option<BoxedEventSink>,
     pub(crate) pool: PcmPool,
     pub(crate) epoch: u64,
@@ -86,6 +88,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             duration,
             pool: runtime.pool,
             epoch: runtime.epoch,
+            blend_duration: runtime.blend_duration,
             byte_len_handle: runtime.byte_len_handle,
             hooks: runtime.hooks,
             frame_offset: 0,
@@ -321,6 +324,10 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
         self.duration
     }
 
+    fn blend_duration(&self) -> Duration {
+        self.blend_duration
+    }
+
     fn flush_reader_signals(&mut self) {
         if let Some(hooks) = self.hooks.as_mut() {
             hooks.flush();
@@ -364,6 +371,7 @@ impl DecoderRuntime {
         Self {
             pool: PcmPool::default(),
             epoch: 0,
+            blend_duration: Duration::ZERO,
             byte_len_handle: None,
             hooks: None,
         }

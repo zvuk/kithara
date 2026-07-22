@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicU64;
 use kithara::{
     self,
     decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory},
-    platform::sync::Arc,
+    platform::{sync::Arc, time::Duration},
 };
 
 const TEST_MP3_BYTES: &[u8] =
@@ -19,6 +19,7 @@ fn decoder_config_default_uses_symphonia_backend() {
         .build();
     assert_eq!(config.backend, DecoderBackend::Symphonia);
     assert!(config.byte_len_handle.is_none());
+    assert_eq!(config.blend_duration, Duration::from_millis(10));
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -59,6 +60,7 @@ fn create_with_probe_with_mp3_hint_succeeds() {
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
             .pcm_pool(kithara::bufpool::PcmPool::default())
+            .blend_duration(Duration::from_millis(17))
             .build(),
     )
     .expect("BUG: mp3 hint should produce a decoder");
@@ -66,6 +68,7 @@ fn create_with_probe_with_mp3_hint_succeeds() {
     let spec = decoder.spec();
     assert!(spec.channels > 0);
     assert!(spec.sample_rate.get() > 0);
+    assert_eq!(decoder.blend_duration(), Duration::from_millis(17));
 }
 
 #[kithara::test]

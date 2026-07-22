@@ -175,6 +175,12 @@ pub(crate) type BoxedSource = Box<dyn DecoderInput>;
 /// decoder type is determined at runtime (e.g., based on media info).
 #[kithara::mock(api = DecoderMock)]
 pub trait Decoder: Send + 'static {
+    /// Duration of the real PCM overlap used by the audio pipeline when this
+    /// decoder is replaced at a format boundary.
+    fn blend_duration(&self) -> Duration {
+        Duration::ZERO
+    }
+
     /// Default leading-silence frame count for `codec` when no
     /// container-/encoder-level gapless metadata is available.
     ///

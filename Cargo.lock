@@ -1471,6 +1471,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cochlea-features"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb423f33d778f705d69dbe50b10a6b9d926505a82dc50e4ce165ed1a04233958"
+dependencies = [
+ "ebur128",
+ "hound",
+ "libm",
+ "rustfft",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "codespan-reporting"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2491,6 +2506,18 @@ name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
+name = "ebur128"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e227cc62d64d6fe01abbef48134b9c1f17d470cef1e7a56337ad05b1f81df7f9"
+dependencies = [
+ "bitflags 1.3.2",
+ "dasp_frame",
+ "dasp_sample",
+ "smallvec",
+]
 
 [[package]]
 name = "either"
@@ -3650,6 +3677,12 @@ checksum = "7f76b1b9a176e5677878243b0c9052d2e0a62405359bd6990bbd85b59cafa2aa"
 dependencies = [
  "hotpath-macros-meta",
 ]
+
+[[package]]
+name = "hound"
+version = "3.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
 
 [[package]]
 name = "http"
@@ -4813,6 +4846,7 @@ dependencies = [
  "bon",
  "bytes",
  "cbc",
+ "cochlea-features",
  "console_error_panic_hook",
  "criterion",
  "firewheel",
