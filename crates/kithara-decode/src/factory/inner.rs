@@ -6,7 +6,7 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 use kithara_stream::{
     AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes,
@@ -183,6 +183,10 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
+    /// Duration of the real PCM overlap used when a decoder is recreated at a
+    /// format boundary.
+    #[builder(default = Duration::from_millis(10))]
+    pub blend_duration: Duration,
     /// Epoch counter for decoder recreation tracking.
     #[builder(default)]
     pub epoch: u64,
@@ -439,6 +443,7 @@ where
         DecoderRuntime {
             pool: pool.clone(),
             epoch: config.epoch,
+            blend_duration: config.blend_duration,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
@@ -559,6 +564,7 @@ where
         DecoderRuntime {
             pool: pool.clone(),
             epoch: config.epoch,
+            blend_duration: config.blend_duration,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
@@ -728,6 +734,7 @@ where
         DecoderRuntime {
             pool: pool.clone(),
             epoch: config.epoch,
+            blend_duration: config.blend_duration,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
@@ -811,6 +818,7 @@ where
         DecoderRuntime {
             pool: pool.clone(),
             epoch: config.epoch,
+            blend_duration: config.blend_duration,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
@@ -899,6 +907,7 @@ where
         DecoderRuntime {
             pool: pool.clone(),
             epoch: config.epoch,
+            blend_duration: config.blend_duration,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
@@ -1082,6 +1091,7 @@ mod apple_factory_tests {
         let media_info = MediaInfo::new(Some(AudioCodec::AacLc), None);
         let config: DecoderConfig<kithara_resampler::NoResamplerBackend> = DecoderConfig {
             backend: DecoderBackend::Apple,
+            blend_duration: Duration::from_millis(10),
             byte_map: Some(byte_map),
             ..DecoderConfig::default()
         };

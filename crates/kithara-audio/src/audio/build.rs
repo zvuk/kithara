@@ -111,6 +111,7 @@ struct StreamSourceRegistration<'a, T: StreamType> {
     engine_load: Option<Arc<EngineLoad>>,
     epoch: Arc<AtomicU64>,
     gapless_mode: GaplessMode,
+    pcm_pool: PcmPool,
     host_sample_rate: Arc<AtomicU32>,
     initial_media_info: Option<MediaInfo>,
     playback_resampler_backend: &'static str,
@@ -234,6 +235,7 @@ where
             engine_load,
             epoch: Arc::clone(&epoch),
             gapless_mode,
+            pcm_pool: pcm_pool.clone(),
             host_sample_rate: Arc::clone(&host_sample_rate),
             initial_media_info: initial_media_info.clone(),
             playback_resampler_backend: deps.playback_resampler_backend(),
@@ -385,6 +387,7 @@ where
         decoder_factory: registration.decoder_factory,
         decoder_backend: registration.decoder_backend,
         gapless_mode: registration.gapless_mode,
+        pcm_pool: registration.pcm_pool,
         host_sample_rate: registration.host_sample_rate.clone(),
         media_info: registration.initial_media_info,
         playback_resampler_backend: registration.playback_resampler_backend,
@@ -454,6 +457,7 @@ where
             .byte_len_handle(Arc::clone(&deps.byte_len))
             .pcm_pool(deps.decoder.pcm_pool.clone())
             .byte_pool(deps.decoder.byte_pool.clone())
+            .blend_duration(deps.decoder.decoder.blend_duration())
             .epoch(deps.epoch.load(Ordering::Acquire))
             .maybe_byte_map(stream.byte_map())
             .maybe_hooks(stream.take_reader_event_sink())
@@ -488,6 +492,7 @@ where
         .byte_len_handle(Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0))))
         .pcm_pool(deps.pcm_pool.clone())
         .byte_pool(deps.byte_pool.clone())
+        .blend_duration(deps.decoder.blend_duration())
         .maybe_byte_map(shared_stream.byte_map())
         .maybe_hooks(shared_stream.take_reader_event_sink())
         .maybe_hint(hint.clone())

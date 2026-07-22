@@ -61,7 +61,7 @@ Backend layout:
   plus native `HEAD` and `POST` request builders.
 - `backend/native/reqwest.rs` builds the native reqwest client.
 - `backend/native/wreq.rs` builds the native wreq client and maps
-  `ImpersonatePreset` to `wreq_util::Emulation`.
+  `ImpersonatePreset` to `wreq_util::Profile`.
 - `backend/wasm/fetch.rs` builds the wasm reqwest-fetch client and maps
   `head` to a one-byte ranged `GET`.
 - `backend/apple/mod.rs` is declaration/re-export only for the Apple adapter.
@@ -191,5 +191,5 @@ The `TimeoutNet` decorator can wrap any `Net` with an additional
 - `&RangeSpec` → `String` (`Display`) — HTTP Range header rendering
 - `HashMap<String, String>` → `Headers` (`From`) — build header set from a map
 - `Compression` → `Vec<ClientBuilderMod>` (`From`) — map compression flags to native-backend (`wreq`/`reqwest`) builder mods
-- `ImpersonatePreset` → `wreq_util::Emulation` (`From`) — only under `client-wreq`
+- `ImpersonatePreset` → `wreq_util::Profile` (`From`) — only under `client-wreq`
 - `ReqwestError` → `NetError` (`From`) — wrap reqwest/wreq transport errors into typed `NetError`; Apple maps `NSError` inside `backend/apple/response.rs`

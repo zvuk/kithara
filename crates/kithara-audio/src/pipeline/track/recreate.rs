@@ -93,6 +93,7 @@ fn finish_route_change_after_recreate<T: StreamType>(
     {
         Ok(outcome) => {
             src.decode.reset();
+            src.decode.notify_seek();
             src.seek_engine
                 .record_resume_target(request.seek.epoch, target);
             let landed_at = seek_position(outcome);
@@ -136,7 +137,9 @@ fn apply_recreate_next<T: StreamType>(
 ) -> TrackStep<PcmChunk> {
     match &recreate.next {
         RecreateNext::Decode => {
-            src.decode.reset();
+            if !src.decode.blend_active() {
+                src.decode.reset();
+            }
             src.update_state(Track::<Decoding>::new(()).erase());
             TrackStep::StateChanged
         }
@@ -153,25 +156,14 @@ fn apply_recreate_next<T: StreamType>(
 
 fn finish_format_boundary_rebuild<T: StreamType>(
     src: &mut StreamAudioSource<T>,
+    blend_start: Option<kithara_platform::time::Duration>,
 ) -> RecreateOutcome {
-    // Continue the new decoder from the producer's decode head, not the
-    // consumer's lagging `committed`: chunks in [committed..decode_head]
-    // are already queued in the outlet ring (a FormatBoundary recreate
-    // neither flushes it nor bumps the seek epoch), so resuming at
-    // `committed` re-emits them — duplicated content, a backward phase
-    // jump. The decode head is an exact frame; the demuxer quantizes the
-    // seek landing to a sample, and `frame_offset_for` rounds that back
-    // to the nearest frame (consistent with `frames_to_trim`), so the
-    // rebuilt decoder relabels its first chunk at exactly `decode_head`.
     let committed = src.playhead.position();
     let epoch_now = src.seek_engine.epoch();
-    // `resume_target` wins only while the target has NOT yet
-    // materialized in produced chunks (`target > decode_head`);
-    // comparing against the consumer's lagging `committed` mislabels
-    // the warmed-up case and re-emits `[target..decode_head)`.
-    let target_time =
+    let target_time = blend_start.unwrap_or_else(|| {
         src.resume
-            .resume_position(epoch_now, committed, src.seek_engine.resume_target());
+            .resume_position(epoch_now, committed, src.seek_engine.resume_target())
+    });
     debug!(
         ?target_time,
         stream_pos = src.shared_stream.position(),
@@ -234,6 +226,14 @@ pub(super) fn finish_rebuild<T: StreamType>(
         Ok(decoder) => decoder,
         Err(outcome) => return finish_recreate_outcome(src, recreate, outcome),
     };
+    let blend_start = if recreate_resumes_decode_head(&recreate) {
+        match src.decode.begin_format_transition() {
+            Ok(start) => start,
+            Err(error) => return finish_recreate_outcome(src, recreate, classify(&error)),
+        }
+    } else {
+        None
+    };
     let duration = decoder.duration();
     let spec = decoder.spec();
     let track_info = decoder.track_info();
@@ -279,7 +279,7 @@ pub(super) fn finish_rebuild<T: StreamType>(
         }
     }
     let outcome = if recreate_resumes_decode_head(&recreate) {
-        finish_format_boundary_rebuild(src)
+        finish_format_boundary_rebuild(src, blend_start)
     } else {
         RecreateOutcome::Done
     };

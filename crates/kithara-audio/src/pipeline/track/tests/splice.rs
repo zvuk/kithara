@@ -442,6 +442,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         decoder_factory,
         decoder_backend: backend,
         gapless_mode: GaplessMode::Disabled,
+        pcm_pool: PcmPool::default(),
         host_sample_rate,
         media_info: Some(media_info(Consts::SLQ_VARIANT)),
         playback_resampler_backend: "none",

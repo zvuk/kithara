@@ -354,6 +354,7 @@ where
 
     delegate::delegate! {
         to self.decoder {
+            fn blend_duration(&self) -> kithara_platform::time::Duration;
             fn duration(&self) -> Option<kithara_platform::time::Duration>;
             fn flush_reader_signals(&mut self);
             fn metadata(&self) -> TrackMetadata;

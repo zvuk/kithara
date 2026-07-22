@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use bon::Builder;
 use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode};
+use kithara_platform::time::Duration;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 
 #[derive(Clone, Debug, Builder)]
@@ -56,6 +57,8 @@ pub struct AudioDecoderConfig<B = NoResamplerBackend> {
     pub(crate) backend: DecoderBackend,
     #[builder(default)]
     pub(crate) gapless_mode: GaplessMode,
+    #[builder(default = Duration::from_millis(10))]
+    pub(crate) blend_duration: Duration,
     pub(crate) resampler: Option<DecoderResamplerSettings<B>>,
 }
 
@@ -73,6 +76,12 @@ where
     #[must_use]
     pub fn gapless_mode(&self) -> GaplessMode {
         self.gapless_mode
+    }
+
+    /// Return the configured decoder-transition overlap duration.
+    #[must_use]
+    pub fn blend_duration(&self) -> Duration {
+        self.blend_duration
     }
 
     /// Return the decoder-side resampler settings.
@@ -110,6 +119,7 @@ impl<B> Default for AudioDecoderConfig<B> {
         Self {
             backend: DecoderBackend::default(),
             gapless_mode: GaplessMode::default(),
+            blend_duration: Duration::from_millis(10),
             resampler: None,
         }
     }

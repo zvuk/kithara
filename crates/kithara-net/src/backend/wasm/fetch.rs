@@ -13,10 +13,10 @@ pub(crate) fn build_client(
     Client::builder().build()
 }
 
-pub(crate) fn head_request(client: &Client, url: Url) -> RequestBuilder {
-    client.get(url).header("Range", "bytes=0-0")
+pub(crate) fn head_request(client: &Client, url: &Url) -> RequestBuilder {
+    client.get(url.as_str()).header("Range", "bytes=0-0")
 }
 
-pub(crate) fn post_request(client: &Client, url: Url, body: Bytes) -> RequestBuilder {
-    client.post(url).body(body)
+pub(crate) fn post_request(client: &Client, url: &Url, body: Bytes) -> RequestBuilder {
+    client.post(url.as_str()).body(body)
 }

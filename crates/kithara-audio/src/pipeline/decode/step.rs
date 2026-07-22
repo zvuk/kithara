@@ -40,8 +40,10 @@ pub(crate) fn tick<T: StreamType>(
         if ctx.seek_observe.is_flushing() || ctx.seek_observe.is_pending() {
             return DecodeAction::SeekInterrupted;
         }
-        if let Some(chunk) = core.next_gapless() {
-            return produced(chunk, epoch, &mut ctx);
+        match core.next_gapless() {
+            Ok(Some(chunk)) => return produced(chunk, epoch, &mut ctx),
+            Ok(None) => {}
+            Err(error) => return DecodeAction::Failed(TrackFailure::Decode(error)),
         }
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
@@ -66,25 +68,31 @@ pub(crate) fn tick<T: StreamType>(
                 return DecodeAction::Pending(WaitingReason::Waiting);
             }
             Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                let Some(chunk) = apply_skip(chunk, epoch, ctx.resume.as_deref_mut()) else {
+                let Some(mut chunk) = apply_skip(chunk, epoch, ctx.resume.as_deref_mut()) else {
                     continue;
                 };
                 if chunk.samples.is_empty() {
                     continue;
                 }
                 hang_reset!();
+                core.normalize_timeline(&mut chunk);
                 core.track(&chunk, ctx.playhead, ctx.emit);
                 core.push(chunk);
             }
             Ok(DecoderChunkOutcome::Eof) => {
                 core.set_tail_compensation();
-                if let Some(chunk) = core.next_gapless() {
-                    return produced(chunk, epoch, &mut ctx);
-                }
                 if let FormatDecision::Recreate(recreate) =
                     detect(ctx.stream, core.session(), ctx.seek_observe)
                 {
                     return DecodeAction::StartRecreate(recreate);
+                }
+                if let Err(error) = core.flush_gapless() {
+                    return DecodeAction::Failed(TrackFailure::Decode(error));
+                }
+                match core.next_gapless() {
+                    Ok(Some(chunk)) => return produced(chunk, epoch, &mut ctx),
+                    Ok(None) => {}
+                    Err(error) => return DecodeAction::Failed(TrackFailure::Decode(error)),
                 }
                 if let Some(chunk) = core.next_drain() {
                     return produced(chunk, epoch, &mut ctx);

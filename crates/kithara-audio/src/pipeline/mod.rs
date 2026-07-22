@@ -5,6 +5,7 @@ pub(crate) mod consumer;
 pub(crate) mod decode;
 pub(crate) mod fetch;
 pub(crate) mod gapless;
+pub(crate) mod gapless_blender;
 pub(crate) mod parts;
 pub(crate) mod rebuild;
 pub(crate) mod seek;
