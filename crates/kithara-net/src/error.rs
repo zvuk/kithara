@@ -105,11 +105,29 @@ impl From<ReqwestError> for NetError {
                 || Self::Network(error_chain(&e)),
                 |status| Self::Status {
                     status,
-                    url: e.url().cloned(),
+                    url: backend_error_url(&e),
                     body: None,
                 },
             )
     }
+}
+
+#[cfg(all(
+    not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))),
+    feature = "client-wreq",
+    not(target_arch = "wasm32")
+))]
+fn backend_error_url(error: &ReqwestError) -> Option<Url> {
+    let uri = error.uri()?.to_string();
+    Url::parse(&uri).ok()
+}
+
+#[cfg(all(
+    not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))),
+    any(not(feature = "client-wreq"), target_arch = "wasm32")
+))]
+fn backend_error_url(error: &ReqwestError) -> Option<Url> {
+    error.url().cloned()
 }
 
 #[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]

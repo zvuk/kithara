@@ -9,7 +9,7 @@ use crate::{
 
 pub(crate) type BackendError = ::wreq::Error;
 
-impl From<ImpersonatePreset> for ::wreq_util::Emulation {
+impl From<ImpersonatePreset> for ::wreq_util::Profile {
     fn from(p: ImpersonatePreset) -> Self {
         match p {
             ImpersonatePreset::Safari => Self::Safari18,
@@ -33,10 +33,29 @@ pub(crate) fn build_client(
 ) -> Result<Client, BackendError> {
     let base = Client::builder()
         .connector_layer(CountConnectionsLayer::new(metrics.clone()))
-        .emulation(::wreq_util::Emulation::from(options.impersonate))
+        .emulation(::wreq_util::Profile::from(options.impersonate))
         .cookie_store(true)
         .pool_max_idle_per_host(options.pool_max_idle_per_host)
         .pool_idle_timeout(Some(Duration::from_secs(5)))
-        .cert_verification(!options.is_insecure);
+        .tls_cert_verification(!options.is_insecure);
     super::apply_compression(base, options.compression).build()
+}
+
+#[cfg(test)]
+mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
+    use super::*;
+
+    #[kithara::test]
+    #[case::safari(ImpersonatePreset::Safari, ::wreq_util::Profile::Safari18)]
+    #[case::chrome(ImpersonatePreset::Chrome, ::wreq_util::Profile::Chrome137)]
+    fn impersonation_profile(
+        #[case] preset: ImpersonatePreset,
+        #[case] expected: ::wreq_util::Profile,
+    ) {
+        assert_eq!(::wreq_util::Profile::from(preset), expected);
+    }
 }

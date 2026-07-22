@@ -379,8 +379,8 @@ wasm-bindgen-test = "0.3"
 wasm_safe_thread = "0.1.1"
 web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioSampleFormat", "Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageEvent", "Window"] }
 web-time = "1.1"
-wreq = "5"
-wreq-util = "2"
+wreq = "=6.0.0-rc.29"
+wreq-util = "=3.0.0-rc.14"
 
 # Optimise CPU-heavy audio dependencies in debug builds so the audio
 # worker thread can keep up with real-time playback.  Without this,

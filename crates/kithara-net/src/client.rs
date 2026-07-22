@@ -180,7 +180,7 @@ impl RawHttp {
         req
     }
 
-    fn head_request(&self, url: Url) -> RequestBuilder {
+    fn head_request(&self, url: &Url) -> RequestBuilder {
         head_request(&self.inner, url)
     }
 
@@ -194,7 +194,7 @@ impl RawHttp {
         headers: Option<Headers>,
         accept_partial: bool,
     ) -> Result<crate::ByteStream, NetError> {
-        let mut req = self.inner.get(url.clone());
+        let mut req = self.inner.get(url.as_str());
         if let Some(range) = &range {
             req = req.header("Range", range.to_string());
         }
@@ -492,7 +492,7 @@ impl Net for HttpClient {
 impl Net for RawHttp {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        let req = self.inner.get(url.clone());
+        let req = self.inner.get(url.as_str());
         let resp = self
             .send_checked(req, headers, url, false, AcceptEncodingPolicy::Configured)
             .await?;
@@ -514,7 +514,7 @@ impl Net for RawHttp {
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        let req = self.head_request(url.clone());
+        let req = self.head_request(&url);
         let req = self.apply_headers(req, headers, AcceptEncodingPolicy::Identity);
         let resp = self.send_idle_bounded(req).await?;
 
@@ -558,7 +558,7 @@ impl Net for RawHttp {
         body: Bytes,
         headers: Option<Headers>,
     ) -> Result<Bytes, NetError> {
-        let req = post_request(&self.inner, url.clone(), body);
+        let req = post_request(&self.inner, &url, body);
         let resp = self
             .send_checked(req, headers, url, false, AcceptEncodingPolicy::Configured)
             .await?;
