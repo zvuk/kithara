@@ -16,7 +16,7 @@
             ),
             Row(
                 id: "transport",
-                size: (w: Fill, h: Fixed(30.0)),
+                size: (w: Fill, h: Fixed(42.0)),
                 pad: Some(6.0),
                 children: [
                     Button(
@@ -62,7 +62,7 @@
             ),
             Row(
                 id: "ts",
-                size: (w: Fill, h: Fixed(38.0)),
+                size: (w: Fill, h: Fixed(46.0)),
                 pad: Some(6.0),
                 children: [
                     Segmented(
@@ -71,9 +71,10 @@
                         items: ["±8", "±16", "±50", "±100"],
                         read: Model(id: "deck.ts.range_index", with: { "deck": "$deck" }),
                     ),
-                    Fader(
+                    Spacer(id: "ts-gap", size: (w: Fill, h: Fixed(24.0))),
+                    Text(id: "ts-tempo-label", style: MicroLabel, label: "TEMPO", size: (w: Fixed(44.0), h: Fixed(14.0))),
+                    Knob(
                         id: "ts-tempo",
-                        label: Some("TEMPO"),
                         read: Parameter(id: "deck.ts.tempo", with: { "deck": "$deck" }),
                         write: Parameter(id: "deck.ts.tempo", with: { "deck": "$deck" }),
                     ),

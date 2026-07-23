@@ -18,11 +18,13 @@ pub(crate) enum Message {
     /// Delete the current track of the focused deck (keyboard shortcut;
     /// the subscription has no access to the focus).
     DeleteFocusedTrack,
-    /// Highlight a catalog row (a second click loads it onto the focused deck).
+    /// Highlight a catalog row.
     SelectCatalogTrack(usize),
     /// Load catalog row `.0` onto deck `.1`.
     LoadOntoDeck(usize, DeckId),
-    /// Periodic tick from the subscription (100 ms).
+    /// Remove catalog row `.0` from deck `.1`'s queue.
+    UnloadFromDeck(usize, DeckId),
+    /// Periodic tick from the subscription.
     Tick,
     /// System close button on the studio window; exits the app.
     WindowCloseRequested,

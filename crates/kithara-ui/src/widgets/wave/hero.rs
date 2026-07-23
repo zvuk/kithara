@@ -12,7 +12,8 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use super::zoom_math::{
-    column_bucket_range, max_bucket, norm_to_x, visible_mark_range, visible_marks, window_bounds,
+    bar_bucket_range, bar_grid, max_bucket, norm_to_x, visible_mark_range, visible_marks,
+    window_bounds,
 };
 use crate::{
     render::{WaveBucket, fonts, theme::RenderPalette},
@@ -45,7 +46,15 @@ pub(crate) fn draw(
     palette: HeroPalette,
 ) {
     let window = window_bounds(data.position, data.zoom);
-    draw_bars(frame, bounds, data.buckets, &window, metrics, palette.base);
+    draw_bars(
+        frame,
+        bounds,
+        data.buckets,
+        data.zoom,
+        &window,
+        metrics,
+        palette.base,
+    );
     draw_grid(frame, bounds, data, &window, metrics, palette.base);
     if let Some(region) = data.loop_region {
         draw_loop(frame, bounds, region, &window, metrics, palette.base);
@@ -59,6 +68,7 @@ fn draw_bars(
     frame: &mut Frame,
     bounds: Rectangle,
     buckets: &[WaveBucket],
+    zoom: f32,
     window: &Range<f32>,
     metrics: WaveSkin,
     palette: RenderPalette,
@@ -66,14 +76,17 @@ fn draw_bars(
     let step = metrics.low_bar_width + metrics.bar_gap;
     let content_width = (bounds.width - metrics.content_inset * 2.0).max(0.0);
     let columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
+    let Some(grid) = bar_grid(columns, zoom, window) else {
+        return;
+    };
     let available_height = (bounds.height - metrics.content_inset * 2.0).max(0.0);
-    for column in 0..columns {
-        let range = column_bucket_range(column, columns, buckets.len(), window);
+    for bar in grid.first..grid.last {
+        let range = bar_bucket_range(bar, grid.norm_width, buckets.len());
         let Some(bucket) = max_bucket(buckets, range) else {
             continue;
         };
-        let column_x: f32 = column.as_();
-        let center_x = metrics.content_inset + column_x * step + metrics.low_bar_width / 2.0;
+        let bar_f: f32 = bar.as_();
+        let center_x = norm_to_x((bar_f + 0.5) * grid.norm_width, window, bounds.width);
         for (level, width, color) in [
             (bucket.low, metrics.low_bar_width, palette.wave_low),
             (bucket.mid, metrics.mid_bar_width, palette.wave_mid),

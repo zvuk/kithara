@@ -37,6 +37,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             handle_load(state, index, id);
             Task::none()
         }
+        Message::UnloadFromDeck(index, id) => {
+            handle_unload(state, index, id);
+            Task::none()
+        }
         Message::Tick => {
             handle_tick(state);
             Task::none()
@@ -69,6 +73,18 @@ fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
     };
     if let Err(e) = catalog::load_onto(deck.controller.queue(), entry, &state.config) {
         error!(index, deck = id.0, error = %e, "load onto deck failed");
+    }
+}
+
+fn handle_unload(state: &mut Kithara, index: usize, id: DeckId) {
+    let Some(entry) = state.catalog.get(index) else {
+        return;
+    };
+    let Some(deck) = state.decks.get(id) else {
+        return;
+    };
+    if let Err(e) = catalog::unload_from(deck.controller.queue(), entry) {
+        error!(index, deck = id.0, error = %e, "unload from deck failed");
     }
 }
 

@@ -3,6 +3,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::endpoints::{EQ_MAX_DB, EQ_MIN_DB, TS_RANGES};
 use crate::{
+    catalog,
     deck::DeckId,
     gui::{app::Kithara, deck::DeckMsg, message::Message, mix::MixMsg},
 };
@@ -105,14 +106,22 @@ fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
 }
 
 /// Track-list assign chips carry the deck letter in the path; the letter is
-/// the deck's position in the session, matching the channel order.
+/// the deck's position in the session, matching the channel order. A chip is
+/// a toggle: it loads the row onto its deck, or removes it when already on.
 fn library_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
         ("tracks", ControlAction::SelectIndex(index)) => Some(Message::SelectCatalogTrack(*index)),
         (_, ControlAction::SelectIndex(row)) => {
             let letter = control.strip_prefix("tracks/assign/")?;
             let deck = letter.bytes().next()?.checked_sub(b'a')?;
-            Some(Message::LoadOntoDeck(*row, deck_id(state, deck.into())?))
+            let id = deck_id(state, deck.into())?;
+            let entry = state.catalog.get(*row)?;
+            let queue = state.decks.get(id)?.controller.queue();
+            if catalog::is_loaded(queue, entry) {
+                Some(Message::UnloadFromDeck(*row, id))
+            } else {
+                Some(Message::LoadOntoDeck(*row, id))
+            }
         }
         _ => None,
     }

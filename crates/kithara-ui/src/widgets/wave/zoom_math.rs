@@ -12,25 +12,41 @@ pub(crate) fn clamp_zoom(zoom: f32) -> f32 {
     zoom.clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
-/// Bucket binning is phase-anchored to the track origin: the window start is
-/// quantized to whole buckets and per-column offsets depend only on zoom, so
-/// ranges translate rigidly as the playhead moves instead of resampling.
-pub(crate) fn column_bucket_range(
-    column: usize,
-    columns: usize,
-    bucket_count: usize,
-    window: &Range<f32>,
-) -> Range<usize> {
-    if columns == 0 || bucket_count == 0 || column >= columns {
+/// Bars tile the track from its origin, so a bar's content never depends on
+/// the playhead; the window only selects which bars are visible and where
+/// they land on screen. This is what makes playback scroll instead of
+/// resampling: bar heights stay constant while their pixel positions glide.
+#[derive(Clone, Copy)]
+pub(crate) struct BarGrid {
+    pub(crate) norm_width: f32,
+    pub(crate) first: i64,
+    pub(crate) last: i64,
+}
+
+pub(crate) fn bar_grid(columns: usize, zoom: f32, window: &Range<f32>) -> Option<BarGrid> {
+    if columns == 0 {
+        return None;
+    }
+    let columns_f: f32 = columns.as_();
+    let norm_width = clamp_zoom(zoom) / columns_f;
+    let first: i64 = (window.start / norm_width).floor().as_();
+    let last: i64 = (window.end / norm_width).ceil().as_();
+    Some(BarGrid {
+        norm_width,
+        first,
+        last,
+    })
+}
+
+pub(crate) fn bar_bucket_range(bar: i64, norm_width: f32, bucket_count: usize) -> Range<usize> {
+    if bar < 0 || bucket_count == 0 || norm_width <= 0.0 {
         return 0..0;
     }
     let bucket_count_f: f64 = bucket_count.as_();
-    let columns_f: f64 = columns.as_();
-    let column_f: f64 = column.as_();
-    let start_bucket = (f64::from(window.start) * bucket_count_f).floor();
-    let window_buckets = f64::from(window.end - window.start) * bucket_count_f;
-    let lo = start_bucket + (window_buckets * column_f / columns_f).floor();
-    let hi = start_bucket + (window_buckets * (column_f + 1.0) / columns_f).floor();
+    let bar_f: f64 = bar.as_();
+    let norm_width_f = f64::from(norm_width);
+    let lo = (bar_f * norm_width_f * bucket_count_f).floor();
+    let hi = ((bar_f + 1.0) * norm_width_f * bucket_count_f).floor();
     let hi = hi.max(lo + 1.0);
     let start = lo.clamp(0.0, bucket_count_f);
     let end = hi.clamp(0.0, bucket_count_f);
@@ -121,56 +137,55 @@ mod tests {
     }
 
     #[kithara::test]
-    fn columns_outside_track_map_to_empty_bucket_ranges() {
-        let window = window_bounds(0.01, DEFAULT_ZOOM);
+    fn bar_content_is_anchored_to_the_track_not_the_window() {
+        let near_start = bar_grid(10, 0.25, &window_bounds(0.2, 0.25)).unwrap();
+        let near_end = bar_grid(10, 0.25, &window_bounds(0.9, 0.25)).unwrap();
 
-        assert_eq!(column_bucket_range(0, 12, 120, &window), 0..0);
-        assert_eq!(column_bucket_range(5, 12, 120, &window), 0..1);
-        assert_eq!(column_bucket_range(11, 12, 120, &window), 7..8);
-        assert_eq!(column_bucket_range(0, 0, 120, &window), 0..0);
-        assert_eq!(column_bucket_range(0, 12, 0, &window), 0..0);
-    }
-
-    #[kithara::test]
-    fn column_ranges_translate_rigidly_by_whole_buckets() {
-        let base = window_bounds(0.5 + 1.0 / 1024.0, 0.25);
-        let moved = window_bounds(0.5 + 1.0 / 1024.0 + 4.0 / 128.0, 0.25);
-
-        for column in 0..10 {
-            let before = column_bucket_range(column, 10, 128, &base);
-            let after = column_bucket_range(column, 10, 128, &moved);
-            assert_eq!(after.start, before.start + 4, "column {column}");
-            assert_eq!(after.end, before.end + 4, "column {column}");
-        }
-    }
-
-    #[kithara::test]
-    fn sub_bucket_position_changes_keep_column_ranges_identical() {
-        let base = window_bounds(0.5 + 1.0 / 1024.0, 0.25);
-        let nudged = window_bounds(0.5 + 1.0 / 1024.0 + 1.0 / 512.0, 0.25);
-
-        for column in 0..10 {
+        assert_eq!(near_start.norm_width, near_end.norm_width);
+        for bar in near_start.first.max(0)..near_start.last {
             assert_eq!(
-                column_bucket_range(column, 10, 128, &base),
-                column_bucket_range(column, 10, 128, &nudged),
-                "column {column}"
+                bar_bucket_range(bar, near_start.norm_width, 128),
+                bar_bucket_range(bar, near_end.norm_width, 128),
+                "bar {bar}"
             );
         }
     }
 
     #[kithara::test]
-    fn downsampled_columns_partition_the_window_without_overlap() {
+    fn bar_grid_covers_the_window_and_only_the_window() {
         let window = window_bounds(0.5, 0.25);
+        let grid = bar_grid(10, 0.25, &window).unwrap();
 
+        assert_near(grid.norm_width, 0.025);
+        let first: f32 = grid.first.as_();
+        let last: f32 = grid.last.as_();
+        assert!(first * grid.norm_width <= window.start + EPSILON);
+        assert!(last * grid.norm_width >= window.end - EPSILON);
+        assert!((first + 1.0) * grid.norm_width > window.start);
+        assert!((last - 1.0) * grid.norm_width < window.end);
+        assert!(bar_grid(0, 0.25, &window).is_none());
+    }
+
+    #[kithara::test]
+    fn downsampled_bars_partition_the_track_without_overlap() {
+        let norm_width = 0.025;
         let mut previous_end = None;
-        for column in 0..10 {
-            let range = column_bucket_range(column, 10, 128, &window);
-            assert!(range.end > range.start, "column {column} is empty");
+        for bar in 0..40 {
+            let range = bar_bucket_range(bar, norm_width, 128);
+            assert!(range.end > range.start, "bar {bar} is empty");
             if let Some(previous) = previous_end {
-                assert_eq!(range.start, previous, "column {column} overlaps");
+                assert_eq!(range.start, previous, "bar {bar} overlaps");
             }
             previous_end = Some(range.end);
         }
+        assert_eq!(previous_end, Some(128));
+    }
+
+    #[kithara::test]
+    fn off_track_bars_map_to_empty_bucket_ranges() {
+        assert_eq!(bar_bucket_range(-3, 0.025, 128), 0..0);
+        assert_eq!(bar_bucket_range(41, 0.025, 128), 0..0);
+        assert_eq!(bar_bucket_range(2, 0.025, 0), 0..0);
     }
 
     #[kithara::test]
