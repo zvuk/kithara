@@ -183,7 +183,7 @@ impl<'a> Widget<'a> for Time<'_, '_, '_, '_, '_> {
         .center_y(Length::Fill)
         .center_x(Length::Fill)
         .height(Length::Fixed(self.skin.deck.transport_height))
-        .width(Length::Fixed(self.skin.deck.time_size.w.min()))
+        .width(Length::Fill)
         .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_deep)))
         .into()
     }

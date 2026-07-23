@@ -40,6 +40,7 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.knob.indicator_color, ColorRole::Text);
     assert_eq!(document.knob.track_alpha, 1.0);
     assert_eq!(document.knob.drag_range, 140.0);
+    assert_eq!(document.knob.wheel_step, 0.02);
     assert_eq!(document.crossfader.rail_height, 6.0);
     assert_eq!(document.crossfader.thumb_width, 10.0);
     assert_eq!(document.crossfader.thumb_height, 16.0);

@@ -191,10 +191,6 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/chrome-join-right.kmodule.ron"),
     ),
     (
-        "modules/tabs/chrome-no-corners.kmodule.ron",
-        include_str!("assets/modules/tabs/chrome-no-corners.kmodule.ron"),
-    ),
-    (
         "modules/tabs/chrome-open-top.kmodule.ron",
         include_str!("assets/modules/tabs/chrome-open-top.kmodule.ron"),
     ),

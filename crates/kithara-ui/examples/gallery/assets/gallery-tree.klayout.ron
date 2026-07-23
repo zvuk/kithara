@@ -17,7 +17,6 @@
                         instance: "gallery",
                         source: "modules/nav.kmodule.ron",
                         frame: (right: false),
-                        corners: false,
                         size: (w: Fixed(198.0), h: Fill),
                     )),
                     (weight: 1.0, node: Module(

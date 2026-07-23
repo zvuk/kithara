@@ -12,6 +12,9 @@ pub(crate) fn clamp_zoom(zoom: f32) -> f32 {
     zoom.clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
+/// Bucket binning is phase-anchored to the track origin: the window start is
+/// quantized to whole buckets and per-column offsets depend only on zoom, so
+/// ranges translate rigidly as the playhead moves instead of resampling.
 pub(crate) fn column_bucket_range(
     column: usize,
     columns: usize,
@@ -21,22 +24,21 @@ pub(crate) fn column_bucket_range(
     if columns == 0 || bucket_count == 0 || column >= columns {
         return 0..0;
     }
-    let window_width = window.end - window.start;
-    let columns_f: f32 = columns.as_();
-    let column_f: f32 = column.as_();
-    let next_column_f: f32 = (column + 1).as_();
-    let column_start = window.start + window_width * column_f / columns_f;
-    let column_end = window.start + window_width * next_column_f / columns_f;
-    let track_start = column_start.max(0.0);
-    let track_end = column_end.min(1.0);
-    if track_start >= track_end {
+    let bucket_count_f: f64 = bucket_count.as_();
+    let columns_f: f64 = columns.as_();
+    let column_f: f64 = column.as_();
+    let start_bucket = (f64::from(window.start) * bucket_count_f).floor();
+    let window_buckets = f64::from(window.end - window.start) * bucket_count_f;
+    let lo = start_bucket + (window_buckets * column_f / columns_f).floor();
+    let hi = start_bucket + (window_buckets * (column_f + 1.0) / columns_f).floor();
+    let hi = hi.max(lo + 1.0);
+    let start = lo.clamp(0.0, bucket_count_f);
+    let end = hi.clamp(0.0, bucket_count_f);
+    if start >= end {
         return 0..0;
     }
-    let bucket_count_f: f32 = bucket_count.as_();
-    let start: usize = (track_start * bucket_count_f).floor().as_();
-    let end: usize = (track_end * bucket_count_f).ceil().as_();
-    let start = start.min(bucket_count);
-    let end = end.min(bucket_count);
+    let start: usize = start.as_();
+    let end: usize = end.as_();
     start..end
 }
 
@@ -123,10 +125,52 @@ mod tests {
         let window = window_bounds(0.01, DEFAULT_ZOOM);
 
         assert_eq!(column_bucket_range(0, 12, 120, &window), 0..0);
-        assert_eq!(column_bucket_range(5, 12, 120, &window), 0..2);
-        assert_eq!(column_bucket_range(11, 12, 120, &window), 7..9);
+        assert_eq!(column_bucket_range(5, 12, 120, &window), 0..1);
+        assert_eq!(column_bucket_range(11, 12, 120, &window), 7..8);
         assert_eq!(column_bucket_range(0, 0, 120, &window), 0..0);
         assert_eq!(column_bucket_range(0, 12, 0, &window), 0..0);
+    }
+
+    #[kithara::test]
+    fn column_ranges_translate_rigidly_by_whole_buckets() {
+        let base = window_bounds(0.5 + 1.0 / 1024.0, 0.25);
+        let moved = window_bounds(0.5 + 1.0 / 1024.0 + 4.0 / 128.0, 0.25);
+
+        for column in 0..10 {
+            let before = column_bucket_range(column, 10, 128, &base);
+            let after = column_bucket_range(column, 10, 128, &moved);
+            assert_eq!(after.start, before.start + 4, "column {column}");
+            assert_eq!(after.end, before.end + 4, "column {column}");
+        }
+    }
+
+    #[kithara::test]
+    fn sub_bucket_position_changes_keep_column_ranges_identical() {
+        let base = window_bounds(0.5 + 1.0 / 1024.0, 0.25);
+        let nudged = window_bounds(0.5 + 1.0 / 1024.0 + 1.0 / 512.0, 0.25);
+
+        for column in 0..10 {
+            assert_eq!(
+                column_bucket_range(column, 10, 128, &base),
+                column_bucket_range(column, 10, 128, &nudged),
+                "column {column}"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn downsampled_columns_partition_the_window_without_overlap() {
+        let window = window_bounds(0.5, 0.25);
+
+        let mut previous_end = None;
+        for column in 0..10 {
+            let range = column_bucket_range(column, 10, 128, &window);
+            assert!(range.end > range.start, "column {column} is empty");
+            if let Some(previous) = previous_end {
+                assert_eq!(range.start, previous, "column {column} overlaps");
+            }
+            previous_end = Some(range.end);
+        }
     }
 
     #[kithara::test]

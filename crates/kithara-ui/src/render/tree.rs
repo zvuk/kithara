@@ -1,5 +1,6 @@
 use iced::{
-    Background, Element, Length,
+    Alignment, Background, Element, Length,
+    alignment::Vertical,
     widget::{Column, Row, Space, container, container::Style as ContainerStyle},
 };
 use num_traits::cast::AsPrimitive;
@@ -105,7 +106,6 @@ fn render_compiled<'a>(
             assign,
             chrome,
             frame,
-            corners,
             footer,
             collapsed,
             root,
@@ -135,7 +135,6 @@ fn render_compiled<'a>(
                 .assign(assign.iter().map(|id| ui.resolve(*id)).collect())
                 .style(*chrome)
                 .frame(*frame)
-                .corners(*corners)
                 .maybe_footer(footer)
                 .on_toggle(UiEvent::ToggleModule(ui.resolve(*module).to_owned()))
                 .collapsed(collapsed)
@@ -162,6 +161,7 @@ fn render_node<'a>(
                     .map(|child| render_node(child, ui, reads, skin)),
             )
             .spacing(gap.unwrap_or(skin.layout.grid_gap))
+            .align_y(Alignment::Center)
             .width(Length::Fill),
         )
         .padding(pad.unwrap_or(skin.layout.grid_pad))
@@ -176,6 +176,7 @@ fn render_node<'a>(
                     .map(|child| render_node(child, ui, reads, skin)),
             )
             .spacing(gap.unwrap_or(skin.layout.grid_gap))
+            .align_x(Alignment::Center)
             .width(Length::Fill),
         )
         .padding(pad.unwrap_or(skin.layout.grid_pad))
@@ -701,6 +702,7 @@ fn apply_size<'a>(element: Element<'a, UiEvent>, size: Option<SizeSpec>) -> Elem
     container(element)
         .width(length_for(size.w, intrinsic.width))
         .height(length_for(size.h, intrinsic.height))
+        .align_y(Vertical::Center)
         .into()
 }
 

@@ -228,10 +228,6 @@ pub struct ChromeSkin {
     pub footer_background: ColorRole,
     pub footer_text: ColorRole,
     pub inner_line: ColorRole,
-    pub corner_size: f32,
-    pub corner_width: f32,
-    pub corner_offset: f32,
-    pub corner_color: ColorRole,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -348,6 +344,7 @@ pub struct KnobSkin {
     pub value_color: ColorRole,
     pub indicator_color: ColorRole,
     pub drag_range: f32,
+    pub wheel_step: f32,
     pub indicator_width: f32,
     pub outer_inset: f32,
     pub start_angle: f32,

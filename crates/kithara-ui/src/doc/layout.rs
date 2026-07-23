@@ -37,8 +37,6 @@ pub enum LayoutNode {
         size: Option<SizeSpec>,
         #[serde(default)]
         frame: FrameSides,
-        #[serde(default = "default_corners")]
-        corners: bool,
     },
 }
 
@@ -88,10 +86,6 @@ fn default_weight() -> f32 {
 }
 
 fn default_frame_side() -> bool {
-    true
-}
-
-fn default_corners() -> bool {
     true
 }
 

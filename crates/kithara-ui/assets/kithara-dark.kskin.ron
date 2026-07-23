@@ -64,10 +64,6 @@
         footer_background: BgFooter,
         footer_text: Muted,
         inner_line: LineInner,
-        corner_size: 10.0,
-        corner_width: 2.0,
-        corner_offset: 0.0,
-        corner_color: Accent,
     ),
     window: (
         titlebar_height: 26.0,
@@ -116,6 +112,7 @@
         value_color: Accent,
         indicator_color: Text,
         drag_range: 140.0,
+        wheel_step: 0.02,
         indicator_width: 2.0,
         outer_inset: 3.0,
         start_angle: 2.3561945,

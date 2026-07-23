@@ -13,7 +13,7 @@ use crate::{
     skin::KnobSkin,
     widgets::{
         Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, WheelStep},
     },
 };
 
@@ -44,6 +44,10 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
                 })
                 .hover(HoverState::new(mouse::Interaction::ResizingVertically))
                 .double_click_value(0.5)
+                .wheel(WheelStep {
+                    value,
+                    step: self.skin.knob.wheel_step,
+                })
                 .build(),
             metrics: self.skin.knob,
             value,

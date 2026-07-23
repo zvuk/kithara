@@ -8,7 +8,7 @@
     root: Column(
         pad: Some(14.0),
         children: [
-            Text(id: "label", style: Body, label: "FRAME + CORNER TICKS"),
+            Text(id: "label", style: Body, label: "FRAME"),
         ],
     ),
 )

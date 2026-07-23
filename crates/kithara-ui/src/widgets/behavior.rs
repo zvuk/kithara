@@ -1,6 +1,6 @@
 use iced::{
     Event, Point, Rectangle,
-    mouse::{self, Button, Cursor},
+    mouse::{self, Button, Cursor, ScrollDelta},
     time::Instant,
     widget::canvas::Action,
 };
@@ -140,12 +140,20 @@ pub(crate) enum ScalarDragMode {
     RelativeVertical { value: f32, range: f32 },
 }
 
+/// Opt-in wheel stepping: the current normalized value plus the per-tick step.
+#[derive(Clone, Copy)]
+pub(crate) struct WheelStep {
+    pub(crate) value: f32,
+    pub(crate) step: f32,
+}
+
 #[derive(bon::Builder)]
 pub(crate) struct ScalarDrag {
     path: String,
     mode: ScalarDragMode,
     hover: HoverState,
     double_click_value: Option<f32>,
+    wheel: Option<WheelStep>,
 }
 
 #[derive(Default)]
@@ -175,6 +183,7 @@ pub(crate) struct ScalarDragState {
     start_position: f32,
     start_value: f32,
     double_click: DoubleClickState,
+    wheel_accum: f32,
 }
 
 impl ScalarDrag {
@@ -290,8 +299,45 @@ impl ScalarDrag {
                 state.active = false;
                 Some(Action::capture())
             }
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
+                let wheel = self.wheel?;
+                let steps = wheel_steps(&mut state.wheel_accum, *delta);
+                if steps == 0.0 {
+                    return Some(Action::capture());
+                }
+                let value = wheel.step.mul_add(steps, wheel.value);
+                Some(self.publish(value.clamp(0.0, 1.0)))
+            }
             _ => None,
         }
+    }
+}
+
+/// Trackpad pixel deltas per emitted wheel step. A discrete wheel detent
+/// (`ScrollDelta::Lines`) is always one step; trackpads stream many small
+/// `Pixels` events per gesture, so those accumulate to this threshold.
+const WHEEL_PIXELS_PER_STEP: f32 = 20.0;
+
+fn wheel_steps(accum: &mut f32, delta: ScrollDelta) -> f32 {
+    match delta {
+        ScrollDelta::Lines { y, .. } => {
+            if y == 0.0 {
+                return 0.0;
+            }
+            y.signum()
+        }
+        ScrollDelta::Pixels { y, .. } => {
+            *accum += y;
+            let steps = (*accum / WHEEL_PIXELS_PER_STEP).trunc();
+            *accum -= steps * WHEEL_PIXELS_PER_STEP;
+            steps
+        }
+    }
+}
+
+pub(crate) fn scroll_y(delta: ScrollDelta) -> f32 {
+    match delta {
+        ScrollDelta::Lines { y, .. } | ScrollDelta::Pixels { y, .. } => y,
     }
 }
 
@@ -434,6 +480,129 @@ mod tests {
             )
             .unwrap_or_else(|| panic!("relative drag must capture its release"));
         assert_eq!(released.into_inner().0, None);
+    }
+
+    #[kithara::test]
+    fn wheel_steps_the_value_by_direction_and_clamps() {
+        let drag = ScalarDrag::builder()
+            .path("knob".to_owned())
+            .mode(ScalarDragMode::RelativeVertical {
+                value: 0.5,
+                range: 140.0,
+            })
+            .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+            .wheel(WheelStep {
+                value: 0.5,
+                step: 0.25,
+            })
+            .build();
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(34.0, 34.0));
+        let over = Cursor::Available(Point::new(17.0, 17.0));
+        let mut state = ScalarDragState::default();
+        let wheel = |y: f32| {
+            Event::Mouse(mouse::Event::WheelScrolled {
+                delta: ScrollDelta::Lines { x: 0.0, y },
+            })
+        };
+
+        let up = drag.update(&mut state, &wheel(1.0), bounds, over).unwrap();
+        assert_eq!(
+            up.into_inner().0,
+            Some(UiEvent::Control {
+                path: "knob".to_owned(),
+                action: ControlAction::SetScalar(0.75),
+            })
+        );
+
+        let down = drag.update(&mut state, &wheel(-1.0), bounds, over).unwrap();
+        assert_eq!(
+            down.into_inner().0,
+            Some(UiEvent::Control {
+                path: "knob".to_owned(),
+                action: ControlAction::SetScalar(0.25),
+            })
+        );
+
+        assert!(
+            drag.update(&mut state, &wheel(0.0), bounds, over)
+                .is_some_and(|action| action.into_inner().0.is_none()),
+            "zero delta must still capture over an opted-in control"
+        );
+        let away = Cursor::Available(Point::new(100.0, 100.0));
+        assert!(drag.update(&mut state, &wheel(1.0), bounds, away).is_none());
+    }
+
+    #[kithara::test]
+    fn trackpad_pixels_accumulate_to_whole_steps() {
+        let drag = ScalarDrag::builder()
+            .path("knob".to_owned())
+            .mode(ScalarDragMode::RelativeVertical {
+                value: 0.5,
+                range: 140.0,
+            })
+            .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+            .wheel(WheelStep {
+                value: 0.5,
+                step: 0.25,
+            })
+            .build();
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(34.0, 34.0));
+        let over = Cursor::Available(Point::new(17.0, 17.0));
+        let mut state = ScalarDragState::default();
+        let pixels = |y: f32| {
+            Event::Mouse(mouse::Event::WheelScrolled {
+                delta: ScrollDelta::Pixels { x: 0.0, y },
+            })
+        };
+
+        let below_threshold = drag.update(&mut state, &pixels(12.0), bounds, over).unwrap();
+        assert_eq!(
+            below_threshold.into_inner().0,
+            None,
+            "sub-threshold pixels capture without publishing"
+        );
+
+        let crossed = drag.update(&mut state, &pixels(12.0), bounds, over).unwrap();
+        assert_eq!(
+            crossed.into_inner().0,
+            Some(UiEvent::Control {
+                path: "knob".to_owned(),
+                action: ControlAction::SetScalar(0.75),
+            })
+        );
+
+        let flick = drag.update(&mut state, &pixels(-45.0), bounds, over).unwrap();
+        assert_eq!(
+            flick.into_inner().0,
+            Some(UiEvent::Control {
+                path: "knob".to_owned(),
+                action: ControlAction::SetScalar(0.0),
+            })
+        );
+    }
+
+    #[kithara::test]
+    fn wheel_is_inert_without_an_opt_in() {
+        let drag = ScalarDrag::builder()
+            .path("wave".to_owned())
+            .mode(ScalarDragMode::HorizontalClick)
+            .hover(HoverState::new(mouse::Interaction::Pointer))
+            .build();
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(200.0, 40.0));
+        let mut state = ScalarDragState::default();
+        let wheel = Event::Mouse(mouse::Event::WheelScrolled {
+            delta: ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        });
+
+        assert!(
+            drag.update(
+                &mut state,
+                &wheel,
+                bounds,
+                Cursor::Available(Point::new(10.0, 10.0)),
+            )
+            .is_none()
+        );
     }
 
     #[kithara::test]

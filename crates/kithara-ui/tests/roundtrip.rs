@@ -127,18 +127,17 @@ fn default_weight_is_one() {
 }
 
 #[kithara::test]
-fn module_frame_and_corners_are_typed_and_default_on() {
+fn module_frame_sides_are_typed_and_default_on() {
     let defaults = parse_layout(
         r#"(schema: "kithara.layout", version: 1, id: "defaults",
             root: Module(instance: "a", source: "m.ron"))"#,
         &origin(),
     )
     .unwrap();
-    let LayoutNode::Module { frame, corners, .. } = &defaults.root else {
+    let LayoutNode::Module { frame, .. } = &defaults.root else {
         panic!("expected module root");
     };
     assert_eq!(*frame, FrameSides::default());
-    assert!(*corners);
 
     let configured = parse_layout(
         r#"(schema: "kithara.layout", version: 1, id: "configured",
@@ -146,19 +145,17 @@ fn module_frame_and_corners_are_typed_and_default_on() {
                 instance: "a",
                 source: "m.ron",
                 frame: (right: false),
-                corners: false,
             ))"#,
         &origin(),
     )
     .unwrap();
-    let LayoutNode::Module { frame, corners, .. } = &configured.root else {
+    let LayoutNode::Module { frame, .. } = &configured.root else {
         panic!("expected module root");
     };
     assert!(frame.top);
     assert!(!frame.right);
     assert!(frame.bottom);
     assert!(frame.left);
-    assert!(!corners);
 }
 
 #[kithara::test]

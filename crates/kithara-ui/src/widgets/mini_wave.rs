@@ -7,7 +7,7 @@ use iced::{
     Color, Element, Event, Font, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
     keyboard::{Event as KeyboardEvent, Modifiers},
-    mouse::{self, Cursor, ScrollDelta},
+    mouse::{self, Cursor},
     widget::{
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
         text,
@@ -23,7 +23,7 @@ use crate::{
     skin::{FontSkin, FrameSkin, WaveOverlaySkin, WaveSkin},
     widgets::{
         Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, scroll_y},
         deck::format_time,
         wave::{
             hero::{HeroPalette, HeroWave, draw as draw_hero_wave},
@@ -272,7 +272,8 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
             );
             layers.push(frame.into_geometry());
         }
-        if let Some(overlay) = self.overlay.as_ref().filter(|_| !cursor.is_over(bounds)) {
+        let strip = overlay_strip(bounds, self.metrics.overlay);
+        if let Some(overlay) = self.overlay.as_ref().filter(|_| !cursor.is_over(strip)) {
             let mut frame = Frame::new(renderer, bounds.size());
             draw_overlay(
                 &mut frame,
@@ -418,10 +419,11 @@ fn wave_revision(waveform: Option<&WaveformData>, progress: f32, zoom: f32) -> u
     hasher.finish()
 }
 
-fn scroll_y(delta: ScrollDelta) -> f32 {
-    match delta {
-        ScrollDelta::Lines { y, .. } | ScrollDelta::Pixels { y, .. } => y,
-    }
+fn overlay_strip(bounds: Rectangle, metrics: WaveOverlaySkin) -> Rectangle {
+    Rectangle::new(
+        bounds.position(),
+        Size::new(bounds.width, metrics.height.min(bounds.height)),
+    )
 }
 
 fn draw_overlay(
@@ -431,7 +433,7 @@ fn draw_overlay(
     metrics: WaveOverlaySkin,
     palette: OverlayPalette,
 ) {
-    let height = metrics.height.min(bounds.height);
+    let height = overlay_strip(bounds, metrics).height;
     frame.fill_rectangle(
         Point::ORIGIN,
         Size::new(bounds.width, height),
@@ -836,4 +838,30 @@ fn draw_border(frame: &mut Frame, bounds: Rectangle, skin: FrameSkin, color: Col
             .with_color(color)
             .with_width(skin.border_width),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn overlay_hides_only_when_the_cursor_is_inside_the_header_strip() {
+        let metrics = crate::builtin::skin_doc().wave.overlay;
+        let bounds = Rectangle::new(Point::new(100.0, 50.0), Size::new(400.0, 300.0));
+        let strip = overlay_strip(bounds, metrics);
+
+        let inside = Cursor::Available(Point::new(150.0, 50.0 + metrics.height / 2.0));
+        let below = Cursor::Available(Point::new(150.0, 50.0 + metrics.height + 40.0));
+        assert!(inside.is_over(strip));
+        assert!(!below.is_over(strip));
+    }
+
+    #[kithara::test]
+    fn overlay_strip_clamps_to_short_bounds() {
+        let metrics = crate::builtin::skin_doc().wave.overlay;
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(200.0, metrics.height / 2.0));
+        assert_eq!(overlay_strip(bounds, metrics).height, bounds.height);
+    }
 }

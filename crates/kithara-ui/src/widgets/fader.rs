@@ -21,7 +21,7 @@ use crate::{
     skin::{FaderSkin, FrameSkin},
     widgets::{
         Widget,
-        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState},
+        behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, WheelStep},
     },
 };
 
@@ -263,6 +263,10 @@ impl<'a> Widget<'a> for VolumeStrip<'_, '_> {
                 .path(self.path.to_owned())
                 .mode(ScalarDragMode::Horizontal)
                 .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+                .wheel(WheelStep {
+                    value: self.value.clamp(0.0, 1.0).as_(),
+                    step: self.skin.fader.step.as_(),
+                })
                 .build(),
             metrics: self.skin.fader,
             border_color: self.skin.color(self.skin.fader.strip_frame.border),
