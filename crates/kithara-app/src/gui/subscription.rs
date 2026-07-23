@@ -1,9 +1,8 @@
 /// Which iced subscriptions should be active, and at what rate.
 ///
-/// Lowering the tick frequency while paused cuts Main Thread redraws by ~5×
-/// without breaking user-input handling that relies on iced's periodic event
-/// pump (mixer faders, EQ bands) — the dominant Main Thread cost
-/// observed in Instruments traces (512 ms / 30 s).
+/// Playback drives the tick at display rate for smooth waveform motion;
+/// idle drops it low because redraws are the dominant Main Thread cost and
+/// only user-driven updates need to propagate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SubscriptionConfig {
     /// Global keyboard listener for Delete/Backspace shortcuts.
@@ -15,9 +14,9 @@ pub(crate) struct SubscriptionConfig {
 
 /// Time-tick interval while a track is actively playing.
 ///
-/// 100 ms (10 Hz) matches the previous fixed cadence — position slider needs
-/// this rate to appear smooth during playback.
-pub(crate) const TICK_INTERVAL_ACTIVE_MS: u64 = 100;
+/// 16 ms (~60 Hz) keeps the hero waveform and playhead scrolling at display
+/// rate; each tick pulls a fresh engine position before the redraw.
+pub(crate) const TICK_INTERVAL_ACTIVE_MS: u64 = 16;
 
 /// Time-tick interval while playback is paused or stopped.
 ///

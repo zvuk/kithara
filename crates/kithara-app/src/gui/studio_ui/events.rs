@@ -32,7 +32,7 @@ fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Me
         return mixer_control(state, rest, action);
     }
     if let Some(rest) = path.strip_prefix("library/") {
-        return library_control(rest, action);
+        return library_control(state, rest, action);
     }
     None
 }
@@ -45,7 +45,6 @@ fn deck_control(
 ) -> Option<Message> {
     let id = deck_id(state, index)?;
     let msg = match (control, action) {
-        ("load", ControlAction::Activate) => return load_selected(state, index),
         ("wave", ControlAction::SetScalar(position)) => {
             let duration = state.decks.get(id)?.ui.duration.max(0.0);
             DeckMsg::SeekTo(position.clamp(0.0, 1.0) * duration)
@@ -105,18 +104,18 @@ fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
     Some(Message::Mix(msg))
 }
 
-fn library_control(control: &str, action: &ControlAction) -> Option<Message> {
+/// Track-list assign chips carry the deck letter in the path; the letter is
+/// the deck's position in the session, matching the channel order.
+fn library_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
         ("tracks", ControlAction::SelectIndex(index)) => Some(Message::SelectCatalogTrack(*index)),
+        (_, ControlAction::SelectIndex(row)) => {
+            let letter = control.strip_prefix("tracks/assign/")?;
+            let deck = letter.bytes().next()?.checked_sub(b'a')?;
+            Some(Message::LoadOntoDeck(*row, deck_id(state, deck.into())?))
+        }
         _ => None,
     }
-}
-
-fn load_selected(state: &Kithara, index: usize) -> Option<Message> {
-    Some(Message::LoadOntoDeck(
-        state.selected_track?,
-        deck_id(state, index)?,
-    ))
 }
 
 fn toggle_mute(state: &Kithara, index: usize) -> Option<MixMsg> {

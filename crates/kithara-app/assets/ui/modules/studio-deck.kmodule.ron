@@ -17,14 +17,8 @@
             Row(
                 id: "transport",
                 size: (w: Fill, h: Fixed(30.0)),
+                pad: Some(6.0),
                 children: [
-                    Button(
-                        id: "load",
-                        size: (w: Fixed(56.0), h: Fixed(30.0)),
-                        label: "LOAD",
-                        style: Transport,
-                        write: Command(id: "deck.load_selected", with: { "deck": "$deck" }),
-                    ),
                     Button(
                         id: "prev",
                         size: (w: Fixed(36.0), h: Fixed(30.0)),
@@ -68,16 +62,18 @@
             ),
             Row(
                 id: "ts",
-                size: (w: Fill, h: Fixed(34.0)),
+                size: (w: Fill, h: Fixed(38.0)),
+                pad: Some(6.0),
                 children: [
                     Segmented(
                         id: "range",
-                        size: (w: Fixed(160.0), h: Fixed(24.0)),
+                        size: (w: Fixed(196.0), h: Fixed(24.0)),
                         items: ["±8", "±16", "±50", "±100"],
                         read: Model(id: "deck.ts.range_index", with: { "deck": "$deck" }),
                     ),
                     Fader(
                         id: "ts-tempo",
+                        label: Some("TEMPO"),
                         read: Parameter(id: "deck.ts.tempo", with: { "deck": "$deck" }),
                         write: Parameter(id: "deck.ts.tempo", with: { "deck": "$deck" }),
                     ),
@@ -109,6 +105,7 @@
             Row(
                 id: "eq",
                 size: (w: Fill, h: Fixed(46.0)),
+                pad: Some(6.0),
                 children: [
                     Text(id: "low-label", style: MicroLabel, label: "LOW", size: (w: Fixed(34.0), h: Fixed(14.0))),
                     Knob(

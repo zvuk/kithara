@@ -54,8 +54,8 @@ fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {
     }
 }
 
-/// Clicking a row highlights it; loading goes through each deck's LOAD
-/// button so the target deck is always explicit.
+/// Clicking a row highlights it; loading goes through the row's A/B assign
+/// chips so the target deck is always explicit.
 fn handle_select_catalog(state: &mut Kithara, index: usize) {
     state.selected_track = Some(index);
 }

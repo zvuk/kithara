@@ -136,12 +136,6 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
         true,
     ),
     (
-        EndpointCategory::Command,
-        "deck.load_selected",
-        ValueKind::Trigger,
-        true,
-    ),
-    (
         EndpointCategory::Parameter,
         "mix.crossfader",
         ValueKind::Scalar,
