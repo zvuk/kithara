@@ -137,7 +137,7 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
     ),
     (
         EndpointCategory::Command,
-        "library.load",
+        "deck.load_selected",
         ValueKind::Trigger,
         true,
     ),

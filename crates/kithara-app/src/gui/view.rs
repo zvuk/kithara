@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use iced::Element;
+use kithara::prelude::{ResourceConfig, ResourceSrc};
 
 use super::{app::Kithara, message::Message};
 use crate::state::UiState;
@@ -9,6 +10,8 @@ pub(crate) fn view(state: &Kithara, _window: iced::window::Id) -> Element<'_, Me
     super::studio_ui::view(state)
 }
 
+/// Folder-derived artist/album only makes sense for local files; a remote
+/// URL has no meaningful parent directories.
 pub(crate) fn track_subtitle(ui: &UiState) -> String {
     let Some(index) = ui.current_track_index else {
         return "Artist / Album unavailable".to_string();
@@ -19,6 +22,9 @@ pub(crate) fn track_subtitle(ui: &UiState) -> String {
     let Some(url) = entry.url.as_deref() else {
         return "Artist / Album unavailable".to_string();
     };
+    if !matches!(ResourceConfig::parse_src(url), Ok(ResourceSrc::Path(_))) {
+        return "Artist / Album unavailable".to_string();
+    }
 
     let path = Path::new(url);
     let album = path

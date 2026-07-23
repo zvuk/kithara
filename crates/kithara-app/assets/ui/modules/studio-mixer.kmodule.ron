@@ -18,6 +18,7 @@
                             ),
                             Chip(
                                 id: "mute-a",
+                                size: (w: Fixed(56.0), h: Fixed(24.0)),
                                 label: "MUTE",
                                 style: Routing,
                                 read: Model(id: "mixer.muted", with: { "deck": "a" }),
@@ -36,6 +37,7 @@
                             ),
                             Chip(
                                 id: "mute-b",
+                                size: (w: Fixed(56.0), h: Fixed(24.0)),
                                 label: "MUTE",
                                 style: Routing,
                                 read: Model(id: "mixer.muted", with: { "deck": "b" }),
@@ -47,6 +49,7 @@
             ),
             Crossfader(
                 id: "xfade",
+                size: (w: Fill, h: Fixed(38.0)),
                 read: Parameter(id: "mix.crossfader"),
                 write: Parameter(id: "mix.crossfader"),
             ),

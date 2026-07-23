@@ -10,27 +10,6 @@
                 columns: [Deck, Title, Artist],
                 adaptive: (priority: Required),
             ),
-            Row(
-                id: "actions",
-                size: (w: Fill, h: Fixed(30.0)),
-                children: [
-                    Spacer(id: "spacer", size: (w: Fill, h: Fixed(30.0))),
-                    Button(
-                        id: "load-a",
-                        size: (w: Fixed(88.0), h: Fixed(28.0)),
-                        label: "LOAD A",
-                        style: Transport,
-                        write: Command(id: "library.load", with: { "deck": "a" }),
-                    ),
-                    Button(
-                        id: "load-b",
-                        size: (w: Fixed(88.0), h: Fixed(28.0)),
-                        label: "LOAD B",
-                        style: Transport,
-                        write: Command(id: "library.load", with: { "deck": "b" }),
-                    ),
-                ],
-            ),
         ],
     ),
 )

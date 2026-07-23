@@ -39,11 +39,8 @@ pub(crate) struct Kithara {
     pub(crate) selected_track: Option<usize>,
 }
 
-/// A non-empty set of deck view-models with one of them focused.
-///
-/// The invariant — `items` is never empty and `focus` always indexes it — is
-/// established by [`Decks::new`] and preserved by [`Decks::set_focus`], so
-/// [`Decks::focused`] is total.
+/// A non-empty set of deck view-models. `focus` is fixed to the first deck
+/// at construction and backs the keyboard Delete shortcut only.
 pub(crate) struct Decks {
     items: Vec<DeckUi>,
     focus: DeckId,

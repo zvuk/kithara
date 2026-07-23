@@ -54,13 +54,9 @@ fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {
     }
 }
 
-/// First click highlights the row; a second click on the same row loads it
-/// onto the focused deck. Matches the deck playlist behaviour.
+/// Clicking a row highlights it; loading goes through each deck's LOAD
+/// button so the target deck is always explicit.
 fn handle_select_catalog(state: &mut Kithara, index: usize) {
-    if state.selected_track == Some(index) {
-        handle_load(state, index, state.decks.focus());
-        return;
-    }
     state.selected_track = Some(index);
 }
 

@@ -1,3 +1,4 @@
+use kithara::prelude::ResourceConfig;
 use kithara_queue::{Queue, QueueError, Transition};
 
 use crate::{config::AppConfig, sources::build_source};
@@ -6,16 +7,27 @@ use crate::{config::AppConfig, sources::build_source};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
     pub name: String,
+    /// Source string as the user supplied it; used for display and loading.
     pub url: String,
+    /// Canonical form of `url`; matches `TrackEntry::url` on deck queues.
+    pub source: String,
 }
 
 impl CatalogEntry {
     fn new(url: String) -> Self {
         Self {
             name: display_name(&url),
+            source: canonical_source(&url),
             url,
         }
     }
+}
+
+/// The queue records sources in url-crate-normalized form; normalize the raw
+/// string the same way so comparisons match. A string that fails to parse is
+/// loaded verbatim as `TrackSource::Uri`, so it stays as-is here too.
+fn canonical_source(url: &str) -> String {
+    ResourceConfig::parse_src(url).map_or_else(|_| url.to_string(), |src| src.to_string())
 }
 
 /// The app's track list. Decks load from it; it never plays anything itself,
@@ -68,7 +80,7 @@ pub fn load_onto(
     let id = queue
         .tracks()
         .into_iter()
-        .find(|track| track.url.as_deref() == Some(entry.url.as_str()))
+        .find(|track| track.url.as_deref() == Some(entry.source.as_str()))
         .map_or_else(
             || queue.append(build_source(&entry.url, config)),
             |track| track.id,
@@ -82,7 +94,7 @@ pub fn is_loaded(queue: &Queue, entry: &CatalogEntry) -> bool {
     queue
         .tracks()
         .iter()
-        .any(|track| track.url.as_deref() == Some(entry.url.as_str()))
+        .any(|track| track.url.as_deref() == Some(entry.source.as_str()))
 }
 
 /// Last path segment without its extension; the whole URL when it has none.
@@ -118,5 +130,26 @@ mod tests {
         assert_eq!(display_name("https://host/path/Song 1.flac"), "Song 1");
         assert_eq!(display_name("/music/track.mp3"), "track");
         assert_eq!(display_name("noslash"), "noslash");
+    }
+
+    #[test]
+    fn entry_source_is_normalized_like_queue_urls() {
+        let mut catalog = Catalog::default();
+        let url = catalog.add("HTTPS://Example.COM:443/a.mp3".to_string());
+        let path = catalog.add("/music/b.mp3".to_string());
+        let unparsable = catalog.add("not a source".to_string());
+
+        assert_eq!(
+            catalog.get(url).map(|e| e.source.as_str()),
+            Some("https://example.com/a.mp3")
+        );
+        assert_eq!(
+            catalog.get(path).map(|e| e.source.as_str()),
+            Some("/music/b.mp3")
+        );
+        assert_eq!(
+            catalog.get(unparsable).map(|e| e.source.as_str()),
+            Some("not a source")
+        );
     }
 }

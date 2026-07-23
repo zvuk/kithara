@@ -19,8 +19,15 @@
                 size: (w: Fill, h: Fixed(30.0)),
                 children: [
                     Button(
+                        id: "load",
+                        size: (w: Fixed(56.0), h: Fixed(30.0)),
+                        label: "LOAD",
+                        style: Transport,
+                        write: Command(id: "deck.load_selected", with: { "deck": "$deck" }),
+                    ),
+                    Button(
                         id: "prev",
-                        size: (w: Fixed(44.0), h: Fixed(30.0)),
+                        size: (w: Fixed(36.0), h: Fixed(30.0)),
                         label: "",
                         icon: Some(Rewind),
                         style: Transport,
@@ -28,7 +35,7 @@
                     ),
                     Button(
                         id: "play",
-                        size: (w: Fixed(72.0), h: Fixed(30.0)),
+                        size: (w: Fixed(64.0), h: Fixed(30.0)),
                         label: "PLAY",
                         icon: Some(Play),
                         style: TransportPrimary,
@@ -38,7 +45,7 @@
                     ),
                     Button(
                         id: "next",
-                        size: (w: Fixed(44.0), h: Fixed(30.0)),
+                        size: (w: Fixed(36.0), h: Fixed(30.0)),
                         label: "",
                         icon: Some(FastForward),
                         style: Transport,
@@ -46,12 +53,12 @@
                     ),
                     Time(
                         id: "time",
+                        size: (w: Fill, h: Fixed(30.0)),
                         read: Telemetry(id: "deck.playback.position_secs", with: { "deck": "$deck" }),
                     ),
-                    Spacer(id: "spacer", size: (w: Fill, h: Fixed(30.0))),
                     Readout(
                         id: "tempo",
-                        size: (w: Fixed(140.0), h: Fixed(30.0)),
+                        size: (w: Fixed(110.0), h: Fixed(30.0)),
                         label: Some("TEMPO"),
                         tone: Accent,
                         framed: true,
@@ -65,7 +72,7 @@
                 children: [
                     Segmented(
                         id: "range",
-                        size: (w: Fixed(196.0), h: Fixed(24.0)),
+                        size: (w: Fixed(160.0), h: Fixed(24.0)),
                         items: ["±8", "±16", "±50", "±100"],
                         read: Model(id: "deck.ts.range_index", with: { "deck": "$deck" }),
                     ),
@@ -83,6 +90,7 @@
                     ),
                     Chip(
                         id: "keylock",
+                        size: (w: Fixed(48.0), h: Fixed(24.0)),
                         label: "KEY",
                         style: Routing,
                         read: Model(id: "deck.ts.keylock", with: { "deck": "$deck" }),
@@ -90,7 +98,7 @@
                     ),
                     Readout(
                         id: "ratio",
-                        size: (w: Fixed(110.0), h: Fixed(28.0)),
+                        size: (w: Fixed(96.0), h: Fixed(28.0)),
                         label: Some("RATIO"),
                         tone: Neutral,
                         framed: true,
@@ -102,19 +110,19 @@
                 id: "eq",
                 size: (w: Fill, h: Fixed(46.0)),
                 children: [
-                    Text(id: "low-label", style: MicroLabel, label: "LOW"),
+                    Text(id: "low-label", style: MicroLabel, label: "LOW", size: (w: Fixed(34.0), h: Fixed(14.0))),
                     Knob(
                         id: "low",
                         read: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
                         write: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
                     ),
-                    Text(id: "mid-label", style: MicroLabel, label: "MID"),
+                    Text(id: "mid-label", style: MicroLabel, label: "MID", size: (w: Fixed(34.0), h: Fixed(14.0))),
                     Knob(
                         id: "mid",
                         read: Parameter(id: "deck.eq.mid", with: { "deck": "$deck" }),
                         write: Parameter(id: "deck.eq.mid", with: { "deck": "$deck" }),
                     ),
-                    Text(id: "high-label", style: MicroLabel, label: "HIGH"),
+                    Text(id: "high-label", style: MicroLabel, label: "HIGH", size: (w: Fixed(34.0), h: Fixed(14.0))),
                     Knob(
                         id: "high",
                         read: Parameter(id: "deck.eq.high", with: { "deck": "$deck" }),

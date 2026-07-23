@@ -32,7 +32,7 @@ fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Me
         return mixer_control(state, rest, action);
     }
     if let Some(rest) = path.strip_prefix("library/") {
-        return library_control(state, rest, action);
+        return library_control(rest, action);
     }
     None
 }
@@ -45,6 +45,7 @@ fn deck_control(
 ) -> Option<Message> {
     let id = deck_id(state, index)?;
     let msg = match (control, action) {
+        ("load", ControlAction::Activate) => return load_selected(state, index),
         ("wave", ControlAction::SetScalar(position)) => {
             let duration = state.decks.get(id)?.ui.duration.max(0.0);
             DeckMsg::SeekTo(position.clamp(0.0, 1.0) * duration)
@@ -104,11 +105,9 @@ fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Opti
     Some(Message::Mix(msg))
 }
 
-fn library_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+fn library_control(control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
         ("tracks", ControlAction::SelectIndex(index)) => Some(Message::SelectCatalogTrack(*index)),
-        ("load-a", ControlAction::Activate) => load_selected(state, 0),
-        ("load-b", ControlAction::Activate) => load_selected(state, 1),
         _ => None,
     }
 }

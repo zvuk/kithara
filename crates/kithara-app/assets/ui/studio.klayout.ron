@@ -20,6 +20,7 @@
                     (weight: 0.42, node: Module(
                         instance: "mixer",
                         source: "modules/studio-mixer.kmodule.ron",
+                        size: (w: Fixed(240.0), h: Fill),
                     )),
                     (weight: 1.0, node: Module(
                         instance: "deck-b",
