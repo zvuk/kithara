@@ -106,6 +106,7 @@ pub(crate) struct TrackList<'path, 'columns, 'state, 'value, 'data, 'reads, 'ski
     columns: &'columns [TrackColumn],
     columns_state: Option<&'state str>,
     columns_scope: &'state str,
+    assign: Vec<&'columns str>,
     value: Option<&'value ReadValue<'data>>,
     reads: &'reads dyn Reads,
     skin: &'skin Skin,
@@ -122,9 +123,12 @@ impl<'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, '_> {
         let columns = column_layouts(self.columns, self.reads, state, self.skin);
         let path = self.path.to_owned();
         let style = TrackListStyle::new(self.skin);
+        let assign: Vec<String> = self.assign.iter().map(|label| (*label).to_owned()).collect();
         let tracks: Vec<_> = tracks.iter().map(TrackListRowData::from).collect();
-        responsive(move |size| track_list_table(&path, &tracks, &columns, &style, size.width))
-            .into()
+        responsive(move |size| {
+            track_list_table(&path, &tracks, &columns, &assign, &style, size.width)
+        })
+        .into()
     }
 }
 
@@ -132,6 +136,7 @@ fn track_list_table(
     path: &str,
     tracks: &[TrackListRowData],
     columns: &[ColumnLayout],
+    assign: &[String],
     style: &TrackListStyle,
     available_width: f32,
 ) -> Element<'static, UiEvent> {
@@ -162,6 +167,7 @@ fn track_list_table(
             .index(index)
             .track(track)
             .columns(columns)
+            .assign(assign)
             .flexible_title(flexible_title)
             .build()
             .view()
@@ -249,6 +255,7 @@ struct TrackListRow<'path, 'columns, 'data, 'style> {
     index: usize,
     track: &'data TrackListRowData,
     columns: &'columns [ColumnLayout],
+    assign: &'columns [String],
     flexible_title: bool,
 }
 
@@ -265,6 +272,8 @@ impl<'a> Widget<'a> for TrackListRow<'_, '_, '_, '_> {
                     self.flexible_title,
                     self.index,
                     self.track,
+                    self.path,
+                    self.assign,
                     self.style,
                 );
                 if column_resizable(self.columns, column_index) {
@@ -347,6 +356,8 @@ fn row_cell(
     flexible_title: bool,
     index: usize,
     track: &TrackListRowData,
+    path: &str,
+    assign: &[String],
     style: &TrackListStyle,
 ) -> Element<'static, UiEvent> {
     let width = column_length(column, flexible_title);
@@ -360,6 +371,9 @@ fn row_cell(
             Horizontal::Right,
             style,
         ),
+        TrackColumn::Deck if !assign.is_empty() => {
+            assign_cell(track, index, path, assign, width, style)
+        }
         TrackColumn::Deck => deck_cell(track, width, style),
         TrackColumn::Title => text_cell(
             value_or_dash(&track.title),
@@ -433,6 +447,66 @@ fn text_cell(
     .width(width)
     .height(Length::Fill)
     .align_x(horizontal)
+    .align_y(Vertical::Center)
+    .into()
+}
+
+/// One chip button per assignable deck: activating a chip targets that deck
+/// with this row. The chip lights up when the row is already on the deck.
+fn assign_cell(
+    track: &TrackListRowData,
+    index: usize,
+    path: &str,
+    assign: &[String],
+    width: Length,
+    style: &TrackListStyle,
+) -> Element<'static, UiEvent> {
+    let marks = track.deck.as_deref().unwrap_or("");
+    let chips = assign.iter().map(|label| {
+        let active = marks.contains(label.as_str());
+        let text_color = if active {
+            style.palette.bg_deep
+        } else {
+            style.palette.text_dim
+        };
+        let chip = container(
+            shaped_text(label.clone())
+                .font(fonts::mono(style.metrics.deck_text.weight))
+                .size(style.metrics.deck_text.size)
+                .color(text_color),
+        )
+        .width(Length::Fixed(style.metrics.deck_chip_width))
+        .height(Length::Fixed(style.metrics.deck_chip_height))
+        .align_x(Horizontal::Center)
+        .align_y(Vertical::Center);
+        let border = style.deck_chip_frame;
+        let background = active.then_some(Background::Color(style.palette.accent));
+        let hover = Background::Color(style.palette.bg_panel);
+        button(chip)
+            .padding(0)
+            .style(move |_theme, status| ButtonStyle {
+                background: if matches!(status, ButtonStatus::Hovered) && !active {
+                    Some(hover)
+                } else {
+                    background
+                },
+                border,
+                ..ButtonStyle::default()
+            })
+            .on_press(UiEvent::Control {
+                path: format!("{path}/assign/{}", label.to_lowercase()),
+                action: ControlAction::SelectIndex(index),
+            })
+            .into()
+    });
+    container(
+        Row::with_children(chips)
+            .spacing(style.metrics.grid_gap)
+            .align_y(Alignment::Center),
+    )
+    .width(width)
+    .height(Length::Fill)
+    .align_x(Horizontal::Center)
     .align_y(Vertical::Center)
     .into()
 }
@@ -618,11 +692,7 @@ fn cell_with_divider(
 }
 
 fn footer(count: usize, style: &TrackListStyle) -> Element<'static, UiEvent> {
-    let left = format!(
-        "{} \u{00b7} {count} {}",
-        style.metrics.labels.footer_component, style.metrics.labels.footer_tracks
-    );
-    let right = style.metrics.labels.footer_usage.clone();
+    let left = format!("{count} {}", style.metrics.labels.footer_tracks);
     let font = style.metrics.footer_text;
     let content = row![
         shaped_text(left)
@@ -630,10 +700,6 @@ fn footer(count: usize, style: &TrackListStyle) -> Element<'static, UiEvent> {
             .size(font.size)
             .color(style.palette.muted),
         Space::new().width(Length::Fill),
-        shaped_text(right)
-            .font(fonts::mono(font.weight))
-            .size(font.size)
-            .color(style.palette.muted),
     ]
     .align_y(Alignment::Center);
     let background = style.palette.bg_footer;

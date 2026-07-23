@@ -394,7 +394,16 @@ fn expand_control(
         ControlNode::Time { .. } => ControlSpec::Time,
         ControlNode::Scalar { format, .. } => ControlSpec::Scalar { format: *format },
         ControlNode::Crossfader { .. } => ControlSpec::Crossfader,
-        ControlNode::Fader { style, .. } => ControlSpec::Fader { style: *style },
+        ControlNode::Fader { style, label, .. } => ControlSpec::Fader {
+            style: *style,
+            label: intern_optional_text(
+                context,
+                machine.interner,
+                label.as_deref(),
+                &path,
+                &context.origin,
+            )?,
+        },
         ControlNode::Wave { style, badge, .. } => ControlSpec::Wave {
             style: *style,
             badge: intern_optional_text(
@@ -407,13 +416,16 @@ fn expand_control(
             zoom: intern_optional_binding(machine.interner, extra.zoom.as_ref(), &context.origin)?,
         },
         ControlNode::Vis { .. } => ControlSpec::Vis,
-        ControlNode::TrackList { columns, .. } => ControlSpec::TrackList {
+        ControlNode::TrackList {
+            columns, assign, ..
+        } => ControlSpec::TrackList {
             columns: columns.clone(),
             columns_state: intern_optional_binding(
                 machine.interner,
                 extra.columns_state.as_ref(),
                 &context.origin,
             )?,
+            assign: intern_texts(context, machine.interner, assign, &path, &context.origin)?,
         },
         ControlNode::Tree { .. } => ControlSpec::Tree {
             query: intern_optional_binding(

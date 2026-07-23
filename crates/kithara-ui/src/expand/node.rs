@@ -92,6 +92,7 @@ pub enum ControlSpec {
     Crossfader,
     Fader {
         style: FaderStyle,
+        label: Option<InternId>,
     },
     Wave {
         style: WaveStyle,
@@ -102,6 +103,7 @@ pub enum ControlSpec {
     TrackList {
         columns: Vec<TrackColumn>,
         columns_state: Option<Binding>,
+        assign: Vec<InternId>,
     },
     Tree {
         query: Option<Binding>,

@@ -318,16 +318,18 @@ impl ScalarDrag {
 /// `Pixels` events per gesture, so those accumulate to this threshold.
 const WHEEL_PIXELS_PER_STEP: f32 = 20.0;
 
+/// Scroll deltas arrive content-directed (macOS natural scrolling): an
+/// upward gesture is negative, so the value axis is the negated delta.
 fn wheel_steps(accum: &mut f32, delta: ScrollDelta) -> f32 {
     match delta {
         ScrollDelta::Lines { y, .. } => {
             if y == 0.0 {
                 return 0.0;
             }
-            y.signum()
+            -y.signum()
         }
         ScrollDelta::Pixels { y, .. } => {
-            *accum += y;
+            *accum -= y;
             let steps = (*accum / WHEEL_PIXELS_PER_STEP).trunc();
             *accum -= steps * WHEEL_PIXELS_PER_STEP;
             steps
@@ -505,7 +507,7 @@ mod tests {
             })
         };
 
-        let up = drag.update(&mut state, &wheel(1.0), bounds, over).unwrap();
+        let up = drag.update(&mut state, &wheel(-1.0), bounds, over).unwrap();
         assert_eq!(
             up.into_inner().0,
             Some(UiEvent::Control {
@@ -514,7 +516,7 @@ mod tests {
             })
         );
 
-        let down = drag.update(&mut state, &wheel(-1.0), bounds, over).unwrap();
+        let down = drag.update(&mut state, &wheel(1.0), bounds, over).unwrap();
         assert_eq!(
             down.into_inner().0,
             Some(UiEvent::Control {
@@ -555,14 +557,18 @@ mod tests {
             })
         };
 
-        let below_threshold = drag.update(&mut state, &pixels(12.0), bounds, over).unwrap();
+        let below_threshold = drag
+            .update(&mut state, &pixels(-12.0), bounds, over)
+            .unwrap();
         assert_eq!(
             below_threshold.into_inner().0,
             None,
             "sub-threshold pixels capture without publishing"
         );
 
-        let crossed = drag.update(&mut state, &pixels(12.0), bounds, over).unwrap();
+        let crossed = drag
+            .update(&mut state, &pixels(-12.0), bounds, over)
+            .unwrap();
         assert_eq!(
             crossed.into_inner().0,
             Some(UiEvent::Control {
@@ -571,7 +577,7 @@ mod tests {
             })
         );
 
-        let flick = drag.update(&mut state, &pixels(-45.0), bounds, over).unwrap();
+        let flick = drag.update(&mut state, &pixels(45.0), bounds, over).unwrap();
         assert_eq!(
             flick.into_inner().0,
             Some(UiEvent::Control {

@@ -259,10 +259,12 @@ fn track_list_compiles_typed_columns_and_optional_state_prefix() {
         panic!("expected module root");
     };
     let ExpandedNode::Control {
-        spec: ControlSpec::TrackList {
-            columns,
-            columns_state,
-        },
+        spec:
+            ControlSpec::TrackList {
+                columns,
+                columns_state,
+                ..
+            },
         ..
     } = &**root
     else {

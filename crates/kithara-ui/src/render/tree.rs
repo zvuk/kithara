@@ -267,9 +267,10 @@ fn render_control<'a>(
             .build()
             .view(),
         ControlSpec::Crossfader => render_crossfader(path, value, skin),
-        ControlSpec::Fader { style } => Fader::builder()
+        ControlSpec::Fader { style, label } => Fader::builder()
             .path(path)
             .style(*style)
+            .maybe_label(label.map(|id| ui.resolve(id)))
             .maybe_value(value)
             .skin(skin)
             .build()
@@ -344,10 +345,12 @@ fn render_control<'a>(
         ControlSpec::TrackList {
             columns,
             columns_state,
+            assign,
         } => render_track_list(
             path,
             columns,
             columns_state.as_ref(),
+            assign,
             value,
             ui,
             reads,
@@ -433,16 +436,19 @@ fn render_track_list<'a>(
     path: &'a str,
     columns: &[TrackColumn],
     columns_state: Option<&Binding>,
+    assign: &[InternId],
     value: Option<&ReadValue<'_>>,
     ui: &'a CompiledUi,
     reads: &dyn Reads,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
+    let assign: Vec<&str> = assign.iter().map(|id| ui.resolve(*id)).collect();
     TrackList::builder()
         .path(path)
         .columns(columns)
         .maybe_columns_state(columns_state.map(|binding| ui.resolve(binding.id())))
         .columns_scope(read_scope(columns_state, ui))
+        .assign(assign)
         .maybe_value(value)
         .reads(reads)
         .skin(skin)

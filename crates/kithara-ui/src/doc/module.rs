@@ -287,6 +287,8 @@ pub enum ControlNode {
         adaptive: AdaptivePolicy,
         #[serde(default)]
         style: FaderStyle,
+        #[serde(default)]
+        label: Option<String>,
     },
     Wave {
         id: NodeId,
@@ -330,6 +332,8 @@ pub enum ControlNode {
         columns: Vec<TrackColumn>,
         #[serde(default)]
         columns_state: Option<BindingRef>,
+        #[serde(default)]
+        assign: Vec<String>,
     },
     Tree {
         id: NodeId,

@@ -893,9 +893,7 @@ pub struct TrackListLabels {
     pub time: String,
     pub energy: String,
     pub transition: String,
-    pub footer_component: String,
     pub footer_tracks: String,
-    pub footer_usage: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

@@ -437,6 +437,7 @@ fn fader(id: &str, endpoint: &str) -> ControlNode {
         write: None,
         adaptive: AdaptivePolicy::default(),
         style: FaderStyle::default(),
+        label: None,
     }
 }
 
@@ -497,6 +498,7 @@ fn track_list(id: &str, endpoint: &str) -> ControlNode {
         adaptive: AdaptivePolicy::default(),
         columns: vec![TrackColumn::Title],
         columns_state: None,
+        assign: Vec::new(),
     }
 }
 

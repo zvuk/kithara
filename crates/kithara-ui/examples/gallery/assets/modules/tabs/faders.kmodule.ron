@@ -17,6 +17,7 @@
             Fader(
                 id: "default",
                 size: (w: Fixed(220.0), h: Fixed(34.0)),
+                label: Some("VOL"),
                 read: Model(id: "mock.volume"),
             ),
             Fader(

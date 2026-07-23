@@ -124,7 +124,7 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(track_list.row_height, 28.0);
     assert_eq!(track_list.footer_height, 22.0);
     assert_eq!(track_list.index_width, 28.0);
-    assert_eq!(track_list.deck_width, 40.0);
+    assert_eq!(track_list.deck_width, 64.0);
     assert_eq!(track_list.artist_width, 180.0);
     assert_eq!(track_list.bpm_width, 64.0);
     assert_eq!(track_list.key_width, 46.0);
