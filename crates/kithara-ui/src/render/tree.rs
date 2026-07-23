@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use iced::{
     Background, Element, Length,
     widget::{Column, Row, Space, container, container::Style as ContainerStyle},
@@ -24,7 +22,7 @@ use crate::{
     ids::InternId,
     layout::Axis,
     module::{
-        ChromeStyle, DeckSummaryStyle, GlyphStyle, IconName, Tone, TrackColumn, WaveStyle,
+        ChromeStyle, DeckSummaryStyle, GlyphStyle, IconName, Tone, TrackColumn,
         WindowControlsStyle,
     },
     render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent},
@@ -212,8 +210,9 @@ fn render_control<'a>(
     let value = read.and_then(|binding| resolve(reads, binding, ui));
     let value = value.as_ref();
     let path = ui.resolve(path);
+    let scope = read_scope(read, ui);
     match spec {
-        ControlSpec::DeckSummary { style } => render_deck_summary(*style, value, reads, skin),
+        ControlSpec::DeckSummary { style } => render_deck_summary(*style, value, scope, reads, skin),
         ControlSpec::Brand => Brand::builder().skin(skin).build().view(),
         ControlSpec::Spacer => Spacer::builder().skin(skin).build().view(),
         ControlSpec::PresetSelector => PresetSelector::builder()
@@ -227,11 +226,12 @@ fn render_control<'a>(
         ControlSpec::Bpm { placeholder } => Bpm::builder()
             .maybe_placeholder(placeholder.map(|id| ui.resolve(id)))
             .maybe_value(value)
+            .scope(scope)
             .reads(reads)
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Time => render_time(value, reads, skin),
+        ControlSpec::Time => render_time(value, scope, reads, skin),
         ControlSpec::Text { style, label } => Text::builder()
             .style(*style)
             .maybe_value(value)
@@ -329,15 +329,17 @@ fn render_control<'a>(
             .build()
             .view(),
         ControlSpec::Vis => render_vis(value, reads),
-        ControlSpec::Wave { style, badge, zoom } => render_wave(
-            path,
-            *style,
-            badge.map(|id| ui.resolve(id)),
-            wave_zoom(zoom.as_ref(), reads, ui),
-            value,
-            reads,
-            skin,
-        ),
+        ControlSpec::Wave { style, badge, zoom } => MiniWave::builder()
+            .path(path)
+            .style(*style)
+            .zoom(wave_zoom(zoom.as_ref(), reads, ui))
+            .maybe_badge(badge.map(|id| ui.resolve(id)))
+            .maybe_value(value)
+            .scope(scope)
+            .reads(reads)
+            .skin(skin)
+            .build()
+            .view(),
         ControlSpec::TrackList {
             columns,
             columns_state,
@@ -372,11 +374,13 @@ fn render_crossfader<'a>(
 
 fn render_time<'a>(
     value: Option<&ReadValue<'_>>,
+    scope: &'a str,
     reads: &dyn Reads,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
     Time::builder()
         .maybe_value(value)
+        .scope(scope)
         .reads(reads)
         .skin(skin)
         .build()
@@ -394,12 +398,14 @@ fn render_vis<'a>(value: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Element<'
 fn render_deck_summary<'a>(
     style: DeckSummaryStyle,
     value: Option<&ReadValue<'_>>,
+    scope: &str,
     reads: &dyn Reads,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
     DeckSummary::builder()
         .style(style)
         .maybe_value(value)
+        .scope(scope)
         .reads(reads)
         .skin(skin)
         .build()
@@ -434,7 +440,8 @@ fn render_track_list<'a>(
     TrackList::builder()
         .path(path)
         .columns(columns)
-        .maybe_columns_state(columns_state.map(|binding| binding_id(binding, ui)))
+        .maybe_columns_state(columns_state.map(|binding| ui.resolve(binding.id())))
+        .columns_scope(read_scope(columns_state, ui))
         .maybe_value(value)
         .reads(reads)
         .skin(skin)
@@ -462,27 +469,6 @@ fn render_tree<'a>(
         .query(query)
         .maybe_value(value)
         .icon(render_tree_icon)
-        .skin(skin)
-        .build()
-        .view()
-}
-
-fn render_wave<'a>(
-    path: &'a str,
-    style: WaveStyle,
-    badge: Option<&'a str>,
-    zoom: f32,
-    value: Option<&ReadValue<'_>>,
-    reads: &dyn Reads,
-    skin: &Skin,
-) -> Element<'a, UiEvent> {
-    MiniWave::builder()
-        .path(path)
-        .style(style)
-        .zoom(zoom)
-        .maybe_badge(badge)
-        .maybe_value(value)
-        .reads(reads)
         .skin(skin)
         .build()
         .view()
@@ -635,28 +621,19 @@ fn render_tab_large<'a>(
 
 fn resolve<'a>(reads: &'a dyn Reads, binding: &Binding, ui: &CompiledUi) -> Option<ReadValue<'a>> {
     match binding {
-        Binding::Telemetry { id, with } if with.is_empty() || deck_is_a(with, ui) => {
-            reads.get(ui.resolve(*id))
-        }
-        Binding::Parameter { id, .. } | Binding::Model { id, .. } => reads.get(ui.resolve(*id)),
-        _ => None,
+        Binding::Command { .. } => None,
+        binding => reads.get(ui.resolve(binding.key())),
     }
 }
 
-fn binding_id<'a>(binding: &Binding, ui: &'a CompiledUi) -> &'a str {
-    let id = match binding {
-        Binding::Command { id, .. }
-        | Binding::Parameter { id, .. }
-        | Binding::Telemetry { id, .. }
-        | Binding::Model { id, .. } => *id,
-    };
-    ui.resolve(id)
-}
-
-fn deck_is_a(scope: &BTreeMap<InternId, InternId>, ui: &CompiledUi) -> bool {
-    scope
-        .iter()
-        .any(|(key, value)| ui.resolve(*key) == "deck" && ui.resolve(*value) == "a")
+/// Scope suffix (`@deck=a` or empty) of a control's read binding. Widgets
+/// append it to their derived endpoints so per-scope reads stay addressable.
+fn read_scope<'a>(read: Option<&Binding>, ui: &'a CompiledUi) -> &'a str {
+    read.map_or("", |binding| {
+        let key = ui.resolve(binding.key());
+        let id_len = ui.resolve(binding.id()).len();
+        key.get(id_len..).unwrap_or("")
+    })
 }
 
 fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {

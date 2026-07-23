@@ -386,6 +386,9 @@ impl MockReads {
 
 impl Reads for MockReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        // The gallery hosts one virtual deck: every scope suffix resolves to
+        // the same state, so the canonical `@scope` qualifier is dropped here.
+        let endpoint = endpoint.split_once('@').map_or(endpoint, |(base, _)| base);
         if let Some(value) = self.mixer.get(endpoint) {
             return Some(value);
         }

@@ -17,7 +17,9 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     module::WaveStyle,
-    render::{ReadValue, Reads, Skin, UiEvent, WaveBucket, fonts, theme::RenderPalette},
+    render::{
+        ReadValue, Reads, Skin, UiEvent, WaveBucket, fonts, model::derived, theme::RenderPalette,
+    },
     skin::{FontSkin, FrameSkin, WaveOverlaySkin, WaveSkin},
     widgets::{
         Widget,
@@ -31,24 +33,28 @@ use crate::{
 };
 
 #[derive(bon::Builder)]
-pub(crate) struct MiniWave<'path, 'value, 'data, 'reads, 'skin> {
+pub(crate) struct MiniWave<'path, 'value, 'data, 'scope, 'reads, 'skin> {
     path: &'path str,
     style: WaveStyle,
     badge: Option<&'path str>,
     value: Option<&'value ReadValue<'data>>,
+    scope: &'scope str,
     reads: &'reads dyn Reads,
     skin: &'skin Skin,
     zoom: f32,
 }
 
-impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_> {
+impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
         let waveform = match self.value {
             Some(ReadValue::Waveform(waveform)) => Some(*waveform),
             _ => None,
         };
         let bpm = waveform.and_then(|view| view.bpm);
-        let progress = match self.reads.get("deck.playback.position_normalized") {
+        let progress = match self
+            .reads
+            .get(&derived("deck.playback.position_normalized", self.scope))
+        {
             Some(ReadValue::Scalar(value)) => value.as_(),
             _ => 0.0,
         };
@@ -63,20 +69,26 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_> {
         let show_beats = self.style == WaveStyle::Hero;
         let wave_revision = show_beats.then(|| wave_revision(waveform.as_ref(), progress, zoom));
         let overlay = show_beats.then(|| OverlayData {
-            title: read_text(self.reads, "deck.track.title")
+            title: read_text(self.reads, &derived("deck.track.title", self.scope))
                 .filter(|title| !title.is_empty())
                 .unwrap_or("No track loaded")
                 .to_owned(),
-            artist: read_text(self.reads, "deck.track.source_kind")
+            artist: read_text(self.reads, &derived("deck.track.source_kind", self.scope))
                 .unwrap_or("no source")
                 .to_owned(),
             bpm: bpm.map_or_else(|| em_dash().to_owned(), |value| format!("{value:.2}")),
-            key: read_text(self.reads, "deck.track.key")
+            key: read_text(self.reads, &derived("deck.track.key", self.scope))
                 .unwrap_or(em_dash())
                 .to_owned(),
             remain: format!(
                 "\u{2212}{}",
-                format_time(read_scalar(self.reads, "deck.playback.remaining_secs").unwrap_or(0.0))
+                format_time(
+                    read_scalar(
+                        self.reads,
+                        &derived("deck.playback.remaining_secs", self.scope)
+                    )
+                    .unwrap_or(0.0)
+                )
             ),
             badge: self.badge.unwrap_or_default().to_owned(),
         });

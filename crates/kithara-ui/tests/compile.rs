@@ -408,10 +408,11 @@ fn module_shell_metadata_compiles_into_the_module_node() {
     assert!(!frame.left);
     assert!(!corners);
     assert_eq!(ui.resolve(*collapsed), "ui.module.deck.collapsed");
-    let Some(Binding::Telemetry { id, with }) = footer else {
+    let Some(Binding::Telemetry { id, key, with }) = footer else {
         panic!("expected telemetry footer");
     };
     assert_eq!(ui.resolve(*id), "deck.track.title");
+    assert_eq!(ui.resolve(*key), "deck.track.title@deck=a");
     assert_eq!(
         with.iter()
             .map(|(key, value)| (ui.resolve(*key), ui.resolve(*value)))

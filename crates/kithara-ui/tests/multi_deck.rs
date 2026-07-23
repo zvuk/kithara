@@ -136,3 +136,63 @@ fn two_deck_layout_compiles() {
     )
     .unwrap();
 }
+
+fn collect_read_keys(ui: &CompiledUi, node: &ExpandedNode, keys: &mut Vec<String>) {
+    match node {
+        ExpandedNode::Row { children, .. }
+        | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Slot { children, .. } => {
+            for child in children {
+                collect_read_keys(ui, child, keys);
+            }
+        }
+        ExpandedNode::Control {
+            read: Some(binding),
+            ..
+        } => keys.push(ui.resolve(binding.key()).to_owned()),
+        _ => {}
+    }
+}
+
+#[kithara::test]
+fn scoped_read_keys_address_each_deck() {
+    let resolver = resolver_with(
+        "two_deck.klayout.ron",
+        include_str!("fixtures/two_deck.klayout.ron"),
+    );
+    let ui = compile(
+        "two_deck.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+
+    let mut decks = BTreeMap::new();
+    collect_instance_decks(&ui, &ui.root, &mut decks);
+    let mut keys_by_instance = BTreeMap::new();
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected two-deck split");
+    };
+    for (_, child) in children {
+        let CompiledNode::Module { instance, root, .. } = child else {
+            panic!("expected deck module");
+        };
+        let mut keys = Vec::new();
+        collect_read_keys(&ui, root, &mut keys);
+        keys_by_instance.insert(ui.resolve(*instance).to_owned(), keys);
+    }
+
+    for (instance, deck) in [("deck-a", "a"), ("deck-b", "b")] {
+        let keys = &keys_by_instance[instance];
+        let waveform = format!("deck.playback.waveform@deck={deck}");
+        assert!(keys.contains(&waveform), "{instance} keys: {keys:?}");
+        assert!(
+            keys.iter()
+                .filter(|key| key.starts_with("deck."))
+                .all(|key| key.ends_with(&format!("@deck={deck}"))),
+            "{instance} keys: {keys:?}"
+        );
+    }
+}

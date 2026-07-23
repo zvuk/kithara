@@ -7,7 +7,7 @@ use num_traits::ToPrimitive;
 
 use crate::{
     module::DeckSummaryStyle,
-    render::{ReadValue, Reads, Skin, UiEvent, WaveformView, fonts, shaped_text},
+    render::{ReadValue, Reads, Skin, UiEvent, WaveformView, fonts, model::derived, shaped_text},
     widgets::Widget,
 };
 
@@ -24,24 +24,26 @@ const fn seconds_per_minute() -> u64 {
 }
 
 #[derive(bon::Builder)]
-pub(crate) struct DeckSummary<'value, 'data, 'reads, 'skin> {
+pub(crate) struct DeckSummary<'value, 'data, 'scope, 'reads, 'skin> {
     style: DeckSummaryStyle,
     value: Option<&'value ReadValue<'data>>,
+    scope: &'scope str,
     reads: &'reads dyn Reads,
     skin: &'skin Skin,
 }
 
-impl<'a> Widget<'a> for DeckSummary<'_, '_, '_, '_> {
+impl<'a> Widget<'a> for DeckSummary<'_, '_, '_, '_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
         let palette = self.skin.palette;
         let title = match self.value {
             Some(ReadValue::Text(value)) if !value.is_empty() => (*value).to_owned(),
-            _ => read_text(self.reads, "deck.track.title")
+            _ => read_text(self.reads, &derived("deck.track.title", self.scope))
                 .filter(|title| !title.is_empty())
                 .unwrap_or(no_track())
                 .to_owned(),
         };
-        let source = read_text(self.reads, "deck.track.source_kind").unwrap_or(em_dash());
+        let source = read_text(self.reads, &derived("deck.track.source_kind", self.scope))
+            .unwrap_or(em_dash());
         let compact = self.style == DeckSummaryStyle::Micro;
         let content: Element<'a, UiEvent> = if compact {
             row![
@@ -89,14 +91,15 @@ impl<'a> Widget<'a> for DeckSummary<'_, '_, '_, '_> {
 }
 
 #[derive(bon::Builder)]
-pub(crate) struct Bpm<'placeholder, 'value, 'data, 'reads, 'skin> {
+pub(crate) struct Bpm<'placeholder, 'value, 'data, 'scope, 'reads, 'skin> {
     placeholder: Option<&'placeholder str>,
     value: Option<&'value ReadValue<'data>>,
+    scope: &'scope str,
     reads: &'reads dyn Reads,
     skin: &'skin Skin,
 }
 
-impl<'a> Widget<'a> for Bpm<'_, '_, '_, '_, '_> {
+impl<'a> Widget<'a> for Bpm<'_, '_, '_, '_, '_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
         let palette = self.skin.palette;
         let content: Element<'a, UiEvent> = if let Some(bpm) =
@@ -108,7 +111,11 @@ impl<'a> Widget<'a> for Bpm<'_, '_, '_, '_, '_> {
                 .color(palette.accent_strong)
                 .into()
         } else if self.placeholder == Some("time") {
-            let position = read_scalar(self.reads, "deck.playback.position_secs").unwrap_or(0.0);
+            let position = read_scalar(
+                self.reads,
+                &derived("deck.playback.position_secs", self.scope),
+            )
+            .unwrap_or(0.0);
             column![
                 shaped_text("TIME")
                     .font(fonts::mono(self.skin.deck.readout_label.weight))
@@ -139,20 +146,29 @@ impl<'a> Widget<'a> for Bpm<'_, '_, '_, '_, '_> {
 }
 
 #[derive(bon::Builder)]
-pub(crate) struct Time<'value, 'data, 'reads, 'skin> {
+pub(crate) struct Time<'value, 'data, 'scope, 'reads, 'skin> {
     value: Option<&'value ReadValue<'data>>,
+    scope: &'scope str,
     reads: &'reads dyn Reads,
     skin: &'skin Skin,
 }
 
-impl<'a> Widget<'a> for Time<'_, '_, '_, '_> {
+impl<'a> Widget<'a> for Time<'_, '_, '_, '_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
         if !matches!(self.value, Some(ReadValue::Scalar(_))) {
             return Space::new().into();
         }
         let palette = self.skin.palette;
-        let position = read_scalar(self.reads, "deck.playback.position_secs").unwrap_or(0.0);
-        let duration = read_scalar(self.reads, "deck.playback.duration_secs").unwrap_or(0.0);
+        let position = read_scalar(
+            self.reads,
+            &derived("deck.playback.position_secs", self.scope),
+        )
+        .unwrap_or(0.0);
+        let duration = read_scalar(
+            self.reads,
+            &derived("deck.playback.duration_secs", self.scope),
+        )
+        .unwrap_or(0.0);
         container(
             shaped_text(format!(
                 "{} / {}",
@@ -191,18 +207,6 @@ fn format_bpm(bpm: f64) -> String {
     format!("{bpm:.2}")
 }
 
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn bpm_uses_two_decimal_places() {
-        assert_eq!(format_bpm(70.0), "70.00");
-    }
-}
-
 fn waveform_value<'data>(value: Option<&ReadValue<'data>>) -> Option<WaveformView<'data>> {
     match value {
         Some(ReadValue::Waveform(analysis)) => Some(*analysis),
@@ -221,5 +225,17 @@ fn read_scalar(reads: &dyn Reads, endpoint: &str) -> Option<f64> {
     match reads.get(endpoint) {
         Some(ReadValue::Scalar(value)) => Some(value),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn bpm_uses_two_decimal_places() {
+        assert_eq!(format_bpm(70.0), "70.00");
     }
 }

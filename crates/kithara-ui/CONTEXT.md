@@ -65,6 +65,20 @@ must keep requesting frames while the visualizer is visible; the gallery does so
 VIS-tab subscription. The shader implementation remains behind the `render` feature, so the
 non-render wasm schema lane does not depend on wgpu or wall-clock state.
 
+## Scoped Read Resolution
+
+A read binding with a non-empty `with` map resolves through the canonical scoped key
+`<endpoint>@<scope>=<value>[,<scope2>=<value2>...]`, scope names sorted lexically. The key is
+built by `expand::scoped_key`, interned once at compile time, and carried by `Binding::key`
+(`key == id` when the scope is empty). `render/tree.rs::resolve` passes exactly this key to
+`Reads::get`; hosts key their read maps by the same form.
+
+Widgets that read derived endpoints beyond their binding (`DeckSummary`, `Bpm`, `Time`,
+`MiniWave`, `TrackList` column state) receive the binding's scope suffix (`@deck=a` or empty)
+and append it to each derived endpoint, so `deck.track.title@deck=b` stays addressable per deck.
+Host-global endpoints (`player.output.levels`, `ui.preset`, the visualizer clock) remain
+unscoped.
+
 ## Typed Control Schema
 
 Each supported control is a structural `ControlNode` enum variant. RON deserialization owns field

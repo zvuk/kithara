@@ -85,7 +85,16 @@ pub enum ReadValue<'a> {
     Tree(&'a [TreeRow<'a>]),
 }
 
-/// Renderer-facing endpoint reader.
+/// Renderer-facing endpoint reader. Endpoints are canonical scoped keys:
+/// `<id>` for unscoped bindings, `<id>@<k>=<v>[,...]` for scoped ones.
 pub trait Reads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>>;
+}
+
+/// Derived widget endpoint qualified by the control's scope suffix.
+pub(crate) fn derived(base: &str, scope: &str) -> String {
+    let mut endpoint = String::with_capacity(base.len() + scope.len());
+    endpoint.push_str(base);
+    endpoint.push_str(scope);
+    endpoint
 }

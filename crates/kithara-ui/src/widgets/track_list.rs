@@ -105,6 +105,7 @@ pub(crate) struct TrackList<'path, 'columns, 'state, 'value, 'data, 'reads, 'ski
     path: &'path str,
     columns: &'columns [TrackColumn],
     columns_state: Option<&'state str>,
+    columns_scope: &'state str,
     value: Option<&'value ReadValue<'data>>,
     reads: &'reads dyn Reads,
     skin: &'skin Skin,
@@ -115,7 +116,10 @@ impl<'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, '_> {
         let Some(ReadValue::TrackList(tracks)) = self.value else {
             return Space::new().into();
         };
-        let columns = column_layouts(self.columns, self.reads, self.columns_state, self.skin);
+        let state = self
+            .columns_state
+            .map(|prefix| (prefix, self.columns_scope));
+        let columns = column_layouts(self.columns, self.reads, state, self.skin);
         let path = self.path.to_owned();
         let style = TrackListStyle::new(self.skin);
         let tracks: Vec<_> = tracks.iter().map(TrackListRowData::from).collect();
@@ -642,27 +646,27 @@ fn footer(count: usize, style: &TrackListStyle) -> Element<'static, UiEvent> {
         .into()
 }
 
-fn column_visible(reads: &dyn Reads, prefix: Option<&str>, column: TrackColumn) -> bool {
-    let Some(prefix) = prefix else {
+fn column_visible(reads: &dyn Reads, state: Option<(&str, &str)>, column: TrackColumn) -> bool {
+    let Some((prefix, scope)) = state else {
         return true;
     };
-    let endpoint = format!("{prefix}.{}", column.endpoint_name());
+    let endpoint = format!("{prefix}.{}{scope}", column.endpoint_name());
     !matches!(reads.get(&endpoint), Some(ReadValue::Bool(false)))
 }
 
 fn column_layouts(
     columns: &[TrackColumn],
     reads: &dyn Reads,
-    prefix: Option<&str>,
+    state: Option<(&str, &str)>,
     skin: &Skin,
 ) -> Vec<ColumnLayout> {
     columns
         .iter()
         .copied()
-        .filter(|column| column_visible(reads, prefix, *column))
+        .filter(|column| column_visible(reads, state, *column))
         .map(|column| ColumnLayout {
             column,
-            width: effective_column_width(reads, prefix, column, skin),
+            width: effective_column_width(reads, state, column, skin),
         })
         .collect()
 }
@@ -683,15 +687,15 @@ fn default_column_width(column: TrackColumn, skin: &Skin) -> f32 {
 
 fn effective_column_width(
     reads: &dyn Reads,
-    prefix: Option<&str>,
+    state: Option<(&str, &str)>,
     column: TrackColumn,
     skin: &Skin,
 ) -> f32 {
     let default = default_column_width(column, skin);
-    let Some(prefix) = prefix else {
+    let Some((prefix, scope)) = state else {
         return default;
     };
-    let endpoint = format!("{prefix}.width.{}", column.endpoint_name());
+    let endpoint = format!("{prefix}.width.{}{scope}", column.endpoint_name());
     let Some(ReadValue::Scalar(width)) = reads.get(&endpoint) else {
         return default;
     };
@@ -800,7 +804,7 @@ mod tests {
     fn absent_column_endpoint_is_visible() {
         assert!(column_visible(
             &ColumnReads(None),
-            Some("columns"),
+            Some(("columns", "")),
             TrackColumn::Title
         ));
     }
@@ -809,7 +813,7 @@ mod tests {
     fn false_column_endpoint_is_hidden() {
         assert!(!column_visible(
             &ColumnReads(Some(false)),
-            Some("columns"),
+            Some(("columns", "")),
             TrackColumn::Title
         ));
     }
@@ -820,7 +824,7 @@ mod tests {
         let columns = column_layouts(
             &[TrackColumn::Index, TrackColumn::Title, TrackColumn::Artist],
             &WidthReads,
-            Some("columns"),
+            Some(("columns", "")),
             skin,
         );
 
