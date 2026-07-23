@@ -5,6 +5,7 @@ mod backend;
 mod client;
 mod error;
 mod metrics;
+mod observe;
 mod resumable;
 mod retry;
 mod timeout;
@@ -20,6 +21,7 @@ pub mod mock {
 pub use crate::{
     backend::HttpClient,
     error::{NetError, NetResult, Retryability},
+    observe::{NetObserver, Observer},
     timeout::TimeoutNet,
     traits::{ByteStream, Net, NetExt},
     types::{Compression, Headers, ImpersonatePreset, NetOptions, RangeSpec, RetryPolicy},

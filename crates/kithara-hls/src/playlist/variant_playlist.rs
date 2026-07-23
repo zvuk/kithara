@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kithara_assets::{AssetScope, ResourceKey};
+use kithara_assets::{AssetResource, AssetScope, ResourceKey};
 use url::Url;
 
 use super::{
@@ -41,7 +41,7 @@ impl VariantPlaylist {
         let key = if &media_url == master_url {
             master_key.clone()
         } else {
-            scope.key_for(&media_url)
+            scope.key(&AssetResource::Url(media_url.clone()))?
         };
         let resource = ResourceHandle::new(scope.clone(), key, media_url);
         Ok(Self {

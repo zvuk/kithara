@@ -1,10 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    collections::BTreeMap,
-    path::PathBuf,
-    sync::{OnceLock, atomic::Ordering},
-};
+use std::{collections::BTreeMap, path::PathBuf, sync::OnceLock};
 
 use dashmap::DashMap;
 use kithara_platform::{
@@ -16,8 +12,8 @@ use kithara_storage::{Atomic, MmapDriver, StorageError};
 use super::core::{Availability, AvailabilityIndex, InnerIndex};
 use crate::{
     error::{AssetsError, AssetsResult},
-    index::{
-        persist,
+    index::persistence::{
+        init_atomic, open_existing,
         schema::{AssetAvailabilityFile, AvailabilityFile, ResourceAvailabilityFile},
     },
 };
@@ -39,7 +35,7 @@ impl AvailabilityIndex {
     /// on first flush.
     pub(crate) fn enable_persistence(&self, path: PathBuf, cancel: CancelToken) {
         let opened = if path.exists() {
-            match persist::open_existing(&path, &cancel) {
+            match open_existing(&path, &cancel) {
                 Ok(res) => {
                     let atomic = Atomic::new(res);
                     let _ = self.load_from(&atomic);
@@ -91,15 +87,16 @@ impl AvailabilityIndex {
 
             for (path, res_record) in asset_record.resources.iter() {
                 let mut avail = Availability::default();
-                res_record
-                    .ranges
-                    .iter()
-                    .for_each(|r| avail.insert(r.0.to_native()..r.1.to_native()));
+                res_record.ranges.iter().for_each(|r| {
+                    avail.insert(r.0.to_native()..r.1.to_native());
+                });
 
                 let final_len: Option<u64> = res_record.final_len.as_ref().map(|l| l.to_native());
 
                 match final_len {
-                    Some(flen) => avail.mark_committed(flen),
+                    Some(flen) => {
+                        avail.mark_committed(flen);
+                    }
                     None => avail.committed = res_record.is_committed,
                 }
 
@@ -123,12 +120,10 @@ impl AvailabilityIndex {
 impl InnerIndex {
     pub(super) fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
         let Some(p) = self.persist.get() else {
-            self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
-        let atomic = persist::init_atomic(&p.res, &p.path, &p.cancel)?;
+        let atomic = init_atomic(&p.res, &p.path, &p.cancel)?;
         write_aggregate(self, atomic, durable)?;
-        self.dirty.store(false, Ordering::Release);
         Ok(())
     }
 }

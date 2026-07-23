@@ -180,7 +180,7 @@ pub(crate) mod phase_oracle {
 
 pub(crate) mod params {
     use kithara::{
-        assets::StoreOptions,
+        assets::AssetStore,
         audio::{Audio, AudioConfig},
         decode::DecoderBackend,
         hls::{AbrMode, Hls, HlsConfig},
@@ -260,7 +260,7 @@ pub(crate) mod params {
     /// rather than a hard-coded constant.
     pub(crate) async fn open_audio(
         url: &url::Url,
-        store: StoreOptions,
+        store: AssetStore,
         abr: AbrMode,
         backend: DecoderBackend,
         prefetch_count: usize,
@@ -279,6 +279,8 @@ pub(crate) mod params {
         // autonomously and fill the channel while the test thread waits via
         // `wait_for_probe`.
         let config = AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(backend)

@@ -10,6 +10,7 @@ pub(crate) mod state;
 pub(crate) mod variant_playlist;
 
 pub use keys::KeyStore;
+pub(crate) use keys::{resolve_init_decrypt_ctx, resolve_variant_decrypt_contexts};
 pub(crate) use master::MasterPlaylist;
 pub use parse::{
     MediaPlaylist, ParsedMaster, VariantId, VariantStream, parse_master_playlist,

@@ -94,14 +94,6 @@ pub enum DecoderChunkOutcome {
     Eof,
 }
 
-impl DecoderChunkOutcome {
-    /// `true` when the outcome is [`Self::Eof`].
-    #[must_use]
-    pub fn is_eof(&self) -> bool {
-        matches!(self, Self::Eof)
-    }
-}
-
 impl TryFrom<DecoderChunkOutcome> for PcmChunk {
     type Error = DecoderChunkOutcome;
 

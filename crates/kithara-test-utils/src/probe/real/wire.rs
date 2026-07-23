@@ -153,8 +153,8 @@ impl<T: IntoProbeArg> IntoProbeArg for Option<T> {
 /// Register all USDT probes embedded in the binary with the host
 /// kernel tracer (dtrace on macOS, bpftrace on Linux). Safe to call
 /// from multiple init paths — guarded by an internal `OnceLock`. On
-/// wasm32 and in production builds (`feature = "probe"` disabled), this is a
-/// no-op stub — the optional `usdt` crate is not pulled in.
+/// wasm32, Android, and production builds (`feature = "probe"` disabled), this
+/// is a no-op stub - the optional `usdt` crate is not pulled in.
 pub fn register_probes() {
     imp::register();
 }
@@ -335,7 +335,11 @@ pub fn current_thread_u64() -> u64 {
     hasher.finish()
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "probe"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    feature = "probe"
+))]
 mod imp {
     use std::sync::OnceLock;
 
@@ -348,7 +352,7 @@ mod imp {
     }
 }
 
-#[cfg(any(target_arch = "wasm32", not(feature = "probe")))]
+#[cfg(any(target_arch = "wasm32", target_os = "android", not(feature = "probe")))]
 mod imp {
     pub(super) fn register() {}
 }

@@ -162,6 +162,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let vis = &input.vis;
     let sig = &input.sig;
     let block = &input.block;
+    let stmts = &block.stmts;
 
     let body = if probe_return {
         quote! {
@@ -175,7 +176,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
             __probe_ret
         }
     } else {
-        quote! { #block }
+        quote! { #(#stmts)* }
     };
 
     let capture_caller_fn = if filter.caller {
@@ -260,5 +261,33 @@ fn build_emit_entry_event(
                 #(#tracing_fields),*
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::{Expr, ItemFn, Stmt, parse_quote};
+
+    use super::*;
+
+    #[test]
+    fn non_return_probe_splices_original_tail_expression() -> syn::Result<()> {
+        let input: ItemFn = parse_quote! {
+            fn total_bytes(&self) -> u64 {
+                self.layout.total_bytes()
+            }
+        };
+        let filter = ProbeFilter {
+            computed: vec![(parse_quote!(total), parse_quote!(self.layout.total_bytes()))],
+            ..ProbeFilter::default()
+        };
+
+        let expanded: ItemFn = syn::parse2(expand(&input, filter)?)?;
+
+        assert!(matches!(
+            expanded.block.stmts.last(),
+            Some(Stmt::Expr(Expr::MethodCall(call), None)) if call.method == "total_bytes"
+        ));
+        Ok(())
     }
 }

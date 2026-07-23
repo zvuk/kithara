@@ -1,5 +1,7 @@
 use std::{
-    env, fs,
+    env,
+    fmt::Write,
+    fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -929,19 +931,20 @@ fn render_release_notes(
 ) -> String {
     let mut notes = format!("## {}\n\n{}", release_title(cfg, tag), body.trim());
     notes.push_str("\n\n## Artifacts\n\n");
-    notes.push_str(&format!("- `{}` for Swift Package Manager.\n", cfg.asset));
+    let _ = writeln!(notes, "- `{}` for Swift Package Manager.", cfg.asset);
     if !cfg.single_asset.is_empty() {
-        notes.push_str(&format!(
-            "- `{}` for manual Apple integration.\n",
+        let _ = writeln!(
+            notes,
+            "- `{}` for manual Apple integration.",
             cfg.single_asset
-        ));
+        );
     }
     notes.push_str("- Rust crates are versioned and published in dependency order.\n");
 
     notes.push_str("\n## Checksums\n\n```text\n");
-    notes.push_str(&format!("{}\n{}\n", cfg.asset, checksum));
+    let _ = write!(notes, "{}\n{}\n", cfg.asset, checksum);
     if let Some(single_checksum) = single_checksum {
-        notes.push_str(&format!("\n{}\n{}\n", cfg.single_asset, single_checksum));
+        let _ = write!(notes, "\n{}\n{}\n", cfg.single_asset, single_checksum);
     }
     notes.push_str("```\n");
 
@@ -1110,10 +1113,10 @@ fn stamp_manifest(manifest: &str, version: &str, checksum: &str) -> Result<Strin
     let mut seen_checksum = false;
     for line in manifest.split_inclusive('\n') {
         if line.starts_with("let version = ") {
-            out.push_str(&format!("let version = \"{version}\"\n"));
+            let _ = writeln!(out, "let version = \"{version}\"");
             seen_version = true;
         } else if line.starts_with("let checksum = ") {
-            out.push_str(&format!("let checksum = \"{checksum}\"\n"));
+            let _ = writeln!(out, "let checksum = \"{checksum}\"");
             seen_checksum = true;
         } else {
             out.push_str(line);

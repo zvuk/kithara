@@ -67,6 +67,9 @@ each fallback hides another underlying failure mode.
 ✅  pick one source (or model the choice as user-facing config), don't \
    chain implementations.
 
+Exact identifiers listed in `retry_fallback.allowed_idents` are excluded from \
+this lexical check.
+
 Suppress with `// xtask-lint-ignore: retry_fallback` ONLY for legitimate \
 user-facing defaults (e.g. a config field literally named `fallback_url` \
 where the user opted in to two endpoints). Suppression for control flow \
@@ -97,6 +100,7 @@ impl Check for RetryFallback {
             };
             let suppress = Suppressions::parse(&source);
             let mut v = IdentVisitor {
+                allowed_idents: &cfg.allowed_idents,
                 rel: &rel,
                 suppress: &suppress,
                 out: &mut violations,
@@ -109,6 +113,7 @@ impl Check for RetryFallback {
 }
 
 struct IdentVisitor<'a> {
+    allowed_idents: &'a [String],
     suppress: &'a Suppressions,
     out: &'a mut Vec<Violation>,
     rel: &'a str,
@@ -155,7 +160,10 @@ impl<'a> IdentVisitor<'a> {
     }
 }
 
-fn name_is_forbidden(name: &str) -> bool {
+fn name_is_forbidden(name: &str, allowed_idents: &[String]) -> bool {
+    if allowed_idents.iter().any(|allowed| allowed == name) {
+        return false;
+    }
     let lower = name.to_lowercase();
     if Consts::FORBIDDEN_IDENTS
         .iter()
@@ -172,7 +180,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
     fn visit_field(&mut self, node: &'ast Field) {
         if let Some(ident) = &node.ident {
             let name = ident.to_string();
-            if name_is_forbidden(&name) {
+            if name_is_forbidden(&name, self.allowed_idents) {
                 self.flag(ident.span().start().line, &name, "field");
             }
         }
@@ -181,7 +189,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
         let name = node.sig.ident.to_string();
-        if name_is_forbidden(&name) {
+        if name_is_forbidden(&name, self.allowed_idents) {
             self.flag(node.sig.ident.span().start().line, &name, "fn");
         }
         visit::visit_impl_item_fn(self, node);
@@ -189,7 +197,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_item_const(&mut self, node: &'ast ItemConst) {
         let name = node.ident.to_string();
-        if name_is_forbidden(&name) {
+        if name_is_forbidden(&name, self.allowed_idents) {
             self.flag(node.ident.span().start().line, &name, "const");
         }
         visit::visit_item_const(self, node);
@@ -197,7 +205,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_item_fn(&mut self, node: &'ast ItemFn) {
         let name = node.sig.ident.to_string();
-        if name_is_forbidden(&name) {
+        if name_is_forbidden(&name, self.allowed_idents) {
             self.flag(node.sig.ident.span().start().line, &name, "fn");
         }
         visit::visit_item_fn(self, node);
@@ -214,7 +222,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_item_static(&mut self, node: &'ast ItemStatic) {
         let name = node.ident.to_string();
-        if name_is_forbidden(&name) {
+        if name_is_forbidden(&name, self.allowed_idents) {
             self.flag(node.ident.span().start().line, &name, "static");
         }
         visit::visit_item_static(self, node);
@@ -222,7 +230,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
         let name = node.ident.to_string();
-        if name_is_forbidden(&name) {
+        if name_is_forbidden(&name, self.allowed_idents) {
             self.flag(node.ident.span().start().line, &name, "struct");
         }
         visit::visit_item_struct(self, node);
@@ -231,7 +239,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
     fn visit_local(&mut self, node: &'ast Local) {
         if let Pat::Ident(PatIdent { ident, .. }) = &node.pat {
             let name = ident.to_string();
-            if name_is_forbidden(&name) {
+            if name_is_forbidden(&name, self.allowed_idents) {
                 self.flag(ident.span().start().line, &name, "let");
             }
         }
@@ -244,10 +252,19 @@ mod tests {
     use super::*;
 
     fn count_violations(source: &str) -> usize {
+        count_violations_with_allowed(source, &[])
+    }
+
+    fn count_violations_with_allowed(source: &str, allowed_idents: &[&str]) -> usize {
         let file = syn::parse_file(source).expect("parse");
         let suppress = Suppressions::parse(source);
+        let allowed_idents = allowed_idents
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>();
         let mut out = Vec::new();
         let mut v = IdentVisitor {
+            allowed_idents: &allowed_idents,
             rel: "test.rs",
             suppress: &suppress,
             out: &mut out,
@@ -278,6 +295,34 @@ mod tests {
     #[test]
     fn flags_let_attempts() {
         let src = "fn f() { let attempts = 0; }\n";
+        assert_eq!(count_violations(src), 1);
+    }
+
+    #[test]
+    fn allows_configured_identifiers() {
+        let src = "struct RetryTelemetry { attempt: u32, max_retries: u32 }\n\
+            fn publish() { let attempt = 1; }\n";
+        assert_eq!(
+            count_violations_with_allowed(src, &["attempt", "max_retries"]),
+            0
+        );
+    }
+
+    #[test]
+    fn configured_identifiers_match_exactly() {
+        let src = "struct RetryTelemetry { attempt: u32, attempts: u32 }\n";
+        assert_eq!(count_violations_with_allowed(src, &["attempt"]), 1);
+    }
+
+    #[test]
+    fn event_names_do_not_bypass_config() {
+        let src = "enum DownloadEvent { Retrying { attempts: u32 } }\n";
+        assert_eq!(count_violations_with_allowed(src, &["attempt"]), 1);
+    }
+
+    #[test]
+    fn still_flags_unconfigured_identifiers() {
+        let src = "struct RetryTelemetry { max_retries: u32 }\n";
         assert_eq!(count_violations(src), 1);
     }
 

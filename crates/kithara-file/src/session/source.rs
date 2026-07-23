@@ -57,7 +57,7 @@ impl FileSource {
         reader: AssetReader,
         coord: Arc<FileCoord>,
         bus: EventBus,
-        backend: Arc<AssetStore>,
+        backend: AssetStore,
         key: ResourceKey,
         cancel: CancelToken,
         cached_codec: Option<AudioCodec>,
@@ -84,6 +84,12 @@ impl FileSource {
         if let Some(codec) = cached_codec {
             let _ = inner.content_type_info.set(MediaInfo::from(codec));
         }
+        let total_bytes = inner.asset.reader.len();
+        inner.publish_opened(
+            total_bytes,
+            true,
+            total_bytes.map(|_| kithara_events::TotalBytesSource::CommittedLen),
+        );
         Self {
             coord,
             inner,
@@ -153,12 +159,19 @@ impl FileSource {
 }
 
 impl kithara_stream::Source for FileSource {
-    fn activity(&self) -> Arc<dyn Activity> {
-        self.coord.activity_handle()
-    }
-
-    fn advance(&self, n: u64) {
-        self.coord.advance_position(n);
+    delegate::delegate! {
+        to self.coord {
+            #[call(activity_handle)]
+            fn activity(&self) -> Arc<dyn Activity>;
+            #[call(advance_position)]
+            fn advance(&self, n: u64);
+            fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
+            fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+            fn position(&self) -> u64;
+            fn seek_control(&self) -> Arc<dyn SeekControl>;
+            fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+            fn set_position(&self, pos: u64);
+        }
     }
 
     fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {
@@ -182,7 +195,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        let Some(readable) = self.readable_part(range.clone()) else {
+        let Some(readable) = self.readable_part(range) else {
             return match self.inner.asset.reader.status() {
                 ResourceStatus::Committed { .. } => SourcePhase::Eof,
                 ResourceStatus::Active | ResourceStatus::Failed(_) | ResourceStatus::Cancelled => {
@@ -199,18 +212,6 @@ impl kithara_stream::Source for FileSource {
             return SourcePhase::Seeking;
         }
         SourcePhase::Waiting
-    }
-
-    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-        self.coord.playhead_read()
-    }
-
-    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        self.coord.playhead_write()
-    }
-
-    fn position(&self) -> u64 {
-        self.coord.position()
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -233,18 +234,6 @@ impl kithara_stream::Source for FileSource {
         trace!(offset, bytes = n, "FileSource read complete");
 
         Ok(ReadOutcome::Bytes(count))
-    }
-
-    fn seek_control(&self) -> Arc<dyn SeekControl> {
-        self.coord.seek_control()
-    }
-
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        self.coord.seek_observe()
-    }
-
-    fn set_position(&self, pos: u64) {
-        self.coord.set_position(pos);
     }
 
     fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
@@ -305,8 +294,7 @@ impl FileByteMap {
 impl kithara_stream::ByteMap for FileByteMap {
     fn init_segment_range(&self) -> Range<u64> {
         self.segment_index()
-            .map(FileSegmentIndex::init_range)
-            .unwrap_or(0..0)
+            .map_or(0..0, FileSegmentIndex::init_range)
     }
 
     fn len(&self) -> Option<u64> {

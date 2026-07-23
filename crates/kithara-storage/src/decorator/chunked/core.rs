@@ -136,21 +136,46 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// Mark the resource failed and remove the orphaned temp file.
     pub fn fail(&self, reason: String) {
         self.inner.load().fail_in_place(reason);
-        if let Some(tmp) = self.tmp_path.lock().take() {
+        let tmp = self.tmp_path.lock().take();
+        if let Some(tmp) = tmp {
             let _ = fs::remove_file(&tmp);
         }
     }
 
-    /// Returns `true` if the resource has been committed with zero length.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == Some(0)
-    }
-
-    /// Committed length, if known.
-    #[must_use]
-    pub fn len(&self) -> Option<u64> {
-        self.read_view().len()
+    delegate::delegate! {
+        to self {
+            /// Returns `true` if the resource has been committed with zero length.
+            #[must_use]
+            #[expr($ == Some(0))]
+            #[call(len)]
+            pub fn is_empty(&self) -> bool;
+            /// Committed length, if known.
+            #[must_use]
+            #[expr($.len())]
+            #[call(read_view)]
+            pub fn len(&self) -> Option<u64>;
+            /// Current runtime status.
+            #[expr($.status())]
+            #[call(read_view)]
+            pub fn status(&self) -> ResourceStatus;
+        }
+        to self.inner.load() {
+            /// Reactivate the inner for continued writing.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled or the backend cannot reopen.
+            #[call(reactivate_in_place)]
+            pub fn reactivate(&self) -> StorageResult<()>;
+            /// Mint a cheap read-only view without holding the inner lock during
+            /// subsequent (possibly blocking) reads.
+            #[call(reader)]
+            fn read_view(&self) -> ResourceReader<D>;
+            /// Write data at the given offset.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the write fails.
+            pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+        }
     }
 
     /// First gap in available data starting at `from`, up to `limit`.
@@ -230,14 +255,6 @@ impl<D: DriverIo> AtomicChunked<D> {
         Some(&self.canonical_path)
     }
 
-    /// Reactivate the inner for continued writing.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled or the backend cannot reopen.
-    pub fn reactivate(&self) -> StorageResult<()> {
-        self.inner.load().reactivate_in_place()
-    }
-
     /// Read data at the given offset into `buf`.
     ///
     /// # Errors
@@ -265,17 +282,6 @@ impl<D: DriverIo> AtomicChunked<D> {
         self.read_view().read_into(buf)
     }
 
-    /// Mint a cheap read-only view without holding the inner lock during
-    /// subsequent (possibly blocking) reads.
-    fn read_view(&self) -> ResourceReader<D> {
-        self.inner.load().reader()
-    }
-
-    /// Current runtime status.
-    pub fn status(&self) -> ResourceStatus {
-        self.read_view().status()
-    }
-
     /// Wait until the given byte range is available.
     ///
     /// # Errors
@@ -283,14 +289,6 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// resource has failed.
     pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         self.read_view().wait_range(range)
-    }
-
-    /// Write data at the given offset.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the write fails.
-    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.load().write_at(offset, data)
     }
 }
 
@@ -300,7 +298,8 @@ impl<D: DriverIo> Drop for AtomicChunked<D> {
     /// `Drop` entirely, in which case the next `AtomicChunked::open`
     /// over the same canonical path wipes the stale temp.
     fn drop(&mut self) {
-        if let Some(tmp) = self.tmp_path.lock().take() {
+        let tmp = self.tmp_path.lock().take();
+        if let Some(tmp) = tmp {
             let _ = fs::remove_file(&tmp);
         }
     }

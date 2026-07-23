@@ -6,6 +6,7 @@ use std::{
 };
 
 use kithara::{
+    bufpool::{BytePool, PcmPool},
     decode::PcmSpec,
     platform::{
         sync::Arc,
@@ -79,10 +80,13 @@ impl MixHarness {
         let session = Arc::new(CountingSession::new());
         let players = (0..count)
             .map(|_| {
-                let mut config = PlayerConfig::default();
-                config.sample_rate = SAMPLE_RATE;
-                config.crossfade_duration = 0.0;
-                config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
+                let config = PlayerConfig::builder()
+                    .byte_pool(BytePool::default())
+                    .pcm_pool(PcmPool::default())
+                    .sample_rate(SAMPLE_RATE)
+                    .crossfade_duration(0.0)
+                    .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+                    .build();
                 Arc::new(PlayerImpl::new(config))
             })
             .collect();

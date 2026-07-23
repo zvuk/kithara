@@ -1,8 +1,8 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    assets::{AssetStoreBuilder, StorageBackend},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::{PcmChunk, PcmMeta},
     hls::{Hls, HlsConfig},
     platform::{
@@ -78,7 +78,7 @@ async fn next_chunk_with_timeout(
 ) -> Option<PcmChunk> {
     let deadline = Instant::now() + timeout;
     loop {
-        match PcmReader::next_chunk(audio) {
+        match PcmRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -169,12 +169,14 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
 
-    let mut store = StoreOptions::new(temp_dir.path());
-    if ephemeral {
-        store.cache_capacity =
-            Some(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"));
-        store.backend = StorageBackend::Memory;
-    }
+    let store = if ephemeral {
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cache_capacity(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"))
+            .build()
+    } else {
+        kithara_integration_tests::disk_asset_store(temp_dir.path())
+    };
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
@@ -184,6 +186,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)

@@ -36,16 +36,16 @@ use crate::{
 /// matching `target_os`). Picking `DecoderBackend::Apple` on Linux is
 /// therefore a compile error, not a runtime `BackendUnavailable`.
 ///
-/// Default = [`DecoderBackend::Symphonia`]: the software path is
-/// cross-platform and capability-complete (gapless seek, full
-/// `StreamContext` propagation). Hardware backends (`Apple`/`Android`)
-/// are opt-in — there is no runtime fallback.
+/// Default = [`DecoderBackend::WebCodecs`] on wasm32 when its feature is
+/// enabled. Elsewhere the default is [`DecoderBackend::Symphonia`], unless a
+/// device build enables only its platform backend. There is no runtime backend
+/// fallback.
 ///
 /// Exactly one backend feature is expected per build: device builds
 /// (`apple` / `android`) compile with `--no-default-features` so
 /// `symphonia` is absent, and the hardware variant is the sole default.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, derive_more::Display, PartialEq, Eq)]
 pub enum DecoderBackend {
     /// Apple `AudioToolbox` (macOS/iOS, requires the `apple` feature).
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -57,6 +57,7 @@ pub enum DecoderBackend {
         ),
         default
     )]
+    #[display("apple")]
     Apple,
     /// Android `MediaCodec` (Android, requires the `android` feature).
     #[cfg(all(feature = "android", target_os = "android"))]
@@ -69,27 +70,20 @@ pub enum DecoderBackend {
         ),
         default
     )]
+    #[display("android")]
     Android,
+    /// Browser `AudioDecoder` (wasm32, requires the `webcodecs` feature).
+    #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
+    #[cfg_attr(all(target_arch = "wasm32", feature = "webcodecs"), default)]
+    #[display("webcodecs")]
+    WebCodecs,
     /// Symphonia software decoder (cross-platform, requires the
     /// `symphonia` feature).
     #[cfg(feature = "symphonia")]
-    #[default]
+    #[cfg_attr(not(all(target_arch = "wasm32", feature = "webcodecs")), default)]
+    #[display("symphonia")]
     Symphonia,
 }
-
-impl std::fmt::Display for DecoderBackend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-            Self::Apple => f.write_str("apple"),
-            #[cfg(all(feature = "android", target_os = "android"))]
-            Self::Android => f.write_str("android"),
-            #[cfg(feature = "symphonia")]
-            Self::Symphonia => f.write_str("symphonia"),
-        }
-    }
-}
-
 /// Decoder-side resampler selected by the caller.
 ///
 /// This describes conversion that is part of decoder construction, not the
@@ -163,16 +157,6 @@ where
 }
 
 /// Configuration for `DecoderFactory`.
-///
-/// `pcm_pool` / `byte_pool` are intentionally `Option<_>` — the
-/// production discipline is to propagate one pool down the entire host
-/// chain (player → `AudioConfig` → `DecoderConfig`). The `None` arm is
-/// a last-resort fallback for unit tests that don't care about pool
-/// budgets and for legacy call sites that haven't been threaded yet;
-/// it routes to the process-global `PcmPool::default()` /
-/// `BytePool::default()`. Don't construct fresh `PcmPool::new` / `BytePool::new`
-/// inside library components — that fragments the heap into many small
-/// per-component pools and defeats recycling.
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -184,17 +168,15 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Optional byte-map handle over the underlying source.
     pub byte_map: Option<Arc<dyn ByteMap>>,
-    /// Raw byte buffer pool, propagated from the host. `None` falls
-    /// back to `BytePool::default()`.
-    pub byte_pool: Option<BytePool>,
+    /// Raw byte buffer pool, propagated from the host.
+    pub byte_pool: BytePool,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     pub hint: Option<String>,
     /// Reader-side observer hooks. Single-owner; moved into
     /// [`ComposedDecoder`] by the chosen backend path.
     pub hooks: Option<BoxedEventSink>,
-    /// PCM buffer pool, propagated from the host. `None` falls back to
-    /// `PcmPool::default()`.
-    pub pcm_pool: Option<PcmPool>,
+    /// PCM buffer pool, propagated from the host.
+    pub pcm_pool: PcmPool,
     /// Optional decoder-side resampler plan. `None` means the decoder emits
     /// at the source rate.
     pub resampler: Option<DecoderResamplerConfig<B>>,
@@ -206,9 +188,13 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     pub epoch: u64,
 }
 
+#[cfg(test)]
 impl Default for DecoderConfig {
     fn default() -> Self {
-        Self::builder().build()
+        Self::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .build()
     }
 }
 
@@ -327,6 +313,8 @@ impl DecoderFactory {
             DecoderBackend::Apple => create_apple(source, codec, container, config),
             #[cfg(all(feature = "android", target_os = "android"))]
             DecoderBackend::Android => create_android(source, codec, container, config),
+            #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
+            DecoderBackend::WebCodecs => create_webcodecs(source, codec, container, config),
             #[cfg(feature = "symphonia")]
             DecoderBackend::Symphonia => create_symphonia(source, codec, container, config),
         }
@@ -352,6 +340,110 @@ impl DecoderFactory {
             _ => InputRequirement::Incremental,
         }
     }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
+fn create_webcodecs<B>(
+    source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
+    use crate::webcodecs::codec::WebCodecsCodec;
+
+    if should_use_segment_aware(codec, container, &config)
+        && let Some(layout) = config.byte_map.clone()
+    {
+        if WebCodecsCodec::supports(codec) {
+            tracing::debug!(
+                ?codec,
+                "fmp4_segment: dispatching to segment-aware WebCodecs path"
+            );
+            let gapless = config.gapless;
+            return build_fmp4_segment_decoder(source, layout, config, |track| {
+                WebCodecsCodec::open(track, gapless)
+            });
+        }
+        #[cfg(feature = "symphonia")]
+        return create_fmp4_segment_symphonia(source, codec, layout, config);
+        #[cfg(not(feature = "symphonia"))]
+        {
+            let _ = layout;
+            return Err(DecodeError::UnsupportedCodec { codec });
+        }
+    }
+
+    #[cfg(feature = "symphonia")]
+    if WebCodecsCodec::supports(codec) {
+        return build_webcodecs_standalone(source, codec, container, config);
+    }
+
+    #[cfg(feature = "symphonia")]
+    return create_symphonia(source, codec, container, config);
+    #[cfg(not(feature = "symphonia"))]
+    {
+        let _ = (source, container, config);
+        Err(DecodeError::UnsupportedCodec { codec })
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "webcodecs", feature = "symphonia"))]
+fn build_webcodecs_standalone<B>(
+    mut source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: DecoderConfig<B>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+{
+    use crate::{
+        composed::{ComposedDecoder, DecoderRuntime},
+        demuxer::Demuxer,
+        gapless::scoped_probe,
+        symphonia::{FileOpen, SymphoniaDemuxer},
+        webcodecs::codec::WebCodecsCodec,
+    };
+
+    tracing::debug!(
+        ?codec,
+        ?container,
+        "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, WebCodecsCodec>"
+    );
+    let probed_gapless = if config.gapless {
+        scoped_probe(&mut *source, codec)?
+    } else {
+        None
+    };
+    let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
+        source,
+        FileOpen {
+            container,
+            hint: config.hint.clone(),
+            byte_len_handle: config.byte_len_handle.clone(),
+            byte_map: config.byte_map.clone(),
+        },
+    )?;
+    if probed_gapless.is_some() {
+        demuxer.set_gapless(probed_gapless);
+    }
+    let codec_impl = WebCodecsCodec::open(demuxer.track_info(), config.gapless)?;
+    let pool = config.pcm_pool.clone();
+    let resampler = config.resampler;
+    let decoder = ComposedDecoder::new(
+        demuxer,
+        codec_impl,
+        DecoderRuntime {
+            pool: pool.clone(),
+            epoch: config.epoch,
+            byte_len_handle: config.byte_len_handle.clone(),
+            hooks: config.hooks,
+        },
+    );
+    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -459,10 +551,7 @@ where
     }
     let codec_impl =
         AppleCodec::open_with_config(&output_track, config.gapless, target_output_rate)?;
-    let pool = config
-        .pcm_pool
-        .clone()
-        .unwrap_or_else(|| PcmPool::default().clone());
+    let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -631,10 +720,7 @@ where
         _ => return Err(DecodeError::UnsupportedCodec { codec }),
     };
     let codec_impl = AndroidCodec::open_with_config(demuxer.track_info())?;
-    let pool = config
-        .pcm_pool
-        .clone()
-        .unwrap_or_else(|| PcmPool::default().clone());
+    let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -715,12 +801,9 @@ where
     let codec_impl = if SymphoniaCodec::supports(codec) {
         SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?
     } else {
-        SymphoniaCodec::open_native(demuxer.native_params())?
+        SymphoniaCodec::open_native(&demuxer.native_params)?
     };
-    let pool = config
-        .pcm_pool
-        .clone()
-        .unwrap_or_else(|| PcmPool::default().clone());
+    let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -806,13 +889,9 @@ where
         fmp4::Fmp4SegmentDemuxer,
     };
 
-    let demuxer =
-        Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone().unwrap_or_default())?;
+    let demuxer = Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone())?;
     let codec = open_codec(demuxer.track_info())?;
-    let pool = config
-        .pcm_pool
-        .clone()
-        .unwrap_or_else(|| PcmPool::default().clone());
+    let pool = config.pcm_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,

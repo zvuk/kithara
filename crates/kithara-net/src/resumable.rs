@@ -16,6 +16,7 @@ mod kithara {
 use crate::{
     ByteStream,
     error::{NetError, Retryability},
+    observe::Observer,
     types::RetryPolicy,
 };
 
@@ -62,6 +63,7 @@ struct State {
     /// Leading bytes of the current (post-resume) body to discard before
     /// yielding — the already-consumed prefix a non-range server re-sent.
     to_skip: u64,
+    observer: Option<Observer>,
 }
 
 impl State {
@@ -83,7 +85,19 @@ impl State {
             return Err(cause);
         }
         if self.resumes >= self.policy.max_retries {
+            if let Some(observer) = self.observer.as_ref() {
+                observer
+                    .0
+                    .retry_exhausted(self.policy.max_retries, self.consumed, &cause);
+            }
             return Err(exhausted(self.policy.max_retries, cause));
+        }
+        if let NetError::Timeout = cause
+            && let Some(observer) = self.observer.as_ref()
+        {
+            observer
+                .0
+                .body_stalled(self.consumed, self.expected_len, self.stall);
         }
         let delay = self.policy.delay_for_attempt(self.resumes);
         self.resumes += 1;
@@ -91,6 +105,11 @@ impl State {
             sleep(delay).await;
         }
         let resumed = (self.refetch)(self.consumed).await?;
+        if let Some(observer) = self.observer.as_ref() {
+            observer
+                .0
+                .body_resumed(self.resumes, self.consumed, resumed.skip == 0);
+        }
         self.inner = resumed.stream;
         self.to_skip = resumed.skip;
         Ok(())
@@ -157,6 +176,7 @@ pub(crate) fn resumable_body(
     stall: Duration,
     policy: RetryPolicy,
     cancel: CancelToken,
+    observer: Option<Observer>,
 ) -> RawBody {
     let expected_len = content_length(&first);
     let state = State {
@@ -169,6 +189,7 @@ pub(crate) fn resumable_body(
         consumed: 0,
         to_skip: 0,
         resumes: 0,
+        observer,
     };
     // `Option<State>` is the unfold's alive/finished switch: a terminal error
     // is yielded together with `None`, so the next poll ends the stream.
@@ -269,6 +290,7 @@ mod tests {
             STALL,
             policy(2),
             CancelToken::never(),
+            None,
         ))
         .await;
         let elapsed = started.elapsed();
@@ -299,6 +321,7 @@ mod tests {
             STALL,
             policy(2),
             CancelToken::never(),
+            None,
         ))
         .await
         .expect("live body must pass through");
@@ -335,6 +358,7 @@ mod tests {
             STALL,
             policy(2),
             CancelToken::never(),
+            None,
         ))
         .await
         .expect("resume must complete the body");
@@ -368,6 +392,7 @@ mod tests {
             STALL,
             policy(2),
             CancelToken::never(),
+            None,
         ))
         .await
         .expect("early EOF before content-length must resume");
@@ -404,6 +429,7 @@ mod tests {
             STALL,
             policy(2),
             CancelToken::never(),
+            None,
         ))
         .await
         .expect("non-range resume must complete without duplication");

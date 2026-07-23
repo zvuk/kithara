@@ -4,7 +4,6 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{
-    assets::StoreOptions,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::task},
     stream::Stream,
@@ -86,7 +85,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
     });
 
     let cancel = CancelToken::never();
-    let store = StoreOptions::new(temp_dir.path());
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let config = HlsConfig::for_url(master.url())
         .store(store)
         .cancel(cancel.clone())

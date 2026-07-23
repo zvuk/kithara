@@ -5,7 +5,6 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
     events::{AbrEvent, Event, EventBus, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio, tokio::task::spawn_blocking},
@@ -59,7 +58,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
     let config = HlsConfig::for_url(url.clone())
         .cancel(cancel_token.clone())
         .events(bus)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(auto(0))
         .build();
 
@@ -71,7 +70,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
     let variant_switches_clone = variant_switches.clone();
 
     tokio::task::spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
+        while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
             match ev {
                 Event::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
                     info!("Variant switch detected: {} -> {}", from, to);
@@ -166,7 +165,7 @@ async fn test_basic_multi_segment_reading(
 
     let config = HlsConfig::for_url(url)
         .cancel(cancel_token.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
@@ -237,7 +236,7 @@ async fn test_abr_variant_switch_with_seek_backward(
     let config = HlsConfig::for_url(url)
         .cancel(cancel_token.clone())
         .events(bus)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(auto(0))
         .build();
 
@@ -248,7 +247,7 @@ async fn test_abr_variant_switch_with_seek_backward(
     let variant_switches_clone = variant_switches.clone();
 
     tokio::task::spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
+        while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
             if let Event::Abr(AbrEvent::VariantApplied { from, to, .. }) = ev {
                 println!("Variant switch: {} -> {}", from, to);
                 variant_switches_clone.lock().unwrap().push((from, to));

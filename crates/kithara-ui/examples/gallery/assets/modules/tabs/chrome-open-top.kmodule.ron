@@ -1,0 +1,12 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-chrome-open-top",
+    chrome: Frame,
+    root: Column(
+        pad: Some(14.0),
+        children: [
+            Text(id: "label", style: Body, label: "FRAME / TOP OFF"),
+        ],
+    ),
+)

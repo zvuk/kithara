@@ -3,7 +3,7 @@ use std::sync::PoisonError;
 
 #[cfg(any(test, feature = "probe"))]
 use kithara_events::TrackStatus;
-use kithara_events::{QueueEvent, TrackId};
+use kithara_events::{AdvanceReason, QueueEvent, TrackId};
 
 use super::{
     Queue,
@@ -215,7 +215,8 @@ impl Queue {
 
         if was_current {
             if let Some(next) = successor_id {
-                let _ = self.select(next, Transition::None);
+                let _ =
+                    self.select_with_reason(next, Transition::None, AdvanceReason::RemovedCurrent);
             } else {
                 self.player.pause();
             }

@@ -37,10 +37,10 @@ impl From<PlaybackSnapshot> for PlaybackView {
     /// it with the cached/smoothed value it owns.
     fn from(snapshot: PlaybackSnapshot) -> Self {
         Self {
-            position: Some(snapshot.position),
-            duration: (snapshot.duration > 0.0).then_some(snapshot.duration),
-            buffered: Some(snapshot.frontier),
-            playing: snapshot.playing,
+            position: Some(snapshot.position()),
+            duration: (snapshot.duration() > 0.0).then_some(snapshot.duration()),
+            buffered: Some(snapshot.frontier()),
+            playing: snapshot.is_playing(),
         }
     }
 }
@@ -301,7 +301,7 @@ pub(crate) fn should_arm_crossfade(
 pub(super) fn extract_track_name(source: &TrackSource) -> String {
     let raw = match source {
         TrackSource::Uri(s) => s.as_str(),
-        TrackSource::Config(cfg) => return name_from_src(&cfg.src),
+        TrackSource::Config(cfg) => return name_from_src(cfg.source()),
     };
     name_from_raw(raw)
 }

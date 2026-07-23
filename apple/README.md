@@ -104,6 +104,34 @@ player.setupNetwork(authToken: "<token>")
 player.updatePeakBitrate(wifi: 2_000_000, cellular: 500_000)
 ```
 
+### Cache location and layout
+
+`AssetStore` owns the outer cache directory and an immutable snapshot of its
+protocol layouts. The Rust registry owns registrations immediately, and the
+same store can be shared by multiple players:
+
+```swift
+let layouts = AssetLayoutRegistry()
+layouts.register(MyFileAssetLayout(), for: .file)
+layouts.register(MyHlsAssetLayout(), for: .hls)
+
+let store = AssetStore(
+    root: appSupportDirectory.path,
+    layouts: layouts
+)
+
+let player = KitharaPlayer(
+    config: .init(store: store)
+)
+```
+
+`MyFileAssetLayout` and `MyHlsAssetLayout` implement `AssetLayout`. Their
+`root(source:)` and `path(resource:)` callbacks are retained by Rust. A store
+captures its registry snapshot when it is created, so later registrations
+affect only later stores. An empty registry uses Kithara's defaults. Invalid
+callback output is rejected rather than rewritten or replaced with a default
+path; see the protocol documentation for the portable component rules.
+
 ### Seek
 
 ```swift

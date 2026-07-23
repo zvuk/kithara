@@ -48,24 +48,21 @@ impl<S> CondvarGate<S> {
         self.state.lock()
     }
 
-    /// Wake every waiter. Call after mutating the guarded state (the wait
-    /// re-checks its predicate on wake).
-    pub fn notify_all(&self) {
-        self.cv.notify_all();
-    }
-
-    /// Park until the next [`notify_all`](Self::notify_all). The caller holds
-    /// `guard` (having re-checked its predicate under it); the lock is
-    /// released for the park and re-acquired on wake.
-    #[must_use]
-    pub fn wait<'a>(&self, guard: MutexGuard<'a, S>) -> MutexGuard<'a, S> {
-        self.cv.wait(guard)
-    }
-
-    /// Park until the next [`notify_all`](Self::notify_all) or `deadline`.
-    #[must_use]
-    pub fn wait_until<'a>(&self, guard: MutexGuard<'a, S>, deadline: Instant) -> MutexGuard<'a, S> {
-        self.cv.wait_timeout(guard, deadline)
+    delegate::delegate! {
+        to self.cv {
+            /// Wake every waiter. Call after mutating the guarded state (the wait
+            /// re-checks its predicate on wake).
+            pub fn notify_all(&self);
+            /// Park until the next [`notify_all`](Self::notify_all). The caller holds
+            /// `guard` (having re-checked its predicate under it); the lock is
+            /// released for the park and re-acquired on wake.
+            #[must_use]
+            pub fn wait<'a>(&self, guard: MutexGuard<'a, S>) -> MutexGuard<'a, S>;
+            /// Park until the next [`notify_all`](Self::notify_all) or `deadline`.
+            #[must_use]
+            #[call(wait_timeout)]
+            pub fn wait_until<'a>(&self, guard: MutexGuard<'a, S>, deadline: Instant) -> MutexGuard<'a, S>;
+        }
     }
 }
 

@@ -1,4 +1,6 @@
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use kithara::events::{DjEvent, StretchBackendKind};
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara::prelude::StretchKind;
 use kithara_platform::sync::Arc;
 use kithara_queue::{TrackId, Transition};
@@ -106,9 +108,10 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
     match *msg {
         DeckMsg::TogglePlayPause => toggle_play_pause(deck),
         DeckMsg::Next => {
-            deck.controller
-                .queue()
-                .advance_to_next(Transition::Crossfade);
+            deck.controller.queue().advance_to_next(
+                Transition::Crossfade,
+                kithara::events::AdvanceReason::UserNext,
+            );
         }
         DeckMsg::Prev => {
             deck.controller
@@ -127,10 +130,31 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::ToggleKeyLock => {
             // Applies live, mid-track (shared controls read each chunk).
             let stretch = deck.controller.stretch();
-            stretch.set_keylock(!stretch.keylock());
+            let keylock = !stretch.keylock();
+            stretch.set_keylock(keylock);
+            deck.controller
+                .queue()
+                .bus()
+                .publish(DjEvent::KeylockChanged { on: keylock });
         }
         #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-        DeckMsg::SelectBackend(backend) => deck.controller.stretch().set_backend(backend),
+        DeckMsg::SelectBackend(backend) => {
+            deck.controller.stretch().set_backend(backend);
+            deck.controller
+                .queue()
+                .bus()
+                .publish(DjEvent::StretchBackendChanged {
+                    kind: stretch_backend_kind(backend),
+                });
+        }
+    }
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+fn stretch_backend_kind(kind: StretchKind) -> StretchBackendKind {
+    match kind {
+        StretchKind::Signalsmith => StretchBackendKind::Signalsmith,
+        _ => StretchBackendKind::Unknown,
     }
 }
 

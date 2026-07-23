@@ -5,7 +5,7 @@ use std::sync::{
 
 use gloo_timers::future::TimeoutFuture;
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig},
     events::{AudioEvent, Event, EventBus, SeekLifecycleStage},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
@@ -123,7 +123,7 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
     let hls_config = HlsConfig::for_url(url)
         .events(bus)
         .store(
-            StoreOptions::builder()
+            AssetStoreBuilder::default()
                 .backend(StorageBackend::Memory)
                 .build(),
         )
@@ -135,6 +135,8 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config).await.unwrap();
@@ -1038,7 +1040,7 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
         let _ = read_with_yield_limit(&mut audio, &mut buf, 50).await;
 
         loop {
-            match events_rx.try_recv() {
+            match events_rx.try_recv().map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::SeekLifecycle {
                     stage: SeekLifecycleStage::SeekRequest,
                     seek_epoch,

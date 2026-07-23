@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::ResourceKey,
+    assets::{AssetResource, ResourceKey},
     hls::{HlsError, HlsResult, VariantId},
     platform::time::Duration,
 };
@@ -17,7 +17,10 @@ fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
 }
 
 fn key_for(assets: &TestAssets, url: &Url) -> ResourceKey {
-    assets.scope().key_for(url)
+    assets
+        .scope()
+        .key(&AssetResource::Url(url.clone()))
+        .expect("valid playlist URL")
 }
 
 #[kithara::test(

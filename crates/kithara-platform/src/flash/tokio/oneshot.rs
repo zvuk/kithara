@@ -23,14 +23,9 @@ use crate::{
 /// constructed here); callers only ever map it away, never name it.
 pub mod error {
     /// The sender half dropped without sending a value.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
+    #[display("oneshot channel closed without a value")]
     pub struct RecvError;
-
-    impl std::fmt::Display for RecvError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("oneshot channel closed without a value")
-        }
-    }
 
     impl std::error::Error for RecvError {}
 }

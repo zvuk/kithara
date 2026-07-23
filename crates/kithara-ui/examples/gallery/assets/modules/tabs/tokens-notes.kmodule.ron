@@ -1,0 +1,19 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-tokens-notes",
+    chrome: Plain,
+    root: Column(
+        gap: Some(5.0),
+        pad: Some(18.0),
+        children: [
+            Text(id: "heading", style: Section, label: "12E · МОДУЛЬ-ШЕЛЛ — АНАТОМИЯ", size: (w: Fill, h: Fixed(20.0))),
+            Text(id: "note-1", style: MicroLabel, label: "1 — CORNER-TICK 2×10PX GOLD, УГЛЫ TL+BR", size: (w: Fill, h: Fixed(24.0))),
+            Text(id: "note-2", style: MicroLabel, label: "2 — РАМКА 1PX #3B3B67 · ВНУТР. ЛИНИИ #2A2A4C", size: (w: Fill, h: Fixed(24.0))),
+            Text(id: "note-3", style: MicroLabel, label: "3 — ШАПКА 26PX: ЧИП-ИДЕНТИФИКАТОР СЛЕВА, НАЗВАНИЕ SG 11PX, АССИГН-ЧИПЫ, ШЕВРОН 26PX", size: (w: Fill, h: Fixed(38.0))),
+            Text(id: "note-4", style: MicroLabel, label: "4 — КЛИК ПО ШАПКЕ = СВЕРНУТЬ (ОСТАЁТСЯ 26PX)", size: (w: Fill, h: Fixed(24.0))),
+            Text(id: "note-5", style: MicroLabel, label: "5 — ФОН: PANEL #20203A · ВРЕЗКИ #15152A", size: (w: Fill, h: Fixed(24.0))),
+            Text(id: "note-6", style: MicroLabel, label: "6 — ФУТЕР 22PX #1B1B32 · MONO 9PX MUTED", size: (w: Fill, h: Fixed(24.0))),
+        ],
+    ),
+)

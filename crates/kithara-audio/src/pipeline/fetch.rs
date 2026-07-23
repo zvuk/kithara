@@ -1,73 +1,40 @@
-/// Kind of fetch marker on the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FetchKind {
-    /// Normal PCM payload.
-    Data,
-    /// Natural end-of-stream — the track played out to its duration.
-    NaturalEof,
-    /// Decoder / source failure. Transient during seek recovery or a
-    /// genuine unrecoverable error; never conflate with `NaturalEof`.
-    Failure,
-}
-
 /// Fetch result from a worker source.
-#[derive(Debug, Clone)]
-pub struct Fetch<C> {
-    /// The data chunk (ignored for non-`Data` kinds).
-    pub data: C,
-    /// Marker kind.
-    pub kind: FetchKind,
-    /// Epoch for seek invalidation (0 if unused).
-    pub epoch: u64,
+#[derive(Debug)]
+pub enum Fetch<C> {
+    /// Decoded data for an epoch.
+    Data { data: C, epoch: u64 },
+    /// Natural end-of-stream for an epoch.
+    NaturalEof { epoch: u64 },
+    /// Decoder or source failure for an epoch.
+    Failure { epoch: u64 },
 }
 
 impl<C> Fetch<C> {
-    /// Create a fetch result from the legacy `is_eof: bool` shape.
-    ///
-    /// `is_eof = true` maps to `FetchKind::NaturalEof`; `false` to
-    /// `FetchKind::Data`. Prefer the explicit constructors below.
-    pub fn new(data: C, is_eof: bool, epoch: u64) -> Self {
-        let kind = if is_eof {
-            FetchKind::NaturalEof
-        } else {
-            FetchKind::Data
-        };
-        Self { data, kind, epoch }
-    }
-
-    /// Explicit data chunk.
+    /// Create a data fetch.
+    #[must_use]
     pub fn data(data: C, epoch: u64) -> Self {
-        Self {
-            data,
-            epoch,
-            kind: FetchKind::Data,
+        Self::Data { data, epoch }
+    }
+
+    /// Create a natural end-of-stream marker.
+    #[must_use]
+    pub fn eof(epoch: u64) -> Self {
+        Self::NaturalEof { epoch }
+    }
+
+    /// Create a failure marker distinct from natural end-of-stream.
+    #[must_use]
+    pub fn failure(epoch: u64) -> Self {
+        Self::Failure { epoch }
+    }
+
+    /// Return the seek-invalidation epoch.
+    pub const fn epoch(&self) -> u64 {
+        match self {
+            Self::Data { epoch, .. } | Self::NaturalEof { epoch } | Self::Failure { epoch } => {
+                *epoch
+            }
         }
-    }
-
-    /// Explicit failure marker (distinct from natural EOF).
-    pub fn failure(data: C, epoch: u64) -> Self {
-        Self {
-            data,
-            epoch,
-            kind: FetchKind::Failure,
-        }
-    }
-
-    /// Consume and return the inner data.
-    pub fn into_inner(self) -> C {
-        self.data
-    }
-
-    /// True iff this is a natural-EOF marker. Does **not** cover
-    /// `Failure` — callers must use `is_failure()` or `is_terminal()`
-    /// for the broader "end of stream for any reason" check.
-    pub fn is_eof(&self) -> bool {
-        self.kind == FetchKind::NaturalEof
-    }
-
-    /// True iff this is any terminal marker (natural EOF or failure).
-    pub fn is_terminal(&self) -> bool {
-        !matches!(self.kind, FetchKind::Data)
     }
 }
 
@@ -83,7 +50,7 @@ pub struct EpochValidator {
 impl EpochValidator {
     /// Check if a fetch result matches the current epoch.
     pub fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
-        item.epoch == self.epoch
+        item.epoch() == self.epoch
     }
 }
 
@@ -96,7 +63,7 @@ mod tests {
     #[kithara::test]
     fn epoch_validator_keeps_matching_chunks() {
         let mut validator = EpochValidator::default();
-        let item = Fetch::new(vec![1u8, 2, 3], false, 1);
+        let item = Fetch::data(vec![1u8, 2, 3], 1);
         validator.epoch = 1;
         assert!(validator.is_valid(&item));
     }
@@ -104,10 +71,10 @@ mod tests {
     #[kithara::test]
     fn epoch_validator_rejects_stale_chunks_after_seek() {
         let mut validator = EpochValidator::default();
-        let stale = Fetch::new(vec![3u8], false, validator.epoch);
-        let first = Fetch::new(vec![1u8], false, validator.epoch);
+        let stale = Fetch::data(vec![3u8], validator.epoch);
+        let first = Fetch::data(vec![1u8], validator.epoch);
         validator.epoch = validator.epoch.wrapping_add(1);
-        let next = Fetch::new(vec![2u8], false, validator.epoch);
+        let next = Fetch::data(vec![2u8], validator.epoch);
 
         assert!(!validator.is_valid(&first));
         assert!(!validator.is_valid(&stale));

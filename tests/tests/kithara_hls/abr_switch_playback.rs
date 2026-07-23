@@ -1,5 +1,5 @@
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     audio::{Audio, AudioConfig, ChunkOutcome, ReadOutcome},
     decode::DecoderBackend,
     events::{AbrEvent, Event, EventBus},
@@ -67,7 +67,7 @@ async fn create_packaged_abr_fixture() -> (TestServerHelper, url::Url) {
 
 async fn open_packaged_hls_audio(
     url: &url::Url,
-    store: StoreOptions,
+    store: AssetStore,
     abr: AbrMode,
     bus: Option<EventBus>,
 ) -> Audio<Stream<Hls>> {
@@ -79,6 +79,8 @@ async fn open_packaged_hls_audio(
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .maybe_events(bus)
         .build();
 
@@ -129,12 +131,14 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
 
     let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -192,7 +196,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
 )]
 async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let (_server, url) = create_packaged_abr_fixture().await;
-    let store = StoreOptions::new(temp_dir.path());
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
 
     let bus = EventBus::new(64);
     let mut hls_rx = bus.subscribe();
@@ -228,7 +232,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         };
         progress_probe.drain(&mut progress_rx);
         loop {
-            match hls_rx.try_recv() {
+            match hls_rx.try_recv().map(|env| env.event) {
                 Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
                     switch_count += 1;
                     switch_seen = true;
@@ -307,6 +311,8 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
                 .download_batch_size(1)
                 .build(),
         )
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .block_on_underrun(true)
         .build();
         let mut warm_audio = Audio::<Stream<Hls>>::new(warm_config)
@@ -420,12 +426,14 @@ async fn stream_continues_after_seek(
         AbrMode::manual(0)
     };
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(abr_mode)
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -515,12 +523,14 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
 
     let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -577,12 +587,14 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
 
     let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Symphonia)
@@ -656,9 +668,11 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let url = server.asset("track.mp3");
 
     let file_config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint(("mp3").to_string())
         .block_on_underrun(true)
         .build();
@@ -741,25 +755,30 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     tracing("kithara_audio=info,kithara_hls=info")
 )]
 async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
-    use kithara::{audio::PcmReader, decode::PcmChunk};
+    use kithara::{audio::PcmRead, decode::PcmChunk};
 
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(auto(0))
         .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
-        .await
-        .expect("audio creation");
+    let mut audio = Audio::<Stream<Hls>>::new(
+        AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .await
+    .expect("audio creation");
     let _ = audio.preload();
 
     async fn next_chunk(audio: &mut Audio<Stream<Hls>>) -> Option<PcmChunk> {
         loop {
             let _ = audio.preload();
-            match PcmReader::next_chunk(audio) {
+            match PcmRead::next_chunk(audio) {
                 Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
                 Ok(ChunkOutcome::Eof { .. }) => return None,
                 Ok(ChunkOutcome::Pending { .. }) => {}
@@ -872,7 +891,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     let bus = EventBus::new(8192);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -887,6 +906,8 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     // pass the hang budget, and the `KITHARA_HANG_TIMEOUT_SECS=5` watchdog fires
     // — the flash-correct enforcement of the "no >5 s stall" contract.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus.clone())
         .block_on_underrun(true)
         .build();
@@ -949,7 +970,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
         let mut max_stall = 0u128;
         let mut eof = false;
         while post < post_target {
-            while let Ok(ev) = hls_rx.try_recv() {
+            while let Ok(ev) = hls_rx.try_recv().map(|env| env.event) {
                 if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
                     applied.push(to.get());
                 }
@@ -971,7 +992,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
                 max_stall = stalled;
             }
         }
-        while let Ok(ev) = hls_rx.try_recv() {
+        while let Ok(ev) = hls_rx.try_recv().map(|env| env.event) {
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
                 applied.push(to.get());
             }

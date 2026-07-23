@@ -3,8 +3,12 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide};
+use kithara_assets::{
+    AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStoreBuilder, StorageBackend,
+    WriteSide,
+};
 use kithara_drm::DecryptContext;
+use kithara_events::{Event, EventBus, HlsEvent};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate},
@@ -41,9 +45,15 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             .build(),
     );
     PlanCtx {
+        bus: EventBus::new(8),
         prefetch_budget,
         master_cancel: cancel,
-        scope: backend.scope("test"),
+        scope: backend
+            .scope::<crate::Hls>(&AssetSource::Remote {
+                url: Url::parse("https://example.com/master.m3u8").expect("master url"),
+                discriminator: Some("test".to_owned()),
+            })
+            .expect("test asset scope"),
         seek_epoch: 0,
         look_ahead_bytes: None,
         look_ahead_segments: None,
@@ -58,7 +68,9 @@ fn make_init(size: u64, scope: &AssetScope) -> Option<Segment> {
         return None;
     }
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
-    let resource_id = scope.key_for(&url);
+    let resource_id = scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("init key");
     Some(Segment::Init(InitSegment {
         url,
         resource_id,
@@ -72,7 +84,9 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
-    let resource_id = scope.key_for(&url);
+    let resource_id = scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("segment key");
     Segment::Media(MediaSegment {
         url,
         resource_id,
@@ -88,7 +102,9 @@ fn make_placeholder_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
-    let resource_id = scope.key_for(&url);
+    let resource_id = scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("segment key");
     Segment::Media(MediaSegment {
         url,
         resource_id,
@@ -208,6 +224,12 @@ fn queue_has_init(v: &HlsVariant) -> bool {
         .any(|p| matches!(p, PlannedFetch::Init))
 }
 
+fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .map(|envelope| envelope.event)
+        .collect()
+}
+
 #[kithara::test]
 fn placeholder_size_uses_duration_as_route_geometry() {
     let size = segment_placeholder_size(Duration::from_secs(2), Some(64_000));
@@ -217,6 +239,60 @@ fn placeholder_size_uses_duration_as_route_geometry() {
         !SegmentSize::placeholder(size).is_exact(),
         "duration-derived route sizes must stay non-exact"
     );
+}
+
+#[kithara::test]
+fn cache_complete_publishes_once_after_full_commit() {
+    let ctx = test_ctx(3);
+    let mut events = ctx.bus.subscribe();
+    let v = VariantParts {
+        init: make_init(8, &ctx.scope),
+        segments: (0..2).map(|idx| make_seg(idx, 4, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+
+    if let Some(init) = v.init() {
+        let key = init.resource_id().clone();
+        let AcquisitionResult::Pending(writer) =
+            ctx.scope.store().acquire_resource(&key, None).unwrap()
+        else {
+            panic!("init must acquire as Pending");
+        };
+        writer.write_at(0, b"initinit").unwrap();
+        writer.commit(Some(8)).unwrap();
+        init.state().mark_loaded();
+    }
+    for segment in v.segments() {
+        let key = segment.resource_id().clone();
+        let AcquisitionResult::Pending(writer) =
+            ctx.scope.store().acquire_resource(&key, None).unwrap()
+        else {
+            panic!("segment must acquire as Pending");
+        };
+        writer.write_at(0, b"data").unwrap();
+        writer.commit(Some(4)).unwrap();
+        segment.state().mark_loaded();
+    }
+
+    v.maybe_publish_cache_complete();
+    v.maybe_publish_cache_complete();
+
+    let events = collect_events(&mut events);
+    let cache_complete_count = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::Hls(HlsEvent::CacheComplete {
+                    total_bytes: Some(16),
+                })
+            )
+        })
+        .count();
+    assert_eq!(cache_complete_count, 1);
 }
 
 #[kithara::test]
@@ -729,7 +805,7 @@ fn init_with_url_but_unknown_size_is_pending() {
         segments: Vec::new(),
     }]);
 
-    let init = HlsVariant::build_init_entry(&playlist, 0, None, &ctx);
+    let init = HlsVariant::build_init_entry(&playlist, 0, None, &ctx).expect("init entry");
 
     assert!(
         matches!(init, Some(Segment::Init(_))),
@@ -750,7 +826,10 @@ fn read_at_zero_holds_pending_while_init_unsized() {
     let ctx = test_ctx(3);
     let init_url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let init = Some(Segment::Init(InitSegment {
-        resource_id: ctx.scope.key_for(&init_url),
+        resource_id: ctx
+            .scope
+            .key(&AssetResource::Url(init_url.clone()))
+            .expect("init key"),
         url: init_url,
         state: SegmentSlotState::missing(),
         size: SegmentSize::seed(0),
@@ -1276,7 +1355,10 @@ fn on_evict_returns_none_for_foreign_asset() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100], &ctx);
     let foreign: Url = "https://other.example.com/x.m4s".parse().expect("url");
-    let foreign_key = ctx.scope.key_for(&foreign);
+    let foreign_key = ctx
+        .scope
+        .key(&AssetResource::Url(foreign.clone()))
+        .expect("foreign key");
     let res = v.on_evict(&foreign_key);
     assert_eq!(res, None);
 }
@@ -1301,7 +1383,10 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let ctx = test_ctx(3);
     let init = make_init(0, &ctx.scope);
     let url: Url = "https://example.com/seg0.m4s".parse().expect("valid url");
-    let resource_id = ctx.scope.key_for(&url);
+    let resource_id = ctx
+        .scope
+        .key(&AssetResource::Url(url.clone()))
+        .expect("segment key");
     let key = *b"0123456789abcdef";
     let seg = Segment::Media(MediaSegment {
         url,

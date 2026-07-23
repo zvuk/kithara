@@ -3,7 +3,6 @@
 use std::error::Error as StdError;
 
 use kithara::{
-    assets::StoreOptions,
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::{
@@ -36,7 +35,7 @@ async fn test_hls_session_creation(
     let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::for_url(test_stream_url.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .events(bus)
         .build();
@@ -50,7 +49,7 @@ async fn test_hls_session_creation(
         // State-wait: block until session creation actually publishes its first
         // event (no idle-timeout drain). One delivered event proves events flow.
         let mut event_count = 0;
-        if let Ok(event) = events_rx.recv().await {
+        if let Ok(event) = events_rx.recv().await.map(|env| env.event) {
             event_count += 1;
             info!("Event {}: {:?}", event_count, event);
         }
@@ -110,7 +109,7 @@ async fn test_hls_session_events_consumption(
     let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::for_url(test_stream_url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .events(bus)
         .build();
@@ -121,7 +120,7 @@ async fn test_hls_session_events_consumption(
     // pacing window. Session creation publishes events; `recv()` returns when one
     // lands (or `Err` if the bus closes). The `timeout(5s)` test attribute bounds
     // this so a real hang still fails fast.
-    match events_rx.recv().await {
+    match events_rx.recv().await.map(|env| env.event) {
         Ok(event) => {
             info!("Received event: {:?}", event);
         }
@@ -147,7 +146,7 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         let config = HlsConfig::for_url(url)
-            .store(StoreOptions::new(temp_dir.path()))
+            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
             .cancel(CancelToken::never())
             .build();
 

@@ -2,8 +2,9 @@ use std::fmt;
 
 use bon::Builder;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, BytePool, EvictConfig, FlushHub, StoreOptions},
+    assets::{AssetStore, AssetStoreBuilder, BytePool, FlushHub, StorageBackend},
     audio::analysis::BeatAnalysisConfig,
+    bufpool::PcmPool,
     hls::SizeProbeMethod,
     prelude::PlaybackResamplerBackend,
     stream::dl::Downloader,
@@ -15,22 +16,18 @@ use crate::{baked, theme::Palette};
 
 /// Application configuration passed to frontends.
 ///
-/// Downloader and flush hub are the only mandatory fields; every
-/// other knob defaults to the value baked at compile time from
-/// `app.toml`. Callers typically do
-/// `AppConfig::builder()` and override anything else via the generated
-/// builder setters.
+/// Shared owners and the downloader are mandatory; product knobs default to
+/// values baked at compile time from `app.toml`.
 #[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AppConfig {
     /// App-wide shared asset store.
-    pub asset_store: Arc<AssetStore>,
-    /// Shared `AssetStore` flush coordinator for every track.
-    pub flush_hub: Arc<FlushHub>,
+    pub store: AssetStore,
     /// App-wide shared byte pool for network and cache buffers.
-    #[builder(default = BytePool::default())]
     pub byte_pool: BytePool,
+    /// App-wide shared PCM pool for playback and track analysis.
+    pub pcm_pool: PcmPool,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the audio worker and HLS
@@ -84,6 +81,7 @@ impl fmt::Debug for AppConfig {
             .field("log_directives", &self.log_directives)
             .field("tracks", &self.tracks)
             .field("byte_pool", &self.byte_pool)
+            .field("pcm_pool", &self.pcm_pool)
             .field(
                 "should_accept_invalid_certs",
                 &self.should_accept_invalid_certs,
@@ -97,32 +95,27 @@ impl fmt::Debug for AppConfig {
 }
 
 impl AppConfig {
-    /// Create a default config around the given downloader, shared flush
-    /// hub, and app master cancel. Builds an app-wide asset store as a
-    /// child of `cancel` so every track shares one cache and one download
-    /// per URL.
+    /// Create a default config around the injected app-wide owners.
     #[must_use]
-    pub fn new(downloader: Downloader, flush_hub: Arc<FlushHub>, cancel: CancelToken) -> Self {
-        let byte_pool = BytePool::default();
-        let store_options = StoreOptions::builder()
-            .flush_hub(Arc::clone(&flush_hub))
+    pub fn new(
+        downloader: Downloader,
+        flush_hub: Arc<FlushHub>,
+        cancel: CancelToken,
+        byte_pool: BytePool,
+        pcm_pool: PcmPool,
+    ) -> Self {
+        let store = AssetStoreBuilder::default()
+            .cancel(cancel.child())
+            .backend(StorageBackend::default())
+            .pool(byte_pool.clone())
+            .flush_hub(flush_hub)
             .build();
-        let asset_store = Arc::new(
-            AssetStoreBuilder::default()
-                .cancel(cancel.child())
-                .backend(store_options.backend.clone())
-                .evict_config(EvictConfig::from(&store_options))
-                .pool(byte_pool.clone())
-                .maybe_cache_capacity(store_options.cache_capacity)
-                .maybe_flush_hub(store_options.flush_hub.clone())
-                .build(),
-        );
         Self::builder()
             .downloader(downloader)
-            .flush_hub(flush_hub)
             .shutdown(cancel)
             .byte_pool(byte_pool)
-            .asset_store(asset_store)
+            .pcm_pool(pcm_pool)
+            .store(store)
             .build()
     }
 }

@@ -8,7 +8,7 @@ use kithara_platform::{
     sync::{Arc, Mutex, Notify},
 };
 
-use crate::key::ResourceKey;
+use crate::layout::ResourceKey;
 
 /// One consumer's contribution to the aggregate demand. `read_pos` is
 /// shared with the consumer (advances seen without an update call);
@@ -89,16 +89,16 @@ pub struct ProducerHandle {
 }
 
 impl ProducerHandle {
-    /// Aggregate demand watermark across all live consumers.
-    #[must_use]
-    pub fn max_watermark(&self) -> u64 {
-        self.slot.max_watermark()
-    }
-
-    /// Producer wake notify (woken on attach / read-advance).
-    #[must_use]
-    pub fn notify(&self) -> &Notify {
-        &self.slot.notify
+    delegate::delegate! {
+        to self.slot {
+            /// Aggregate demand watermark across all live consumers.
+            #[must_use]
+            pub fn max_watermark(&self) -> u64;
+            /// Producer wake notify (woken on attach / read-advance).
+            #[must_use]
+            #[field(&notify)]
+            pub fn notify(&self) -> &Notify;
+        }
     }
 
     /// Producer cancel token (fires when the last consumer detaches).
@@ -189,12 +189,8 @@ struct DemandInner {
 ///
 /// Cheap to [`Clone`] (one `Arc` bump); all clones share the same slot
 /// map, so demand aggregates across `AssetStore` clones automatically.
-///
-/// Declared `pub` to satisfy `private_interfaces` on the `AssetStore`
-/// enum field (mirrors [`AvailabilityIndex`](super::AvailabilityIndex));
-/// the crate re-export in `index/mod.rs` narrows it to `pub(crate)`.
 #[derive(Clone)]
-pub struct DemandIndex {
+pub(crate) struct DemandIndex {
     inner: Arc<DemandInner>,
 }
 
@@ -277,7 +273,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::key::ResourceKey;
+    use crate::layout::ResourceKey;
 
     fn entry(read_pos: u64, look_ahead: Option<u64>) -> Arc<DemandEntry> {
         Arc::new(DemandEntry::new(

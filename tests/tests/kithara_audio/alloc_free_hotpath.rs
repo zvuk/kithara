@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use assert_no_alloc::*;
 use kithara::{
     self,
-    bufpool::{PcmPool, SharedPool},
+    bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
@@ -16,7 +16,7 @@ use kithara::{
 static A: AllocDisabler = AllocDisabler;
 
 fn make_pool() -> PcmPool {
-    SharedPool::<8, Vec<f32>>::new(128, 200_000)
+    PcmPool::new(128, 200_000)
 }
 
 fn make_chunk(pool: &PcmPool, frames: usize, channels: u16) -> PcmChunk {

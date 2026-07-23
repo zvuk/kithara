@@ -42,8 +42,8 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    assets::{AssetStoreBuilder, StorageBackend},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
@@ -97,7 +97,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         .expect("create HLS fixture")
         .master_url();
 
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(64).expect("nonzero"))
         .build();
@@ -107,6 +107,8 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -136,7 +138,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         let deadline = kithara::platform::time::Instant::now() + Consts::DRAIN_BUDGET;
         let mut chunks = 0usize;
         while chunks < Consts::MIN_CHUNKS && kithara::platform::time::Instant::now() < deadline {
-            match PcmReader::next_chunk(&mut audio) {
+            match PcmRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => break,

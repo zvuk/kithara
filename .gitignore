@@ -1,6 +1,8 @@
 # Rust / Cargo
 /target/
 **/target/
+/xtask/.agent-hook-cache*
+/xtask/.xtask-cache*
 # Flash-time builds use a separate CARGO_TARGET_DIR so the flash/non-flash
 # feature sets don't thrash one cache; keep them out of git AND out of
 # lint / ast-grep scans (generated build code would otherwise trip style rules).
@@ -19,8 +21,8 @@
 .LSOverride
 Icon?
 ._*
-!crates/kithara-app/assets/icons/
-!crates/kithara-app/assets/icons/*.svg
+!crates/kithara-ui/assets/icons/
+!crates/kithara-ui/assets/icons/*.svg
 
 # JetBrains
 .idea/

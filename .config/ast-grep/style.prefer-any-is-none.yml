@@ -1,0 +1,15 @@
+id: style.prefer-any-is-none
+message: Use `!iter.any(p)` instead of `.find(p).is_none()`.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  pattern: $X.find($P).is_none()
+fix: "!($X.any($P))"

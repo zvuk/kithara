@@ -39,7 +39,8 @@ impl Consts {
 }
 
 /// Stateful PCM trimmer that applies one track's gapless contract.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub struct GaplessTrimmer {
     mode: GaplessMode,
     tail_buffer: TailBuffer,
@@ -54,6 +55,7 @@ pub struct GaplessTrimmer {
     /// helpers below: `trailing_frames` does not always mean "frames
     /// to drop", sometimes it just means "minimum buffered tail".
     trailing_frames: u64,
+    #[field(with)]
     tail_compensation: Option<GaplessTailCompensation>,
     input_frames_seen: u64,
 }
@@ -196,12 +198,6 @@ impl GaplessTrimmer {
     #[must_use]
     pub fn disabled() -> Self {
         Self::default()
-    }
-
-    #[must_use]
-    pub fn with_tail_compensation(mut self, compensation: Option<GaplessTailCompensation>) -> Self {
-        self.tail_compensation = compensation;
-        self
     }
 
     pub fn set_tail_compensation(&mut self, compensation: Option<GaplessTailCompensation>) {
@@ -560,24 +556,24 @@ fn release_ready_chunks(
     trailing_frames: u64,
 ) -> GaplessOutput {
     let mut ready = GaplessOutput::new();
-    while can_release_front(tail_buffer, *tail_buffered_frames, trailing_frames) {
-        if let Some(chunk) = pop_front_chunk(tail_buffer, tail_buffered_frames) {
-            ready.push(chunk);
+    let mut remaining_frames = *tail_buffered_frames;
+    let mut release_count = 0;
+
+    for chunk in tail_buffer.iter() {
+        let next_remaining = remaining_frames.saturating_sub(chunk_frames(chunk));
+        if next_remaining < trailing_frames {
+            break;
         }
+
+        remaining_frames = next_remaining;
+        release_count += 1;
     }
+
+    for chunk in tail_buffer.drain(..release_count) {
+        ready.push(chunk);
+    }
+    *tail_buffered_frames = remaining_frames;
     ready
-}
-
-fn can_release_front(
-    tail_buffer: &TailBuffer,
-    tail_buffered_frames: u64,
-    trailing_frames: u64,
-) -> bool {
-    let Some(front) = tail_buffer.first() else {
-        return false;
-    };
-
-    tail_buffered_frames.saturating_sub(chunk_frames(front)) >= trailing_frames
 }
 
 fn trim_tail_frames(
@@ -732,28 +728,16 @@ fn find_leading_trim_frames(
 
 fn drain_tail(tail_buffer: &mut TailBuffer, tail_buffered_frames: &mut u64) -> GaplessOutput {
     let mut ready = GaplessOutput::new();
-    while let Some(chunk) = pop_front_chunk(tail_buffer, tail_buffered_frames) {
+    for chunk in std::mem::take(tail_buffer) {
         ready.push(chunk);
     }
+    *tail_buffered_frames = 0;
     ready
 }
 
 fn clear_tail_buffer(tail_buffer: &mut TailBuffer, tail_buffered_frames: &mut u64) {
     tail_buffer.clear();
     *tail_buffered_frames = 0;
-}
-
-fn pop_front_chunk(
-    tail_buffer: &mut TailBuffer,
-    tail_buffered_frames: &mut u64,
-) -> Option<PcmChunk> {
-    if tail_buffer.is_empty() {
-        return None;
-    }
-
-    let chunk = tail_buffer.remove(0);
-    *tail_buffered_frames = tail_buffered_frames.saturating_sub(chunk_frames(&chunk));
-    Some(chunk)
 }
 
 fn frame_is_silent(samples: &[f32], threshold_amp: f32) -> bool {

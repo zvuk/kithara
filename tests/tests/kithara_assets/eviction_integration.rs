@@ -5,12 +5,14 @@ use std::{fs, path::Path};
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, StorageBackend, WriteSide,
+        AcquisitionResult, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide,
         index::schema::{ArchivedPinsIndexFile, PinsIndexFile},
     },
     platform::{thread, time::Duration},
 };
 use kithara_integration_tests::temp_dir;
+
+use super::support::{LiteralLayout, literal_layouts, resource, source};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
@@ -35,12 +37,11 @@ fn asset_scope_with_root(
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
         })
-        .evict_config(EvictConfig {
-            max_assets,
-            max_bytes: None,
-        })
+        .maybe_max_assets(max_assets)
+        .layouts(literal_layouts())
         .build()
-        .scope(asset_root)
+        .scope::<LiteralLayout>(&source(asset_root))
+        .expect("scope")
 }
 
 #[kithara::test(
@@ -61,7 +62,7 @@ fn eviction_max_assets_skips_pinned_assets(
     for i in 0..create_count {
         let asset_root = format!("asset-{}", i);
         let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(max_assets));
-        let key = scope.key(format!("media/{}.bin", i));
+        let key = scope.key(&resource(format!("media/{}.bin", i))).unwrap();
 
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         let data = format!("data-{}", i);
@@ -92,7 +93,7 @@ fn eviction_max_assets_skips_pinned_assets(
 
             let trigger_root = format!("asset-trigger-{}", i);
             let trigger_scope = asset_scope_with_root(&temp_dir, &trigger_root, Some(max_assets));
-            let key_trigger = trigger_scope.key("media/trigger.bin");
+            let key_trigger = trigger_scope.key(&resource("media/trigger.bin")).unwrap();
             let writer_trigger = pending(
                 trigger_scope
                     .store()
@@ -145,7 +146,7 @@ fn eviction_ignores_missing_index(
     for i in 0..asset_count {
         let asset_root = format!("asset-{}", i);
         let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(2));
-        let key = scope.key(format!("data/{}.bin", i));
+        let key = scope.key(&resource(format!("data/{}.bin", i))).unwrap();
 
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         let data = format!("data-{}", i);
@@ -159,7 +160,7 @@ fn eviction_ignores_missing_index(
     }
 
     let trigger_scope = asset_scope_with_root(&temp_dir, "trigger-asset", Some(2));
-    let trigger_key = trigger_scope.key("data/trigger.bin");
+    let trigger_key = trigger_scope.key(&resource("data/trigger.bin")).unwrap();
 
     let res = trigger_scope.store().acquire_resource(&trigger_key, None);
 
@@ -177,7 +178,7 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_integration_tests::TestTempD
     for i in 0..3 {
         let asset_root = format!("zero-asset-{}", i);
         let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(2));
-        let key = scope.key("empty.bin");
+        let key = scope.key(&resource("empty.bin")).unwrap();
 
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         writer.write_at(0, b"").unwrap();
@@ -218,7 +219,7 @@ fn eviction_respects_max_assets_limit(
     for i in 0..create_count {
         let asset_root = format!("asset-{}", i);
         let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(max_assets));
-        let key = scope.key(format!("media/{}.bin", i));
+        let key = scope.key(&resource(format!("media/{}.bin", i))).unwrap();
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         writer.write_at(0, b"DATA").unwrap();
         let res = writer.commit(Some(b"DATA".len() as u64)).unwrap();

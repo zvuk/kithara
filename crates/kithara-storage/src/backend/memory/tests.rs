@@ -4,6 +4,7 @@ mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
+use kithara_bufpool::{BytePool, Region, RegionConfig};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::thread;
 use kithara_platform::{CancelToken, time::Duration};
@@ -11,13 +12,13 @@ use kithara_platform::{CancelToken, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::StorageError;
 use crate::{
-    ResourceRead,
-    backend::memory::driver::{MemOptions, MemResource},
+    Driver, DriverIo, ResourceRead,
+    backend::memory::driver::{MemDriver, MemOptions, MemResource},
     resource::{ResourceStatus, WaitOutcome},
 };
 
 fn create_resource() -> MemResource {
-    MemResource::new(CancelToken::never())
+    MemResource::new(CancelToken::never(), BytePool::default())
 }
 
 fn with_bytes(data: &[u8], cancel: CancelToken) -> MemResource {
@@ -37,6 +38,24 @@ fn test_create_new_resource() {
     assert_eq!(res.len(), None);
     assert_eq!(res.status(), ResourceStatus::Active);
     assert_eq!(res.path(), None);
+}
+
+#[kithara::test(timeout(Duration::from_secs(1)))]
+fn post_commit_replacement_uses_injected_pool() {
+    let region = Region::new(RegionConfig::default().max_bytes(1024));
+    let pool = region.byte_pool();
+    let (driver, _) = MemDriver::open(MemOptions {
+        capacity: 32,
+        pool,
+        ..MemOptions::default()
+    })
+    .unwrap();
+    DriverIo::commit(&driver, Some(0)).unwrap();
+    let allocated_before = region.stats().allocated_bytes;
+
+    DriverIo::write_at(&driver, 0, &[1; 64], false).unwrap();
+
+    assert!(region.stats().allocated_bytes > allocated_before);
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -138,7 +157,7 @@ fn test_fail_wakes_waiters() {
 #[kithara::test(native)]
 fn test_cancel_wakes_waiters() {
     let cancel = CancelToken::never();
-    let res = MemResource::new(cancel.clone());
+    let res = MemResource::new(cancel.clone(), BytePool::default());
 
     let handle = thread::spawn({
         let cancel = cancel.clone();

@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{AssetStore, AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::AbrMode,
     net::{HttpClient, NetOptions},
@@ -29,18 +29,34 @@ use url::Url;
 struct Session {
     queue: Arc<Queue>,
     downloader: Downloader,
-    store: StoreOptions,
+    store: AssetStore,
     flush_hub: Arc<FlushHub>,
     tick: tokio::task::JoinHandle<()>,
 }
 
 fn build_session(cache_path: &Path) -> Session {
+    // Own the flush hub so the test can drive a synchronous durable
+    // checkpoint (`flush_now`) instead of guessing at the background
+    // worker's debounce with a timer.
+    let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: cache_path.to_path_buf(),
+        })
+        .flush_hub(Arc::clone(&flush_hub))
+        .build();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::default()
+            .with_player(player)
+            .with_store(store.clone()),
+    ));
     let queue_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
         loop {
@@ -54,12 +70,6 @@ fn build_session(cache_path: &Path) -> Session {
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    // Own the flush hub so the test can drive a synchronous durable
-    // checkpoint (`flush_now`) instead of guessing at the background
-    // worker's debounce with a timer.
-    let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let mut store = StoreOptions::new(cache_path);
-    store.flush_hub = Some(Arc::clone(&flush_hub));
     Session {
         queue,
         downloader,
@@ -72,6 +82,8 @@ fn build_session(cache_path: &Path) -> Session {
 fn track_source(url: &Url, session: &Session) -> TrackSource {
     let cfg = ResourceConfig::for_src(url.as_str())
         .expect("valid fixture URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(session.downloader.clone())
         .store(session.store.clone())
         .decoder(

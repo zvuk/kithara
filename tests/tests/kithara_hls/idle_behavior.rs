@@ -5,7 +5,6 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig},
     events::{Event, EventBus},
     hls::{AbrMode, Hls, HlsConfig},
@@ -60,13 +59,18 @@ async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
-        .await
-        .expect("audio creation");
+    let mut audio = Audio::<Stream<Hls>>::new(
+        AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .await
+    .expect("audio creation");
 
     // Mirror the user-facing app: opening the audio handle implicitly
     // arms its scheduler slot via `preload()`. After that no consumer
@@ -144,7 +148,7 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     let bus = EventBus::new(8192);
     let mut rx = bus.subscribe();
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(AbrMode::manual(0))
         .download_batch_size(1)
         .look_ahead_bytes(LOOK_AHEAD_BYTES)
@@ -153,6 +157,8 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
 
     let _audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .events(bus.clone())
             .build(),
     )
@@ -169,7 +175,10 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     // virtual clock advances to the deadline whenever nothing is runnable.
     const SETTLE_WINDOW: Duration = Duration::from_secs(3);
     loop {
-        match time::timeout(SETTLE_WINDOW, rx.recv()).await {
+        match time::timeout(SETTLE_WINDOW, rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             // A downloader event arrived inside the window: still active,
             // keep waiting. Lagged is also "events are flowing".
             Ok(Ok(Event::Downloader(_)))

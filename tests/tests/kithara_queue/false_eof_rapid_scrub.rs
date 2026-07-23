@@ -1,7 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -15,7 +16,7 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_app::config::AppConfig;
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 
@@ -58,9 +59,17 @@ async fn build_ctx() -> Ctx {
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
+    let config = AppConfig::new(
+        downloader,
+        flush_hub,
+        CancelToken::never(),
+        BytePool::default(),
+        PcmPool::default(),
+    );
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -82,15 +91,14 @@ async fn build_ctx() -> Ctx {
 }
 
 fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource {
-    match build_source(url, &ctx.config) {
-        TrackSource::Config(mut cfg) => {
-            cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder.backend = backend;
-            cfg.initial_abr_mode = AbrMode::Auto(None);
-            TrackSource::Config(cfg)
-        }
-        other => other,
-    }
+    super::app_track_source(
+        url,
+        &ctx.config,
+        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
+        backend,
+        AbrMode::Auto(None),
+        None,
+    )
 }
 
 async fn wait_for_loaded(
@@ -110,7 +118,7 @@ async fn wait_for_loaded(
     timeout(deadline, async {
         loop {
             let ev = match rx.recv().await {
-                Ok(ev) => ev,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             };
@@ -285,7 +293,10 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
             };
         }
         let recv_budget = remaining.min(Duration::from_millis(200));
-        match timeout(recv_budget, obs.rx.recv()).await {
+        match timeout(recv_budget, obs.rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(ev)) => {
                 if let Event::Player(PlayerEvent::ItemDidFail { src, .. }) = &ev
                     && src.as_ref() == target_src

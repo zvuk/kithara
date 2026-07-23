@@ -5,6 +5,53 @@
 [project]
 name = "kithara"
 
+[audit_clippy]
+lints = [
+  "redundant_clone",
+  "needless_collect",
+  "iter_with_drain",
+  "drain_collect",
+  "iter_overeager_cloned",
+  "collection_is_never_read",
+  "assigning_clones",
+  "unnecessary_to_owned",
+  "inefficient_to_string",
+  "implicit_clone",
+  "format_push_string",
+  "format_collect",
+  "redundant_allocation",
+  "box_collection",
+  "rc_buffer",
+  "large_enum_variant",
+  "large_types_passed_by_value",
+  "large_stack_arrays",
+  "result_large_err",
+  "stable_sort_primitive",
+  "unnecessary_box_returns",
+  "zero_sized_map_values",
+  "map_entry",
+  "await_holding_lock",
+  "await_holding_refcell_ref",
+  "significant_drop_in_scrutinee",
+  "needless_pass_by_ref_mut",
+  "readonly_write_lock",
+  "mutex_integer",
+  "mutex_atomic",
+  "suboptimal_flops",
+  "imprecise_flops",
+  "naive_bytecount",
+  "map_flatten",
+  "string_lit_as_bytes",
+  "unused_peekable",
+  "unnecessary_struct_initialization",
+  "path_buf_push_overwrite",
+  "single_char_pattern",
+  "manual_memcpy",
+  "slow_vector_initialization",
+  "useless_vec",
+  "missing_const_for_fn",
+]
+
 [health]
 # Crates excluded from `cargo hack --feature-powerset` (too many features).
 feature_powerset_exclude = ["kithara-play", "kithara-app", "kithara-fuzz"]
@@ -170,6 +217,24 @@ backend = "apple"
 flash = false
 backend = "apple"
 
+[ext.xtask.cache]
+extra_inputs = []
+keep_generations = 2
+generation_grace_secs = 3600
+
+[ext.agent_hook]
+destructive_git_override_env = "KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT"
+
+[[ext.agent_hook.routes]]
+event = "pre-tool-use"
+tool_kind = "shell"
+handler = "command-guard"
+
+[[ext.agent_hook.routes]]
+event = "post-tool-use"
+tool_kind = "file-edit"
+handler = "format-edited-paths"
+
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"
 delay_secs = 20
@@ -230,7 +295,7 @@ js_artifact = "kithara-ffi.js"
 
 [quality]
 # Trait directory whose every `pub trait` must carry `#[unimock]`.
-unimock_traits_dir = "crates/kithara-play/src/traits"
+unimock_traits_dir = "crates/kithara-play/src/api"
 
 [ext.apple]
 # Demo app launched by `cargo xtask apple run`.

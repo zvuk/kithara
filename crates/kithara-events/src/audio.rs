@@ -22,7 +22,8 @@ pub enum SeekLifecycleStage {
 /// `kithara-events → kithara-decode → kithara-stream → kithara-events`
 /// cycle once `kithara-stream` starts publishing downloader events via
 /// this bus.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, derive_more::Display, PartialEq, Eq)]
+#[display("{sample_rate} Hz, {channels} channels")]
 #[non_exhaustive]
 pub struct AudioFormat {
     pub channels: u16,
@@ -36,12 +37,6 @@ impl AudioFormat {
             channels,
             sample_rate,
         }
-    }
-}
-
-impl std::fmt::Display for AudioFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} Hz, {} channels", self.sample_rate, self.channels)
     }
 }
 
@@ -78,6 +73,7 @@ impl SegmentLocation {
 
 /// Events from the audio pipeline.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum AudioEvent {
     /// Audio format detected.
     FormatDetected { spec: AudioFormat },
@@ -113,6 +109,56 @@ pub enum AudioEvent {
         base_offset: u64,
         variant: Option<u32>,
     },
+    /// Terminal track failure surfaced by the audio FSM.
+    TrackFailed {
+        failure: TrackFailureKind,
+        seek_epoch: SeekEpoch,
+    },
+    /// Consumer crossed from playable output into starvation.
+    UnderrunStarted {
+        position_ms: u64,
+        seek_epoch: SeekEpoch,
+    },
+    /// Consumer recovered from starvation and resumed playback.
+    UnderrunEnded {
+        position_ms: u64,
+        seek_epoch: SeekEpoch,
+    },
+    /// Low-rate worker-side view of decoded/buffered progress.
+    BufferHealth {
+        buffered_ms: u64,
+        decoded_frontier_ms: u64,
+        seek_epoch: SeekEpoch,
+    },
+    /// Low-rate worker-side engine cost snapshot.
+    EngineLoad {
+        load: f32,
+        ms_per_chunk: f32,
+        realtime_factor: f32,
+    },
+    /// Host-rate adaptation selected or reconfigured for playback.
+    PlaybackResamplerConfigured {
+        backend: PlaybackResamplerKind,
+        host_sample_rate: u32,
+        source_sample_rate: u32,
+        active: bool,
+    },
     /// Decoding finished (EOF).
     EndOfStream,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PlaybackResamplerKind {
+    Rubato,
+    Glide,
+    None,
+}
+
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum TrackFailureKind {
+    Decode,
+    RecreateFailed { offset: u64 },
+    SourceCancelled,
 }

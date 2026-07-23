@@ -1,0 +1,14 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-chrome-full-all",
+    title: Some("FULL / ALL SIDES"),
+    chip: Some("12E"),
+    chrome: Full,
+    root: Column(
+        pad: Some(14.0),
+        children: [
+            Text(id: "label", style: Body, label: "FRAME + CORNER TICKS"),
+        ],
+    ),
+)

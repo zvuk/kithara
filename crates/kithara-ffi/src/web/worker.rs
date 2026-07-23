@@ -1,6 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, rc::Rc};
 
 use kithara_abr::AbrMode;
+use kithara_assets::{AssetStore, AssetStoreBuilder, StorageBackend};
+use kithara_bufpool::Region;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_hls::{KeyOptions, KeyProcessorRule};
 use kithara_platform::{
@@ -9,7 +11,7 @@ use kithara_platform::{
     time::{Duration, sleep},
     tokio::task::spawn as task_spawn,
 };
-use kithara_play::ResourceConfig;
+use kithara_play::{ResourceConfig, wasm};
 use kithara_queue::{Queue, QueueConfig, TrackId, TrackSource};
 
 use crate::{
@@ -17,15 +19,44 @@ use crate::{
     web::{commands::WorkerCmd, key_processor_bridge},
 };
 
+struct Consts;
+
+impl Consts {
+    /// Capacity for concurrent playback and crossfade HLS working sets.
+    const ASSET_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(128).unwrap();
+    /// Bound cached media while leaving wasm linear-memory headroom for decode
+    /// and PCM buffers.
+    const ASSET_CACHE_MAX_BYTES: u64 = 128 * 1024 * 1024;
+}
+
 /// Player-wide DRM + network state owned by the engine Worker, parallel to
 /// the `key_options` + `player_headers` fields on
 /// [`NativeInner`](crate::native::inner::NativeInner). Held in a
 /// `RefCell` shared across the worker's command loop: setters mutate it,
 /// and each track build snapshots it into a [`ResourceConfig`].
-#[derive(Default)]
 struct BuildState {
     headers: HashMap<String, String>,
     keys: KeyOptions,
+    region: Region,
+    store: AssetStore,
+}
+
+impl Default for BuildState {
+    fn default() -> Self {
+        let region = Region::default();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cache_capacity(Consts::ASSET_CACHE_CAPACITY)
+            .max_bytes(Consts::ASSET_CACHE_MAX_BYTES)
+            .pool(region.byte_pool())
+            .build();
+        Self {
+            headers: HashMap::new(),
+            keys: KeyOptions::default(),
+            region,
+            store,
+        }
+    }
 }
 
 macro_rules! clog {
@@ -39,7 +70,10 @@ macro_rules! clog {
 /// Creates and owns the [`Queue`] (mirroring
 /// [`NativeInner`](crate::native::inner::NativeInner)'s construction),
 /// spawns a periodic `tick` loop, then drives the command channel.
-pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
+pub(crate) fn worker_main(
+    cmd_rx: mpsc::Receiver<WorkerCmd>,
+    session_tx: mpsc::Sender<kithara_play::CmdMsg>,
+) {
     /// Default crossfade window, in seconds. Mirrors the legacy worker.
     const CROSSFADE_SECONDS: f32 = 5.0;
 
@@ -51,10 +85,24 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     keep_worker_alive();
 
     task_spawn(async move {
-        let queue = Rc::new(Queue::new(QueueConfig::default()));
+        let session = wasm::remote_session(session_tx);
+        let state = BuildState::default();
+        let player = Arc::new(kithara_play::PlayerImpl::new(
+            kithara_play::PlayerConfig::builder()
+                .byte_pool(state.region.byte_pool())
+                .pcm_pool(state.region.pcm_pool())
+                .session(session.dispatcher())
+                .build(),
+        ));
+        let queue = Rc::new(Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(state.store.clone())
+                .build(),
+        ));
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
 
-        let build_state = Rc::new(RefCell::new(BuildState::default()));
+        let build_state = Rc::new(RefCell::new(state));
         spawn_tick_loop(Rc::clone(&queue));
         crate::web::observer::source::spawn(&queue);
 
@@ -272,6 +320,9 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
             let config = builder
                 .keys(state.keys.clone())
                 .maybe_headers(headers.map(Into::into))
+                .byte_pool(state.region.byte_pool())
+                .pcm_pool(state.region.pcm_pool())
+                .store(state.store.clone())
                 .build();
             TrackSource::Config(Box::new(config))
         }
@@ -308,4 +359,20 @@ fn replace_track(
         .map_err(|e| e.to_string())?;
     let _ = queue.remove(old_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_store_keeps_two_hls_working_sets() {
+        let state = BuildState::default();
+
+        assert_eq!(
+            state.store.ephemeral_cache_capacity(),
+            Some(Consts::ASSET_CACHE_CAPACITY)
+        );
+        assert_eq!(Consts::ASSET_CACHE_MAX_BYTES, 128 * 1024 * 1024);
+    }
 }

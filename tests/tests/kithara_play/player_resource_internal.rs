@@ -11,14 +11,16 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
-    audio::{DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
+    audio::{
+        DecodeError, PcmControl, PcmRead, PcmSession, PendingReason, ReadOutcome, SeekOutcome,
+    },
     bufpool::PcmPool,
     decode::{PcmSpec, TrackMetadata},
     events::EventBus,
     platform::{sync::Arc, time::Duration},
     play::{
         Resource,
-        impls::player_resource::{PlayerResource, ReadOutcome as BlockReadOutcome},
+        rt::track::{PlayerResource, ReadOutcome as BlockReadOutcome},
     },
 };
 use kithara_integration_tests::audio_mock::TestPcmReader;
@@ -49,7 +51,7 @@ impl PendingReader {
     }
 }
 
-impl PcmReader for PendingReader {
+impl PcmRead for PendingReader {
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Ok(ReadOutcome::Pending {
             reason: PendingReason::Buffering,
@@ -67,13 +69,6 @@ impl PcmReader for PendingReader {
         })
     }
 
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
-
     fn spec(&self) -> PcmSpec {
         self.spec
     }
@@ -81,7 +76,9 @@ impl PcmReader for PendingReader {
     fn position(&self) -> Duration {
         Duration::ZERO
     }
+}
 
+impl PcmSession for PendingReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(1))
     }
@@ -92,6 +89,15 @@ impl PcmReader for PendingReader {
 
     fn event_bus(&self) -> &EventBus {
         &self.bus
+    }
+}
+
+impl PcmControl for PendingReader {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
     }
 }
 
@@ -119,7 +125,7 @@ impl PositionReader {
     }
 }
 
-impl PcmReader for PositionReader {
+impl PcmRead for PositionReader {
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         let channels = self.spec.channels as usize;
         let frames = buf.len() / channels;
@@ -166,15 +172,6 @@ impl PcmReader for PositionReader {
         })
     }
 
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let frame = (position.as_secs_f64() * self.spec.sample_rate.get() as f64) as u64;
-        self.frame_idx = frame.min(self.total_frames);
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
-
     fn spec(&self) -> PcmSpec {
         self.spec
     }
@@ -182,7 +179,9 @@ impl PcmReader for PositionReader {
     fn position(&self) -> Duration {
         Duration::from_secs_f64(self.frame_idx as f64 / self.spec.sample_rate.get() as f64)
     }
+}
 
+impl PcmSession for PositionReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs_f64(
             self.total_frames as f64 / self.spec.sample_rate.get() as f64,
@@ -195,6 +194,17 @@ impl PcmReader for PositionReader {
 
     fn event_bus(&self) -> &EventBus {
         &self.bus
+    }
+}
+
+impl PcmControl for PositionReader {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        let frame = (position.as_secs_f64() * self.spec.sample_rate.get() as f64) as u64;
+        self.frame_idx = frame.min(self.total_frames);
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
     }
 }
 
@@ -329,7 +339,7 @@ async fn read_returns_partial_when_eof_inside_buffer() {
 
     let mut output2: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result2 = pr.read(&mut output2, 0..4096);
-    assert!(matches!(result2, BlockReadOutcome::Eof { .. }));
+    assert!(matches!(result2, BlockReadOutcome::Eof));
 }
 
 /// Reader that returns a typed decode `Err` on every read — models
@@ -353,7 +363,7 @@ impl FailingReader {
     }
 }
 
-impl PcmReader for FailingReader {
+impl PcmRead for FailingReader {
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Err(DecodeError::InvalidData {
             detail: "mock: decoder failed mid-stream",
@@ -367,18 +377,15 @@ impl PcmReader for FailingReader {
             detail: "mock: decoder failed mid-stream",
         })
     }
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
     fn spec(&self) -> PcmSpec {
         self.spec
     }
     fn position(&self) -> Duration {
         Duration::ZERO
     }
+}
+
+impl PcmSession for FailingReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(169))
     }
@@ -387,6 +394,15 @@ impl PcmReader for FailingReader {
     }
     fn event_bus(&self) -> &EventBus {
         &self.bus
+    }
+}
+
+impl PcmControl for FailingReader {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
     }
 }
 
@@ -412,7 +428,7 @@ async fn read_returns_failed_not_eof_on_decoder_error() {
 
     match result {
         BlockReadOutcome::Failed => {}
-        BlockReadOutcome::Eof { .. } | BlockReadOutcome::Partial { .. } => panic!(
+        BlockReadOutcome::Eof | BlockReadOutcome::Partial { .. } => panic!(
             "decoder Err must NOT be conflated with natural EOF — got {result:?}; \
              this is the false-EOF bug from app.log"
         ),
@@ -441,12 +457,12 @@ async fn read_returns_eof_when_already_drained() {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
         match pr.read(&mut output, 0..4096) {
             BlockReadOutcome::Full { .. } | BlockReadOutcome::Partial { .. } => {}
-            BlockReadOutcome::Eof { .. } => break,
+            BlockReadOutcome::Eof => break,
             BlockReadOutcome::Failed => panic!("unexpected Failed in EOF test"),
         }
     }
 
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result = pr.read(&mut output, 0..4096);
-    assert!(matches!(result, BlockReadOutcome::Eof { .. }));
+    assert!(matches!(result, BlockReadOutcome::Eof));
 }

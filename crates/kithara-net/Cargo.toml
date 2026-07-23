@@ -38,8 +38,10 @@ bitflags = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true, optional = true }
+delegate = { workspace = true }
+derive_more = { workspace = true }
+fieldwork = { workspace = true }
 futures = { workspace = true }
-hotpath = { workspace = true, optional = true }
 num-traits = { workspace = true }
 # `client-reqwest` backend (native + wasm). reqwest gates its own TLS /
 # compression deps behind `cfg(not(wasm32))`, so the compression / cookie / TLS
@@ -57,11 +59,16 @@ tracing = { workspace = true }
 unimock = { workspace = true }
 url = { workspace = true }
 
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 kithara-apple = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+# hotpath drives the `perf`/`memprof` profiling knobs and does not build on
+# wasm32; gate it here so the `perf` feature stays inert on wasm.
+hotpath = { workspace = true, optional = true }
 tower-layer = { workspace = true, optional = true }
 tower-service = { workspace = true, optional = true }
 # `client-wreq` backend (native only — BoringSSL has no wasm target).

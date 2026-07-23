@@ -2,14 +2,16 @@
 pub(crate) mod android;
 #[cfg(all(target_os = "android", feature = "test"))]
 pub(crate) mod android_test;
+pub mod asset;
 pub(crate) mod bridge;
 pub mod cipher;
-pub(crate) mod config;
+pub mod config;
 pub(crate) mod inner;
 pub(crate) mod layout;
 pub mod logging;
 mod runtime;
 pub mod salt;
+pub(crate) mod session;
 
 pub(crate) use bridge::{event_bridge, item_bridge};
 pub(crate) use inner::Inner;

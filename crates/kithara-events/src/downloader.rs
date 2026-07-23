@@ -125,6 +125,37 @@ pub enum DownloaderEvent {
         /// don't repeat the math.
         bandwidth_bps: u64,
     },
+    RequestRetrying {
+        request_id: RequestId,
+        attempt: u32,
+        max_retries: u32,
+        error: NetError,
+        backoff: Duration,
+    },
+    BodyStalled {
+        request_id: RequestId,
+        consumed: u64,
+        expected: Option<u64>,
+        stall: Duration,
+    },
+    BodyResumed {
+        request_id: RequestId,
+        resume_number: u32,
+        from_offset: u64,
+        honoured_range: bool,
+    },
+    RetryExhausted {
+        request_id: RequestId,
+        max_retries: u32,
+        consumed: u64,
+        error: NetError,
+    },
+    FirstByte {
+        request_id: RequestId,
+        ttfb: Duration,
+        status: u16,
+        partial: bool,
+    },
     /// HTTP fetch ended with a network-level error.
     RequestFailed {
         request_id: RequestId,

@@ -209,9 +209,9 @@ impl canvas::Program<WaveEvent> for WaveformCanvas {
                 let hi = hi_far.max(hi_near);
                 let mut peak = [0.0_f32; 3];
                 for b in &buckets[lo..hi] {
-                    peak[0] = peak[0].max(b.low);
-                    peak[1] = peak[1].max(b.mid);
-                    peak[2] = peak[2].max(b.high);
+                    peak[0] = peak[0].max(b.low());
+                    peak[1] = peak[1].max(b.mid());
+                    peak[2] = peak[2].max(b.high());
                 }
                 for (value, base) in peak.iter().zip(bands.iter()) {
                     let v = value.clamp(0.0, 1.0);

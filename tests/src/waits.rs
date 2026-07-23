@@ -116,7 +116,10 @@ pub async fn wait_for_position_event(
             {
                 return Ok(pos);
             }
-            match timeout(POLL_TICK, rx.recv()).await {
+            match timeout(POLL_TICK, rx.recv())
+                .await
+                .map(|r| r.map(|env| env.event))
+            {
                 Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                     if position_ms >= min_ms {
                         return Ok(position_ms as f64 / 1000.0);
@@ -189,7 +192,10 @@ pub async fn wait_for_position_near_event(
             {
                 return Ok(pos);
             }
-            match timeout(POLL_TICK, rx.recv()).await {
+            match timeout(POLL_TICK, rx.recv())
+                .await
+                .map(|r| r.map(|env| env.event))
+            {
                 Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                     let pos = position_ms as f64 / 1000.0;
                     if (pos - target).abs() < tolerance {
@@ -233,7 +239,7 @@ pub async fn wait_for_event(
     timeout(deadline, async {
         loop {
             match rx.recv().await {
-                Ok(ev) if pred(&ev) => return Ok(()),
+                Ok(ev) if pred(&ev.event) => return Ok(()),
                 Ok(_) | Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return Err(format!("event bus closed before {what}")),
             }
@@ -297,7 +303,7 @@ pub async fn wait_for_loader_done_event(
     }
     timeout(deadline, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Queue(QueueEvent::TrackStatusChanged { id, status }))
                     if id == track_id =>
                 {

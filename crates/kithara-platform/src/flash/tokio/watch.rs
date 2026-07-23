@@ -225,6 +225,20 @@ impl<T> Receiver<T> {
         Ref { guard }
     }
 
+    /// Report whether a newer value is waiting without awaiting one, matching
+    /// [`tokio::sync::watch::Receiver::has_changed`].
+    ///
+    /// # Errors
+    /// [`RecvError`] once every sender has dropped, so no further change can
+    /// arrive.
+    pub fn has_changed(&self) -> Result<bool, RecvError> {
+        let guard = self.shared.state.lock();
+        if guard.closed {
+            return Err(RecvError);
+        }
+        Ok(guard.version > self.seen)
+    }
+
     /// Await the next value change.
     ///
     /// # Errors

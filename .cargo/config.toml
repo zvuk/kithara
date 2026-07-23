@@ -15,6 +15,7 @@ runner = [
   "--",
 ]
 rustflags = [
+  "--cfg=web_sys_unstable_apis",
   "-C",
   "target-feature=+atomics,+bulk-memory,+mutable-globals",
   "-C",

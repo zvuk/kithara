@@ -1,7 +1,6 @@
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 
 use kithara::{
-    assets::StoreOptions,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
@@ -107,7 +106,7 @@ async fn stress_random_seek_read_hls(
     let cancel = CancelToken::never();
 
     let config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();

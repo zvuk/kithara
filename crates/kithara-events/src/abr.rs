@@ -13,7 +13,7 @@ const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
 /// [`VariantIndex::try_new`] at trust boundaries (FFI, UI), or
 /// [`VariantIndex::new`] when validity is already structurally guaranteed
 /// (atomic reload, playlist parse). See `kithara-abr/CONTEXT.md`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, derive_more::Display, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
 pub struct VariantIndex(usize);
 
@@ -46,27 +46,12 @@ impl VariantIndex {
     }
 }
 
-impl std::fmt::Display for VariantIndex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
 /// A variant index out of range against a known variant count.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq)]
+#[display("variant index {requested} out of bounds (available: {available})")]
 pub struct BoundsError {
     pub available: usize,
     pub requested: usize,
-}
-
-impl std::fmt::Display for BoundsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "variant index {} out of bounds (available: {})",
-            self.requested, self.available
-        )
-    }
 }
 
 impl std::error::Error for BoundsError {}

@@ -12,19 +12,21 @@ impl<T> Mutex<T> {
         Self(WasmMutex::new(value))
     }
 
-    #[inline]
-    pub fn lock(&self) -> MutexGuard<'_, T> {
-        MutexGuard(self.0.lock_sync())
-    }
-
-    /// Try to acquire the lock without blocking.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NotAvailable`] if the mutex is already held.
-    #[inline]
-    pub fn try_lock(&self) -> Result<MutexGuard<'_, T>, NotAvailable> {
-        self.0.try_lock().map(MutexGuard).map_err(|_| NotAvailable)
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            #[expr(MutexGuard($))]
+            #[call(lock_sync)]
+            pub fn lock(&self) -> MutexGuard<'_, T>;
+            /// Try to acquire the lock without blocking.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`NotAvailable`] if the mutex is already held.
+            #[inline]
+            #[expr($.map(MutexGuard).map_err(|_| NotAvailable))]
+            pub fn try_lock(&self) -> Result<MutexGuard<'_, T>, NotAvailable>;
+        }
     }
 }
 

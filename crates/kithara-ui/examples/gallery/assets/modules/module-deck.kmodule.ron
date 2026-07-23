@@ -1,0 +1,24 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-module-deck",
+    title: Some("Дека"),
+    chip: Some("DECK"),
+    chrome: Full,
+    footer: Some(Model(id: "gallery.footer.deck")),
+    root: Column(
+        children: [
+            Slot(
+                id: "content",
+                size: (w: Fill, h: Fill),
+                default: [
+                    Include(
+                        id: "deck",
+                        source: "deck.kmodule.ron",
+                        with: { "deck": "a" },
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

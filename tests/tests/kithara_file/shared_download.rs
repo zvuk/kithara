@@ -69,16 +69,14 @@ async fn shared_store_one_get() {
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.mp3");
 
-    let store = Arc::new(
-        AssetStoreBuilder::default()
-            .backend(StorageBackend::Memory)
-            .build(),
-    );
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
 
     // Whole-file consumer (waveform) attaches first → wins the producer
     // election and drives the single download.
     let waveform_cfg = FileConfig::for_src(url.clone().into())
-        .asset_store(Arc::clone(&store))
+        .store(store.clone())
         .build();
     let waveform = Stream::<File>::new(waveform_cfg)
         .await
@@ -87,7 +85,7 @@ async fn shared_store_one_get() {
     // Bounded consumer (player) of the same URL → loses the election and
     // reads the shared bytes instead of issuing its own download.
     let player_cfg = FileConfig::for_src(url.into())
-        .asset_store(Arc::clone(&store))
+        .store(store)
         .look_ahead_bytes(16)
         .build();
     let player = Stream::<File>::new(player_cfg)

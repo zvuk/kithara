@@ -5,13 +5,9 @@
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig},
-    hls::{AbrMode, Hls, HlsConfig},
-    platform::{
-        time::{Duration, Instant},
-        tokio::task::spawn_blocking,
-    },
+    hls::{Hls, HlsConfig},
+    platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
@@ -51,10 +47,13 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
         let url = server.asset("hls/master.m3u8");
 
         let hls_config = HlsConfig::for_url(url)
-            .store(StoreOptions::new(temp_dir.path()))
+            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
             .initial_abr_mode(auto(0))
             .build();
-        let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+        let config = AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build();
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
             .expect("audio creation");
@@ -62,7 +61,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
         let samples = spawn_blocking(move || {
             let mut buf = vec![0f32; 4096];
             let mut rss_samples = Vec::new();
-            let start = Instant::now();
+            let start = kithara::platform::time::Instant::now();
             let mut last_sample = start;
 
             while start.elapsed() < Duration::from_secs(Consts::BUDGET_PLAYBACK_SECS) {
@@ -80,7 +79,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
                     if let Some(stats) = memory_stats() {
                         rss_samples.push(stats.physical_mem);
                     }
-                    last_sample = Instant::now();
+                    last_sample = kithara::platform::time::Instant::now();
                 }
             }
             rss_samples
@@ -137,17 +136,21 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
     let url = server.asset("hls/master.m3u8");
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
-        .initial_abr_mode(AbrMode::auto(0))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let config = AudioConfig::<Hls>::new(
+        hls_config,
+        kithara::bufpool::BytePool::default(),
+        kithara::bufpool::PcmPool::default(),
+    );
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");
 
     let (warmup_rss, final_rss) = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
-        let start = Instant::now();
+        let start = kithara::platform::time::Instant::now();
         let mut warmup_rss = None;
         let mut final_rss = 0usize;
 

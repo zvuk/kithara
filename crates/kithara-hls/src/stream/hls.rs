@@ -2,10 +2,8 @@
 
 use std::sync::OnceLock;
 
-use kithara_assets::{
-    AssetStore, AssetStoreBuilder, BytePool, EvictConfig, ResourceKey, StorageBackend, StoreOptions,
-};
-use kithara_events::{EventBus, VariantInfo};
+use kithara_assets::{AssetSource, ResourceKey};
+use kithara_events::{DeferredBus, EventBus, HlsError as EventHlsError, HlsEvent, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelScope, CancelToken,
@@ -28,7 +26,7 @@ use crate::{
     peer::HlsPeer,
     playlist::{
         KeyStore, MasterPlaylist, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState,
-        load_variant_playlists,
+        load_variant_playlists, resolve_init_decrypt_ctx, resolve_variant_decrypt_contexts,
     },
     signal::SizeSignal,
     variant::{HlsVariant, PlanCtx, VariantParams},
@@ -38,14 +36,15 @@ use crate::{
 pub struct Hls;
 
 fn effective_look_ahead_segments(config: &HlsConfig) -> Option<usize> {
-    if config.store.backend != StorageBackend::Memory {
-        return None;
-    }
-    let capacity = config.store.cache_capacity?;
+    let capacity = config.store.ephemeral_cache_capacity()?;
+    let maximum = config
+        .ephemeral_cache_max_media_window
+        .max(config.ephemeral_cache_min_media_window);
     let bounded = capacity
         .get()
         .saturating_sub(config.ephemeral_cache_non_media_reserve)
-        .max(config.ephemeral_cache_min_media_window);
+        .max(config.ephemeral_cache_min_media_window)
+        .min(maximum);
     Some(capacity.get().min(bounded))
 }
 
@@ -70,21 +69,17 @@ impl StreamType for Hls {
 
         let (evict_tx, evict_rx) = mpsc::unbounded_channel::<ResourceKey>();
 
-        let store = config
-            .asset_store
-            .clone()
-            .unwrap_or_else(|| Arc::new(build_asset_store(&config, cancel.clone())));
-        let asset_root = store
-            .layout()
-            .asset_root(&config.url, config.name.as_deref());
-        let asset_root_arc: Arc<str> = Arc::from(asset_root.as_str());
-        let invalidation_guard = store.subscribe_eviction(Arc::clone(&asset_root_arc), evict_tx);
-        let scope = store.scope(asset_root_arc);
+        let store = config.store.clone();
+        let source = AssetSource::Remote {
+            url: config.url.clone(),
+            discriminator: config.discriminator.clone(),
+        };
+        let scope = store
+            .scope::<Self>(&source)
+            .map_err(crate::HlsError::from)?;
+        let invalidation_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), evict_tx);
 
-        let byte_pool = config
-            .pool
-            .clone()
-            .unwrap_or_else(|| BytePool::default().clone());
+        let byte_pool = config.pool.clone();
 
         let playhead = Arc::new(PlayheadState::new());
         let seek = Arc::new(SeekState::new());
@@ -102,33 +97,12 @@ impl StreamType for Hls {
             byte_pool,
         );
 
-        let (master, media_playlists) = load_playlists(&stream_peer, &config).await?;
-
-        // Size the private per-stream LRU handle cache to the variant's
-        // segment count when the caller left it at the default, so random
-        // seeks reuse open segment resources instead of thrashing a tiny
-        // window into repeated re-opens. The store owns the headroom/cap
-        // policy; shared stores are app-wide and must not be resized here.
-        if config.asset_store.is_none() && config.store.cache_capacity.is_none() {
-            let max_variant_segments = media_playlists
-                .iter()
-                .map(|mp| mp.segments.len())
-                .max()
-                .unwrap_or(0);
-            let installed = stream_peer
-                .scope()
-                .store()
-                .reserve_cache_for(max_variant_segments);
-            tracing::debug!(
-                max_variant_segments,
-                cache_capacity = installed.get(),
-                "sized private per-stream handle cache"
-            );
-        }
+        let (master, media_playlists) = load_playlists(&stream_peer, &bus, &config).await?;
 
         let key_store = KeyStore::with_options(
             stream_peer.peer_handle(),
             stream_peer.scope(),
+            bus.clone(),
             config.headers.clone(),
             config.keys.clone(),
             stream_peer.byte_pool(),
@@ -163,8 +137,10 @@ impl StreamType for Hls {
         // re-ticks on data arrival, not on its 10 ms scheduler poll. Built once
         // here and cloned down into every consumer.
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
+        let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
         let plan_ctx = PlanCtx {
+            bus: bus.clone(),
             look_ahead_bytes,
             look_ahead_segments,
             master_cancel: cancel.clone(),
@@ -180,9 +156,9 @@ impl StreamType for Hls {
             .iter()
             .enumerate()
             .map(|(idx, mp)| {
-                let init_decrypt_ctx = key_store.resolve_init_decrypt_ctx(mp);
-                let decrypt_contexts = key_store.resolve_variant_decrypt_contexts(mp);
-                FromWithParams::build(
+                let init_decrypt_ctx = resolve_init_decrypt_ctx(&key_store, mp);
+                let decrypt_contexts = resolve_variant_decrypt_contexts(&key_store, mp);
+                HlsVariant::try_build(
                     &playlist_state,
                     VariantParams {
                         init_decrypt_ctx,
@@ -193,8 +169,8 @@ impl StreamType for Hls {
                     },
                 )
             })
-            .collect();
-        let variants = Arc::new(variants);
+            .collect::<crate::HlsResult<Vec<_>>>()?;
+        let variants: Arc<[Arc<HlsVariant>]> = variants.into();
 
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
@@ -202,6 +178,7 @@ impl StreamType for Hls {
                 cancel: cancel.clone(),
                 scope: stream_peer.scope(),
                 headers: config.headers.clone(),
+                emit: Arc::clone(&emit),
             },
             playhead,
             seek,
@@ -210,7 +187,7 @@ impl StreamType for Hls {
             Arc::clone(&playlist_state),
         ));
 
-        let mut source = HlsSource::new(Arc::clone(&coord), bus.clone(), stream_scope);
+        let mut source = HlsSource::new(Arc::clone(&coord), emit, stream_scope);
 
         hls_peer.activate(
             coord,
@@ -237,6 +214,7 @@ impl StreamType for Hls {
 /// playlist (master order).
 async fn load_playlists(
     stream_peer: &StreamPeer,
+    bus: &EventBus,
     config: &HlsConfig,
 ) -> Result<(ParsedMaster, Vec<MediaPlaylist>), SourceError> {
     let playlist_cache = PlaylistCache::new(
@@ -248,14 +226,17 @@ async fn load_playlists(
     playlist_cache.set_base_url(config.base_url.clone());
     playlist_cache.set_headers(config.headers.clone());
 
-    let master_key = stream_peer.scope().key_for(&config.url);
-    let master = MasterPlaylist::new(
+    let master_playlist = MasterPlaylist::new(
         playlist_cache.clone(),
         &stream_peer.scope(),
         config.url.clone(),
     )
-    .load()
-    .await?;
+    .map_err(SourceError::from)?;
+    let master_key = master_playlist.key().clone();
+    let master = master_playlist.load().await.map_err(|err| {
+        publish_playlist_error(bus, &err);
+        SourceError::from(err)
+    })?;
 
     let media_playlists = load_variant_playlists(
         &playlist_cache,
@@ -264,9 +245,21 @@ async fn load_playlists(
         &master_key,
         &master.variants,
     )
-    .await?;
+    .await
+    .map_err(|err| {
+        publish_playlist_error(bus, &err);
+        SourceError::from(err)
+    })?;
 
     Ok((master, media_playlists))
+}
+
+fn publish_playlist_error(bus: &EventBus, err: &crate::HlsError) {
+    if let crate::HlsError::PlaylistParse(detail) = err {
+        bus.publish(HlsEvent::Error {
+            error: EventHlsError::Playlist(detail.clone()),
+        });
+    }
 }
 
 /// Default transport when the caller injects none: a private `Downloader`
@@ -282,42 +275,63 @@ fn default_downloader(config: &HlsConfig, cancel: &CancelToken) -> Downloader {
     Downloader::new(dl_config)
 }
 
-/// Build a private per-stream `AssetStore` (cache, flush hub; AES-128
-/// decryption travels per-acquire as a `ProcessCtx`). The caller
-/// subscribes its eviction channel via
-/// [`AssetStore::subscribe_eviction`](kithara_assets::AssetStore::subscribe_eviction).
-fn build_asset_store(config: &HlsConfig, cancel: CancelToken) -> AssetStore {
-    AssetStoreBuilder::default()
-        .cancel(cancel)
-        .backend(config.store.backend.clone())
-        .evict_config(EvictConfig::from(&config.store))
-        .maybe_layout(config.store.layout.clone())
-        .maybe_pool(config.pool.clone())
-        .maybe_cache_capacity(config.store.cache_capacity)
-        .maybe_flush_hub(config.store.flush_hub.clone())
-        .build()
-}
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroUsize;
 
-/// Build an app-wide shared HLS asset store.
-///
-/// Inject the result into every [`HlsConfig::asset_store`] that should
-/// cooperate on a single cache. Per-stream eviction delivery is bound by
-/// [`AssetStore::subscribe_eviction`].
-#[must_use]
-pub fn build_shared_asset_store(
-    store: &StoreOptions,
-    pool: Option<BytePool>,
-    cancel: CancelToken,
-) -> Arc<AssetStore> {
-    Arc::new(
-        AssetStoreBuilder::default()
-            .cancel(cancel)
-            .backend(store.backend.clone())
-            .evict_config(EvictConfig::from(store))
-            .maybe_layout(store.layout.clone())
-            .maybe_pool(pool)
-            .maybe_cache_capacity(store.cache_capacity)
-            .maybe_flush_hub(store.flush_hub.clone())
-            .build(),
-    )
+    use kithara_assets::{AssetStoreBuilder, StorageBackend};
+    use kithara_test_utils::kithara;
+    use url::Url;
+
+    use super::*;
+
+    fn config_with_capacity(capacity: usize) -> HlsConfig {
+        let capacity = NonZeroUsize::new(capacity).expect("test capacity must be non-zero");
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cache_capacity(capacity)
+            .build();
+        let url = Url::parse("https://example.com/master.m3u8").expect("valid test URL");
+        HlsConfig::new(url, store)
+    }
+
+    #[kithara::test]
+    fn default_window_keeps_two_streams_within_shared_capacity() {
+        let config = config_with_capacity(128);
+
+        assert_eq!(effective_look_ahead_segments(&config), Some(60));
+    }
+
+    #[kithara::test]
+    fn window_preserves_reserve_below_default_maximum() {
+        let config = config_with_capacity(63);
+
+        assert_eq!(effective_look_ahead_segments(&config), Some(59));
+    }
+
+    #[kithara::test]
+    fn window_preserves_minimum_until_capacity_is_exhausted() {
+        let at_minimum = config_with_capacity(3);
+        let below_minimum = config_with_capacity(2);
+
+        assert_eq!(effective_look_ahead_segments(&at_minimum), Some(3));
+        assert_eq!(effective_look_ahead_segments(&below_minimum), Some(2));
+    }
+
+    #[kithara::test]
+    fn configured_maximum_bounds_the_window() {
+        let mut config = config_with_capacity(128);
+        config.ephemeral_cache_max_media_window = 10;
+
+        assert_eq!(effective_look_ahead_segments(&config), Some(10));
+    }
+
+    #[kithara::test]
+    fn configured_minimum_takes_precedence_over_smaller_maximum() {
+        let mut config = config_with_capacity(128);
+        config.ephemeral_cache_min_media_window = 8;
+        config.ephemeral_cache_max_media_window = 2;
+
+        assert_eq!(effective_look_ahead_segments(&config), Some(8));
+    }
 }

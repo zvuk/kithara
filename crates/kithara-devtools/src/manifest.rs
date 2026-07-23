@@ -169,6 +169,37 @@ fn rewrite_manifest(source: &str) -> RewriteResult {
     }
 }
 
+pub(crate) fn add_workspace_dependency(source: &str, dependency: &str) -> Result<Option<String>> {
+    let parsed: toml::Value = toml::from_str(source).context("parse Cargo manifest")?;
+    if parsed
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|dependencies| dependencies.contains_key(dependency))
+    {
+        return Ok(None);
+    }
+
+    let lines: Vec<_> = source.split_inclusive('\n').collect();
+    let mut offset = 0;
+    for line in lines {
+        offset += line.len();
+        if table_header(line) != Some("dependencies") {
+            continue;
+        }
+        let mut inserted = String::with_capacity(source.len() + dependency.len() + 32);
+        inserted.push_str(&source[..offset]);
+        if !inserted.ends_with('\n') {
+            inserted.push('\n');
+        }
+        inserted.push_str(dependency);
+        inserted.push_str(" = { workspace = true }\n");
+        inserted.push_str(&source[offset..]);
+        return Ok(Some(rewrite_manifest(&inserted).content));
+    }
+
+    bail!("Cargo manifest has no [dependencies] section")
+}
+
 fn section_body_end(lines: &[&str], body_start: usize) -> usize {
     lines[body_start..]
         .iter()
@@ -422,7 +453,19 @@ fn push_blank_separator(output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{rewrite_manifest, table_header};
+    use super::{add_workspace_dependency, rewrite_manifest, table_header};
+
+    #[test]
+    fn adds_workspace_dependency_in_canonical_order() -> anyhow::Result<()> {
+        let input = "[dependencies]\nkithara-stream = { workspace = true }\n\nanyhow = { workspace = true }\nfutures = { workspace = true }\n";
+        let rewritten = add_workspace_dependency(input, "fieldwork")?.expect("dependency added");
+        assert_eq!(
+            rewritten,
+            "[dependencies]\nkithara-stream = { workspace = true }\n\nanyhow = { workspace = true }\nfieldwork = { workspace = true }\nfutures = { workspace = true }\n"
+        );
+        assert!(add_workspace_dependency(&rewritten, "fieldwork")?.is_none());
+        Ok(())
+    }
 
     #[test]
     fn moves_internal_dependencies_before_external_dependencies() {

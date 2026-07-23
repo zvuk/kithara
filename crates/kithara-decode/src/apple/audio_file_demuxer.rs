@@ -113,8 +113,8 @@ impl AppleAudioFileDemuxer {
             }
             _ => AppleAudioFile::open(source, hint)?,
         };
-        let asbd = file.data_format();
-        let total_packets = file.packet_count();
+        let asbd = file.data_format;
+        let total_packets = file.packet_count;
         let frames_per_packet = if asbd.frames_per_packet > 0 {
             asbd.frames_per_packet
         } else {
@@ -172,7 +172,7 @@ impl AppleAudioFileDemuxer {
             // VBR. A streaming open reports no max packet size, so fall back
             // to the FLAC STREAMINFO frame bound (FLAC frames reach ~16-19
             // KiB, far past the 4 KiB floor) when AudioFile can't supply one.
-            let reported = usize::try_from(file.max_packet_size()).map_err(DecodeError::backend)?;
+            let reported = usize::try_from(file.max_packet_size).map_err(DecodeError::backend)?;
             let flac_bound = flac_info.map_or(0, StreamInfo::max_frame_bytes);
             (None, reported.max(flac_bound).max(4096))
         } else {

@@ -25,8 +25,15 @@ impl<T> Clone for Sender<T> {
 pub struct Receiver<T>(::loom::sync::mpsc::Receiver<T>);
 
 impl<T> Receiver<T> {
-    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
-        core::iter::from_fn(|| self.recv().ok())
+    delegate::delegate! {
+        to self {
+            #[expr(core::iter::from_fn(|| $.ok()))]
+            #[call(recv)]
+            pub fn iter(&self) -> impl Iterator<Item = T> + '_;
+            #[expr(core::iter::from_fn(|| $.ok()))]
+            #[call(try_recv)]
+            pub fn try_iter(&self) -> impl Iterator<Item = T> + '_;
+        }
     }
 
     pub fn recv(&self) -> Result<T, RecvError> {
@@ -36,10 +43,6 @@ impl<T> Receiver<T> {
 
     pub fn recv_timeout(&self, _deadline: Instant) -> Result<T, RecvTimeoutError> {
         panic!("timed channel receives require the flash backend when loom is enabled");
-    }
-
-    pub fn try_iter(&self) -> impl Iterator<Item = T> + '_ {
-        core::iter::from_fn(|| self.try_recv().ok())
     }
 
     pub fn try_recv(&self) -> Result<T, TryRecvError> {

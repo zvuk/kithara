@@ -1,16 +1,16 @@
 use std::{
     collections::VecDeque,
-    ops::Deref,
-    sync::atomic::{AtomicU32, AtomicU64},
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
+use kithara_assets::AssetResource;
 use kithara_drm::DecryptContext;
+use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
     time::Duration,
-    traits::FromWithParams,
 };
 use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve};
 
@@ -23,6 +23,7 @@ use super::{
     seqlock::{AtomicOptU64, AtomicSeekAlias},
 };
 use crate::{
+    HlsResult,
     config::SizeProbeMethod,
     playlist::{PlaylistAccess, PlaylistState},
     segment::{MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize, SegmentSlotState},
@@ -32,6 +33,7 @@ use crate::{
 pub(super) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
 
 pub(crate) struct PlanCtx {
+    pub(crate) bus: EventBus,
     pub(crate) scope: kithara_assets::AssetScope,
     pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
@@ -95,6 +97,7 @@ pub(crate) struct HlsVariant {
     pub(super) seek: VariantSeek,
     pub(super) segments: VariantSegments,
     pub(super) variant: usize,
+    pub(super) cache_complete_emitted: AtomicBool,
 }
 
 pub(super) struct VariantProfile {
@@ -109,6 +112,7 @@ pub(super) struct VariantProfile {
     /// resource-wide auth (e.g. zvuk `X-Auth-Token`) so segment GETs
     /// reach the same authenticated endpoint as the playlist load.
     pub(super) headers: Option<Headers>,
+    pub(super) bus: EventBus,
 }
 
 pub(super) struct VariantFlow {
@@ -151,6 +155,7 @@ pub(super) struct VariantSeek {
     pub(super) size_demand: Mutex<SizeDemandState>,
 }
 
+#[derive(derive_more::Deref)]
 pub(super) struct VariantSegments {
     /// Per-track asset store. The single source-of-truth clone: each vended
     /// [`ResourceHandle`] gets a cheap clone of it, and the fetch path
@@ -166,15 +171,8 @@ pub(super) struct VariantSegments {
     pub(super) init: Option<Segment>,
     /// Media entry table — the fetch path and descriptor builders index it
     /// for `url` / `content` / `decode_time`.
+    #[deref]
     entries: Vec<Segment>,
-}
-
-impl Deref for VariantSegments {
-    type Target = [Segment];
-
-    fn deref(&self) -> &Self::Target {
-        &self.entries
-    }
 }
 
 impl VariantSegments {
@@ -224,12 +222,12 @@ impl VariantSeek {
 /// Media payload + shared-dep snapshot that owns bare variant assembly.
 /// Production builds this from parsed playlist metadata; tests build it
 /// inline from synthesised fixtures.
-pub(super) struct VariantParts {
-    pub(super) seek_obs: Arc<dyn SeekObserve>,
-    pub(super) codec: Option<AudioCodec>,
-    pub(super) container: Option<ContainerFormat>,
-    pub(super) init: Option<Segment>,
-    pub(super) segments: Vec<Segment>,
+pub(crate) struct VariantParts {
+    pub(crate) seek_obs: Arc<dyn SeekObserve>,
+    pub(crate) codec: Option<AudioCodec>,
+    pub(crate) container: Option<ContainerFormat>,
+    pub(crate) init: Option<Segment>,
+    pub(crate) segments: Vec<Segment>,
 }
 
 /// In-memory init prefix size: 0 when the variant carries no separately
@@ -271,12 +269,6 @@ pub(super) fn segment_placeholder_size(duration: Duration, bandwidth_bps: Option
         .clamp(MIN_BYTES, MAX_PRECOMMIT_BYTES)
 }
 
-/// Per-variant construction parameters: the runtime context a parsed
-/// [`PlaylistState`] cannot carry, folded in via [`FromWithParams`].
-/// `decrypt_contexts[i]` carries the pre-resolved [`DecryptContext`] for
-/// segment `i` (or `None` for cleartext segments) — the caller resolves
-/// AES-128 keys through [`KeyStore`](crate::playlist::KeyStore) before
-/// construction.
 pub(crate) struct VariantParams<'a> {
     pub(crate) ctx: &'a PlanCtx,
     pub(crate) decrypt_contexts: &'a [Option<DecryptContext>],
@@ -285,10 +277,11 @@ pub(crate) struct VariantParams<'a> {
     pub(crate) variant_idx: usize,
 }
 
-/// Production constructor: read parsed playlist metadata and assemble the
-/// per-variant index, init/segment entries, queue, and cancel hierarchy.
-impl FromWithParams<&Arc<PlaylistState>, VariantParams<'_>> for Arc<HlsVariant> {
-    fn build(playlist_state: &Arc<PlaylistState>, params: VariantParams<'_>) -> Self {
+impl HlsVariant {
+    pub(crate) fn try_build(
+        playlist_state: &Arc<PlaylistState>,
+        params: VariantParams<'_>,
+    ) -> HlsResult<Arc<Self>> {
         let VariantParams {
             variant_idx,
             seek_obs,
@@ -296,35 +289,31 @@ impl FromWithParams<&Arc<PlaylistState>, VariantParams<'_>> for Arc<HlsVariant> 
             decrypt_contexts,
             ctx,
         } = params;
-        let init = HlsVariant::build_init_entry(
-            playlist_state.as_ref(),
-            variant_idx,
-            init_decrypt_ctx,
-            ctx,
-        );
-        let segments = HlsVariant::build_segment_entries(
+        let init =
+            Self::build_init_entry(playlist_state.as_ref(), variant_idx, init_decrypt_ctx, ctx)?;
+        let segments = Self::build_segment_entries(
             playlist_state.as_ref(),
             decrypt_contexts,
             variant_idx,
             ctx,
-        );
+        )?;
         let codec = playlist_state.variant_codec(variant_idx);
         let container = playlist_state.variant_container(variant_idx);
-        VariantParts {
+        Ok(VariantParts {
             seek_obs,
             codec,
             container,
             init,
             segments,
         }
-        .into_variant(variant_idx, ctx)
+        .into_variant(variant_idx, ctx))
     }
 }
 
 impl VariantParts {
     /// Bare assembly used by unit tests inside this module.
     #[must_use]
-    pub(super) fn into_variant(self, variant: usize, ctx: &PlanCtx) -> Arc<HlsVariant> {
+    pub(crate) fn into_variant(self, variant: usize, ctx: &PlanCtx) -> Arc<HlsVariant> {
         let Self {
             init,
             codec,
@@ -346,15 +335,45 @@ impl VariantParts {
                 codec,
                 container,
                 headers: ctx.headers.clone(),
+                bus: ctx.bus.clone(),
             },
             seek: VariantSeek::new(HlsVariant::NO_SEEK_TAIL),
             segments: VariantSegments::new(ctx.scope.clone(), init, segments),
+            cache_complete_emitted: AtomicBool::new(false),
         })
     }
 }
 
 impl HlsVariant {
     pub(super) const NO_SEEK_TAIL: u32 = u32::MAX;
+
+    pub(crate) fn event_bus(&self) -> EventBus {
+        self.profile.bus.clone()
+    }
+
+    pub(crate) fn is_encrypted_segment(&self, segment_index: u32) -> bool {
+        self.segments
+            .get(segment_index as usize)
+            .is_some_and(|segment| matches!(segment.content(), SegmentContent::Encrypted(_)))
+    }
+
+    pub(crate) fn maybe_publish_cache_complete(&self) {
+        if !self.fetch_plan_satisfied(0) {
+            return;
+        }
+        if self.cache_complete_emitted.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.profile
+            .bus
+            .publish(kithara_events::HlsEvent::CacheComplete {
+                total_bytes: self.authoritative_len(),
+            });
+    }
+
+    pub(crate) fn variant_index_u32(&self) -> Option<u32> {
+        u32::try_from(self.variant).ok()
+    }
 
     /// Builds per-segment metadata. `#EXT-X-BYTERANGE` supplies an exact
     /// media-segment length when present; all other playlists get a non-exact
@@ -365,10 +384,10 @@ impl HlsVariant {
         decrypt_contexts: &[Option<DecryptContext>],
         variant_idx: usize,
         ctx: &PlanCtx,
-    ) -> Vec<Segment> {
+    ) -> HlsResult<Vec<Segment>> {
         let scope = &ctx.scope;
         let Some(num) = playlist_state.num_segments(variant_idx) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let bandwidth_bps = playlist_state.variant_bandwidth_bps(variant_idx);
         let mut decode_time = Duration::ZERO;
@@ -388,7 +407,7 @@ impl HlsVariant {
                     SegmentSize::seed,
                 );
             entries.push(Segment::Media(MediaSegment {
-                resource_id: scope.key_for(&url),
+                resource_id: scope.key(&AssetResource::Url(url.clone()))?,
                 url,
                 state: SegmentSlotState::missing(),
                 size,
@@ -398,6 +417,6 @@ impl HlsVariant {
             }));
             decode_time = decode_time.saturating_add(duration);
         }
-        entries
+        Ok(entries)
     }
 }

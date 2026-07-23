@@ -4,10 +4,10 @@ use std::sync::{
 };
 
 use kithara_assets::{
-    AssetReader, AssetResource, AssetStore, AssetWriter, DemandLease, RawWriteHandle, ReadSide,
-    ResourceKey, WriteSide,
+    AssetReader, AssetStore, AssetWriter, DemandLease, RawWriteHandle, ReadSide,
+    ResourceAcquisition, ResourceKey, WriteSide,
 };
-use kithara_events::EventBus;
+use kithara_events::{AudioCodecKind, ContainerKind, EventBus, FileEvent, TotalBytesSource};
 use kithara_net::Headers;
 use kithara_platform::{
     CancelToken,
@@ -24,15 +24,15 @@ use crate::{coord::FileCoord, error::SourceError};
 /// (`Pending` writer to download / `Ready` reader already cached) is decided
 /// by the caller.
 pub(crate) struct FileStreamState {
-    pub(crate) backend: Arc<AssetStore>,
-    pub(crate) acq: AssetResource,
+    pub(crate) backend: AssetStore,
+    pub(crate) acq: ResourceAcquisition,
     pub(crate) bus: EventBus,
     pub(crate) key: ResourceKey,
 }
 
 impl FileStreamState {
     pub(crate) fn create(
-        assets: &Arc<AssetStore>,
+        assets: &AssetStore,
         key: ResourceKey,
         bus: Option<EventBus>,
         event_channel_capacity: usize,
@@ -45,7 +45,7 @@ impl FileStreamState {
             bus,
             key,
             acq,
-            backend: Arc::clone(assets),
+            backend: assets.clone(),
         })
     }
 }
@@ -77,7 +77,7 @@ pub(crate) struct FileSourceCtx {
 /// present only on the download path; `raw` is the clone-able streaming-write
 /// handle a fetch closure uses to land bytes into the writer's generation.
 pub(crate) struct FileAssetCtx {
-    pub(crate) backend: Arc<AssetStore>,
+    pub(crate) backend: AssetStore,
     pub(crate) reader: AssetReader,
     pub(crate) writer: Mutex<Option<AssetWriter>>,
     pub(crate) headers: Option<Headers>,
@@ -109,6 +109,7 @@ pub(crate) struct FileInner {
     /// election if the original producer drops. `None` for local /
     /// already-cached sources that never download.
     pub(crate) demand_lease: Option<DemandLease>,
+    opened_emitted: OnceLock<()>,
 
     /// FSM phase as `FilePhase as u8`. Lock-free transitions.
     phase: AtomicU8,
@@ -130,6 +131,7 @@ impl FileInner {
             source,
             asset,
             demand_lease,
+            opened_emitted: OnceLock::new(),
             content_type_info: OnceLock::new(),
             segment_index: OnceLock::new(),
             worker_wake: OnceLock::new(),
@@ -161,11 +163,12 @@ impl FileInner {
     /// keeps the mmap parked in the cache directory for the full lifetime
     /// of the holding `Stream<File>`.
     pub(crate) fn fail_and_evict(&self, reason: &str) {
-        self.set_phase(FilePhase::Complete);
         if let Some(writer) = self.take_writer() {
             writer.fail(reason.to_string());
         }
-        self.asset.backend.remove_resource(&self.asset.key);
+        if let Err(error) = self.asset.backend.remove_resource(&self.asset.key) {
+            tracing::warn!(%error, reason, "kithara-file: failed to remove terminal resource");
+        }
     }
 
     /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs
@@ -173,8 +176,14 @@ impl FileInner {
     /// can short-circuit on `segment_index.get()` without re-reading the
     /// file each tick.
     pub(crate) fn set_phase(&self, phase: FilePhase) {
+        let previous = self.phase.load(Ordering::Acquire);
         self.phase.store(phase as u8, Ordering::Release);
-        if matches!(phase, FilePhase::Complete) {
+        if matches!(phase, FilePhase::Complete) && previous != FilePhase::Complete as u8 {
+            if let Some(total_bytes) = self.source.coord.total_bytes() {
+                self.source
+                    .bus
+                    .publish(FileEvent::CacheComplete { total_bytes });
+            }
             self.try_build_segment_index();
         }
     }
@@ -207,5 +216,76 @@ impl FileInner {
         if let Some(wake) = self.worker_wake.get() {
             wake.wake();
         }
+    }
+
+    pub(crate) fn publish_opened(
+        &self,
+        total_bytes: Option<u64>,
+        cached: bool,
+        source: Option<TotalBytesSource>,
+    ) {
+        if self.opened_emitted.set(()).is_err() {
+            return;
+        }
+        let (codec, container) = self
+            .content_type_info
+            .get()
+            .map_or((None, None), map_media_info);
+        self.source.bus.publish(FileEvent::Opened {
+            codec,
+            container,
+            total_bytes,
+            cached,
+        });
+        if let (Some(total_bytes), Some(source)) = (total_bytes, source) {
+            self.source.bus.publish(FileEvent::TotalBytesResolved {
+                total_bytes,
+                source,
+            });
+        }
+    }
+
+    pub(crate) fn publish_total_bytes_resolved(&self, total_bytes: u64, source: TotalBytesSource) {
+        self.source.bus.publish(FileEvent::TotalBytesResolved {
+            total_bytes,
+            source,
+        });
+    }
+}
+
+fn map_media_info(info: &MediaInfo) -> (Option<AudioCodecKind>, Option<ContainerKind>) {
+    (
+        info.codec.map(map_audio_codec),
+        info.container.map(map_container),
+    )
+}
+
+fn map_audio_codec(codec: kithara_stream::AudioCodec) -> AudioCodecKind {
+    match codec {
+        kithara_stream::AudioCodec::AacLc => AudioCodecKind::AacLc,
+        kithara_stream::AudioCodec::AacHe => AudioCodecKind::AacHe,
+        kithara_stream::AudioCodec::AacHeV2 => AudioCodecKind::AacHeV2,
+        kithara_stream::AudioCodec::Mp3 => AudioCodecKind::Mp3,
+        kithara_stream::AudioCodec::Flac => AudioCodecKind::Flac,
+        kithara_stream::AudioCodec::Vorbis => AudioCodecKind::Vorbis,
+        kithara_stream::AudioCodec::Opus => AudioCodecKind::Opus,
+        kithara_stream::AudioCodec::Alac => AudioCodecKind::Alac,
+        kithara_stream::AudioCodec::Pcm => AudioCodecKind::Pcm,
+        kithara_stream::AudioCodec::Adpcm => AudioCodecKind::Adpcm,
+    }
+}
+
+fn map_container(container: kithara_stream::ContainerFormat) -> ContainerKind {
+    match container {
+        kithara_stream::ContainerFormat::Mp4 => ContainerKind::Mp4,
+        kithara_stream::ContainerFormat::Fmp4 => ContainerKind::Fmp4,
+        kithara_stream::ContainerFormat::MpegTs => ContainerKind::MpegTs,
+        kithara_stream::ContainerFormat::MpegAudio => ContainerKind::MpegAudio,
+        kithara_stream::ContainerFormat::Adts => ContainerKind::Adts,
+        kithara_stream::ContainerFormat::Flac => ContainerKind::Flac,
+        kithara_stream::ContainerFormat::Wav => ContainerKind::Wav,
+        kithara_stream::ContainerFormat::Ogg => ContainerKind::Ogg,
+        kithara_stream::ContainerFormat::Caf => ContainerKind::Caf,
+        kithara_stream::ContainerFormat::Mkv => ContainerKind::Mkv,
     }
 }

@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use kithara_assets::AssetResource;
 #[cfg(test)]
 use kithara_assets::ResourceKey;
 use kithara_drm::DecryptContext;
@@ -8,6 +9,7 @@ use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
 
 use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};
 use crate::{
+    HlsResult,
     handle::ResourceHandle,
     playlist::{PlaylistAccess, PlaylistState},
     segment::{
@@ -24,9 +26,18 @@ impl HlsVariant {
     ) -> Option<FetchCmd> {
         let init = self.init()?;
         let resource_handle = self.init_handle()?;
-        let resource = resource_handle
-            .acquire(init.content())
-            .expect("acquire_resource for init must succeed");
+        let resource = match resource_handle.acquire(init.content()) {
+            Ok(resource) => resource,
+            Err(error) => {
+                tracing::debug!(
+                    variant = self.variant,
+                    error = %error,
+                    "build_init_cmd: acquire_resource dropped (variant switch in flight)"
+                );
+                let _ = handle.into_missing();
+                return None;
+            }
+        };
         self.build_cmd(
             resource_handle.url().clone(),
             resource,
@@ -51,8 +62,10 @@ impl HlsVariant {
         variant_idx: usize,
         decrypt_ctx: Option<DecryptContext>,
         ctx: &PlanCtx,
-    ) -> Option<Segment> {
-        let url = playlist_state.init_url(variant_idx)?;
+    ) -> HlsResult<Option<Segment>> {
+        let Some(url) = playlist_state.init_url(variant_idx) else {
+            return Ok(None);
+        };
         let needs_exact = needs_exact_byte_sizes(
             playlist_state.variant_codec(variant_idx),
             playlist_state.variant_container(variant_idx),
@@ -62,26 +75,38 @@ impl HlsVariant {
         } else {
             SegmentSize::default()
         };
-        Some(Segment::Init(InitSegment {
-            resource_id: ctx.scope.key_for(&url),
+        Ok(Some(Segment::Init(InitSegment {
+            resource_id: ctx.scope.key(&AssetResource::Url(url.clone()))?,
             url,
             state: SegmentSlotState::missing(),
             size,
             content: SegmentContent::from(decrypt_ctx),
-        }))
+        })))
     }
 
-    /// Whether this variant declares a separately fetched `#EXT-X-MAP` init,
-    /// regardless of whether its size is yet known.
-    pub(crate) fn has_init(&self) -> bool {
-        self.segments.init.is_some()
-    }
-
-    /// Borrow the init slot — the fetch path matches on it, reading the init
-    /// `Segment`'s `url` / `content` / `resource_id` and claiming its state
-    /// atom. `None` for a variant with no separate init.
-    pub(super) fn init(&self) -> Option<&Segment> {
-        self.segments.init.as_ref()
+    delegate::delegate! {
+        to self.segments.init {
+            /// Whether this variant declares a separately fetched `#EXT-X-MAP` init,
+            /// regardless of whether its size is yet known.
+            #[call(is_some)]
+            pub(crate) fn has_init(&self) -> bool;
+            /// Borrow the init slot — the fetch path matches on it, reading the init
+            /// `Segment`'s `url` / `content` / `resource_id` and claiming its state
+            /// atom. `None` for a variant with no separate init.
+            #[call(as_ref)]
+            pub(super) fn init(&self) -> Option<&Segment>;
+            /// Narrow disk handle for the variant's separately fetched init segment,
+            /// or `None` for a variant with no `#EXT-X-MAP` init.
+            #[expr(Some($?.resource(&self.segments.scope)))]
+            #[call(as_ref)]
+            fn init_handle(&self) -> Option<ResourceHandle>;
+            #[expr($.map_or(0, Segment::len))]
+            #[call(as_ref)]
+            pub(super) fn init_route_size(&self) -> u64;
+            #[expr($.map_or(0, Segment::read_len))]
+            #[call(as_ref)]
+            pub(crate) fn init_size(&self) -> u64;
+        }
     }
 
     /// Committed on-disk length of the (separately fetched) init segment, as
@@ -116,12 +141,6 @@ impl HlsVariant {
             .is_some_and(|seg| seg.state().is_failed())
     }
 
-    /// Narrow disk handle for the variant's separately fetched init segment,
-    /// or `None` for a variant with no `#EXT-X-MAP` init.
-    fn init_handle(&self) -> Option<ResourceHandle> {
-        Some(self.segments.init.as_ref()?.resource(&self.segments.scope))
-    }
-
     /// Read `range` of the init segment into `dst` via the [`Segment`]
     /// cascade. `Ok(None)` when there is no init or its bytes are not on disk
     /// yet.
@@ -148,14 +167,6 @@ impl HlsVariant {
     #[cfg(test)]
     pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
         Some(self.segments.init.as_ref()?.resource_id().clone())
-    }
-
-    pub(super) fn init_route_size(&self) -> u64 {
-        self.segments.init.as_ref().map_or(0, Segment::len)
-    }
-
-    pub(crate) fn init_size(&self) -> u64 {
-        self.segments.init.as_ref().map_or(0, Segment::read_len)
     }
 
     /// Flip the init slot to `Missing`, clearing the Layout seed when the

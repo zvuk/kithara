@@ -12,14 +12,15 @@ impl<T> Mutex<T> {
         Self(ParkingLotMutex::new(value))
     }
 
-    #[inline]
-    pub(crate) fn lock(&self) -> MutexGuard<'_, T> {
-        MutexGuard(self.0.lock())
-    }
-
-    #[inline]
-    pub(crate) fn try_lock(&self) -> Result<MutexGuard<'_, T>, NotAvailable> {
-        self.0.try_lock().map(MutexGuard).ok_or(NotAvailable)
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            #[expr(MutexGuard($))]
+            pub(crate) fn lock(&self) -> MutexGuard<'_, T>;
+            #[inline]
+            #[expr($.map(MutexGuard).ok_or(NotAvailable))]
+            pub(crate) fn try_lock(&self) -> Result<MutexGuard<'_, T>, NotAvailable>;
+        }
     }
 }
 

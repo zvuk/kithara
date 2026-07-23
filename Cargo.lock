@@ -2728,6 +2728,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "fieldwork"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16b5ff57d22899405076c15dd38c2735eb8ff261a37fd0d1b0e841f3fd298433"
+dependencies = [
+ "fieldwork-derive",
+]
+
+[[package]]
+name = "fieldwork-derive"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9aca8417ff665ef605a5d6f8f7670df33f74f3226003a1021582940878730b3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "filedescriptor"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4403,6 +4423,8 @@ dependencies = [
  "bon",
  "criterion",
  "dashmap",
+ "delegate",
+ "fieldwork",
  "kithara-events",
  "kithara-platform",
  "kithara-test-utils",
@@ -4424,6 +4446,8 @@ dependencies = [
  "clap",
  "crabtime",
  "crossterm",
+ "derive_more",
+ "fieldwork",
  "futures",
  "iced",
  "kithara",
@@ -4452,6 +4476,7 @@ name = "kithara-apple"
 version = "0.0.1-alpha4"
 dependencies = [
  "block2 0.6.2",
+ "fieldwork",
  "kithara-platform",
  "kithara-workspace-hack",
  "num-traits",
@@ -4470,10 +4495,12 @@ dependencies = [
  "cbc",
  "dashmap",
  "delegate",
+ "fieldwork",
  "hex",
  "kithara-assets",
  "kithara-bufpool",
  "kithara-drm",
+ "kithara-events",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-macros",
@@ -4482,7 +4509,6 @@ dependencies = [
  "lru 0.18.0",
  "rangemap",
  "rkyv",
- "serde",
  "serial_test",
  "sha2 0.11.0",
  "tempfile",
@@ -4507,7 +4533,9 @@ dependencies = [
  "cbc",
  "crossbeam-queue",
  "delegate",
+ "derive_more",
  "fast-interleave",
+ "fieldwork",
  "hotpath",
  "js-sys",
  "kithara-abr",
@@ -4563,6 +4591,8 @@ name = "kithara-bufpool"
 version = "0.0.1-alpha4"
 dependencies = [
  "crossbeam-queue",
+ "delegate",
+ "derive_more",
  "hotpath",
  "kithara-bufpool",
  "kithara-platform",
@@ -4580,10 +4610,13 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
  "criterion",
+ "delegate",
  "derive_more",
  "fdk-aac",
+ "fieldwork",
  "hotpath",
  "jni 0.22.4",
+ "js-sys",
  "kithara-apple",
  "kithara-bufpool",
  "kithara-platform",
@@ -4602,7 +4635,10 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "unimock",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]
@@ -4612,8 +4648,8 @@ dependencies = [
  "anyhow",
  "cargo_metadata 0.23.1",
  "clap",
+ "fieldwork",
  "glob",
- "kithara-workspace-hack",
  "proc-macro2",
  "quote",
  "regex",
@@ -4665,6 +4701,8 @@ dependencies = [
  "crossbeam-queue",
  "dashmap",
  "delegate",
+ "derive_more",
+ "fieldwork",
  "kithara-events",
  "kithara-net",
  "kithara-platform",
@@ -4686,14 +4724,18 @@ dependencies = [
  "console_error_panic_hook",
  "cpal 0.18.1",
  "dashmap",
+ "delegate",
  "futures",
  "jni 0.22.4",
  "js-sys",
  "kithara",
  "kithara-abr",
+ "kithara-assets",
+ "kithara-bufpool",
  "kithara-drm",
  "kithara-events",
  "kithara-hls",
+ "kithara-net",
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
@@ -4726,6 +4768,9 @@ version = "0.0.1-alpha4"
 dependencies = [
  "axum",
  "bon",
+ "delegate",
+ "derive_more",
+ "fieldwork",
  "futures",
  "hotpath",
  "kithara-abr",
@@ -4773,6 +4818,8 @@ dependencies = [
  "cbc",
  "dashmap",
  "delegate",
+ "derive_more",
+ "fieldwork",
  "futures",
  "hls_m3u8",
  "hotpath",
@@ -4810,6 +4857,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64",
+ "bon",
  "bytes",
  "cbc",
  "console_error_panic_hook",
@@ -4864,6 +4912,9 @@ dependencies = [
  "bon",
  "bytes",
  "dashmap",
+ "delegate",
+ "derive_more",
+ "fieldwork",
  "futures",
  "gloo-timers",
  "hotpath",
@@ -4898,6 +4949,8 @@ dependencies = [
  "cpu-time",
  "criterion",
  "delegate",
+ "derive_more",
+ "fieldwork",
  "futures",
  "js-sys",
  "kithara-platform",
@@ -4924,6 +4977,9 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bevy_platform 0.19.0",
  "bon",
+ "delegate",
+ "derive_more",
+ "fieldwork",
  "firewheel",
  "firewheel-web-audio",
  "kithara-abr",
@@ -4959,7 +5015,11 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "delegate",
+ "derive_more",
+ "fieldwork",
  "kithara-abr",
+ "kithara-assets",
+ "kithara-bufpool",
  "kithara-events",
  "kithara-platform",
  "kithara-play",
@@ -4976,6 +5036,8 @@ dependencies = [
  "bitflags 2.13.0",
  "bon",
  "criterion",
+ "delegate",
+ "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
  "kithara-workspace-hack",
@@ -5020,6 +5082,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "delegate",
+ "derive_more",
  "futures",
  "hotpath",
  "kithara-abr",
@@ -5048,6 +5111,8 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "bungee-rs",
+ "derive_more",
+ "fast-interleave",
  "kithara-bufpool",
  "kithara-workspace-hack",
  "num-traits",
@@ -5071,6 +5136,7 @@ name = "kithara-test-utils"
 version = "0.0.1-alpha4"
 dependencies = [
  "backtrace",
+ "fieldwork",
  "kithara-events",
  "kithara-platform",
  "kithara-test-macros",
@@ -5088,6 +5154,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-ui"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bon",
+ "criterion",
+ "delegate",
+ "derive_more",
+ "iced",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "lucide-icons",
+ "num-traits",
+ "ron",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "kithara-workspace-hack"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5101,6 +5186,8 @@ dependencies = [
  "clang-sys",
  "clap",
  "clap_builder",
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
  "cpal 0.17.3",
  "crossbeam-utils",
  "dasp_sample",
@@ -5137,14 +5224,18 @@ dependencies = [
  "memchr",
  "miniz_oxide",
  "mio",
+ "nu-ansi-term",
  "num-traits",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "once_cell",
+ "parking_lot",
  "percent-encoding",
  "portable-atomic",
  "prettyplease",
  "proc-macro2",
  "quote",
+ "rangemap",
  "regex",
  "regex-automata",
  "regex-syntax",
@@ -5153,7 +5244,6 @@ dependencies = [
  "rustc-hash 1.1.0",
  "rustix 1.1.4",
  "rustls-pki-types",
- "semver",
  "serde",
  "serde_core",
  "serde_json",
@@ -5167,12 +5257,13 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
- "toml_datetime 1.1.1+spec-1.1.0",
- "toml_parser",
  "tower",
  "tracing",
+ "tracing-core",
  "tracing-subscriber",
+ "web-sys",
  "winnow 1.0.3",
+ "zerocopy",
  "zstd",
  "zstd-safe",
  "zstd-sys",
@@ -5395,6 +5486,12 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
+
+[[package]]
+name = "lucide-icons"
+version = "1.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "029a7582875d762cacb18cb1255779e8efb2fc78081a4fc1ddc65b49b4d42aa0"
 
 [[package]]
 name = "lyon"
@@ -7593,6 +7690,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "ron"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81116b9531d61eabc41aeb228e4b6b2435bcca3233b98cf3b3077d4e6e9debb3"
+dependencies = [
+ "bitflags 2.13.0",
+ "once_cell",
+ "serde",
+ "serde_derive",
+ "typeid",
+ "unicode-ident",
 ]
 
 [[package]]
@@ -11567,14 +11678,17 @@ dependencies = [
  "anyhow",
  "cargo_metadata 0.23.1",
  "clap",
+ "fs4",
  "glob",
  "kithara-devtools",
- "kithara-workspace-hack",
+ "nix",
  "plist",
  "regex",
  "rustdoc-types",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "signal-hook",
  "syn 2.0.118",
  "tempfile",
  "toml 1.1.2+spec-1.1.0",

@@ -12,7 +12,6 @@ import com.kithara.ffi.FfiTrackStatus
 import com.kithara.ffi.FfiTransition
 import com.kithara.ffi.PlayerObserver
 import com.kithara.ffi.SeekCallback
-import com.kithara.ffi.StoreOptions as FfiStoreOptions
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -54,10 +53,13 @@ class KitharaPlayer(config: Config = Config()) {
     data class Config(
         val eqBandCount: Int = 10,
         val keyRules: List<KeyRule> = emptyList(),
-        val cacheDir: String? = null,
+        /** Shared asset store used by every item created by this player. */
+        val store: AssetStore = Kithara.defaultStore,
     )
 
-    private val inner: FfiAudioPlayer = FfiAudioPlayer(config.toFfi())
+    private val inner: FfiAudioPlayer = FfiAudioPlayer(
+        config.toFfi()
+    )
     private val observer = PlayerObserverBridge(this)
     private val eventsFlow = MutableSharedFlow<KitharaPlayerEvent>(extraBufferCapacity = 16)
     private val stateFlow = MutableStateFlow(PlayerState())
@@ -375,7 +377,25 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.MuteChanged,
             is FfiPlayerEvent.ItemDidPlayToEnd,
             is FfiPlayerEvent.CrossfadeStarted,
-            is FfiPlayerEvent.CrossfadeDurationChanged -> Unit
+            is FfiPlayerEvent.CrossfadeDurationChanged,
+            is FfiPlayerEvent.TrackAdded,
+            is FfiPlayerEvent.TrackRemoved,
+            is FfiPlayerEvent.TrackLoadFailed,
+            is FfiPlayerEvent.RepeatModeChanged,
+            is FfiPlayerEvent.NextTrackReady,
+            is FfiPlayerEvent.CurrentItemAdvanced,
+            is FfiPlayerEvent.EngineStarted,
+            is FfiPlayerEvent.EngineStopped,
+            is FfiPlayerEvent.CrossfadeCompleted,
+            is FfiPlayerEvent.CrossfadeCancelled,
+            is FfiPlayerEvent.MasterVolumeChanged,
+            is FfiPlayerEvent.AudioRouteChanged,
+            is FfiPlayerEvent.DjBpmDetected,
+            is FfiPlayerEvent.DjKeylockChanged,
+            is FfiPlayerEvent.DjStretchBackendChanged,
+            is FfiPlayerEvent.AssetCommitted,
+            is FfiPlayerEvent.AssetFailed,
+            is FfiPlayerEvent.AssetEvicted -> Unit
         }
     }
 
@@ -442,7 +462,7 @@ private class ClosureKeyProcessorBridge(
         decrypt(key, salt) ?: key
 }
 
-private fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
+internal fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
     val ffiRules = keyRules.map { rule ->
         FfiKeyRule(
             processor = KeyProcessorBridge(rule.processor),
@@ -454,7 +474,7 @@ private fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
     }
     return FfiPlayerConfig(
         keyOptions = FfiKeyOptions(rules = ffiRules),
-        store = FfiStoreOptions(cacheDir = cacheDir),
+        store = store.inner,
         eqBandCount = eqBandCount.toUInt(),
     )
 }

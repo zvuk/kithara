@@ -2,6 +2,11 @@
 #[path = "../common/offline_player_harness.rs"]
 mod offline_player_harness;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod source_helper;
+#[cfg(not(target_arch = "wasm32"))]
+use source_helper::app_track_source;
+
 mod advance_boundary_provenance;
 mod auto_advance;
 mod cold_seek_middle;

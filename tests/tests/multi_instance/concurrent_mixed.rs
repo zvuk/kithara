@@ -1,5 +1,4 @@
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
@@ -46,9 +45,11 @@ async fn spawn_file_instance(
     temp_path: &std::path::Path,
 ) -> JoinHandle<InstanceResult> {
     let file_config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(temp_path))
+        .store(kithara_integration_tests::disk_asset_store(temp_path))
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint(("mp3").to_string())
         .build();
     let mut audio = Audio::<Stream<File>>::new(config)
@@ -84,13 +85,15 @@ async fn spawn_hls_instance(
     let cancel = CancelToken::never();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_path))
+        .store(kithara_integration_tests::disk_asset_store(temp_path))
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
 

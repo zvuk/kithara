@@ -7,7 +7,6 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
     file::{File, FileConfig},
     platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, Stream},
@@ -68,7 +67,7 @@ async fn remote_presigned_file_url_uses_bounded_cache_name(temp_dir: TestTempDir
     .expect("test URL must parse");
 
     let config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
 
     if let Err(e) = Stream::<File>::new(config).await {
@@ -101,7 +100,7 @@ async fn stream_file_seek_start_reads_correct_bytes(
     let url = audio_behavior(&helper, None);
 
     let config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
@@ -144,7 +143,7 @@ async fn stream_file_seek_reads_expected_bytes(
     let url = audio_behavior(&helper, None);
 
     let config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
@@ -193,7 +192,7 @@ async fn stream_media_info_carries_container_from_content_type(
     let url = audio_behavior(&helper, Some(mime));
 
     let config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
@@ -230,7 +229,7 @@ async fn stream_file_seek_past_eof_fails(temp_dir: TestTempDir) {
     let url = audio_behavior(&helper, None);
 
     let config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
@@ -253,7 +252,7 @@ async fn stream_file_multiple_seeks_work(temp_dir: TestTempDir) {
     let url = audio_behavior(&helper, None);
 
     let config = FileConfig::for_src(url.into())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 

@@ -1,5 +1,5 @@
 use kithara::play::{PlayerEvent, TimeControlStatus};
-use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{Envelope, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -13,7 +13,10 @@ use kithara_queue::Queue;
 use crate::{
     observer::{ItemObserver, PlayerObserver},
     registry::ItemRegistry,
-    types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTimeRange, FfiTrackStatus},
+    types::{
+        FfiAdvanceReason, FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiRepeatMode, FfiTimeRange,
+        FfiTrackStatus,
+    },
 };
 
 pub(crate) struct EventBridge {
@@ -35,22 +38,24 @@ impl EventBridge {
         last_current: &Mutex<Option<TrackId>>,
         event: &Event,
     ) {
-        match event {
-            Event::Player(pe) => {
-                Self::route_player_event_to_item(items, queue, last_current, pe);
-                let Some(ffi_event) = Self::player_event_to_ffi(pe) else {
-                    return;
-                };
-                observer.on_event(ffi_event);
+        if let Event::Player(pe) = event {
+            Self::route_player_event_to_item(items, queue, last_current, pe);
+            let Some(ffi_event) = FfiPlayerEvent::try_from(pe).ok() else {
+                return;
+            };
+            observer.on_event(ffi_event);
+            return;
+        }
+        if let Event::Queue(qe) = event {
+            if let QueueEvent::CurrentTrackChanged { id } = qe {
+                let mut prev = last_current.lock();
+                *prev = *id;
             }
-            Event::Queue(qe) => {
-                if let QueueEvent::CurrentTrackChanged { id } = qe {
-                    let mut prev = last_current.lock();
-                    *prev = *id;
-                }
-                Self::dispatch_queue_event(observer, items, qe);
-            }
-            _ => {}
+            Self::dispatch_queue_event(observer, items, qe);
+            return;
+        }
+        if let Ok(ffi_event) = FfiPlayerEvent::try_from(event) {
+            observer.on_event(ffi_event);
         }
     }
 
@@ -60,9 +65,24 @@ impl EventBridge {
         event: &QueueEvent,
     ) {
         match event {
+            QueueEvent::TrackAdded { id, index } => {
+                observer.on_event(FfiPlayerEvent::TrackAdded {
+                    item_id: *id,
+                    index: *index as u64,
+                });
+            }
+            QueueEvent::TrackRemoved { id } => {
+                observer.on_event(FfiPlayerEvent::TrackRemoved { item_id: *id });
+            }
             QueueEvent::CurrentTrackChanged { id } => {
                 let item_id = *id;
                 observer.on_event(FfiPlayerEvent::CurrentItemChanged { item_id });
+            }
+            QueueEvent::CurrentTrackAdvance { id, reason } => {
+                observer.on_event(FfiPlayerEvent::CurrentItemAdvanced {
+                    item_id: *id,
+                    reason: FfiAdvanceReason::from(*reason),
+                });
             }
             QueueEvent::TrackStatusChanged { id, status } => {
                 let Some(item) = items.lock().get(id).cloned() else {
@@ -79,6 +99,17 @@ impl EventBridge {
             QueueEvent::QueueEnded => {
                 observer.on_event(FfiPlayerEvent::QueueEnded);
             }
+            QueueEvent::TrackLoadFailed {
+                id,
+                reason,
+                auto_skipped,
+            } => {
+                observer.on_event(FfiPlayerEvent::TrackLoadFailed {
+                    item_id: *id,
+                    reason: reason.clone(),
+                    auto_skipped: *auto_skipped,
+                });
+            }
             QueueEvent::CrossfadeStarted { duration_seconds } => {
                 observer.on_event(FfiPlayerEvent::CrossfadeStarted {
                     duration_seconds: *duration_seconds,
@@ -86,6 +117,17 @@ impl EventBridge {
             }
             QueueEvent::CrossfadeDurationChanged { seconds } => {
                 observer.on_event(FfiPlayerEvent::CrossfadeDurationChanged { seconds: *seconds });
+            }
+            QueueEvent::RepeatModeChanged { mode } => {
+                observer.on_event(FfiPlayerEvent::RepeatModeChanged {
+                    mode: FfiRepeatMode::from(*mode),
+                });
+            }
+            QueueEvent::NextTrackReady { id, index } => {
+                observer.on_event(FfiPlayerEvent::NextTrackReady {
+                    item_id: *id,
+                    index: *index as u64,
+                });
             }
             _ => {}
         }
@@ -157,32 +199,6 @@ impl EventBridge {
         } else {
             Vec::new()
         }
-    }
-
-    fn player_event_to_ffi(event: &PlayerEvent) -> Option<FfiPlayerEvent> {
-        Some(match event {
-            PlayerEvent::RateChanged { rate } => FfiPlayerEvent::RateChanged { rate: *rate },
-            PlayerEvent::StatusChanged { status } => FfiPlayerEvent::StatusChanged {
-                status: (*status).into(),
-            },
-            PlayerEvent::TimeControlStatusChanged { status, .. } => {
-                FfiPlayerEvent::TimeControlStatusChanged {
-                    status: (*status).into(),
-                }
-            }
-            PlayerEvent::VolumeChanged { volume } => {
-                FfiPlayerEvent::VolumeChanged { volume: *volume }
-            }
-            PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
-            PlayerEvent::ItemDidPlayToEnd { .. } => FfiPlayerEvent::ItemDidPlayToEnd,
-            PlayerEvent::ItemDidFail { item_id, .. } => FfiPlayerEvent::ItemDidFail {
-                item_id: item_id
-                    .as_ref()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .map(TrackId::from),
-            },
-            _ => return None,
-        })
     }
 
     /// Forward player-level signals (`ItemDidPlayToEnd`, `ItemDidFail`,
@@ -291,7 +307,7 @@ impl EventBridge {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
-                            Ok(ev) => Self::dispatch(
+                            Ok(Envelope { event: ev, .. }) => Self::dispatch(
                                 &observer,
                                 &queue,
                                 &items,
@@ -352,8 +368,28 @@ impl Drop for EventBridge {
 
 #[cfg(test)]
 mod tests {
+    use kithara_events::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackId};
+    use kithara_platform::sync::{Arc, Mutex};
+
     use super::*;
     use crate::{item::AudioPlayerItem, types::FfiItemConfig};
+
+    #[derive(Default)]
+    struct CollectingPlayerObserver {
+        events: Mutex<Vec<FfiPlayerEvent>>,
+    }
+
+    impl CollectingPlayerObserver {
+        fn take_events(&self) -> Vec<FfiPlayerEvent> {
+            std::mem::take(&mut *self.events.lock())
+        }
+    }
+
+    impl PlayerObserver for CollectingPlayerObserver {
+        fn on_event(&self, event: FfiPlayerEvent) {
+            self.events.lock().push(event);
+        }
+    }
 
     fn assert_send<T: Send>() {}
 
@@ -390,5 +426,86 @@ mod tests {
     #[kithara::test]
     fn loaded_ranges_empty_when_nothing_decoded() {
         assert!(EventBridge::loaded_ranges_from_frontier(0.0).is_empty());
+    }
+
+    #[kithara::test]
+    fn current_track_advance_emits_advanced_only() {
+        let observer_impl = Arc::new(CollectingPlayerObserver::default());
+        let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let item_id = TrackId::from(7_u64);
+
+        EventBridge::dispatch_queue_event(
+            &observer,
+            &items,
+            &QueueEvent::CurrentTrackAdvance {
+                id: Some(item_id),
+                reason: AdvanceReason::UserNext,
+            },
+        );
+
+        let events = observer_impl.take_events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            FfiPlayerEvent::CurrentItemAdvanced {
+                item_id: Some(id),
+                reason: FfiAdvanceReason::UserNext,
+            } if *id == item_id
+        ));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, FfiPlayerEvent::CurrentItemChanged { .. }))
+        );
+    }
+
+    #[kithara::test]
+    fn repeat_mode_changed_maps_to_ffi_repeat_mode() {
+        let observer_impl = Arc::new(CollectingPlayerObserver::default());
+        let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+
+        EventBridge::dispatch_queue_event(
+            &observer,
+            &items,
+            &QueueEvent::RepeatModeChanged {
+                mode: QueueRepeatMode::All,
+            },
+        );
+
+        assert!(matches!(
+            observer_impl.take_events().as_slice(),
+            [FfiPlayerEvent::RepeatModeChanged {
+                mode: FfiRepeatMode::All,
+            }]
+        ));
+    }
+
+    #[kithara::test]
+    fn track_load_failed_passes_reason_and_auto_skipped() {
+        let observer_impl = Arc::new(CollectingPlayerObserver::default());
+        let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let item_id = TrackId::from(11_u64);
+
+        EventBridge::dispatch_queue_event(
+            &observer,
+            &items,
+            &QueueEvent::TrackLoadFailed {
+                id: item_id,
+                reason: "network timeout".to_string(),
+                auto_skipped: true,
+            },
+        );
+
+        assert!(matches!(
+            observer_impl.take_events().as_slice(),
+            [FfiPlayerEvent::TrackLoadFailed {
+                item_id: id,
+                reason,
+                auto_skipped: true,
+            }] if *id == item_id && reason == "network timeout"
+        ));
     }
 }

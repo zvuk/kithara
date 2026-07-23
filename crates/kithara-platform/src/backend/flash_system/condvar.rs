@@ -7,14 +7,13 @@ use crate::common::time::Instant;
 pub(crate) struct Condvar(ParkingLotCondvar);
 
 impl Condvar {
-    #[inline]
-    pub(crate) fn notify_all(&self) {
-        self.0.notify_all();
-    }
-
-    #[inline]
-    pub(crate) fn notify_one(&self) {
-        self.0.notify_one();
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            pub(crate) fn notify_all(&self);
+            #[inline]
+            pub(crate) fn notify_one(&self);
+        }
     }
 
     #[inline]

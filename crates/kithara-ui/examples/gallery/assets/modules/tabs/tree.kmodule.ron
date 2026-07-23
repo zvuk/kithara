@@ -1,0 +1,17 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-tree-tab",
+    chrome: Plain,
+    root: Row(
+        children: [
+            Tree(
+                id: "browser",
+                size: (w: Fixed(232.0), h: Fill),
+                read: Model(id: "library.tree"),
+                query: Model(id: "library.query"),
+                adaptive: (priority: Required),
+            ),
+        ],
+    ),
+)

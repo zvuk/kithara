@@ -27,6 +27,8 @@ pub struct MemOptions {
     /// The buffer starts with this capacity but grows as needed on writes.
     /// Defaults to 0 (start empty, grow on demand).
     pub capacity: usize,
+    /// Shared byte pool that owns this resource's working buffers.
+    pub pool: BytePool,
 }
 
 /// Internal state of the growable memory driver.
@@ -35,12 +37,14 @@ pub(super) struct MemState {
     pub(super) buf: PooledOwned<32, Vec<u8>>,
     /// Logical length: highest write extent across all writes.
     pub(super) len: u64,
+    /// Canonical owner used for every working-buffer checkout.
+    pub(super) pool: BytePool,
 }
 
 /// In-memory storage driver backed by a growable byte pool buffer.
 ///
-/// Uses [`BytePool::default()`](kithara_bufpool::byte_pool) for memory management
-/// with byte budget enforcement. Data is never evicted —
+/// Uses the pool injected through [`MemOptions`] for memory management with byte
+/// budget enforcement. Data is never evicted —
 /// [`valid_window()`](crate::DriverIo::valid_window) returns `None`.
 ///
 /// `path()` returns `None`.
@@ -65,9 +69,14 @@ impl Driver for MemDriver {
     type Options = MemOptions;
 
     fn open(opts: MemOptions) -> StorageResult<(Self, DriverState)> {
-        let mut buf = BytePool::default().get();
+        let MemOptions {
+            initial_data,
+            capacity,
+            pool,
+        } = opts;
+        let mut buf = pool.get();
 
-        let (len, init_state, committed) = if let Some(data) = opts.initial_data {
+        let (len, init_state, committed) = if let Some(data) = initial_data {
             let data_len = data.len();
             if data_len > 0 {
                 buf.ensure_len(data_len)
@@ -100,8 +109,8 @@ impl Driver for MemDriver {
                 committed,
             )
         } else {
-            if opts.capacity > 0 {
-                buf.ensure_len(opts.capacity)
+            if capacity > 0 {
+                buf.ensure_len(capacity)
                     .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
             }
             (0, DriverState::default(), ArcSwapOption::empty())
@@ -109,7 +118,7 @@ impl Driver for MemDriver {
 
         let driver = Self {
             committed,
-            state: Mutex::new(MemState { buf, len }),
+            state: Mutex::new(MemState { buf, len, pool }),
         };
 
         Ok((driver, init_state))
@@ -129,8 +138,14 @@ impl MemResource {
     ///
     /// Panics if `MemDriver::open` fails (should never happen with default options).
     #[must_use]
-    pub fn new(cancel: CancelToken) -> Self {
-        Self::open(cancel, MemOptions::default())
-            .expect("BUG: MemDriver::open with default options is infallible")
+    pub fn new(cancel: CancelToken, pool: BytePool) -> Self {
+        Self::open(
+            cancel,
+            MemOptions {
+                pool,
+                ..MemOptions::default()
+            },
+        )
+        .expect("BUG: MemDriver::open with default options is infallible")
     }
 }

@@ -352,16 +352,13 @@ where
         )
     }
 
-    fn duration(&self) -> Option<kithara_platform::time::Duration> {
-        self.decoder.duration()
-    }
-
-    fn flush_reader_signals(&mut self) {
-        self.decoder.flush_reader_signals();
-    }
-
-    fn metadata(&self) -> TrackMetadata {
-        self.decoder.metadata()
+    delegate::delegate! {
+        to self.decoder {
+            fn duration(&self) -> Option<kithara_platform::time::Duration>;
+            fn flush_reader_signals(&mut self);
+            fn metadata(&self) -> TrackMetadata;
+            fn update_byte_len(&self, len: u64);
+        }
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -437,10 +434,6 @@ where
                 )
             }),
         }
-    }
-
-    fn update_byte_len(&self, len: u64) {
-        self.decoder.update_byte_len(len);
     }
 }
 

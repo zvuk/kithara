@@ -46,6 +46,10 @@ pub(crate) fn green(s: &str) -> String {
     wrap("32", s)
 }
 
+pub(crate) fn bold_green(s: &str) -> String {
+    wrap("1;32", s)
+}
+
 pub(crate) fn bold_red(s: &str) -> String {
     wrap("1;31", s)
 }

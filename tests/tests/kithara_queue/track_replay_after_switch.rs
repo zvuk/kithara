@@ -4,7 +4,7 @@
 use std::fmt::Write;
 
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     events::{AbrMode, Event, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -106,7 +106,7 @@ fn build_queue_with_tick(
 ) -> (
     Arc<Queue>,
     Downloader,
-    StoreOptions,
+    AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
     build_queue_with_tick_cf(temp_dir, 0.0)
@@ -118,16 +118,23 @@ fn build_queue_with_tick_cf(
 ) -> (
     Arc<Queue>,
     Downloader,
-    StoreOptions,
+    AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .crossfade_duration(crossfade_seconds)
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::default()
+            .with_player(player)
+            .with_store(store.clone()),
+    ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
         loop {
@@ -141,7 +148,6 @@ fn build_queue_with_tick_cf(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
 
@@ -184,7 +190,7 @@ async fn wait_for_current_track(
     deadline: Duration,
 ) {
     let wait = async {
-        while let Ok(ev) = rx.recv().await {
+        while let Ok(ev) = rx.recv().await.map(|env| env.event) {
             if let Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) = ev
                 && id == expected
             {
@@ -212,6 +218,8 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(url.as_str())
             .expect("valid fixture URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))
@@ -318,6 +326,8 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(url.as_str())
             .expect("valid fixture URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))

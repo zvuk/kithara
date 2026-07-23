@@ -1,7 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
+    bufpool::{BytePool, PcmPool},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -12,7 +13,7 @@ use kithara::{
         tokio::sync::OnceCell,
     },
     play::{PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, TrackSource},
+    queue::{Queue, QueueConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{config::AppConfig, sources::build_source};
@@ -36,13 +37,9 @@ async fn zvuk_drm_master_playlist_trace() {
     let ctx = shared_ctx().await;
     let url = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
 
-    let source = match build_source(url, &ctx.config) {
-        TrackSource::Config(mut cfg) => {
-            cfg.store = StoreOptions::new(cache.path());
-            TrackSource::Config(cfg)
-        }
-        other => other,
-    };
+    let mut config = ctx.config.clone();
+    config.store = kithara_integration_tests::disk_asset_store(cache.path());
+    let source = build_source(url, &config);
 
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx.queue.append(source);
@@ -70,8 +67,19 @@ async fn shared_ctx() -> &'static Ctx {
                 .build(),
         );
         let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-        let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
-        let player = Arc::new(PlayerImpl::new(PlayerConfig::builder().build()));
+        let config = AppConfig::new(
+            downloader,
+            flush_hub,
+            CancelToken::never(),
+            BytePool::default(),
+            PcmPool::default(),
+        );
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder()
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .build(),
+        ));
         let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
         let q = Arc::clone(&queue);
@@ -119,7 +127,7 @@ async fn wait_for_terminal(
     timeout(deadline, async {
         loop {
             let ev = match rx.recv().await {
-                Ok(ev) => ev,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             };

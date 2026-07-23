@@ -9,8 +9,8 @@ use kithara::platform::time;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    assets::{AssetStoreBuilder, StorageBackend},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     decode::{DecoderBackend, PcmChunk},
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
     hls::{Hls, HlsConfig},
@@ -186,7 +186,7 @@ async fn build_live_audio(
     cache_capacity: usize,
 ) -> Audio<Stream<Hls>> {
     let url = server.asset(path);
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"))
         .build();
@@ -196,6 +196,8 @@ async fn build_live_audio(
         .build();
     Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .block_on_underrun(true)
             .build(),
     )
@@ -212,7 +214,7 @@ fn spawn_live_stats_task(
     let events_task = spawn(async move {
         loop {
             let event = match events.recv().await {
-                Ok(event) => event,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
@@ -281,7 +283,7 @@ fn warmup_until_variant_switch(
 #[cfg(not(target_arch = "wasm32"))]
 fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
     loop {
-        match PcmReader::next_chunk(audio) {
+        match PcmRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -295,7 +297,7 @@ fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
 #[kithara::flash(true)]
 async fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
     loop {
-        match PcmReader::next_chunk(audio) {
+        match PcmRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -317,7 +319,7 @@ async fn live_real_drm_playback_smoke() {
     let server = TestServerHelper::new().await;
     let url = server.asset("drm/master.m3u8");
     info!(%url, "starting real DRM playback smoke");
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
@@ -330,6 +332,8 @@ async fn live_real_drm_playback_smoke() {
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .block_on_underrun(true)
             .build(),
     )
@@ -406,7 +410,7 @@ async fn live_ephemeral_revisit_sequence_regression(
 
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
         .build();
@@ -417,6 +421,8 @@ async fn live_ephemeral_revisit_sequence_regression(
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -436,7 +442,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     let events_task = spawn(async move {
         loop {
             let event = match events.recv().await {
-                Ok(event) => event,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             };
@@ -735,7 +741,7 @@ async fn live_real_stream_random_seek_prefix_regression(
 async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: &str) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
@@ -747,6 +753,8 @@ async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: 
 
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .block_on_underrun(true)
             .build(),
     )
@@ -832,11 +840,14 @@ async fn live_stress_real_stream_seek_read_cache(
     {
         let server = TestServerHelper::new().await;
         let url = server.asset(path);
-        let mut store = StoreOptions::new(temp_dir.path());
-        if ephemeral {
-            store.backend = StorageBackend::Memory;
-            store.cache_capacity = Some(NonZeroUsize::new(24).expect("nonzero"));
-        }
+        let store = if ephemeral {
+            AssetStoreBuilder::default()
+                .backend(StorageBackend::Memory)
+                .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
+                .build()
+        } else {
+            kithara_integration_tests::disk_asset_store(temp_dir.path())
+        };
 
         let hls_config = HlsConfig::for_url(url)
             .store(store)
@@ -845,6 +856,8 @@ async fn live_stress_real_stream_seek_read_cache(
 
         let mut audio = Audio::<Stream<Hls>>::new(
             AudioConfig::<Hls>::for_stream(hls_config)
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .block_on_underrun(true)
                 .build(),
         )
@@ -859,7 +872,7 @@ async fn live_stress_real_stream_seek_read_cache(
         let events_task = spawn(async move {
             loop {
                 let event = match events.recv().await {
-                    Ok(event) => event,
+                    Ok(env) => env.event,
                     Err(RecvError::Lagged(_)) => continue,
                     Err(RecvError::Closed) => break,
                 };
@@ -1150,7 +1163,7 @@ async fn live_stress_real_stream_seek_read_cache(
 async fn live_ephemeral_small_cache_playback(#[case] path: &str, #[case] label: &str) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
@@ -1162,6 +1175,8 @@ async fn live_ephemeral_small_cache_playback(#[case] path: &str, #[case] label: 
 
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .block_on_underrun(true)
             .build(),
     )
@@ -1245,7 +1260,7 @@ async fn live_ephemeral_small_cache_seek_stress(
     {
         let server = TestServerHelper::new().await;
         let url = server.asset(path);
-        let store = StoreOptions::builder()
+        let store = AssetStoreBuilder::default()
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .build();
@@ -1256,6 +1271,8 @@ async fn live_ephemeral_small_cache_seek_stress(
             .build();
 
         let config = AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(backend)

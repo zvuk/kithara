@@ -8,17 +8,18 @@ use std::{
 use axum::{
     Router,
     body::Body,
+    http::StatusCode,
     routing::{get, head},
 };
 use bytes::Bytes;
-use futures::stream::iter as stream_iter;
+use futures::{StreamExt, stream::iter as stream_iter};
 use kithara_abr::Abr;
-use kithara_events::{DownloaderEvent, Event, EventBus};
+use kithara_events::{DownloaderEvent, Envelope, Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Notify},
-    time::{self, Duration},
+    time::{self, Duration, Instant},
     tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
 };
 use kithara_test_utils::kithara;
@@ -658,7 +659,10 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let mut seen_slow = false;
     while Instant::now() < deadline {
         match time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
-            Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow { .. }))) => {
+            Ok(Ok(Envelope {
+                event: Event::Downloader(DownloaderEvent::LoadSlow { .. }),
+                ..
+            })) => {
                 seen_slow = true;
                 break;
             }
@@ -700,7 +704,10 @@ async fn soft_timeout_covers_response_body() {
     let mut seen_slow = false;
     while Instant::now() < deadline {
         match time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
-            Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow { .. }))) => {
+            Ok(Ok(Envelope {
+                event: Event::Downloader(DownloaderEvent::LoadSlow { .. }),
+                ..
+            })) => {
                 seen_slow = true;
                 break;
             }
@@ -832,6 +839,174 @@ async fn spawn_slow_body_server(delay_ms: u64) -> Url {
             .expect("serve");
     });
     Url::parse(&format!("http://{addr}/data")).expect("url")
+}
+
+async fn spawn_flaky_retry_server() -> Url {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let app = Router::new().route(
+        "/data",
+        get({
+            let attempts = Arc::clone(&attempts);
+            move || {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                    if attempt == 0 {
+                        (StatusCode::INTERNAL_SERVER_ERROR, "retry me")
+                    } else {
+                        (StatusCode::OK, "ok")
+                    }
+                }
+            }
+        }),
+    );
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+    Url::parse(&format!("http://{addr}/data")).expect("url")
+}
+
+async fn spawn_stalled_body_server() -> Url {
+    let app = Router::new().route(
+        "/data",
+        get(|| async {
+            let first = futures::stream::iter([Ok::<_, Infallible>(Bytes::from_static(b"xx"))]);
+            Body::from_stream(first.chain(futures::stream::pending()))
+        }),
+    );
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    tokio_spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("serve");
+    });
+    Url::parse(&format!("http://{addr}/data")).expect("url")
+}
+
+// flash(false): this assertion depends on real localhost request progress and
+// retries, not on virtual scheduler time.
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(10)))]
+async fn retry_and_first_byte_publish_on_peer_bus() {
+    let url = spawn_flaky_retry_server().await;
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_millis(100))
+        .retry_policy(
+            kithara_net::RetryPolicy::builder()
+                .max_retries(2)
+                .base_delay(Duration::from_millis(1))
+                .max_delay(Duration::from_millis(5))
+                .build(),
+        )
+        .build();
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+    );
+    let root = EventBus::new(64);
+    let scoped = root.scoped();
+    let mut rx = scoped.subscribe();
+    let handle = dl.register(Arc::new(MockPeer)).with_bus(scoped);
+
+    let response = handle
+        .execute(FetchCmd::get(url).build())
+        .await
+        .expect("retry should recover");
+    let body = response.body.collect().await.expect("collect");
+    assert_eq!(body.as_ref(), b"ok");
+
+    let mut saw_retry = false;
+    let mut saw_first_byte = false;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline && !(saw_retry && saw_first_byte) {
+        match time::timeout(Duration::from_millis(100), rx.recv()).await {
+            Ok(Ok(Envelope {
+                event:
+                    Event::Downloader(DownloaderEvent::RequestRetrying {
+                        attempt,
+                        max_retries,
+                        ..
+                    }),
+                ..
+            })) => {
+                saw_retry = attempt == 1 && max_retries == 2;
+            }
+            Ok(Ok(Envelope {
+                event: Event::Downloader(DownloaderEvent::FirstByte { .. }),
+                ..
+            })) => saw_first_byte = true,
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+
+    assert!(saw_retry, "peer bus must receive RequestRetrying");
+    assert!(saw_first_byte, "peer bus must receive FirstByte");
+}
+
+// flash(false): the stalled-body fixture is a real loopback socket that must
+// deliver headers before body inactivity is measured.
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(10)))]
+async fn stalled_body_publishes_resume_and_exhaustion_events() {
+    let url = spawn_stalled_body_server().await;
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_millis(120))
+        .retry_policy(
+            kithara_net::RetryPolicy::builder()
+                .max_retries(2)
+                .base_delay(Duration::from_millis(1))
+                .max_delay(Duration::from_millis(5))
+                .build(),
+        )
+        .build();
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+    );
+    let root = EventBus::new(64);
+    let scoped = root.scoped();
+    let mut rx = scoped.subscribe();
+    let handle = dl.register(Arc::new(MockPeer)).with_bus(scoped);
+
+    // dl `execute` drives the whole fetch through the peer writer, so a
+    // permanently stalled body surfaces as the terminal establish error.
+    let error = handle
+        .execute(FetchCmd::get(url).build())
+        .await
+        .expect_err("stalled body must exhaust resume retries");
+    assert!(
+        matches!(error, kithara_net::NetError::RetryExhausted { .. }),
+        "expected RetryExhausted, got {error:?}"
+    );
+
+    let mut saw_stalled = false;
+    let mut saw_resumed = false;
+    let mut saw_exhausted = false;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline && !(saw_stalled && saw_resumed && saw_exhausted) {
+        match time::timeout(Duration::from_millis(100), rx.recv()).await {
+            Ok(Ok(Envelope {
+                event: Event::Downloader(DownloaderEvent::BodyStalled { consumed, .. }),
+                ..
+            })) => saw_stalled = consumed >= 2,
+            Ok(Ok(Envelope {
+                event: Event::Downloader(DownloaderEvent::BodyResumed { resume_number, .. }),
+                ..
+            })) => saw_resumed = resume_number >= 1,
+            Ok(Ok(Envelope {
+                event: Event::Downloader(DownloaderEvent::RetryExhausted { consumed, .. }),
+                ..
+            })) => saw_exhausted = consumed >= 2,
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+
+    assert!(saw_stalled, "peer bus must receive BodyStalled");
+    assert!(saw_resumed, "peer bus must receive BodyResumed");
+    assert!(saw_exhausted, "peer bus must receive RetryExhausted");
 }
 
 /// Active peer (PLAYING=true from the start) must finish its batch

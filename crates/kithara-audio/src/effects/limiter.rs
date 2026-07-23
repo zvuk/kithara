@@ -1,5 +1,7 @@
 use core::num::{NonZeroU32, NonZeroUsize};
 
+use num_traits::ToPrimitive;
+
 /// Configuration rejected by [`PeakLimiter::new`].
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
@@ -40,7 +42,7 @@ impl PeakLimiter {
             return Err(LimiterError::Release { release_ms });
         }
 
-        let samples = release_ms / 1000.0 * sample_rate.get() as f32;
+        let samples = release_ms / 1000.0 * sample_rate.get().to_f32().unwrap_or(1.0);
         let release_coeff = (-1.0 / samples).exp();
 
         Ok(Self {

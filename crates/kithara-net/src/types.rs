@@ -5,15 +5,11 @@ use bon::Builder;
 use kithara_bufpool::BytePool;
 use kithara_platform::{time::Duration, traits::FromWithParams};
 
+use crate::observe::Observer;
+
 bitflags! {
-    /// HTTP `Accept-Encoding` algorithms the client advertises and is
-    /// willing to decode. Reqwest auto-adds the corresponding
-    /// `Accept-Encoding` header for every algorithm whose flag is set;
-    /// the rest are disabled via `ClientBuilder::no_*` so the wire
-    /// header stays in lockstep with this set.
-    ///
-    /// Subset selection matters when talking to anti-bot WAFs that
-    /// fingerprint clients by their exact `Accept-Encoding` value.
+    /// HTTP codings auto-decoded for whole-body native requests.
+    /// Byte-addressed requests use `identity`; configured subsets stay exact.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Compression: u8 {
         const GZIP    = 1 << 0;
@@ -21,6 +17,33 @@ bitflags! {
         const BROTLI  = 1 << 2;
         const ZSTD    = 1 << 3;
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AcceptEncodingPolicy {
+    Configured,
+    Identity,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn accept_encoding_value(compression: Compression) -> String {
+    let mut codings = Vec::new();
+    if compression.contains(Compression::GZIP) {
+        codings.push("gzip");
+    }
+    if compression.contains(Compression::DEFLATE) {
+        codings.push("deflate");
+    }
+    if compression.contains(Compression::BROTLI) {
+        codings.push("br");
+    }
+    if compression.contains(Compression::ZSTD) {
+        codings.push("zstd");
+    }
+    if codings.is_empty() {
+        return "identity".to_string();
+    }
+    codings.join(", ")
 }
 
 /// TLS+HTTP fingerprint the native `client-wreq` backend impersonates. The
@@ -38,8 +61,9 @@ pub enum ImpersonatePreset {
     Chrome,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, derive_more::From, PartialEq, Eq)]
 pub struct Headers {
+    #[from]
     inner: HashMap<String, String>,
 }
 
@@ -50,27 +74,19 @@ impl Headers {
         Self::default()
     }
 
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.inner.get(key).map(String::as_str)
+    delegate::delegate! {
+        to self.inner {
+            #[expr($.map(String::as_str))]
+            pub fn get(&self, key: &str) -> Option<&str>;
+            #[must_use]
+            pub fn is_empty(&self) -> bool;
+            #[expr($.map(|(k, v)| (k.as_str(), v.as_str())))]
+            pub fn iter(&self) -> impl Iterator<Item = (&str, &str)>;
+        }
     }
 
     pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
         self.inner.insert(key.into(), value.into());
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
-    }
-}
-
-impl From<HashMap<String, String>> for Headers {
-    fn from(map: HashMap<String, String>) -> Self {
-        Self { inner: map }
     }
 }
 
@@ -138,11 +154,8 @@ impl RetryPolicy {
 #[derive(Clone, Debug, Builder)]
 #[non_exhaustive]
 pub struct NetOptions {
-    /// `Accept-Encoding` algorithms the client offers and auto-decodes.
-    /// Defaults to all four (`gzip | deflate | brotli | zstd`); narrow it
-    /// when an upstream rejects the full set (anti-bot WAFs that
-    /// fingerprint on the exact `Accept-Encoding` string are a common
-    /// reason).
+    /// Codings advertised and decoded for whole-body native requests.
+    /// Defaults to all four; byte-addressed requests always use `identity`.
     #[builder(default = Compression::all())]
     pub compression: Compression,
     /// Maximum allowed inactivity between consecutive read operations.
@@ -170,7 +183,8 @@ pub struct NetOptions {
     pub impersonate: ImpersonatePreset,
     /// Shared byte buffer pool used by backends that must copy platform-owned
     /// response buffers before handing bytes to Rust consumers.
-    pub byte_pool: Option<BytePool>,
+    #[builder(default = BytePool::default())]
+    pub byte_pool: BytePool,
     #[builder(default)]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
@@ -192,6 +206,7 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
+    pub observer: Option<Observer>,
 }
 
 impl Default for NetOptions {
@@ -200,8 +215,8 @@ impl Default for NetOptions {
     }
 }
 
-impl FromWithParams<Self, Option<BytePool>> for NetOptions {
-    fn build(options: Self, byte_pool: Option<BytePool>) -> Self {
+impl FromWithParams<Self, BytePool> for NetOptions {
+    fn build(options: Self, byte_pool: BytePool) -> Self {
         Self::builder()
             .compression(options.compression)
             .inactivity_timeout(options.inactivity_timeout)
@@ -210,8 +225,9 @@ impl FromWithParams<Self, Option<BytePool>> for NetOptions {
             .pool_max_idle_per_host(options.pool_max_idle_per_host)
             .body_queue_capacity(options.body_queue_capacity)
             .body_queue_resume_at(options.body_queue_resume_at)
-            .maybe_byte_pool(options.byte_pool.or(byte_pool))
+            .byte_pool(byte_pool)
             .impersonate(options.impersonate)
+            .maybe_observer(options.observer)
             .build()
     }
 }

@@ -1,7 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -12,10 +13,10 @@ use kithara::{
         tokio,
     },
     play::{PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_app::config::AppConfig;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::{DelayRule, EncryptionRequest},
@@ -51,7 +52,10 @@ async fn wait_for_status(
     }
     let start = Instant::now();
     while start.elapsed() < deadline {
-        match timeout(Duration::from_millis(500), rx.recv()).await {
+        match timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
@@ -74,10 +78,11 @@ async fn wait_for_status(
 /// target AND resume audible progress — the exact sequence that hung on
 /// the real CDN with `AbrMode::manual(2)`.
 ///
-/// Track construction goes through the same `kithara-app` `build_source`
-/// path as the e2e (shared downloader / flush hub / byte pool / asset
-/// store from `AppConfig`), so the only axis left between this test and
-/// the e2e is the network. Data and uniform latency alone do NOT
+/// Track construction goes through `app_track_source`, the suite's mirror
+/// of the `kithara-app` `build_source` path used by the e2e (same shared
+/// downloader / flush hub / byte pool / asset store from `AppConfig`), so
+/// the only axis left between this test and the e2e is the network. Data
+/// and uniform latency alone do NOT
 /// reproduce the production stall — that needs a mid-body network stall,
 /// pinned separately by `playlist_stall_fails_load` and the kithara-net
 /// `*_when_body_stalls` tests. This mirror pins the healthy-path contract
@@ -134,10 +139,18 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
             .build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
+    let config = AppConfig::new(
+        downloader,
+        flush_hub,
+        CancelToken::never(),
+        BytePool::default(),
+        PcmPool::default(),
+    );
 
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -152,15 +165,14 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         }
     });
 
-    let source = match build_source(url.as_str(), &config) {
-        TrackSource::Config(mut cfg) => {
-            cfg.store = StoreOptions::new(temp.path());
-            cfg.decoder.backend = backend;
-            cfg.initial_abr_mode = abr;
-            TrackSource::Config(cfg)
-        }
-        other => other,
-    };
+    let source = super::app_track_source(
+        url.as_str(),
+        &config,
+        kithara_integration_tests::disk_asset_store(temp.path()),
+        backend,
+        abr,
+        None,
+    );
 
     let mut rx = queue.subscribe();
     let id = queue.append(source);

@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration},
     stream::Stream,
@@ -22,7 +21,7 @@ async fn html_body_rejected_before_caching(temp_dir: TestTempDir) {
     });
 
     let config = HlsConfig::for_url(handle.url())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .build();
 

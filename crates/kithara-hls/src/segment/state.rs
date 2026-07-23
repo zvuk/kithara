@@ -54,24 +54,25 @@ impl SegmentSlotState {
         SlotFlags::from_bits_truncate(self.0.load(Ordering::Acquire))
     }
 
-    pub(crate) fn is_downloading(&self) -> bool {
-        self.flags().contains(SlotFlags::DOWNLOADING)
-    }
-
-    /// Terminal-failure probe. A `Failed` slot will never load (the
-    /// downloader gave up); readers surface a terminal error on it.
-    pub(crate) fn is_failed(&self) -> bool {
-        self.flags().contains(SlotFlags::FAILED)
-    }
-
-    pub(crate) fn is_loaded(&self) -> bool {
-        self.flags().contains(SlotFlags::LOADED)
-    }
-
-    /// True while the current in-flight fetch has crossed `soft_timeout`
-    /// without settling. Meaningful only together with [`Self::is_downloading`].
-    pub(crate) fn is_slow(&self) -> bool {
-        self.flags().contains(SlotFlags::SLOW)
+    delegate::delegate! {
+        to self {
+            #[expr($.contains(SlotFlags::DOWNLOADING))]
+            #[call(flags)]
+            pub(crate) fn is_downloading(&self) -> bool;
+            /// Terminal-failure probe. A `Failed` slot will never load (the
+            /// downloader gave up); readers surface a terminal error on it.
+            #[expr($.contains(SlotFlags::FAILED))]
+            #[call(flags)]
+            pub(crate) fn is_failed(&self) -> bool;
+            #[expr($.contains(SlotFlags::LOADED))]
+            #[call(flags)]
+            pub(crate) fn is_loaded(&self) -> bool;
+            /// True while the current in-flight fetch has crossed `soft_timeout`
+            /// without settling. Meaningful only together with [`Self::is_downloading`].
+            #[expr($.contains(SlotFlags::SLOW))]
+            #[call(flags)]
+            pub(crate) fn is_slow(&self) -> bool;
+        }
     }
 
     pub(crate) fn mark_failed(&self) {

@@ -6,8 +6,6 @@ schema_version = 1
 
 [fat_loop_body]
 "crates/kithara-app/src/tui/runner.rs:loop_body" = 1
-"crates/kithara-audio/src/audio.rs:loop_body" = 1
-"crates/kithara-audio/src/runtime/scheduler.rs:loop_body" = 1
 "crates/kithara-decode/src/composed.rs:loop_body" = 1
 "crates/kithara-decode/src/fmp4/source_io.rs:loop_body" = 1
 "crates/kithara-encode/src/ffmpeg/pcm.rs:while_body" = 1
@@ -17,8 +15,6 @@ schema_version = 1
 
 [function_branch_density]
 "crates/kithara-app/src/tui/runner.rs:72:0" = 1
-"crates/kithara-audio/src/audio.rs:389:4" = 1
-"crates/kithara-audio/src/pipeline/source.rs:1396:4" = 1
 "crates/kithara-hls/src/variant.rs:786:4" = 1
 "crates/kithara-play/src/impls/player_processor.rs:453:4" = 1
 "crates/kithara-play/src/impls/player_resource.rs:140:4" = 1
@@ -46,5 +42,4 @@ schema_version = 1
 "crates/kithara-storage/src/decorator/chunked/core.rs:depth_2" = 1
 
 [retry_fallback]
-"crates/kithara-audio/src/pipeline/track_fsm.rs:attempt" = 2
 "crates/kithara-events/src/audio.rs:attempts" = 1

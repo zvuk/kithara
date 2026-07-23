@@ -1,8 +1,18 @@
+//! Finds private fields whose struct literals always use the same expression.
+//!
+//! Direct and compound assignments suppress a finding by crate and field name.
+//! A same-named field assigned on another struct in that crate can therefore
+//! cause a false negative, which is safer for this warning than suggesting
+//! removal of a live field. Mutations through calls such as `mem::take` and
+//! `mem::replace` are not tracked.
+
 use anyhow::Result;
 
 use super::{
     Check, Context,
-    struct_index::{LiteralSite, WorkspaceStructIndex, build_index, full_literal_sites},
+    struct_index::{
+        LiteralSite, WorkspaceStructIndex, build_index, crate_name_from_rel, full_literal_sites,
+    },
 };
 use crate::common::{suppress::Suppressions, violation::Violation, walker::compile_globs};
 
@@ -40,6 +50,12 @@ fn emit(idx: &WorkspaceStructIndex, min_call_sites: usize, out: &mut Vec<Violati
             continue;
         }
         for field in &info.field_names {
+            let assigned = crate_name_from_rel(&info.rel)
+                .and_then(|crate_name| idx.assigned_fields.get(crate_name))
+                .is_some_and(|fields| fields.contains(field));
+            if assigned {
+                continue;
+            }
             let Some(value) = constant_value(field, &full_sites) else {
                 continue;
             };
@@ -132,6 +148,59 @@ mod tests {
             fn c() -> Ev { Ev { id: 0, kind: 3 } }
         "#;
         assert_eq!(count(src, 3), 1);
+    }
+
+    #[test]
+    fn mutated_field_not_flagged() {
+        let src = r#"
+            pub(crate) struct E { field: u32, kind: u32 }
+            fn a() -> E { E { field: 0, kind: 1 } }
+            fn b() -> E { E { field: 0, kind: 2 } }
+            fn c() -> E { E { field: 0, kind: 3 } }
+            fn mutate(mut x: E, other: u32) { x.field = other; }
+        "#;
+        assert_eq!(count(src, 3), 0);
+    }
+
+    #[test]
+    fn constant_field_still_flagged() {
+        let src = r#"
+            pub(crate) struct E { mutated: u32, constant: u32, kind: u32 }
+            fn a() -> E { E { mutated: 0, constant: 7, kind: 1 } }
+            fn b() -> E { E { mutated: 0, constant: 7, kind: 2 } }
+            fn c() -> E { E { mutated: 0, constant: 7, kind: 3 } }
+            fn mutate(mut x: E, other: u32) { x.mutated = other; }
+        "#;
+        let ks = keys(src, 3);
+        assert_eq!(ks.len(), 1, "{ks:?}");
+        assert!(ks[0].ends_with("E::constant"), "{ks:?}");
+    }
+
+    #[test]
+    fn compound_assignment_counts() {
+        let src = r#"
+            pub(crate) struct E { count: u32, kind: u32 }
+            fn a() -> E { E { count: 0, kind: 1 } }
+            fn b() -> E { E { count: 0, kind: 2 } }
+            fn c() -> E { E { count: 0, kind: 3 } }
+            fn increment(mut x: E) { x.count += 1; }
+        "#;
+        assert_eq!(count(src, 3), 0);
+    }
+
+    #[test]
+    fn nested_receiver_assignment_counts() {
+        let src = r#"
+            pub(crate) struct Inner { field: u32, kind: u32 }
+            struct Outer { inner: Inner }
+            fn a() -> Inner { Inner { field: 0, kind: 1 } }
+            fn b() -> Inner { Inner { field: 0, kind: 2 } }
+            fn c() -> Inner { Inner { field: 0, kind: 3 } }
+            impl Outer {
+                fn mutate(&mut self, value: u32) { self.inner.field = value; }
+            }
+        "#;
+        assert_eq!(count(src, 3), 0);
     }
 
     #[test]

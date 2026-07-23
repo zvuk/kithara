@@ -6,9 +6,7 @@ use kithara_queue::Transition;
 use crate::{
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
-    types::{
-        FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus,
-    },
+    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus},
     web::{bridge::WorkerBridge, commands::WorkerCmd},
 };
 
@@ -82,10 +80,6 @@ impl WasmInner {
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
-    pub(crate) fn new(_config: FfiPlayerConfig) -> Self {
-        Self::default()
-    }
-
     pub(crate) fn advance_to_next_item(&self) {
         let Some(current) = self.bridge.current_track_id() else {
             tracing::warn!(
@@ -135,8 +129,17 @@ impl WasmInner {
             .map(|(_, item)| Arc::clone(item))
     }
 
-    pub(crate) fn current_time(&self) -> f64 {
-        self.bridge.position_secs()
+    delegate::delegate! {
+        to self.bridge {
+            #[call(position_secs)]
+            pub(crate) fn current_time(&self) -> f64;
+            /// Forward a command to the worker, mapping a channel failure to a
+            /// typed [`FfiError`]. Used by the fallible facade methods that should
+            /// surface a real error when the worker link is down.
+            #[expr($.map_err(|err| into_internal(&err)))]
+            #[call(send)]
+            fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError>;
+        }
     }
 
     pub(crate) fn eq_band_count(&self) -> u32 {
@@ -435,13 +438,6 @@ impl WasmInner {
 
     pub(crate) fn stop(&self) {
         self.send(WorkerCmd::Stop);
-    }
-
-    /// Forward a command to the worker, mapping a channel failure to a
-    /// typed [`FfiError`]. Used by the fallible facade methods that should
-    /// surface a real error when the worker link is down.
-    fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError> {
-        self.bridge.send(cmd).map_err(|err| into_internal(&err))
     }
 
     pub(crate) fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {

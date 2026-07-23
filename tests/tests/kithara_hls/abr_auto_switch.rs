@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig},
     events::EventBus,
     hls::{Hls, HlsConfig},
@@ -107,7 +106,8 @@ async fn abr_auto_switch_during_playback(
         use kithara::platform::tokio::sync::broadcast::error::RecvError;
         loop {
             match events_rx.recv().await {
-                Ok(ev) => {
+                Ok(env) => {
+                    let ev = env.event;
                     let ev_str = format!("{ev:?}");
                     if ev_str.contains("VariantApplied") {
                         switches_bg.fetch_add(1, Ordering::Relaxed);
@@ -121,7 +121,7 @@ async fn abr_auto_switch_during_playback(
     });
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -129,6 +129,8 @@ async fn abr_auto_switch_during_playback(
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();

@@ -17,19 +17,22 @@ Single-file media streaming (MP3, AAC, FLAC, ALAC, WAV …). Implements `kithara
 ## Usage
 
 ```rust
+use kithara_assets::AssetStoreBuilder;
 use kithara_stream::Stream;
 use kithara_file::{File, FileConfig, FileSrc};
 
+let store = AssetStoreBuilder::default().build();
+
 // Remote HTTP source
-let config = FileConfig::new(FileSrc::Remote(url));
+let config = FileConfig::new(FileSrc::Remote(url), store.clone());
 let stream = Stream::<File>::new(config).await?;
 
 // Local file source
-let local = FileConfig::new(FileSrc::Local(path));
+let local = FileConfig::new(FileSrc::Local(path), store);
 let stream = Stream::<File>::new(local).await?;
 ```
 
-`FileConfig` is a [`bon`](https://crates.io/crates/bon) builder. `FileConfig::for_src(src)` returns the chained builder for non-default settings (event channel capacity, downloader, asset store, cancel token).
+`FileConfig` is a [`bon`](https://crates.io/crates/bon) builder. The shared `AssetStore` is required. `FileConfig::for_src(src)` returns the chained builder for non-default settings (event channel capacity, downloader, cache discriminator, extension hint, asset store, cancel token).
 
 ## Public Items
 

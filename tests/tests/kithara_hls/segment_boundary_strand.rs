@@ -31,7 +31,6 @@
 //! `stress_chunk_integrity` asserts).
 
 use kithara::{
-    assets::StoreOptions,
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -116,7 +115,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     let cancel = CancelToken::never();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         // Manual variant 0 — no ABR, no recreate; isolate the read-ahead strand.
         .initial_abr_mode(AbrMode::manual(0))
@@ -170,6 +169,8 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
         let byte_len = stream.len().unwrap_or(0);
         let byte_map = stream.byte_map();
         let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .backend(DecoderBackend::Symphonia)
             .byte_len_handle(Arc::new(std::sync::atomic::AtomicU64::new(byte_len)))
             .maybe_byte_map(byte_map)
@@ -190,7 +191,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
         while chunks.len() < 64 {
             match decoder.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                    chunks.push((chunk.meta.frame_offset, chunk.samples.clone()));
+                    chunks.push((chunk.meta.frame_offset, chunk.samples.to_vec()));
                 }
                 Ok(DecoderChunkOutcome::Pending(_)) => {
                     // Not expected under the wait-then-resume contract (the

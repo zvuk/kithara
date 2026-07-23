@@ -24,4 +24,4 @@ pub use playlist::{
     KeyStore, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState, SegmentState, VariantId,
     VariantState, VariantStream, parse_master_playlist, parse_media_playlist,
 };
-pub use stream::{Hls, HlsSource, build_shared_asset_store};
+pub use stream::{Hls, HlsSource};

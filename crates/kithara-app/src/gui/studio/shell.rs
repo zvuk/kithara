@@ -23,6 +23,7 @@ use crate::{
         mix::MixMsg,
         view::{format_time, track_subtitle},
     },
+    waveform::TrackAnalysis,
 };
 
 /// Channel letters, in deck order. Decks past the alphabet fall back to a dot;
@@ -218,7 +219,7 @@ fn waveform_of(deck: &DeckUi) -> Option<&kithara::audio::Waveform> {
     deck.ui
         .analysis
         .as_ref()
-        .and_then(|analysis| analysis.waveform.as_ref())
+        .and_then(TrackAnalysis::waveform)
         .filter(|wave| !wave.is_empty())
 }
 

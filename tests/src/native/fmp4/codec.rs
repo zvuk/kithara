@@ -12,6 +12,9 @@ impl CodecDescriptor {
             AudioCodec::AacLc => Some(Self {
                 codec: AudioCodec::AacLc,
             }),
+            AudioCodec::AacHe => Some(Self {
+                codec: AudioCodec::AacHe,
+            }),
             AudioCodec::AacHeV2 => Some(Self {
                 codec: AudioCodec::AacHeV2,
             }),
@@ -31,8 +34,8 @@ impl CodecDescriptor {
     ) -> Vec<u8> {
         match self.codec {
             AudioCodec::AacLc => aac_lc_sample_entry(sample_rate, channels, bit_rate),
-            AudioCodec::AacHeV2 => {
-                aac_he_v2_sample_entry(sample_rate, channels, bit_rate, codec_config)
+            AudioCodec::AacHe | AudioCodec::AacHeV2 => {
+                aac_he_sample_entry(sample_rate, channels, bit_rate, codec_config)
             }
             AudioCodec::Flac => flac_sample_entry(sample_rate, channels, codec_config),
             _ => unreachable!("unsupported codec descriptor"),
@@ -118,13 +121,7 @@ fn aac_audio_specific_config(sample_rate: u32, channels: u16) -> [u8; 2] {
     ]
 }
 
-/// HE-AAC v2 sample entry. Mirrors AAC-LC layout (`mp4a` fourcc +
-/// `esds` box), but the `AudioSpecificConfig` embedded in `esds`
-/// comes from the encoder's own `confBuf` rather than being
-/// computed from sample rate / channels: HE-AAC v2 ASC carries
-/// SBR and Parametric Stereo signalling that is not derivable
-/// from the container fields alone.
-fn aac_he_v2_sample_entry(
+fn aac_he_sample_entry(
     sample_rate: u32,
     channels: u16,
     bit_rate: u64,

@@ -1,5 +1,5 @@
 use kithara::abr::AbrMode;
-use kithara_events::{AbrEvent, AudioEvent, DownloaderEvent, Event, FileEvent, HlsEvent};
+use kithara_events::{AbrEvent, AudioEvent, Envelope, Event};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -48,7 +48,11 @@ impl ItemEventBridge {
 
         Self::dispatch_variant_events(observer, event, variants);
 
-        if let Some(error) = Self::error_from_event(event) {
+        if let Ok(event) = FfiItemEvent::try_from(event) {
+            observer.on_event(event);
+        }
+
+        if let Ok(error) = FfiError::try_from(event) {
             state.lock().mark_failed();
             observer.on_event(FfiItemEvent::StatusChanged {
                 status: FfiItemStatus::Failed,
@@ -157,23 +161,6 @@ impl ItemEventBridge {
         }
     }
 
-    fn error_from_event(event: &Event) -> Option<FfiError> {
-        match event {
-            Event::File(FileEvent::Error { error }) => Some(FfiError::ItemFailed {
-                reason: error.to_string(),
-            }),
-            Event::Hls(HlsEvent::Error { error }) => Some(FfiError::ItemFailed {
-                reason: error.to_string(),
-            }),
-            Event::Downloader(DownloaderEvent::RequestFailed { error, .. }) => {
-                Some(FfiError::ItemFailed {
-                    reason: error.to_string(),
-                })
-            }
-            _ => None,
-        }
-    }
-
     /// Spawn a task that translates resource events into item callbacks
     /// and refreshes the shared [`ItemView`] cache backing the item's
     /// synchronous getters (`duration_sec`, `is_live_stream`, …).
@@ -206,7 +193,7 @@ impl ItemEventBridge {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
-                            Ok(event) => Self::dispatch(
+                            Ok(Envelope { event, .. }) => Self::dispatch(
                                 &observer,
                                 &event,
                                 &mut duration_seconds,
@@ -239,7 +226,6 @@ impl Drop for ItemEventBridge {
 mod tests {
     use kithara_events::{Event, FileError, FileEvent};
 
-    use super::ItemEventBridge;
     use crate::types::FfiError;
 
     #[kithara::test]
@@ -247,7 +233,7 @@ mod tests {
         let event = Event::File(FileEvent::Error {
             error: FileError::Io("boom".into()),
         });
-        let error = ItemEventBridge::error_from_event(&event);
+        let error = FfiError::try_from(&event).ok();
         assert!(matches!(
             error,
             Some(FfiError::ItemFailed { reason }) if reason == "io: boom"

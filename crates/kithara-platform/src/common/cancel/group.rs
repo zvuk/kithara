@@ -21,8 +21,10 @@ use crate::sync::Arc;
 /// let cancel = group | extra_token;
 /// let cancel = group1 | group2;
 /// ```
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(get, vis = "")]
 pub struct CancelGroup {
+    #[field(get = tokens)]
     sources: Arc<[CancelToken]>,
 }
 
@@ -49,10 +51,6 @@ impl CancelGroup {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.sources.iter().any(CancelToken::is_cancelled)
-    }
-
-    fn tokens(&self) -> &[CancelToken] {
-        &self.sources
     }
 }
 

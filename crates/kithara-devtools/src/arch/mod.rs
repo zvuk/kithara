@@ -5,13 +5,13 @@
 //! `.config/arch/baseline.toml`.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context as _, Result, bail};
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{Metadata, MetadataCommand};
 use clap::Args;
 
 mod checks;
@@ -28,6 +28,25 @@ use crate::common::{
     scope::Scope,
     violation::Report,
 };
+
+pub(crate) fn redundant_accessor_keys(
+    metadata: &Metadata,
+    workspace_root: &Path,
+    scope: &Scope,
+) -> Result<BTreeSet<String>> {
+    let config = ArchConfig::load(&workspace_root.join(".config/arch"))?;
+    let ctx = Context {
+        config: &config,
+        metadata,
+        workspace_root,
+        scope,
+    };
+    let violations = checks::Check::run(&checks::redundant_accessors::RedundantAccessors, &ctx)?;
+    Ok(violations
+        .into_iter()
+        .map(|violation| violation.key)
+        .collect())
+}
 
 #[derive(Debug, Default, Args)]
 pub struct ArchArgs {

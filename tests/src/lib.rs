@@ -73,6 +73,9 @@ pub mod wav;
 
 pub use abr_fixtures::{abr_fast, abr_initial_mode, abr_switch_trigger};
 pub use alac_fixture::ensure_silence_1s_alac_m4a;
+#[cfg(not(target_arch = "wasm32"))]
+pub use assets_ext::disk_asset_store;
+pub use assets_ext::memory_asset_store;
 pub use fixtures::*;
 pub use hls_server::{
     AbrTestServer, EncryptionConfig, HlsTestServer, HlsTestServerConfig, PackagedTestServer,

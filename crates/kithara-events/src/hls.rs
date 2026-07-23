@@ -3,28 +3,21 @@
 use crate::SeekEpoch;
 
 /// Errors specific to the HLS stream layer (non-network, non-downloader).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, derive_more::Display, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HlsError {
     /// Playlist parse / structure error.
+    #[display("playlist: {_0}")]
     Playlist(String),
     /// AES-128 / `FairPlay` decryption failure.
+    #[display("decryption: {_0}")]
     Decryption(String),
     /// Codec / container probing or validation failure.
+    #[display("codec: {_0}")]
     Codec(String),
     /// Anything else not covered above.
+    #[display("other: {_0}")]
     Other(String),
-}
-
-impl std::fmt::Display for HlsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Playlist(msg) => write!(f, "playlist: {msg}"),
-            Self::Decryption(msg) => write!(f, "decryption: {msg}"),
-            Self::Codec(msg) => write!(f, "codec: {msg}"),
-            Self::Other(msg) => write!(f, "other: {msg}"),
-        }
-    }
 }
 
 /// Events emitted during HLS playback.
@@ -88,6 +81,16 @@ pub enum HlsEvent {
     },
     /// HLS-specific error (non-network).
     Error { error: HlsError },
+    /// Decoder-recreate variant switch raised a read fence.
+    VariantSwitchFenced {
+        from_variant: usize,
+        to_variant: usize,
+        cross_codec: bool,
+    },
+    /// Decoder acknowledged a fenced variant generation.
+    VariantSwitchAcked { variant: usize, generation: u64 },
+    /// Active variant is fully cached for offline-ready playback.
+    CacheComplete { total_bytes: Option<u64> },
     /// Stream ended (reader hit EOF).
     EndOfStream,
 }

@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{
@@ -39,10 +38,13 @@ async fn stress_seek_during_abr_switch_real_decoder(
     info!(label, path, "Opening real stream");
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -53,7 +55,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
     spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
+        while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
             let ev_str = format!("{:?}", ev);
             if ev_str.contains("VariantApplied") {
                 switches_bg.fetch_add(1, Ordering::Relaxed);
@@ -170,10 +172,14 @@ async fn seek_sequence_from_log_real_stream(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let config = AudioConfig::<Hls>::new(
+        hls_config,
+        kithara::bufpool::BytePool::default(),
+        kithara::bufpool::PcmPool::default(),
+    );
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");

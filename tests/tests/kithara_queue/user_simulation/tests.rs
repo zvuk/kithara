@@ -4,7 +4,8 @@
 use std::fmt::Write;
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::AbrMode,
     net::{HttpClient, NetOptions},
@@ -21,7 +22,7 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_app::config::AppConfig;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::EncryptionRequest, kithara,
     offline::OfflineSession, temp_dir,
@@ -407,9 +408,11 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let cfg = kithara::play::ResourceConfig::for_src(spec.url.as_str())
         .expect("valid track URL")
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .decoder(
@@ -421,6 +424,8 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
         .build();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -654,15 +659,14 @@ const PROD_DRM_TRACK_ALT: &str =
 /// the binary uses. The resolver picks up baked credentials and the
 /// `zvuk-prod` keyserver provider.
 fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource {
-    match build_source(url, &ctx.config) {
-        TrackSource::Config(mut cfg) => {
-            cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder.backend = DecoderBackend::Symphonia;
-            cfg.initial_abr_mode = AbrMode::Auto(None);
-            TrackSource::Config(cfg)
-        }
-        other => other,
-    }
+    crate::kithara_queue::app_track_source(
+        url,
+        &ctx.config,
+        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
+        DecoderBackend::Symphonia,
+        AbrMode::Auto(None),
+        None,
+    )
 }
 
 struct ProdCtx {
@@ -676,7 +680,13 @@ fn build_prod_ctx() -> ProdCtx {
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
+    let config = AppConfig::new(
+        downloader,
+        flush_hub,
+        CancelToken::never(),
+        BytePool::default(),
+        PcmPool::default(),
+    );
     ProdCtx {
         config,
         cache: TestTempDir::new(),
@@ -687,6 +697,8 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -959,6 +971,8 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -1021,6 +1035,8 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -1269,6 +1285,8 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
     let session = Arc::new(OfflineSession::new_manual());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
     ));

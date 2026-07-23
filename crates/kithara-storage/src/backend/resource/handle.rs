@@ -148,31 +148,34 @@ impl<D: DriverIo> Resource<Active, D> {
         })
     }
 
-    /// Commit without consuming, for a decorator that rewrites in place.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the backend
-    /// cannot finalize.
-    pub(crate) fn commit_in_place(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.data.core.commit_inner(final_len)
-    }
-
-    /// Mark the resource as failed, consuming the writer.
-    pub fn fail(self, reason: String) {
-        self.data.core.fail_inner(reason);
-    }
-
-    /// Mark failed without consuming, for a decorator that owns the writer.
-    pub(crate) fn fail_in_place(&self, reason: String) {
-        self.data.core.fail_inner(reason);
-    }
-
-    /// Reactivate without consuming, for a decorator that rewrites in place.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled or the backend cannot reopen.
-    pub(crate) fn reactivate_in_place(&self) -> StorageResult<()> {
-        self.data.core.reactivate_inner()
+    delegate::delegate! {
+        to self.data.core {
+            /// Commit without consuming, for a decorator that rewrites in place.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the backend
+            /// cannot finalize.
+            #[call(commit_inner)]
+            pub(crate) fn commit_in_place(&self, final_len: Option<u64>) -> StorageResult<()>;
+            /// Mark the resource as failed, consuming the writer.
+            #[call(fail_inner)]
+            pub fn fail(self, reason: String);
+            /// Mark failed without consuming, for a decorator that owns the writer.
+            #[call(fail_inner)]
+            pub(crate) fn fail_in_place(&self, reason: String);
+            /// Reactivate without consuming, for a decorator that rewrites in place.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled or the backend cannot reopen.
+            #[call(reactivate_inner)]
+            pub(crate) fn reactivate_in_place(&self) -> StorageResult<()>;
+            /// Write data at the given offset.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the write fails.
+            #[call(write_at_inner)]
+            pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+        }
     }
 
     /// Mint a cloneable read-only view over the in-flight resource (readers may
@@ -193,14 +196,6 @@ impl<D: DriverIo> Resource<Active, D> {
     pub fn write_all(self, data: &[u8]) -> StorageResult<Resource<Committed, D>> {
         self.data.core.write_at_inner(0, data)?;
         self.commit(Some(data.len() as u64))
-    }
-
-    /// Write data at the given offset.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the write fails.
-    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.data.core.write_at_inner(offset, data)
     }
 }
 

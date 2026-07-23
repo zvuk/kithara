@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus, FileEvent},
     file::{File, FileConfig},
     platform::{
@@ -58,10 +57,12 @@ async fn wait_for_download_terminal(
         }
         let recv = timeout(remaining, rx.recv());
         match recv.await {
-            Ok(Ok(Event::Downloader(DownloaderEvent::RequestFailed { .. }))) => return true,
-            Ok(Ok(Event::Downloader(DownloaderEvent::RequestCompleted { .. }))) => return true,
-            Ok(Ok(Event::File(FileEvent::Error { .. }))) => return true,
-            Ok(Ok(_)) => {}
+            Ok(Ok(env)) => match env.event {
+                Event::Downloader(DownloaderEvent::RequestFailed { .. }) => return true,
+                Event::Downloader(DownloaderEvent::RequestCompleted { .. }) => return true,
+                Event::File(FileEvent::Error { .. }) => return true,
+                _ => {}
+            },
             Ok(Err(_)) | Err(_) => return false,
         }
     }
@@ -88,7 +89,7 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     let cancel = CancelToken::never();
     let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel.clone())
         .build();
 
@@ -133,7 +134,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let cancel = CancelToken::never();
     let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel.clone())
         .build();
 
@@ -148,7 +149,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     // failed resource scheduled no retry.
     let retried = time::timeout(Duration::from_secs(3), async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,
                 Ok(_) => {}
                 Err(_) => break false,

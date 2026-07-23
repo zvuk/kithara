@@ -1,10 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+mod support;
+
 use kithara_assets::{
     AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend, WriteSide,
 };
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_test_utils::kithara;
+use support::{Test, resource, source};
 use tempfile::tempdir;
 
 /// Stream `data` through a Pending writer and commit it.
@@ -34,20 +37,12 @@ fn shared_hub_flush_now_persists_every_store() {
         .flush_hub(hub.clone())
         .build();
 
-    let scope_a = store_a.scope("track-a");
-    let scope_b = store_b.scope("track-b");
-    write_commit(
-        store_a
-            .acquire_resource(&scope_a.key("payload.bin"), None)
-            .unwrap(),
-        b"alpha",
-    );
-    write_commit(
-        store_b
-            .acquire_resource(&scope_b.key("payload.bin"), None)
-            .unwrap(),
-        b"bravo",
-    );
+    let scope_a = store_a.scope::<Test>(&source("track-a")).unwrap();
+    let scope_b = store_b.scope::<Test>(&source("track-b")).unwrap();
+    let key_a = scope_a.key(&resource("payload.bin")).unwrap();
+    let key_b = scope_b.key(&resource("payload.bin")).unwrap();
+    write_commit(store_a.acquire_resource(&key_a, None).unwrap(), b"alpha");
+    write_commit(store_b.acquire_resource(&key_b, None).unwrap(), b"bravo");
 
     let avail_a = dir.path().join("a/_index/availability.bin");
     let avail_b = dir.path().join("b/_index/availability.bin");

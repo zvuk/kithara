@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Write,
     fs,
     path::Path,
 };
@@ -124,10 +125,11 @@ pub(crate) fn aggregate(
 
 pub(crate) fn render_md(report: &SlowReport) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
+    let _ = write!(
+        out,
         "# Slow tests (median >= {:.0}ms in any lane) - {}\n\n",
         report.threshold_ms, report.run_id
-    ));
+    );
     let lane_names: Vec<String> = report
         .tests
         .iter()
@@ -138,7 +140,7 @@ pub(crate) fn render_md(report: &SlowReport) -> String {
     let header = |out: &mut String| {
         out.push_str("| test | rank |");
         for lane in &lane_names {
-            out.push_str(&format!(" {lane} med/min/max ms |"));
+            let _ = write!(out, " {lane} med/min/max ms |");
         }
         out.push('\n');
         out.push_str("|---|---|");
@@ -148,25 +150,29 @@ pub(crate) fn render_md(report: &SlowReport) -> String {
         out.push('\n');
     };
     let row = |out: &mut String, test: &SlowTest| {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "| {} {} | {:.0} |",
             test.suite, test.name, test.rank_score
-        ));
+        );
         for lane in &lane_names {
             match test.lanes.get(lane) {
-                Some(stat) => out.push_str(&format!(
-                    " {:.0}/{:.0}/{:.0}{} |",
-                    stat.median_ms,
-                    stat.min_ms,
-                    stat.max_ms,
-                    if stat.failed > 0 { " FAIL" } else { "" }
-                )),
+                Some(stat) => {
+                    let _ = write!(
+                        out,
+                        " {:.0}/{:.0}/{:.0}{} |",
+                        stat.median_ms,
+                        stat.min_ms,
+                        stat.max_ms,
+                        if stat.failed > 0 { " FAIL" } else { "" }
+                    );
+                }
                 None => out.push_str(" - |"),
             }
         }
         out.push('\n');
     };
-    out.push_str(&format!("## Top 20 of {}\n\n", report.tests.len()));
+    let _ = write!(out, "## Top 20 of {}\n\n", report.tests.len());
     header(&mut out);
     for test in report.tests.iter().take(20) {
         row(&mut out, test);

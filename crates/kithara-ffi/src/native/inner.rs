@@ -4,13 +4,15 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
-    assets::{AssetLayout, BytePool},
     audio::generate_log_spaced_bands,
+    bufpool::Region,
+    events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry, KeyProcessorRule},
     net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
+use kithara_assets::BytePool;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_platform::{
     CancelToken,
@@ -20,15 +22,13 @@ use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource, Transition};
 
 use super::salt;
 use crate::{
-    config::StoreOptions,
+    asset::FfiAssetStore,
+    config::FfiPlayerConfig,
     event_bridge::EventBridge,
     item::AudioPlayerItem,
-    native_config,
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
     registry::ItemRegistry,
-    types::{
-        FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus,
-    },
+    types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus},
 };
 
 fn build_processor_closure(
@@ -157,18 +157,10 @@ pub(crate) struct NativeInner {
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
     queue: Arc<Queue>,
-    /// App-wide byte pool shared by `NSURLSession` copies, cache processors,
-    /// and resource probes.
-    byte_pool: BytePool,
-    /// Master cancel token for this FFI player instance. Propagated
-    /// into [`PlayerConfig::cancel`] so the audio worker, downloader,
-    /// asset store, HLS peer, and per-track resources all derive
-    /// children of this token. The facade's `Drop` fires
-    /// `cancel.cancel()` so the shutdown pulse reaches subsystems before
-    /// structural Arc teardown unwinds. See `kithara-play/CONTEXT.md`
-    /// "Cancel Hierarchy". The chain flag reaches the audio worker and HLS
-    /// coord lock-free `is_cancelled()` reads; every subsystem derives its
-    /// own [`CancelToken::child`] from this consumer-top master.
+    /// Store-owned pools shared by cache, network, decode, and playback.
+    region: Region,
+    /// Cancellation root for player-owned work; the shared store owns a
+    /// separate scope.
     shutdown: CancelToken,
     /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
     /// `X-Auth-Token`). Merged into per-item `headers` on insert.
@@ -190,42 +182,48 @@ pub(crate) struct NativeInner {
     /// drives the ABR cap unless cellular is tighter; cellular is held
     /// for future network-state-aware switching.
     peak_bitrate: Mutex<PeakBitrate>,
-    /// Shared on-disk layout resolved once from [`StoreOptions::layout`].
-    /// `None` keeps the store's `DefaultLayout`.
-    layout: Option<Arc<dyn AssetLayout>>,
-    /// Shared storage options (cache dir, etc.) applied to every item.
-    store: StoreOptions,
+    /// Rust-owned asset store shared by the queue and every item resource.
+    store: Arc<FfiAssetStore>,
 }
 
 impl NativeInner {
     pub(crate) fn new(config: FfiPlayerConfig) -> Self {
+        let FfiPlayerConfig {
+            key_options,
+            store,
+            eq_band_count,
+        } = config;
         let cancel = CancelToken::root();
-        let byte_pool = BytePool::default();
+        let region = store.region().clone();
         let player_config = PlayerConfig::builder()
-            .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
+            .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
             .cancel(cancel.child())
+            .byte_pool(region.byte_pool())
+            .pcm_pool(region.pcm_pool())
+            .session(super::session::handle().dispatcher())
             .build();
         let player = Arc::new(PlayerImpl::new(player_config));
-        let queue_config = QueueConfig::default().with_player(player);
-        let net = default_net_options(byte_pool.clone());
+        let queue_config = QueueConfig::builder()
+            .player(player)
+            .store(store.handle().clone())
+            .build();
+        let net = default_net_options(region.byte_pool());
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, cancel.child()))
                 .runtime(crate::FFI_RUNTIME.clone())
                 .build(),
         );
-        let (key_options, player_headers) = build_initial_key_state(config.key_options);
+        let (key_options, player_headers) = build_initial_key_state(key_options);
         let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
-        let layout = super::layout::resolve_layout(config.store.layout.as_ref());
         Self {
             downloader,
-            byte_pool,
-            layout,
+            region,
             shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
             peak_bitrate: Mutex::default(),
             queue: Arc::new(Queue::new(queue_config)),
-            store: config.store,
+            store,
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
@@ -256,17 +254,32 @@ impl NativeInner {
         Ok(())
     }
 
-    pub(crate) fn crossfade_duration(&self) -> f32 {
-        self.queue.crossfade_duration()
+    delegate::delegate! {
+        to self.queue {
+            pub(crate) fn crossfade_duration(&self) -> f32;
+            #[expr($.unwrap_or(0.0))]
+            #[call(position_seconds)]
+            pub(crate) fn current_time(&self) -> f64;
+            pub(crate) fn is_muted(&self) -> bool;
+            pub(crate) fn pause(&self);
+            pub(crate) fn play(&self);
+            #[call(default_rate)]
+            pub(crate) fn playing_rate(&self) -> f32;
+            pub(crate) fn rate(&self) -> f32;
+            #[expr($.map_err(FfiError::from))]
+            pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
+            pub(crate) fn set_crossfade_duration(&self, seconds: f32);
+            pub(crate) fn set_muted(&self, muted: bool);
+            #[call(set_default_rate)]
+            pub(crate) fn set_playing_rate(&self, rate: f32);
+            pub(crate) fn set_volume(&self, volume: f32);
+            pub(crate) fn volume(&self) -> f32;
+        }
     }
 
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
         let entry = self.queue.current()?;
         self.items.lock().get(&entry.id).cloned()
-    }
-
-    pub(crate) fn current_time(&self) -> f64 {
-        self.queue.position_seconds().unwrap_or(0.0)
     }
 
     pub(crate) fn eq_band_count(&self) -> u32 {
@@ -303,10 +316,6 @@ impl NativeInner {
         Ok(())
     }
 
-    pub(crate) fn is_muted(&self) -> bool {
-        self.queue.is_muted()
-    }
-
     pub(crate) fn item_count(&self) -> u32 {
         let len = self.queue.len();
         u32::try_from(len).unwrap_or_else(|_| {
@@ -333,22 +342,6 @@ impl NativeInner {
                     description: other.to_string(),
                 },
             })
-    }
-
-    pub(crate) fn pause(&self) {
-        self.queue.pause();
-    }
-
-    pub(crate) fn play(&self) {
-        self.queue.play();
-    }
-
-    pub(crate) fn playing_rate(&self) -> f32 {
-        self.queue.default_rate()
-    }
-
-    pub(crate) fn rate(&self) -> f32 {
-        self.queue.rate()
     }
 
     pub(crate) fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
@@ -413,10 +406,6 @@ impl NativeInner {
         Ok(())
     }
 
-    pub(crate) fn reset_eq(&self) -> Result<(), FfiError> {
-        self.queue.reset_eq().map_err(FfiError::from)
-    }
-
     pub(crate) fn seek(
         &self,
         to_seconds: f64,
@@ -464,18 +453,10 @@ impl NativeInner {
         }
     }
 
-    pub(crate) fn set_crossfade_duration(&self, seconds: f32) {
-        self.queue.set_crossfade_duration(seconds);
-    }
-
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
         self.queue
             .set_eq_gain(band as usize, gain_db)
             .map_err(FfiError::from)
-    }
-
-    pub(crate) fn set_muted(&self, muted: bool) {
-        self.queue.set_muted(muted);
     }
 
     pub(crate) fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
@@ -497,14 +478,6 @@ impl NativeInner {
         drop(eb);
     }
 
-    pub(crate) fn set_playing_rate(&self, rate: f32) {
-        self.queue.set_default_rate(rate);
-    }
-
-    pub(crate) fn set_volume(&self, volume: f32) {
-        self.queue.set_volume(volume);
-    }
-
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
         let salt = salt::drm_lowercase_hex_salt();
         let mut rule_headers = HashMap::new();
@@ -514,7 +487,7 @@ impl NativeInner {
             headers: Some(rule_headers),
             query_params: None,
             domains: vec!["*".to_string()],
-            salt: Some(salt.clone()),
+            salt: Some(salt),
         };
         self.setup_hls_aes_with_rule(rule);
     }
@@ -574,10 +547,6 @@ impl NativeInner {
             handle.set_max_bandwidth_bps(updated.effective_cap());
         }
     }
-
-    pub(crate) fn volume(&self) -> f32 {
-        self.queue.volume()
-    }
 }
 
 /// Build a [`TrackSource::Config`] from the item's fields. Also attaches
@@ -588,12 +557,15 @@ fn build_source_for_item(
     inner: &NativeInner,
     item: &Arc<AudioPlayerItem>,
 ) -> Result<TrackSource, FfiError> {
-    let scoped = inner.queue.bus().scoped();
+    let scoped = inner.queue.bus().scoped_labeled(ScopeLabel {
+        track: Some(item.track_id()),
+        ..ScopeLabel::default()
+    });
     let abr_mode = item.abr_mode().map(|mode| match mode {
         FfiAbrMode::Auto => AbrMode::Auto(None),
         FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),
     });
-    let mut config = ResourceConfig::for_src(item.url())
+    let config = ResourceConfig::for_src(item.url())
         .map_err(|e| FfiError::InvalidArgument {
             reason: e.to_string(),
         })?
@@ -601,12 +573,12 @@ fn build_source_for_item(
         .maybe_headers(merged_headers_for_item(inner, item).map(Into::into))
         .events(scoped.clone())
         .downloader(inner.downloader.clone())
-        .byte_pool(inner.byte_pool.clone())
+        .byte_pool(inner.region.byte_pool())
+        .pcm_pool(inner.region.pcm_pool())
+        .store(inner.store.handle().clone())
         .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();
-
-    native_config::configure_resource(&mut config, &inner.store, inner.layout.as_ref());
     *item.bus.lock() = Some(scoped);
 
     Ok(TrackSource::Config(Box::new(config)))
@@ -653,6 +625,29 @@ impl Drop for NativeInner {
 mod tests {
     use super::*;
     use crate::observer::FfiKeyProcessor;
+
+    #[kithara::test]
+    fn shared_store_outlives_each_player() {
+        let store = Arc::new(FfiAssetStore::default());
+        let cancel = store.cancel_token();
+        let config = |store| FfiPlayerConfig {
+            key_options: crate::types::FfiKeyOptions::default(),
+            store,
+            eq_band_count: 10,
+        };
+        let first = NativeInner::new(config(Arc::clone(&store)));
+        let second = NativeInner::new(config(Arc::clone(&store)));
+
+        assert!(Arc::ptr_eq(&first.store, &second.store));
+        assert!(first.store.handle().is_same(second.store.handle()));
+
+        drop(store);
+        drop(first);
+        assert!(!cancel.is_cancelled());
+
+        drop(second);
+        assert!(cancel.is_cancelled());
+    }
 
     #[kithara::test]
     fn setup_network_writes_auth_token_into_player_headers() {

@@ -1,0 +1,21 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "deck",
+    parameters: ["deck"],
+    root: Column(
+        children: [
+            Wave(
+                id: "wave",
+                style: Hero,
+                badge: Some("A"),
+                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+                zoom: Model(id: "deck.view.zoom"),
+                adaptive: (priority: Required),
+            ),
+            Include(id: "transport", source: "deck/transport.kmodule.ron", with: { "deck": "$deck" }),
+            Slot(id: "extra-controls"),
+        ],
+    ),
+)

@@ -5,19 +5,13 @@ use iced::{
     widget::{Space, button, column, container, container::Style as ContainerStyle, row, text},
 };
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use iced::{
-    Shadow,
-    widget::{overlay::menu, pick_list},
-};
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara::prelude::StretchKind;
 
+use self::backend::{keylock_pill, library_select};
 use super::{
     module::Module,
     tokens::{studio_radius, studio_space, studio_type},
 };
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use crate::gui::icons::Icon;
 use crate::{
     gui::{deck::TimestretchState, fonts, tokens::gap, widgets},
     theme::gui::GuiPalette,
@@ -147,40 +141,102 @@ fn stats_row(ts: TimestretchState, props: TsProps, p: GuiPalette) -> Element<'st
     .into()
 }
 
-/// Without a compiled-in stretch backend there is no selector to render.
-#[cfg(not(any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
-fn library_select(_props: TsProps, _p: GuiPalette) -> Element<'static, TsMsg> {
-    Space::new().into()
+/// The stretch-backend seam: real selector and key-lock when a native backend
+/// is compiled in, empty placeholders otherwise.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+mod backend {
+    use iced::{
+        Alignment, Background, Border, Element, Length, Shadow, Theme,
+        font::Weight,
+        widget::{button, container, overlay::menu, pick_list, row, text},
+    };
+    use kithara::prelude::StretchKind;
+
+    use super::{Consts, TsMsg, TsProps};
+    use crate::{
+        gui::{fonts, icons::Icon, studio::tokens::studio_type, tokens::gap},
+        theme::gui::GuiPalette,
+    };
+
+    /// Narrow stretch-backend selector (dropdown) shown next to the title.
+    /// Only backends compiled into this target appear.
+    pub(super) fn library_select(props: TsProps, p: GuiPalette) -> Element<'static, TsMsg> {
+        pick_list(
+            StretchKind::all(),
+            Some(props.backend),
+            TsMsg::SelectBackend,
+        )
+        .text_size(studio_type::MONO_SM)
+        .font(fonts::mono(Weight::Semibold))
+        .padding([3.0, 8.0])
+        .style(move |_theme: &Theme, _status| pick_list::Style {
+            text_color: p.accent,
+            placeholder_color: p.muted,
+            handle_color: p.muted,
+            background: Background::Color(p.bg_inset),
+            border: Border::default().width(1.0).color(p.line),
+        })
+        .menu_style(move |_theme: &Theme| menu::Style {
+            background: Background::Color(p.bg_panel),
+            border: Border::default().width(1.0).color(p.line),
+            text_color: p.text,
+            selected_text_color: p.bg,
+            selected_background: Background::Color(p.accent),
+            shadow: Shadow::default(),
+        })
+        .into()
+    }
+
+    pub(super) fn keylock_pill(props: TsProps, p: GuiPalette) -> Element<'static, TsMsg> {
+        let on = props.keylock;
+        // Active toggle: gold fill with on-gold (dark) text, per the design
+        // system.
+        let color = if on { p.bg } else { p.muted };
+        let background = if on { p.accent } else { p.bg_inset };
+        let border = if on { p.accent } else { p.line };
+        button(
+            container(
+                row![
+                    Icon::Lock.view(13.0, color),
+                    text("KEY LOCK")
+                        .size(studio_type::MONO_SM)
+                        .font(fonts::mono(Weight::Semibold))
+                        .color(color),
+                ]
+                .spacing(gap::INLINE)
+                .align_y(Alignment::Center),
+            )
+            .center_y(Length::Fill),
+        )
+        .height(Length::Fixed(Consts::STAT_H))
+        .padding([0.0, 12.0])
+        .style(move |_theme: &Theme, _status| button::Style {
+            background: Some(Background::Color(background)),
+            text_color: color,
+            border: Border::default().width(1.0).color(border),
+            ..button::Style::default()
+        })
+        .on_press(TsMsg::ToggleKeyLock)
+        .into()
+    }
 }
 
-/// Narrow stretch-backend selector (dropdown) shown next to the title. Only
-/// backends compiled into this target appear.
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-fn library_select(props: TsProps, p: GuiPalette) -> Element<'static, TsMsg> {
-    pick_list(
-        StretchKind::all(),
-        Some(props.backend),
-        TsMsg::SelectBackend,
-    )
-    .text_size(studio_type::MONO_SM)
-    .font(fonts::mono(Weight::Semibold))
-    .padding([3.0, 8.0])
-    .style(move |_theme: &Theme, _status| pick_list::Style {
-        text_color: p.accent,
-        placeholder_color: p.muted,
-        handle_color: p.muted,
-        background: Background::Color(p.bg_inset),
-        border: Border::default().width(1.0).color(p.line),
-    })
-    .menu_style(move |_theme: &Theme| menu::Style {
-        background: Background::Color(p.bg_panel),
-        border: Border::default().width(1.0).color(p.line),
-        text_color: p.text,
-        selected_text_color: p.bg,
-        selected_background: Background::Color(p.accent),
-        shadow: Shadow::default(),
-    })
-    .into()
+/// Without a compiled-in stretch backend neither the selector nor key-lock
+/// exists.
+#[cfg(not(any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
+mod backend {
+    use iced::{Element, widget::Space};
+
+    use super::{TsMsg, TsProps};
+    use crate::theme::gui::GuiPalette;
+
+    pub(super) fn library_select(_props: TsProps, _p: GuiPalette) -> Element<'static, TsMsg> {
+        Space::new().into()
+    }
+
+    pub(super) fn keylock_pill(_props: TsProps, _p: GuiPalette) -> Element<'static, TsMsg> {
+        Space::new().into()
+    }
 }
 
 fn mini_label(label: String, p: GuiPalette) -> Element<'static, TsMsg> {
@@ -212,45 +268,6 @@ fn stat_tile(label: &str, value: String, p: GuiPalette) -> Element<'static, TsMs
     .padding([0.0, 10.0])
     .center_y(Length::Fixed(Consts::STAT_H))
     .style(tile_style(p))
-    .into()
-}
-
-/// Without a compiled-in stretch backend key-lock does not exist.
-#[cfg(not(any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
-fn keylock_pill(_props: TsProps, _p: GuiPalette) -> Element<'static, TsMsg> {
-    Space::new().into()
-}
-
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-fn keylock_pill(props: TsProps, p: GuiPalette) -> Element<'static, TsMsg> {
-    let on = props.keylock;
-    // Active toggle: gold fill with on-gold (dark) text, per the design system.
-    let color = if on { p.bg } else { p.muted };
-    let background = if on { p.accent } else { p.bg_inset };
-    let border = if on { p.accent } else { p.line };
-    button(
-        container(
-            row![
-                Icon::Lock.view(13.0, color),
-                text("KEY LOCK")
-                    .size(studio_type::MONO_SM)
-                    .font(fonts::mono(Weight::Semibold))
-                    .color(color),
-            ]
-            .spacing(gap::INLINE)
-            .align_y(Alignment::Center),
-        )
-        .center_y(Length::Fill),
-    )
-    .height(Length::Fixed(Consts::STAT_H))
-    .padding([0.0, 12.0])
-    .style(move |_theme: &Theme, _status| button::Style {
-        background: Some(Background::Color(background)),
-        text_color: color,
-        border: Border::default().width(1.0).color(border),
-        ..button::Style::default()
-    })
-    .on_press(TsMsg::ToggleKeyLock)
     .into()
 }
 

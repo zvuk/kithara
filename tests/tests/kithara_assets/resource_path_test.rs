@@ -3,24 +3,23 @@
 
 use kithara::{
     assets::{
-        AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, ReadSide, StorageBackend,
-        WriteSide,
+        AcquisitionResult, AssetScope, AssetStoreBuilder, ReadSide, StorageBackend, WriteSide,
     },
     platform::time::Duration,
 };
 use kithara_integration_tests::{TestTempDir, temp_dir};
+
+use super::support::{LiteralLayout, literal_layouts, resource, source};
 
 fn asset_scope_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetScope {
     AssetStoreBuilder::default()
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
         })
-        .evict_config(EvictConfig {
-            max_assets: None,
-            max_bytes: None,
-        })
+        .layouts(literal_layouts())
         .build()
-        .scope(asset_root)
+        .scope::<LiteralLayout>(&source(asset_root))
+        .expect("scope")
 }
 
 /// Selects the write path exercised by the case: an "atomic" single write or a
@@ -43,7 +42,7 @@ fn asset_resource_path_method(
     #[case] write_mode: WriteMode,
 ) {
     let scope = asset_scope_with_root(&temp_dir, "test-asset");
-    let key = scope.key(resource_name);
+    let key = scope.key(&resource(resource_name)).unwrap();
     let AcquisitionResult::Pending(writer) = scope
         .store()
         .acquire_resource(&key, None)
@@ -89,7 +88,7 @@ fn asset_resource_path_method(
 )]
 fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     let scope = asset_scope_with_root(&temp_dir, "test-asset");
-    let key = scope.key("data.bin");
+    let key = scope.key(&resource("data.bin")).unwrap();
     let AcquisitionResult::Pending(writer) = scope
         .store()
         .acquire_resource(&key, None)
@@ -121,7 +120,7 @@ fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempD
     let asset_root = "my-asset";
     let resource_name = "subdir/file.txt";
     let scope = asset_scope_with_root(&temp_dir, asset_root);
-    let key = scope.key(resource_name);
+    let key = scope.key(&resource(resource_name)).unwrap();
     let AcquisitionResult::Pending(writer) = scope
         .store()
         .acquire_resource(&key, None)
@@ -153,7 +152,7 @@ fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TestTempDir
     let asset_root = "shared-asset";
     let scope = asset_scope_with_root(&temp_dir, asset_root);
 
-    let key1 = scope.key("resource1.bin");
+    let key1 = scope.key(&resource("resource1.bin")).unwrap();
     let AcquisitionResult::Pending(writer1) = scope
         .store()
         .acquire_resource(&key1, None)
@@ -163,7 +162,7 @@ fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TestTempDir
     };
     let resource1 = writer1.reader();
 
-    let key2 = scope.key("resource2.bin");
+    let key2 = scope.key(&resource("resource2.bin")).unwrap();
     let AcquisitionResult::Pending(writer2) = scope
         .store()
         .acquire_resource(&key2, None)

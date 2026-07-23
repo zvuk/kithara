@@ -7,7 +7,7 @@ use std::{
 };
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -63,7 +63,7 @@ impl Consts {
 
 async fn build_small_cache_stream(server: &TestServer, cancel: CancelToken) -> Stream<Hls> {
     let url = server.url("/master.m3u8");
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();

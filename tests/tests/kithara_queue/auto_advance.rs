@@ -6,14 +6,14 @@ use kithara::{
     self,
     decode::PcmSpec,
     platform::sync::Arc,
-    play::{PlayerConfig, Resource},
+    play::Resource,
     queue::{Queue, QueueConfig, Transition},
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader, offline::resource_from_reader_with_src,
 };
 
-use super::offline_player_harness::OfflinePlayerHarness;
+use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -78,7 +78,9 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     const TRACK_B_VALUE: f32 = 0.80;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
@@ -142,7 +144,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     const TRACK_B_VALUE: f32 = 0.80;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
+        OfflinePlayerOptions::builder()
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,
@@ -213,7 +215,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     const CROSSFADE_SECS: f32 = 0.2;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder()
+        OfflinePlayerOptions::builder()
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,
@@ -239,7 +241,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
         let _ = harness.render(BLOCK_FRAMES);
 
         loop {
-            match rx.try_recv() {
+            match rx.try_recv().map(|env| env.event) {
                 Ok(Event::Player(PlayerEvent::PrefetchRequested)) => prefetch_seen = true,
                 Ok(Event::Player(PlayerEvent::HandoverRequested)) => handover_seen = true,
                 Ok(Event::Player(PlayerEvent::ItemDidPlayToEnd { .. })) => item_end_seen = true,
@@ -284,7 +286,9 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
     const LOUD_VALUE: f32 = 0.80;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
@@ -346,7 +350,9 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_B_VALUE: f32 = 0.80;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
@@ -413,7 +419,9 @@ async fn queue_pauses_player_when_last_track_ends() {
     const TRACK_SECS: f64 = 0.4;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
@@ -432,7 +440,7 @@ async fn queue_pauses_player_when_last_track_ends() {
         let _ = queue.tick();
         let _ = harness.render(BLOCK_FRAMES);
         loop {
-            match rx.try_recv() {
+            match rx.try_recv().map(|env| env.event) {
                 Ok(Event::Queue(QueueEvent::QueueEnded)) => saw_queue_ended = true,
                 Ok(_) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
@@ -469,7 +477,9 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     const TRACK_VALUE: f32 = 0.30;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::builder().crossfade_duration(0.0).build(),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(

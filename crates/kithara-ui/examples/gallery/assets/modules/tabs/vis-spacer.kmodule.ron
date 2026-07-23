@@ -1,0 +1,7 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-vis-spacer",
+    chrome: Plain,
+    root: Column(children: []),
+)

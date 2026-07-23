@@ -32,7 +32,10 @@ fn partial_slice(full: &'static [u8]) -> &'static [u8] {
 }
 
 fn decoder_config() -> DecoderConfig {
-    DecoderConfig::default()
+    DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .build()
 }
 
 /// Xing-headered MP3 reports the full duration even when probed against

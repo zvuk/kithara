@@ -7,10 +7,14 @@
 //! ## Quick start
 //!
 //! ```ignore
-//! use kithara::prelude::*;
+//! use kithara::{bufpool::{BytePool, PcmPool}, prelude::*};
 //!
 //! // Auto-detect from URL
-//! let config = ResourceConfig::new("https://example.com/song.mp3")?;
+//! let config = ResourceConfig::new(
+//!     "https://example.com/song.mp3",
+//!     BytePool::default(),
+//!     PcmPool::default(),
+//! )?;
 //! let mut resource = Resource::new(config).await?;
 //!
 //! // Read interleaved PCM
@@ -121,8 +125,8 @@ pub mod prelude {
     #[cfg(feature = "hls")]
     pub use kithara_abr::AbrMode;
     pub use kithara_audio::{
-        Audio, AudioConfig, EngineLoadSnapshot, GridSegment, PcmReader, RegionPlan,
-        RegionPlanError, ResamplerQuality, StretchControls,
+        Audio, AudioConfig, EngineLoadSnapshot, GridSegment, PcmControl, PcmRead, PcmReader,
+        PcmSession, RegionPlan, RegionPlanError, ResamplerQuality, StretchControls,
     };
     #[cfg(all(
         not(target_arch = "wasm32"),

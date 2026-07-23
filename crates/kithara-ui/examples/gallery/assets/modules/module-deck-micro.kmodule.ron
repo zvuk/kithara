@@ -1,0 +1,24 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-module-deck-micro",
+    title: Some("Микро-дека"),
+    chip: Some("MIC"),
+    chrome: Full,
+    footer: Some(Model(id: "gallery.footer.deck_micro")),
+    root: Column(
+        children: [
+            Slot(
+                id: "content",
+                size: (w: Fill, h: Fill),
+                default: [
+                    Include(
+                        id: "deck-micro",
+                        source: "deck-micro.kmodule.ron",
+                        with: { "deck": "a" },
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

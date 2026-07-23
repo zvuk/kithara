@@ -105,6 +105,7 @@ dev = []
 test = ["kithara/probe", "kithara-play/probe", "dep:cpal"]
 
 [dependencies]
+kithara-assets = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 # Cross-platform deps (used by both the native UniFFI modules and `src/web`).
 # `kithara-play` is the canonical owner of the shared play types
@@ -113,6 +114,8 @@ kithara-events = { workspace = true }
 # both targets. The native arm pulls a host backend below; the wasm arm pulls
 # the web-audio backend in the wasm32 target block.
 kithara-platform = { workspace = true }
+
+delegate = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -145,13 +148,14 @@ uuid = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-abr = { workspace = true, default-features = false }
+kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
 # The wasm worker reaches the shared DRM key-options, ABR-mode, and
 # key-processor types directly (native reaches the same types through the
 # `kithara` facade and a native-only `kithara-drm` dep).
 kithara-hls = { workspace = true, default-features = false }
-kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia"] }
-kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia"] }
+kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia", "webcodecs"] }
+kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia", "webcodecs"] }
 kithara-test-macros = { workspace = true }
 
 bytes = { workspace = true }
@@ -180,6 +184,7 @@ tracing-android = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara = { workspace = true, features = ["probe"] }
+kithara-net = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 futures = { workspace = true }

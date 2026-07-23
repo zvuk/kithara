@@ -3,8 +3,8 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    assets::{AssetStoreBuilder, StorageBackend},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
@@ -35,7 +35,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(1).expect("nonzero"))
         .build();
@@ -49,6 +49,8 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
     // so the loops need no wall-clock deadlines — a hot-refetch livelock
     // becomes a permanent park caught by the hang watchdog / timeout.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -64,7 +66,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
         info!("warmup: reading {} chunks", Consts::WARMUP_CHUNKS);
         let mut chunks_read = 0usize;
         while chunks_read < Consts::WARMUP_CHUNKS {
-            match PcmReader::next_chunk(&mut audio) {
+            match PcmRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks_read += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => {
@@ -78,7 +80,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
         let mut drained = 0usize;
         let mut reached_eof = false;
         while drained < Consts::DRAIN_CHUNKS && !reached_eof {
-            match PcmReader::next_chunk(&mut audio) {
+            match PcmRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => {
                     drained += 1;
                     // Load-bearing pacing: the reader must lag the network so

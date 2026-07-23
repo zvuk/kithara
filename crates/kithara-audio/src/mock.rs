@@ -1,1 +1,1 @@
-pub use crate::traits::{AudioEffectMock, PcmReaderMock};
+pub use crate::traits::{AudioEffectMock, PcmControlMock, PcmReadMock, PcmSessionMock};

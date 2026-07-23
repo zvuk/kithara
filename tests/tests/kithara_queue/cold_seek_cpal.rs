@@ -1,15 +1,13 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     decode::DecoderBackend,
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         sync::Arc,
-        time,
-        time::{Duration, Instant, timeout},
+        time::{self, Duration, Instant, timeout},
         tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
@@ -44,7 +42,10 @@ async fn wait_for_status(
     }
     let start = Instant::now();
     while start.elapsed() < deadline {
-        match timeout(Duration::from_millis(500), rx.recv()).await {
+        match timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
@@ -91,7 +92,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     const URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 
     let temp = temp_dir();
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::builder()
@@ -99,7 +100,12 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
             .build(),
     );
 
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     queue.set_volume(kithara_integration_tests::e2e::volume());
 
@@ -115,6 +121,8 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let cfg = ResourceConfig::for_src(URL)
         .expect("valid silvercomet URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .decoder(

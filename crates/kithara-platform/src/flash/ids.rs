@@ -48,17 +48,11 @@ pub(in crate::flash) fn trace_native_from_ambient(primitive: &'static str, op: &
 
 /// Hashed [`ThreadId`] key targeting a parked thread.
 /// Park and wake paths must derive it through the same `thread_id_hash`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, derive_more::From, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::flash) struct ThreadKey(u64);
 
 impl ThreadKey {
     pub(in crate::flash) fn of<I: Hash>(id: I) -> Self {
         Self(thread_id_hash(id))
-    }
-}
-
-impl From<u64> for ThreadKey {
-    fn from(hash: u64) -> Self {
-        Self(hash)
     }
 }

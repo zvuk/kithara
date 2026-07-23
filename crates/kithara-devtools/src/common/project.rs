@@ -13,6 +13,7 @@ const CONFIG_REL: &str = ".config/xtask.toml";
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProjectConfig {
+    pub audit_clippy: AuditClippyConfig,
     pub health: HealthConfig,
     pub lint_exclude: LintExcludeConfig,
     pub orphans: OrphansConfig,
@@ -24,6 +25,13 @@ pub struct ProjectConfig {
     pub test: TestCommandConfig,
     #[serde(default, rename = "workspace-scan")]
     pub workspace_scan: WorkspaceScan,
+}
+
+/// Extended advisory clippy lints for the opt-in `cargo xtask audit-clippy` sweep.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AuditClippyConfig {
+    pub lints: Vec<String>,
 }
 
 /// Workspace-wide Rust file scan exclusions.

@@ -3,11 +3,13 @@
 use std::{fs::File, io::Write};
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
-    bufpool::{PcmPool, SharedPool},
+    bufpool::PcmPool,
     decode::{GaplessMode, SilenceTrimParams},
-    events::{AudioEvent, Event, EventReceiver, SeekEpoch, SeekLifecycleStage},
+    events::{
+        AudioEvent, DecoderBackend, DecoderChangeCause, DecoderEvent, Event, EventBus,
+        EventReceiver, SeekEpoch, SeekLifecycleStage,
+    },
     file::{FileConfig, FileSrc},
     platform::time::{self, Duration, Instant},
     stream::{ContainerFormat, MediaInfo, Stream},
@@ -43,7 +45,9 @@ async fn await_seek_request_epoch(events: &mut EventReceiver, budget: Duration) 
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
-        }))) = time::timeout(remaining, events.recv()).await
+        }))) = time::timeout(remaining, events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
         {
             return seek_epoch;
         }
@@ -68,9 +72,11 @@ fn test_wav_config(
         .unwrap();
     let cache = TestTempDir::new();
     let file_config = FileConfig::for_src(FileSrc::Local(tmp.path().to_path_buf()))
-        .store(StoreOptions::new(cache.path()))
+        .store(kithara_integration_tests::disk_asset_store(cache.path()))
         .build();
     let config = AudioConfig::<kithara::file::File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(PcmPool::default())
         .hint("wav".to_string())
         .build();
     (cache, tmp, config)
@@ -86,21 +92,59 @@ async fn test_audio_new(#[case] sample_count: usize) {
         .unwrap();
 }
 
+#[kithara::test(tokio)]
+async fn test_audio_new_publishes_initial_decoder_changed() {
+    let (_cache, _tmp, config) = test_wav_config(1000);
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe();
+    let config = AudioConfig::<kithara::file::File>::for_stream(config.stream().clone())
+        .byte_pool(config.byte_pool().clone())
+        .pcm_pool(config.pcm_pool().clone())
+        .maybe_hint(config.hint().map(str::to_owned))
+        .events(bus)
+        .build();
+
+    let audio = Audio::<Stream<kithara::file::File>>::new(config)
+        .await
+        .unwrap();
+    let expected_backend = DecoderBackend::Symphonia;
+
+    match events.try_recv().map(|env| env.event) {
+        Ok(Event::Decoder(DecoderEvent::DecoderChanged {
+            backend,
+            sample_rate,
+            channels,
+            cause,
+            ..
+        })) => {
+            assert_eq!(backend, expected_backend);
+            assert_eq!(sample_rate, audio.spec().sample_rate.get());
+            assert_eq!(channels, audio.spec().channels);
+            assert_eq!(cause, DecoderChangeCause::Initial);
+        }
+        other => panic!("expected initial DecoderChanged event, got {other:?}"),
+    }
+}
+
 /// `Audio::new` pre-warms its PCM pool so the decode hot path and the
 /// first reads reuse pooled buffers instead of allocating on the audio
 /// thread. Drives a fresh, cold custom pool and asserts construction
 /// leaves it warmed.
 #[kithara::test(tokio)]
 async fn audio_new_warms_pcm_pool() {
-    let pool: PcmPool = SharedPool::<8, Vec<f32>>::new(128, 200_000);
+    let pool = PcmPool::new(128, 200_000);
     assert_eq!(
         pool.allocated_bytes(),
         0,
         "precondition: a fresh pool is cold"
     );
 
-    let (_cache, _tmp, mut config) = test_wav_config(1000);
-    config.pcm_pool = Some(pool.clone());
+    let (_cache, _tmp, config) = test_wav_config(1000);
+    let config = AudioConfig::<kithara::file::File>::for_stream(config.stream().clone())
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .hint(config.hint().unwrap().to_owned())
+        .pcm_pool(pool.clone())
+        .build();
 
     let _audio = Audio::<Stream<kithara::file::File>>::new(config)
         .await
@@ -133,13 +177,19 @@ fn test_audio_config_with_media_info() {
         .sample_rate(44100)
         .build();
 
-    let config = AudioConfig::<kithara::file::File>::for_stream(FileConfig::default())
+    let file_config = FileConfig::new(
+        FileSrc::Local("/tmp/test.mp3".into()),
+        kithara_integration_tests::memory_asset_store(),
+    );
+    let config = AudioConfig::<kithara::file::File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(PcmPool::default())
         .media_info(info.clone())
         .build();
 
-    assert!(config.media_info.is_some());
+    assert!(config.media_info().is_some());
     assert_eq!(
-        config.media_info.unwrap().container,
+        config.media_info().unwrap().container,
         Some(ContainerFormat::Wav)
     );
 }
@@ -153,7 +203,13 @@ fn test_audio_config_with_media_info() {
     trim_trailing: true,
 }))]
 fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
-    let config = AudioConfig::<kithara::file::File>::for_stream(FileConfig::default())
+    let file_config = FileConfig::new(
+        FileSrc::Local("/tmp/test.mp3".into()),
+        kithara_integration_tests::memory_asset_store(),
+    );
+    let config = AudioConfig::<kithara::file::File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .gapless_mode(mode)
@@ -161,7 +217,7 @@ fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
         )
         .build();
 
-    assert_eq!(config.decoder.gapless_mode, mode);
+    assert_eq!(config.decoder().gapless_mode(), mode);
 }
 
 #[kithara::test(tokio)]
@@ -274,7 +330,9 @@ async fn test_audio_playback_progress_uses_output_commit() {
             total_ms,
             seek_epoch,
             ..
-        }))) = time::timeout(Duration::from_millis(40), events.recv()).await
+        }))) = time::timeout(Duration::from_millis(40), events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
         {
             assert!(position_ms > 0);
             assert!(total_ms.is_some());
@@ -305,7 +363,9 @@ async fn test_seek_emits_matching_playback_progress() {
     let mut matched_epoch = None;
     while Instant::now() < deadline {
         if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
-            time::timeout(Duration::from_millis(40), events.recv()).await
+            time::timeout(Duration::from_millis(40), events.recv())
+                .await
+                .map(|r| r.map(|env| env.event))
             && seek_epoch == expected_epoch
         {
             matched_epoch = Some(seek_epoch);
@@ -328,7 +388,7 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     let expected_epoch = await_seek_request_epoch(&mut events, Duration::from_secs(1)).await;
 
     let mut saw_seek_complete_before_read = false;
-    while let Ok(event) = events.try_recv() {
+    while let Ok(event) = events.try_recv().map(|env| env.event) {
         if matches!(event, Event::Audio(AudioEvent::SeekComplete { .. })) {
             saw_seek_complete_before_read = true;
             break;
@@ -350,7 +410,10 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     let mut saw_seek_complete = false;
     let mut saw_output_committed = false;
     while Instant::now() < deadline {
-        match time::timeout(Duration::from_millis(40), events.recv()).await {
+        match time::timeout(Duration::from_millis(40), events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
                 stage: SeekLifecycleStage::OutputCommitted,
                 seek_epoch,

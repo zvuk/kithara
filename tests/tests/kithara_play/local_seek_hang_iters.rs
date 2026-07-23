@@ -2,7 +2,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     decode::DecoderBackend,
     events::{AbrMode, AudioEvent, Event, EventReceiver},
     net::{HttpClient, NetOptions},
@@ -127,7 +126,7 @@ async fn render_and_collect(
 /// receiver would otherwise wedge later `try_recv` reads.
 fn drain_events(events: &mut EventReceiver) {
     loop {
-        match events.try_recv() {
+        match events.try_recv().map(|env| env.event) {
             Ok(_) => continue,
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             Err(TryRecvError::Lagged(_)) => continue,
@@ -192,7 +191,7 @@ async fn render_until_audio(
 
         let mut advanced = false;
         loop {
-            match events.try_recv() {
+            match events.try_recv().map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     if u128::from(position_ms) > min_position_ms {
                         advanced = true;
@@ -220,14 +219,16 @@ async fn build_resource(
     url: &Url,
     downloader: &Downloader,
     iter_label: &str,
-    store: StoreOptions,
+    store: kithara::assets::AssetStore,
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
     let cfg = ResourceConfig::for_src(url.as_str())
         .unwrap_or_else(|e| panic!("ResourceConfig::for_src({url}): {e}"))
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
-        .name(format!("{iter_label}|{url}"))
+        .discriminator(format!("{iter_label}|{url}"))
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -289,7 +290,7 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
     for iter in 0..Consts::ITERATIONS {
         let iter_label = format!("iter-{iter}");
         let temp = temp_dir();
-        let store = StoreOptions::new(temp.path());
+        let store = kithara_integration_tests::disk_asset_store(temp.path());
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),

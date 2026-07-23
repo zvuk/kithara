@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import KitharaFFI
 import Testing
 @testable import Kithara
 
@@ -132,5 +133,31 @@ struct KitharaPlayerTests {
             Issue.record("expected command error")
         }
         _ = cancellable
+    }
+
+    @Test("track load failures preserve reason and item id")
+    func trackLoadFailuresPreserveReasonAndItemId() throws {
+        let player = KitharaPlayer()
+        let item = KitharaPlayerItem(
+            url: "https://example.com/failing.mp3",
+            audioId: 42,
+            uuid: 123
+        )
+        try player.insert(item)
+
+        let error = player.playerError(
+            from: .trackLoadFailed(
+                itemId: item.ffiTrackId,
+                reason: "cache rejected",
+                autoSkipped: true
+            )
+        )
+
+        guard case let .playback(.itemFailed(reason), itemId) = error else {
+            Issue.record("expected attributed item load failure")
+            return
+        }
+        #expect(reason == "cache rejected")
+        #expect(itemId == item.audioId)
     }
 }

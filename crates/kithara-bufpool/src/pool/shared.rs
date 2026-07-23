@@ -3,10 +3,11 @@ use std::fmt;
 use kithara_platform::sync::Arc;
 
 use super::{
-    core::{ByteBudget, Pool, PoolStats},
+    core::{Pool, PoolStats},
     owned::PooledOwned,
     reuse::Reuse,
 };
+use crate::{ByteBudget, budget::RegionBudget};
 
 /// Helper to create `Arc`-wrapped Pool for shared access.
 ///
@@ -70,41 +71,52 @@ where
             budget,
         )))
     }
+
+    pub(crate) fn with_region_budget(
+        max_buffers: usize,
+        trim_capacity: usize,
+        budget: RegionBudget,
+    ) -> Self {
+        Self(Arc::new(Pool::with_region_budget(
+            max_buffers,
+            trim_capacity,
+            budget,
+        )))
+    }
 }
 
 impl<const SHARDS: usize, T> SharedPool<SHARDS, T>
 where
     T: Reuse,
 {
-    /// Current number of tracked bytes across all live buffers.
-    #[must_use]
-    pub fn allocated_bytes(&self) -> usize {
-        self.0.allocated_bytes()
+    delegate::delegate! {
+        to self.0 {
+            /// Current number of tracked bytes across all live buffers.
+            #[must_use]
+            pub fn allocated_bytes(&self) -> usize;
+            /// Return a value to the pool for reuse.
+            ///
+            /// See [`Pool::recycle()`] for details.
+            pub fn recycle(&self, value: T);
+            /// Get pool hit/miss statistics.
+            #[must_use]
+            pub fn stats(&self) -> PoolStats;
+        }
     }
 
-    /// Wrap an externally-owned value into a [`PooledOwned`] guard.
+    /// Wrap a value into a [`PooledOwned`] guard without charging budget.
     ///
     /// The returned guard automatically returns the value to this pool on drop,
     /// just like a value obtained via [`get()`](SharedPool::get).
     ///
-    /// Useful for attaching pool-recycling to values that were extracted via
-    /// [`PooledOwned::into_inner()`] or created outside the pool.
+    /// The budget charge travels with a buffer from its first growth until a
+    /// rejected return, so `attach` is only for values whose capacity this
+    /// pool already accounts for — [`PooledOwned::into_inner()`] round-trips.
+    /// Importing genuinely external memory needs a charging API, which does
+    /// not exist until a production consumer appears.
     pub fn attach(&self, value: T) -> PooledOwned<SHARDS, T> {
         let shard_idx = Pool::<SHARDS, T>::shard_index();
         PooledOwned::wrap(Arc::clone(&self.0), value, shard_idx)
-    }
-
-    /// Return a value to the pool for reuse.
-    ///
-    /// See [`Pool::recycle()`] for details.
-    pub fn recycle(&self, value: T) {
-        self.0.recycle(value);
-    }
-
-    /// Get pool hit/miss statistics.
-    #[must_use]
-    pub fn stats(&self) -> PoolStats {
-        self.0.stats()
     }
 }
 

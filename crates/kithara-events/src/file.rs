@@ -1,28 +1,23 @@
 #![forbid(unsafe_code)]
 
+use crate::{AudioCodecKind, ContainerKind};
+
 /// Errors specific to the file stream layer (non-network, non-downloader).
 ///
 /// Network errors are reported by [`crate::DownloaderEvent::RequestFailed`]
 /// with a typed [`kithara_net::NetError`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, derive_more::Display, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FileError {
     /// Local I/O / storage failure (mmap, write, eviction).
+    #[display("io: {_0}")]
     Io(String),
     /// Decoder-side complaint surfaced through the file stream.
+    #[display("decode: {_0}")]
     Decode(String),
     /// Anything else not covered above.
+    #[display("other: {_0}")]
     Other(String),
-}
-
-impl std::fmt::Display for FileError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(msg) => write!(f, "io: {msg}"),
-            Self::Decode(msg) => write!(f, "decode: {msg}"),
-            Self::Other(msg) => write!(f, "other: {msg}"),
-        }
-    }
 }
 
 /// Events emitted by file streams.
@@ -33,10 +28,26 @@ impl std::fmt::Display for FileError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FileEvent {
+    Opened {
+        codec: Option<AudioCodecKind>,
+        container: Option<ContainerKind>,
+        total_bytes: Option<u64>,
+        cached: bool,
+    },
+    TotalBytesResolved {
+        total_bytes: u64,
+        source: TotalBytesSource,
+    },
+    CacheComplete {
+        total_bytes: u64,
+    },
     /// Reader progressed through the stream — bytes consumed by the
     /// reader, not bytes written to disk and not bytes played by the
     /// sink. Sink-truth lives in `AudioEvent::PlaybackProgress`.
-    ReadProgress { position: u64, total: Option<u64> },
+    ReadProgress {
+        position: u64,
+        total: Option<u64>,
+    },
     /// Reader byte cursor jumped (driven by the decoder calling
     /// `Seek::seek` after a user-facing seek).
     ReaderSeek {
@@ -45,7 +56,16 @@ pub enum FileEvent {
         seek_epoch: crate::SeekEpoch,
     },
     /// Non-network error specific to the file stream.
-    Error { error: FileError },
+    Error {
+        error: FileError,
+    },
     /// Reader reached EOF.
     EndOfStream,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TotalBytesSource {
+    CommittedLen,
+    ContentLength,
 }

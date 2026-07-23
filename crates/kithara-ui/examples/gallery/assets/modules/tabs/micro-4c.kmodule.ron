@@ -1,0 +1,56 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-micro-4c",
+    chrome: Plain,
+    parameters: ["deck"],
+    root: Column(
+        gap: Some(8.0),
+        pad: Some(24.0),
+        children: [
+            Text(
+                id: "label",
+                style: MicroLabel,
+                label: "4C VU СКРЫТ — ТОЛЬКО ВОЛНА",
+                size: (w: Fixed(580.0), h: Fixed(18.0)),
+            ),
+            Row(
+                id: "bar",
+                size: (w: Fixed(580.0), h: Fixed(40.0)),
+                gap: Some(1.0),
+                children: [
+                    Glyph(id: "menu", icon: Menu, size: (w: Fixed(32.0), h: Fixed(40.0))),
+                    Button(
+                        id: "play",
+                        label: "PLAY",
+                        active_label: Some("PAUSE"),
+                        style: MicroPrimary,
+                        read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
+                        write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
+                        size: (w: Fixed(36.0), h: Fixed(40.0)),
+                    ),
+                    DeckSummary(
+                        id: "summary",
+                        style: Micro,
+                        read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
+                        size: (w: Fill, h: Fixed(40.0)),
+                    ),
+                    Bpm(
+                        id: "bpm",
+                        read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                        size: (w: Fixed(64.0), h: Fixed(40.0)),
+                    ),
+                    Select(id: "auto", label: "AUTO·320", size: (w: Fixed(84.0), h: Fixed(26.0))),
+                    Wave(
+                        id: "wave",
+                        style: Micro,
+                        read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                        write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+                        size: (w: Fixed(90.0), h: Fixed(40.0)),
+                    ),
+                    Glyph(id: "close", icon: X, size: (w: Fixed(28.0), h: Fixed(40.0))),
+                ],
+            ),
+        ],
+    ),
+)

@@ -11,7 +11,10 @@ use kithara_integration_tests::{
 };
 
 fn test_config() -> DecoderConfig {
-    DecoderConfig::default()
+    DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .build()
 }
 
 #[kithara::fixture]

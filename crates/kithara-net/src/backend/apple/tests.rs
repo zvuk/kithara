@@ -12,7 +12,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use kithara_platform::{
     CancelToken,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -25,8 +25,16 @@ use url::Url;
 use super::client::AppleNet;
 use crate::{
     error::NetError,
-    types::{NetOptions, RetryPolicy},
+    types::{Compression, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
+
+const PLAYLIST: &[u8] = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\na.m3u8\n";
+const GZIP_PLAYLIST: &[u8] = &[
+    0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x53, 0x76, 0x8d, 0x08, 0xf1, 0x35,
+    0x0e, 0xe5, 0x52, 0x06, 0xd2, 0xba, 0x11, 0xba, 0xc1, 0x21, 0x41, 0xae, 0x8e, 0xbe, 0xba, 0x9e,
+    0x7e, 0x6e, 0x56, 0x4e, 0x8e, 0x7e, 0x2e, 0xe1, 0x9e, 0x2e, 0x21, 0x1e, 0xb6, 0x86, 0x5c, 0x89,
+    0x7a, 0xb9, 0xc6, 0xa5, 0x16, 0x5c, 0x00, 0xf1, 0x51, 0x3e, 0xd3, 0x2d, 0x00, 0x00, 0x00,
+];
 
 async fn spawn_server<F, Fut>(handler: F) -> Url
 where
@@ -110,6 +118,19 @@ fn range_start(request: &str) -> Option<usize> {
         .and_then(|start| start.parse().ok())
 }
 
+fn request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    request.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.eq_ignore_ascii_case(name).then(|| value.trim())
+    })
+}
+
+fn overriding_accept_encoding() -> Headers {
+    let mut headers = Headers::new();
+    headers.insert("AcCePt-EnCoDiNg", "br");
+    headers
+}
+
 async fn collect(mut stream: crate::ByteStream) -> Result<Bytes, NetError> {
     let mut out = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -143,6 +164,130 @@ async fn apple_get_bytes_retries_503_until_ok() {
 
     assert_eq!(&body[..], b"ok");
     assert_eq!(counter.load(Ordering::SeqCst), 3);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn apple_accept_encoding_policy_is_authoritative_per_request() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let handler_seen = Arc::clone(&seen);
+    let url = spawn_server(move |socket, request| {
+        let seen = Arc::clone(&handler_seen);
+        async move {
+            let accept_encoding = request_header(&request, "accept-encoding")
+                .unwrap_or_default()
+                .to_string();
+            seen.lock().push(accept_encoding);
+            if request.starts_with("HEAD ") {
+                write_raw(
+                    socket,
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            } else {
+                write_response(socket, "200 OK", &[], b"ok").await;
+            }
+        }
+    })
+    .await;
+
+    let options = NetOptions::builder()
+        .compression(Compression::GZIP | Compression::DEFLATE)
+        .build();
+    let client = AppleNet::new(options, CancelToken::never());
+
+    let body = client
+        .get_bytes(url.clone(), Some(overriding_accept_encoding()))
+        .await
+        .expect("whole-body get");
+    assert_eq!(&body[..], b"ok");
+
+    let stream = client
+        .stream(url.clone(), Some(overriding_accept_encoding()))
+        .await
+        .expect("stream");
+    assert_eq!(&collect(stream).await.expect("stream body")[..], b"ok");
+
+    let range = client
+        .get_range(
+            url.clone(),
+            RangeSpec::new(0, Some(1)),
+            Some(overriding_accept_encoding()),
+        )
+        .await
+        .expect("range");
+    assert_eq!(&collect(range).await.expect("range body")[..], b"ok");
+
+    client
+        .head(url.clone(), Some(overriding_accept_encoding()))
+        .await
+        .expect("head");
+    let body = client
+        .post_bytes(
+            url,
+            Bytes::from_static(b"request"),
+            Some(overriding_accept_encoding()),
+        )
+        .await
+        .expect("whole-body post");
+    assert_eq!(&body[..], b"ok");
+
+    assert_eq!(
+        seen.lock().as_slice(),
+        [
+            "gzip, deflate",
+            "identity",
+            "identity",
+            "identity",
+            "gzip, deflate"
+        ]
+    );
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn apple_whole_body_preserves_configured_auto_decode() {
+    let url = spawn_server(|socket, request| async move {
+        assert_eq!(request_header(&request, "accept-encoding"), Some("gzip"));
+        write_response(
+            socket,
+            "200 OK",
+            &[("Content-Encoding", "gzip")],
+            GZIP_PLAYLIST,
+        )
+        .await;
+    })
+    .await;
+    let options = NetOptions::builder().compression(Compression::GZIP).build();
+    let client = AppleNet::new(options, CancelToken::never());
+
+    let body = client
+        .get_bytes(url, None)
+        .await
+        .expect("Foundation auto-decodes configured gzip");
+
+    assert_eq!(&body[..], PLAYLIST);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn apple_identity_stream_rejects_nonidentity_content_encoding() {
+    let url = spawn_server(|socket, _request| async move {
+        write_response(
+            socket,
+            "200 OK",
+            &[("CoNtEnT-EnCoDiNg", "gzip")],
+            GZIP_PLAYLIST,
+        )
+        .await;
+    })
+    .await;
+    let client = AppleNet::new(fast_options(0), CancelToken::never());
+
+    let Err(error) = client.stream(url.clone(), None).await else {
+        panic!("encoded bytes must not reach an identity stream");
+    };
+
+    assert!(
+        matches!(error, NetError::Decode(detail) if detail.contains(url.as_str()) && detail.contains("gzip"))
+    );
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
@@ -190,12 +335,20 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
             .collect::<Vec<_>>(),
     );
     let resume_offset = Arc::new(AtomicUsize::new(usize::MAX));
+    let accept_encodings = Arc::new(Mutex::new(Vec::new()));
     let served_body = Arc::clone(&body);
     let seen_resume = Arc::clone(&resume_offset);
+    let seen_accept_encodings = Arc::clone(&accept_encodings);
     let url = spawn_server(move |mut socket, request| {
         let body = Arc::clone(&served_body);
         let resume_offset = Arc::clone(&seen_resume);
+        let accept_encodings = Arc::clone(&seen_accept_encodings);
         async move {
+            accept_encodings.lock().push(
+                request_header(&request, "accept-encoding")
+                    .unwrap_or_default()
+                    .to_string(),
+            );
             if let Some(offset) = range_start(&request) {
                 resume_offset.store(offset, Ordering::SeqCst);
                 let tail = &body[offset.min(body.len())..];
@@ -237,6 +390,16 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
         "resume must start after delivered partial bytes, got {actual_resume}"
     );
     assert_eq!(&body_out[..], &body[..]);
+    let accept_encodings = accept_encodings.lock().clone();
+    assert!(
+        accept_encodings.len() >= 2,
+        "stream must include its initial request and at least one resume"
+    );
+    assert!(
+        accept_encodings.iter().all(|value| value == "identity"),
+        "every initial and resumed stream request must use identity: {:?}",
+        &*accept_encodings
+    );
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]

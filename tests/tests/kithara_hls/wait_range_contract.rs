@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
@@ -49,7 +49,7 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
             root: temp_dir.path().into(),
         }
     };
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(backend)
         .cache_capacity(NonZeroUsize::new(256).unwrap())
         .build();
@@ -163,7 +163,7 @@ async fn ephemeral_small_cache_reads_entire_stream() {
     let url = server.url("/master.m3u8");
     let total_bytes = server.total_bytes();
 
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(5).expect("5 > 0"))
         .build();

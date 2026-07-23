@@ -166,6 +166,7 @@ impl HlsFixtureBuilder {
     fn default_bit_rate(codec: AudioCodec) -> u64 {
         match codec {
             AudioCodec::AacLc => 128_000,
+            AudioCodec::AacHe => 64_000,
             // HE-AAC v2 is bandwidth-efficient; production zvuk DRM
             // typically sits around 32 kbps for the stream-low
             // variant.
@@ -364,8 +365,29 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
+    pub fn packaged_audio_aac_he(self, sample_rate: u32, channels: u16) -> Self {
+        self.packaged_audio_signal_aac_he(sample_rate, channels, PackagedSignal::Sawtooth)
+    }
+
+    #[must_use]
     pub fn packaged_audio_aac_he_v2(self, sample_rate: u32, channels: u16) -> Self {
         self.packaged_audio_signal_aac_he_v2(sample_rate, channels, PackagedSignal::Sawtooth)
+    }
+
+    #[must_use]
+    pub fn packaged_audio_signal_aac_he(
+        mut self,
+        sample_rate: u32,
+        channels: u16,
+        signal: PackagedSignal,
+    ) -> Self {
+        self.set_packaged_audio_codec_source(
+            AudioCodec::AacHe,
+            sample_rate,
+            channels,
+            PackagedAudioSource::Signal(signal),
+        );
+        self
     }
 
     #[must_use]

@@ -25,11 +25,14 @@ type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 /// off the player runtime, hands the opened reader to the worker thread,
 /// and keeps at most one run in flight. Dropping it cancels the run and
 /// stops the worker.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct TrackAnalysisRunner {
     worker: Arc<AppAnalysisWorker>,
     current: Option<RunHandle>,
     /// Whether any analyzer is compiled in; without one a decode pass would
     /// produce nothing, so the driver skips analysis entirely.
+    #[field(get = is_active)]
     active: bool,
 }
 
@@ -46,9 +49,14 @@ impl TrackAnalysisRunner {
     /// and every run scope live under it. `buckets` caps the waveform output;
     /// the native window count is the real resolution.
     #[must_use]
-    pub fn new(master: &CancelToken, _buckets: usize, beat_config: AppBeatAnalysisConfig) -> Self {
+    pub fn new(
+        master: &CancelToken,
+        _buckets: usize,
+        beat_config: AppBeatAnalysisConfig,
+        pcm_pool: PcmPool,
+    ) -> Self {
         let builder = AnalyzerBuilder::default()
-            .with_pcm_pool(PcmPool::default())
+            .with_pcm_pool(pcm_pool)
             .with_beat_config(beat_config);
         #[cfg(feature = "analysis-waveform")]
         let builder = builder.with_waveform(_buckets);
@@ -86,13 +94,6 @@ impl TrackAnalysisRunner {
             prev.cancel.cancel();
             prev.task.abort();
         }
-    }
-
-    /// `false` when no analyzer is configured (`builder.is_empty()`) — the
-    /// runtime signal to skip analysis scheduling.
-    #[must_use]
-    pub fn is_active(&self) -> bool {
-        self.active
     }
 }
 
@@ -134,7 +135,7 @@ async fn open_reader(
     if cancel.is_cancelled() {
         return None;
     }
-    config.cancel = Some(cancel.child());
+    config.set_cancel(cancel.child());
     let mut resource = match Resource::new(config).await {
         Ok(r) => r,
         Err(e) => {

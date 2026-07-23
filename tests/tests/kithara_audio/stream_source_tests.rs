@@ -19,6 +19,8 @@ fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
         event_bus: None,
     };
     AudioConfig::<MemStream>::for_stream(stream)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint("wav".to_string())
         .build()
 }
@@ -89,7 +91,9 @@ async fn seek_during_active_decode_completes_without_hang() {
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
-        }))) = time::timeout(remaining, events.recv()).await
+        }))) = time::timeout(remaining, events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
         {
             observed_epoch = Some(seek_epoch);
             break;
@@ -101,7 +105,10 @@ async fn seek_during_active_decode_completes_without_hang() {
     let mut saw_complete = false;
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match time::timeout(remaining, events.recv()).await {
+        match time::timeout(remaining, events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. })))
                 if seek_epoch == expected_epoch =>
             {
@@ -166,7 +173,9 @@ async fn rapid_seeks_via_timeline_all_complete() {
                 stage: SeekLifecycleStage::SeekRequest,
                 seek_epoch,
                 ..
-            }))) = time::timeout(remaining, events.recv()).await
+            }))) = time::timeout(remaining, events.recv())
+                .await
+                .map(|r| r.map(|env| env.event))
             {
                 captured = Some(seek_epoch);
                 break;
@@ -209,7 +218,10 @@ async fn rapid_seeks_via_timeline_all_complete() {
             Err(error) => panic!("decode error while draining seek completions: {error}"),
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match time::timeout(remaining, events.recv()).await {
+        match time::timeout(remaining, events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
                 last_complete = Some(seek_epoch);
                 if seek_epoch >= highest_expected {
@@ -236,6 +248,8 @@ async fn truncated_wav_surfaces_decode_error_or_eof() {
         source: Some(source),
         event_bus: None,
     })
+    .byte_pool(kithara::bufpool::BytePool::default())
+    .pcm_pool(kithara::bufpool::PcmPool::default())
     .hint("wav".to_string())
     .build();
 

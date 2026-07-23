@@ -61,7 +61,7 @@ class PlayerViewModelBase: ObservableObject {
     /// `bindEvents()` (invoked from `init`).
     let player = KitharaPlayer(
         config: KitharaPlayer.Config(
-            cacheDir: PlayerViewModelBase.defaultCacheDir
+            store: AssetStore(root: PlayerViewModelBase.defaultCacheDir)
         )
     )
 

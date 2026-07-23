@@ -1,0 +1,17 @@
+id: idioms.derive-setter-candidate
+message: Trivial setter; prefer direct field access at the right visibility or an accessor-derive crate.
+severity: warning
+language: Rust
+files: ["crates/**/*.rs"]
+ignores: ["**/tests/**", "**/test_*.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests.rs"]
+rule:
+  all:
+    - any:
+        - pattern: "fn $NAME(&mut self, $V: $T) { self.$F = $V; }"
+        - pattern: "pub fn $NAME(&mut self, $V: $T) { self.$F = $V; }"
+        - pattern: "pub(crate) fn $NAME(&mut self, $V: $T) { self.$F = $V; }"
+    - inside: { kind: impl_item, stopBy: end }
+    - not:
+        inside: { pattern: "impl $TRAIT for $TYPE { $$$ }", stopBy: end }
+constraints:
+  NAME: { regex: "^set_" }

@@ -18,9 +18,9 @@ use axum::{
 use bytes::Bytes;
 use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig},
-    bufpool::PcmPool,
+    bufpool::{BytePool, PcmPool},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -106,7 +106,10 @@ fn build_resampler(source_rate: u32, target_rate: u32, frames: usize) -> Box<dyn
         .backend(RubatoBackend::new())
         .settings(settings)
         .build();
-    create_resampler(&config).unwrap_or_else(|err| panic!("bench resampler should build: {err}"))
+    Box::new(
+        create_resampler(&config)
+            .unwrap_or_else(|err| panic!("bench resampler should build: {err}")),
+    )
 }
 
 fn process_stereo(
@@ -314,8 +317,13 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
             },
             |(_temp_dir, file_path)| {
                 rt.block_on(async move {
-                    let file_config = FileConfig::new(file_path.into());
+                    let file_config = FileConfig::new(
+                        file_path.into(),
+                        kithara_integration_tests::memory_asset_store(),
+                    );
                     let config = AudioConfig::<File>::for_stream(file_config)
+                        .byte_pool(BytePool::default())
+                        .pcm_pool(PcmPool::default())
                         .hint(("mp3").to_string())
                         .build();
                     let mut audio = Audio::<Stream<File>>::new(config)
@@ -369,7 +377,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                             .client(HttpClient::new(net, CancelToken::never()))
                             .build(),
                     );
-                    let store = StoreOptions::builder()
+                    let store = AssetStoreBuilder::default()
                         .backend(StorageBackend::Memory)
                         .max_bytes(200_000)
                         .build();

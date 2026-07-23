@@ -1,12 +1,17 @@
 #[cfg(not(any(feature = "tui", feature = "gui")))]
 compile_error!("`kithara` binary requires at least one of `tui` or `gui` feature");
 
-use std::io::{self, IsTerminal};
+use std::{
+    io::{self, IsTerminal},
+    sync::OnceLock,
+};
 
 use clap::Parser;
 use kithara::{
-    assets::{AssetStoreBuilder, BytePool, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
+    assets::{AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend},
+    bufpool::Region,
     net::{HttpClient, NetOptions},
+    play::SessionHandle,
     stream::dl::{Downloader, DownloaderConfig},
 };
 #[cfg(not(feature = "tui"))]
@@ -22,7 +27,7 @@ use kithara_app::{
     frontend::Frontend,
     tracing_init::init_tracing,
 };
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::CancelToken;
 
 /// Kithara — audio player application.
 #[derive(Parser)]
@@ -54,6 +59,12 @@ enum Mode {
 
 type AppError = Box<dyn std::error::Error + Send + Sync>;
 type AppResult<T = ()> = Result<T, AppError>;
+
+static APP_SESSION: OnceLock<SessionHandle> = OnceLock::new();
+
+fn app_session_handle() -> SessionHandle {
+    APP_SESSION.get_or_init(SessionHandle::spawn_native).clone()
+}
 
 /// Resolve `Mode::Auto` into a concrete mode.
 fn resolve_mode(mode: Mode) -> Mode {
@@ -103,7 +114,8 @@ fn main() -> AppResult {
     // every subsystem derives from `shutdown.child()`, so a frontend
     // `config.shutdown.cancel()` propagates down the shutdown subtree to all of
     let shutdown = CancelToken::root();
-    let byte_pool = BytePool::default();
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let net = NetOptions::builder()
         .is_insecure(args.insecure || baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
         .compression(baked::BAKED_COMPRESSION)
@@ -113,34 +125,27 @@ fn main() -> AppResult {
         DownloaderConfig::for_client(HttpClient::new(net, shutdown.child())).build(),
     );
     let flush_hub = FlushHub::new(shutdown.child(), FlushPolicy::default());
-    let store_options = StoreOptions::builder()
-        .flush_hub(Arc::clone(&flush_hub))
+    let store = AssetStoreBuilder::default()
+        .cancel(shutdown.child())
+        .backend(StorageBackend::default())
+        .pool(byte_pool.clone())
+        .flush_hub(flush_hub)
         .build();
-    let asset_store = Arc::new(
-        AssetStoreBuilder::default()
-            .cancel(shutdown.child())
-            .backend(store_options.backend.clone())
-            .evict_config(EvictConfig::from(&store_options))
-            .pool(byte_pool.clone())
-            .maybe_cache_capacity(store_options.cache_capacity)
-            .maybe_flush_hub(store_options.flush_hub.clone())
-            .build(),
-    );
     let config = AppConfig::builder()
         .downloader(downloader)
-        .flush_hub(flush_hub)
         .shutdown(shutdown.clone())
         .byte_pool(byte_pool)
-        .asset_store(asset_store)
+        .pcm_pool(region.pcm_pool())
+        .store(store)
         .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
         .should_accept_invalid_certs(args.insecure)
         .build();
 
-    let mut deck_set = DeckSet::new(vec![
-        Deck::build(DeckId(0), &config),
-        Deck::build(DeckId(1), &config),
+    let session = app_session_handle();
+    let deck_set = DeckSet::new(vec![
+        Deck::build(DeckId(0), &config, &session),
+        Deck::build(DeckId(1), &config, &session),
     ]);
-    deck_set.commit(deck_set.mix().clone())?;
 
     match mode {
         #[cfg(feature = "tui")]
@@ -152,6 +157,10 @@ fn main() -> AppResult {
         }
         #[cfg(feature = "gui")]
         Mode::Gui => {
+            // The DJ mix drives deck gains only in the GUI; the TUI plays its
+            // single deck at unity.
+            let mut deck_set = deck_set;
+            deck_set.commit(deck_set.mix().clone())?;
             let mut frontend = GuiFrontend::new(&config)?;
             frontend.start(&deck_set)?;
             frontend.run_loop(deck_set)?;

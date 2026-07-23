@@ -4,7 +4,6 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     events::{
@@ -141,7 +140,7 @@ impl EventCollector {
         use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
         let mut rx = self.rx.lock();
         loop {
-            let ev = match rx.try_recv() {
+            let ev = match rx.try_recv().map(|env| env.event) {
                 Ok(ev) => ev,
                 Err(TryRecvError::Lagged(_)) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
@@ -459,7 +458,7 @@ async fn vod_manual_switch_affects_future_segments() {
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -467,6 +466,8 @@ async fn vod_manual_switch_affects_future_segments() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -607,7 +608,7 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     let mut release_rx = bus.subscribe();
     drop(spawn(async move {
         loop {
-            match release_rx.recv().await {
+            match release_rx.recv().await.map(|env| env.event) {
                 Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
                     release_gate.release();
                     break;
@@ -620,7 +621,7 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     }));
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -628,6 +629,8 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -724,13 +727,15 @@ async fn multi_track_shared_abr_with_cache() {
     let collector1 = EventCollector::new(&bus1);
 
     let hls1 = HlsConfig::for_url(url1.clone())
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .events(bus1.clone())
         .initial_abr_mode(auto(0))
         .build();
 
     let config1 = AudioConfig::<Hls>::for_stream(hls1)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus1)
         .media_info(wav_info.clone())
         .build();
@@ -760,13 +765,15 @@ async fn multi_track_shared_abr_with_cache() {
     let collector2 = EventCollector::new(&bus2);
 
     let hls2 = HlsConfig::for_url(url2)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .events(bus2.clone())
         .initial_abr_mode(AbrMode::manual(1))
         .build();
 
     let config2 = AudioConfig::<Hls>::for_stream(hls2)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus2)
         .media_info(wav_info.clone())
         .build();
@@ -795,13 +802,15 @@ async fn multi_track_shared_abr_with_cache() {
     let collector3 = EventCollector::new(&bus3);
 
     let hls3 = HlsConfig::for_url(url1)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(CancelToken::never())
         .events(bus3.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let config3 = AudioConfig::<Hls>::for_stream(hls3)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus3)
         .media_info(wav_info)
         .build();
@@ -886,7 +895,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -894,6 +903,8 @@ async fn abr_switch_must_not_redownload_covered_segments() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -976,7 +987,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -984,6 +995,8 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -1061,13 +1074,15 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .build();
     let audio = Audio::<Stream<Hls>>::new(config)
@@ -1167,7 +1182,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     // download_batch_size larger than total segments → peer fetches the
     // full variant 0 then parks itself idle.
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1178,6 +1193,8 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     // Offline pull: park on ring underrun instead of spinning on Pending,
     // so the warmup loop needs no wall-clock deadline.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .block_on_underrun(true)
@@ -1291,7 +1308,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     // Manual(0) initial so Auto-decision doesn't fire an UpSwitch/
     // DownSwitch that races against the explicit Manual(1) below.
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -1304,6 +1321,8 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     // seek-settled wait below.
     let mut seek_rx = bus.subscribe();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -1457,7 +1476,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 
     // Crucially: NO `with_settings(abr_fast())` — production defaults.
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1465,6 +1484,8 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -1552,13 +1573,15 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .build();
     let audio = Audio::<Stream<Hls>>::new(config)
@@ -1678,13 +1701,15 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(2))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -1879,7 +1904,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     let mut applied_rx = bus.subscribe();
     spawn(async move {
         loop {
-            match applied_rx.recv().await {
+            match applied_rx.recv().await.map(|env| env.event) {
                 Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
                     applied_bg.lock().push(to.get());
                 }
@@ -1893,13 +1918,15 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     });
 
     let hls_config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

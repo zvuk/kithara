@@ -3,7 +3,6 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{
-    assets::StoreOptions,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
@@ -44,7 +43,7 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     let url = server.url("/master.m3u8");
 
     let config = HlsConfig::for_url(url)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .cancel(rt_cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();

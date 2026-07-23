@@ -1,9 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{AbrMode, AdvanceReason, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -16,12 +17,15 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig, sources::build_source};
+use kithara_app::{baked, config::AppConfig};
 use kithara_integration_tests::{
     TestTempDir, Xorshift64, kithara,
     offline::OfflineSession,
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
+
+#[path = "source_helper.rs"]
+mod source_helper;
 
 /// Per-process singleton: one offline audio session, one Downloader,
 /// one Queue. `#[case]` tests inside this file share it, so init cost
@@ -45,15 +49,14 @@ fn build_track_source(
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> TrackSource {
-    match build_source(url, &ctx.config) {
-        TrackSource::Config(mut cfg) => {
-            cfg.store = StoreOptions::new(ctx.cache.path());
-            cfg.decoder.backend = backend;
-            cfg.initial_abr_mode = abr;
-            TrackSource::Config(cfg)
-        }
-        other => other,
-    }
+    source_helper::app_track_source(
+        url,
+        &ctx.config,
+        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
+        backend,
+        abr,
+        None,
+    )
 }
 
 mod test_statics {
@@ -71,9 +74,17 @@ async fn shared_test_ctx() -> &'static TestCtx {
                     .build(),
             );
             let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-            let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
+            let config = AppConfig::new(
+                downloader,
+                flush_hub,
+                CancelToken::never(),
+                BytePool::default(),
+                PcmPool::default(),
+            );
             let player = Arc::new(PlayerImpl::new(
                 PlayerConfig::builder()
+                    .byte_pool(BytePool::default())
+                    .pcm_pool(PcmPool::default())
                     .session(OfflineSession::arc_auto())
                     .build(),
             ));
@@ -115,7 +126,7 @@ async fn wait_for_status(
     let res = timeout(deadline, async {
         loop {
             let ev = match rx.recv().await {
-                Ok(ev) => ev,
+                Ok(env) => env.event,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             };
@@ -555,7 +566,7 @@ where
     use kithara::platform::tokio::sync::broadcast::error::RecvError;
     let res = timeout(deadline, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Queue(ev)) if pred(&ev) => return Some(ev),
                 Ok(_) => continue,
                 Err(RecvError::Lagged(_)) => continue,
@@ -659,7 +670,8 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     .await
     .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = ctx.queue.crossfade_duration();
-    ctx.queue.advance_to_next(Transition::Crossfade);
+    ctx.queue
+        .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
     let started = wait_for_queue_event(
         &mut rx,
         |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),

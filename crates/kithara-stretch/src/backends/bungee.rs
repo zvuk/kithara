@@ -1,5 +1,8 @@
+use std::num::NonZeroUsize;
+
 use bungee_rs::Stream;
-use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
+use fast_interleave::{deinterleave_variable, interleave_variable};
+use kithara_bufpool::{BudgetExhausted, PcmPool};
 use num_traits::cast::AsPrimitive;
 use tracing::warn;
 
@@ -12,14 +15,17 @@ struct PooledPlanar {
 
 impl PooledPlanar {
     fn new(pool: &PcmPool, channels: usize, min_len: usize) -> Result<Self, BudgetExhausted> {
-        let mut pooled = (0..channels).map(|_| pool.get()).collect::<Vec<_>>();
-        for samples in &mut pooled {
-            samples.ensure_len(min_len)?;
-            samples.clear();
-        }
+        let channels = (0..channels)
+            .map(|_| {
+                let mut samples = pool.get();
+                samples.ensure_len(min_len)?;
+                samples.clear();
+                Ok(samples.into_inner())
+            })
+            .collect::<Result<Vec<_>, BudgetExhausted>>()?;
         Ok(Self {
             pool: pool.clone(),
-            channels: pooled.into_iter().map(PcmBuf::into_inner).collect(),
+            channels,
         })
     }
 
@@ -40,11 +46,23 @@ impl PooledPlanar {
         Ok(())
     }
 
-    fn fill_interleaved(&mut self, input: &[f32], start: usize, frames: usize, channels: usize) {
-        for (channel, samples) in self.channels.iter_mut().take(channels).enumerate() {
-            samples.clear();
-            samples.extend((0..frames).map(|frame| input[(start + frame) * channels + channel]));
-        }
+    fn fill_interleaved(
+        &mut self,
+        input: &[f32],
+        start: usize,
+        frames: usize,
+        channels: NonZeroUsize,
+    ) -> Result<(), BudgetExhausted> {
+        self.ensure_len(frames)?;
+        let ch = channels.get();
+        let start = start * ch;
+        deinterleave_variable(
+            &input[start..start + frames * ch],
+            channels,
+            &mut self.channels,
+            0..frames,
+        );
+        Ok(())
     }
 }
 
@@ -156,6 +174,9 @@ impl StretchBackend for BungeeBackend {
             return Ok(());
         };
         let ch = self.channels;
+        let Some(num_ch) = NonZeroUsize::new(ch) else {
+            return Ok(());
+        };
         let total = input.len() / ch;
         if total == 0 {
             return Ok(());
@@ -170,7 +191,9 @@ impl StretchBackend for BungeeBackend {
         let mut done = 0;
         while done < total {
             let n = (total - done).min(self.max_input_frames);
-            self.in_planar.fill_interleaved(input, done, n, ch);
+            self.in_planar
+                .fill_interleaved(input, done, n, num_ch)
+                .map_err(|e| StretchBackendError::Process(e.to_string()))?;
             let n_f: f64 = n.as_();
             let out_frames = (n_f * self.ratio).max(1.0);
             self.out_planar
@@ -185,9 +208,9 @@ impl StretchBackend for BungeeBackend {
             );
             let rendered = rendered.min(cap);
             let output = self.out_planar.as_ref();
-            for frame in 0..rendered {
-                out.extend(output.iter().take(ch).map(|channel| channel[frame]));
-            }
+            let base = out.len();
+            out.resize(base + rendered * ch, 0.0);
+            interleave_variable(output, 0..rendered, &mut out[base..], num_ch);
             done += n;
         }
         Ok(())

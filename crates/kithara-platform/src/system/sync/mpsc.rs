@@ -30,9 +30,19 @@ impl<T> Clone for Sender<T> {
 pub struct Receiver<T>(std::sync::mpsc::Receiver<T>);
 
 impl<T> Receiver<T> {
-    /// Iterate over received values, blocking until all senders disconnect.
-    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
-        self.0.iter()
+    delegate::delegate! {
+        to self.0 {
+            /// Iterate over received values, blocking until all senders disconnect.
+            pub fn iter(&self) -> impl Iterator<Item = T> + '_;
+            /// Iterate over currently-available values without blocking.
+            pub fn try_iter(&self) -> impl Iterator<Item = T> + '_;
+            /// Try to receive without blocking.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`TryRecvError`] if no value is available or senders are dropped.
+            pub fn try_recv(&self) -> Result<T, TryRecvError>;
+        }
     }
 
     /// Block until a value arrives.
@@ -59,19 +69,5 @@ impl<T> Receiver<T> {
         let now = Instant::now();
         let remaining = deadline.saturating_duration_since(now);
         self.0.recv_timeout(remaining)
-    }
-
-    /// Iterate over currently-available values without blocking.
-    pub fn try_iter(&self) -> impl Iterator<Item = T> + '_ {
-        self.0.try_iter()
-    }
-
-    /// Try to receive without blocking.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TryRecvError`] if no value is available or senders are dropped.
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        self.0.try_recv()
     }
 }

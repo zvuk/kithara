@@ -1,6 +1,6 @@
 use std::sync::PoisonError;
 
-use kithara_events::{QueueEvent, TrackId, TrackStatus};
+use kithara_events::{AdvanceReason, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::{sync::Arc, tokio::task};
 use kithara_play::{Resource, SelectTransition};
 use tracing::{debug, warn};
@@ -20,14 +20,18 @@ impl Queue {
     /// Advance to the next track per navigation rules. Returns the newly
     /// selected id, or `None` when the queue has ended (and
     /// [`RepeatMode::Off`](crate::navigation::RepeatMode::Off) is active).
-    pub fn advance_to_next(&self, transition: Transition) -> Option<TrackId> {
+    pub fn advance_to_next(
+        &self,
+        transition: Transition,
+        reason: AdvanceReason,
+    ) -> Option<TrackId> {
         let Some(next) = self.next_selectable_entry() else {
             self.lock_navigation_mut().finish();
             self.bus.publish(QueueEvent::QueueEnded);
             return None;
         };
         let id = next.id;
-        if let Err(e) = self.select(id, transition) {
+        if let Err(e) = self.select_with_reason(id, transition, reason) {
             warn!(id = id.as_u64(), error = %e, "advance_to_next: select failed");
         }
         Some(id)
@@ -135,7 +139,7 @@ impl Queue {
     pub fn return_to_previous(&self, transition: Transition) -> Option<TrackId> {
         let prev_idx = self.lock_navigation_mut().prev()?;
         let id = self.lock_tracks().get(prev_idx).map(|e| e.id)?;
-        if let Err(e) = self.select(id, transition) {
+        if let Err(e) = self.select_with_reason(id, transition, AdvanceReason::UserPrev) {
             warn!(id = id.as_u64(), error = %e, "return_to_previous: select failed");
         }
         Some(id)
@@ -150,6 +154,15 @@ impl Queue {
     /// [`QueueError::NotReady`] if the track is in a terminal failed state,
     /// or [`QueueError::Play`] if the underlying `select_item` call fails.
     pub fn select(&self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
+        self.select_with_reason(id, transition, AdvanceReason::UserSelect)
+    }
+
+    pub(super) fn select_with_reason(
+        &self,
+        id: TrackId,
+        transition: Transition,
+        reason: AdvanceReason,
+    ) -> Result<(), QueueError> {
         // Serialise the whole select against a concurrent
         // `spawn_apply_after_load` completion (see `select_apply`): the
         // supersede (marking the prior pending `Cancelled`) and a loading
@@ -189,6 +202,10 @@ impl Queue {
                     },
                 )?;
                 self.lock_navigation_mut().select(index);
+                self.bus.publish(QueueEvent::CurrentTrackAdvance {
+                    id: Some(id),
+                    reason,
+                });
                 self.set_status(id, TrackStatus::Consumed);
                 Ok(())
             }
@@ -284,6 +301,9 @@ impl Queue {
 
             player.replace_item(index, resource);
             tracks.set_status(id, TrackStatus::Loaded);
+            if tracks.lock().get(index).is_some_and(|entry| entry.id == id) {
+                bus.publish(QueueEvent::NextTrackReady { id, index });
+            }
 
             let pending_transition = {
                 let mut p = pending_select
@@ -324,6 +344,10 @@ impl Queue {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .select(index);
+                    bus.publish(QueueEvent::CurrentTrackAdvance {
+                        id: Some(id),
+                        reason: AdvanceReason::UserSelect,
+                    });
                     mark_consumed();
                 }
             }
@@ -367,6 +391,10 @@ impl Queue {
             return Some(Err(err.into()));
         }
         self.lock_navigation_mut().select(index);
+        self.bus.publish(QueueEvent::CurrentTrackAdvance {
+            id: Some(id),
+            reason: AdvanceReason::UserSelect,
+        });
         self.set_status(id, TrackStatus::Consumed);
         Some(Ok(()))
     }
@@ -422,7 +450,11 @@ mod tests {
     async fn advance_to_next_on_empty_emits_queue_ended() {
         let queue = make_queue();
         let mut rx = queue.subscribe();
-        assert!(queue.advance_to_next(Transition::Crossfade).is_none());
+        assert!(
+            queue
+                .advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof)
+                .is_none()
+        );
         let saw_ended =
             wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 200).await;
         assert!(saw_ended);
@@ -436,7 +468,11 @@ mod tests {
         queue.lock_navigation_mut().select(1);
         let mut rx = queue.subscribe();
 
-        assert!(queue.advance_to_next(Transition::Crossfade).is_none());
+        assert!(
+            queue
+                .advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof)
+                .is_none()
+        );
 
         let saw_ended =
             wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 400).await;
@@ -452,7 +488,10 @@ mod tests {
         queue.set_status(first, TrackStatus::Consumed);
         queue.set_status(second, TrackStatus::Pending);
 
-        assert_eq!(queue.advance_to_next(Transition::Crossfade), Some(second));
+        assert_eq!(
+            queue.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof),
+            Some(second)
+        );
         assert_eq!(
             queue.lock_navigation().current_index(),
             Some(0),

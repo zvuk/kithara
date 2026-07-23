@@ -10,14 +10,15 @@ impl<T> Mutex<T> {
         Self(backend::Mutex::new(value))
     }
 
-    #[inline]
-    pub fn lock(&self) -> MutexGuard<'_, T> {
-        MutexGuard(self.0.lock())
-    }
-
-    #[inline]
-    pub fn try_lock(&self) -> Result<MutexGuard<'_, T>, NotAvailable> {
-        self.0.try_lock().map(MutexGuard)
+    delegate::delegate! {
+        to self.0 {
+            #[inline]
+            #[expr(MutexGuard($))]
+            pub fn lock(&self) -> MutexGuard<'_, T>;
+            #[inline]
+            #[expr($.map(MutexGuard))]
+            pub fn try_lock(&self) -> Result<MutexGuard<'_, T>, NotAvailable>;
+        }
     }
 }
 

@@ -5,7 +5,7 @@ use kithara_abr::{AbrController, AbrPeerId};
 use kithara_events::{
     BandwidthSource, CancelReason, DownloaderEvent, EventBus, RequestId, RequestMethod,
 };
-use kithara_net::{HttpClient, NetError, Retryability};
+use kithara_net::{HttpClient, NetError, NetObserver, Observer, Retryability};
 use kithara_platform::{
     CancelGroup, CancelToken,
     flash::virtual_now,
@@ -23,6 +23,59 @@ use super::{
     peer::{InternalCmd, ResponseTarget, SlotEntry},
     response::{BodyStream, FetchResponse},
 };
+
+struct RequestObserver {
+    bus: EventBus,
+    request_id: RequestId,
+}
+
+impl NetObserver for RequestObserver {
+    fn body_resumed(&self, resume_number: u32, from_offset: u64, honoured_range: bool) {
+        self.bus.publish(DownloaderEvent::BodyResumed {
+            request_id: self.request_id,
+            resume_number,
+            from_offset,
+            honoured_range,
+        });
+    }
+
+    fn body_stalled(&self, consumed: u64, expected: Option<u64>, stall: Duration) {
+        self.bus.publish(DownloaderEvent::BodyStalled {
+            request_id: self.request_id,
+            consumed,
+            expected,
+            stall,
+        });
+    }
+
+    fn first_byte(&self, ttfb: Duration, status: u16, partial: bool) {
+        self.bus.publish(DownloaderEvent::FirstByte {
+            request_id: self.request_id,
+            ttfb,
+            status,
+            partial,
+        });
+    }
+
+    fn retry_exhausted(&self, max_retries: u32, consumed: u64, error: &NetError) {
+        self.bus.publish(DownloaderEvent::RetryExhausted {
+            request_id: self.request_id,
+            max_retries,
+            consumed,
+            error: error.clone(),
+        });
+    }
+
+    fn retrying(&self, attempt: u32, max_retries: u32, error: &NetError, backoff: Duration) {
+        self.bus.publish(DownloaderEvent::RequestRetrying {
+            request_id: self.request_id,
+            attempt,
+            max_retries,
+            error: error.clone(),
+            backoff,
+        });
+    }
+}
 
 /// Transition a fetch from queued → in-flight. Increments the
 /// `inflight` counter (the fact subscribers and the watchdog actually
@@ -223,7 +276,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     task::spawn(async move {
         let slow_bus = bus.clone();
         let fetch = async move {
-            let result = establish(&client, &cancel, cmd, request_id).await;
+            let result = establish(&client, &cancel, cmd, request_id, bus.as_ref()).await;
             deliver(
                 request_id,
                 DeliveryContext {
@@ -315,6 +368,7 @@ async fn establish(
     cancel: &CancelGroup,
     cmd: FetchCmd,
     request_id: RequestId,
+    bus: Option<&EventBus>,
 ) -> Result<FetchResponse, NetError> {
     let FetchCmd {
         method,
@@ -332,6 +386,11 @@ async fn establish(
             .unwrap_or_default();
         tracing::trace!(%url, ?method, ?range, header_names = ?names, "fetch: outgoing FetchCmd");
     }
+
+    let client = client.with_observer(
+        bus.cloned()
+            .map(|bus| Observer(Arc::new(RequestObserver { bus, request_id }))),
+    );
 
     if method == RequestMethod::Head {
         let resp_headers = tokio::select! {

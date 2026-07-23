@@ -2,6 +2,8 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
+use kithara_assets::{AssetStoreBuilder, StorageBackend};
+use kithara_bufpool::Region;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 use kithara_play::{PlayerConfig, PlayerImpl};
@@ -121,6 +123,7 @@ impl Queue {
     pub fn new(config: QueueConfig) -> Self {
         let QueueConfig {
             player,
+            store,
             cancel: config_cancel,
             max_concurrent_loads,
             prefetch_duration: _,
@@ -133,14 +136,27 @@ impl Queue {
         // use falls back to a fresh root (the documented safety net).
         let cancel = CancelScope::new(config_cancel).token();
         let player = player.unwrap_or_else(|| {
-            let config = PlayerConfig::builder().cancel(cancel.clone()).build();
+            let region = Region::default();
+            let config = PlayerConfig::builder()
+                .cancel(cancel.clone())
+                .byte_pool(region.byte_pool())
+                .pcm_pool(region.pcm_pool())
+                .build();
             Arc::new(PlayerImpl::new(config))
+        });
+        let store = store.unwrap_or_else(|| {
+            AssetStoreBuilder::default()
+                .backend(StorageBackend::default())
+                .cancel(cancel.child())
+                .pool(player.byte_pool().clone())
+                .build()
         });
         player.set_auto_advance_enabled(false);
         let bus = player.bus().clone();
         let tracks = Arc::new(Tracks::new(bus.clone()));
         let loader = Arc::new(Loader::new(
             Arc::clone(&player),
+            store,
             max_concurrent_loads,
             Arc::clone(&tracks),
         ));
@@ -196,36 +212,28 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>> {
-        self.tracks.lock()
-    }
-
-    pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>> {
-        self.tracks.lock()
-    }
-
-    pub(super) fn read_armed_for(&self) -> CrossfadeArm {
-        self.crossfade_armed_for.load()
-    }
-
-    pub(super) fn read_cached_position(&self) -> CachedPosition {
-        self.cached_position.load()
-    }
-
-    pub(super) fn set_status(&self, id: TrackId, status: kithara_events::TrackStatus) {
-        self.tracks.set_status(id, status);
-    }
-
-    pub(super) fn take_armed_for_if_matches(&self, id: TrackId) -> bool {
-        self.crossfade_armed_for.take_if_matches(id)
-    }
-
-    pub(super) fn write_armed_for(&self, arm: CrossfadeArm) {
-        self.crossfade_armed_for.store(arm);
-    }
-
-    pub(super) fn write_cached_position(&self, pos: CachedPosition) {
-        self.cached_position.store(pos);
+    delegate::delegate! {
+        to self.tracks {
+            #[call(lock)]
+            pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>>;
+            #[call(lock)]
+            pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>>;
+            pub(super) fn set_status(&self, id: TrackId, status: kithara_events::TrackStatus);
+        }
+        to self.crossfade_armed_for {
+            #[call(load)]
+            pub(super) fn read_armed_for(&self) -> CrossfadeArm;
+            #[call(take_if_matches)]
+            pub(super) fn take_armed_for_if_matches(&self, id: TrackId) -> bool;
+            #[call(store)]
+            pub(super) fn write_armed_for(&self, arm: CrossfadeArm);
+        }
+        to self.cached_position {
+            #[call(load)]
+            pub(super) fn read_cached_position(&self) -> CachedPosition;
+            #[call(store)]
+            pub(super) fn write_cached_position(&self, pos: CachedPosition);
+        }
     }
 }
 
@@ -237,7 +245,7 @@ impl Drop for Queue {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use kithara_events::{Event, EventReceiver, QueueEvent};
+    use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
     use kithara_platform::time::{Duration, Instant, timeout};
     use kithara_test_utils::kithara;
 
@@ -262,7 +270,10 @@ pub(super) mod tests {
                 return false;
             }
             match timeout(remaining, rx.recv()).await {
-                Ok(Ok(Event::Queue(ev))) if matches(&ev) => return true,
+                Ok(Ok(Envelope {
+                    event: Event::Queue(ev),
+                    ..
+                })) if matches(&ev) => return true,
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => return false,
             }

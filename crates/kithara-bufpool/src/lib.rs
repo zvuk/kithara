@@ -6,12 +6,15 @@
 
 #![forbid(unsafe_code)]
 
+mod budget;
 mod global;
 mod growth;
 mod pool;
+mod region;
 
+pub use budget::ByteBudget;
 pub use global::{BytePool, PcmBuf, PcmPool};
 pub use growth::BudgetExhausted;
-pub use pool::ByteBudget;
 #[doc(hidden)]
 pub use pool::{Pool, PoolStats, Pooled, PooledOwned, Reuse, SharedPool};
+pub use region::{Region, RegionConfig, RegionStats};

@@ -1,6 +1,6 @@
 use kithara::{
     abr::AbrHandle,
-    events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo},
+    events::{AbrMode, AppEvent, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
     play::StretchControls,
     prelude::EngineLoadSnapshot,
     stream::AudioCodec,
@@ -11,7 +11,7 @@ use kithara_platform::{
     tokio::task,
 };
 use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry};
-use num_traits::cast::AsPrimitive;
+use num_traits::{ToPrimitive, cast::AsPrimitive};
 
 use crate::{config::AppConfig, waveform::TrackAnalysis};
 
@@ -121,10 +121,10 @@ impl UiState {
         let (beats, downbeats) = analysis
             .as_ref()
             .and_then(|a| {
-                a.beat.as_ref().filter(|_| a.source_frames > 0).map(|grid| {
+                a.beat().filter(|_| a.source_frames() > 0).map(|grid| {
                     (
-                        frames_to_fractions(&grid.beats, a.source_frames),
-                        frames_to_fractions(&grid.downbeats, a.source_frames),
+                        frames_to_fractions(grid.beats(), a.source_frames()),
+                        frames_to_fractions(grid.downbeats(), a.source_frames()),
                     )
                 })
             })
@@ -165,10 +165,15 @@ fn frames_to_fractions(frames: &[u64], total: u64) -> Arc<[f32]> {
 /// `parking_lot` mutex) instead of `tokio::sync::Mutex`. The previous
 /// design called `blocking_lock` from inside the iced runtime, which
 /// would panic; this one avoids `await`s while the lock is held.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct StateController {
+    beat_clock: Arc<Mutex<BeatClockState>>,
+    #[field(get, deref = false)]
     queue: Arc<Queue>,
     state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
+    #[field(get = stretch, deref = false)]
     timestretch: Arc<StretchControls>,
     cancel: CancelToken,
 }
@@ -197,17 +202,12 @@ impl StateController {
         );
 
         Self {
+            beat_clock: Arc::new(Mutex::new(BeatClockState::default())),
             queue,
             state,
             timestretch,
             cancel,
         }
-    }
-
-    /// The time-stretch handle shared with this deck's player.
-    #[must_use]
-    pub fn stretch(&self) -> &Arc<StretchControls> {
-        &self.timestretch
     }
 
     /// Apply a closure under the lock. Returns the closure's result.
@@ -221,30 +221,26 @@ impl StateController {
         f(&mut st)
     }
 
-    #[must_use]
-    pub fn queue(&self) -> &Arc<Queue> {
-        &self.queue
-    }
-
     /// Pull the continuous values (position, duration, volume, tracks,
     /// active variant) from the queue. Event-driven mirrors keep the
     /// rest in sync.
     pub fn refresh_continuous(&self) {
         let position = self.queue.position_seconds().unwrap_or(0.0);
         let duration = self.queue.duration_seconds().unwrap_or(0.0);
-        let abr = self.queue.current_abr_handle();
+        let queue = &self.queue;
+        let abr = queue.current_abr_handle();
         let current_variant = abr.as_ref().and_then(AbrHandle::current_variant);
         let variants = abr.as_ref().map(AbrHandle::variants).unwrap_or_default();
         let mode = abr.as_ref().and_then(AbrHandle::mode);
         let mut st = self.state.lock();
-        st.playing = self.queue.is_playing();
-        st.shuffle_enabled = self.queue.is_shuffle_enabled();
-        st.repeat_mode = self.queue.repeat_mode();
-        st.volume = self.queue.volume();
+        st.playing = queue.is_playing();
+        st.shuffle_enabled = queue.is_shuffle_enabled();
+        st.repeat_mode = queue.repeat_mode();
+        st.volume = queue.volume();
         st.position = position;
         st.duration = duration;
-        st.engine_load = self.queue.engine_load();
-        if let Some(idx) = self.queue.current_index() {
+        st.engine_load = queue.engine_load();
+        if let Some(idx) = queue.current_index() {
             st.current_track_index = Some(idx);
         }
         st.variant_label = current_variant
@@ -259,6 +255,9 @@ impl StateController {
             Some(AbrMode::Manual(_)) => false,
             Some(AbrMode::Auto(_)) | None => true,
         };
+        let snapshot = st.clone();
+        drop(st);
+        self.publish_dj_events(&snapshot);
     }
 
     /// Cheap clone of the current state — UI consumers call this once
@@ -267,6 +266,98 @@ impl StateController {
     pub fn snapshot(&self) -> UiState {
         self.state.lock().clone()
     }
+}
+
+#[derive(Debug, Default)]
+struct BeatClockState {
+    last_beat_number: Option<u64>,
+    published_track: Option<usize>,
+}
+
+impl StateController {
+    fn publish_dj_events(&self, state: &UiState) {
+        let Some(current_index) = state.current_track_index else {
+            self.beat_clock.lock().last_beat_number = None;
+            return;
+        };
+        let Some(analysis) = state.analysis.as_ref() else {
+            return;
+        };
+        let Some(grid) = analysis.beat() else {
+            return;
+        };
+        let source_frames = analysis.source_frames();
+        let slot = SlotId::new(1);
+        let mut beat_clock = self.beat_clock.lock();
+        if beat_clock.published_track != Some(current_index)
+            && let Some(info) = bpm_info_from_state(grid, source_frames, state.duration)
+        {
+            self.queue
+                .bus()
+                .publish(DjEvent::BpmDetected { slot, info });
+            beat_clock.published_track = Some(current_index);
+            beat_clock.last_beat_number = None;
+        }
+
+        let beats = grid.beats();
+        if beats.is_empty() || source_frames == 0 || state.duration <= 0.0 {
+            return;
+        }
+
+        let max_frame = u64_to_f64(source_frames);
+        let current_frame = (((state.position / state.duration) * max_frame).clamp(0.0, max_frame))
+            .to_u64()
+            .unwrap_or(source_frames);
+        let crossed = beats.partition_point(|beat| *beat <= current_frame);
+        let latest = crossed.checked_sub(1).and_then(|idx| idx.to_u64());
+        let start = beat_clock.last_beat_number.map_or(0, |prev| prev + 1);
+        if let Some(latest) = latest {
+            for beat_number in start..=latest {
+                let beat_idx = usize::try_from(beat_number).unwrap_or(usize::MAX);
+                let timestamp =
+                    media_time_for_frame(beats[beat_idx], source_frames, state.duration);
+                self.queue.bus().publish(DjEvent::BeatTick {
+                    slot,
+                    beat_number,
+                    timestamp,
+                });
+            }
+            beat_clock.last_beat_number = Some(latest);
+        }
+    }
+}
+
+fn bpm_info_from_state(
+    grid: &kithara::audio::BeatGrid,
+    source_frames: u64,
+    duration_secs: f64,
+) -> Option<kithara::events::BpmInfo> {
+    let first_beat = *grid.beats().first()?;
+    if source_frames == 0 || duration_secs <= 0.0 {
+        return None;
+    }
+    Some(kithara::events::BpmInfo::new(
+        grid.bpm(),
+        None,
+        kithara_platform::time::Duration::from_secs_f64(
+            (u64_to_f64(first_beat) / u64_to_f64(source_frames)) * duration_secs,
+        ),
+    ))
+}
+
+fn media_time_for_frame(frame: u64, total_frames: u64, duration_secs: f64) -> MediaTime {
+    if total_frames == 0 || duration_secs <= 0.0 {
+        return MediaTime::ZERO;
+    }
+    MediaTime::with_seconds(
+        (u64_to_f64(frame) / u64_to_f64(total_frames)) * duration_secs,
+        600,
+    )
+}
+
+/// Saturating conversion for frame counts used in beat-grid ratio math.
+fn u64_to_f64(value: u64) -> f64 {
+    value.to_f64().unwrap_or(f64::MAX)
 }
 
 impl Drop for StateController {
@@ -321,8 +412,9 @@ pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
                 reapply_eq(queue, &eq_bands);
             }
         }
-        Event::Player(PlayerEvent::VolumeChanged { volume })
-        | Event::Engine(EngineEvent::MasterVolumeChanged { volume }) => {
+        // Session-mix gain deliberately has no event mapping here: `st.volume`
+        // is content volume, owned by the player's volume path alone.
+        Event::Player(PlayerEvent::VolumeChanged { volume }) => {
             let mut st = state.lock();
             st.volume = volume;
         }

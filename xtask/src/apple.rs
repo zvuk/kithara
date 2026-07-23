@@ -470,8 +470,10 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
     if let Some(parent) = swift_dst.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(&swift_src, &swift_dst)
-        .with_context(|| format!("copy {} -> {}", swift_src.display(), swift_dst.display()))?;
+    let swift =
+        fs::read_to_string(&swift_src).with_context(|| format!("read {}", swift_src.display()))?;
+    fs::write(&swift_dst, normalize_generated_swift(&swift))
+        .with_context(|| format!("write {}", swift_dst.display()))?;
 
     println!("==> Done!");
     println!("==> XCFramework: {}", xcf_dst.display());
@@ -497,6 +499,15 @@ fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn normalize_generated_swift(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        out.push_str(line.trim_end_matches([' ', '\t']));
+        out.push('\n');
+    }
+    out
 }
 
 /// `signalsmith-stretch` runs `bindgen`, which derives clang's target from
@@ -1535,6 +1546,16 @@ public struct FfiConverterTypeTrackId {
         );
         assert!(out.contains("FfiConverterTypeTrackId"), "{out}");
         assert!(!out.contains("typealias TrackId = UInt64"), "{out}");
+    }
+
+    #[test]
+    fn generated_swift_has_no_trailing_whitespace() {
+        let src = "public struct Value {  \n\tlet id: UInt64\t\n}\n";
+
+        assert_eq!(
+            normalize_generated_swift(src),
+            "public struct Value {\n\tlet id: UInt64\n}\n"
+        );
     }
 
     #[test]

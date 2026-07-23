@@ -144,8 +144,7 @@ fn scoped_path_match(workspace_root: &Path, scope: &Scope, path: &Path) -> bool 
 // and relative links only resolve there.
 fn is_symlink(path: &Path) -> bool {
     path.symlink_metadata()
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false)
+        .is_ok_and(|m| m.file_type().is_symlink())
 }
 
 fn is_lint_text_file(path: &Path) -> bool {

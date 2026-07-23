@@ -19,7 +19,7 @@ use kithara_storage::{Atomic, MmapDriver, StorageError};
 use super::core::{LruIndex, LruInner, LruState};
 use crate::{
     error::{AssetsError, AssetsResult},
-    index::{persist, schema::LruIndexFile},
+    index::persistence::{init_atomic, open_existing, schema::LruIndexFile},
 };
 
 pub(super) struct LruPersist {
@@ -64,7 +64,7 @@ impl LruInner {
             return Ok(());
         };
         let snapshot = self.state.lock().clone();
-        let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
+        let atomic = init_atomic(&persist.res, &persist.path, &persist.cancel)?;
         write_state(atomic, &snapshot, durable)?;
         self.dirty.store(false, Ordering::Release);
         Ok(())
@@ -80,7 +80,7 @@ fn hydrate_existing(
     if !nonempty {
         return (LruState::default(), None);
     }
-    match persist::open_existing(path, cancel) {
+    match open_existing(path, cancel) {
         Ok(res) => {
             let atomic = Atomic::new(res);
             let initial = read_state(&atomic, pool).unwrap_or_default();

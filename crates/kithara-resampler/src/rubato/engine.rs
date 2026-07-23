@@ -54,12 +54,16 @@ impl RubatoEngine {
         })
     }
 
-    pub(super) fn input_frames_max(&self) -> usize {
-        self.inner.input_frames_max()
-    }
-
-    pub(super) fn input_frames_next(&self) -> usize {
-        self.inner.input_frames_next()
+    delegate::delegate! {
+        to self.inner {
+            pub(super) fn input_frames_max(&self) -> usize;
+            pub(super) fn input_frames_next(&self) -> usize;
+            pub(super) fn output_delay(&self) -> usize;
+            pub(super) fn output_frames_max(&self) -> usize;
+            pub(super) fn output_frames_next(&self) -> usize;
+            pub(super) fn resample_ratio(&self) -> f64;
+            pub(super) fn reset(&mut self);
+        }
     }
 
     fn new_async(
@@ -115,18 +119,6 @@ impl RubatoEngine {
         Self::with_inner(Box::new(fft), channels, pcm_pool)
     }
 
-    pub(super) fn output_delay(&self) -> usize {
-        self.inner.output_delay()
-    }
-
-    pub(super) fn output_frames_max(&self) -> usize {
-        self.inner.output_frames_max()
-    }
-
-    pub(super) fn output_frames_next(&self) -> usize {
-        self.inner.output_frames_next()
-    }
-
     pub(super) fn process_into_buffer(
         &mut self,
         input: &[&[f32]],
@@ -170,18 +162,12 @@ impl RubatoEngine {
 
         Ok(ResamplerProcess::new(input_frames, output_frames))
     }
-
-    pub(super) fn resample_ratio(&self) -> f64 {
-        self.inner.resample_ratio()
-    }
-
-    pub(super) fn reset(&mut self) {
-        self.inner.reset();
-    }
 }
 
+#[derive(fieldwork::Fieldwork)]
 struct PooledScratch {
     pool: PcmPool,
+    #[field(get(deref = "[Vec<f32>]", vis = ""))]
     buffers: SmallVec<[Vec<f32>; 8]>,
 }
 
@@ -200,10 +186,6 @@ impl PooledScratch {
             buffers.push(buffer.into_inner());
         }
         Ok(Self { pool, buffers })
-    }
-
-    fn buffers(&self) -> &[Vec<f32>] {
-        &self.buffers
     }
 
     fn buffers_mut(&mut self) -> &mut [Vec<f32>] {

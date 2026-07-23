@@ -62,7 +62,7 @@ pub(crate) fn nextest_list(
     let Some(run_pos) = args.iter().position(|arg| arg == "run") else {
         bail!("default lane prefix args carry no `run` verb; cannot derive list command");
     };
-    args[run_pos] = "list".to_owned();
+    "list".clone_into(&mut args[run_pos]);
     let features = lane_features(
         test,
         lane,

@@ -1,0 +1,134 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-tracklist-tab",
+    root: Column(
+        gap: Some(12.0),
+        pad: Some(18.0),
+        children: [
+            Row(
+                size: (w: Fill, h: Fixed(26.0)),
+                gap: Some(12.0),
+                children: [
+                    Text(
+                        id: "preset-label",
+                        style: MicroLabel,
+                        label: "ПРЕСЕТ КОЛОНОК",
+                        size: (w: Fixed(128.0), h: Fixed(26.0)),
+                    ),
+                    Segmented(
+                        id: "column-preset",
+                        items: ["БИБЛИОТЕКА", "ОЧЕРЕДЬ СЕТА", "MICRO"],
+                        read: Model(id: "gallery.tracklist.preset"),
+                        size: (w: Fixed(420.0), h: Fixed(26.0)),
+                    ),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fill),
+                gap: Some(16.0),
+                children: [
+                    TrackList(
+                        id: "table",
+                        size: (w: Fill, h: Fill),
+                        read: Model(id: "library.visible_tracks"),
+                        columns: [Index, Deck, Title, Artist, Bpm, Key, Time, Energy, Transition],
+                        columns_state: Some(Model(id: "gallery.tracklist.columns")),
+                        adaptive: (priority: Required),
+                    ),
+                    Column(
+                        id: "columns-panel",
+                        size: (w: Fixed(200.0), h: Fill),
+                        gap: Some(8.0),
+                        pad: Some(10.0),
+                        children: [
+                            Text(
+                                id: "columns-label",
+                                style: MicroLabel,
+                                label: "КОЛОНКИ ТАБЛИЦЫ",
+                                size: (w: Fill, h: Fixed(18.0)),
+                            ),
+                            Row(
+                                size: (w: Fill, h: Fixed(18.0)),
+                                gap: Some(8.0),
+                                children: [
+                                    Checkbox(id: "column-index", read: Model(id: "gallery.tracklist.columns.index")),
+                                    Text(id: "column-index-label", style: MicroLabel, label: "#", size: (w: Fill, h: Fill)),
+                                ],
+                            ),
+                            Row(
+                                size: (w: Fill, h: Fixed(18.0)),
+                                gap: Some(8.0),
+                                children: [
+                                    Checkbox(id: "column-deck", read: Model(id: "gallery.tracklist.columns.deck")),
+                                    Text(id: "column-deck-label", style: MicroLabel, label: "ДЕКА", size: (w: Fill, h: Fill)),
+                                ],
+                            ),
+                            Row(
+                                size: (w: Fill, h: Fixed(18.0)),
+                                gap: Some(8.0),
+                                children: [
+                                    Checkbox(id: "column-title", read: Model(id: "gallery.tracklist.columns.title")),
+                                    Text(id: "column-title-label", style: MicroLabel, label: "TITLE", size: (w: Fill, h: Fill)),
+                                ],
+                            ),
+                            Row(
+                                size: (w: Fill, h: Fixed(18.0)),
+                                gap: Some(8.0),
+                                children: [
+                                    Checkbox(id: "column-artist", read: Model(id: "gallery.tracklist.columns.artist")),
+                                    Text(id: "column-artist-label", style: MicroLabel, label: "ARTIST", size: (w: Fill, h: Fill)),
+                                ],
+                            ),
+                            Row(
+                                size: (w: Fill, h: Fixed(18.0)),
+                                gap: Some(8.0),
+                                children: [
+                                    Checkbox(id: "column-bpm", read: Model(id: "gallery.tracklist.columns.bpm")),
+                                    Text(id: "column-bpm-label", style: MicroLabel, label: "BPM", size: (w: Fill, h: Fill)),
+                                ],
+                            ),
+                            Row(
+                                size: (w: Fill, h: Fixed(18.0)),
+                                gap: Some(8.0),
+                                children: [
+                                    Checkbox(id: "column-key", read: Model(id: "gallery.tracklist.columns.key")),
+                                    Text(id: "column-key-label", style: MicroLabel, label: "KEY", size: (w: Fill, h: Fill)),
+                                ],
+                            ),
+                            Row(
+                                size: (w: Fill, h: Fixed(18.0)),
+                                gap: Some(8.0),
+                                children: [
+                                    Checkbox(id: "column-time", read: Model(id: "gallery.tracklist.columns.time")),
+                                    Text(id: "column-time-label", style: MicroLabel, label: "TIME", size: (w: Fill, h: Fill)),
+                                ],
+                            ),
+                            Row(
+                                size: (w: Fill, h: Fixed(18.0)),
+                                gap: Some(8.0),
+                                children: [
+                                    Checkbox(id: "column-energy", read: Model(id: "gallery.tracklist.columns.energy")),
+                                    Text(id: "column-energy-label", style: MicroLabel, label: "ЭНЕРГИЯ", size: (w: Fill, h: Fill)),
+                                ],
+                            ),
+                            Row(
+                                size: (w: Fill, h: Fixed(18.0)),
+                                gap: Some(8.0),
+                                children: [
+                                    Checkbox(id: "column-transition", read: Model(id: "gallery.tracklist.columns.transition")),
+                                    Text(id: "column-transition-label", style: MicroLabel, label: "ПЕРЕХОД", size: (w: Fill, h: Fill)),
+                                ],
+                            ),
+                            Button(
+                                id: "reset-columns",
+                                label: "СБРОСИТЬ ПО УМОЛЧАНИЮ",
+                                size: (w: Fill, h: Fixed(26.0)),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

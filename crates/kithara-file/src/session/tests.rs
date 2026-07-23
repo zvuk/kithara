@@ -1,19 +1,36 @@
 use std::num::NonZeroUsize;
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetStoreBuilder, StorageBackend, WriteSide,
+    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, AssetStoreBuilder,
+    ResourceKey, StorageBackend, WriteSide,
 };
-use kithara_events::EventBus;
+use kithara_events::{
+    AudioCodecKind, ContainerKind, Envelope, Event, EventBus, FileEvent, TotalBytesSource,
+};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NotReadyCause, PendingReason, PlayheadState, ReadOutcome, SeekState, Source,
+    AudioCodec, NotReadyCause, PendingReason, PlayheadState, ReadOutcome, SeekState, Source,
     SourceError as StreamSourceError, SourcePhase, StreamError,
 };
 use kithara_test_utils::kithara;
 
 use super::source::FileSource;
-use crate::coord::FileCoord;
+use crate::{File, coord::FileCoord};
+
+fn test_key(store: &AssetStore, name: &str) -> ResourceKey {
+    let source = AssetSource::Remote {
+        url: url::Url::parse("https://example.com/session-test").expect("test URL"),
+        discriminator: Some("session-test".to_string()),
+    };
+    let scope = store.scope::<File>(&source).expect("test scope");
+    scope
+        .key(&AssetResource::Named {
+            namespace: "test".to_string(),
+            name: name.to_string(),
+        })
+        .expect("test resource key")
+}
 
 fn nz_bytes(n: usize) -> ReadOutcome {
     ReadOutcome::Bytes(NonZeroUsize::new(n).expect("test: byte count must be > 0"))
@@ -27,13 +44,54 @@ fn make_coord() -> Arc<FileCoord> {
 }
 
 fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
-    let backend = Arc::new(
-        AssetStoreBuilder::default()
-            .cancel(CancelToken::never())
-            .build(),
-    );
-    let key = backend.scope("test").key("test-source");
-    FileSource::local(reader, coord, bus, backend, key, CancelToken::never(), None)
+    let backend = AssetStoreBuilder::default()
+        .cancel(CancelToken::never())
+        .build();
+    let key = test_key(&backend, "test-source");
+    FileSource::local(
+        reader,
+        coord,
+        bus,
+        backend,
+        key,
+        CancelToken::never(),
+        Some(AudioCodec::Mp3),
+    )
+}
+
+#[kithara::test]
+fn file_source_local_open_publishes_opened_and_size() {
+    let reader = create_committed_resource(b"ID3metadata");
+    let coord = make_coord();
+    let bus = EventBus::new(16);
+    let mut rx = bus.subscribe();
+
+    let _source = make_source(reader, coord, bus);
+
+    let opened = rx.try_recv().expect("opened event");
+    assert!(matches!(
+        opened,
+        Envelope {
+            event: Event::File(FileEvent::Opened {
+                codec: Some(AudioCodecKind::Mp3),
+                container: Some(ContainerKind::MpegAudio),
+                total_bytes: Some(11),
+                cached: true,
+            }),
+            ..
+        }
+    ));
+    let total = rx.try_recv().expect("size event");
+    assert!(matches!(
+        total,
+        Envelope {
+            event: Event::File(FileEvent::TotalBytesResolved {
+                total_bytes: 11,
+                source: TotalBytesSource::CommittedLen,
+            }),
+            ..
+        }
+    ));
 }
 
 #[kithara::test]
@@ -76,7 +134,7 @@ fn create_committed_resource(data: &[u8]) -> AssetReader {
         .cancel(CancelToken::never())
         .build();
 
-    let key = store.scope("test").key("test.dat");
+    let key = test_key(&store, "test.dat");
     let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
         panic!("fresh acquire must be Pending");
     };
@@ -90,7 +148,7 @@ fn create_active_resource(data: &[u8]) -> (AssetReader, kithara_assets::AssetWri
         .cancel(CancelToken::never())
         .build();
 
-    let key = store.scope("test").key("active.dat");
+    let key = test_key(&store, "active.dat");
     let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
         panic!("fresh acquire must be Pending");
     };

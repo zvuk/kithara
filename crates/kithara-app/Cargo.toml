@@ -49,6 +49,8 @@ kithara-platform = { workspace = true }
 kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
 kithara-test-utils = { workspace = true }
 
+fieldwork = { workspace = true }
+
 # Desktop binary deps. Gated off iOS as well as wasm: kithara-app is a
 # desktop-only binary (TUI/GUI, no iOS audio backend), so none of these —
 # notably tracing-subscriber/env-filter, which drags in regex — should resolve
@@ -63,6 +65,7 @@ bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
 crossterm = { workspace = true, optional = true }
+derive_more = { workspace = true }
 iced = { workspace = true, optional = true }
 num-traits = { workspace = true }
 obfstr = { workspace = true }

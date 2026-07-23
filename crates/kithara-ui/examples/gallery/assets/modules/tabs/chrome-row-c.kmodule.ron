@@ -1,0 +1,12 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-chrome-row-c",
+    chrome: Plain,
+    root: Column(
+        pad: Some(14.0),
+        children: [
+            Text(id: "label", style: Section, label: "C · УГОЛКИ И СТОРОНЫ"),
+        ],
+    ),
+)

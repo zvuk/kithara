@@ -1,7 +1,6 @@
 use std::{fs::File as FsFile, io::Write};
 
 use kithara::{
-    assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
@@ -43,9 +42,11 @@ async fn stress_random_seek_read_synthetic_wav() {
 
     let cache = TestTempDir::new();
     let file_config = FileConfig::for_src(FileSrc::Local(tmp.path().to_path_buf()))
-        .store(StoreOptions::new(cache.path()))
+        .store(kithara_integration_tests::disk_asset_store(cache.path()))
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint("wav".to_string())
         .build();
     let mut audio = Audio::<Stream<File>>::new(config)

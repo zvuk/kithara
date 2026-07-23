@@ -1,0 +1,59 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-typography-tab",
+    root: Column(
+        gap: Some(20.0),
+        pad: Some(24.0),
+        children: [
+            Row(
+                size: (w: Fill, h: Fixed(52.0)),
+                gap: Some(24.0),
+                children: [
+                    Text(id: "brand", style: Brand, label: "KITHARA", size: (w: Fill, h: Fill)),
+                    Text(id: "brand-spec", style: MicroLabel, label: "БРЕНД · SPACE GROTESK 700 · 0.3EM", size: (w: Fixed(380.0), h: Fill)),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fixed(52.0)),
+                gap: Some(24.0),
+                children: [
+                    Text(id: "deck-letter", style: DeckLetter, label: "A B C D", size: (w: Fill, h: Fill)),
+                    Text(id: "deck-letter-spec", style: MicroLabel, label: "БУКВА ДЕКИ · SPACE GROTESK 700 · 12PX", size: (w: Fixed(380.0), h: Fill)),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fixed(52.0)),
+                gap: Some(24.0),
+                children: [
+                    Text(id: "track-title", style: TrackTitle, label: "Midnight City", size: (w: Fill, h: Fill)),
+                    Text(id: "track-title-spec", style: MicroLabel, label: "ТРЕК · SPACE GROTESK 500 · 12PX", size: (w: Fixed(380.0), h: Fill)),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fixed(52.0)),
+                gap: Some(24.0),
+                children: [
+                    Text(id: "body", style: Body, label: "Artist · Album", size: (w: Fill, h: Fill)),
+                    Text(id: "body-spec", style: MicroLabel, label: "ОСНОВНОЙ · INTER 400 · 11PX", size: (w: Fixed(380.0), h: Fill)),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fixed(52.0)),
+                gap: Some(24.0),
+                children: [
+                    Text(id: "telemetry", style: Telemetry, label: "124.00 · 4m · -04:17 · +0.0%", size: (w: Fill, h: Fill)),
+                    Text(id: "telemetry-spec", style: MicroLabel, label: "ТЕЛЕМЕТРИЯ · MONO 500 · GOLD", size: (w: Fixed(380.0), h: Fill)),
+                ],
+            ),
+            Row(
+                size: (w: Fill, h: Fixed(52.0)),
+                gap: Some(24.0),
+                children: [
+                    Text(id: "micro-label", style: MicroLabel, label: "MICRO LABEL", size: (w: Fill, h: Fill)),
+                    Text(id: "micro-label-spec", style: MicroLabel, label: "МИКРО-ЛЕЙБЛ · MONO 400 · 9PX · 0.12EM", size: (w: Fixed(380.0), h: Fill)),
+                ],
+            ),
+        ],
+    ),
+)

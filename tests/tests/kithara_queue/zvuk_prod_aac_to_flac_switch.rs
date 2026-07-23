@@ -2,7 +2,8 @@
 
 use kithara::{
     abr::AbrHandle,
-    assets::{FlushHub, FlushPolicy, StoreOptions},
+    assets::{FlushHub, FlushPolicy},
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, VariantInfo},
     net::{HttpClient, NetOptions},
@@ -14,9 +15,12 @@ use kithara::{
     queue::TrackSource,
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_app::config::AppConfig;
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflinePlayer};
 use tracing::info;
+
+#[path = "source_helper.rs"]
+mod source_helper;
 
 /// Production zvuk DRM master from the on-device AAC->FLAC recreate trace.
 /// The baked `zvuk-prod` provider supplies the DRM keyserver headers.
@@ -181,16 +185,25 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
+    let config = AppConfig::new(
+        downloader,
+        flush_hub,
+        CancelToken::never(),
+        BytePool::default(),
+        PcmPool::default(),
+    );
     let temp = TestTempDir::new();
 
-    let TrackSource::Config(mut cfg) = build_source(PROD_TRACK, &config) else {
+    let TrackSource::Config(cfg) = source_helper::app_track_source(
+        PROD_TRACK,
+        &config,
+        kithara_integration_tests::disk_asset_store(temp.path()),
+        backend,
+        AbrMode::manual(START_VARIANT),
+        Some(TRACK_NAME),
+    ) else {
         panic!("expected an HLS config source for {PROD_TRACK}");
     };
-    cfg.store = StoreOptions::new(temp.path());
-    cfg.decoder.backend = backend;
-    cfg.initial_abr_mode = AbrMode::manual(START_VARIANT);
-    cfg.name = Some(TRACK_NAME.to_string());
 
     let resource = Resource::new(*cfg)
         .await

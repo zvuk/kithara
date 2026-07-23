@@ -39,13 +39,15 @@ pub struct TrackEntry {
 /// `TrackSource` is `Clone` so the queue can respawn a load when a
 /// previously-consumed track is re-selected — re-tapping a track in
 /// the playlist must work without the caller reconstructing anything.
-#[derive(Clone)]
+#[derive(Clone, derive_more::From)]
 #[non_exhaustive]
 pub enum TrackSource {
     /// Load from URL / path. Queue fills in defaults from `QueueConfig`.
+    #[from]
     Uri(String),
     /// Caller-assembled resource config (DRM, headers, etc.). Boxed because
     /// [`ResourceConfig`] is ~100 bytes larger than the `Uri` variant.
+    #[from]
     Config(Box<ResourceConfig>),
 }
 
@@ -67,21 +69,9 @@ impl From<&str> for TrackSource {
     }
 }
 
-impl From<String> for TrackSource {
-    fn from(s: String) -> Self {
-        Self::Uri(s)
-    }
-}
-
 impl From<ResourceConfig> for TrackSource {
     fn from(c: ResourceConfig) -> Self {
         Self::Config(Box::new(c))
-    }
-}
-
-impl From<Box<ResourceConfig>> for TrackSource {
-    fn from(c: Box<ResourceConfig>) -> Self {
-        Self::Config(c)
     }
 }
 
@@ -283,6 +273,8 @@ fn install(record: &mut TrackRecord, generations: &AtomicU64, cancel: CancelToke
 
 #[cfg(test)]
 mod tests {
+    use kithara_assets::AssetStoreBuilder;
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -300,8 +292,13 @@ mod tests {
 
     #[kithara::test]
     fn track_source_from_resource_config() {
-        let cfg =
-            ResourceConfig::new("https://example.com/a.mp3").expect("BUG: hard-coded URL is valid");
+        let cfg = ResourceConfig::new(
+            "https://example.com/a.mp3",
+            AssetStoreBuilder::default().build(),
+            BytePool::default(),
+            PcmPool::default(),
+        )
+        .expect("BUG: hard-coded URL is valid");
         let src: TrackSource = cfg.into();
         assert!(matches!(src, TrackSource::Config(_)));
         assert_eq!(src.uri(), None);

@@ -1,11 +1,20 @@
 #![no_main]
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::LazyLock};
 
 use arbitrary::{Arbitrary, Unstructured};
-use kithara::file::{FileConfig, FileSrc};
+use kithara::{
+    assets::{AssetStore, AssetStoreBuilder, StorageBackend},
+    file::{FileConfig, FileSrc},
+};
 use libfuzzer_sys::fuzz_target;
 use url::Url;
+
+static STORE: LazyLock<AssetStore> = LazyLock::new(|| {
+    AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build()
+});
 
 #[derive(Debug)]
 struct Input {
@@ -41,10 +50,11 @@ fuzz_target!(|input: Input| {
 
     let name = String::from_utf8_lossy(&input.name);
     let cfg = FileConfig::for_src(src)
-        .name(name.as_ref().to_string())
+        .store(STORE.clone())
+        .discriminator(name.as_ref().to_string())
         .build();
 
-    if let Some(stored) = cfg.name.as_ref() {
+    if let Some(stored) = cfg.discriminator.as_ref() {
         assert!(stored.len() <= name.len());
     }
 });

@@ -1,0 +1,43 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-sizes-tab",
+    root: Column(
+        gap: Some(16.0),
+        pad: Some(24.0),
+        children: [
+            Row(size: (w: Fill, h: Fixed(44.0)), children: [
+                Text(id: "module-header", style: Body, label: "Шапка модуля", size: (w: Fill, h: Fill)),
+                Text(id: "module-header-value", style: Telemetry, label: "26PX", size: (w: Fixed(260.0), h: Fill)),
+            ]),
+            Row(size: (w: Fill, h: Fixed(44.0)), children: [
+                Text(id: "list-row", style: Body, label: "Строка списка", size: (w: Fill, h: Fill)),
+                Text(id: "list-row-value", style: Telemetry, label: "28PX", size: (w: Fixed(260.0), h: Fill)),
+            ]),
+            Row(size: (w: Fill, h: Fixed(44.0)), children: [
+                Text(id: "compact-rows", style: Body, label: "Строка дерева / шапка колонок / футер", size: (w: Fill, h: Fill)),
+                Text(id: "compact-rows-value", style: Telemetry, label: "24 · 22 · 22PX", size: (w: Fixed(260.0), h: Fill)),
+            ]),
+            Row(size: (w: Fill, h: Fixed(44.0)), children: [
+                Text(id: "bars", style: Body, label: "Транспорт / настройки / Global bar", size: (w: Fill, h: Fill)),
+                Text(id: "bars-value", style: Telemetry, label: "30 · 36 · 36–42PX", size: (w: Fixed(260.0), h: Fill)),
+            ]),
+            Row(size: (w: Fill, h: Fixed(44.0)), children: [
+                Text(id: "knobs", style: Body, label: "Кнобы", size: (w: Fill, h: Fill)),
+                Text(id: "knobs-value", style: Telemetry, label: "26 · 28 · 34 · 38PX", size: (w: Fixed(260.0), h: Fill)),
+            ]),
+            Row(size: (w: Fill, h: Fixed(44.0)), children: [
+                Text(id: "fader-vu", style: Body, label: "Фейдер + VU", size: (w: Fill, h: Fill)),
+                Text(id: "fader-vu-value", style: Telemetry, label: "88 · 120 · 160PX", size: (w: Fixed(260.0), h: Fill)),
+            ]),
+            Row(size: (w: Fill, h: Fixed(44.0)), children: [
+                Text(id: "small-controls", style: Body, label: "VU-слайдер / тумблер / чекбокс", size: (w: Fill, h: Fill)),
+                Text(id: "small-controls-value", style: Telemetry, label: "64×22 · 26×14 · 10×10", size: (w: Fixed(260.0), h: Fill)),
+            ]),
+            Row(size: (w: Fill, h: Fixed(44.0)), children: [
+                Text(id: "radius", style: Body, label: "Радиус углов", size: (w: Fill, h: Fill)),
+                Text(id: "radius-value", style: Telemetry, label: "0PX", size: (w: Fixed(260.0), h: Fill)),
+            ]),
+        ],
+    ),
+)

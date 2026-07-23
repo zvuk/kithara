@@ -1,0 +1,50 @@
+[package]
+name = "kithara-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Serializable modular UI model: layout and module documents, registries, compiler."
+keywords = ["ui", "layout", "modular", "serde", "ron"]
+categories = ["gui", "config"]
+
+[features]
+default = []
+render = ["dep:iced", "dep:lucide-icons", "dep:num-traits"]
+
+[dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+bon = { workspace = true }
+delegate = { workspace = true }
+derive_more = { workspace = true }
+iced = { workspace = true, optional = true }
+lucide-icons = { workspace = true, optional = true }
+num-traits = { workspace = true, optional = true }
+ron = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+kithara-platform = { path = "../kithara-platform" }
+kithara-test-utils = { path = "../kithara-test-utils", features = [
+    "client-reqwest",
+    "probe",
+    "tls-rustls",
+] }
+
+criterion = { workspace = true }
+ron = { workspace = true }
+
+[lints]
+workspace = true
+
+[[example]]
+name = "gallery"
+required-features = ["render"]
+
+[[bench]]
+name = "ui"
+harness = false
+required-features = ["render"]

@@ -60,7 +60,10 @@ fn measure_leading_silence(
     backend: DecoderBackend,
     gapless: bool,
 ) -> (usize, f32, usize) {
-    let mut config = DecoderConfig::default();
+    let mut config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .build();
     config.backend = backend;
     config.gapless = gapless;
     config.hint = Some("mp3".to_owned());

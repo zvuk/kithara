@@ -18,21 +18,19 @@
 ///
 /// The struct and its accessors are cross-platform; the per-target `Send`
 /// impl lives in the owning backend (`native`/`wasm` `maybe_send.rs`).
-pub struct WasmSend<T>(T);
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(get)]
+pub struct WasmSend<T>(
+    #[field(
+        get(name = get, doc = "Immutable access."),
+        get_mut(name = get_mut, doc = "Mutable access.")
+    )]
+    T,
+);
 
 impl<T> WasmSend<T> {
     /// Wrap a value.
     pub fn new(value: T) -> Self {
         Self(value)
-    }
-
-    /// Immutable access.
-    pub fn get(&self) -> &T {
-        &self.0
-    }
-
-    /// Mutable access.
-    pub fn get_mut(&mut self) -> &mut T {
-        &mut self.0
     }
 }

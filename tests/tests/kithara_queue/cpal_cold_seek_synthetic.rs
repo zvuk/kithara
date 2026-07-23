@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
     decode::DecoderBackend,
     events::{AudioEvent, Event},
     net::{HttpClient, NetOptions},
@@ -49,7 +48,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let master = created.master_url();
 
     let temp = temp_dir();
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
@@ -57,6 +56,8 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
 
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -74,6 +75,8 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
 
     let cfg = ResourceConfig::for_src(master.as_str())
         .expect("valid master URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .decoder(
@@ -111,7 +114,10 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     // branch below reports it. `time::timeout` is only a safety deadline here.
     let mut confirmed = false;
     while !tick_handle.is_finished() {
-        match time::timeout(Duration::from_secs(60), events.recv()).await {
+        match time::timeout(Duration::from_secs(60), events.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                 let pos_secs = position_ms as f64 / 1000.0;
                 if pos_secs > seek_target + 0.5 {

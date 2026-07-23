@@ -31,11 +31,14 @@ pub struct AudioFilePacketRead {
     pub packets: UInt32,
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct AudioFile<C>
 where
     C: AudioFileCallbacks,
 {
     raw: NonNull<c_void>,
+    #[field(get)]
     callbacks: Box<C>,
 }
 
@@ -47,11 +50,6 @@ impl<C> AudioFile<C>
 where
     C: AudioFileCallbacks,
 {
-    #[must_use]
-    pub fn callbacks(&self) -> &C {
-        &self.callbacks
-    }
-
     /// Reads a typed `AudioFile` property.
     ///
     /// # Errors

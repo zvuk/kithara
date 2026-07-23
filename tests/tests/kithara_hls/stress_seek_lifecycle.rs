@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
+    assets::{AssetStoreBuilder, StorageBackend},
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
@@ -162,13 +162,16 @@ async fn stress_seek_lifecycle_with_zero_reset(
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
 
-    let mut store = StoreOptions::new(temp_dir.path());
-    if ephemeral {
+    let store = if ephemeral {
         let cap =
             NonZeroUsize::new(Consts::SEGMENT_COUNT * Consts::VARIANT_COUNT + 20).expect("nz");
-        store.cache_capacity = Some(cap);
-        store.backend = StorageBackend::Memory;
-    }
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .cache_capacity(cap)
+            .build()
+    } else {
+        kithara_integration_tests::disk_asset_store(temp_dir.path())
+    };
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
@@ -179,6 +182,8 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();

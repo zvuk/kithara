@@ -3,8 +3,8 @@
 use std::{error::Error as StdError, num::NonZeroUsize};
 
 use kithara::{
-    assets::{StorageBackend, StoreOptions},
-    audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmReader},
+    assets::{AssetStoreBuilder, StorageBackend},
+    audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmControl, PcmRead, PcmSession},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{
@@ -28,7 +28,7 @@ impl Consts {
 async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
     let deadline = time::Instant::now() + Duration::from_secs(3);
     loop {
-        match PcmReader::next_chunk(audio) {
+        match PcmRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
@@ -42,13 +42,13 @@ async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
 }
 
 async fn preload_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
-    if let Some(gate) = PcmReader::preload_gate(audio) {
+    if let Some(gate) = PcmSession::preload_gate(audio) {
         time::timeout(Duration::from_secs(3), gate.wait())
             .await
             .unwrap_or_else(|_| panic!("preload timeout at `{label}`"));
     }
 
-    PcmReader::preload(audio).unwrap_or_else(|err| panic!("preload failed at `{label}`: {err}"));
+    PcmControl::preload(audio).unwrap_or_else(|err| panic!("preload failed at `{label}`: {err}"));
 }
 
 async fn run_drm_seek_resume_cycle(
@@ -58,7 +58,7 @@ async fn run_drm_seek_resume_cycle(
     iter_idx: usize,
 ) {
     let url = server.asset("drm/master.m3u8");
-    let store = StoreOptions::builder()
+    let store = AssetStoreBuilder::default()
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
@@ -71,6 +71,8 @@ async fn run_drm_seek_resume_cycle(
 
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::for_stream(hls_config)
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .worker(shared_worker.clone())
             .build(),
     )

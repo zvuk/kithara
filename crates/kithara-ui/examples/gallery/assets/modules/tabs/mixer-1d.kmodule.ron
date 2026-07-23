@@ -1,0 +1,100 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-mixer-standard",
+    root: Column(
+        gap: Some(18.0),
+        pad: Some(22.0),
+        children: [
+            Row(
+                id: "channels",
+                gap: Some(28.0),
+                size: (w: Fill, h: Fixed(268.0)),
+                children: [
+                    Row(
+                        id: "channel-a",
+                        gap: Some(16.0),
+                        size: (w: Fill, h: Fixed(250.0)),
+                        children: [
+                            Column(
+                                id: "a-eq",
+                                gap: Some(5.0),
+                                size: (w: Fixed(64.0), h: Fixed(236.0)),
+                                children: [
+                                    Knob(id: "a-hi", read: Parameter(id: "mixer.standard.a.hi"), write: Parameter(id: "mixer.standard.a.hi"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Text(id: "a-hi-label", style: MicroLabel, label: "HI", size: (w: Fixed(44.0), h: Fixed(12.0))),
+                                    Knob(id: "a-mid", read: Parameter(id: "mixer.standard.a.mid"), write: Parameter(id: "mixer.standard.a.mid"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Text(id: "a-mid-label", style: MicroLabel, label: "MID", size: (w: Fixed(44.0), h: Fixed(12.0))),
+                                    Knob(id: "a-lo", read: Parameter(id: "mixer.standard.a.lo"), write: Parameter(id: "mixer.standard.a.lo"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Text(id: "a-lo-label", style: MicroLabel, label: "LO", size: (w: Fixed(44.0), h: Fixed(12.0))),
+                                    Knob(id: "a-filter", read: Parameter(id: "mixer.standard.a.filter"), write: Parameter(id: "mixer.standard.a.filter"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    StatusDot(id: "a-filter-label", label: "FLTR", tone: Accent, size: (w: Fixed(44.0), h: Fixed(12.0))),
+                                    Row(
+                                        id: "a-fx",
+                                        gap: Some(4.0),
+                                        children: [
+                                            Chip(id: "a-fx1", label: "FX1", style: Routing, read: Model(id: "mixer.channel.a.fx1"), write: Command(id: "mixer.channel.a.toggle_fx1"), size: (w: Fixed(28.0), h: Fixed(18.0))),
+                                            Chip(id: "a-fx2", label: "FX2", style: Routing, read: Model(id: "mixer.channel.a.fx2"), write: Command(id: "mixer.channel.a.toggle_fx2"), size: (w: Fixed(28.0), h: Fixed(18.0))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            Column(
+                                id: "a-level",
+                                gap: Some(7.0),
+                                size: (w: Fixed(32.0), h: Fixed(220.0)),
+                                children: [
+                                    VuVertical(id: "a-fader", read: Telemetry(id: "mixer.channel.a.levels"), write: Parameter(id: "mixer.channel.a.fader"), size: (w: Fixed(18.0), h: Fixed(120.0))),
+                                    Text(id: "a-deck", style: DeckLetter, label: "A", size: (w: Fixed(28.0), h: Fixed(24.0))),
+                                    Button(id: "a-cue", label: "", icon: Some(Headphones), read: Model(id: "mixer.channel.a.cue"), write: Command(id: "mixer.channel.a.toggle_cue"), size: (w: Fixed(28.0), h: Fixed(30.0))),
+                                ],
+                            ),
+                        ],
+                    ),
+                    Row(
+                        id: "channel-b",
+                        gap: Some(16.0),
+                        size: (w: Fill, h: Fixed(250.0)),
+                        children: [
+                            Column(
+                                id: "b-eq",
+                                gap: Some(5.0),
+                                size: (w: Fixed(64.0), h: Fixed(236.0)),
+                                children: [
+                                    Knob(id: "b-hi", read: Parameter(id: "mixer.standard.b.hi"), write: Parameter(id: "mixer.standard.b.hi"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Text(id: "b-hi-label", style: MicroLabel, label: "HI", size: (w: Fixed(44.0), h: Fixed(12.0))),
+                                    Knob(id: "b-mid", read: Parameter(id: "mixer.standard.b.mid"), write: Parameter(id: "mixer.standard.b.mid"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Text(id: "b-mid-label", style: MicroLabel, label: "MID", size: (w: Fixed(44.0), h: Fixed(12.0))),
+                                    Knob(id: "b-lo", read: Parameter(id: "mixer.standard.b.lo"), write: Parameter(id: "mixer.standard.b.lo"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    Text(id: "b-lo-label", style: MicroLabel, label: "LO", size: (w: Fixed(44.0), h: Fixed(12.0))),
+                                    Knob(id: "b-filter", read: Parameter(id: "mixer.standard.b.filter"), write: Parameter(id: "mixer.standard.b.filter"), size: (w: Fixed(28.0), h: Fixed(28.0))),
+                                    StatusDot(id: "b-filter-label", label: "FLTR", tone: Accent, size: (w: Fixed(44.0), h: Fixed(12.0))),
+                                    Row(
+                                        id: "b-fx",
+                                        gap: Some(4.0),
+                                        children: [
+                                            Chip(id: "b-fx1", label: "FX1", style: Routing, read: Model(id: "mixer.channel.b.fx1"), write: Command(id: "mixer.channel.b.toggle_fx1"), size: (w: Fixed(28.0), h: Fixed(18.0))),
+                                            Chip(id: "b-fx2", label: "FX2", style: Routing, read: Model(id: "mixer.channel.b.fx2"), write: Command(id: "mixer.channel.b.toggle_fx2"), size: (w: Fixed(28.0), h: Fixed(18.0))),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            Column(
+                                id: "b-level",
+                                gap: Some(7.0),
+                                size: (w: Fixed(32.0), h: Fixed(220.0)),
+                                children: [
+                                    VuVertical(id: "b-fader", read: Telemetry(id: "mixer.channel.b.levels"), write: Parameter(id: "mixer.channel.b.fader"), size: (w: Fixed(18.0), h: Fixed(120.0))),
+                                    Text(id: "b-deck", style: DeckLetter, label: "B", size: (w: Fixed(28.0), h: Fixed(24.0))),
+                                    Button(id: "b-cue", label: "", icon: Some(Headphones), read: Model(id: "mixer.channel.b.cue"), write: Command(id: "mixer.channel.b.toggle_cue"), size: (w: Fixed(28.0), h: Fixed(30.0))),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            Slot(id: "xfade-spacer", size: (w: Fill, h: Fill)),
+            Crossfader(id: "xfade", read: Parameter(id: "mixer.xfade"), write: Parameter(id: "mixer.xfade"), size: (w: Fill, h: Fixed(38.0))),
+        ],
+    ),
+)

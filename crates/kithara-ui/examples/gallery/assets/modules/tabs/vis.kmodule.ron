@@ -1,0 +1,78 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-vis",
+    root: Column(
+        gap: Some(0.0),
+        pad: Some(0.0),
+        children: [
+            Row(
+                id: "header",
+                gap: Some(0.0),
+                pad: Some(0.0),
+                size: (w: Fill, h: Fixed(26.0)),
+                children: [
+                    Chip(
+                        id: "badge",
+                        label: "VIS",
+                        read: Model(id: "vis.badge"),
+                        size: (w: Fixed(46.0), h: Fixed(26.0)),
+                    ),
+                    Text(
+                        id: "preset-name",
+                        style: VisTitle,
+                        read: Model(id: "vis.preset_name"),
+                    ),
+                    Button(
+                        id: "previous",
+                        label: "‹",
+                        style: VisNav,
+                        write: Command(id: "vis.previous"),
+                    ),
+                    Button(
+                        id: "next",
+                        label: "›",
+                        style: VisNav,
+                        write: Command(id: "vis.next"),
+                    ),
+                    Text(
+                        id: "preset-index",
+                        style: VisMeta,
+                        read: Model(id: "vis.preset_index"),
+                        size: (w: Fixed(48.0), h: Fixed(26.0)),
+                    ),
+                    Glyph(
+                        id: "collapse",
+                        icon: ChevronUp,
+                        style: Vis,
+                        size: (w: Fixed(26.0), h: Fixed(26.0)),
+                    ),
+                ],
+            ),
+            Vis(
+                id: "shader",
+                read: Model(id: "vis.preset"),
+                write: Parameter(id: "vis.preset"),
+            ),
+            Row(
+                id: "footer",
+                gap: Some(0.0),
+                pad: Some(0.0),
+                size: (w: Fill, h: Fixed(22.0)),
+                children: [
+                    Text(
+                        id: "footer-label",
+                        style: VisFooter,
+                        label: "WGSL · 60 FPS · REACT: MASTER",
+                    ),
+                    Glyph(
+                        id: "maximize",
+                        icon: Maximize,
+                        style: Vis,
+                        size: (w: Fixed(22.0), h: Fixed(22.0)),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

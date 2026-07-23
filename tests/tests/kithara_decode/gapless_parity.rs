@@ -29,8 +29,14 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
     let fixture =
         generated_aac_elst_fixture(&server, PackagedSignal::Sine { freq_hz: 1_000.0 }, 0).await;
 
-    let direct = create_decoder_from_media_info(&fixture, DecoderConfig::default())
-        .expect("create direct AAC fMP4 decoder");
+    let direct = create_decoder_from_media_info(
+        &fixture,
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .build(),
+    )
+    .expect("create direct AAC fMP4 decoder");
     let direct_gapless = direct
         .track_info()
         .gapless
@@ -47,7 +53,11 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
     let probe = create_decoder_with_probe(
         fixture.bytes.clone(),
         "m4a",
-        DecoderConfig::builder().hint("m4a".to_string()).build(),
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .hint("m4a".to_string())
+            .build(),
     )
     .expect("create probe AAC fMP4 decoder");
     let probe_gapless = probe.track_info().gapless.expect("probe gapless metadata");
@@ -56,7 +66,9 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
 
     let preferred = create_decoder_from_media_info(
         &fixture,
-        DecoderConfig::builder()
+        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .backend(DecoderBackend::default())
             .build(),
     )
@@ -266,15 +278,24 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
         .to_vec();
 
     let default_pcm = decode_visible_frames(
-        create_decoder_with_probe(bytes.clone(), hint, DecoderConfig::default())
-            .expect("create default decoder"),
+        create_decoder_with_probe(
+            bytes.clone(),
+            hint,
+            DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
+                .build(),
+        )
+        .expect("create default decoder"),
     )
     .expect("decode default path");
     let preferred_pcm = decode_visible_frames(
         create_decoder_with_probe(
             bytes,
             hint,
-            DecoderConfig::builder()
+            DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .backend(DecoderBackend::default())
                 .build(),
         )

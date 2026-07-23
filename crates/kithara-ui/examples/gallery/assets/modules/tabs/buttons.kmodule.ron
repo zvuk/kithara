@@ -1,0 +1,62 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-buttons-tab",
+    root: Column(
+        gap: Some(18.0),
+        pad: Some(14.0),
+        children: [
+            Text(id: "transport-title", style: Section, read: Model(id: "gallery.label.transport")),
+            Row(
+                gap: Some(1.0),
+                children: [
+                    Button(
+                        id: "play",
+                        size: (w: Fixed(48.0), h: Fixed(28.0)),
+                        label: "PLAY",
+                        active_label: Some("PAUSE"),
+                        style: TransportPrimary,
+                        read: Model(id: "mock.button.play"),
+                    ),
+                    Button(
+                        id: "cue",
+                        size: (w: Fixed(42.0), h: Fixed(28.0)),
+                        label: "CUE",
+                        style: Transport,
+                        read: Model(id: "mock.button.cue"),
+                    ),
+                    Button(
+                        id: "sync",
+                        size: (w: Fixed(46.0), h: Fixed(28.0)),
+                        label: "SYNC",
+                        style: Transport,
+                        read: Model(id: "mock.button.sync"),
+                    ),
+                ],
+            ),
+            Text(id: "regular-title", style: Section, read: Model(id: "gallery.label.regular")),
+            Row(
+                gap: Some(12.0),
+                children: [
+                    Button(
+                        id: "default",
+                        size: (w: Fixed(72.0), h: Fixed(28.0)),
+                        label: "DEFAULT",
+                    ),
+                    Button(
+                        id: "primary",
+                        size: (w: Fixed(72.0), h: Fixed(28.0)),
+                        label: "PRIMARY",
+                        style: TransportPrimary,
+                    ),
+                    Button(
+                        id: "micro",
+                        size: (w: Fixed(36.0), h: Fixed(20.0)),
+                        label: "PLAY",
+                        style: MicroPrimary,
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

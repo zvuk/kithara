@@ -2,7 +2,6 @@
 
 use kithara::{
     abr::AbrMode,
-    assets::StoreOptions,
     decode::DecoderBackend,
     net::{HttpClient, NetOptions},
     platform::{
@@ -119,7 +118,7 @@ async fn run_case(
     let master = created.master_url();
 
     let temp = TestTempDir::new();
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
@@ -131,8 +130,10 @@ async fn run_case(
     };
     let cfg = ResourceConfig::for_src(master.as_str())
         .expect("valid master URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)
-        .name("t0".to_string())
+        .discriminator("t0".to_string())
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

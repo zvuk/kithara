@@ -2,9 +2,9 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     decode::DecoderBackend,
-    events::{AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
+    events::{AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -92,7 +92,7 @@ async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url 
 fn drain_latest_position(rx: &mut EventReceiver) -> Option<f64> {
     let mut latest: Option<f64> = None;
     loop {
-        match rx.try_recv() {
+        match rx.try_recv().map(|env| env.event) {
             Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                 latest = Some(position_ms as f64 / 1000.0);
             }
@@ -113,7 +113,7 @@ fn drain_latest_position(rx: &mut EventReceiver) -> Option<f64> {
 async fn next_progress_position(rx: &mut EventReceiver, deadline: Duration) -> Result<f64, String> {
     timeout(deadline, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     return Ok(position_ms as f64 / 1000.0);
                 }
@@ -142,7 +142,7 @@ async fn sample_positions_via_progress(
     out.push(queue.position_seconds().unwrap_or(0.0));
     timeout(deadline, async {
         while out.len() < count {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     out.push(position_ms as f64 / 1000.0);
                 }
@@ -179,15 +179,22 @@ fn build_queue_with_tick(
 ) -> (
     Arc<Queue>,
     Downloader,
-    StoreOptions,
+    AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::default()
+            .with_player(player)
+            .with_store(store.clone()),
+    ));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
         loop {
@@ -201,7 +208,6 @@ fn build_queue_with_tick(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
 
@@ -271,6 +277,8 @@ async fn local_track_plays_end_to_end(
 
     let cfg = ResourceConfig::for_src(url.as_str())
         .expect("valid fixture URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .decoder(
@@ -388,7 +396,7 @@ where
 {
     timeout(deadline, async {
         loop {
-            match rx.recv().await {
+            match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Queue(ev)) => {
                     if pred(&ev) {
                         return Some(ev);
@@ -481,6 +489,8 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .map(|u| {
             let cfg = ResourceConfig::for_src(u.as_str())
                 .expect("valid fixture URL")
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .downloader(downloader.clone())
                 .store(store.clone())
                 .decoder(
@@ -546,7 +556,7 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .await
         .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = queue.crossfade_duration();
-    queue.advance_to_next(Transition::Crossfade);
+    queue.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
     let started = wait_for_queue_event(
         &mut rx,
         |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -45,7 +45,10 @@ async fn wait_for_status(
     }
     let start = Instant::now();
     while start.elapsed() < deadline {
-        match timeout(Duration::from_millis(500), rx.recv()).await {
+        match timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
@@ -67,11 +70,13 @@ fn build_queue_with_tick(
 ) -> (
     Arc<Queue>,
     Downloader,
-    StoreOptions,
+    AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -89,7 +94,7 @@ fn build_queue_with_tick(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp_dir.path());
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
 
@@ -141,7 +146,7 @@ async fn wait_for_post_seek_progress(
         let mut landed: Option<f64> = None;
         let mut last: Option<f64> = None;
         loop {
-            let pos = match rx.recv().await {
+            let pos = match rx.recv().await.map(|env| env.event) {
                 Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     position_ms as f64 / 1000.0
                 }
@@ -212,7 +217,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         .map(|p| server.url(p).as_str().to_string())
         .collect();
 
-    let store = StoreOptions::new(temp.path());
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
@@ -220,6 +225,8 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
 
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -241,6 +248,8 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         .map(|u| {
             let cfg = ResourceConfig::for_src(u)
                 .expect("valid URL")
+                .byte_pool(kithara::bufpool::BytePool::default())
+                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .downloader(downloader.clone())
                 .store(store.clone())
                 .build();
@@ -379,6 +388,8 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     let track_source = |url: &str| -> TrackSource {
         let cfg = ResourceConfig::for_src(url)
             .expect("valid URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .build();
@@ -468,6 +479,8 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     let track_source = |url: &str| -> TrackSource {
         let cfg = ResourceConfig::for_src(url)
             .expect("valid URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .build();

@@ -12,7 +12,7 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
-    assets::StoreOptions,
+    assets::AssetStore,
     events::{AbrMode, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -88,11 +88,14 @@ fn build_queue_with_tick(
 ) -> (
     Arc<Queue>,
     Downloader,
-    StoreOptions,
+    AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -100,6 +103,7 @@ fn build_queue_with_tick(
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .max_concurrent_loads(cap)
+            .store(store.clone())
             .build()
             .with_player(player),
     ));
@@ -116,7 +120,6 @@ fn build_queue_with_tick(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
 
@@ -157,6 +160,8 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(url.as_str())
             .expect("valid fixture URL")
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))

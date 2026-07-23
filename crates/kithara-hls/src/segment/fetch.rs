@@ -8,6 +8,7 @@ use std::{
 };
 
 use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSide};
+use kithara_events::{DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent};
 use kithara_net::{NetError, Retryability};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
@@ -155,15 +156,24 @@ impl FetchClaim<Downloading> {
     pub(crate) fn slot_state(&self) -> Arc<SegmentSlotState> {
         Arc::clone(&self.data.slot)
     }
-}
-
-impl FetchClaim<Loaded> {
-    pub(crate) fn final_len(&self) -> u64 {
-        self.data.final_len
-    }
 
     pub(crate) fn planned(&self) -> PlannedFetch {
         self.data.planned
+    }
+
+    pub(crate) fn variant(&self) -> Option<Arc<HlsVariant>> {
+        self.data.variant.upgrade()
+    }
+}
+
+impl FetchClaim<Loaded> {
+    delegate::delegate! {
+        to self.data {
+            #[field]
+            pub(crate) fn final_len(&self) -> u64;
+            #[field]
+            pub(crate) fn planned(&self) -> PlannedFetch;
+        }
     }
 }
 
@@ -194,15 +204,8 @@ pub(crate) enum PlannedFetch {
     Segment(u32),
 }
 
-/// Pairs the freshly-acquired [`AssetResource`](kithara_assets::AssetResource) with the entry's state
-/// atom and the cancel token captured at dispatch time. `settle` reads
-/// `cancel.is_cancelled()` as the rebuild-epoch marker: a stale fetch
-/// (cancelled before completion) does not write to state — `rebuild`
-/// has already taken over and the asset slot belongs to the new epoch.
-///
-/// The `Weak<HlsVariant>` lets the slot call back into the variant to
-/// apply the post-decrypt size — we use `Weak` (not `Arc`) so a dropped
-/// peer doesn't keep the variant alive past teardown.
+/// Fetch ownership and epoch state settled back into one variant slot.
+/// Its weak variant reference does not extend the variant lifetime.
 pub(crate) struct FetchSlot {
     /// Read view of the writer's generation — used to observe a
     /// committed-by-race status before deciding the terminal transition.
@@ -220,6 +223,7 @@ pub(crate) struct FetchSlot {
     /// readable (the decrypt gate opens here for DRM segments), not on its
     /// 10 ms poll.
     pub(crate) signal: SizeSignal,
+    pub(crate) bus: EventBus,
 }
 
 impl From<FetchSlot> for OnCompleteFn {
@@ -278,6 +282,7 @@ impl FetchSlot {
             handle,
             writer,
             reader,
+            bus,
             ..
         } = self;
         let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
@@ -307,6 +312,9 @@ impl FetchSlot {
                     err = %e,
                     "terminal fetch failure — slot parked Failed, will not re-dispatch"
                 );
+                bus.publish(HlsEvent::Error {
+                    error: EventHlsError::Other("segment fetch failed".to_string()),
+                });
                 handle.into_failed();
             } else {
                 handle.into_missing();
@@ -326,7 +334,14 @@ impl FetchSlot {
     }
 
     fn settle_success(self, bytes_written: u64) {
-        let Self { handle, writer, .. } = self;
+        let Self {
+            handle,
+            writer,
+            bus,
+            ..
+        } = self;
+        let planned = handle.planned();
+        let variant = handle.variant();
         // Consume-self commit returns the Ready reader; read `final_len` off it
         // (PKCS7 unpad shrinks DRM segments below the announced size).
         match writer.commit(Some(bytes_written)) {
@@ -337,6 +352,9 @@ impl FetchSlot {
                     _ => bytes_written,
                 };
                 handle.into_loaded(actual);
+                if let Some(variant) = variant {
+                    variant.maybe_publish_cache_complete();
+                }
             }
             Err(e) => {
                 debug!(
@@ -345,6 +363,15 @@ impl FetchSlot {
                     err = %e,
                     "success-but-commit-failed"
                 );
+                if let Some((variant_idx, segment_index)) =
+                    decrypt_failure_site(planned, variant.as_ref())
+                {
+                    bus.publish(DrmEvent::SegmentDecryptFailed {
+                        variant: variant_idx,
+                        segment_index,
+                        detail: e.to_string(),
+                    });
+                }
                 handle.into_missing();
             }
         }
@@ -358,4 +385,19 @@ impl FetchSlot {
             raw.write_at(pos, chunk).map_err(IoError::other)
         })
     }
+}
+
+fn decrypt_failure_site(
+    planned: PlannedFetch,
+    variant: Option<&Arc<HlsVariant>>,
+) -> Option<(u32, u32)> {
+    let PlannedFetch::Segment(segment_index) = planned else {
+        return None;
+    };
+    let variant = variant?;
+    if !variant.is_encrypted_segment(segment_index) {
+        return None;
+    }
+    let variant_idx = variant.variant_index_u32()?;
+    Some((variant_idx, segment_index))
 }

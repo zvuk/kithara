@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kithara.AssetStore
 import com.kithara.Kithara
 import com.kithara.KitharaError
 import com.kithara.KitharaItemEvent
@@ -46,8 +47,9 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         // under storage pressure, which would desync our bookkeeping.
         // Only clears on app uninstall.
         val cacheDir = File(application.filesDir, "kithara-cache").apply { mkdirs() }.absolutePath
+        val store = AssetStore(root = cacheDir)
         player = KitharaPlayer(
-            config = KitharaPlayer.Config(cacheDir = cacheDir),
+            config = KitharaPlayer.Config(store = store),
         ).apply { playingRate = _uiState.value.selectedRate }
         // Register a wildcard `"*"` HLS-AES decryptor — the closure
         // derives the cipher per-call from the player-supplied salt

@@ -1,14 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::StoreOptions,
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
         CancelToken,
         sync::Arc,
-        time,
-        time::{Duration, Instant, timeout},
+        time::{self, Duration, Instant, timeout},
         tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
@@ -33,7 +31,10 @@ async fn wait_for_failed(
     }
     let start = Instant::now();
     while start.elapsed() < deadline {
-        match timeout(Duration::from_millis(500), rx.recv()).await {
+        match timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
@@ -51,6 +52,17 @@ async fn wait_for_failed(
     Err(format!(
         "track neither failed nor loaded within {deadline:?} — load hung on the stalled playlist"
     ))
+}
+
+fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn(async move {
+        loop {
+            time::sleep(Duration::from_millis(50)).await;
+            if queue.tick().is_err() {
+                break;
+            }
+        }
+    })
 }
 
 /// A master-playlist GET whose body stalls after the first bytes (headers
@@ -88,24 +100,20 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
 
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
+            .byte_pool(kithara::bufpool::BytePool::default())
+            .pcm_pool(kithara::bufpool::PcmPool::default())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = spawn_ticker(Arc::clone(&queue));
 
     let cfg = ResourceConfig::for_src(url.as_str())
         .expect("valid URL")
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
         .build();
 
     let mut rx = queue.subscribe();

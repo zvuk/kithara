@@ -6,12 +6,12 @@ use std::path::Path;
 
 use bytes::Bytes;
 use kithara::{
-    assets::{
-        AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, StorageBackend, WriteSide,
-    },
+    assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide},
     platform::{CancelToken, time::Duration},
 };
 use kithara_integration_tests::{cancel_token, temp_dir};
+
+use super::support::{LiteralLayout, literal_layouts, resource, source};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
@@ -29,13 +29,12 @@ fn asset_scope_with_root_and_limit(
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
         })
-        .evict_config(EvictConfig {
-            max_assets: None,
-            max_bytes,
-        })
+        .maybe_max_bytes(max_bytes)
         .cancel(cancel)
+        .layouts(literal_layouts())
         .build()
-        .scope(asset_root)
+        .scope::<LiteralLayout>(&source(asset_root))
+        .expect("scope")
 }
 
 #[kithara::test(
@@ -65,7 +64,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             Some(100),
             cancel_token.clone(),
         );
-        let key_a = scope_a.key("media/a.bin");
+        let key_a = scope_a.key(&resource("media/a.bin")).unwrap();
         let AcquisitionResult::Pending(writer_a) =
             scope_a.store().acquire_resource(&key_a, None).unwrap()
         else {
@@ -86,7 +85,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             Some(100),
             cancel_token.clone(),
         );
-        let key_b = scope_b.key("media/b.bin");
+        let key_b = scope_b.key(&resource("media/b.bin")).unwrap();
         let AcquisitionResult::Pending(writer_b) =
             scope_b.store().acquire_resource(&key_b, None).unwrap()
         else {
@@ -107,7 +106,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             Some(100),
             cancel_token.clone(),
         );
-        let key_c = scope_c.key("media/c.bin");
+        let key_c = scope_c.key(&resource("media/c.bin")).unwrap();
         let AcquisitionResult::Pending(writer_c) =
             scope_c.store().acquire_resource(&key_c, None).unwrap()
         else {
@@ -172,7 +171,7 @@ fn eviction_corner_cases_different_byte_limits(
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let key = scope.key(format!("data{}.bin", i));
+        let key = scope.key(&resource(format!("data{}.bin", i))).unwrap();
 
         let AcquisitionResult::Pending(writer) =
             scope.store().acquire_resource(&key, None).unwrap()
@@ -191,7 +190,7 @@ fn eviction_corner_cases_different_byte_limits(
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let trigger_key = scope.key("trigger.bin");
+        let trigger_key = scope.key(&resource("trigger.bin")).unwrap();
 
         let AcquisitionResult::Pending(writer) =
             scope.store().acquire_resource(&trigger_key, None).unwrap()
@@ -210,7 +209,7 @@ fn eviction_corner_cases_different_byte_limits(
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let probe_key = scope.key("probe.bin");
+        let probe_key = scope.key(&resource("probe.bin")).unwrap();
         let AcquisitionResult::Pending(probe) =
             scope.store().acquire_resource(&probe_key, None).unwrap()
         else {

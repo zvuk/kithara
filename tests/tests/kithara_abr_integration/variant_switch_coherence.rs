@@ -138,7 +138,7 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
     let window = fast_settings().incoherence_deadline;
     let watchdog = Instant::now() + StdDuration::from_secs(5);
     loop {
-        if let Ok(Event::Abr(AbrEvent::Incoherence { .. })) = rx.try_recv() {
+        if let Ok(Event::Abr(AbrEvent::Incoherence { .. })) = rx.try_recv().map(|env| env.event) {
             saw_incoherence = AtomicBool::new(true);
             break;
         }
