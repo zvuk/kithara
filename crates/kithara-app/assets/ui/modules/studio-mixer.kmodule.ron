@@ -1,0 +1,62 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "studio-mixer",
+    root: Column(
+        children: [
+            Row(
+                id: "strips",
+                children: [
+                    Column(
+                        id: "strip-a",
+                        children: [
+                            Text(id: "label-a", style: DeckLetter, label: "A"),
+                            Knob(
+                                id: "trim-a",
+                                read: Parameter(id: "mixer.trim", with: { "deck": "a" }),
+                                write: Parameter(id: "mixer.trim", with: { "deck": "a" }),
+                            ),
+                            Chip(
+                                id: "mute-a",
+                                label: "MUTE",
+                                style: Routing,
+                                read: Model(id: "mixer.muted", with: { "deck": "a" }),
+                                write: Command(id: "mixer.toggle_mute", with: { "deck": "a" }),
+                            ),
+                        ],
+                    ),
+                    Column(
+                        id: "strip-b",
+                        children: [
+                            Text(id: "label-b", style: DeckLetter, label: "B"),
+                            Knob(
+                                id: "trim-b",
+                                read: Parameter(id: "mixer.trim", with: { "deck": "b" }),
+                                write: Parameter(id: "mixer.trim", with: { "deck": "b" }),
+                            ),
+                            Chip(
+                                id: "mute-b",
+                                label: "MUTE",
+                                style: Routing,
+                                read: Model(id: "mixer.muted", with: { "deck": "b" }),
+                                write: Command(id: "mixer.toggle_mute", with: { "deck": "b" }),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            Crossfader(
+                id: "xfade",
+                read: Parameter(id: "mix.crossfader"),
+                write: Parameter(id: "mix.crossfader"),
+            ),
+            Text(id: "master-label", style: MicroLabel, label: "MASTER"),
+            Fader(
+                id: "master",
+                style: Volume,
+                read: Parameter(id: "mix.group_master"),
+                write: Parameter(id: "mix.group_master"),
+            ),
+        ],
+    ),
+)

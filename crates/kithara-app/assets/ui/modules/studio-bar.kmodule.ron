@@ -1,0 +1,11 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "studio-bar",
+    root: Row(
+        children: [
+            Brand(id: "brand"),
+            Spacer(id: "spacer"),
+        ],
+    ),
+)

@@ -103,24 +103,15 @@ pub(crate) mod gui {
 
     use super::{Palette, Rgb};
 
-    /// Resolved iced color palette.
+    /// Resolved iced color palette for the window theme; module chrome and
+    /// control colors come from the `kithara-ui` skin.
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct GuiPalette {
         pub(crate) accent: Color,
-        pub(crate) accent_glow: Color,
-        pub(crate) accent_strong: Color,
         pub(crate) bg: Color,
-        pub(crate) bg_elev: Color,
-        pub(crate) bg_inset: Color,
-        pub(crate) bg_panel: Color,
-        pub(crate) bg_panel_2: Color,
         pub(crate) danger: Color,
-        pub(crate) line: Color,
-        pub(crate) line_soft: Color,
-        pub(crate) muted: Color,
         pub(crate) success: Color,
         pub(crate) text: Color,
-        pub(crate) text_dim: Color,
         pub(crate) warning: Color,
     }
 
@@ -128,20 +119,10 @@ pub(crate) mod gui {
         fn from(p: Palette) -> Self {
             Self {
                 accent: to_iced(p.accent),
-                accent_glow: Color::from_rgba8(p.accent.0, p.accent.1, p.accent.2, 0.45),
-                accent_strong: to_iced(p.accent_strong),
                 bg: to_iced(p.bg),
-                bg_elev: to_iced(p.bg_elev),
-                bg_inset: to_iced(p.bg_inset),
-                bg_panel: to_iced(p.bg_panel),
-                bg_panel_2: to_iced(p.bg_panel_2),
                 danger: to_iced(p.danger),
-                line: to_iced(p.line),
-                line_soft: to_iced(p.line_soft),
-                muted: to_iced(p.muted),
                 success: to_iced(p.success),
                 text: to_iced(p.text),
-                text_dim: to_iced(p.text_dim),
                 warning: to_iced(p.warning),
             }
         }
@@ -150,29 +131,6 @@ pub(crate) mod gui {
     fn to_iced(rgb: Rgb) -> Color {
         Color::from_rgb8(rgb.0, rgb.1, rgb.2)
     }
-
-    /// Deck-waveform band colors (Serato-style overlay): `low` magenta, `mid`
-    /// yellow, `high` cyan. The deck paints the three as concentric mirrored
-    /// bars (low behind, high in front), so all bands stay visible. This is the
-    /// single seam where waveform band-color policy lives.
-    pub(crate) const WAVE_LOW: Color = Color {
-        r: 0.92,
-        g: 0.16,
-        b: 0.55,
-        a: 1.0,
-    };
-    pub(crate) const WAVE_MID: Color = Color {
-        r: 0.95,
-        g: 0.82,
-        b: 0.16,
-        a: 1.0,
-    };
-    pub(crate) const WAVE_HIGH: Color = Color {
-        r: 0.18,
-        g: 0.78,
-        b: 0.92,
-        a: 1.0,
-    };
 }
 
 #[cfg(feature = "tui")]

@@ -1,3 +1,5 @@
+use kithara_ui::render::UiEvent;
+
 use crate::deck::DeckId;
 
 /// All GUI events flow through this enum.
@@ -6,6 +8,9 @@ use crate::deck::DeckId;
 /// [`super::deck::DeckMsg`] and know nothing about deck identity.
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
+    /// Raw event from the compiled studio UI; translated by
+    /// [`super::studio_ui::translate`].
+    Ui(UiEvent),
     /// Event addressed to one deck.
     Deck(DeckId, super::deck::DeckMsg),
     /// Session-mix edit (crossfader, trim, mute, master).
@@ -17,8 +22,6 @@ pub(crate) enum Message {
     SelectCatalogTrack(usize),
     /// Load catalog row `.0` onto deck `.1`.
     LoadOntoDeck(usize, DeckId),
-    /// Move the keyboard / library focus to a deck.
-    FocusDeck(DeckId),
     /// Periodic tick from the subscription (100 ms).
     Tick,
     /// System close button on the studio window; exits the app.

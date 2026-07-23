@@ -137,12 +137,9 @@ branch or selects a leaf. `TreeSkin` owns the search, row, indentation, panel, a
 metrics. `ContextBar` keeps breadcrumb text read-only; optional scope items use a separate Scalar
 read binding and emit `SelectIndex` on the control path so scope state remains host-owned.
 
-## Detached application consumer (2026-07-20)
+## Application Consumer
 
-By owner decision the application was reverted to its pre-modular GUI and PR #117 ships
-`kithara-ui` alone. Until the app integration returns, the crate's public surface
-(`compile`, `EndpointDesc::with_scope`, `fonts::FONT_BYTES`) is exercised only by the
-gallery example, which the `dead_exports` scan classifies as testish; those three names
-are exempted in `.config/arch/thresholds.toml` with the same rationale. Builtin module
-docs under `assets/modules/` remain the canonical presets and are consumed by the gallery
-modules page; nothing outside this crate reads them right now.
+The `kithara-app` GUI studio is the production consumer: it embeds its own layout and
+module documents, implements `EndpointRegistry` and `Reads`, and maps `UiEvent` to app
+messages (`crates/kithara-app/src/gui/studio_ui`). Builtin module docs under
+`assets/modules/` remain the canonical presets consumed by the gallery modules page.

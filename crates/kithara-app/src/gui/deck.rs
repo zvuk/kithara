@@ -1,12 +1,9 @@
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use kithara::events::{DjEvent, StretchBackendKind};
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use kithara::prelude::StretchKind;
+use kithara::events::DjEvent;
 use kithara_platform::sync::Arc;
 use kithara_queue::{TrackId, Transition};
 use tracing::{debug, error};
 
-use super::widgets::{Viewport, WaveMsg};
 use crate::{
     deck::DeckId,
     state::{StateController, UiState},
@@ -38,7 +35,6 @@ impl DeckUi {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DeckView {
     pub(crate) timestretch: TimestretchState,
-    pub(crate) wave: Viewport,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -60,11 +56,6 @@ impl TimestretchState {
     fn clamp_tempo(&mut self) {
         let r = f32::from(self.range);
         self.tempo = self.tempo.clamp(-r, r);
-    }
-
-    fn nudge(&mut self, delta: f32) {
-        self.tempo = ((self.tempo + delta) * 100.0).round() / 100.0;
-        self.clamp_tempo();
     }
 
     fn set_range(&mut self, range: u8) {
@@ -92,15 +83,11 @@ pub(crate) enum DeckMsg {
     SeekTo(f64),
     EqBandChanged(usize, f32),
     DeleteTrack,
-    Wave(WaveMsg),
     SetTempo(f32),
     SetRange(u8),
-    Nudge(f32),
     ResetTempo,
     #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     ToggleKeyLock,
-    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-    SelectBackend(StretchKind),
 }
 
 /// Apply a deck message to its own deck. Nothing here reaches another deck.
@@ -121,10 +108,8 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::SeekTo(pos) => seek_to(deck, pos),
         DeckMsg::EqBandChanged(band, db) => eq_band_changed(deck, band, db),
         DeckMsg::DeleteTrack => delete_track(deck),
-        DeckMsg::Wave(m) => deck.view.wave = deck.view.wave.apply(m),
         DeckMsg::SetTempo(t) => set_speed(deck, |ts| ts.set_tempo(t)),
         DeckMsg::SetRange(r) => set_speed(deck, |ts| ts.set_range(r)),
-        DeckMsg::Nudge(d) => set_speed(deck, |ts| ts.nudge(d)),
         DeckMsg::ResetTempo => set_speed(deck, |ts| ts.tempo = 0.0),
         #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
         DeckMsg::ToggleKeyLock => {
@@ -137,24 +122,6 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
                 .bus()
                 .publish(DjEvent::KeylockChanged { on: keylock });
         }
-        #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-        DeckMsg::SelectBackend(backend) => {
-            deck.controller.stretch().set_backend(backend);
-            deck.controller
-                .queue()
-                .bus()
-                .publish(DjEvent::StretchBackendChanged {
-                    kind: stretch_backend_kind(backend),
-                });
-        }
-    }
-}
-
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-fn stretch_backend_kind(kind: StretchKind) -> StretchBackendKind {
-    match kind {
-        StretchKind::Signalsmith => StretchBackendKind::Signalsmith,
-        _ => StretchBackendKind::Unknown,
     }
 }
 

@@ -5,12 +5,18 @@ use super::{
     app::Kithara,
     deck::{self, DeckMsg},
     message::Message,
-    mix,
+    mix, studio_ui,
 };
 use crate::{catalog, deck::DeckId};
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
+        Message::Ui(event) => {
+            if let Some(translated) = studio_ui::translate(state, event) {
+                return update(state, translated);
+            }
+            Task::none()
+        }
         Message::Deck(id, msg) => {
             handle_deck(state, id, &msg);
             Task::none()
@@ -29,10 +35,6 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::LoadOntoDeck(index, id) => {
             handle_load(state, index, id);
-            Task::none()
-        }
-        Message::FocusDeck(id) => {
-            state.decks.set_focus(id);
             Task::none()
         }
         Message::Tick => {
@@ -83,9 +85,11 @@ fn handle_tick(state: &mut Kithara) {
     }
 }
 
-/// One consistent snapshot per deck per frame, taken after the update.
+/// One consistent snapshot per deck per frame, taken after the update. The
+/// studio cache re-derives its renderer-borrowed state from the snapshots.
 fn refresh_snapshots(state: &mut Kithara) {
     for deck in state.decks.iter_mut() {
         deck.ui = deck.controller.snapshot();
     }
+    state.studio.cache.refresh(&state.decks, &state.catalog);
 }

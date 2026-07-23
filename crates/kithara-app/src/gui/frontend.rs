@@ -4,9 +4,11 @@ use kithara_platform::{
     tokio,
 };
 
+use kithara_ui::render::fonts;
+
 use super::{
     app::{Decks, Kithara},
-    fonts, update, view,
+    update, view,
 };
 use crate::{
     catalog::Catalog,
@@ -87,7 +89,7 @@ impl Frontend for GuiFrontend {
             config.clone(),
         )));
 
-        let result = iced::daemon(
+        let daemon = iced::daemon(
             move || {
                 let (session, decks, catalog, config) = boot
                     .lock()
@@ -101,11 +103,11 @@ impl Frontend for GuiFrontend {
         .title(Kithara::title)
         .theme(Kithara::theme)
         .subscription(Kithara::subscription)
-        .default_font(fonts::SANS)
-        .font(fonts::INTER_REGULAR_BYTES)
-        .font(fonts::SPACE_GROTESK_MEDIUM_BYTES)
-        .font(fonts::SPACE_GROTESK_BOLD_BYTES)
-        .run();
+        .default_font(fonts::SANS);
+        let result = fonts::FONT_BYTES
+            .iter()
+            .fold(daemon, |daemon, bytes| daemon.font(*bytes))
+            .run();
 
         config.shutdown.cancel();
         result?;

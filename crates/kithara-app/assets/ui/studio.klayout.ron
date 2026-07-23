@@ -1,0 +1,37 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "studio",
+    root: Split(
+        axis: Vertical,
+        children: [
+            (weight: 0.25, node: Module(
+                instance: "bar",
+                source: "modules/studio-bar.kmodule.ron",
+            )),
+            (weight: 2.8, node: Split(
+                axis: Horizontal,
+                children: [
+                    (weight: 1.0, node: Module(
+                        instance: "deck-a",
+                        source: "modules/studio-deck.kmodule.ron",
+                        with: { "deck": "a", "badge": "A" },
+                    )),
+                    (weight: 0.42, node: Module(
+                        instance: "mixer",
+                        source: "modules/studio-mixer.kmodule.ron",
+                    )),
+                    (weight: 1.0, node: Module(
+                        instance: "deck-b",
+                        source: "modules/studio-deck.kmodule.ron",
+                        with: { "deck": "b", "badge": "B" },
+                    )),
+                ],
+            )),
+            (weight: 1.3, node: Module(
+                instance: "library",
+                source: "modules/studio-library.kmodule.ron",
+            )),
+        ],
+    ),
+)

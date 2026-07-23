@@ -7,8 +7,8 @@ use iced::{
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    deck::DeckUi, frontend::window_settings, message::Message, subscription::subscription_config,
-    theme,
+    deck::DeckUi, frontend::window_settings, message::Message, studio_ui::StudioUi,
+    subscription::subscription_config, theme,
 };
 use crate::{
     catalog::Catalog,
@@ -31,6 +31,8 @@ pub(crate) struct Kithara {
     pub(crate) catalog: Catalog,
     /// Needed to build a track source when the catalog loads onto a deck.
     pub(crate) config: AppConfig,
+    /// The compiled studio UI and its host-owned view state.
+    pub(crate) studio: StudioUi,
 
     pub(crate) palette: gui::GuiPalette,
     /// Highlighted catalog row, shared by every deck's load buttons.
@@ -59,10 +61,6 @@ impl Decks {
         Some(Self { items, focus })
     }
 
-    pub(crate) fn ids(&self) -> Vec<DeckId> {
-        self.items.iter().map(|deck| deck.id).collect()
-    }
-
     pub(crate) fn get(&self, id: DeckId) -> Option<&DeckUi> {
         self.items.iter().find(|deck| deck.id == id)
     }
@@ -82,22 +80,6 @@ impl Decks {
     pub(crate) fn focus(&self) -> DeckId {
         self.focus
     }
-
-    pub(crate) fn focused(&self) -> &DeckUi {
-        let at = self.position(self.focus).unwrap_or(0);
-        &self.items[at]
-    }
-
-    /// Ignores an id no deck answers to, keeping the focus invariant.
-    pub(crate) fn set_focus(&mut self, id: DeckId) {
-        if self.position(id).is_some() {
-            self.focus = id;
-        }
-    }
-
-    fn position(&self, id: DeckId) -> Option<usize> {
-        self.items.iter().position(|deck| deck.id == id)
-    }
 }
 
 impl Kithara {
@@ -114,6 +96,7 @@ impl Kithara {
             decks,
             catalog,
             config,
+            studio: StudioUi::new(),
             palette,
             selected_track: None,
         };
