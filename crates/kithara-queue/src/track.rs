@@ -5,7 +5,7 @@ use std::sync::{
 
 use kithara_events::{EventBus, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::CancelToken;
-use kithara_play::ResourceConfig;
+use kithara_play::{ResourceConfig, ResourceSrc};
 
 use crate::attempts::{AttemptGuard, Ticket};
 
@@ -13,9 +13,8 @@ use crate::attempts::{AttemptGuard, Ticket};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct TrackEntry {
-    /// Source URL, if known. `None` for `TrackSource::Config` entries
-    /// whose source is a pre-built [`ResourceConfig`] without a URL
-    /// string (local file path, etc.).
+    /// Canonical source location: a normalized URL or a file path.
+    /// `None` only for a non-UTF-8 file path.
     pub url: Option<String>,
     /// Display name derived from the URL or caller-supplied. May be empty.
     pub name: String,
@@ -52,13 +51,17 @@ pub enum TrackSource {
 }
 
 impl TrackSource {
-    /// Returns the source URI if the variant is [`TrackSource::Uri`].
+    /// Canonical source location: the string for [`TrackSource::Uri`], the
+    /// config's URL or file path for [`TrackSource::Config`]. `None` only
+    /// for a non-UTF-8 file path.
     #[must_use]
     pub fn uri(&self) -> Option<&str> {
-        if let Self::Uri(s) = self {
-            Some(s)
-        } else {
-            None
+        match self {
+            Self::Uri(s) => Some(s),
+            Self::Config(cfg) => match cfg.source() {
+                ResourceSrc::Url(url) => Some(url.as_str()),
+                ResourceSrc::Path(path) => path.to_str(),
+            },
         }
     }
 }
@@ -301,7 +304,7 @@ mod tests {
         .expect("BUG: hard-coded URL is valid");
         let src: TrackSource = cfg.into();
         assert!(matches!(src, TrackSource::Config(_)));
-        assert_eq!(src.uri(), None);
+        assert_eq!(src.uri(), Some("https://example.com/a.mp3"));
     }
 
     fn tracks_with(id: TrackId) -> Tracks {
