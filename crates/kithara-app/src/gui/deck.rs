@@ -1,9 +1,8 @@
-use kithara::abr::AbrMode;
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara::prelude::StretchKind;
 use kithara_platform::sync::Arc;
-use kithara_queue::{RepeatMode, TrackId, Transition};
-use tracing::{debug, error, info};
+use kithara_queue::{TrackId, Transition};
+use tracing::{debug, error};
 
 use super::widgets::{Viewport, WaveMsg};
 use crate::{
@@ -19,7 +18,6 @@ pub(crate) struct DeckUi {
     pub(crate) controller: Arc<StateController>,
     pub(crate) ui: UiState,
     pub(crate) view: DeckView,
-    pub(crate) previous_volume: f32,
 }
 
 impl DeckUi {
@@ -27,7 +25,6 @@ impl DeckUi {
         let ui = controller.snapshot();
         Self {
             id,
-            previous_volume: ui.volume.max(0.01),
             controller,
             ui,
             view: DeckView::default(),
@@ -40,8 +37,6 @@ impl DeckUi {
 pub(crate) struct DeckView {
     pub(crate) timestretch: TimestretchState,
     pub(crate) wave: Viewport,
-    /// Highlighted row of this deck's playlist; the second click plays it.
-    pub(crate) selected_track: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -92,20 +87,9 @@ pub(crate) enum DeckMsg {
     TogglePlayPause,
     Next,
     Prev,
-    SeekChanged(f64),
-    SeekReleased,
     SeekTo(f64),
-    VolumeChanged(f32),
-    ToggleMute,
     EqBandChanged(usize, f32),
-    EqResetAll,
-    PlayRateChanged(f32),
-    CrossfadeChanged(f32),
-    ToggleShuffle,
-    ToggleRepeat,
-    SelectTrack(usize),
     DeleteTrack,
-    SetAbrMode(Option<usize>),
     Wave(WaveMsg),
     SetTempo(f32),
     SetRange(u8),
@@ -131,20 +115,9 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
                 .queue()
                 .return_to_previous(Transition::Crossfade);
         }
-        DeckMsg::SeekChanged(pos) => seek_changed(deck, pos),
-        DeckMsg::SeekReleased => seek_released(deck),
         DeckMsg::SeekTo(pos) => seek_to(deck, pos),
-        DeckMsg::VolumeChanged(vol) => volume_changed(deck, vol),
-        DeckMsg::ToggleMute => toggle_mute(deck),
         DeckMsg::EqBandChanged(band, db) => eq_band_changed(deck, band, db),
-        DeckMsg::EqResetAll => eq_reset_all(deck),
-        DeckMsg::PlayRateChanged(rate) => play_rate_changed(deck, rate),
-        DeckMsg::CrossfadeChanged(secs) => crossfade_changed(deck, secs),
-        DeckMsg::ToggleShuffle => toggle_shuffle(deck),
-        DeckMsg::ToggleRepeat => toggle_repeat(deck),
-        DeckMsg::SelectTrack(idx) => select_track(deck, idx),
         DeckMsg::DeleteTrack => delete_track(deck),
-        DeckMsg::SetAbrMode(variant) => set_abr_mode(deck, variant),
         DeckMsg::Wave(m) => deck.view.wave = deck.view.wave.apply(m),
         DeckMsg::SetTempo(t) => set_speed(deck, |ts| ts.set_tempo(t)),
         DeckMsg::SetRange(r) => set_speed(deck, |ts| ts.set_range(r)),
@@ -169,21 +142,6 @@ fn toggle_play_pause(deck: &DeckUi) {
     }
 }
 
-fn seek_changed(deck: &DeckUi, pos: f64) {
-    deck.controller.mutate(|st| {
-        st.is_seeking = true;
-        st.seek_position = pos;
-    });
-}
-
-fn seek_released(deck: &DeckUi) {
-    let target = deck.controller.mutate(|st| {
-        st.is_seeking = false;
-        st.seek_position
-    });
-    seek(deck, target);
-}
-
 fn seek_to(deck: &DeckUi, pos: f64) {
     deck.controller.mutate(|st| {
         st.is_seeking = false;
@@ -195,29 +153,6 @@ fn seek_to(deck: &DeckUi, pos: f64) {
 fn seek(deck: &DeckUi, target: f64) {
     if let Err(e) = deck.controller.queue().seek(target) {
         error!("seek failed: {e:?}");
-    }
-}
-
-/// Content volume of this deck's track, not its session-mix level.
-fn volume_changed(deck: &mut DeckUi, vol: f32) {
-    deck.controller.queue().set_volume(vol);
-    deck.controller.mutate(|st| st.volume = vol);
-    if vol > 0.0 {
-        deck.previous_volume = vol;
-    }
-}
-
-fn toggle_mute(deck: &mut DeckUi) {
-    if deck.ui.volume > 0.0 {
-        deck.previous_volume = deck.ui.volume;
-        volume_changed(deck, 0.0);
-    } else {
-        let target = if deck.previous_volume > 0.0 {
-            deck.previous_volume
-        } else {
-            0.5
-        };
-        volume_changed(deck, target);
     }
 }
 
@@ -240,93 +175,17 @@ fn eq_band_changed(deck: &DeckUi, band: usize, db: f32) {
     }
 }
 
-fn eq_reset_all(deck: &DeckUi) {
-    for band in 0..deck.ui.eq_bands.len() {
-        if let Err(e) = deck.controller.queue().set_eq_gain(band, 0.0) {
-            error!("reset EQ band={band} failed: {e:?}");
-        }
-    }
-    deck.controller.mutate(|st| {
-        for slot in &mut st.eq_bands {
-            *slot = 0.0;
-        }
-    });
-}
-
-fn play_rate_changed(deck: &DeckUi, rate: f32) {
-    deck.controller.queue().set_default_rate(rate);
-    if deck.ui.playing {
-        deck.controller.queue().play();
-    }
-    deck.controller.mutate(|st| st.selected_rate = rate);
-}
-
-fn crossfade_changed(deck: &DeckUi, secs: f32) {
-    deck.controller.queue().set_crossfade_duration(secs);
-    deck.controller.mutate(|st| st.crossfade = secs);
-}
-
-fn toggle_shuffle(deck: &DeckUi) {
-    let new = !deck.ui.shuffle_enabled;
-    deck.controller.queue().set_shuffle(new);
-    deck.controller.mutate(|st| st.shuffle_enabled = new);
-}
-
-fn toggle_repeat(deck: &DeckUi) {
-    // `RepeatMode` is non_exhaustive; the wildcard covers `One` and any
-    // future variant, both cycling back to `Off`.
-    let next = match deck.ui.repeat_mode {
-        RepeatMode::Off => RepeatMode::All,
-        RepeatMode::All => RepeatMode::One,
-        _ => RepeatMode::Off,
-    };
-    deck.controller.queue().set_repeat(next);
-    deck.controller.mutate(|st| st.repeat_mode = next);
-}
-
 fn track_id_at(deck: &DeckUi, index: usize) -> Option<TrackId> {
     deck.ui.tracks.get(index).map(|e| e.id)
 }
 
-fn select_track(deck: &mut DeckUi, idx: usize) {
-    if deck.view.selected_track != Some(idx) {
-        deck.view.selected_track = Some(idx);
-        return;
-    }
-    if let Some(id) = track_id_at(deck, idx)
-        && let Err(e) = deck.controller.queue().select(id, Transition::None)
-    {
-        error!(index = idx, error = %e, "select failed");
-    }
-}
-
 fn delete_track(deck: &mut DeckUi) {
-    let target = deck.view.selected_track.or(deck.ui.current_track_index);
-    if let Some(idx) = target
+    if let Some(idx) = deck.ui.current_track_index
         && let Some(id) = track_id_at(deck, idx)
+        && let Err(e) = deck.controller.queue().remove(id)
     {
-        match deck.controller.queue().remove(id) {
-            Ok(()) => deck.view.selected_track = None,
-            Err(e) => error!(index = idx, error = %e, "remove failed"),
-        }
+        error!(index = idx, error = %e, "remove failed");
     }
-}
-
-fn set_abr_mode(deck: &DeckUi, variant: Option<usize>) {
-    let handle = deck.controller.queue().current_abr_handle();
-    if let Some(handle) = handle {
-        let mode = variant.map_or(AbrMode::Auto(None), AbrMode::manual);
-        match handle.set_mode(mode) {
-            Ok(()) => info!(?variant, ?mode, "set_mode accepted"),
-            Err(err) => error!(?err, ?variant, "SetAbrMode rejected by ABR state"),
-        }
-    } else {
-        error!(?variant, "no current AbrHandle — set_mode skipped");
-    }
-    deck.controller.mutate(|st| {
-        st.abr_mode_is_auto = variant.is_none();
-        st.selected_variant = variant;
-    });
 }
 
 /// Live tempo: mirror the speed to this deck's queue.

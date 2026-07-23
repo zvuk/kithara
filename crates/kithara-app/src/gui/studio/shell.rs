@@ -36,7 +36,7 @@ pub(crate) fn view_dj_studio(state: &Kithara) -> Element<'_, Message> {
 
     container(
         column![
-            view_topbar(p).map(|_exit| Message::ToggleStudio),
+            view_topbar(p),
             horizontal_divider(studio_size::DIVIDER, p.line),
             deck_row(state),
             horizontal_divider(studio_size::DIVIDER, p.line),

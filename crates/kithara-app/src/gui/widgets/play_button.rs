@@ -30,9 +30,8 @@ mod consts {
 }
 use consts::*;
 
-/// Primary play/pause control shared by compact view and DJ Studio:
-/// a solid-gold square with a hover glow. The icon swaps between
-/// play and pause based on `playing`.
+/// Primary play/pause control of a deck: a solid-gold square with a
+/// hover glow. The icon swaps between play and pause based on `playing`.
 pub(crate) fn play_button<'a, M: Clone + 'a>(
     playing: bool,
     p: GuiPalette,

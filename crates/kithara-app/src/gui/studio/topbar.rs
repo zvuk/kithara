@@ -2,7 +2,7 @@ use iced::{
     Alignment, Element, Length,
     font::Weight,
     widget::{
-        Space, Svg, button, row,
+        Svg, row,
         svg::{self, Handle as SvgHandle},
         text,
     },
@@ -10,7 +10,6 @@ use iced::{
 
 use super::{
     module::Module,
-    styles::ghost_button_style,
     tokens::{studio_size, studio_space, studio_type},
 };
 use crate::{
@@ -18,28 +17,14 @@ use crate::{
     theme::gui::GuiPalette,
 };
 
-/// The topbar reports one thing: leave the studio.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ExitStudio;
-
-pub(super) fn view_topbar(p: GuiPalette) -> Element<'static, ExitStudio> {
-    let exit = button(
-        text("Back to compact")
-            .size(studio_type::BODY_MD)
-            .font(fonts::mono(Weight::Medium)),
-    )
-    .padding(studio_space::BUTTON)
-    .style(ghost_button_style(p))
-    .on_press(ExitStudio);
-
-    Module::new().bg(p.bg_panel).pad(studio_space::TOPBAR).wrap(
-        row![brand_mark(p), Space::new().width(Length::Fill), exit]
-            .align_y(Alignment::Center)
-            .spacing(gap::SECTION_ROOMY),
-    )
+pub(super) fn view_topbar<M: 'static>(p: GuiPalette) -> Element<'static, M> {
+    Module::new()
+        .bg(p.bg_panel)
+        .pad(studio_space::TOPBAR)
+        .wrap(row![brand_mark(p)].align_y(Alignment::Center))
 }
 
-pub(crate) fn brand_mark<M: 'static>(p: GuiPalette) -> Element<'static, M> {
+fn brand_mark<M: 'static>(p: GuiPalette) -> Element<'static, M> {
     let logo = Svg::new(SvgHandle::from_memory(
         include_bytes!("../../../assets/logo.svg") as &[u8],
     ))

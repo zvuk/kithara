@@ -5,8 +5,6 @@ use iced::{
 
 pub(crate) const INTER_REGULAR_BYTES: &[u8] =
     include_bytes!("../../assets/fonts/Inter-Regular.ttf");
-pub(crate) const INTER_SEMIBOLD_BYTES: &[u8] =
-    include_bytes!("../../assets/fonts/Inter-SemiBold.ttf");
 pub(crate) const SPACE_GROTESK_MEDIUM_BYTES: &[u8] =
     include_bytes!("../../assets/fonts/SpaceGrotesk-Medium.ttf");
 pub(crate) const SPACE_GROTESK_BOLD_BYTES: &[u8] =
@@ -22,10 +20,6 @@ use consts::{INTER_FAMILY, SPACE_GROTESK_FAMILY};
 
 pub(crate) const SANS: Font = font(INTER_FAMILY, Weight::Normal);
 pub(crate) const MONO: Font = font(Family::Monospace, Weight::Normal);
-
-pub(crate) const fn sans(weight: Weight) -> Font {
-    font(INTER_FAMILY, weight)
-}
 
 pub(crate) const fn display(weight: Weight) -> Font {
     font(SPACE_GROTESK_FAMILY, weight)

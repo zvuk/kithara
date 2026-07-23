@@ -2,7 +2,7 @@
 ///
 /// Lowering the tick frequency while paused cuts Main Thread redraws by ~5×
 /// without breaking user-input handling that relies on iced's periodic event
-/// pump (volume slider, tab switching) — the dominant Main Thread cost
+/// pump (mixer faders, EQ bands) — the dominant Main Thread cost
 /// observed in Instruments traces (512 ms / 30 s).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SubscriptionConfig {
@@ -22,14 +22,14 @@ pub(crate) const TICK_INTERVAL_ACTIVE_MS: u64 = 100;
 /// Time-tick interval while playback is paused or stopped.
 ///
 /// 500 ms (2 Hz) is 5× less CPU than active playback, yet still pumps iced's
-/// message loop often enough that user-driven updates (volume slider, EQ
+/// message loop often enough that user-driven updates (mixer faders, EQ
 /// bands, background variant discovery) propagate promptly to the view.
 pub(crate) const TICK_INTERVAL_IDLE_MS: u64 = 500;
 
 /// Decide subscription cadence based on playback state.
 ///
-/// Keyboard shortcuts must always work so the user can delete a highlighted
-/// row even while paused.
+/// Keyboard shortcuts must always work so the user can delete the current
+/// track even while paused.
 pub(crate) const fn subscription_config(playing: bool) -> SubscriptionConfig {
     SubscriptionConfig {
         tick_interval_ms: if playing {

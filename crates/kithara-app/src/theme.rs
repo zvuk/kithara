@@ -108,7 +108,6 @@ pub(crate) mod gui {
     pub(crate) struct GuiPalette {
         pub(crate) accent: Color,
         pub(crate) accent_glow: Color,
-        pub(crate) accent_soft: Color,
         pub(crate) accent_strong: Color,
         pub(crate) bg: Color,
         pub(crate) bg_elev: Color,
@@ -130,7 +129,6 @@ pub(crate) mod gui {
             Self {
                 accent: to_iced(p.accent),
                 accent_glow: Color::from_rgba8(p.accent.0, p.accent.1, p.accent.2, 0.45),
-                accent_soft: Color::from_rgba8(p.accent.0, p.accent.1, p.accent.2, 0.18),
                 accent_strong: to_iced(p.accent_strong),
                 bg: to_iced(p.bg),
                 bg_elev: to_iced(p.bg_elev),

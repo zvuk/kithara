@@ -17,7 +17,7 @@ pub mod tracing_init;
 mod wave_cache;
 pub mod waveform;
 
-#[cfg(any(feature = "tui", feature = "gui"))]
+#[cfg(feature = "tui")]
 mod track;
 
 #[cfg(feature = "tui")]

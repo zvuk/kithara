@@ -7,12 +7,8 @@ use iced::{
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{
-    deck::DeckUi,
-    frontend::window_settings,
-    message::{Message, Tab},
-    subscription::subscription_config,
+    deck::DeckUi, frontend::window_settings, message::Message, subscription::subscription_config,
     theme,
-    url_bar::UrlBar,
 };
 use crate::{
     catalog::Catalog,
@@ -26,8 +22,8 @@ use crate::{
 ///
 /// Each deck owns its shared model ([`crate::state::StateController`]) and its
 /// own snapshot; the session mix is owned by [`DeckSet`]. This struct adds only
-/// what belongs to no single deck: the live window, the active tab, transient
-/// text input, and which deck the keyboard talks to.
+/// what belongs to no single deck: the highlighted catalog row and which deck
+/// the keyboard talks to.
 pub(crate) struct Kithara {
     pub(crate) session: DeckSet,
     pub(crate) decks: Decks,
@@ -37,16 +33,8 @@ pub(crate) struct Kithara {
     pub(crate) config: AppConfig,
 
     pub(crate) palette: gui::GuiPalette,
-    /// Currently live window. One window is open at a time; the DJ-mode
-    /// swap opens the new window and closes this one.
-    pub(crate) window_id: Option<window::Id>,
-    /// DJ Studio open (vs the compact window).
-    pub(crate) studio_open: bool,
     /// Highlighted catalog row, shared by every deck's load buttons.
     pub(crate) selected_track: Option<usize>,
-    pub(crate) active_tab: Tab,
-    pub(crate) url: UrlBar,
-    pub(crate) blink_counter: u8,
 }
 
 /// A non-empty set of deck view-models with one of them focused.
@@ -113,8 +101,7 @@ impl Decks {
 }
 
 impl Kithara {
-    /// Boot function for `iced::daemon()`. Opens the initial window and
-    /// tracks its id.
+    /// Boot function for `iced::daemon()`. Opens the studio window.
     pub(crate) fn new(
         session: DeckSet,
         decks: Decks,
@@ -122,22 +109,16 @@ impl Kithara {
         config: AppConfig,
         palette: gui::GuiPalette,
     ) -> (Self, Task<Message>) {
-        let mut state = Self {
+        let state = Self {
             session,
             decks,
             catalog,
             config,
             palette,
             selected_track: None,
-            active_tab: Tab::Playlist,
-            blink_counter: 0,
-            url: UrlBar::default(),
-            studio_open: true,
-            window_id: None,
         };
 
-        let (id, open) = window::open(window_settings(state.studio_open));
-        state.window_id = Some(id);
+        let (_id, open) = window::open(window_settings());
 
         (state, open.discard())
     }
@@ -152,12 +133,11 @@ impl Kithara {
         subs.push(
             iced_time::every(Duration::from_millis(cfg.tick_interval_ms)).map(|_| Message::Tick),
         );
-        subs.push(window::close_requests().map(Message::WindowCloseRequested));
+        subs.push(window::close_requests().map(|_| Message::WindowCloseRequested));
         if cfg.is_keyboard_enabled {
             subs.push(event::listen_with(|e, status, _window| match e {
                 // Only act on Delete/Backspace the focused widget left
-                // unhandled. A focused text input (URL bar) captures these
-                // for editing, so the playlist shortcut must not also fire.
+                // unhandled.
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     key: Key::Named(Named::Delete | Named::Backspace),
                     ..
@@ -173,12 +153,8 @@ impl Kithara {
         theme::kithara_theme(&self.palette)
     }
 
-    /// Window title, reflecting the active mode.
-    pub(crate) fn title(&self, _window: window::Id) -> String {
-        if self.studio_open {
-            "Kithara - DJ Studio".to_string()
-        } else {
-            "Kithara".to_string()
-        }
+    /// Window title.
+    pub(crate) fn title(_state: &Self, _window: window::Id) -> String {
+        "Kithara - DJ Studio".to_string()
     }
 }

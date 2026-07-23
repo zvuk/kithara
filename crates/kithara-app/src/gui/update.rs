@@ -1,12 +1,11 @@
-use iced::{Task, window};
+use iced::Task;
 use tracing::error;
 
 use super::{
     app::Kithara,
     deck::{self, DeckMsg},
-    frontend::window_settings,
     message::Message,
-    mix, url_bar,
+    mix,
 };
 use crate::{catalog, deck::DeckId};
 
@@ -18,11 +17,6 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::Mix(msg) => {
             mix::handle(state, msg);
-            Task::none()
-        }
-        Message::Url(msg) => url_bar::handle(state, msg),
-        Message::TabSelected(tab) => {
-            state.active_tab = tab;
             Task::none()
         }
         Message::DeleteFocusedTrack => {
@@ -41,12 +35,11 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             state.decks.set_focus(id);
             Task::none()
         }
-        Message::ToggleStudio => handle_toggle_studio(state),
         Message::Tick => {
             handle_tick(state);
             Task::none()
         }
-        Message::WindowCloseRequested(id) => handle_window_close_requested(state, id),
+        Message::WindowCloseRequested => iced::exit(),
     };
 
     refresh_snapshots(state);
@@ -56,26 +49,6 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
 fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {
     if let Some(target) = state.decks.get_mut(id) {
         deck::handle(target, msg);
-    }
-}
-
-/// Swap the live window for the other mode. The new window opens before
-/// the old one closes so the daemon always has a window in flight.
-fn handle_toggle_studio(state: &mut Kithara) -> Task<Message> {
-    state.studio_open = !state.studio_open;
-
-    let old = state.window_id;
-    let (new_id, open) = window::open(window_settings(state.studio_open));
-    state.window_id = Some(new_id);
-    let close_old = old.map_or_else(Task::none, window::close);
-    open.discard().chain(close_old)
-}
-
-fn handle_window_close_requested(state: &Kithara, id: window::Id) -> Task<Message> {
-    if state.window_id == Some(id) {
-        iced::exit()
-    } else {
-        window::close(id)
     }
 }
 
@@ -108,7 +81,6 @@ fn handle_tick(state: &mut Kithara) {
         let _ = deck.controller.queue().tick();
         deck.controller.refresh_continuous();
     }
-    state.blink_counter = state.blink_counter.wrapping_add(1);
 }
 
 /// One consistent snapshot per deck per frame, taken after the update.

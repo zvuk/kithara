@@ -11,8 +11,6 @@ use crate::{
 };
 
 mod consts {
-    /// Mirrors the compact equalizer tab so a band's fader and slider agree
-    /// on the same gain.
     pub(super) const EQ_MIN_DB: f32 = -24.0;
     pub(super) const EQ_MAX_DB: f32 = 6.0;
     pub(super) const FADER_GAP: f32 = 2.0;

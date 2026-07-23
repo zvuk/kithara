@@ -5,7 +5,6 @@ pub(super) mod studio_space {
     pub(crate) const CLUSTER: [f32; 2] = [8.0, 10.0];
     /// Footer is `0 12px` on a fixed 22px row in the design.
     pub(crate) const STATUS: [f32; 2] = [0.0, 12.0];
-    pub(crate) const BUTTON: [f32; 2] = [4.0, 12.0];
     pub(crate) const LIBRARY_RAIL: [f32; 2] = [0.0, 12.0];
     pub(crate) const LIBRARY_ROW: [f32; 2] = [0.0, 10.0];
 }

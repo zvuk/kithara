@@ -1,11 +1,6 @@
 use iced::{
-    Background, Border, Color, Element, Length, Theme,
-    widget::{
-        Space,
-        button::{Status as ButtonStatus, Style as ButtonStyle},
-        container,
-        container::Style as ContainerStyle,
-    },
+    Color, Element, Length, Theme,
+    widget::{Space, container, container::Style as ContainerStyle},
 };
 
 use crate::theme::gui::GuiPalette;
@@ -36,22 +31,4 @@ pub(super) fn horizontal_divider<M: 'static>(height: f32, color: Color) -> Eleme
 
 pub(super) fn shell_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
     move |_theme| ContainerStyle::default().background(p.bg).color(p.text)
-}
-
-pub(crate) fn ghost_button_style(p: GuiPalette) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle {
-    move |_theme, status| {
-        let (background, text_color, border_color) = match status {
-            ButtonStatus::Active => (Color::TRANSPARENT, p.text, p.line),
-            ButtonStatus::Hovered => (Color::TRANSPARENT, p.text, p.text_dim),
-            ButtonStatus::Pressed => (p.accent, p.bg, p.accent),
-            ButtonStatus::Disabled => (Color::TRANSPARENT, p.muted, p.line_soft),
-        };
-
-        ButtonStyle {
-            background: Some(Background::Color(background)),
-            text_color,
-            border: Border::default().width(1.0).color(border_color),
-            ..ButtonStyle::default()
-        }
-    }
 }

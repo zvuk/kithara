@@ -18,12 +18,6 @@ use crate::{
 };
 
 mod consts {
-    /// Compact-player window size in logical pixels.
-    pub(super) const COMPACT_WIDTH: f32 = 448.0;
-    pub(super) const COMPACT_HEIGHT: f32 = 784.0;
-    pub(super) const COMPACT_MIN_WIDTH: f32 = 420.0;
-    pub(super) const COMPACT_MIN_HEIGHT: f32 = 760.0;
-
     /// DJ Studio window size in logical pixels.
     pub(super) const STUDIO_WIDTH: f32 = 980.0;
     pub(super) const STUDIO_HEIGHT: f32 = 700.0;
@@ -32,24 +26,12 @@ mod consts {
 }
 use consts::*;
 
-/// Window settings per mode. A mode swap opens a fresh window rather than
-/// resizing the live one. Close is handled via `close_requests()`, so the
-/// programmatic swap-close does not exit the app.
-pub(crate) fn window_settings(dj: bool) -> Settings {
-    let (size, min_size) = if dj {
-        (
-            Size::new(STUDIO_WIDTH, STUDIO_HEIGHT),
-            Size::new(STUDIO_MIN_WIDTH, STUDIO_MIN_HEIGHT),
-        )
-    } else {
-        (
-            Size::new(COMPACT_WIDTH, COMPACT_HEIGHT),
-            Size::new(COMPACT_MIN_WIDTH, COMPACT_MIN_HEIGHT),
-        )
-    };
+/// Settings for the studio window. Close goes through `close_requests()`,
+/// whose handler exits the app.
+pub(crate) fn window_settings() -> Settings {
     Settings {
-        size,
-        min_size: Some(min_size),
+        size: Size::new(STUDIO_WIDTH, STUDIO_HEIGHT),
+        min_size: Some(Size::new(STUDIO_MIN_WIDTH, STUDIO_MIN_HEIGHT)),
         exit_on_close_request: false,
         ..Settings::default()
     }
@@ -121,7 +103,6 @@ impl Frontend for GuiFrontend {
         .subscription(Kithara::subscription)
         .default_font(fonts::SANS)
         .font(fonts::INTER_REGULAR_BYTES)
-        .font(fonts::INTER_SEMIBOLD_BYTES)
         .font(fonts::SPACE_GROTESK_MEDIUM_BYTES)
         .font(fonts::SPACE_GROTESK_BOLD_BYTES)
         .run();

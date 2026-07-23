@@ -10,7 +10,6 @@ mod subscription;
 mod theme;
 mod tokens;
 mod update;
-mod url_bar;
 mod view;
 mod widgets;
 
