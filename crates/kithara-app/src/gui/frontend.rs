@@ -3,7 +3,6 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     tokio,
 };
-
 use kithara_ui::render::fonts;
 
 use super::{

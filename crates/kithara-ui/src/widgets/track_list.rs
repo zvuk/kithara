@@ -123,7 +123,11 @@ impl<'a> Widget<'a> for TrackList<'_, '_, '_, '_, '_, '_, '_> {
         let columns = column_layouts(self.columns, self.reads, state, self.skin);
         let path = self.path.to_owned();
         let style = TrackListStyle::new(self.skin);
-        let assign: Vec<String> = self.assign.iter().map(|label| (*label).to_owned()).collect();
+        let assign: Vec<String> = self
+            .assign
+            .iter()
+            .map(|label| (*label).to_owned())
+            .collect();
         let tracks: Vec<_> = tracks.iter().map(TrackListRowData::from).collect();
         responsive(move |size| {
             track_list_table(&path, &tracks, &columns, &assign, &style, size.width)

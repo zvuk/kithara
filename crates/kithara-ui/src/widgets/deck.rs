@@ -102,36 +102,35 @@ pub(crate) struct Bpm<'placeholder, 'value, 'data, 'scope, 'reads, 'skin> {
 impl<'a> Widget<'a> for Bpm<'_, '_, '_, '_, '_, '_> {
     fn view(self) -> Element<'a, UiEvent> {
         let palette = self.skin.palette;
-        let content: Element<'a, UiEvent> = if let Some(bpm) =
-            analysis_bpm(waveform_value(self.value))
-        {
-            shaped_text(format_bpm(bpm))
-                .font(fonts::mono(self.skin.deck.bpm_text.weight))
-                .size(self.skin.deck.bpm_text.size)
-                .color(palette.accent_strong)
-                .into()
-        } else if self.placeholder == Some("time") {
-            let position = read_scalar(
-                self.reads,
-                &derived("deck.playback.position_secs", self.scope),
-            )
-            .unwrap_or(0.0);
-            column![
-                shaped_text("TIME")
-                    .font(fonts::mono(self.skin.deck.readout_label.weight))
-                    .size(self.skin.deck.readout_label.size)
-                    .color(palette.muted),
-                shaped_text(format_time(position))
+        let content: Element<'a, UiEvent> =
+            if let Some(bpm) = analysis_bpm(waveform_value(self.value)) {
+                shaped_text(format_bpm(bpm))
                     .font(fonts::mono(self.skin.deck.bpm_text.weight))
                     .size(self.skin.deck.bpm_text.size)
-                    .color(palette.accent_strong),
-            ]
-            .spacing(self.skin.deck.readout_gap)
-            .align_x(Alignment::Center)
-            .into()
-        } else {
-            return Space::new().into();
-        };
+                    .color(palette.accent_strong)
+                    .into()
+            } else if self.placeholder == Some("time") {
+                let position = read_scalar(
+                    self.reads,
+                    &derived("deck.playback.position_secs", self.scope),
+                )
+                .unwrap_or(0.0);
+                column![
+                    shaped_text("TIME")
+                        .font(fonts::mono(self.skin.deck.readout_label.weight))
+                        .size(self.skin.deck.readout_label.size)
+                        .color(palette.muted),
+                    shaped_text(format_time(position))
+                        .font(fonts::mono(self.skin.deck.bpm_text.weight))
+                        .size(self.skin.deck.bpm_text.size)
+                        .color(palette.accent_strong),
+                ]
+                .spacing(self.skin.deck.readout_gap)
+                .align_x(Alignment::Center)
+                .into()
+            } else {
+                return Space::new().into();
+            };
 
         container(content)
             .width(Length::Fill)

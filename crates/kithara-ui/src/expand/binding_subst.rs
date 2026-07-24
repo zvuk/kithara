@@ -136,19 +136,23 @@ pub(super) fn intern_binding(
 ) -> Result<Binding, UiDocError> {
     match binding {
         BindingRef::Command { id, with } => {
-            let BindingParts { id, key, with } = intern_binding_parts(interner, &id.0, with, origin)?;
+            let BindingParts { id, key, with } =
+                intern_binding_parts(interner, &id.0, with, origin)?;
             Ok(Binding::Command { id, key, with })
         }
         BindingRef::Parameter { id, with } => {
-            let BindingParts { id, key, with } = intern_binding_parts(interner, &id.0, with, origin)?;
+            let BindingParts { id, key, with } =
+                intern_binding_parts(interner, &id.0, with, origin)?;
             Ok(Binding::Parameter { id, key, with })
         }
         BindingRef::Telemetry { id, with } => {
-            let BindingParts { id, key, with } = intern_binding_parts(interner, &id.0, with, origin)?;
+            let BindingParts { id, key, with } =
+                intern_binding_parts(interner, &id.0, with, origin)?;
             Ok(Binding::Telemetry { id, key, with })
         }
         BindingRef::Model { id, with } => {
-            let BindingParts { id, key, with } = intern_binding_parts(interner, &id.0, with, origin)?;
+            let BindingParts { id, key, with } =
+                intern_binding_parts(interner, &id.0, with, origin)?;
             Ok(Binding::Model { id, key, with })
         }
     }
@@ -235,4 +239,3 @@ mod tests {
         );
     }
 }
-

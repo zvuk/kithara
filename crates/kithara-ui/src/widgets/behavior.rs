@@ -577,7 +577,9 @@ mod tests {
             })
         );
 
-        let flick = drag.update(&mut state, &pixels(45.0), bounds, over).unwrap();
+        let flick = drag
+            .update(&mut state, &pixels(45.0), bounds, over)
+            .unwrap();
         assert_eq!(
             flick.into_inner().0,
             Some(UiEvent::Control {

@@ -45,4 +45,3 @@ pub(crate) fn track_subtitle(ui: &UiState) -> String {
         _ => "Artist / Album unavailable".to_string(),
     }
 }
-
