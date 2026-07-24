@@ -1,11 +1,19 @@
 use kithara_ui::render::{ControlAction, UiEvent};
 use num_traits::cast::AsPrimitive;
 
-use super::endpoints::{EQ_MAX_DB, EQ_MIN_DB, TS_RANGES};
+use super::{
+    endpoints::{EQ_MAX_DB, EQ_MIN_DB},
+    scope::deck_index,
+};
 use crate::{
     catalog,
     deck::DeckId,
-    gui::{app::Kithara, deck::DeckMsg, message::Message, mix::MixMsg},
+    gui::{
+        app::Kithara,
+        deck::{DeckMsg, TEMPO_RANGE},
+        message::Message,
+        mix::MixMsg,
+    },
 };
 
 /// Translate a compiled-UI event into an app message, applying host-owned
@@ -23,19 +31,15 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
 }
 
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
-    if let Some(rest) = path.strip_prefix("deck-a/") {
-        return deck_control(state, 0, rest, action);
+    let (instance, rest) = path.split_once('/')?;
+    match instance {
+        "mixer" => mixer_control(state, rest, action),
+        "library" => library_control(state, rest, action),
+        _ => {
+            let index = deck_index(instance.strip_prefix("deck-")?)?;
+            deck_control(state, index, rest, action)
+        }
     }
-    if let Some(rest) = path.strip_prefix("deck-b/") {
-        return deck_control(state, 1, rest, action);
-    }
-    if let Some(rest) = path.strip_prefix("mixer/") {
-        return mixer_control(state, rest, action);
-    }
-    if let Some(rest) = path.strip_prefix("library/") {
-        return library_control(state, rest, action);
-    }
-    None
 }
 
 fn deck_control(
@@ -57,15 +61,6 @@ fn deck_control(
         ("play", ControlAction::Activate) => DeckMsg::TogglePlayPause,
         ("prev", ControlAction::Activate) => DeckMsg::Prev,
         ("next", ControlAction::Activate) => DeckMsg::Next,
-        ("range", ControlAction::SelectIndex(index)) => {
-            DeckMsg::SetRange(*TS_RANGES.get(*index)?)
-        }
-        ("ts-tempo", ControlAction::SetScalar(normalized)) => {
-            let range = f32::from(state.decks.get(id)?.view.timestretch.range);
-            let normalized: f32 = normalized.clamp(0.0, 1.0).as_();
-            DeckMsg::SetTempo(normalized.mul_add(range * 2.0, -range))
-        }
-        ("reset", ControlAction::Activate) => DeckMsg::ResetTempo,
         ("keylock", ControlAction::Activate) => {
             #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
             {
@@ -76,33 +71,48 @@ fn deck_control(
                 return None;
             }
         }
-        ("low", ControlAction::SetScalar(value)) => eq_msg(0, *value),
-        ("mid", ControlAction::SetScalar(value)) => eq_msg(1, *value),
-        ("high", ControlAction::SetScalar(value)) => eq_msg(2, *value),
         _ => return None,
     };
     Some(Message::Deck(id, msg))
 }
 
 fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
-    let msg = match (control, action) {
-        ("trim-a", ControlAction::SetScalar(trim)) => {
-            MixMsg::Trim(deck_id(state, 0)?, trim.clamp(0.0, 1.0).as_())
+    match (control, action) {
+        ("xfade", ControlAction::SetScalar(position)) => Some(Message::Mix(MixMsg::Crossfader(
+            position.clamp(0.0, 1.0).as_(),
+        ))),
+        ("master", ControlAction::SetScalar(master)) => Some(Message::Mix(MixMsg::GroupMaster(
+            master.clamp(0.0, 1.0).as_(),
+        ))),
+        _ => strip_control(state, control, action),
+    }
+}
+
+/// The channel strip owns both mix-side controls and the deck's tone and
+/// tempo, so its instance letter addresses the deck.
+fn strip_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+    let (letter, name) = control.split_once('/')?;
+    let index = deck_index(letter)?;
+    let id = deck_id(state, index)?;
+    let msg = match (name, action) {
+        ("trim", ControlAction::SetScalar(trim)) => {
+            Message::Mix(MixMsg::Trim(id, trim.clamp(0.0, 1.0).as_()))
         }
-        ("trim-b", ControlAction::SetScalar(trim)) => {
-            MixMsg::Trim(deck_id(state, 1)?, trim.clamp(0.0, 1.0).as_())
+        ("mute", ControlAction::Activate) => {
+            let muted = state.session.mix().strips.get(index)?.muted;
+            Message::Mix(MixMsg::Mute(id, !muted))
         }
-        ("mute-a", ControlAction::Activate) => toggle_mute(state, 0)?,
-        ("mute-b", ControlAction::Activate) => toggle_mute(state, 1)?,
-        ("xfade", ControlAction::SetScalar(position)) => {
-            MixMsg::Crossfader(position.clamp(0.0, 1.0).as_())
-        }
-        ("master", ControlAction::SetScalar(master)) => {
-            MixMsg::GroupMaster(master.clamp(0.0, 1.0).as_())
+        ("low", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(0, *value)),
+        ("mid", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(1, *value)),
+        ("high", ControlAction::SetScalar(value)) => Message::Deck(id, eq_msg(2, *value)),
+        ("tempo", ControlAction::SetScalar(normalized)) => {
+            let normalized: f32 = normalized.clamp(0.0, 1.0).as_();
+            let tempo = normalized.mul_add(TEMPO_RANGE * 2.0, -TEMPO_RANGE);
+            Message::Deck(id, DeckMsg::SetTempo(tempo))
         }
         _ => return None,
     };
-    Some(Message::Mix(msg))
+    Some(msg)
 }
 
 /// Track-list assign chips carry the deck letter in the path; the letter is
@@ -113,8 +123,7 @@ fn library_control(state: &Kithara, control: &str, action: &ControlAction) -> Op
         ("tracks", ControlAction::SelectIndex(index)) => Some(Message::SelectCatalogTrack(*index)),
         (_, ControlAction::SelectIndex(row)) => {
             let letter = control.strip_prefix("tracks/assign/")?;
-            let deck = letter.bytes().next()?.checked_sub(b'a')?;
-            let id = deck_id(state, deck.into())?;
+            let id = deck_id(state, deck_index(letter)?)?;
             let entry = state.catalog.get(*row)?;
             let queue = state.decks.get(id)?.controller.queue();
             if catalog::is_loaded(queue, entry) {
@@ -125,11 +134,6 @@ fn library_control(state: &Kithara, control: &str, action: &ControlAction) -> Op
         }
         _ => None,
     }
-}
-
-fn toggle_mute(state: &Kithara, index: usize) -> Option<MixMsg> {
-    let muted = state.session.mix().strips.get(index)?.muted;
-    Some(MixMsg::Mute(deck_id(state, index)?, !muted))
 }
 
 fn deck_id(state: &Kithara, index: usize) -> Option<DeckId> {

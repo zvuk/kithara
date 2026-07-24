@@ -1,0 +1,49 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "studio-strip",
+    parameters: ["deck", "letter"],
+    root: Column(
+        children: [
+            Text(id: "label", style: DeckLetter, label: "$letter"),
+            Knob(
+                id: "trim",
+                label: Some("TRIM"),
+                read: Parameter(id: "mixer.trim", with: { "deck": "$deck" }),
+                write: Parameter(id: "mixer.trim", with: { "deck": "$deck" }),
+            ),
+            Knob(
+                id: "high",
+                label: Some("HIGH"),
+                read: Parameter(id: "deck.eq.high", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.eq.high", with: { "deck": "$deck" }),
+            ),
+            Knob(
+                id: "mid",
+                label: Some("MID"),
+                read: Parameter(id: "deck.eq.mid", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.eq.mid", with: { "deck": "$deck" }),
+            ),
+            Knob(
+                id: "low",
+                label: Some("LOW"),
+                read: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.eq.low", with: { "deck": "$deck" }),
+            ),
+            Knob(
+                id: "tempo",
+                label: Some("TEMPO"),
+                read: Parameter(id: "deck.ts.tempo", with: { "deck": "$deck" }),
+                write: Parameter(id: "deck.ts.tempo", with: { "deck": "$deck" }),
+            ),
+            Chip(
+                id: "mute",
+                size: (w: Fixed(56.0), h: Fixed(24.0)),
+                label: "MUTE",
+                style: Routing,
+                read: Model(id: "mixer.muted", with: { "deck": "$deck" }),
+                write: Command(id: "mixer.toggle_mute", with: { "deck": "$deck" }),
+            ),
+        ],
+    ),
+)

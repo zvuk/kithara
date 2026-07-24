@@ -1,15 +1,16 @@
 use iced::{
-    Color, Element, Event, Length, Point, Radians, Rectangle, Renderer, Theme,
+    Alignment, Color, Element, Event, Length, Point, Radians, Rectangle, Renderer, Theme,
     mouse::{self, Cursor},
     widget::{
-        Space,
+        Column, Space,
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, path::Arc},
+        container,
     },
 };
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    render::{ReadValue, Skin, UiEvent},
+    render::{ReadValue, Skin, UiEvent, typography::styled_text},
     skin::KnobSkin,
     widgets::{
         Widget,
@@ -20,6 +21,7 @@ use crate::{
 #[derive(bon::Builder)]
 pub(crate) struct Knob<'path, 'value, 'data, 'skin> {
     path: &'path str,
+    label: Option<&'data str>,
     value: Option<&'value ReadValue<'data>>,
     skin: &'skin Skin,
 }
@@ -30,7 +32,7 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
             return Space::new().into();
         };
         let value = value.clamp(0.0, 1.0).as_();
-        Canvas::new(KnobCanvas {
+        let dial = Canvas::new(KnobCanvas {
             body_fill: self.skin.color(self.skin.knob.body_fill),
             body_border: self.skin.color(self.skin.knob.body_border),
             track_color: self.skin.color(self.skin.knob.track_color),
@@ -53,8 +55,27 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
             value,
         })
         .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        .height(Length::Fill);
+        let Some(label) = self.label else {
+            return dial.into();
+        };
+        let caption = container(styled_text(
+            label.to_owned(),
+            self.skin.knob.label_text,
+            self.skin,
+        ))
+        .width(Length::Fill)
+        .height(Length::Fixed(self.skin.knob.label_height))
+        .center_x(Length::Fill);
+
+        Column::new()
+            .push(dial)
+            .push(caption)
+            .spacing(self.skin.knob.label_gap)
+            .align_x(Alignment::Center)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 }
 

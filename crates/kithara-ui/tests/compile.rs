@@ -632,3 +632,51 @@ fn fifty_empty_columns_exceed_node_limit() {
         "{error:?}"
     );
 }
+
+#[kithara::test]
+fn knob_caption_is_document_text_and_optional() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "knobs.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "knobs",
+            root: Module(instance: "deck-a", source: "knobs.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "knobs.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "knobs",
+            root: Row(children: [
+                Knob(id: "low", label: Some("LOW")),
+                Knob(id: "mid"),
+            ]))"#,
+    );
+
+    let ui = compile(
+        "knobs.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected row");
+    };
+    let captions: Vec<Option<&str>> = children
+        .iter()
+        .map(|child| {
+            let ExpandedNode::Control {
+                spec: ControlSpec::Knob { label },
+                ..
+            } = child
+            else {
+                panic!("expected knob");
+            };
+            label.map(|id| ui.resolve(id))
+        })
+        .collect();
+
+    assert_eq!(captions, vec![Some("LOW"), None]);
+}

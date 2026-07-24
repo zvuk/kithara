@@ -141,7 +141,9 @@ pub enum ControlSpec {
         label: InternId,
         style: ChipStyle,
     },
-    Knob,
+    Knob {
+        label: Option<InternId>,
+    },
     VuStereo,
     VuVertical,
 }

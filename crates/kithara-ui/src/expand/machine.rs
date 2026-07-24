@@ -489,7 +489,15 @@ fn expand_control(
             label: intern_text(context, machine.interner, label, &path, &context.origin)?,
             style: *style,
         },
-        ControlNode::Knob { .. } => ControlSpec::Knob,
+        ControlNode::Knob { label, .. } => ControlSpec::Knob {
+            label: intern_optional_text(
+                context,
+                machine.interner,
+                label.as_deref(),
+                &path,
+                &context.origin,
+            )?,
+        },
         ControlNode::VuStereo { .. } => ControlSpec::VuStereo,
         ControlNode::VuVertical { .. } => ControlSpec::VuVertical,
         ControlNode::Row { .. }
@@ -823,6 +831,7 @@ fn expand_atom_control(
             read,
             write,
             adaptive,
+            ..
         }
         | ControlNode::VuStereo {
             id,

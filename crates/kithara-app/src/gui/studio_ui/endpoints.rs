@@ -3,9 +3,6 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };
 
-/// Tempo range presets, indexed by the `range` segmented control.
-pub(super) const TS_RANGES: [u8; 4] = [8, 16, 50, 100];
-
 /// EQ knob travel in dB: knob `0.0` is `EQ_MIN_DB`, knob `1.0` is `EQ_MAX_DB`.
 pub(super) const EQ_MIN_DB: f32 = -24.0;
 pub(super) const EQ_MAX_DB: f32 = 6.0;
@@ -39,12 +36,6 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
         true,
     ),
     (
-        EndpointCategory::Telemetry,
-        "deck.ts.ratio",
-        ValueKind::Text,
-        true,
-    ),
-    (
         EndpointCategory::Command,
         "deck.transport.toggle_play",
         ValueKind::Trigger,
@@ -70,12 +61,6 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
     ),
     (
         EndpointCategory::Command,
-        "deck.ts.reset",
-        ValueKind::Trigger,
-        true,
-    ),
-    (
-        EndpointCategory::Command,
         "deck.ts.toggle_keylock",
         ValueKind::Trigger,
         true,
@@ -83,12 +68,6 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
     (
         EndpointCategory::Parameter,
         "deck.ts.tempo",
-        ValueKind::Scalar,
-        true,
-    ),
-    (
-        EndpointCategory::Model,
-        "deck.ts.range_index",
         ValueKind::Scalar,
         true,
     ),
@@ -128,7 +107,12 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
         ValueKind::Scalar,
         true,
     ),
-    (EndpointCategory::Model, "mixer.muted", ValueKind::Bool, true),
+    (
+        EndpointCategory::Model,
+        "mixer.muted",
+        ValueKind::Bool,
+        true,
+    ),
     (
         EndpointCategory::Command,
         "mixer.toggle_mute",

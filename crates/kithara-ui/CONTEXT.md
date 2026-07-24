@@ -86,6 +86,12 @@ validation, so the document layer has no string control discriminator, property 
 kind catalog. Common control fields are repeated in the serde variants because RON flattening is
 not part of the schema contract.
 
+Captions attached to a control — the fader's inline label, the knob's caption under its dial —
+are document text carried on the control node; the skin owns their typography, and the knob's
+caption is a full text role down to family and letter-spacing. A control without a caption renders
+bare and callers compose no separate text node beside it; the knob's intrinsic size reserves the
+caption row either way.
+
 `validate::value_kinds` is the single owner of control read/write endpoint kinds. Intrinsic sizes
 are selected exhaustively from `ControlSpec` and the supplied `SkinDoc` by
 `size::control_size`; this remains available in non-render and wasm builds. Renderers match

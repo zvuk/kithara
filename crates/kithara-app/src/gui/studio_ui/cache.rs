@@ -26,7 +26,6 @@ pub(super) struct DeckCache {
     /// Revision stamp of the converted waveform: the source slice address.
     wave_src: Option<usize>,
     pub(super) tempo: String,
-    pub(super) ratio: String,
     pub(super) subtitle: String,
     pub(super) zoom: Option<f64>,
 }
@@ -49,7 +48,8 @@ impl StudioCache {
     /// Refresh the borrowed-by-render state from the current snapshots.
     /// Called once per frame after the deck snapshots are taken.
     pub(crate) fn refresh(&mut self, decks: &Decks, catalog: &Catalog) {
-        self.decks.resize_with(decks.iter().count(), Default::default);
+        self.decks
+            .resize_with(decks.iter().count(), Default::default);
         for (cache, deck) in self.decks.iter_mut().zip(decks.iter()) {
             cache.refresh(deck);
         }
@@ -75,7 +75,6 @@ impl DeckCache {
     fn refresh(&mut self, deck: &DeckUi) {
         let ts = deck.view.timestretch;
         self.tempo = format!("{:+.2}%", ts.tempo);
-        self.ratio = format!("{:.3}\u{00d7}", ts.speed());
         self.subtitle = track_subtitle(&deck.ui);
         self.refresh_wave(deck.ui.analysis.as_ref());
     }

@@ -488,6 +488,8 @@ pub enum ControlNode {
         write: Option<BindingRef>,
         #[serde(default)]
         adaptive: AdaptivePolicy,
+        #[serde(default)]
+        label: Option<String>,
     },
     VuStereo {
         id: NodeId,

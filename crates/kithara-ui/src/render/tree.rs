@@ -23,8 +23,7 @@ use crate::{
     ids::InternId,
     layout::Axis,
     module::{
-        ChromeStyle, DeckSummaryStyle, GlyphStyle, IconName, Tone, TrackColumn,
-        WindowControlsStyle,
+        ChromeStyle, DeckSummaryStyle, GlyphStyle, IconName, Tone, TrackColumn, WindowControlsStyle,
     },
     render::{Icon, ReadValue, Reads, Skin, TreeIcon, UiEvent},
     size::{Dim, SizeSpec, control_size},
@@ -213,7 +212,9 @@ fn render_control<'a>(
     let path = ui.resolve(path);
     let scope = read_scope(read, ui);
     match spec {
-        ControlSpec::DeckSummary { style } => render_deck_summary(*style, value, scope, reads, skin),
+        ControlSpec::DeckSummary { style } => {
+            render_deck_summary(*style, value, scope, reads, skin)
+        }
         ControlSpec::Brand => Brand::builder().skin(skin).build().view(),
         ControlSpec::Spacer => Spacer::builder().skin(skin).build().view(),
         ControlSpec::PresetSelector => PresetSelector::builder()
@@ -312,8 +313,9 @@ fn render_control<'a>(
             .skin(skin)
             .build()
             .view(),
-        ControlSpec::Knob => Knob::builder()
+        ControlSpec::Knob { label } => Knob::builder()
             .path(path)
+            .maybe_label(label.map(|id| ui.resolve(id)))
             .maybe_value(value)
             .skin(skin)
             .build()

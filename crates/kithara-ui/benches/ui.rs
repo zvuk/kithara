@@ -426,6 +426,7 @@ fn knob(id: &str, endpoint: &str) -> ControlNode {
         read: Some(model(endpoint)),
         write: None,
         adaptive: AdaptivePolicy::default(),
+        label: None,
     }
 }
 

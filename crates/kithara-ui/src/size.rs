@@ -201,7 +201,7 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Cell { .. } => skin.cell.size,
         ControlSpec::Readout { .. } => skin.readout.size,
         ControlSpec::Chip { .. } => skin.chip.size,
-        ControlSpec::Knob => skin.knob.size,
+        ControlSpec::Knob { .. } => skin.knob.size,
         ControlSpec::VuStereo => skin.vu_stereo.size,
         ControlSpec::VuVertical => skin.vu_vertical.size,
     }
@@ -302,7 +302,7 @@ mod tests {
         ExpandedNode::Control {
             path: interner.intern(id, &origin).unwrap(),
             id: interner.intern(id, &origin).unwrap(),
-            spec: ControlSpec::Knob,
+            spec: ControlSpec::Knob { label: None },
             read: None,
             write: None,
             adaptive: AdaptivePolicy::default(),

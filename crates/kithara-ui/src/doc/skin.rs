@@ -353,6 +353,9 @@ pub struct KnobSkin {
     pub track_width: f32,
     pub track_alpha: f32,
     pub body_border_width: f32,
+    pub label_text: TextRoleSkin,
+    pub label_gap: f32,
+    pub label_height: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

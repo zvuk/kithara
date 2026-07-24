@@ -3,9 +3,13 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     cache::DeckCache,
-    endpoints::{EQ_MAX_DB, EQ_MIN_DB, TS_RANGES},
+    endpoints::{EQ_MAX_DB, EQ_MIN_DB},
+    scope::deck_index,
 };
-use crate::gui::{app::Kithara, deck::DeckUi};
+use crate::gui::{
+    app::Kithara,
+    deck::{DeckUi, TEMPO_RANGE},
+};
 
 /// Frame-local read adapter: borrows the app state and the studio cache and
 /// answers the renderer's canonical scoped endpoint keys.
@@ -82,14 +86,9 @@ impl<'a> StudioReads<'a> {
                 ReadValue::Text(&ui.track_name)
             }
             "deck.track.source_kind" => ReadValue::Text(&cache.subtitle),
-            "deck.ts.ratio" => ReadValue::Text(&cache.ratio),
             "deck.ts.tempo" => {
-                let range = f64::from(ts.range);
+                let range = f64::from(TEMPO_RANGE);
                 ReadValue::Scalar((f64::from(ts.tempo) + range) / (range * 2.0))
-            }
-            "deck.ts.range_index" => {
-                let index = TS_RANGES.iter().position(|range| *range == ts.range)?;
-                ReadValue::Scalar(index.as_())
             }
             "deck.ts.keylock" => ReadValue::Bool(keylock(deck)?),
             "deck.eq.low" => eq_value(ui.eq_bands.first())?,
@@ -130,19 +129,9 @@ impl Reads for StudioReads<'_> {
             return Some(ReadValue::TrackList(&self.rows));
         }
         match endpoint.split_once('@') {
-            Some((base, scope)) => self.deck_value(base, deck_index(scope)?),
+            Some((base, scope)) => self.deck_value(base, deck_index(scope.strip_prefix("deck=")?)?),
             None => self.global_value(endpoint),
         }
-    }
-}
-
-/// Scope suffix → session deck position. The studio addresses decks by their
-/// channel letter, which is their position in the session.
-pub(super) fn deck_index(scope: &str) -> Option<usize> {
-    match scope {
-        "deck=a" => Some(0),
-        "deck=b" => Some(1),
-        _ => None,
     }
 }
 

@@ -37,35 +37,18 @@ pub(crate) struct DeckView {
     pub(crate) timestretch: TimestretchState,
 }
 
-#[derive(Debug, Clone, Copy)]
+/// Tempo travel either way, in percent: the TEMPO knob spans `-TEMPO_RANGE` to
+/// `+TEMPO_RANGE`.
+pub(crate) const TEMPO_RANGE: f32 = 16.0;
+
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TimestretchState {
     pub(crate) tempo: f32,
-    pub(crate) range: u8,
-}
-
-impl Default for TimestretchState {
-    fn default() -> Self {
-        Self {
-            range: 16,
-            tempo: 0.0,
-        }
-    }
 }
 
 impl TimestretchState {
-    fn clamp_tempo(&mut self) {
-        let r = f32::from(self.range);
-        self.tempo = self.tempo.clamp(-r, r);
-    }
-
-    fn set_range(&mut self, range: u8) {
-        self.range = range;
-        self.clamp_tempo();
-    }
-
     fn set_tempo(&mut self, tempo: f32) {
-        self.tempo = tempo;
-        self.clamp_tempo();
+        self.tempo = tempo.clamp(-TEMPO_RANGE, TEMPO_RANGE);
     }
 
     pub(crate) fn speed(self) -> f32 {
@@ -84,8 +67,6 @@ pub(crate) enum DeckMsg {
     EqBandChanged(usize, f32),
     DeleteTrack,
     SetTempo(f32),
-    SetRange(u8),
-    ResetTempo,
     #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     ToggleKeyLock,
 }
@@ -109,8 +90,6 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::EqBandChanged(band, db) => eq_band_changed(deck, band, db),
         DeckMsg::DeleteTrack => delete_track(deck),
         DeckMsg::SetTempo(t) => set_speed(deck, |ts| ts.set_tempo(t)),
-        DeckMsg::SetRange(r) => set_speed(deck, |ts| ts.set_range(r)),
-        DeckMsg::ResetTempo => set_speed(deck, |ts| ts.tempo = 0.0),
         #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
         DeckMsg::ToggleKeyLock => {
             // Applies live, mid-track (shared controls read each chunk).
@@ -195,10 +174,7 @@ mod tests {
 
     #[kithara::test]
     fn speed_is_raw_passthrough_floor_owned_by_engine() {
-        let ts = TimestretchState {
-            range: 100,
-            tempo: -100.0,
-        };
+        let ts = TimestretchState { tempo: -100.0 };
 
         assert!(ts.speed().abs() < f32::EPSILON);
     }
