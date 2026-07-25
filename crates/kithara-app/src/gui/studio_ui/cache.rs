@@ -2,10 +2,12 @@ use std::collections::BTreeSet;
 
 use kithara::audio::Waveform;
 use kithara_ui::render::WaveBucket;
+use num_traits::cast::ToPrimitive;
 
 use crate::{
     catalog::{Catalog, is_loaded},
     gui::{app::Decks, deck::DeckUi, view::track_subtitle},
+    state::UiState,
     waveform::TrackAnalysis,
 };
 
@@ -18,6 +20,33 @@ pub(crate) struct StudioCache {
     /// Per catalog row: channel letters of the decks the row is loaded on.
     pub(super) deck_marks: Vec<String>,
     pub(super) collapsed: BTreeSet<String>,
+    pub(super) layout: DeckLayout,
+}
+
+/// How many decks the studio lays out. The top bar switches it; the session
+/// keeps every deck either way.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum DeckLayout {
+    Single,
+    #[default]
+    Dual,
+}
+
+impl DeckLayout {
+    pub(super) const fn index(self) -> usize {
+        match self {
+            Self::Single => 0,
+            Self::Dual => 1,
+        }
+    }
+
+    pub(super) const fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Single),
+            1 => Some(Self::Dual),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -26,6 +55,8 @@ pub(super) struct DeckCache {
     /// Revision stamp of the converted waveform: the source slice address.
     wave_src: Option<usize>,
     pub(super) tempo: String,
+    /// Time left in the track, `−MM:SS`, as the overview row shows it.
+    pub(super) remain: String,
     pub(super) subtitle: String,
     pub(super) zoom: Option<f64>,
 }
@@ -75,6 +106,7 @@ impl DeckCache {
     fn refresh(&mut self, deck: &DeckUi) {
         let ts = deck.view.timestretch;
         self.tempo = format!("{:+.2}%", ts.tempo);
+        self.remain = format_remain(&deck.ui);
         self.subtitle = track_subtitle(&deck.ui);
         self.refresh_wave(deck.ui.analysis.as_ref());
     }
@@ -93,6 +125,17 @@ impl DeckCache {
             self.wave.extend(waveform_buckets(wave));
         }
     }
+}
+
+fn format_remain(ui: &UiState) -> String {
+    let head = if ui.is_seeking {
+        ui.seek_position
+    } else {
+        ui.position
+    };
+    let left = (ui.duration - head).max(0.0);
+    let total = left.floor().to_u64().unwrap_or(0);
+    format!("\u{2212}{:02}:{:02}", total / 60, total % 60)
 }
 
 fn waveform_buckets(wave: &Waveform) -> impl Iterator<Item = WaveBucket> + '_ {

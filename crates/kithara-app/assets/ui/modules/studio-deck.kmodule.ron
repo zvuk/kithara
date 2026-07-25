@@ -16,20 +16,11 @@
             ),
             Row(
                 id: "transport",
-                size: (w: Fill, h: Fixed(42.0)),
-                pad: Some(6.0),
+                size: (w: Fill, h: Fixed(36.0)),
                 children: [
                     Button(
-                        id: "prev",
-                        size: (w: Fixed(36.0), h: Fixed(30.0)),
-                        label: "",
-                        icon: Some(Rewind),
-                        style: Transport,
-                        write: Command(id: "deck.transport.prev", with: { "deck": "$deck" }),
-                    ),
-                    Button(
                         id: "play",
-                        size: (w: Fixed(64.0), h: Fixed(30.0)),
+                        size: (w: Fixed(64.0), h: Fill),
                         label: "PLAY",
                         icon: Some(Play),
                         style: TransportPrimary,
@@ -38,16 +29,25 @@
                         adaptive: (priority: Required),
                     ),
                     Button(
+                        id: "prev",
+                        size: (w: Fixed(36.0), h: Fill),
+                        label: "",
+                        icon: Some(Rewind),
+                        style: Transport,
+                        write: Command(id: "deck.transport.prev", with: { "deck": "$deck" }),
+                    ),
+                    Button(
                         id: "next",
-                        size: (w: Fixed(36.0), h: Fixed(30.0)),
+                        size: (w: Fixed(36.0), h: Fill),
                         label: "",
                         icon: Some(FastForward),
                         style: Transport,
                         write: Command(id: "deck.transport.next", with: { "deck": "$deck" }),
                     ),
+                    Spacer(id: "gap"),
                     Time(
                         id: "time",
-                        size: (w: Fill, h: Fixed(30.0)),
+                        size: (w: Fixed(144.0), h: Fill),
                         read: Telemetry(id: "deck.playback.position_secs", with: { "deck": "$deck" }),
                     ),
                     Chip(

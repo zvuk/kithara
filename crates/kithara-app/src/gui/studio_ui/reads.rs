@@ -82,6 +82,7 @@ impl<'a> StudioReads<'a> {
                 ReadValue::Scalar(normalized.clamp(0.0, 1.0))
             }
             "deck.playback.tempo" => ReadValue::Text(&cache.tempo),
+            "deck.playback.remain" => ReadValue::Text(&cache.remain),
             "deck.track.title" if !ui.track_name.trim().is_empty() => {
                 ReadValue::Text(&ui.track_name)
             }
@@ -109,6 +110,7 @@ impl<'a> StudioReads<'a> {
         let value = match endpoint {
             "mix.crossfader" => ReadValue::Scalar(f64::from(mix.position)),
             "mix.group_master" => ReadValue::Scalar(f64::from(mix.group_master)),
+            "ui.layout.decks" => ReadValue::Scalar(self.state.studio.cache.layout.index().as_()),
             _ => return None,
         };
         Some(value)

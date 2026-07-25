@@ -2,6 +2,34 @@
 
 Detailed contracts and invariants for the kithara-app crate; the README is the overview.
 
+## Studio UI Host
+
+The studio is a compiled `kithara-ui` document set; `gui::studio_ui` is the host
+side of it. `StudioRegistry` declares every endpoint the documents may bind, and
+the documents are validated against it by a unit test, so `StudioUi::new` may
+panic on a compile failure: it is a build defect, not a runtime condition.
+
+The studio addresses decks by channel letter, and the letter is the deck's
+position in the session. It appears in two independent places — the control path
+and the `deck=` scope of a binding — so they must agree:
+
+- `deck-<letter>/<control>` — a deck module;
+- `mixer/<letter>/<control>` — a channel strip;
+- `overview/<letter>/<control>` — an overview row.
+
+`scope::deck_index` is the single owner of letter → position for both sides,
+and a unit test walks the compiled tree asserting that every deck-scoped
+binding is addressed by the letter it reads.
+
+Reads are answered per frame by `StudioReads`, which borrows the app state and
+`StudioCache`. The cache owns what the renderer borrows but the model does not
+hold: converted waveform columns, formatted strings (tempo, remaining time,
+source subtitle), per-deck zoom, collapsed modules, and the deck layout.
+
+Both deck layouts are compiled once at startup and the top bar picks between
+them through `ui.layout.decks`; the session owns the same decks either way, so
+switching changes what is laid out and nothing else.
+
 ## Track Analysis Cache
 
 The DJ Studio source analysis is an expensive whole-track decode. It currently

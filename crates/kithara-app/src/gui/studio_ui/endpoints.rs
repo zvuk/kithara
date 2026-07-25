@@ -36,6 +36,12 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
         true,
     ),
     (
+        EndpointCategory::Telemetry,
+        "deck.playback.remain",
+        ValueKind::Text,
+        true,
+    ),
+    (
         EndpointCategory::Command,
         "deck.transport.toggle_play",
         ValueKind::Trigger,
@@ -135,6 +141,18 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
         EndpointCategory::Model,
         "library.tracks",
         ValueKind::TrackList,
+        false,
+    ),
+    (
+        EndpointCategory::Model,
+        "ui.layout.decks",
+        ValueKind::Scalar,
+        false,
+    ),
+    (
+        EndpointCategory::Command,
+        "ui.layout.set_decks",
+        ValueKind::Scalar,
         false,
     ),
 ];

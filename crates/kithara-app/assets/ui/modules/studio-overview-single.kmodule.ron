@@ -1,0 +1,14 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "studio-overview-single",
+    root: Column(
+        children: [
+            Include(
+                id: "a",
+                source: "studio-overview-row.kmodule.ron",
+                with: { "deck": "a", "letter": "A" },
+            ),
+        ],
+    ),
+)

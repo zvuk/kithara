@@ -1,7 +1,7 @@
 (
     schema: "kithara.layout",
     version: 1,
-    id: "studio",
+    id: "studio-single",
     root: Split(
         axis: Vertical,
         children: [
@@ -10,10 +10,10 @@
                 source: "modules/studio-bar.kmodule.ron",
                 size: (w: Fill, h: Fixed(36.0)),
             )),
-            (weight: 0.6, node: Module(
+            (weight: 0.3, node: Module(
                 instance: "overview",
-                source: "modules/studio-overview.kmodule.ron",
-                size: (w: Fill, h: Fixed(80.0)),
+                source: "modules/studio-overview-single.kmodule.ron",
+                size: (w: Fill, h: Fixed(40.0)),
             )),
             (weight: 2.8, node: Split(
                 axis: Horizontal,
@@ -27,11 +27,6 @@
                         instance: "mixer",
                         source: "modules/studio-mixer.kmodule.ron",
                         size: (w: Fixed(224.0), h: Fill),
-                    )),
-                    (weight: 1.0, node: Module(
-                        instance: "deck-b",
-                        source: "modules/studio-deck.kmodule.ron",
-                        with: { "deck": "b", "badge": "B" },
                     )),
                 ],
             )),

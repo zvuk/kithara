@@ -2,6 +2,7 @@ use kithara_ui::render::{ControlAction, UiEvent};
 use num_traits::cast::AsPrimitive;
 
 use super::{
+    cache::DeckLayout,
     endpoints::{EQ_MAX_DB, EQ_MIN_DB},
     scope::deck_index,
 };
@@ -33,8 +34,13 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
     let (instance, rest) = path.split_once('/')?;
     match instance {
+        "bar" => bar_control(state, rest, action),
         "mixer" => mixer_control(state, rest, action),
         "library" => library_control(state, rest, action),
+        "overview" => {
+            let (letter, control) = rest.split_once('/')?;
+            deck_control(state, deck_index(letter)?, control, action)
+        }
         _ => {
             let index = deck_index(instance.strip_prefix("deck-")?)?;
             deck_control(state, index, rest, action)
@@ -74,6 +80,15 @@ fn deck_control(
         _ => return None,
     };
     Some(Message::Deck(id, msg))
+}
+
+/// Top-bar controls act on the studio's own view state, so they resolve here
+/// and produce no app message.
+fn bar_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+    if let ("decks", ControlAction::SelectIndex(index)) = (control, action) {
+        state.studio.cache.layout = DeckLayout::from_index(*index)?;
+    }
+    None
 }
 
 fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {

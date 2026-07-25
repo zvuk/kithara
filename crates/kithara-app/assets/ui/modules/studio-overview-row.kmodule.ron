@@ -1,0 +1,29 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "studio-overview-row",
+    parameters: ["deck", "letter"],
+    root: Row(
+        size: (w: Fill, h: Fixed(40.0)),
+        children: [
+            Text(
+                id: "letter",
+                size: (w: Fixed(28.0), h: Fill),
+                style: DeckLetter,
+                label: "$letter",
+            ),
+            Wave(
+                id: "wave",
+                read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+                adaptive: (priority: Required),
+            ),
+            Text(
+                id: "remain",
+                size: (w: Fixed(62.0), h: Fill),
+                style: Telemetry,
+                read: Telemetry(id: "deck.playback.remain", with: { "deck": "$deck" }),
+            ),
+        ],
+    ),
+)
