@@ -20,27 +20,35 @@ pub(crate) struct StudioCache {
     /// Per catalog row: channel letters of the decks the row is loaded on.
     pub(super) deck_marks: Vec<String>,
     pub(super) collapsed: BTreeSet<String>,
-    pub(super) layout: DeckLayout,
+    pub(crate) layout: DeckLayout,
 }
 
 /// How many decks the studio lays out. The top bar switches it; the session
 /// keeps every deck either way.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum DeckLayout {
+pub(crate) enum DeckLayout {
     Single,
     #[default]
     Dual,
 }
 
 impl DeckLayout {
-    pub(super) const fn index(self) -> usize {
+    /// Deck bodies the layout lays out; the session may hold more.
+    pub(crate) const fn decks(self) -> usize {
+        match self {
+            Self::Single => 1,
+            Self::Dual => 2,
+        }
+    }
+
+    pub(crate) const fn index(self) -> usize {
         match self {
             Self::Single => 0,
             Self::Dual => 1,
         }
     }
 
-    pub(super) const fn from_index(index: usize) -> Option<Self> {
+    pub(crate) const fn from_index(index: usize) -> Option<Self> {
         match index {
             0 => Some(Self::Single),
             1 => Some(Self::Dual),

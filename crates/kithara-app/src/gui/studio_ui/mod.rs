@@ -12,8 +12,11 @@ use kithara_ui::{
     source::UiConfig,
 };
 
-use self::{cache::DeckLayout, reads::StudioReads};
-pub(crate) use self::{cache::StudioCache, events::translate};
+use self::reads::StudioReads;
+pub(crate) use self::{
+    cache::{DeckLayout, StudioCache},
+    events::translate,
+};
 use super::{app::Kithara, message::Message};
 
 const COMPILES: &str = "embedded studio documents must compile";
@@ -50,6 +53,10 @@ const DOCS: &[(&str, &str)] = &[
     (
         "modules/studio-mixer.kmodule.ron",
         include_str!("../../../assets/ui/modules/studio-mixer.kmodule.ron"),
+    ),
+    (
+        "modules/studio-mixer-single.kmodule.ron",
+        include_str!("../../../assets/ui/modules/studio-mixer-single.kmodule.ron"),
     ),
     (
         "modules/studio-strip.kmodule.ron",
@@ -247,22 +254,38 @@ mod tests {
         }
     }
 
-    /// The single-deck layout lays out one deck body and one overview row; the
-    /// mixer keeps a channel per session deck either way.
+    /// A layout lays out exactly the decks it declares: body, overview row and
+    /// channel strip, and nothing addressing a deck it hides.
     #[kithara::test]
-    fn the_single_layout_lays_out_one_deck_body() {
-        let ui = compile_studio(DeckLayout::Single).unwrap();
-        let paths = control_paths(&ui);
+    fn a_layout_addresses_only_the_decks_it_lays_out() {
+        for layout in LAYOUTS {
+            let ui = compile_studio(layout).unwrap();
+            let paths = control_paths(&ui);
+            let shown = ["a", "b"].into_iter().take(layout.decks());
 
-        assert!(paths.contains(&"deck-a/wave"));
-        assert!(paths.contains(&"overview/a/wave"));
-        assert!(
-            !paths
-                .iter()
-                .any(|path| path.starts_with("deck-b/") || path.starts_with("overview/b/")),
-            "the single-deck layout still lays out deck B: {paths:?}",
-        );
-        assert!(paths.contains(&"mixer/b/trim"));
+            for letter in shown {
+                for path in [
+                    format!("deck-{letter}/wave"),
+                    format!("overview/{letter}/wave"),
+                    format!("mixer/{letter}/trim"),
+                ] {
+                    assert!(paths.contains(&path.as_str()), "{layout:?}: missing {path}");
+                }
+            }
+            for letter in ["a", "b"].into_iter().skip(layout.decks()) {
+                let hidden = [
+                    format!("deck-{letter}/"),
+                    format!("overview/{letter}/"),
+                    format!("mixer/{letter}/"),
+                ];
+                assert!(
+                    !paths
+                        .iter()
+                        .any(|path| hidden.iter().any(|prefix| path.starts_with(prefix))),
+                    "{layout:?}: still addresses deck {letter}: {paths:?}",
+                );
+            }
+        }
     }
 
     /// The top-bar switch offers exactly the layouts the host can select, in

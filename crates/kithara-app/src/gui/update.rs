@@ -41,6 +41,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             handle_unload(state, index, id);
             Task::none()
         }
+        Message::PauseHiddenDecks => {
+            pause_hidden_decks(state);
+            Task::none()
+        }
         Message::Tick => {
             handle_tick(state);
             Task::none()
@@ -50,6 +54,20 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
 
     refresh_snapshots(state);
     task
+}
+
+/// A deck the studio no longer lays out keeps its queue but stops playing.
+fn pause_hidden_decks(state: &mut Kithara) {
+    let hidden: Vec<DeckId> = state
+        .session
+        .decks()
+        .iter()
+        .skip(state.studio.cache.layout.decks())
+        .map(|deck| deck.id)
+        .collect();
+    for id in hidden {
+        handle_deck(state, id, &DeckMsg::Pause);
+    }
 }
 
 fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {

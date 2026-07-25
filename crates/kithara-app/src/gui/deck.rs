@@ -57,6 +57,7 @@ impl TimestretchState {
 #[derive(Debug, Clone)]
 pub(crate) enum DeckMsg {
     TogglePlayPause,
+    Pause,
     Next,
     Prev,
     SeekTo(f64),
@@ -71,6 +72,7 @@ pub(crate) enum DeckMsg {
 pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
     match *msg {
         DeckMsg::TogglePlayPause => toggle_play_pause(deck),
+        DeckMsg::Pause => deck.controller.queue().pause(),
         DeckMsg::Next => {
             deck.controller.queue().advance_to_next(
                 Transition::Crossfade,

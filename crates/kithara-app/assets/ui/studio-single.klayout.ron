@@ -25,7 +25,7 @@
                     )),
                     (node: Module(
                         instance: "mixer",
-                        source: "modules/studio-mixer.kmodule.ron",
+                        source: "modules/studio-mixer-single.kmodule.ron",
                         size: (w: Fixed(224.0), h: Fill),
                     )),
                 ],

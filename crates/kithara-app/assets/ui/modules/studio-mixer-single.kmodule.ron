@@ -1,0 +1,26 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "studio-mixer-single",
+    root: Column(
+        children: [
+            Row(
+                id: "strips",
+                children: [
+                    Include(
+                        id: "a",
+                        source: "studio-strip.kmodule.ron",
+                        with: { "deck": "a", "letter": "A" },
+                    ),
+                ],
+            ),
+            Text(id: "master-label", style: MicroLabel, label: "MASTER"),
+            Fader(
+                id: "master",
+                style: Volume,
+                read: Parameter(id: "mix.group_master"),
+                write: Parameter(id: "mix.group_master"),
+            ),
+        ],
+    ),
+)

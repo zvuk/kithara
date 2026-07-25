@@ -24,6 +24,8 @@ pub(crate) enum Message {
     LoadOntoDeck(usize, DeckId),
     /// Remove catalog row `.0` from deck `.1`'s queue.
     UnloadFromDeck(usize, DeckId),
+    /// Pause every deck the current studio layout does not lay out.
+    PauseHiddenDecks,
     /// Periodic tick from the subscription.
     Tick,
     /// System close button on the studio window; exits the app.

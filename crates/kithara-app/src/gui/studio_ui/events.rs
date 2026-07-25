@@ -84,13 +84,15 @@ fn deck_control(
     Some(Message::Deck(id, msg))
 }
 
-/// Top-bar controls act on the studio's own view state, so they resolve here
-/// and produce no app message.
+/// The top bar owns the studio's own view state. Narrowing the layout also
+/// silences the decks it stops laying out: a deck the user cannot see must
+/// not keep playing.
 fn bar_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
-    if let ("decks", ControlAction::SelectIndex(index)) = (control, action) {
-        state.studio.cache.layout = DeckLayout::from_index(*index)?;
-    }
-    None
+    let ("decks", ControlAction::SelectIndex(index)) = (control, action) else {
+        return None;
+    };
+    state.studio.cache.layout = DeckLayout::from_index(*index)?;
+    Some(Message::PauseHiddenDecks)
 }
 
 fn mixer_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {

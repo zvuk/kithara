@@ -32,16 +32,18 @@ hold: converted waveform columns, formatted strings (tempo, remaining time,
 source subtitle), per-deck zoom, collapsed modules, and the deck layout.
 
 Both deck layouts are compiled once at startup and the top bar picks between
-them through `ui.layout.decks`; the session owns the same decks either way, so
-switching changes what is laid out and nothing else. The mixer keeps a channel
-per session deck in both layouts — a hidden deck still plays, and its trim,
-tone and mute stay reachable.
+them through `ui.layout.decks`. A layout lays out a deck whole or not at all:
+its body, its overview row and its channel strip appear together, and
+`DeckLayout::decks` is the single owner of how many that is. Narrowing the
+layout pauses every deck it stops laying out — a deck the user cannot see must
+not keep playing — while the session keeps the deck and its queue, so widening
+the layout brings it back where it was, paused.
 
 The two layout documents repeat their frame because the layout schema has no
-include: only the deck body and the overview rows may differ between them. The
-top bar, the mixer and the library nodes must stay identical, and the switch
-must offer one segment per layout in the host's own index order — a unit test
-holds that last part.
+include: only the deck bodies, the overview rows and the mixer channels may
+differ between them. The top bar and the library nodes must stay identical, and
+the switch must offer one segment per layout in the host's own index order — a
+unit test holds that last part.
 
 ## Track Analysis Cache
 
