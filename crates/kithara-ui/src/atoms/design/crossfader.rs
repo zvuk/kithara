@@ -71,8 +71,8 @@ where
         .height(Length::Fixed(metrics.thumb_height));
 
         Column::new()
-            .push(labels)
             .push(slider)
+            .push(labels)
             .spacing(metrics.label_gap)
             .width(Length::Fill)
             .height(Length::Fill)

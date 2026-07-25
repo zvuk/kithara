@@ -19,7 +19,12 @@ and the `deck=` scope of a binding — so they must agree:
 
 `scope::deck_index` is the single owner of letter → position for both sides,
 and a unit test walks the compiled tree asserting that every deck-scoped
-binding is addressed by the letter it reads.
+binding is addressed by the letter it reads. Any lowercase ASCII letter maps to
+a position; the session bounds it, so a letter past the last deck resolves to
+nothing rather than to a neighbour.
+
+Tempo travel is fixed at `TEMPO_RANGE` percent either way, clamped where the
+deck applies it; there is no range selector and no reset control.
 
 Reads are answered per frame by `StudioReads`, which borrows the app state and
 `StudioCache`. The cache owns what the renderer borrows but the model does not
@@ -28,7 +33,15 @@ source subtitle), per-deck zoom, collapsed modules, and the deck layout.
 
 Both deck layouts are compiled once at startup and the top bar picks between
 them through `ui.layout.decks`; the session owns the same decks either way, so
-switching changes what is laid out and nothing else.
+switching changes what is laid out and nothing else. The mixer keeps a channel
+per session deck in both layouts — a hidden deck still plays, and its trim,
+tone and mute stay reachable.
+
+The two layout documents repeat their frame because the layout schema has no
+include: only the deck body and the overview rows may differ between them. The
+top bar, the mixer and the library nodes must stay identical, and the switch
+must offer one segment per layout in the host's own index order — a unit test
+holds that last part.
 
 ## Track Analysis Cache
 

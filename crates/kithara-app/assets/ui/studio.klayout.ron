@@ -5,12 +5,12 @@
     root: Split(
         axis: Vertical,
         children: [
-            (weight: 0.25, node: Module(
+            (node: Module(
                 instance: "bar",
                 source: "modules/studio-bar.kmodule.ron",
                 size: (w: Fill, h: Fixed(36.0)),
             )),
-            (weight: 0.6, node: Module(
+            (node: Module(
                 instance: "overview",
                 source: "modules/studio-overview.kmodule.ron",
                 size: (w: Fill, h: Fixed(80.0)),
@@ -23,7 +23,7 @@
                         source: "modules/studio-deck.kmodule.ron",
                         with: { "deck": "a", "badge": "A" },
                     )),
-                    (weight: 0.42, node: Module(
+                    (node: Module(
                         instance: "mixer",
                         source: "modules/studio-mixer.kmodule.ron",
                         size: (w: Fixed(224.0), h: Fill),

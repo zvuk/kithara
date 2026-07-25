@@ -144,14 +144,8 @@ const ENDPOINTS: &[(EndpointCategory, &str, ValueKind, bool)] = &[
         false,
     ),
     (
-        EndpointCategory::Model,
+        EndpointCategory::Parameter,
         "ui.layout.decks",
-        ValueKind::Scalar,
-        false,
-    ),
-    (
-        EndpointCategory::Command,
-        "ui.layout.set_decks",
         ValueKind::Scalar,
         false,
     ),

@@ -16,10 +16,16 @@ use self::{cache::DeckLayout, reads::StudioReads};
 pub(crate) use self::{cache::StudioCache, events::translate};
 use super::{app::Kithara, message::Message};
 
+const COMPILES: &str = "embedded studio documents must compile";
+
 const DOCS: &[(&str, &str)] = &[
     (
         "studio.klayout.ron",
         include_str!("../../../assets/ui/studio.klayout.ron"),
+    ),
+    (
+        "studio-single.klayout.ron",
+        include_str!("../../../assets/ui/studio-single.klayout.ron"),
     ),
     (
         "modules/studio-bar.kmodule.ron",
@@ -34,6 +40,10 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../../assets/ui/modules/studio-overview.kmodule.ron"),
     ),
     (
+        "modules/studio-overview-single.kmodule.ron",
+        include_str!("../../../assets/ui/modules/studio-overview-single.kmodule.ron"),
+    ),
+    (
         "modules/studio-overview-row.kmodule.ron",
         include_str!("../../../assets/ui/modules/studio-overview-row.kmodule.ron"),
     ),
@@ -44,14 +54,6 @@ const DOCS: &[(&str, &str)] = &[
     (
         "modules/studio-strip.kmodule.ron",
         include_str!("../../../assets/ui/modules/studio-strip.kmodule.ron"),
-    ),
-    (
-        "studio-single.klayout.ron",
-        include_str!("../../../assets/ui/studio-single.klayout.ron"),
-    ),
-    (
-        "modules/studio-overview-single.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-overview-single.kmodule.ron"),
     ),
     (
         "modules/studio-library.kmodule.ron",
@@ -87,8 +89,6 @@ impl StudioUi {
     }
 }
 
-const COMPILES: &str = "embedded studio documents must compile";
-
 fn compile_studio(layout: DeckLayout) -> Result<CompiledUi, kithara_ui::error::UiDocError> {
     let mut resolver = builtin::resolver();
     for (path, text) in DOCS {
@@ -119,6 +119,7 @@ mod tests {
     use kithara_ui::{
         compile::CompiledNode,
         expand::{ControlSpec, ExpandedNode},
+        module::TextStyle,
     };
 
     use super::*;
@@ -170,12 +171,18 @@ mod tests {
     }
 
     fn control_paths(ui: &CompiledUi) -> Vec<&str> {
-        controls(ui).into_iter().map(|(path, _)| path).collect()
+        let mut out = Vec::new();
+        each_control(ui, &mut |node| {
+            if let ExpandedNode::Control { path, .. } = node {
+                out.push(ui.resolve(*path));
+            }
+        });
+        out
     }
 
-    /// Number of segments the segmented control at `want` declares.
-    fn segments(ui: &CompiledUi, want: &str) -> Option<usize> {
-        let mut found = None;
+    /// Labels the segmented control at `want` declares, in document order.
+    fn segments<'a>(ui: &'a CompiledUi, want: &str) -> Vec<&'a str> {
+        let mut found = Vec::new();
         each_control(ui, &mut |node| {
             if let ExpandedNode::Control {
                 path,
@@ -184,7 +191,7 @@ mod tests {
             } = node
                 && ui.resolve(*path) == want
             {
-                found = Some(items.len());
+                found = items.iter().map(|item| ui.resolve(*item)).collect();
             }
         });
         found
@@ -240,10 +247,10 @@ mod tests {
         }
     }
 
-    /// The single-deck layout lays out deck A alone: nothing addresses deck B,
-    /// in the deck body or in the overview.
+    /// The single-deck layout lays out one deck body and one overview row; the
+    /// mixer keeps a channel per session deck either way.
     #[kithara::test]
-    fn the_single_layout_lays_out_one_deck() {
+    fn the_single_layout_lays_out_one_deck_body() {
         let ui = compile_studio(DeckLayout::Single).unwrap();
         let paths = control_paths(&ui);
 
@@ -253,16 +260,49 @@ mod tests {
             !paths
                 .iter()
                 .any(|path| path.starts_with("deck-b/") || path.starts_with("overview/b/")),
-            "the single-deck layout still addresses deck B: {paths:?}",
+            "the single-deck layout still lays out deck B: {paths:?}",
         );
+        assert!(paths.contains(&"mixer/b/trim"));
     }
 
-    /// The top-bar switch offers exactly the layouts the host can select.
+    /// The top-bar switch offers exactly the layouts the host can select, in
+    /// the order the host indexes them.
     #[kithara::test]
-    fn the_deck_switch_offers_every_layout() {
+    fn the_deck_switch_offers_every_layout_in_order() {
         for layout in LAYOUTS {
             let ui = compile_studio(layout).unwrap();
-            assert_eq!(segments(&ui, "bar/decks"), Some(LAYOUTS.len()));
+            let items = segments(&ui, "bar/decks");
+            assert_eq!(items.len(), LAYOUTS.len());
+            for (offered, label) in [(DeckLayout::Single, "1"), (DeckLayout::Dual, "2")] {
+                assert_eq!(items.get(offered.index()).copied(), Some(label));
+            }
+        }
+    }
+
+    /// A deck letter caption names the deck its control path routes to.
+    #[kithara::test]
+    fn deck_letter_captions_name_their_deck() {
+        for layout in LAYOUTS {
+            let ui = compile_studio(layout).unwrap();
+            let mut seen = 0_usize;
+            each_control(&ui, &mut |node| {
+                if let ExpandedNode::Control {
+                    path,
+                    spec:
+                        ControlSpec::Text {
+                            style: TextStyle::DeckLetter,
+                            label: Some(label),
+                        },
+                    ..
+                } = node
+                {
+                    let path = ui.resolve(*path);
+                    let letter = path.rsplit('/').nth(1).unwrap_or_default();
+                    assert_eq!(ui.resolve(*label), letter.to_uppercase(), "at `{path}`");
+                    seen += 1;
+                }
+            });
+            assert!(seen > 0, "{layout:?}: no deck letter caption");
         }
     }
 

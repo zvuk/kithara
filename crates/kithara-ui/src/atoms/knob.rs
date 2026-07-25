@@ -64,7 +64,6 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
             self.skin.knob.label_text,
             self.skin,
         ))
-        .width(Length::Fill)
         .height(Length::Fixed(self.skin.knob.label_height))
         .center_x(Length::Fill);
 

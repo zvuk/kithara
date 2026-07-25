@@ -181,7 +181,7 @@ impl<'a> Widget<'a> for Time<'_, '_, '_, '_, '_> {
         .padding([self.skin.deck.time_padding_y, self.skin.deck.time_padding_x])
         .center_y(Length::Fill)
         .center_x(Length::Fill)
-        .height(Length::Fixed(self.skin.deck.transport_height))
+        .height(Length::Fill)
         .width(Length::Fill)
         .style(move |_| ContainerStyle::default().background(Background::Color(palette.bg_deep)))
         .into()
@@ -236,5 +236,12 @@ mod tests {
     #[kithara::test]
     fn bpm_uses_two_decimal_places() {
         assert_eq!(format_bpm(70.0), "70.00");
+    }
+
+    #[kithara::test]
+    fn time_is_zero_padded_minutes() {
+        assert_eq!(format_time(0.0), "00:00");
+        assert_eq!(format_time(61.4), "01:01");
+        assert_eq!(format_time(3600.0), "60:00");
     }
 }

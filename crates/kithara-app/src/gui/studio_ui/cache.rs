@@ -12,8 +12,8 @@ use crate::{
 };
 
 /// Studio state owned by the host and refreshed once per frame: converted
-/// waveform columns, formatted strings the renderer borrows, and view-local
-/// scalars the compiled UI reads back (zoom, collapsed modules).
+/// waveform columns, formatted strings the renderer borrows, and the view
+/// state the compiled UI reads back (zoom, collapsed modules, deck layout).
 #[derive(Default)]
 pub(crate) struct StudioCache {
     pub(super) decks: Vec<DeckCache>,
@@ -127,13 +127,17 @@ impl DeckCache {
     }
 }
 
-fn format_remain(ui: &UiState) -> String {
-    let head = if ui.is_seeking {
+/// The playhead the UI shows: while the user drags, that is the seek target.
+pub(super) fn head(ui: &UiState) -> f64 {
+    if ui.is_seeking {
         ui.seek_position
     } else {
         ui.position
-    };
-    let left = (ui.duration - head).max(0.0);
+    }
+}
+
+fn format_remain(ui: &UiState) -> String {
+    let left = (ui.duration - head(ui)).max(0.0);
     let total = left.floor().to_u64().unwrap_or(0);
     format!("\u{2212}{:02}:{:02}", total / 60, total % 60)
 }

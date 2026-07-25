@@ -9,7 +9,7 @@
         children: [
             Text(id: "label", style: DeckLetter, label: "$letter"),
             Row(
-                id: "gain",
+                id: "row-1",
                 gap: 2.0,
                 children: [
                     Knob(
@@ -27,7 +27,7 @@
                 ],
             ),
             Row(
-                id: "tone",
+                id: "row-2",
                 gap: 2.0,
                 children: [
                     Knob(
@@ -45,7 +45,7 @@
                 ],
             ),
             Row(
-                id: "rate",
+                id: "row-3",
                 gap: 2.0,
                 children: [
                     Knob(

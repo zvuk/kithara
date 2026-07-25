@@ -92,6 +92,14 @@ caption is a full text role down to family and letter-spacing. A control without
 bare and callers compose no separate text node beside it; the knob's intrinsic size reserves the
 caption row either way.
 
+A waveform column is one bar wide for all three bands: low, mid and high are drawn from the
+vertical centre over each other and nest by level, never by width, so a single `bar_width` and
+`bar_gap` set the column pitch for both the deck wave and the overview row.
+
+Controls take their size from the wrapper, not from themselves: a widget fills what
+`size::control_size` or the document gives it. A widget that pins its own height would ignore the
+document and break the row it sits in.
+
 `validate::value_kinds` is the single owner of control read/write endpoint kinds. Intrinsic sizes
 are selected exhaustively from `ControlSpec` and the supplied `SkinDoc` by
 `size::control_size`; this remains available in non-render and wasm builds. Renderers match

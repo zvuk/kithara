@@ -177,7 +177,10 @@ fn control_button_style(
     } else {
         skin.button.frame
     });
-    if style == ButtonStyle::Transport {
+    if matches!(
+        style,
+        ButtonStyle::Transport | ButtonStyle::TransportPrimary
+    ) {
         border.color = palette.line_inner;
     }
     let vis_background = skin.color(skin.vis.nav_background);
@@ -240,6 +243,11 @@ mod tests {
             Some(Background::Color(skin.palette.bg_panel))
         );
         assert_eq!(style(false).text_color, skin.palette.text);
+        assert_eq!(
+            style(false).border.width,
+            skin.button.primary_frame.border_width
+        );
+        assert_eq!(style(false).border.color, skin.palette.line_inner);
         assert_eq!(
             style(true).background,
             Some(Background::Color(skin.palette.accent))

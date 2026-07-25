@@ -642,9 +642,9 @@ pub struct WaveSkin {
     pub size: SizeSpec,
     pub frame: FrameSkin,
     pub overlay: WaveOverlaySkin,
+    pub background: ColorRole,
     pub bar_gap: f32,
-    /// One width for all three bands: they are drawn from the vertical centre
-    /// over each other, nested by level, not by width.
+    /// Width of every band bar; bands nest by level, not by width.
     pub bar_width: f32,
     pub content_inset: f32,
     pub cue_badge_background: ColorRole,
@@ -727,7 +727,6 @@ pub struct DeckSkin {
     pub time_padding_y: f32,
     pub time_text: FontSkin,
     pub title: FontSkin,
-    pub transport_height: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

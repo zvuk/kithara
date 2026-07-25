@@ -18,8 +18,8 @@ use crate::{
 };
 
 /// Translate a compiled-UI event into an app message, applying host-owned
-/// view state (zoom, module collapse) in place. Control paths come from the
-/// studio documents: `<instance>/<control-id>`.
+/// view state (zoom, module collapse, deck layout) in place. Control paths
+/// come from the studio documents: `<instance>/<control-id>`.
 pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> {
     match event {
         UiEvent::Control { path, action } => control(state, &path, &action),
@@ -41,10 +41,12 @@ fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Me
             let (letter, control) = rest.split_once('/')?;
             deck_control(state, deck_index(letter)?, control, action)
         }
-        _ => {
-            let index = deck_index(instance.strip_prefix("deck-")?)?;
-            deck_control(state, index, rest, action)
-        }
+        deck => deck_control(
+            state,
+            deck_index(deck.strip_prefix("deck-")?)?,
+            rest,
+            action,
+        ),
     }
 }
 

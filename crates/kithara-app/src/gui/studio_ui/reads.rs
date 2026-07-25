@@ -2,7 +2,7 @@ use kithara_ui::render::{ReadValue, Reads, TrackRow, WaveformView};
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    cache::DeckCache,
+    cache::{DeckCache, head},
     endpoints::{EQ_MAX_DB, EQ_MIN_DB},
     scope::deck_index,
 };
@@ -58,11 +58,7 @@ impl<'a> StudioReads<'a> {
         let (deck, cache) = self.deck(index)?;
         let ui = &deck.ui;
         let ts = deck.view.timestretch;
-        let head = if ui.is_seeking {
-            ui.seek_position
-        } else {
-            ui.position
-        };
+        let head = head(ui);
         let duration = ui.duration.max(0.0);
         let value = match base {
             "deck.playback.waveform" => ReadValue::Waveform(WaveformView {

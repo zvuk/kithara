@@ -24,8 +24,8 @@ use crate::{
     widgets::{
         Widget,
         behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, scroll_y},
-        deck::format_time,
         wave::{
+            bars,
             hero::{HeroPalette, HeroWave, draw as draw_hero_wave},
             zoom_math::{clamp_zoom, window_bounds, x_to_norm, zoom_for_wheel},
         },
@@ -80,20 +80,14 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
             key: read_text(self.reads, &derived("deck.track.key", self.scope))
                 .unwrap_or(em_dash())
                 .to_owned(),
-            remain: format!(
-                "\u{2212}{}",
-                format_time(
-                    read_scalar(
-                        self.reads,
-                        &derived("deck.playback.remaining_secs", self.scope)
-                    )
-                    .unwrap_or(0.0)
-                )
-            ),
+            remain: read_text(self.reads, &derived("deck.playback.remain", self.scope))
+                .unwrap_or(em_dash())
+                .to_owned(),
             badge: self.badge.unwrap_or_default().to_owned(),
         });
         Canvas::new(MiniWaveCanvas {
             metrics: self.skin.wave,
+            background: self.skin.color(self.skin.wave.background),
             border_color: self.skin.color(self.skin.wave.frame.border),
             cue_badge_background: self.skin.color(self.skin.wave.cue_badge_background),
             cue_badge_text_color: self.skin.color(self.skin.wave.cue_badge_text_color),
@@ -130,6 +124,7 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
 
 struct MiniWaveCanvas {
     metrics: WaveSkin,
+    background: Color,
     border_color: Color,
     cue_badge_background: Color,
     cue_badge_text_color: Color,
@@ -354,7 +349,7 @@ impl MiniWaveCanvas {
     }
 
     fn draw_wave(&self, frame: &mut Frame, bounds: Rectangle) {
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.palette.bg_deep);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.background);
         if let Some(waveform) = &self.waveform {
             if self.show_beats {
                 self.draw_zoom_wave(frame, bounds, waveform);
@@ -725,13 +720,6 @@ fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
     }
 }
 
-fn read_scalar(reads: &dyn Reads, endpoint: &str) -> Option<f64> {
-    match reads.get(endpoint) {
-        Some(ReadValue::Scalar(value)) => Some(value),
-        _ => None,
-    }
-}
-
 fn draw_bars(
     frame: &mut Frame,
     bounds: Rectangle,
@@ -739,7 +727,7 @@ fn draw_bars(
     metrics: WaveSkin,
     palette: RenderPalette,
 ) {
-    let step = metrics.bar_width + metrics.bar_gap;
+    let step = bars::step(metrics);
     let content_width = (bounds.width - metrics.content_inset * 2.0).max(0.0);
     let max_columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
     let columns = max_columns.min(buckets.len());
@@ -753,54 +741,30 @@ fn draw_bars(
         let end = ((column + 1) * buckets.len() / columns)
             .max(start + 1)
             .min(buckets.len());
-        let (low, mid, high) = buckets[start..end].iter().fold(
-            (0.0_f32, 0.0_f32, 0.0_f32),
-            |(low, mid, high), bucket| {
-                (
-                    low.max(bucket.low),
-                    mid.max(bucket.mid),
-                    high.max(bucket.high),
-                )
+        let peak = buckets[start..end].iter().fold(
+            WaveBucket {
+                low: 0.0,
+                mid: 0.0,
+                high: 0.0,
+            },
+            |peak, bucket| WaveBucket {
+                low: peak.low.max(bucket.low),
+                mid: peak.mid.max(bucket.mid),
+                high: peak.high.max(bucket.high),
             },
         );
         let column_x: f32 = column.as_();
         let center_x = metrics.content_inset + column_x * step + metrics.bar_width / 2.0;
-        for (level, color) in [
-            (low, palette.wave_low),
-            (mid, palette.wave_mid),
-            (high, palette.wave_high),
-        ] {
-            draw_band(
-                frame,
-                bounds,
-                center_x,
-                level,
-                available_height,
-                metrics.bar_width,
-                color,
-            );
-        }
+        bars::draw_column(
+            frame,
+            bounds,
+            center_x,
+            peak,
+            available_height,
+            metrics,
+            palette,
+        );
     }
-}
-
-fn draw_band(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    center_x: f32,
-    level: f32,
-    available_height: f32,
-    width: f32,
-    color: Color,
-) {
-    let height = level.clamp(0.0, 1.0) * available_height;
-    if height <= 0.0 {
-        return;
-    }
-    frame.fill_rectangle(
-        Point::new(center_x - width / 2.0, (bounds.height - height) / 2.0),
-        Size::new(width, height),
-        color,
-    );
 }
 
 fn with_alpha(color: Color, alpha: f32) -> Color {

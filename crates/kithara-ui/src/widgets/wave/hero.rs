@@ -11,9 +11,12 @@ use iced::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::zoom_math::{
-    bar_bucket_range, bar_grid, max_bucket, norm_to_x, visible_mark_range, visible_marks,
-    window_bounds,
+use super::{
+    bars,
+    zoom_math::{
+        bar_bucket_range, bar_grid, max_bucket, norm_to_x, visible_mark_range, visible_marks,
+        window_bounds,
+    },
 };
 use crate::{
     render::{WaveBucket, fonts, theme::RenderPalette},
@@ -73,7 +76,7 @@ fn draw_bars(
     metrics: WaveSkin,
     palette: RenderPalette,
 ) {
-    let step = metrics.bar_width + metrics.bar_gap;
+    let step = bars::step(metrics);
     let content_width = (bounds.width - metrics.content_inset * 2.0).max(0.0);
     let columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
     let Some(grid) = bar_grid(columns, zoom, window) else {
@@ -87,39 +90,14 @@ fn draw_bars(
         };
         let bar_f: f32 = bar.as_();
         let center_x = norm_to_x((bar_f + 0.5) * grid.norm_width, window, bounds.width);
-        for (level, color) in [
-            (bucket.low, palette.wave_low),
-            (bucket.mid, palette.wave_mid),
-            (bucket.high, palette.wave_high),
-        ] {
-            draw_band(
-                frame,
-                bounds,
-                center_x,
-                level,
-                available_height,
-                metrics.bar_width,
-                color,
-            );
-        }
-    }
-}
-
-fn draw_band(
-    frame: &mut Frame,
-    bounds: Rectangle,
-    center_x: f32,
-    level: f32,
-    available_height: f32,
-    width: f32,
-    color: Color,
-) {
-    let height = level.clamp(0.0, 1.0) * available_height;
-    if height > 0.0 {
-        frame.fill_rectangle(
-            Point::new(center_x - width / 2.0, (bounds.height - height) / 2.0),
-            Size::new(width, height),
-            color,
+        bars::draw_column(
+            frame,
+            bounds,
+            center_x,
+            bucket,
+            available_height,
+            metrics,
+            palette,
         );
     }
 }

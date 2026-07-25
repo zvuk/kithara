@@ -47,10 +47,6 @@ pub(crate) struct TimestretchState {
 }
 
 impl TimestretchState {
-    fn set_tempo(&mut self, tempo: f32) {
-        self.tempo = tempo.clamp(-TEMPO_RANGE, TEMPO_RANGE);
-    }
-
     pub(crate) fn speed(self) -> f32 {
         1.0 + self.tempo / 100.0
     }
@@ -89,7 +85,7 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::SeekTo(pos) => seek_to(deck, pos),
         DeckMsg::EqBandChanged(band, db) => eq_band_changed(deck, band, db),
         DeckMsg::DeleteTrack => delete_track(deck),
-        DeckMsg::SetTempo(t) => set_speed(deck, |ts| ts.set_tempo(t)),
+        DeckMsg::SetTempo(tempo) => set_tempo(deck, tempo),
         #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
         DeckMsg::ToggleKeyLock => {
             // Applies live, mid-track (shared controls read each chunk).
@@ -158,24 +154,25 @@ fn delete_track(deck: &mut DeckUi) {
     }
 }
 
-/// Live tempo: mirror the speed to this deck's queue.
-fn set_speed(deck: &mut DeckUi, edit: impl FnOnce(&mut TimestretchState)) {
-    edit(&mut deck.view.timestretch);
-    deck.controller
-        .queue()
-        .set_rate(deck.view.timestretch.speed());
+/// Live tempo: clamp to the travel and mirror the speed to this deck's queue.
+fn set_tempo(deck: &mut DeckUi, tempo: f32) {
+    let timestretch = &mut deck.view.timestretch;
+    timestretch.tempo = tempo.clamp(-TEMPO_RANGE, TEMPO_RANGE);
+    deck.controller.queue().set_rate(timestretch.speed());
 }
 
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::TimestretchState;
+    use super::{TEMPO_RANGE, TimestretchState};
 
     #[kithara::test]
-    fn speed_is_raw_passthrough_floor_owned_by_engine() {
-        let ts = TimestretchState { tempo: -100.0 };
+    fn speed_is_one_percent_per_tempo_point() {
+        let speed = |tempo| TimestretchState { tempo }.speed();
 
-        assert!(ts.speed().abs() < f32::EPSILON);
+        assert!((speed(0.0) - 1.0).abs() < f32::EPSILON);
+        assert!((speed(TEMPO_RANGE) - 1.16).abs() < 1e-6);
+        assert!((speed(-TEMPO_RANGE) - 0.84).abs() < 1e-6);
     }
 }

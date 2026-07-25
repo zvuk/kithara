@@ -81,7 +81,7 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.text.body.size, 11.0);
     assert_eq!(document.text.telemetry.font, FontFamily::Mono);
     assert_eq!(document.text.telemetry.color, ColorRole::Accent);
-    assert_eq!(document.text.micro_label.spacing, 0.12);
+    assert_eq!(document.text.micro_label.spacing, 0.14);
     assert_eq!(document.text.micro_label.color, ColorRole::Muted);
     assert_eq!(document.segmented.frame.border_width, 1.0);
     assert_eq!(document.segmented.active_background, ColorRole::Accent);
@@ -108,7 +108,7 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.wave.loop_fill_alpha, 0.22);
     assert_eq!(document.wave.overlay.background, ColorRole::BgDeep);
     assert_eq!(document.wave.overlay.background_alpha, 0.84);
-    assert_eq!(document.wave.overlay.key_color, ColorRole::Success);
+    assert_eq!(document.wave.overlay.key_color, ColorRole::Accent);
     assert_eq!(document.wave.played_alpha, 0.35);
     assert_eq!(document.wave.playhead_width, 1.5);
     assert_eq!(document.global_bar.brand_width, 112.0);
@@ -120,14 +120,14 @@ fn builtin_skin_parses_every_required_section() {
     assert_eq!(document.tree.context_height, 26.0);
     let track_list = &document.track_list;
     assert_eq!(track_list.header_height, 22.0);
-    assert_eq!(track_list.row_height, 28.0);
+    assert_eq!(track_list.row_height, 30.0);
     assert_eq!(track_list.footer_height, 22.0);
     assert_eq!(track_list.index_width, 28.0);
     assert_eq!(track_list.deck_width, 64.0);
-    assert_eq!(track_list.artist_width, 180.0);
-    assert_eq!(track_list.bpm_width, 64.0);
-    assert_eq!(track_list.key_width, 46.0);
-    assert_eq!(track_list.time_width, 60.0);
+    assert_eq!(track_list.artist_width, 200.0);
+    assert_eq!(track_list.bpm_width, 70.0);
+    assert_eq!(track_list.key_width, 56.0);
+    assert_eq!(track_list.time_width, 70.0);
     assert_eq!(track_list.energy_width, 110.0);
     assert_eq!(track_list.transition_width, 130.0);
     assert_eq!(track_list.deck_text.size, 9.0);
