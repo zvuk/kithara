@@ -739,7 +739,7 @@ fn draw_bars(
     metrics: WaveSkin,
     palette: RenderPalette,
 ) {
-    let step = metrics.low_bar_width + metrics.bar_gap;
+    let step = metrics.bar_width + metrics.bar_gap;
     let content_width = (bounds.width - metrics.content_inset * 2.0).max(0.0);
     let max_columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
     let columns = max_columns.min(buckets.len());
@@ -764,34 +764,22 @@ fn draw_bars(
             },
         );
         let column_x: f32 = column.as_();
-        let center_x = metrics.content_inset + column_x * step + metrics.low_bar_width / 2.0;
-        draw_band(
-            frame,
-            bounds,
-            center_x,
-            low,
-            available_height,
-            metrics.low_bar_width,
-            palette.wave_low,
-        );
-        draw_band(
-            frame,
-            bounds,
-            center_x,
-            mid,
-            available_height,
-            metrics.mid_bar_width,
-            palette.wave_mid,
-        );
-        draw_band(
-            frame,
-            bounds,
-            center_x,
-            high,
-            available_height,
-            metrics.high_bar_width,
-            palette.wave_high,
-        );
+        let center_x = metrics.content_inset + column_x * step + metrics.bar_width / 2.0;
+        for (level, color) in [
+            (low, palette.wave_low),
+            (mid, palette.wave_mid),
+            (high, palette.wave_high),
+        ] {
+            draw_band(
+                frame,
+                bounds,
+                center_x,
+                level,
+                available_height,
+                metrics.bar_width,
+                color,
+            );
+        }
     }
 }
 

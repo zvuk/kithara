@@ -73,7 +73,7 @@ fn draw_bars(
     metrics: WaveSkin,
     palette: RenderPalette,
 ) {
-    let step = metrics.low_bar_width + metrics.bar_gap;
+    let step = metrics.bar_width + metrics.bar_gap;
     let content_width = (bounds.width - metrics.content_inset * 2.0).max(0.0);
     let columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
     let Some(grid) = bar_grid(columns, zoom, window) else {
@@ -87,10 +87,10 @@ fn draw_bars(
         };
         let bar_f: f32 = bar.as_();
         let center_x = norm_to_x((bar_f + 0.5) * grid.norm_width, window, bounds.width);
-        for (level, width, color) in [
-            (bucket.low, metrics.low_bar_width, palette.wave_low),
-            (bucket.mid, metrics.mid_bar_width, palette.wave_mid),
-            (bucket.high, metrics.high_bar_width, palette.wave_high),
+        for (level, color) in [
+            (bucket.low, palette.wave_low),
+            (bucket.mid, palette.wave_mid),
+            (bucket.high, palette.wave_high),
         ] {
             draw_band(
                 frame,
@@ -98,7 +98,7 @@ fn draw_bars(
                 center_x,
                 level,
                 available_height,
-                width,
+                metrics.bar_width,
                 color,
             );
         }

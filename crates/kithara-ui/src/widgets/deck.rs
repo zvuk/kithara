@@ -192,7 +192,7 @@ pub(crate) fn format_time(seconds: f64) -> String {
     let total = seconds.max(0.0).floor().to_u64().unwrap_or(0);
     let minutes = total / seconds_per_minute();
     let seconds = total % seconds_per_minute();
-    format!("{minutes}:{seconds:02}")
+    format!("{minutes:02}:{seconds:02}")
 }
 
 fn analysis_bpm(analysis: Option<WaveformView<'_>>) -> Option<f64> {

@@ -33,8 +33,8 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
         } else {
             self.label
         };
-        let highlighted = is_primary(self.style) || active;
-        let font = if highlighted {
+        let highlighted = is_filled(self.style, active);
+        let font = if is_primary(self.style) || active {
             self.skin.button.primary_text
         } else if self.style == ButtonStyle::VisNav {
             self.skin.vis.nav_text
@@ -62,13 +62,6 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
                 },
             ),
         };
-        let height = if self.style == ButtonStyle::MicroPrimary {
-            self.skin.button.micro_size
-        } else if self.style == ButtonStyle::VisNav {
-            self.skin.vis.nav_cell_size
-        } else {
-            self.skin.button.height
-        };
         let centered = container(content)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -80,7 +73,7 @@ impl<'a> Widget<'a> for ControlButton<'a, '_, '_, '_> {
             [self.skin.button.padding_y, self.skin.button.padding_x]
         };
         let control = button(centered)
-            .height(Length::Fixed(height))
+            .height(Length::Fill)
             .padding(padding)
             .style(control_button_style(self.skin, self.style, active))
             .on_press(UiEvent::Control {
@@ -163,13 +156,20 @@ fn is_primary(style: ButtonStyle) -> bool {
     )
 }
 
+/// Accent fill follows the read value: a transport button is filled while its
+/// state is on. The micro play button is the exception — it is a solid accent
+/// cell that only swaps its glyph.
+fn is_filled(style: ButtonStyle, active: bool) -> bool {
+    active || style == ButtonStyle::MicroPrimary
+}
+
 fn control_button_style(
     skin: &Skin,
     style: ButtonStyle,
     active: bool,
 ) -> impl Fn(&Theme, ButtonStatus) -> IcedButtonStyle + 'static {
     let palette = skin.palette;
-    let highlighted = is_primary(style) || active;
+    let highlighted = is_filled(style, active);
     let mut border = skin.border(if style == ButtonStyle::VisNav {
         skin.vis.nav_frame
     } else if is_primary(style) {
@@ -223,6 +223,29 @@ mod tests {
 
     use super::*;
     use crate::{builtin, ids::SourceUri};
+
+    #[kithara::test]
+    fn transport_primary_fills_only_while_active() {
+        let origin = SourceUri("button.kskin.ron".to_owned());
+        let skin = Skin::resolve(builtin::skin_doc().clone(), &origin).unwrap();
+        let style = |active| {
+            control_button_style(&skin, ButtonStyle::TransportPrimary, active)(
+                &Theme::Dark,
+                ButtonStatus::Active,
+            )
+        };
+
+        assert_eq!(
+            style(false).background,
+            Some(Background::Color(skin.palette.bg_panel))
+        );
+        assert_eq!(style(false).text_color, skin.palette.text);
+        assert_eq!(
+            style(true).background,
+            Some(Background::Color(skin.palette.accent))
+        );
+        assert_eq!(style(true).text_color, skin.palette.bg);
+    }
 
     #[kithara::test]
     fn active_transport_keeps_line_inner_separator() {

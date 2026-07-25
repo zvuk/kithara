@@ -178,6 +178,10 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
                 Dim::Fixed(skin.vis.nav_cell_size),
                 Dim::Fixed(skin.vis.nav_cell_size),
             ),
+            ButtonStyle::MicroPrimary => SizeSpec::new(
+                Dim::Fixed(skin.button.micro_size),
+                Dim::Fixed(skin.button.micro_size),
+            ),
             _ => skin.button.size,
         },
         ControlSpec::Bpm { .. } => skin.deck.bpm_size,
