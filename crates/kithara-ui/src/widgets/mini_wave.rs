@@ -267,8 +267,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
             );
             layers.push(frame.into_geometry());
         }
-        let strip = overlay_strip(bounds, self.metrics.overlay);
-        if let Some(overlay) = self.overlay.as_ref().filter(|_| !cursor.is_over(strip)) {
+        if let Some(overlay) = self.overlay.as_ref().filter(|_| !cursor.is_over(bounds)) {
             let mut frame = Frame::new(renderer, bounds.size());
             draw_overlay(
                 &mut frame,
@@ -643,7 +642,7 @@ fn draw_readout(
     let total_height =
         metrics.readout_label.size + metrics.readout_gap + metrics.readout_value.size;
     let label_y = bounds.y + metrics.readout_padding_y + (inner_height - total_height) / 2.0;
-    let x = bounds.center_x();
+    let x = bounds.x + bounds.width - metrics.readout_padding_x;
     draw_text(
         frame,
         CanvasText {
@@ -653,7 +652,7 @@ fn draw_readout(
             color: palette.readout_label,
             skin: metrics.readout_label,
             font: fonts::mono(metrics.readout_label.weight),
-            align_x: text::Alignment::Center,
+            align_x: text::Alignment::Right,
             align_y: Vertical::Top,
         },
     );
@@ -669,7 +668,7 @@ fn draw_readout(
             color: data.value_color,
             skin: metrics.readout_value,
             font: fonts::mono(metrics.readout_value.weight),
-            align_x: text::Alignment::Center,
+            align_x: text::Alignment::Right,
             align_y: Vertical::Top,
         },
     );
