@@ -13,7 +13,6 @@ use crate::{
     widgets::frame_overlay,
 };
 
-/// An element together with where it sits inside the box the document gave it.
 pub(super) struct Rendered<'a> {
     element: Element<'a, UiEvent>,
     align: Horizontal,
@@ -29,7 +28,6 @@ impl<'a> Rendered<'a> {
     }
 }
 
-/// Container padding: per-axis overrides fall back to `pad`, then to the grid.
 pub(super) fn padding(
     pad: Option<f32>,
     pad_x: Option<f32>,
@@ -44,7 +42,6 @@ pub(super) fn padding(
         .right(pad_x.unwrap_or(base))
 }
 
-/// Paints the container's fill when the node asks for one.
 pub(super) fn filled<'a>(
     element: Container<'a, UiEvent>,
     background: Option<ColorRole>,
@@ -63,7 +60,6 @@ pub(super) fn filled<'a>(
         .into()
 }
 
-/// Wraps a container in hairline borders when the node asks for them.
 pub(super) fn bordered<'a>(
     element: Element<'a, UiEvent>,
     frame: Option<FrameSides>,
@@ -76,7 +72,6 @@ pub(super) fn bordered<'a>(
     }
 }
 
-/// A node that measures its content carries `Shrink` down, or the first `Fill` claims the row.
 pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length) {
     effective_size(node, skin).map_or((Length::Fill, Length::Fill), |size| {
         (

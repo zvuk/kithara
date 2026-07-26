@@ -6,7 +6,7 @@ use num_traits::cast::ToPrimitive;
 
 use super::scope::deck_letter;
 use crate::{
-    catalog::{Catalog, is_loaded},
+    catalog::{Catalog, CatalogEntry, is_loaded},
     gui::{
         app::Decks,
         deck::DeckUi,
@@ -16,26 +16,21 @@ use crate::{
     waveform::TrackAnalysis,
 };
 
-/// Studio state owned by the host and refreshed once per frame: converted
-/// waveform columns, formatted strings the renderer borrows, and the view
-/// state the compiled UI reads back (zoom, collapsed modules, deck layout).
+/// Studio state the host owns, re-derived from the deck snapshots once a frame.
 #[derive(Default)]
 pub(crate) struct StudioCache {
-    pub(super) decks: Vec<DeckCache>,
-    /// Per catalog row: channel letters of the decks the row is loaded on.
-    pub(super) deck_marks: Vec<String>,
-    pub(super) collapsed: BTreeSet<String>,
+    decks: Vec<DeckCache>,
     layout: DeckLayout,
-    /// Catalog row the pointer is carrying out of the library.
-    pub(super) drag: Option<usize>,
-    /// Deck the pointer is over, tracked whether or not a drag is in flight.
-    pub(super) hover_deck: Option<usize>,
-    /// Deck the keyboard talks to; a drop moves it.
+    hover_deck: Option<usize>,
     focus_deck: usize,
+
+    pub(super) deck_marks: CatalogRowMarks,
+    pub(super) drag: Option<usize>,
+
+    pub(super) collapsed: CollapsedModules,
 }
 
-/// How many decks the studio lays out. The top bar switches it; the session
-/// keeps every deck either way.
+/// Deck bodies the studio lays out; the session keeps every deck either way.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum DeckLayout {
     Single,
@@ -44,7 +39,6 @@ pub(super) enum DeckLayout {
 }
 
 impl DeckLayout {
-    /// Deck bodies the layout lays out; the session may hold more.
     pub(super) const fn decks(self) -> usize {
         match self {
             Self::Single => 1,
@@ -71,25 +65,30 @@ impl DeckLayout {
 #[derive(Default)]
 pub(super) struct DeckCache {
     pub(super) wave: Vec<WaveBucket>,
-    /// Revision stamp of the converted waveform: the source slice address.
     wave_src: Option<usize>,
     pub(super) tempo: String,
-    /// Time left in the track, a minus sign and `MM:SS`, as the overview row
-    /// shows it.
     pub(super) remain: String,
     pub(super) subtitle: String,
     pub(super) zoom: Option<f64>,
 }
 
+#[derive(Default)]
+pub(super) struct CatalogRowMarks(Vec<String>);
+
+#[derive(Default)]
+pub(super) struct CollapsedModules(BTreeSet<String>);
+
 impl StudioCache {
     pub(super) fn toggle_module(&mut self, module: String) {
-        if !self.collapsed.remove(&module) {
-            self.collapsed.insert(module);
-        }
+        self.collapsed.toggle(module);
     }
 
     pub(super) fn deck(&self, index: usize) -> Option<&DeckCache> {
         self.decks.get(index)
+    }
+
+    pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
+        self.decks.get_mut(index)
     }
 
     pub(super) const fn layout(&self) -> DeckLayout {
@@ -104,8 +103,6 @@ impl StudioCache {
         self.focus_deck
     }
 
-    /// Switch the layout. Hover and focus follow it onto a deck it lays out:
-    /// one it drops reports no crossing, so nothing later would correct them.
     pub(super) fn set_layout(&mut self, layout: DeckLayout) {
         self.layout = layout;
         if self.hover_deck.is_some_and(|deck| deck >= layout.decks()) {
@@ -116,8 +113,6 @@ impl StudioCache {
         }
     }
 
-    /// The pointer entered or left a deck. Hover is tracked on its own: a drag
-    /// that starts with the pointer already inside a deck gets no fresh enter.
     pub(super) fn set_hover_deck(&mut self, deck: usize, over: bool) {
         if over {
             self.hover_deck = Some(deck);
@@ -126,49 +121,24 @@ impl StudioCache {
         }
     }
 
-    /// A dragged row is over this deck.
     pub(super) fn drag_over(&self, deck: usize) -> bool {
         self.drag.is_some() && self.hover_deck == Some(deck)
     }
 
-    /// End the drag and report where it landed: the row it carried and the
-    /// deck under the pointer, if it was released over one. That deck becomes
-    /// the focused one.
     pub(super) fn take_drop(&mut self) -> Option<(usize, usize)> {
-        let track = self.drag.take()?;
+        let row = self.drag.take()?;
         let deck = self.hover_deck?;
         self.focus_deck = deck;
-        Some((track, deck))
+        Some((row, deck))
     }
 
-    pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
-        self.decks.get_mut(index)
-    }
-
-    /// Refresh the borrowed-by-render state from the current snapshots.
-    /// Called once per frame after the deck snapshots are taken.
     pub(crate) fn refresh(&mut self, decks: &Decks, catalog: &Catalog) {
         self.decks
             .resize_with(decks.iter().count(), Default::default);
         for (cache, deck) in self.decks.iter_mut().zip(decks.iter()) {
             cache.refresh(deck);
         }
-        self.refresh_deck_marks(decks, catalog);
-    }
-
-    fn refresh_deck_marks(&mut self, decks: &Decks, catalog: &Catalog) {
-        self.deck_marks.clear();
-        for entry in catalog.entries() {
-            let mut marks = String::new();
-            for (at, deck) in decks.iter().enumerate() {
-                if is_loaded(deck.controller.queue(), entry)
-                    && let Some(letter) = deck_letter(at)
-                {
-                    marks.push(letter.to_ascii_uppercase());
-                }
-            }
-            self.deck_marks.push(marks);
-        }
+        self.deck_marks.refresh(decks, catalog);
     }
 }
 
@@ -181,8 +151,6 @@ impl DeckCache {
         self.refresh_wave(deck.ui.analysis.as_ref());
     }
 
-    /// Convert the analysed waveform into renderer columns only when the
-    /// underlying `Arc` changes; the conversion is native-resolution sized.
     fn refresh_wave(&mut self, analysis: Option<&TrackAnalysis>) {
         let wave = analysis.and_then(TrackAnalysis::waveform);
         let src = wave.map(|wave| wave.buckets().as_ptr().addr());
@@ -197,10 +165,50 @@ impl DeckCache {
     }
 }
 
+impl CatalogRowMarks {
+    pub(super) fn get(&self, row: usize) -> Option<&String> {
+        self.0.get(row)
+    }
+
+    fn refresh(&mut self, decks: &Decks, catalog: &Catalog) {
+        self.0.clear();
+        self.0.extend(
+            catalog
+                .entries()
+                .iter()
+                .map(|entry| loaded_deck_letters(entry, decks)),
+        );
+    }
+}
+
+impl CollapsedModules {
+    pub(super) fn contains(&self, module: &str) -> bool {
+        self.0.contains(module)
+    }
+
+    fn toggle(&mut self, module: String) {
+        if !self.0.remove(&module) {
+            self.0.insert(module);
+        }
+    }
+}
+
+fn loaded_deck_letters(entry: &CatalogEntry, decks: &Decks) -> String {
+    decks
+        .iter()
+        .enumerate()
+        .filter(|(_, deck)| is_loaded(deck.controller.queue(), entry))
+        .filter_map(|(at, _)| deck_letter(at))
+        .map(|letter| letter.to_ascii_uppercase())
+        .collect()
+}
+
 fn format_remain(ui: &UiState) -> String {
+    const MINUS_SIGN: char = '\u{2212}';
+
     let left = (ui.duration - playhead(ui)).max(0.0);
     let total = left.floor().to_u64().unwrap_or(0);
-    format!("\u{2212}{:02}:{:02}", total / 60, total % 60)
+    format!("{MINUS_SIGN}{:02}:{:02}", total / 60, total % 60)
 }
 
 fn waveform_buckets(wave: &Waveform) -> impl Iterator<Item = WaveBucket> + '_ {

@@ -48,15 +48,11 @@ pub(crate) struct ItemDrag {
 #[derive(Default)]
 pub(crate) struct ItemDragState {
     held: bool,
-    /// A container that lost the pointer hands the item a cursor without a
-    /// position, so travel is measured from the positions move events carry.
     origin: Option<Point>,
     active: bool,
 }
 
 impl ItemDragState {
-    /// Claiming the cursor at rest would lift it off the item below and cost
-    /// that item its hover and its click.
     pub(crate) const fn interaction(&self) -> mouse::Interaction {
         if self.active {
             mouse::Interaction::Grabbing

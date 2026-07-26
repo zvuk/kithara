@@ -9,8 +9,6 @@ use crate::{
     widgets::Widget,
 };
 
-/// A surface of a window that draws its own chrome. It paints nothing; it
-/// turns a press into the command the host executes against the window.
 pub(crate) struct WindowSurface {
     command: WindowCommand,
     width: Length,
@@ -19,7 +17,6 @@ pub(crate) struct WindowSurface {
 }
 
 impl WindowSurface {
-    /// The area the window is moved by; the row it sits in owns the background.
     pub(crate) const fn drag() -> Self {
         Self {
             command: WindowCommand::Drag,

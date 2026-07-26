@@ -8,8 +8,6 @@ pub(super) fn deck_index(letter: &str) -> Option<usize> {
     byte.is_ascii_lowercase().then(|| usize::from(byte - b'a'))
 }
 
-/// Session deck position -> channel letter. A position past the alphabet has
-/// no letter, so the studio labels it with nothing rather than a stand-in.
 pub(super) fn deck_letter(index: usize) -> Option<char> {
     let byte = u8::try_from(index).ok()?.checked_add(b'a')?;
     byte.is_ascii_lowercase().then(|| char::from(byte))

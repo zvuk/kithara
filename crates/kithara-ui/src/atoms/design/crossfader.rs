@@ -149,8 +149,6 @@ pub(crate) enum TickAxis {
     Vertical,
 }
 
-/// Scale beside a fader: hairlines aligned to the far edge of the box they are
-/// drawn in, with a longer, brighter one at centre.
 pub(crate) struct TickRail {
     axis: TickAxis,
     metrics: TickSkin,
@@ -172,12 +170,10 @@ impl TickRail {
         self.metrics.count.checked_sub(1).filter(|last| *last > 0)
     }
 
-    /// Cross-axis room the hairlines themselves take.
     pub(crate) fn extent(&self) -> f32 {
         self.metrics.center_length.max(self.metrics.length)
     }
 
-    /// Cross-axis room the scale pushes the control it belongs to by.
     pub(crate) fn reserved(&self) -> f32 {
         self.last()
             .map_or(0.0, |_| self.extent() + self.metrics.gap)

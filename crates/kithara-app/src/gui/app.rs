@@ -41,8 +41,7 @@ pub(crate) struct Kithara {
     pub(crate) window_id: window::Id,
 }
 
-/// A non-empty set of deck view-models, addressed by id. Which deck the studio
-/// is focused on is view state and belongs to the studio cache.
+/// A non-empty set of deck view-models, addressed by id.
 pub(crate) struct Decks {
     items: Vec<DeckUi>,
 }
@@ -82,6 +81,7 @@ impl Kithara {
         decks: Decks,
         catalog: Catalog,
         config: AppConfig,
+        studio: StudioUi,
         palette: gui::GuiPalette,
     ) -> (Self, Task<Message>) {
         let (window_id, open) = window::open(window_settings());
@@ -91,7 +91,7 @@ impl Kithara {
             decks,
             catalog,
             config,
-            studio: StudioUi::new(),
+            studio,
             palette,
             selected_track: None,
             window_id,

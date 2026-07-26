@@ -18,7 +18,6 @@ pub(super) fn resolve<'a>(
     }
 }
 
-/// Scope suffix (`@deck=a` or empty) a widget appends to its derived endpoints.
 pub(super) fn read_scope<'a>(read: Option<&Binding>, ui: &'a CompiledUi) -> &'a str {
     read.map_or("", |binding| {
         let key = ui.resolve(binding.key());

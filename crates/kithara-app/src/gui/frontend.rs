@@ -7,6 +7,7 @@ use kithara_ui::render::fonts;
 
 use super::{
     app::{Decks, Kithara},
+    studio_ui::StudioUi,
     update, view,
 };
 use crate::{
@@ -41,6 +42,14 @@ pub(crate) fn window_settings() -> Settings {
     }
 }
 
+struct Boot {
+    session: DeckSet,
+    decks: Decks,
+    catalog: Catalog,
+    config: AppConfig,
+    studio: StudioUi,
+}
+
 /// GUI frontend using iced.
 pub struct GuiFrontend {
     config: AppConfig,
@@ -55,9 +64,10 @@ impl Frontend for GuiFrontend {
         })
     }
 
-    fn run_loop(&mut self, decks: DeckSet) -> Result<(), FrontendError> {
+    fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let palette = self.palette;
         let config = self.config.clone();
+        let studio = StudioUi::new()?;
 
         let rt = tokio::runtime::Runtime::new()
             .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
@@ -65,12 +75,12 @@ impl Frontend for GuiFrontend {
 
         // The CLI tracks start on the first deck; every deck gets its own
         // controller, listener and analysis worker.
-        if let Some(first) = decks.decks().first() {
+        if let Some(first) = session.decks().first() {
             first
                 .queue
                 .set_tracks(crate::sources::build_sources(&config));
         }
-        let controllers: Vec<(DeckId, Arc<StateController>)> = decks
+        let controllers: Vec<(DeckId, Arc<StateController>)> = session
             .decks()
             .iter()
             .map(|deck| {
@@ -84,20 +94,28 @@ impl Frontend for GuiFrontend {
             })
             .collect();
 
-        let boot = Mutex::new(Some((
-            decks,
-            Decks::new(controllers).ok_or("no decks to render")?,
-            Catalog::new(config.tracks.clone()),
-            config.clone(),
-        )));
+        let boot = Mutex::new(Some(Boot {
+            session,
+            decks: Decks::new(controllers).ok_or("no decks to render")?,
+            catalog: Catalog::new(config.tracks.clone()),
+            config: config.clone(),
+            studio,
+        }));
 
         let daemon = iced::daemon(
             move || {
-                let (session, decks, catalog, config) = boot
+                let boot = boot
                     .lock()
                     .take()
                     .expect("iced boots the application exactly once");
-                Kithara::new(session, decks, catalog, config, palette)
+                Kithara::new(
+                    boot.session,
+                    boot.decks,
+                    boot.catalog,
+                    boot.config,
+                    boot.studio,
+                    palette,
+                )
             },
             update::update,
             view::view,

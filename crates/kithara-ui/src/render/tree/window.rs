@@ -34,7 +34,6 @@ pub fn render<'a>(
     with_drag_ghost(content, dragged_label(ui, reads), skin)
 }
 
-/// Always laid out, even empty-handed: a layer that came and went would reset the gesture.
 fn with_drag_ghost<'a>(
     content: Element<'a, UiEvent>,
     label: Option<String>,
@@ -54,7 +53,6 @@ fn dragged_label(ui: &CompiledUi, reads: &dyn Reads) -> Option<String> {
     }
 }
 
-/// The zones sit above the content, not beside it, so the layout keeps the whole window.
 fn framed_by_resize_edges<'a>(content: Element<'a, UiEvent>, skin: &Skin) -> Element<'a, UiEvent> {
     let thickness = Length::Fixed(skin.window.resize_edge);
     let corner = |edge| WindowSurface::resize(edge, thickness, thickness).view();

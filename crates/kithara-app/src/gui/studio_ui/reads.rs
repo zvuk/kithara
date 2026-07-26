@@ -110,9 +110,7 @@ impl<'a> StudioReads<'a> {
         Some(value)
     }
 
-    /// Heaviest deck load of the frame, off the per-frame snapshots the rest
-    /// of the deck reads come off.
-    fn engine_load(&self) -> f32 {
+    fn peak_engine_load(&self) -> f32 {
         self.state
             .decks
             .iter()
@@ -126,7 +124,7 @@ impl<'a> StudioReads<'a> {
             "ui.drag.track" => ReadValue::Text(self.dragged_track()?),
             "mix.crossfader" => ReadValue::Scalar(f64::from(mix.position)),
             "ui.layout.decks" => ReadValue::Scalar(self.state.studio.cache.layout().index().as_()),
-            "engine.load" => ReadValue::Scalar(self.engine_load().as_()),
+            "engine.load" => ReadValue::Scalar(self.peak_engine_load().as_()),
             _ => return None,
         };
         Some(value)

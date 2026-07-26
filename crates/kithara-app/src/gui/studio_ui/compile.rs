@@ -2,6 +2,7 @@ use iced::Element;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
+    error::UiDocError,
     render::tree,
     source::UiConfig,
 };
@@ -12,8 +13,6 @@ use super::{
     reads::StudioReads,
 };
 use crate::gui::{app::Kithara, message::Message};
-
-const COMPILES: &str = "embedded studio documents must compile";
 
 const DOCS: &[(&str, &str)] = &[
     (
@@ -71,15 +70,12 @@ pub(crate) struct StudioUi {
 }
 
 impl StudioUi {
-    /// Compile the embedded studio documents. Panicking here is sanctioned:
-    /// the documents are compile-time assets validated by unit tests, so a
-    /// failure is a build defect, not a runtime condition.
-    pub(crate) fn new() -> Self {
-        Self {
-            single: compile_studio(DeckLayout::Single).expect(COMPILES),
-            dual: compile_studio(DeckLayout::Dual).expect(COMPILES),
+    pub(crate) fn new() -> Result<Self, UiDocError> {
+        Ok(Self {
+            single: compile_studio(DeckLayout::Single)?,
+            dual: compile_studio(DeckLayout::Dual)?,
             cache: StudioCache::default(),
-        }
+        })
     }
 
     fn compiled(&self, layout: DeckLayout) -> &CompiledUi {
@@ -90,9 +86,7 @@ impl StudioUi {
     }
 }
 
-pub(super) fn compile_studio(
-    layout: DeckLayout,
-) -> Result<CompiledUi, kithara_ui::error::UiDocError> {
+pub(super) fn compile_studio(layout: DeckLayout) -> Result<CompiledUi, UiDocError> {
     let mut resolver = builtin::resolver();
     for (path, text) in DOCS {
         resolver.insert(path, text);

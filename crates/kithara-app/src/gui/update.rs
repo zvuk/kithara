@@ -100,8 +100,6 @@ fn pause_hidden_decks(state: &mut Kithara) {
     }
 }
 
-/// The keyboard reaches the deck the studio has focused; the studio keeps that
-/// position on a deck it lays out.
 fn delete_focused_track(state: &mut Kithara) {
     let focus = state.studio.cache.focus_deck();
     let Some(id) = state.session.decks().get(focus).map(|deck| deck.id) else {
