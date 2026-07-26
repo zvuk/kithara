@@ -603,343 +603,6 @@ fn button_spec(
     })
 }
 
-fn expand_header_control(
-    context: &Context<'_>,
-    control: &ControlNode,
-    depth: usize,
-    machine: &mut Expander<'_, '_>,
-) -> Result<ExpandedNode, UiDocError> {
-    match control {
-        control @ (ControlNode::DeckSummary {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Brand {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::Spacer {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::Divider {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::PresetSelector {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::SettingsButton {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::Text {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Glyph {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }) => expand_control(
-            context,
-            control,
-            ControlFields::new(id, *size, read.as_ref(), write.as_ref(), adaptive),
-            depth,
-            machine,
-        ),
-        _ => walk(context, control, depth, machine),
-    }
-}
-
-fn expand_value_control(
-    context: &Context<'_>,
-    control: &ControlNode,
-    depth: usize,
-    machine: &mut Expander<'_, '_>,
-) -> Result<ExpandedNode, UiDocError> {
-    match control {
-        control @ (ControlNode::Button {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::NavItem {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::TabLarge {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Bpm {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Time {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::Scalar {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Crossfader {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Fader {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Wave {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Vis {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::TrackList {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Tree {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::ContextBar {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }) => expand_control(
-            context,
-            control,
-            ControlFields::new(id, *size, read.as_ref(), write.as_ref(), adaptive),
-            depth,
-            machine,
-        ),
-        _ => walk(context, control, depth, machine),
-    }
-}
-
-fn expand_window_control(
-    context: &Context<'_>,
-    control: &ControlNode,
-    depth: usize,
-    machine: &mut Expander<'_, '_>,
-) -> Result<ExpandedNode, UiDocError> {
-    match control {
-        control @ (ControlNode::TitleBar {
-            id, size, adaptive, ..
-        }
-        | ControlNode::WindowDrag { id, size, adaptive }
-        | ControlNode::WindowControls {
-            id, size, adaptive, ..
-        }) => expand_control(
-            context,
-            control,
-            ControlFields::new(id, *size, None, None, adaptive),
-            depth,
-            machine,
-        ),
-        _ => walk(context, control, depth, machine),
-    }
-}
-
-fn expand_atom_control(
-    context: &Context<'_>,
-    control: &ControlNode,
-    depth: usize,
-    machine: &mut Expander<'_, '_>,
-) -> Result<ExpandedNode, UiDocError> {
-    match control {
-        ControlNode::Swatch {
-            id, size, adaptive, ..
-        } => expand_control(
-            context,
-            control,
-            ControlFields::new(id, *size, None, None, adaptive),
-            depth,
-            machine,
-        ),
-        control @ (ControlNode::Toggle {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::Checkbox {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::Segmented {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Select {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::StatusDot {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Cell {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Readout {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Chip {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::Knob {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }
-        | ControlNode::VuStereo {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::Meter {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-        }
-        | ControlNode::VuVertical {
-            id,
-            size,
-            read,
-            write,
-            adaptive,
-            ..
-        }) => expand_control(
-            context,
-            control,
-            ControlFields::new(id, *size, read.as_ref(), write.as_ref(), adaptive),
-            depth,
-            machine,
-        ),
-        _ => walk(context, control, depth, machine),
-    }
-}
-
 fn walk(
     context: &Context<'_>,
     node: &ControlNode,
@@ -1034,45 +697,52 @@ fn walk(
                     })?;
             expand_at(context.set, &target, args, path, depth + 1, machine)
         }
-        control @ (ControlNode::DeckSummary { .. }
-        | ControlNode::Brand { .. }
-        | ControlNode::Spacer { .. }
-        | ControlNode::Divider { .. }
-        | ControlNode::PresetSelector { .. }
-        | ControlNode::SettingsButton { .. }
-        | ControlNode::Text { .. }
-        | ControlNode::Glyph { .. }) => expand_header_control(context, control, depth, machine),
-        control @ (ControlNode::TitleBar { .. }
-        | ControlNode::WindowDrag { .. }
-        | ControlNode::WindowControls { .. }) => {
-            expand_window_control(context, control, depth, machine)
+        control @ (ControlNode::DeckSummary { id, adaptive, .. }
+        | ControlNode::Brand { id, adaptive, .. }
+        | ControlNode::Spacer { id, adaptive, .. }
+        | ControlNode::Meter { id, adaptive, .. }
+        | ControlNode::Divider { id, adaptive, .. }
+        | ControlNode::PresetSelector { id, adaptive, .. }
+        | ControlNode::SettingsButton { id, adaptive, .. }
+        | ControlNode::WindowDrag { id, adaptive, .. }
+        | ControlNode::TitleBar { id, adaptive, .. }
+        | ControlNode::WindowControls { id, adaptive, .. }
+        | ControlNode::Text { id, adaptive, .. }
+        | ControlNode::Glyph { id, adaptive, .. }
+        | ControlNode::NavItem { id, adaptive, .. }
+        | ControlNode::TabLarge { id, adaptive, .. }
+        | ControlNode::Button { id, adaptive, .. }
+        | ControlNode::Bpm { id, adaptive, .. }
+        | ControlNode::Time { id, adaptive, .. }
+        | ControlNode::Scalar { id, adaptive, .. }
+        | ControlNode::Crossfader { id, adaptive, .. }
+        | ControlNode::Fader { id, adaptive, .. }
+        | ControlNode::Wave { id, adaptive, .. }
+        | ControlNode::Vis { id, adaptive, .. }
+        | ControlNode::TrackList { id, adaptive, .. }
+        | ControlNode::Tree { id, adaptive, .. }
+        | ControlNode::ContextBar { id, adaptive, .. }
+        | ControlNode::Toggle { id, adaptive, .. }
+        | ControlNode::Checkbox { id, adaptive, .. }
+        | ControlNode::Segmented { id, adaptive, .. }
+        | ControlNode::Select { id, adaptive, .. }
+        | ControlNode::StatusDot { id, adaptive, .. }
+        | ControlNode::Swatch { id, adaptive, .. }
+        | ControlNode::Cell { id, adaptive, .. }
+        | ControlNode::Readout { id, adaptive, .. }
+        | ControlNode::Chip { id, adaptive, .. }
+        | ControlNode::Knob { id, adaptive, .. }
+        | ControlNode::VuStereo { id, adaptive, .. }
+        | ControlNode::VuVertical { id, adaptive, .. }) => {
+            let (read, write) = control.bindings();
+            expand_control(
+                context,
+                control,
+                ControlFields::new(id, control.size(), read, write, adaptive),
+                depth,
+                machine,
+            )
         }
-        control @ (ControlNode::Button { .. }
-        | ControlNode::NavItem { .. }
-        | ControlNode::TabLarge { .. }
-        | ControlNode::Bpm { .. }
-        | ControlNode::Time { .. }
-        | ControlNode::Scalar { .. }
-        | ControlNode::Crossfader { .. }
-        | ControlNode::Fader { .. }
-        | ControlNode::Wave { .. }
-        | ControlNode::Vis { .. }
-        | ControlNode::TrackList { .. }
-        | ControlNode::Tree { .. }
-        | ControlNode::ContextBar { .. }) => expand_value_control(context, control, depth, machine),
-        control @ (ControlNode::Toggle { .. }
-        | ControlNode::Checkbox { .. }
-        | ControlNode::Segmented { .. }
-        | ControlNode::Select { .. }
-        | ControlNode::StatusDot { .. }
-        | ControlNode::Swatch { .. }
-        | ControlNode::Cell { .. }
-        | ControlNode::Readout { .. }
-        | ControlNode::Chip { .. }
-        | ControlNode::Knob { .. }
-        | ControlNode::VuStereo { .. }
-        | ControlNode::VuVertical { .. }
-        | ControlNode::Meter { .. }) => expand_atom_control(context, control, depth, machine),
     }
 }
 

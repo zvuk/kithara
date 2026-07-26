@@ -604,6 +604,100 @@ pub enum ControlNode {
     },
 }
 
+impl ControlNode {
+    pub(crate) fn size(&self) -> Option<SizeSpec> {
+        match self {
+            Self::Include { .. } => None,
+            Self::Row { size, .. }
+            | Self::Column { size, .. }
+            | Self::Slot { size, .. }
+            | Self::DeckSummary { size, .. }
+            | Self::Brand { size, .. }
+            | Self::Spacer { size, .. }
+            | Self::Meter { size, .. }
+            | Self::Divider { size, .. }
+            | Self::PresetSelector { size, .. }
+            | Self::SettingsButton { size, .. }
+            | Self::WindowDrag { size, .. }
+            | Self::TitleBar { size, .. }
+            | Self::WindowControls { size, .. }
+            | Self::Text { size, .. }
+            | Self::Glyph { size, .. }
+            | Self::NavItem { size, .. }
+            | Self::TabLarge { size, .. }
+            | Self::Button { size, .. }
+            | Self::Bpm { size, .. }
+            | Self::Time { size, .. }
+            | Self::Scalar { size, .. }
+            | Self::Crossfader { size, .. }
+            | Self::Fader { size, .. }
+            | Self::Wave { size, .. }
+            | Self::Vis { size, .. }
+            | Self::TrackList { size, .. }
+            | Self::Tree { size, .. }
+            | Self::ContextBar { size, .. }
+            | Self::Toggle { size, .. }
+            | Self::Checkbox { size, .. }
+            | Self::Segmented { size, .. }
+            | Self::Select { size, .. }
+            | Self::StatusDot { size, .. }
+            | Self::Swatch { size, .. }
+            | Self::Cell { size, .. }
+            | Self::Readout { size, .. }
+            | Self::Chip { size, .. }
+            | Self::Knob { size, .. }
+            | Self::VuStereo { size, .. }
+            | Self::VuVertical { size, .. } => *size,
+        }
+    }
+
+    pub(crate) fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
+        match self {
+            Self::Row { .. }
+            | Self::Column { .. }
+            | Self::Include { .. }
+            | Self::Slot { .. }
+            | Self::WindowDrag { .. }
+            | Self::TitleBar { .. }
+            | Self::WindowControls { .. }
+            | Self::Swatch { .. } => (None, None),
+            Self::DeckSummary { read, write, .. }
+            | Self::Brand { read, write, .. }
+            | Self::Spacer { read, write, .. }
+            | Self::Meter { read, write, .. }
+            | Self::Divider { read, write, .. }
+            | Self::PresetSelector { read, write, .. }
+            | Self::SettingsButton { read, write, .. }
+            | Self::Text { read, write, .. }
+            | Self::Glyph { read, write, .. }
+            | Self::NavItem { read, write, .. }
+            | Self::TabLarge { read, write, .. }
+            | Self::Button { read, write, .. }
+            | Self::Bpm { read, write, .. }
+            | Self::Time { read, write, .. }
+            | Self::Scalar { read, write, .. }
+            | Self::Crossfader { read, write, .. }
+            | Self::Fader { read, write, .. }
+            | Self::Wave { read, write, .. }
+            | Self::Vis { read, write, .. }
+            | Self::TrackList { read, write, .. }
+            | Self::Tree { read, write, .. }
+            | Self::ContextBar { read, write, .. }
+            | Self::Toggle { read, write, .. }
+            | Self::Checkbox { read, write, .. }
+            | Self::Segmented { read, write, .. }
+            | Self::Select { read, write, .. }
+            | Self::StatusDot { read, write, .. }
+            | Self::Cell { read, write, .. }
+            | Self::Readout { read, write, .. }
+            | Self::Chip { read, write, .. }
+            | Self::Knob { read, write, .. }
+            | Self::VuStereo { read, write, .. }
+            | Self::VuVertical { read, write, .. } => (read.as_ref(), write.as_ref()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum IconName {
